@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants.js";
+import { crossBasename } from "../../shared/cross-basename.js";
 import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
 import type {
@@ -15,7 +16,7 @@ import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
-import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
+import { getAnnotationEditedChannelKey, wasEmittedViaChannelInDocument } from "../events/queue.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
   hideFromAI,
@@ -29,7 +30,13 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
-import { checkInboxOutputShape } from "./output-schemas.js";
+import {
+  checkInboxOutputShape,
+  inboxChatMessageSchema,
+  inboxUserReplySchema,
+  userActionSchema,
+  userResponseSchema,
+} from "./output-schemas.js";
 import {
   mcpError,
   mcpStructured,
@@ -191,10 +198,18 @@ function isSettledUserComment(ann: Annotation, lastSurfacedEditedAt: number | un
   );
 }
 
+/**
+ * Bumped by {@link resetInbox}. A quiet-document skip entry records the
+ * generation it was taken under, so one recorded against a ledger that has since
+ * been emptied never matches (see `quietDocs`).
+ */
+let ledgerGeneration = 0;
+
 /** Reset surfaced IDs (exported for testing) */
 export function resetInbox(): void {
   surfacedIds.clear();
   replySurfacedIds.clear();
+  ledgerGeneration += 1;
 }
 
 /** What `appendClaudeChatMessage` returns: the new message id, or the licence refusal. */
@@ -437,25 +452,24 @@ export function finalizeClaudeChatMessage(id: string): void {
 }
 
 /**
- * Leads `tandem_checkInbox`'s summary when the poll resolved to no document.
- * Deliberately carries no "call tandem_open" advice: opening a document is
- * something Claude does only when the user asks.
+ * Leads `tandem_checkInbox`'s summary when the poll read no document: a named
+ * one that is not open, or nothing open at all. Deliberately carries no "call
+ * tandem_open" advice: opening a document is something Claude does only when
+ * the user asks. (A default poll with tabs open but none ACTIVE is not here
+ * any more — #2187 made it read every open document.)
  */
 function noDocumentInboxNote(requestedId: string | undefined): string {
-  if (requestedId !== undefined) {
-    return `Document ${requestedId} is not open (tandem_listDocuments lists the open ones), so only chat is shown.`;
-  }
-  // No id and no store means no ACTIVE document, which is not quite "none
-  // open": the active id can be unset while tabs remain.
-  return getOpenDocs().size === 0
-    ? "No document is open."
-    : "No document is active (tandem_listDocuments lists the open ones), so only chat is shown.";
+  return requestedId !== undefined
+    ? `Document ${requestedId} is not open (tandem_listDocuments lists the open ones), so only chat is shown.`
+    : "No document is open.";
 }
 
 type DocumentStore = NonNullable<ReturnType<typeof getDocumentStore>>;
 
 /** The `activity` object `tandem_checkInbox` returns. */
 interface InboxActivity {
+  /** The document `activity` describes: the named one, or the active one on a default poll. */
+  documentId: string | null;
   isTyping: boolean;
   cursor: number | null;
   lastEdit: number | null;
@@ -464,35 +478,264 @@ interface InboxActivity {
 }
 
 interface DocumentInbox {
-  userActions: ReturnType<typeof processInboxAnnotations>["userActions"];
-  userResponses: ReturnType<typeof processInboxAnnotations>["userResponses"];
-  userReplies: ReturnType<typeof collectInboxUserReplies>;
+  userActions: InboxUserAction[];
+  userResponses: InboxUserResponse[];
+  userReplies: InboxUserReply[];
   activity: InboxActivity;
 }
 
-/** The document-scoped half of a `tandem_checkInbox` pass with nothing open. */
-function emptyDocumentInbox(): DocumentInbox {
+/** `activity` when no document supplied one. */
+function emptyActivity(): InboxActivity {
   return {
-    userActions: [],
-    userResponses: [],
-    userReplies: [],
-    activity: {
-      isTyping: false,
-      cursor: null,
-      lastEdit: null,
-      selectedText: null,
-      selectionAt: null,
-    },
+    documentId: null,
+    isTyping: false,
+    cursor: null,
+    lastEdit: null,
+    selectedText: null,
+    selectionAt: null,
   };
 }
 
 /**
- * The document-scoped half of a `tandem_checkInbox` pass: the three annotation
- * buckets and `activity`, all read from `store`. Chat is NOT here — it lives in
- * CTRL_ROOM and is read by the handler whether or not a document is open.
+ * The ledger surface the annotation collector reads and writes, and nothing
+ * else (PR #2225 review). The collectors take THIS rather than `Map`, because
+ * the staged overlay below buffers exactly `get`/`set`/`has`: a `Map` parameter
+ * would let a collector reach `size`, iteration or `delete`, which on an overlay
+ * answer for one pass's writes while looking like the whole ledger. A real
+ * `Map<string, number>` satisfies it, so tests still pass one.
  */
-function collectDocumentInbox(store: DocumentStore, modeState: ModeState): DocumentInbox {
+export interface InboxLedger {
+  get(key: string): number | undefined;
+  set(key: string, value: number): unknown;
+  has(key: string): boolean;
+}
+
+/** {@link InboxLedger} for the reply ledger. A real `Set<string>` satisfies it. */
+export interface ReplyLedger {
+  has(key: string): boolean;
+  add(key: string): unknown;
+}
+
+/**
+ * A per-document view of an inbox ledger that BUFFERS its writes (#2187).
+ * Reads see the module ledger plus this pass's own writes; nothing reaches the
+ * module ledger until `commit()`, which runs only once the whole poll's
+ * response has validated (PR #2225 review). A default poll isolates a document
+ * that throws, and a write that landed before the throw would mark items
+ * delivered that the poll then discarded — lost for the server run. Buffering
+ * makes that impossible whichever read throws, rather than relying on every
+ * throwing read staying above the first stamp.
+ *
+ * A plain class over a private buffer, not a `Map` subclass: a subclass
+ * inherited `size`, `forEach`, `entries` and `delete`, every one of which
+ * silently answered for the buffer alone.
+ */
+class StagedInboxLedger implements InboxLedger {
+  readonly #ledger: Map<string, number>;
+  readonly #staged = new Map<string, number>();
+  constructor(ledger: Map<string, number>) {
+    this.#ledger = ledger;
+  }
+  get(key: string): number | undefined {
+    return this.#staged.has(key) ? this.#staged.get(key) : this.#ledger.get(key);
+  }
+  set(key: string, value: number): void {
+    this.#staged.set(key, value);
+  }
+  has(key: string): boolean {
+    return this.#staged.has(key) || this.#ledger.has(key);
+  }
+  commit(): void {
+    for (const [key, value] of this.#staged) this.#ledger.set(key, value);
+  }
+}
+
+/** {@link StagedInboxLedger} for the reply ledger. */
+class StagedReplyLedger implements ReplyLedger {
+  readonly #ledger: Set<string>;
+  readonly #staged = new Set<string>();
+  constructor(ledger: Set<string>) {
+    this.#ledger = ledger;
+  }
+  has(key: string): boolean {
+    return this.#staged.has(key) || this.#ledger.has(key);
+  }
+  add(key: string): void {
+    this.#staged.add(key);
+  }
+  commit(): void {
+    for (const key of this.#staged) this.#ledger.add(key);
+  }
+}
+
+/** The SDK's own schema for each document bucket — what `admit` checks an item against. */
+const INBOX_BUCKET_SCHEMAS = {
+  userActions: userActionSchema,
+  userResponses: userResponseSchema,
+  userReplies: inboxUserReplySchema,
+} satisfies Record<InboxBucket, z.ZodTypeAny>;
+
+/** The whole response, checked before anything is committed. Built once. */
+const checkInboxOutputSchema = z.object(checkInboxOutputShape);
+
+/**
+ * What an id or a zod path segment must look like to be printed. Anything else
+ * prints as a placeholder: a record id is client-written, and a log line is no
+ * place for whatever a client chose to put in one.
+ */
+const PRINTABLE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+function printableId(id: unknown): string {
+  return typeof id === "string" && PRINTABLE_ID.test(id) ? JSON.stringify(id) : "(unprintable)";
+}
+
+/**
+ * Zod issues as `path code` pairs ONLY (PR #2225 review). Never `issue.message`,
+ * `.format()` or the value: a message can quote the received value, and the
+ * record can be a user's text.
+ */
+function describeIssues(issues: readonly z.ZodIssue[]): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path
+        .map((seg) => (typeof seg === "number" || PRINTABLE_ID.test(seg) ? String(seg) : "?"))
+        .join(".");
+      return `${path || "(root)"} ${issue.code}`;
+    })
+    .join(", ");
+}
+
+/**
+ * Drop log lines already written, keyed `(scope, id, editedAt)`, so a record
+ * that stays malformed is logged once per process rather than on every poll —
+ * an edit re-logs it. Bounded: past the cap it starts over, which costs a
+ * repeated line, never a missing one for a new record.
+ */
+const loggedInboxDrops = new Set<string>();
+const LOGGED_INBOX_DROPS_CAP = 1_000;
+
+function logInboxDrop(
+  scope: string,
+  what: string,
+  item: { id?: unknown; editedAt?: unknown },
+  issues: readonly z.ZodIssue[],
+): void {
+  const key = `${scope}\u0000${String(item.id)}\u0000${String(item.editedAt)}`;
+  if (loggedInboxDrops.has(key)) return;
+  if (loggedInboxDrops.size >= LOGGED_INBOX_DROPS_CAP) loggedInboxDrops.clear();
+  loggedInboxDrops.add(key);
+  console.error(
+    `[Tandem] tandem_checkInbox left out a malformed ${what} ${printableId(item.id)} (${scope}): ${describeIssues(issues)}`,
+  );
+}
+
+/**
+ * The quiet-document skip (PR #2225 review). A default poll reads every open
+ * document; most are quiet, and each pass costs a full annotation collection
+ * plus a refresh of every still-unsurfaced record. This lets a BACKGROUND
+ * document whose last pass was a quiet fixed point be skipped.
+ *
+ * Soundness — why a skipped document's re-run would be byte-identical: its last
+ * recorded pass returned no item, refused none and did not throw, and it was a
+ * FIXED POINT — no transaction changed the document while it ran, so the refresh
+ * it performed had nothing left to write. Since then:
+ *  - no transaction has changed this Y.Doc INSTANCE (`epoch`). A change counter,
+ *    not the state vector: a delete advances no clock, so a state-vector
+ *    comparison misses a deleted reply or a deletion that changes what a record
+ *    resolves to. A swapped or reopened document is a new instance, so a miss;
+ *  - the mode is the same, so the Solo hold decides every record as before;
+ *  - the ledger was not reset (`ledgerGeneration`). Between resets it only ever
+ *    GAINS entries — named polls of this document included — and an entry can
+ *    only remove an item from a pass, never add one.
+ * Everything else the pass reads is in that Y.Doc (annotations, replies), and
+ * `admit` is a pure schema check. So the pass would produce nothing again, and
+ * write nothing. Never cached: the active document (it supplies `activity`) and
+ * any named poll.
+ *
+ * A record that is refused every poll keeps its document out of the cache, so
+ * it stays a refresh candidate on every poll — a cost, never a loss.
+ */
+interface QuietRecord {
+  epoch: number;
+  mode: ModeState;
+  ledgerGeneration: number;
+}
+
+interface QuietDocState {
+  /** Transactions that changed this Y.Doc instance since the listener attached. */
+  epoch: number;
+  /** The last quiet fixed point a default poll committed, if any. */
+  quiet: QuietRecord | null;
+}
+
+const quietDocs = new WeakMap<Y.Doc, QuietDocState>();
+
+/**
+ * The document's change counter, attaching it on first sight. `afterTransaction`
+ * rather than `update`: `changed` / `deleteSet` say whether a transaction changed
+ * anything at all, local writes included, and an empty transaction leaves the
+ * counter alone — so a refresh with nothing to write does not defeat the
+ * fixed-point test.
+ */
+function quietDocState(ydoc: Y.Doc): QuietDocState {
+  const known = quietDocs.get(ydoc);
+  if (known) return known;
+  const state: QuietDocState = { epoch: 0, quiet: null };
+  ydoc.on("afterTransaction", (tr: Y.Transaction) => {
+    if (tr.changed.size > 0 || tr.deleteSet.clients.size > 0) state.epoch += 1;
+  });
+  quietDocs.set(ydoc, state);
+  return state;
+}
+
+function isQuietSkip(state: QuietDocState, modeState: ModeState): boolean {
+  const quiet = state.quiet;
+  return (
+    quiet !== null &&
+    quiet.epoch === state.epoch &&
+    quiet.mode === modeState &&
+    quiet.ledgerGeneration === ledgerGeneration
+  );
+}
+
+/**
+ * The document-scoped half of a `tandem_checkInbox` pass: the three annotation
+ * buckets and, when `withActivity`, `activity` — all read from `store`. Chat is
+ * NOT here — it lives in CTRL_ROOM and is read by the handler whether or not a
+ * document is open.
+ *
+ * `withActivity` is false for the background documents of a default poll
+ * (#2187): only the active document's activity is returned. `admit` is the last
+ * gate on every item (see `InboxPollContext.admit`).
+ *
+ * Ledger writes are staged; the caller applies them with `commitLedgers` once
+ * the whole response has validated, so a throw anywhere stamps nothing.
+ */
+function collectDocumentInbox(
+  store: DocumentStore,
+  modeState: ModeState,
+  withActivity: boolean,
+  admit: InboxPollContext["admit"],
+): DocumentInbox & { commitLedgers: () => void } {
+  const surfaced = new StagedInboxLedger(surfacedIds);
+  const replySurfaced = new StagedReplyLedger(replySurfacedIds);
+  const commitLedgers = (): void => {
+    surfaced.commit();
+    replySurfaced.commit();
+  };
+
   const allAnnotations = store.listAnnotations();
+  // Nothing to surface and no activity wanted: skip the full-text walk. A
+  // default poll reaches every open document, most of them quiet.
+  if (!withActivity && allAnnotations.length === 0) {
+    return {
+      userActions: [],
+      userResponses: [],
+      userReplies: [],
+      activity: emptyActivity(),
+      commitLedgers,
+    };
+  }
   const fullText = store.getText();
 
   // Refresh only unsurfaced annotations, in the one batch
@@ -513,12 +756,16 @@ function collectDocumentInbox(store: DocumentStore, modeState: ModeState): Docum
   const pollCtx: InboxPollContext = {
     modeState,
     documentId: store.documentId,
-    wasChannelEmitted: wasEmittedViaChannel,
+    // Scoped to THIS document (PR #2225 review): since #2187 the same imported
+    // comment open in two files arrives twice, and a bare-id lookup stamped
+    // `alreadyPushed` on the copy nothing had pushed.
+    wasChannelEmitted: (payloadId) => wasEmittedViaChannelInDocument(payloadId, store.documentId),
+    admit,
   };
   const { userActions, userResponses } = processInboxAnnotations(
     allAnnotations,
     fullText,
-    surfacedIds,
+    surfaced,
     (anns) => store.refreshAnnotations(anns),
     pollCtx,
   );
@@ -530,41 +777,294 @@ function collectDocumentInbox(store: DocumentStore, modeState: ModeState): Docum
     allAnnotations,
     fullText,
     (id) => store.listReplies(id),
-    replySurfacedIds,
+    replySurfaced,
     pollCtx,
   );
 
+  return {
+    userActions,
+    userResponses,
+    userReplies,
+    activity: withActivity ? readActivity(store, fullText) : emptyActivity(),
+    commitLedgers,
+  };
+}
+
+/** A finite number, or null. `Number.isFinite`, not `typeof`: NaN is a number. */
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** The `activity` object for `store`, whose flat text is `fullText`. */
+function readActivity(store: DocumentStore, fullText: string): InboxActivity {
   // Current user activity. `getUserAwareness()` is typed rather than a
   // `getMap` returning the raw Y.Map — a map accessor would be the `ydoc`
   // hatch under a new name.
+  //
+  // Its types are a CAST, not a check: both records are client-written. So
+  // every field below is narrowed to what the output schema declares (PR #2225
+  // review) — a bad value fails the SDK's validation of the WHOLE response,
+  // the chat and every document's items with it, not just this field.
   const { selection, activity } = store.getUserAwareness();
 
-  const hasSelection = selection && selection.from !== selection.to;
-  const selectedText = hasSelection ? safeSlice(fullText, selection!.from, selection!.to) : null;
+  const from = finiteOrNull(selection?.from);
+  const to = finiteOrNull(selection?.to);
+  const hasSelection = from !== null && to !== null && from !== to;
+  const selectedText = hasSelection ? safeSlice(fullText, from, to) : null;
   // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
   // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
   // halves of `activity` read as one snapshot while having independent
   // ages. Null whenever `selectedText` is null, but NOT only then: a record
   // with no numeric `timestamp` yields a real `selectedText` beside a null
   // `selectionAt`, so a null here must never be read as "no selection".
-  // The `typeof` guard is not defensive: an `undefined` here fails the
-  // SDK's structured-output validation for the WHOLE response, not just
-  // this field.
-  const selectionAt =
-    hasSelection && typeof selection!.timestamp === "number" ? selection!.timestamp : null;
+  const selectionAt = hasSelection ? finiteOrNull(selection?.timestamp) : null;
 
   return {
-    userActions,
-    userResponses,
-    userReplies,
-    activity: {
-      isTyping: activity?.isTyping ?? false,
-      cursor: activity?.cursor ?? null,
-      lastEdit: activity?.lastEdit ?? null,
-      selectedText,
-      selectionAt,
+    documentId: store.documentId,
+    isTyping: activity?.isTyping === true,
+    cursor: finiteOrNull(activity?.cursor),
+    lastEdit: finiteOrNull(activity?.lastEdit),
+    selectedText,
+    selectionAt,
+  };
+}
+
+/** Everything document-scoped one `tandem_checkInbox` call returns. */
+interface InboxDocumentsPass extends DocumentInbox {
+  /** The document `activity` describes (named, or active); null if none. */
+  activityDocumentId: string | null;
+  /** Whether any open document was read; false means only chat is shown. */
+  readAnyDocument: boolean;
+  /** Ids of documents a default poll skipped because their pass threw. */
+  unreadable: string[];
+  /** Per document, how many items `admit` refused (PR #2225 review). */
+  dropped: Map<string, number>;
+  /**
+   * Apply every read document's staged ledger writes and quiet-skip records.
+   * Call only once the whole response has validated.
+   */
+  commit: () => void;
+}
+
+/**
+ * Read the documents one `tandem_checkInbox` call covers: the named one, or —
+ * with no id (#2187) — every open document, the active one first.
+ *
+ * A default poll used to read only the active document, so a comment on a
+ * background tab came back as "No new actions." — indistinguishable from a
+ * quiet poll — and the supervisor's wake for it landed on an empty inbox.
+ *
+ * On a default poll a document whose pass throws is skipped — resolving its
+ * store included (PR #2225 review) — so one document that cannot be read no
+ * longer takes every other document's items AND the chat down with it. Its
+ * staged ledger writes are dropped with it. The id is reported and the error
+ * goes to stderr alone: it can carry record text, notes included (ADR-027). A
+ * named poll rethrows to the error boundary, as before.
+ *
+ * Nothing here is durable until the caller runs `commit()`.
+ */
+function collectInboxDocuments(
+  requestedId: string | undefined,
+  modeState: ModeState,
+): InboxDocumentsPass {
+  // `getCurrentDoc` resolves only an OPEN document, so this is open or null.
+  const activityDocumentId = requestedId ?? getCurrentDoc()?.id ?? null;
+  const order =
+    requestedId !== undefined
+      ? [requestedId]
+      : [
+          ...(activityDocumentId !== null ? [activityDocumentId] : []),
+          ...[...getOpenDocs().keys()].filter((id) => id !== activityDocumentId),
+        ];
+
+  const commits: Array<() => void> = [];
+  const pass: InboxDocumentsPass = {
+    userActions: [],
+    userResponses: [],
+    userReplies: [],
+    activity: emptyActivity(),
+    activityDocumentId,
+    readAnyDocument: false,
+    unreadable: [],
+    dropped: new Map(),
+    commit: () => {
+      for (const commit of commits) commit();
     },
   };
+  for (const id of order) {
+    const isActivityDocument = id === activityDocumentId;
+    // Refusals are merged into the pass only if this document's pass returns:
+    // one that throws is reported as unreadable, whole.
+    let refused = 0;
+    const admit: InboxPollContext["admit"] = (bucket, item) => {
+      const checked = INBOX_BUCKET_SCHEMAS[bucket].safeParse(item);
+      if (checked.success) return true;
+      logInboxDrop(`document ${id}`, `${bucket} item`, item, checked.error.issues);
+      refused += 1;
+      return false;
+    };
+    let inbox: ReturnType<typeof collectDocumentInbox>;
+    let commitQuiet: (() => void) | undefined;
+    try {
+      const store = getDocumentStore(id);
+      if (!store) continue;
+      pass.readAnyDocument = true;
+      if (requestedId === undefined && !isActivityDocument) {
+        // The quiet skip — see `quietDocs`. Resolved AFTER the store, so it
+        // never creates a document, and this one reference serves both epoch
+        // reads and the cache key.
+        const ydoc = getOrCreateDocument(id);
+        const state = quietDocState(ydoc);
+        if (isQuietSkip(state, modeState)) continue;
+        const epochBefore = state.epoch;
+        const outsideTransaction = ydoc._transaction === null;
+        inbox = collectDocumentInbox(store, modeState, false, admit);
+        const produced =
+          inbox.userActions.length + inbox.userResponses.length + inbox.userReplies.length;
+        // A fixed point: nothing changed the document while the pass ran. Never
+        // recorded from inside an open transaction, where the counter cannot
+        // move until it closes and so proves nothing. (Recording the BEFORE
+        // epoch would refuse a pass that wrote on its own; the test is stated
+        // rather than left to that coincidence.)
+        const fixedPoint =
+          outsideTransaction && ydoc._transaction === null && state.epoch === epochBefore;
+        const record: QuietRecord | null =
+          fixedPoint && produced === 0 && refused === 0
+            ? { epoch: epochBefore, mode: modeState, ledgerGeneration }
+            : null;
+        commitQuiet = () => {
+          state.quiet = record;
+        };
+      } else {
+        inbox = collectDocumentInbox(store, modeState, isActivityDocument, admit);
+      }
+    } catch (err) {
+      if (requestedId !== undefined) throw err;
+      console.error(`[Tandem] tandem_checkInbox could not read document ${id}:`, err);
+      pass.unreadable.push(id);
+      // Still the document `activity` describes — empty because it could not
+      // be read, not because none is active.
+      if (isActivityDocument) pass.activity = { ...emptyActivity(), documentId: id };
+      continue;
+    }
+    const { commitLedgers } = inbox;
+    commits.push(() => {
+      commitLedgers();
+      commitQuiet?.();
+    });
+    pass.userActions.push(...inbox.userActions);
+    pass.userResponses.push(...inbox.userResponses);
+    pass.userReplies.push(...inbox.userReplies);
+    if (refused > 0) {
+      pass.dropped.set(id, refused);
+    }
+    if (isActivityDocument) pass.activity = inbox.activity;
+  }
+  return pass;
+}
+
+/** A user chat message as `tandem_checkInbox` returns it. */
+type InboxChatMessage = Omit<ChatMessage, "read" | "author">;
+
+/** The unread user chat one poll returns, and how to mark it read once committed. */
+interface UnreadChat {
+  messages: InboxChatMessage[];
+  /** Messages refused as malformed: not returned, not marked read. */
+  dropped: number;
+  /** Stamp the returned messages read. Call only once the response validated. */
+  markRead: () => void;
+}
+
+/**
+ * Collect the unread user chat from CTRL_ROOM WITHOUT stamping it (PR #2225
+ * review): the stamp waits until the whole response validates.
+ *
+ * Each message is admitted against the SDK's own chat schema, as the document
+ * items are. The chat map is client-writable, and one malformed entry used to
+ * fail the WHOLE response — every document's items with it — after this loop
+ * had already marked the healthy messages read. A refused message is neither
+ * returned nor stamped, so it stays unread; it does not set `hasNew`, and the
+ * summary counts it.
+ */
+function collectUnreadChat(): UnreadChat {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const messages: InboxChatMessage[] = [];
+  const keys: string[] = [];
+  let dropped = 0;
+
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user" || msg.read) return;
+    const item = {
+      id: msg.id,
+      text: msg.text,
+      timestamp: msg.timestamp,
+      ...(msg.documentId ? { documentId: msg.documentId } : {}),
+      ...(msg.anchor ? { anchor: msg.anchor } : {}),
+      ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+    };
+    const checked = inboxChatMessageSchema.safeParse(item);
+    if (!checked.success) {
+      logInboxDrop("chat", "chat message", item, checked.error.issues);
+      dropped += 1;
+      return;
+    }
+    messages.push(item as InboxChatMessage);
+    keys.push(key);
+  });
+
+  return {
+    messages,
+    dropped,
+    markRead: () => {
+      if (keys.length === 0) return;
+      // ONE transaction for every stamp, each against the LIVE value: re-read
+      // rather than spread from the copy collected above, so the stamp writes
+      // back exactly what is stored now, and only while it is still an unread
+      // user message.
+      withMcp(ctrlDoc, () => {
+        for (const key of keys) {
+          const live = chatMap.get(key);
+          if (typeof live !== "object" || live === null) continue;
+          const msg = live as ChatMessage;
+          if (msg.author === "user" && !msg.read) chatMap.set(key, { ...msg, read: true });
+        }
+      });
+    },
+  };
+}
+
+/**
+ * How the summary names each document: its file's basename, or — when two of
+ * the documents in play share one (PR #2225 review) — `<basename>
+ * (<documentId>)`, so "notes.md" never stands for two files. The active
+ * document joins the collision set though it is never listed: a background
+ * `notes.md` must not read as the active one.
+ */
+function documentLabels(
+  ids: Iterable<string>,
+  activityDocumentId: string | null,
+): Map<string, string> {
+  const openDocs = getOpenDocs();
+  const basename = (id: string): string => {
+    const doc = openDocs.get(id);
+    return (doc && crossBasename(doc.filePath)) || id;
+  };
+  const named = new Set(ids);
+  const counts = new Map<string, number>();
+  const inPlay = new Set([...named, ...(activityDocumentId !== null ? [activityDocumentId] : [])]);
+  for (const id of inPlay) {
+    const name = basename(id);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return new Map(
+    [...named].map((id): [string, string] => {
+      const name = basename(id);
+      return [id, (counts.get(name) ?? 0) > 1 ? `${name} (${id})` : name];
+    }),
+  );
 }
 
 export function registerAwarenessTools(server: McpServer): void {
@@ -633,12 +1133,14 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server's side only. Does not return user notes or any other record the user has kept private — user highlights never appear here at all. Comments, replies and accept/dismiss responses cover the target document only; `chatMessages` holds every unread user chat message across all documents (with its documentId when it was sent from a document), and returning them marks them read. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets.",
+        "Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Call it with no `documentId` to cover every open document: each comment, response and reply carries its `documentId` (the same imported comment open in two files arrives twice, told apart by it), so pass that id when acting on an item: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one, and a range from one document applied to another lands on the wrong text. Passing a `documentId` limits comments, replies and accept/dismiss responses to that document. An item whose stored record is malformed is left out, counted in `summary` and retried on the next poll. `activity` describes only the active document (`activity.documentId`). `chatMessages` holds every unread user chat message across all documents (with its documentId when it was sent from a document), and returning them marks them read. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server's side only. Does not return user notes or any other record the user has kept private — user highlights never appear here at all. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets.",
       inputSchema: {
         documentId: z
           .string()
           .optional()
-          .describe("Target document ID (defaults to active document)"),
+          .describe(
+            "Limit the poll to one document. Omit it to poll every open document — the usual call",
+          ),
       },
       outputSchema: checkInboxOutputShape,
     },
@@ -654,14 +1156,12 @@ export function registerAwarenessTools(server: McpServer): void {
         // `""` is treated as omitted: `getCurrentDoc("")` would otherwise
         // resolve to no document even with one active.
         const requestedId = documentId || undefined;
-        const store = getDocumentStore(requestedId);
         // No document is NOT an error here. Chat lives in CTRL_ROOM, not on a
         // document, and returning NO_DOCUMENT is how a chat sent with every tab
         // closed went unanswered: the supervisor's Claude polled, got the
         // error, and never reached the chat loop. That held for an explicit id
-        // naming a closed tab too (the skill says to pass one when several are
-        // open). So the poll always runs; with no store the document buckets
-        // are empty and the summary says why.
+        // naming a closed tab too. So the poll always runs; with nothing read
+        // the document buckets are empty and the summary says why.
 
         // WS-A2: single live read of the three-state mode, used both to gate
         // the Solo privacy hold (`hideFromAI` in the surfacer) and to report
@@ -669,47 +1169,29 @@ export function registerAwarenessTools(server: McpServer): void {
         // value can never disagree within a single poll.
         const modeState = readModeState();
 
+        // PR #2225 review: NOTHING durable happens until the whole response
+        // has validated. The documents' ledgers are staged, the chat is
+        // collected unstamped, the response is built and checked against the
+        // output schema the SDK enforces, and only then are the ledgers
+        // committed, the chat marked read and the delivery round resolved. A
+        // response the SDK would reject used to be rejected AFTER every item in
+        // it was stamped delivered — so the next poll skipped them all.
+        //
+        // This section MUST stay synchronous — `safeParse`, never
+        // `safeParseAsync`, and no `await` anywhere from here to the commit. An
+        // await would let another poll, or a user edit, interleave between what
+        // was validated and what is committed.
+
         // Every document-scoped field — the three annotation buckets and
-        // `activity` — comes from the store. With no document open they are
-        // empty, so nothing annotation-derived (notes, private records,
-        // Solo-held content) can reach Claude on that pass.
-        const { userActions, userResponses, userReplies, activity } = store
-          ? collectDocumentInbox(store, modeState)
-          : emptyDocumentInbox();
+        // `activity` — comes from `collectDocumentInbox`, whose per-record
+        // filters (notes, private records, the Solo hold) are the same for
+        // every document it reads.
+        const docs = collectInboxDocuments(requestedId, modeState);
+        const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
 
-        // The join closes HERE, directly above the chat loop — a separate fact
-        // from the stamp above, kept apart because it is a claim about the
-        // USER's message. Below the document pass on purpose: a throw from
-        // `refreshAnnotations`, `listReplies` or `getUserAwareness` reaches the
-        // error boundary with nothing read, and must leave the round open. The
-        // round is process-wide, not per document, so this still closes one
-        // whose forward was an annotation on any document other than the one
-        // polled (closed, or open but not named). That predates the
-        // no-document pass: a poll naming a different open document always
-        // closed it the same way. `polled` was never proof that that
-        // annotation was delivered.
-        resolveDeliveryRound();
-
-        // Bucket 3: unread chat messages from CTRL_ROOM
-        const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-        const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-        const chatMessages: Array<Omit<ChatMessage, "read" | "author">> = [];
-
-        chatMap.forEach((value) => {
-          const msg = value as ChatMessage;
-          if (msg.author === "user" && !msg.read) {
-            chatMessages.push({
-              id: msg.id,
-              text: msg.text,
-              timestamp: msg.timestamp,
-              ...(msg.documentId ? { documentId: msg.documentId } : {}),
-              ...(msg.anchor ? { anchor: msg.anchor } : {}),
-              ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
-            });
-            // Mark as read
-            withMcp(ctrlDoc, () => chatMap.set(msg.id, { ...msg, read: true }));
-          }
-        });
+        // Bucket 3: unread chat messages from CTRL_ROOM, not yet marked read.
+        const chat = collectUnreadChat();
+        const chatMessages = chat.messages;
 
         // Reported mode is the two-state view of the same live read used for
         // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
@@ -747,10 +1229,42 @@ export function registerAwarenessTools(server: McpServer): void {
           );
           parts.push(CHAT_ACK_DIRECTIVE);
         }
-        const actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
+        let actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
+        // #2187: items from a background document are exactly the ones a
+        // follow-up call without `documentId` would aim at the WRONG document —
+        // a range-keyed write lands in the active one at another document's
+        // offsets. Named by file so no tandem_listDocuments round trip is needed.
+        const elsewhere = new Set(
+          [...userActions, ...userResponses, ...userReplies]
+            .map((item) => item.documentId)
+            .filter((id) => id !== activityDocumentId),
+        );
+        const labels = documentLabels([...elsewhere, ...docs.dropped.keys()], activityDocumentId);
+        if (elsewhere.size > 0) {
+          const names = [...elsewhere].map((id) => labels.get(id) ?? id);
+          actions +=
+            ` Some items are from ${activityDocumentId === null ? "open documents (none is active)" : "documents other than the active one"}: ${names.join(", ")}.` +
+            " Pass each item's documentId when acting on it.";
+        }
+        if (docs.unreadable.length > 0) {
+          const { unreadable } = docs;
+          actions += ` Could not read ${unreadable.length === 1 ? "document" : "documents"} ${unreadable.join(", ")}; ${unreadable.length === 1 ? "its" : "their"} items are missing from this poll (the error is in Tandem's log).`;
+        }
+        // PR #2225 review: refused records are counted, never described — the
+        // record is client-written and its text stays out of the response.
+        // They are retried on every poll, and they do not set `hasNew`: there
+        // is nothing in this response to act on.
+        for (const [id, n] of docs.dropped) {
+          actions += ` ${n} ${n === 1 ? "item" : "items"} in ${labels.get(id) ?? id} could not be returned (malformed record; details in Tandem's log).`;
+        }
+        if (chat.dropped > 0) {
+          actions += ` ${chat.dropped} chat ${chat.dropped === 1 ? "message" : "messages"} could not be returned (malformed record; details in Tandem's log).`;
+        }
         // Leads, so a model reading only the summary knows why the document
         // buckets are empty. Not counted in `hasNew`: it is a state, not an ask.
-        const summary = store ? actions : `${noDocumentInboxNote(requestedId)} ${actions}`;
+        const summary = docs.readAnyDocument
+          ? actions
+          : `${noDocumentInboxNote(requestedId)} ${actions}`;
 
         const hasNew =
           userActions.length > 0 ||
@@ -758,7 +1272,7 @@ export function registerAwarenessTools(server: McpServer): void {
           userReplies.length > 0 ||
           chatMessages.length > 0;
 
-        return mcpStructured({
+        const response = {
           summary,
           hasNew,
           mode,
@@ -772,7 +1286,41 @@ export function registerAwarenessTools(server: McpServer): void {
           userReplies,
           chatMessages,
           activity,
+        };
+
+        // The backstop. With every client-written value admitted or narrowed
+        // above, a failure here is a server-built field — a code bug — so
+        // failing the poll and retrying everything next time is the right
+        // trade: nothing is committed, nothing stamped, the round stays open.
+        const checked = checkInboxOutputSchema.safeParse(response);
+        if (!checked.success) {
+          console.error(
+            `[Tandem] tandem_checkInbox built a response that fails its output schema; nothing was marked returned: ${describeIssues(checked.error.issues)}`,
+          );
+          return mcpError(
+            "INTERNAL_ERROR",
+            "tandem_checkInbox could not build a valid response, so nothing was marked as returned and the next poll returns the same items (details in Tandem's log).",
+          );
+        }
+
+        docs.commit();
+        chat.markRead();
+        // The join closes only now, once what was returned is committed — a
+        // claim about the USER's message, kept apart from the poll stamp above.
+        // It stays OPEN while a document the round is waiting on could not be
+        // read at all; that held round is re-timed to its oldest item still
+        // undelivered (`resolveDeliveryRound`). A record `admit` refused does
+        // NOT hold it: the summary just told Claude about it, and holding would
+        // leave a permanently malformed record pinning the round at
+        // `awaiting-poll` for the life of the process (PR #2225 review). The round is process-wide, so a poll naming
+        // a different document still closes one whose forward was elsewhere —
+        // `polled` was never proof that that annotation was delivered.
+        resolveDeliveryRound(Date.now(), {
+          documents: new Set(docs.unreadable),
+          items: new Set(),
         });
+
+        return mcpStructured(response);
       }),
     ),
   );
@@ -896,12 +1444,12 @@ export function isUserActive(
 export function processInboxAnnotations(
   allAnnotations: Annotation[],
   fullText: string,
-  surfaced: Map<string, number>,
+  surfaced: InboxLedger,
   refreshAll: (anns: Annotation[]) => Annotation[],
   ctx: InboxPollContext,
 ): {
   userActions: Array<InboxUserAction>;
-  userResponses: Array<Annotation & { textSnippet: string }>;
+  userResponses: Array<InboxUserResponse>;
 } {
   // Select first, refresh once. The two halves are separable because the
   // selection reads only the pre-refresh records and a stable ledger — a refresh
@@ -953,14 +1501,14 @@ export type ProcessUnsurfacedInboxAnnotationsParameters = Parameters<
 function processUnsurfacedInboxAnnotations(
   unsurfaced: Annotation[],
   fullText: string,
-  surfaced: Map<string, number>,
+  surfaced: InboxLedger,
   ctx: InboxPollContext,
 ): {
   userActions: Array<InboxUserAction>;
-  userResponses: Array<Annotation & { textSnippet: string }>;
+  userResponses: Array<InboxUserResponse>;
 } {
   const userActions: Array<InboxUserAction> = [];
-  const userResponses: Array<Annotation & { textSnippet: string }> = [];
+  const userResponses: Array<InboxUserResponse> = [];
 
   for (const ann of unsurfaced) {
     // WS-A2 Solo hold — the gate-before-ledger. A held user record must be
@@ -1034,12 +1582,18 @@ function processUnsurfacedInboxAnnotations(
       // it can be true for an item no model saw, and absent for one that was
       // pushed (ids are untracked on buffer eviction). Never gate on it.
       // Cost: one duplicate per comment in channel-connected sessions.
-      userActions.push({
+      const item: InboxUserAction = {
         ...ann,
         textSnippet: snippet,
+        documentId: ctx.documentId,
         ...(edited ? { edited: true } : {}),
         ...(ctx.wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
-      });
+      };
+      // Last, after every privacy and status gate, directly before the push
+      // and the stamp (PR #2225 review). A refused item is neither: it stays
+      // unsurfaced and is retried next poll, never marked delivered.
+      if (!ctx.admit("userActions", item)) continue;
+      userActions.push(item);
       surfaced.set(key, ann.editedAt ?? 0);
     } else if (
       ann.author === "claude" &&
@@ -1050,7 +1604,9 @@ function processUnsurfacedInboxAnnotations(
       // a Claude dismiss was indistinguishable from one.
       ann.resolvedBy !== "claude"
     ) {
-      userResponses.push({ ...ann, textSnippet: snippet });
+      const item: InboxUserResponse = { ...ann, textSnippet: snippet, documentId: ctx.documentId };
+      if (!ctx.admit("userResponses", item)) continue; // see the userActions arm
+      userResponses.push(item);
       surfaced.set(key, ann.editedAt ?? 0);
     }
   }
@@ -1086,11 +1642,32 @@ export interface InboxPollContext {
   documentId: string;
   /**
    * Stamps `alreadyPushed` — advisory, never a gate. Production passes
-   * `wasEmittedViaChannel`; a `() => false` stand-in silently stops the stamp
-   * for every channel-connected session.
+   * `wasEmittedViaChannelInDocument` bound to THIS document (PR #2225 review):
+   * the bare `wasEmittedViaChannel` answers for a push in ANY document, and
+   * since #2187 the same imported comment arrives once per document. A
+   * `() => false` stand-in silently stops the stamp for every
+   * channel-connected session.
    */
   wasChannelEmitted: (payloadId: string) => boolean;
+  /**
+   * The last gate on every item, run after the privacy and status gates and
+   * directly before the push and the ledger stamp (PR #2225 review). `false`
+   * means the item is neither returned nor stamped, so it is retried on the
+   * next poll and never marked delivered. Production checks the item against
+   * the bucket's own output schema — the one the SDK validates the whole
+   * response with, which is why a single malformed client-written record used
+   * to fail every item in the poll after they had all been stamped. Because it
+   * runs after the gates, a held or private record is never counted. Tests
+   * pass `() => true`.
+   */
+  admit: (bucket: InboxBucket, item: InboxItem) => boolean;
 }
+
+/** The three document-scoped `tandem_checkInbox` buckets an item is admitted to. */
+export type InboxBucket = "userActions" | "userResponses" | "userReplies";
+
+/** An item of one of those buckets. */
+export type InboxItem = InboxUserAction | InboxUserResponse | InboxUserReply;
 
 /**
  * A user comment in the checkInbox `userActions` bucket.
@@ -1111,6 +1688,8 @@ export interface InboxPollContext {
  */
 export type InboxUserAction = Annotation & {
   textSnippet: string;
+  /** The document this item belongs to (#2187: a default poll spans every open one). */
+  documentId: string;
   /** Set when re-surfaced after a user edit. Never `false` — omitted instead. */
   edited?: true;
   /** Also emitted as a channel event. A hint, not proof of delivery. */
@@ -1124,9 +1703,14 @@ export interface InboxUserReply {
   text: string;
   timestamp: number;
   textSnippet: string;
+  /** The document this item belongs to (#2187). */
+  documentId: string;
   /** Also emitted as a channel event. A hint, not proof of delivery. */
   alreadyPushed?: true;
 }
+
+/** A user accept/dismiss in the checkInbox `userResponses` bucket. */
+export type InboxUserResponse = Annotation & { textSnippet: string; documentId: string };
 
 /**
  * WS-A2: collect NEW user replies for the checkInbox userReplies bucket — the
@@ -1144,7 +1728,7 @@ export function collectInboxUserReplies(
   allAnnotations: Annotation[],
   fullText: string,
   loadReplies: (annotationId: string) => AnnotationReply[],
-  replySurfaced: Set<string>,
+  replySurfaced: ReplyLedger,
   ctx: InboxPollContext,
 ): InboxUserReply[] {
   const out: InboxUserReply[] = [];
@@ -1161,15 +1745,20 @@ export function collectInboxUserReplies(
       // `replySurfaced` is a plain Set with no edit dimension, so a poisoned
       // entry had no `editedAt` escape hatch and the reply was lost for the
       // whole server run with certainty.
-      out.push({
+      const item: InboxUserReply = {
         id: reply.id,
         annotationId: ann.id,
         author: "user",
         text: reply.text,
         timestamp: reply.timestamp,
         textSnippet: snippet,
+        documentId: ctx.documentId,
         ...(ctx.wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
-      });
+      };
+      // Last, directly before the push and the stamp — see the annotation
+      // surfacer (PR #2225 review).
+      if (!ctx.admit("userReplies", item)) continue;
+      out.push(item);
       replySurfaced.add(ledgerKey(ctx.documentId, reply.id));
     }
   }

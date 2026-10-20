@@ -37,8 +37,11 @@ import { DELIVERY_STALL_MS } from "../../shared/constants.js";
  *
  * ## What it deliberately cannot catch
  *
- * `"awaiting-poll"` is only reachable when NO session has polled, because the
- * outstanding forward is process-global. With two sessions attached, a second
+ * `"awaiting-poll"` is only reachable when NO session has polled — or when no
+ * poll since could hand the waited-on comment or reply over (PR #2225 review:
+ * its document could not be read, or its record was refused as malformed), which
+ * is an undelivered ask in its own right — because the outstanding forward is
+ * process-global. With two sessions attached, a second
  * one polling on its routine cadence clears the flag and this stays silent while
  * the first is genuinely wedged. That is a real gap and it is the honest side of
  * the trade: the alternative is a per-session claim, and neither session id is

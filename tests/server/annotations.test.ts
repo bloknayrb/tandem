@@ -310,10 +310,14 @@ describe("refreshRange", () => {
 
     const refreshed = refreshRange(ann, doc);
     // Either re-anchors (repaired) or strips (degraded) depending on what
-    // flatOffsetToRelPos can find post-delete. Both are valid; both leave
-    // the original flat range so downstream code can still render.
+    // flatOffsetToRelPos can find post-delete. Both are valid. The stored
+    // {6,12} now lies wholly past the end of "first", so a re-anchor parks it
+    // at the end — {5,5}, where the next refresh collapsed it before #2188 —
+    // while a strip keeps the original flat range.
     expect(["repaired", "degraded"]).toContain(refreshed.kind);
-    expect(refreshed.annotation.range).toEqual({ from: 6, to: 12 });
+    expect(refreshed.annotation.range).toEqual(
+      refreshed.kind === "repaired" ? { from: 5, to: 5 } : { from: 6, to: 12 },
+    );
 
     // PR #705 review: enforce the dead-relRange strip invariant per
     // CLAUDE.md. On the `degraded` branch (lazy-attach OR re-anchor
