@@ -43,8 +43,11 @@ import { TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   McpTestClient,
+  openAnnotatePopup,
   openSettingsViaBrandMenu,
+  selectTextStable,
   setRailVisible,
+  submitAnnotation,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
 import { E2E_MCP_PORT } from "../test-ports";
@@ -102,13 +105,26 @@ type Envelope = {
   data?: Record<string, unknown>;
 };
 
-test.beforeAll(() => {
+/**
+ * ONE MCP client for the whole file, not one per test.
+ *
+ * The status pill prints " · N sessions", and the server keeps counting a
+ * closed session for about a minute. With a fresh client per test, slot 06 —
+ * the fifth step — photographed "5 sessions" and the hero's faint pill read
+ * "10 sessions": accurate about the harness and wrong about the product, where
+ * one person has one AI attached.
+ */
+test.beforeAll(async () => {
   fs.mkdirSync(screenshotsDir, { recursive: true });
+  mcp = new McpTestClient();
+  await mcp.connect();
+});
+
+test.afterAll(async () => {
+  await mcp.close();
 });
 
 test.beforeEach(async () => {
-  mcp = new McpTestClient();
-  await mcp.connect();
   // Start with a clean slate — close anything previous tests left open.
   await cleanupAllOpenDocuments(mcp);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-shot-"));
@@ -116,7 +132,6 @@ test.beforeEach(async () => {
 
 test.afterEach(async () => {
   await cleanupAllOpenDocuments(mcp);
-  await mcp.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -467,12 +482,66 @@ async function redactAccountName(page: Page): Promise<AccountRedactionPlan> {
   return plan;
 }
 
-/** Load the app, wait for the editor + first annotation card, settle animations. */
-async function gotoAnnotatedEditor(page: Page): Promise<void> {
+/**
+ * Load the app and wait until the status pill has settled on "Synced".
+ *
+ * The pill's connection label is a rising-edge detector, and the page's FIRST
+ * connect is a rising edge: for two seconds after load it reads "Reconnected".
+ * Every shot that included the pill — slot 06 is nothing else — photographed
+ * that transient instead of the steady state a reader will actually see.
+ */
+async function loadEditor(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
   await dismissReadOnlyBanner(page);
+  await expect(page.locator("[data-status-focus-root]")).toContainText("Synced", {
+    timeout: 10_000,
+  });
+}
+
+/**
+ * Collapse the side panel's filter bar.
+ *
+ * `switchToAnnotationsTab` EXPANDS it, because the e2e specs that share the
+ * helper want the filter controls. In a picture of annotation cards those three
+ * rows of chips are the first thing the eye lands on, and they cost the hero
+ * the suggestion card's Accept/Dismiss row.
+ */
+async function collapseFilterBar(page: Page): Promise<void> {
+  const toggle = page.getByTestId("filter-bar-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) === "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+}
+
+/**
+ * Drop focus from whatever holds it. Closing a menu or modal returns focus to
+ * the control that opened it — the brand logo — and a shot taken then carries
+ * its focus ring.
+ */
+async function blurActiveElement(page: Page): Promise<void> {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+}
+
+/**
+ * Wait until every CSS animation and transition inside `target` has finished.
+ * `toBeVisible` passes on an entrance animation's first frame, when the element
+ * is still nearly transparent — slots 07 and 21 both photographed that.
+ */
+async function waitForAnimations(target: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      target.evaluate((el) =>
+        el.getAnimations({ subtree: true }).every((a) => a.playState === "finished"),
+      ),
+    )
+    .toBe(true);
+}
+
+/** Load the app, wait for the editor + first annotation card, settle animations. */
+async function gotoAnnotatedEditor(page: Page): Promise<void> {
+  await loadEditor(page);
   await switchToAnnotationsTab(page);
+  await collapseFilterBar(page);
   await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
     timeout: 10_000,
   });
@@ -652,9 +721,7 @@ test("04-toolbar-actions", async ({ page }) => {
 
   await mcp.callTool("tandem_switchDocument", { documentId: welcomeId });
 
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  await loadEditor(page);
 
   // The dirtying edit lands AFTER the page is up and the tab has armed, and
   // that ordering is the whole trick. `dirty` is not server state: TabItem
@@ -784,9 +851,7 @@ test("07-toast-notification", async ({ page }) => {
   });
 
   await openWelcome();
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  await loadEditor(page);
 
   await openSettingsClaudeCodeTab(page);
   await expect(page.getByTestId("settings-modal-working-directory")).toBeVisible({
@@ -801,6 +866,15 @@ test("07-toast-notification", async ({ page }) => {
   await expect(toast).toBeVisible({ timeout: 5_000 });
   await expect(toast).toContainText("Working directory saved.");
   await expect(page.locator("[data-testid^='toast-dismiss-']").first()).toBeVisible();
+  // Close Settings before the shot. Its backdrop is a 70% wash of the page
+  // background on the above-titlebar tier (z 100000), far above the toast tier
+  // (1100), so every capture of this slot until now was a pale ghost of the
+  // toast seen through it. The toast outlives the modal by design.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-modal")).toHaveCount(0);
+  await expect(toast).toContainText("Working directory saved.");
+  // And wait out the 200ms slide-in: `toBeVisible` passes on its first frame.
+  await waitForAnimations(toast);
 
   // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
   // before the pixel capture, not just after a fixed sleep.
@@ -835,11 +909,17 @@ test("08-onboarding-tutorial", async ({ page }) => {
 
 test("09-settings-modal", async ({ page }) => {
   await openWelcome();
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  // A full-viewport shot: the tutorial card sits bottom-left, half under the
+  // modal's backdrop and half beside it, and read as part of Settings.
+  await suppressTutorialCard(page);
+  await loadEditor(page);
   const modal = await openSettingsClaudeCodeTab(page);
   await expect(modal).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByTestId("settings-modal-tab-claude-code")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
   await page.waitForTimeout(300);
   // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
   // before the pixel capture, not just after a fixed sleep.
@@ -852,9 +932,7 @@ test("09-settings-modal", async ({ page }) => {
 
 test("10-solo-tandem-toggle", async ({ page }) => {
   await openWelcome();
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  await loadEditor(page);
 
   const toggle = page.getByTestId("mode-toggle");
   await expect(toggle).toBeVisible({ timeout: 10_000 });
@@ -878,9 +956,7 @@ test("11-margin-annotations", async ({ page }) => {
   // Slot 11's own above-the-fold seed — see `openWithMarginAnnotations`.
   await openWithMarginAnnotations();
   await suppressTutorialCard(page);
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  await loadEditor(page);
 
   // Open rails feed the auto-hide threshold; close both so `full` is reachable.
   await setRailVisible(page, "left", false);
@@ -891,6 +967,7 @@ test("11-margin-annotations", async ({ page }) => {
   if (!(await marginToggle.isChecked())) await marginToggle.click();
   await expect(marginToggle).toBeChecked();
   await page.keyboard.press("Escape");
+  await blurActiveElement(page);
 
   // `margin-column-right` is asserted ATTACHED, never visible. Every bubble it
   // holds is `position: absolute`, so the column contributes no height of its
@@ -947,9 +1024,7 @@ test("12-outline-rail", async ({ page }) => {
   // passed with a card clipped across the lower third of the frame -- passing
   // is not the same as depicting the subject.
   await suppressTutorialCard(page);
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  await loadEditor(page);
   await setRailVisible(page, "left", true);
 
   const rail = page.getByTestId("left-outline-rail");
@@ -1031,9 +1106,7 @@ test("13-setup-wizard", async ({ page }) => {
   });
 
   await openWelcome();
-  await page.goto("/");
-  await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await dismissReadOnlyBanner(page);
+  await loadEditor(page);
 
   await openSettingsClaudeCodeTab(page);
   await page.getByTestId("settings-modal-open-integration-wizard").click();
@@ -1086,6 +1159,376 @@ test("13-setup-wizard", async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "13-setup-wizard.png"),
+    fullPage: false,
+  });
+});
+
+// ── Slots 15+ ────────────────────────────────────────────────────────────────
+
+/**
+ * Slots 15 and 16: slot 01's seed and framing, re-themed through the brand
+ * menu's colour-scheme swatch — the control a reader will actually use. The
+ * attribute assertion is what proves the switch happened: a light frame is a
+ * perfectly plausible-looking screenshot.
+ */
+async function captureThemedOverview(page: Page, theme: "dark" | "warm", file: string) {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await openWithAnnotations();
+  await suppressTutorialCard(page);
+  await gotoAnnotatedEditor(page);
+
+  await page.getByTestId("titlebar-brand-menu").click();
+  // Choosing a swatch closes the menu, so the proof of the switch is the
+  // attribute on <html> below, not the swatch's own `aria-checked`.
+  await page.getByTestId(`brand-menu-theme-${theme}`).click();
+  const popover = page.getByTestId("titlebar-brand-menu-popover");
+  if (await popover.isVisible()) await page.keyboard.press("Escape");
+  await expect(popover).toHaveCount(0);
+  await blurActiveElement(page);
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(4);
+  await expect(page.getByTestId("mode-toggle")).toBeVisible();
+  // The theme swap is a CSS-variable change with colour transitions on it.
+  await page.waitForTimeout(500);
+
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: path.join(screenshotsDir, file), fullPage: false });
+}
+
+test("15-dark-theme", async ({ page }) => {
+  await captureThemedOverview(page, "dark", "15-dark-theme.png");
+});
+
+test("16-warm-theme", async ({ page }) => {
+  await captureThemedOverview(page, "warm", "16-warm-theme.png");
+});
+
+test("17-reply-thread-and-note", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const documentId = await openWelcome();
+  const text = await documentText(documentId);
+
+  // The thread: Claude's comment, the user's reply, Claude's answer. The user
+  // half goes through the card's own Reply button, because that is the path
+  // the screenshot claims exists.
+  const openerText = "Both you and your AI can see and edit this document at the same time";
+  const created = (await mcp.callTool("tandem_comment", {
+    ...findRange(text, openerText),
+    text: "Great opening line — sets collaborative expectations immediately.",
+    textSnapshot: openerText,
+  })) as Envelope;
+  const commentId = created.data?.annotationId as string | undefined;
+  if (created.error || !commentId) {
+    throw new Error(`tandem_comment failed: ${created.code ?? ""} ${created.message ?? ""}`);
+  }
+
+  await suppressTutorialCard(page);
+  await loadEditor(page);
+  await switchToAnnotationsTab(page);
+  await collapseFilterBar(page);
+
+  const commentCard = page.getByTestId(`annotation-card-${commentId}`);
+  await expect(commentCard).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId(`reply-btn-${commentId}`).click();
+  await page
+    .getByTestId(`reply-input-${commentId}`)
+    .fill("Should it say that edits sync both ways, not just that we can both see it?");
+  await page.getByTestId(`reply-send-btn-${commentId}`).click();
+
+  const reply = (await mcp.callTool("tandem_annotationReply", {
+    annotationId: commentId,
+    documentId,
+    text: "Yes — that's the stronger claim. I'd add “and every edit appears for both of you as it happens.”",
+  })) as Envelope;
+  if (reply.error) {
+    throw new Error(`tandem_annotationReply failed: ${reply.code ?? ""} ${reply.message ?? ""}`);
+  }
+
+  // The private note. Claude cannot create one (ADR-027 — there is no MCP path
+  // to a note at all), so it is made the way a user makes it: select text, open
+  // the selection popup's composer, choose "Note to self".
+  const notesItem = page.locator(".ProseMirror li", {
+    hasText: "private thoughts kept to yourself",
+  });
+  await selectTextStable(notesItem);
+  await openAnnotatePopup(page);
+  await page
+    .getByTestId("popup-annotation-input")
+    .fill("Check whether a note can be promoted to a comment later.");
+  await submitAnnotation(page, "note");
+
+  const noteCard = page
+    .locator("[data-testid^='annotation-card-']")
+    .filter({ has: page.getByTestId("annotation-private-pill") });
+  await expect(noteCard).toBeVisible({ timeout: 10_000 });
+  await expect(noteCard).toContainText("promoted to a comment");
+
+  // Threads start collapsed; the toggle's count proves both replies landed.
+  const toggle = page.getByTestId(`reply-toggle-${commentId}`);
+  await expect(toggle).toContainText("2 replies", { timeout: 10_000 });
+  await toggle.click();
+  const thread = commentCard.getByTestId("comment-thread");
+  await expect(thread).toBeVisible();
+  await expect(thread).toContainText("edits sync both ways");
+  await expect(thread).toContainText("the stronger claim");
+
+  // Clear the selection so the popup is not floating over the editor, then
+  // check both cards sit wholly inside the captured box (see slot 03).
+  await page.keyboard.press("Escape");
+  await blurActiveElement(page);
+  const list = page.getByTestId("annotation-list-scroll-container");
+  await commentCard.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+  const listBox = await list.boundingBox();
+  if (!listBox) throw new Error("annotation list has no box");
+  for (const card of [commentCard, noteCard]) {
+    const box = await card.boundingBox();
+    if (!box) throw new Error("annotation card has no box");
+    expect(box.y).toBeGreaterThanOrEqual(listBox.y - 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
+  }
+
+  await page.evaluate(() => document.fonts.ready);
+  await list.screenshot({ path: path.join(screenshotsDir, "17-reply-thread-and-note.png") });
+
+  // Remove the note before the next step reopens welcome.md. `openWelcome`'s
+  // sweep lists through `tandem_getAnnotations`, which never returns a note
+  // (ADR-027) — the same blind spot `TUTORIAL_ANNOTATION_IDS` exists for — so
+  // without this the note survives into every later shot of the document; the
+  // first full run put it behind slot 22's Settings modal.
+  const noteTestId = await noteCard.getAttribute("data-testid");
+  const noteId = noteTestId?.replace(/^annotation-card-/, "");
+  if (!noteId) throw new Error("note card carries no annotation id");
+  await removeAnnotation(documentId, noteId);
+});
+
+/** Write a Markdown file into this test's temp dir and open it. */
+async function openTempDocument(
+  name: string,
+  content: string,
+): Promise<{ filePath: string; id: string }> {
+  const filePath = path.join(tmpDir, name);
+  fs.writeFileSync(filePath, content);
+  const res = (await mcp.callTool("tandem_open", {
+    filePath: filePath.replace(/\\/g, "/"),
+  })) as Envelope;
+  const id = res.data?.documentId as string | undefined;
+  if (!id) throw new Error(`tandem_open returned no documentId for ${name}`);
+  return { filePath, id };
+}
+
+/**
+ * Make an unsaved edit in the ACTIVE document through the editor, then wait for
+ * its tab's dirty dot — the browser-side proof that the edit registered. The
+ * server's own dirty flag, which is what turns a disk change into a conflict
+ * rather than a silent reload, is set by the same Y.Doc update.
+ */
+async function makeUnsavedEdit(page: Page, documentId: string, typed: string): Promise<void> {
+  const firstPara = page.locator(".ProseMirror p").first();
+  await firstPara.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(typed);
+  await expect(page.locator(`[data-testid='unsaved-indicator-${documentId}'] .dot`)).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+const BRIEF_MD =
+  "# Project Brief\n\nThe pilot runs for six weeks with two partner teams.\n\n## Scope\n\nWe will measure review turnaround and the share of suggestions accepted.\n\n## Risks\n\nThe second team has not confirmed its start date.\n";
+
+test("18-external-conflict-banner", async ({ page }) => {
+  const { filePath, id } = await openTempDocument("project-brief.md", BRIEF_MD);
+  await suppressTutorialCard(page);
+  await loadEditor(page);
+  // The right rail would only frame an empty annotation list beside the banner.
+  await setRailVisible(page, "right", false);
+  await makeUnsavedEdit(page, id, " Draft two.");
+
+  // Another program rewrites the file while the edit is unsaved. Autosave is
+  // 60s away, so the edit is still only in the Y.Doc when the watcher fires.
+  fs.writeFileSync(filePath, BRIEF_MD.replace("six weeks", "eight weeks"));
+
+  const banner = page.getByTestId("external-conflict-banner");
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await expect(banner).toContainText("changed on disk while you have unsaved edits");
+  await expect(page.getByTestId("external-conflict-keep-btn")).toHaveText("Keep my edits");
+  await expect(page.getByTestId("external-conflict-reload-btn")).toHaveText("Reload from file");
+  await blurActiveElement(page);
+  // Park the pointer off the document: left over the heading from the click,
+  // it summons the heading's collapse caret.
+  await page.mouse.move(700, 4);
+  await page.waitForTimeout(300);
+
+  // The top of the window: the tab with its unsaved dot, the banner, and the
+  // edited paragraph under it.
+  const bannerBox = await banner.boundingBox();
+  if (!bannerBox) throw new Error("conflict banner has no box");
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("No viewport");
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({
+    path: path.join(screenshotsDir, "18-external-conflict-banner.png"),
+    clip: {
+      x: 0,
+      y: 0,
+      width: viewport.width,
+      height: Math.min(viewport.height, Math.round(bannerBox.y + bannerBox.height + 220)),
+    },
+  });
+});
+
+test("19-command-palette", async ({ page }) => {
+  await openWelcome();
+  await suppressTutorialCard(page);
+  await loadEditor(page);
+
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.getByTestId("command-palette");
+  await expect(palette).toBeVisible({ timeout: 3_000 });
+  await page.getByTestId("palette-input").fill("annotation");
+  await expect(palette).toContainText("Next annotation");
+  await expect(palette).toContainText("Accept focused annotation");
+  await expect(palette.locator("[data-testid^='palette-item-']")).not.toHaveCount(0);
+  await page.waitForTimeout(300);
+
+  await page.evaluate(() => document.fonts.ready);
+  await palette.screenshot({ path: path.join(screenshotsDir, "19-command-palette.png") });
+});
+
+test("20-help-modal", async ({ page }) => {
+  await openWelcome();
+  await suppressTutorialCard(page);
+  await loadEditor(page);
+
+  await page.getByTestId("titlebar-brand-menu").click();
+  await page.getByTestId("brand-menu-shortcuts").click();
+  const dialog = page.getByTestId("help-modal").getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 3_000 });
+  await expect(dialog).toContainText("Keyboard Shortcuts");
+  await expect(page.getByTestId("help-modal-content")).toContainText("Toggle Solo / Tandem mode");
+  await page.waitForTimeout(300);
+
+  await page.evaluate(() => document.fonts.ready);
+  await dialog.screenshot({ path: path.join(screenshotsDir, "20-help-modal.png") });
+});
+
+test("21-activity-tray", async ({ page }) => {
+  // Two real events, not injected ones: a clean file rewritten on disk (an
+  // info "reloaded" entry) and a dirty one (a warning conflict entry).
+  const notes = await openTempDocument(
+    "meeting-notes.md",
+    "# Meeting Notes\n\nAgreed to ship the pilot on the first of the month.\n",
+  );
+  const brief = await openTempDocument("project-brief.md", BRIEF_MD);
+  await suppressTutorialCard(page);
+  await loadEditor(page);
+
+  fs.writeFileSync(
+    notes.filePath,
+    "# Meeting Notes\n\nAgreed to ship the pilot on the second of the month.\n",
+  );
+  await expect(page.getByTestId("activity-pill")).toContainText("1", { timeout: 15_000 });
+
+  await makeUnsavedEdit(page, brief.id, " Draft two.");
+  fs.writeFileSync(brief.filePath, BRIEF_MD.replace("six weeks", "eight weeks"));
+  await expect(page.getByTestId("external-conflict-banner")).toBeVisible({ timeout: 15_000 });
+
+  // Clear the transient pops so they are not stacked over the tray. Dismissing
+  // a pop leaves its tray entry, which is the point of the tray.
+  const dismiss = page.locator("[data-testid^='toast-dismiss-']");
+  await expect(dismiss).not.toHaveCount(0, { timeout: 5_000 });
+  while ((await dismiss.count()) > 0) await dismiss.first().click();
+
+  const pill = page.getByTestId("activity-pill");
+  await pill.click();
+  const tray = page.getByTestId("activity-tray");
+  await expect(tray).toBeVisible();
+  const rows = tray.locator("[data-testid^='activity-row-']");
+  await expect(rows).toHaveCount(2);
+  // The rows cascade in from opacity 0; the first passing run photographed an
+  // open tray with both rows still invisible.
+  await waitForAnimations(tray);
+  await expect(rows.nth(0)).toBeVisible();
+  await expect(rows.nth(1)).toBeVisible();
+  await expect(tray).toContainText("reloaded: meeting-notes.md");
+  await expect(tray).toContainText("project-brief.md changed on disk");
+  await expect(page.getByTestId("activity-clear-all")).toBeVisible();
+  await blurActiveElement(page);
+  await page.waitForTimeout(400);
+
+  // The tray and its pill together, with a margin.
+  const trayBox = await tray.boundingBox();
+  const pillBox = await pill.boundingBox();
+  if (!trayBox || !pillBox) throw new Error("activity tray or pill has no box");
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("No viewport");
+  const pad = 16;
+  const x = Math.max(0, Math.min(trayBox.x, pillBox.x) - pad);
+  const y = Math.max(0, Math.min(trayBox.y, pillBox.y) - pad);
+  const right = Math.min(
+    viewport.width,
+    Math.max(trayBox.x + trayBox.width, pillBox.x + pillBox.width) + pad,
+  );
+  const bottom = Math.min(
+    viewport.height,
+    Math.max(trayBox.y + trayBox.height, pillBox.y + pillBox.height) + pad,
+  );
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({
+    path: path.join(screenshotsDir, "21-activity-tray.png"),
+    clip: { x, y, width: right - x, height: bottom - y },
+  });
+});
+
+test("22-settings-notifications", async ({ page, context, baseURL }) => {
+  // The tab's first line reports the browser's notification permission, and
+  // the shot should show the settled "allowed" state rather than a prompt or a
+  // block the reader may never see. `grantPermissions` is the real lever, but
+  // the headless shell this pipeline runs reports `Notification.permission` as
+  // "denied" whatever is granted — so the BROWSER's answer is stubbed before
+  // any page script runs, the same way slot 13 stubs the machine's config.
+  // Nothing in Tandem is stubbed: the tab renders its own granted branch.
+  await context.grantPermissions(["notifications"], { origin: baseURL });
+  await page.addInitScript(() => {
+    if (typeof Notification !== "undefined") {
+      Object.defineProperty(Notification, "permission", { get: () => "granted" });
+    }
+  });
+  await openWelcome();
+  await suppressTutorialCard(page);
+  await loadEditor(page);
+
+  await openSettingsViaBrandMenu(page);
+  const modal = page.getByTestId("settings-modal");
+  await expect(modal).toBeVisible({ timeout: 3_000 });
+  const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
+  if (await hamburger.isVisible().catch(() => false)) await hamburger.click();
+  await page.getByTestId("settings-modal-tab-notifications").click();
+  await expect(page.getByTestId("settings-modal-tab-notifications")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByTestId("notifications-permission-status")).toHaveText(
+    "This browser allows Tandem's notifications.",
+  );
+  await expect(page.getByTestId("notifications-enable-toggle")).toBeVisible();
+  await expect(page.getByTestId("notifications-sound-select")).toBeVisible();
+
+  // The modal is a fixed 900x680 with a scrolling body (docs/gotchas.md), so
+  // the last control must be inside the visible body, not merely rendered.
+  const body = page.getByTestId("settings-modal-content");
+  const lastControl = page.getByTestId("notifications-test-button");
+  await lastControl.scrollIntoViewIfNeeded();
+  const bodyBox = await body.boundingBox();
+  const lastBox = await lastControl.boundingBox();
+  if (!bodyBox || !lastBox) throw new Error("settings body or test button has no box");
+  expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height + 1);
+  await page.waitForTimeout(300);
+
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({
+    path: path.join(screenshotsDir, "22-settings-notifications.png"),
     fullPage: false,
   });
 });

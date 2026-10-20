@@ -36,7 +36,7 @@ A "You're ready!" card follows the three steps. The tutorial dismisses after tha
 
 ## The Editor
 
-![Five documents open in tabs, the formatting toolbar, and a selected sentence with the popup offering highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
+![Four documents open in tabs, one marked with an unsaved-changes dot, above the formatting toolbar, and a selected sentence with the popup offering formatting, highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
 
 ### Document Area
 
@@ -145,6 +145,8 @@ Annotation failures and save errors surface as dismissible toast notifications a
 
 ### Activity Tray
 
+![The Activity tray open above its pill, listing a file reloaded from disk and a file that changed on disk while it had unsaved edits, with Clear all](screenshots/21-activity-tray.png)
+
 Toasts disappear; the **Activity** tray keeps them. Its pill sits at the bottom-right of the window and reads **No activity** or **Activity** with a count. Click it to open the list of recent saves, errors and integration events, newest first, each with how long ago it happened and a ×2, ×3… badge when the same event repeats. A failed save carries a **Retry** button. Dismiss a row with its ×, or empty the list with **Clear all**; click outside the tray or press `Esc` to close it. The list survives a reload of the window, holds the most recent 50 events, and drops informational events after five minutes.
 
 ### Brand Menu
@@ -157,9 +159,15 @@ The Tandem logo at the top-left of the title bar opens the brand menu:
 
 In the desktop app, a dot on the logo means an update is ready; opening Settings clears it.
 
+![The editor in the Dark theme: the document on the left and AI annotation cards on the right, on dark surfaces](screenshots/15-dark-theme.png)
+
+![The same editor in the Warm theme, with paper-toned surfaces](screenshots/16-warm-theme.png)
+
 ### Help Modal
 
 Press `?` (or `Ctrl+/`) at any time, or choose **Keyboard Shortcuts** from the brand menu, to open the keyboard shortcuts reference. Press `?` or `Esc` to close it.
+
+![The Keyboard Shortcuts reference, listing each shortcut beside the action it runs](screenshots/20-help-modal.png)
 
 ### Banners
 
@@ -300,6 +308,8 @@ If you *do* have unsaved edits, Tandem won't choose for you. A banner at the top
 - **Keep my edits** — keep what's in the editor. Your next save overwrites the changes on disk.
 - **Reload from file** — load the version on disk and discard your unsaved edits.
 
+![A banner across the top of the document saying the file changed on disk while you have unsaved edits, with Keep my edits and Reload from file buttons](screenshots/18-external-conflict-banner.png)
+
 Until you answer, autosave leaves that document alone, and while the disk holds changes you haven't chosen to discard, `Ctrl+S` won't write over them either — so neither version is lost by accident. The same banner appears when Tandem restores unsaved edits from your last session ("Unsaved edits for … were restored from your last session"), asking whether to keep them or reload fresh from the file. For a format Tandem can't write back to disk, keeping your edits keeps them in this session only, and the banner says so.
 
 ## Annotations
@@ -323,6 +333,8 @@ The AI's comments may carry a **replacement suggestion** (`suggestedText`) — a
 ### Note
 
 A private note to yourself. Notes are never sent to the AI — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide the AI should see it.
+
+![The annotation list: an AI comment with its reply thread open, showing your reply and the AI's answer, and below it a private note marked Private](screenshots/17-reply-thread-and-note.png)
 
 ### Creating Annotations
 
@@ -448,6 +460,8 @@ On macOS, clicking opens chat for the first notification each time you step away
 
 The "working on it" message your AI sends before starting longer work doesn't notify. The answer that follows does.
 
+![Settings open on the Notifications tab: the browser's permission status, Show a notification, the notification content, the tab-title count, the sound and volume, and Send a test notification](screenshots/22-settings-notifications.png)
+
 Change any of this under **Settings → Notifications**:
 
 - **Show a notification** — on by default. In the browser, notifications also need your browser's permission. Tandem asks only when you click **Allow notifications** in this tab, or turn the setting on. With it off, you still hear the sound, at the same limit of once every 30 seconds while you're away.
@@ -555,6 +569,8 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Escape` | Deselect annotation / close overlays |
 
 ### Navigation & General
+
+![The command palette with "annotation" typed, listing the matching annotation commands and their shortcuts](screenshots/19-command-palette.png)
 
 | Shortcut | Action |
 |----------|--------|

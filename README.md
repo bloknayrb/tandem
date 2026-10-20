@@ -89,7 +89,7 @@ Either way, the rest is the same:
 - Paste that keeps its structure: Markdown tables and images arrive as real tables and images, and a URL pasted over selected text becomes a link.
 - Suggestions shown as word-level diffs, so you can see exactly which words change.
 - Optional smart typography (curly quotes, em dashes) and a spellcheck toggle, in Settings (`Ctrl+,`).
-- Light and dark themes.
+- Light, dark and warm themes.
 - Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to dismiss.
 
 <details>
@@ -118,6 +118,12 @@ Either way, the rest is the same:
 </p>
 
 *The optional margin view. Instead of stacking in a side panel, each card sits level with the passage it's about, so you can see what's being discussed without clicking anything.*
+
+<p align="center">
+  <img src="docs/screenshots/15-dark-theme.png" alt="The Tandem editor in the dark theme, with the document on the left and AI annotation cards on the right" width="820">
+</p>
+
+*The dark theme. Pick Light, Dark, Warm or Match system from the Tandem logo menu at the top-left.*
 
 </details>
 
