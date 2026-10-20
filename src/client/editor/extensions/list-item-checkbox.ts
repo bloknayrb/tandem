@@ -152,15 +152,14 @@ export const ListItemCheckbox = ListItem.extend({
       // inside a plain item stays plain (no override — `checked` defaults to
       // `null` via `keepOnSplit: false` above).
       //
-      // Accepted deviation from GitHub: splitting at position 0 of a checked
-      // item (cursor before any text) leaves the emptied *first* item as
-      // `checked: true` and moves the original content into the *second*,
-      // newly created item, which gets `checked: false`. GitHub instead keeps
-      // the checked state on the item that retains the content and makes the
-      // new (empty) item unchecked. Reproducing GitHub's behavior would
-      // require detecting the position-0 case and swapping which side gets
-      // which attrs — not worth the complexity for a rare edge case; pinned
-      // by a test below.
+      // Splitting at position 0 of a checked item (cursor before any text)
+      // matches GitHub: the original content keeps `checked: true` and the new
+      // empty item above it gets `checked: false`. That comes from
+      // `splitListItem` itself (since @tiptap/core 3.32 it keeps the original
+      // attrs on the trailing item when the split is at the start of the
+      // item), not from code here; before 3.32 the emptied first item kept
+      // `checked: true` instead. Pinned by a test in
+      // tests/client/list-item-checkbox.test.ts.
       Enter: () => {
         const { $from } = this.editor.state.selection;
         // Widening `listItem` to `block+` (#1664) made splitting a list item
