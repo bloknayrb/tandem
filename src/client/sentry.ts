@@ -32,8 +32,11 @@
  * - every exception stack frame's `filename` / `abs_path` is redacted the same
  *   way messages are (#2023)
  * - request/console breadcrumbs that could contain document content or API
- *   keys are dropped or redacted
- * - `sendDefaultPii` is left off
+ *   keys have their messages redacted and their data payloads dropped
+ * - the SDK's `dataCollection` is set with every category off
+ *   (`SENTRY_DATA_COLLECTION_OFF`): `@sentry/browser` 11 removed
+ *   `sendDefaultPii`, and its replacement's defaults collect everything,
+ *   including Relay IP inference
  *
  * Document content and annotation bodies are never attached to events by us;
  * this module captures only `Error` objects (stack + message), never editor
@@ -41,7 +44,13 @@
  */
 
 import type * as SentryBrowser from "@sentry/browser";
-import { redactPaths, redactSecrets, scrubSentryEvent, scrubText } from "../shared/scrub-text";
+import {
+  redactPaths,
+  redactSecrets,
+  SENTRY_DATA_COLLECTION_OFF,
+  scrubSentryEvent,
+  scrubText,
+} from "../shared/scrub-text";
 
 let sentry: typeof SentryBrowser | null = null;
 
@@ -80,6 +89,26 @@ function scrubEvent(event: SentryBrowser.ErrorEvent): SentryBrowser.ErrorEvent {
 }
 
 /**
+ * The `beforeBreadcrumb` hook, named and passed by reference for the same
+ * reason as `scrubEvent`. `console` breadcrumbs carry the raw console
+ * arguments in `data.arguments` (the SDK's `consoleIntegration`, a default
+ * integration), and `fetch`/`xhr` ones carry URLs and request metadata — any
+ * of which can hold document text or auth headers — so their messages are
+ * scrubbed and their data payloads dropped.
+ */
+function scrubBreadcrumb(breadcrumb: SentryBrowser.Breadcrumb): SentryBrowser.Breadcrumb {
+  if (breadcrumb.message) breadcrumb.message = scrubText(breadcrumb.message);
+  if (
+    breadcrumb.category === "console" ||
+    breadcrumb.category === "fetch" ||
+    breadcrumb.category === "xhr"
+  ) {
+    breadcrumb.data = undefined;
+  }
+  return breadcrumb;
+}
+
+/**
  * Initialise client-side crash reporting. Safe to call unconditionally and
  * exactly once (from `main.ts`): it self-gates on the Tauri WebView and on the
  * plugin being present, and becomes a no-op everywhere else.
@@ -109,18 +138,16 @@ export async function initCrashReporting(): Promise<void> {
       // shell did NOT register the plugin (operator left `TANDEM_SENTRY_DSN`
       // unset), the IPC command is unregistered and events are dropped by the
       // transport — a harmless no-op, matching the opt-in posture.
-      sendDefaultPii: false,
-      // By reference, not inline — see `scrubEvent`.
+      // `@sentry/browser` 11 removed `sendDefaultPii`; its replacement
+      // `dataCollection` defaults every category ON, so it is passed all-off.
+      // `Required<…>` makes an SDK bump that adds a category fail typecheck
+      // rather than silently collect it (see `SIDECAR_DATA_COLLECTION`).
+      dataCollection: SENTRY_DATA_COLLECTION_OFF satisfies Required<
+        NonNullable<SentryBrowser.BrowserOptions["dataCollection"]>
+      >,
+      // By reference, not inline — see `scrubEvent` / `scrubBreadcrumb`.
       beforeSend: scrubEvent,
-      beforeBreadcrumb: (breadcrumb) => {
-        // `console`/`fetch`/`xhr` breadcrumbs can capture document text or auth
-        // headers. Scrub their messages and drop their data payloads.
-        if (breadcrumb.message) breadcrumb.message = scrubText(breadcrumb.message);
-        if (breadcrumb.category === "fetch" || breadcrumb.category === "xhr") {
-          breadcrumb.data = undefined;
-        }
-        return breadcrumb;
-      },
+      beforeBreadcrumb: scrubBreadcrumb,
     });
 
     sentry = Sentry;
@@ -171,4 +198,4 @@ export function reportError(error: unknown, context?: Record<string, unknown>): 
  * which until then held byte-identical copies; `scrub` stays named here so the
  * existing tests keep their entry point.
  */
-export const __test = { scrub: scrubText, redactSecrets, redactPaths, scrubEvent };
+export const __test = { scrub: scrubText, redactSecrets, redactPaths, scrubEvent, scrubBreadcrumb };

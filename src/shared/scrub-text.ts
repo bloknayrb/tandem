@@ -128,6 +128,36 @@ export function scrubText(input: string): string {
 }
 
 /**
+ * The most restrictive `dataCollection` either Sentry SDK accepts, passed to
+ * BOTH `Sentry.init` calls (`src/server/sentry.ts`, `src/client/sentry.ts`).
+ *
+ * `@sentry/node` 11 and `@sentry/browser` 11 removed `sendDefaultPii` and
+ * replaced it with `dataCollection`, whose every default is ON — user info
+ * (including Relay IP inference, `infer_ip: "auto"`, in the browser client),
+ * cookies, headers, bodies, query params, stack-frame locals, source context.
+ * An omitted or partial object silently re-enables collection, so every
+ * category is listed. Shared for the same reason as the scrubbers above: two
+ * copies of a privacy control is how a hardening pass fixes only one.
+ *
+ * Written structurally (no SDK type import) because `src/shared` reaches both
+ * bundles; each caller checks it against `Required<>` of its own SDK's
+ * `dataCollection` type, so a missing or misspelled category fails typecheck.
+ */
+export const SENTRY_DATA_COLLECTION_OFF = {
+  userInfo: false,
+  cookies: false,
+  httpHeaders: false,
+  httpBodies: [],
+  urlQueryParams: false,
+  graphQL: { document: false, variables: false },
+  genAI: { inputs: false, outputs: false },
+  databaseQueryData: false,
+  queues: false,
+  stackFrameVariables: false,
+  frameContextLines: 0,
+};
+
+/**
  * The structural slice of a Sentry event that every `beforeSend` hook in the
  * repo scrubs the same way. Written structurally rather than against
  * `@sentry/node`'s or `@sentry/browser`'s `ErrorEvent` because the two hooks
@@ -161,10 +191,9 @@ export interface ScrubbableSentryEvent {
  * Frames are read off `exception.values[].stacktrace` only: neither SDK
  * populates `event.stacktrace` or `event.threads` here.
  *
- * The SDKs' PII switches cover none of this — `sendDefaultPii: false` in the
- * WebView, and its `@sentry/node` 11 replacement `dataCollection` in the
- * sidecar, govern IPs, cookies, headers and request bodies, not filenames or
- * hostnames. Surfaces that are NOT shared
+ * The SDKs' PII switch covers none of this — `SENTRY_DATA_COLLECTION_OFF`
+ * (the SDK 11 replacement for `sendDefaultPii: false`, in both hooks) governs
+ * IPs, cookies, headers and request bodies, not filenames or hostnames. Surfaces that are NOT shared
  * (the WebView's `request` and breadcrumbs) stay in the caller.
  */
 export function scrubSentryEvent<E extends ScrubbableSentryEvent>(
