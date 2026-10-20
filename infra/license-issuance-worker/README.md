@@ -75,13 +75,14 @@ before their first commit, narrowing (not eliminating) the window for a
 same-transaction race against a concurrent delivery — see "Known limitation"
 below.
 
-**Privacy:** PII (email/name) lives ONLY in `LEDGER_KV`; `LICENSE_KV` is
+**Privacy:** PII (the buyer's email) lives ONLY in `LEDGER_KV`; `LICENSE_KV` is
 PII-free. The HTTP response never contains the license blob (it would leak into
 Paddle's notification logs) — it reaches the buyer by email alone. Logs carry
 `{ result, ts }` plus a non-PII failure `stage` (and upstream HTTP status) or a
 `notice`/`ref` id, never an email or license id; alerts carry no ids at all. The
 `PADDLE_API_KEY` can read **every** Paddle customer's email and name, not only
-the ones the ledger holds, so keep its scopes to `customer.read` plus
+the ones the ledger holds (the Worker itself reads only the email; a license
+carries no name since 2026-10-20), so keep its scopes to `customer.read` plus
 notification read (`docs/security.md`).
 
 ## Deploy
@@ -116,6 +117,12 @@ stage `paddle-api-auth`.
 fresh `ts`, or a failed sale can never be recovered), and the Terms
 (`https://tandem.ink/terms`) and Refund Policy (`https://tandem.ink/refunds`)
 are live, because the license email links both. Neither page is live yet.
+
+**Roll forward, never back, past the 2026-10-20 name removal.** Ledger records
+written since then carry no `name`, and a Worker deployed from before that change
+treats a name-less record as corrupt (`stage: "ledger"`, retried forever). A
+redeploy of an older version is therefore never a safe rollback once a sale has
+been recorded; fix forward instead.
 
 The version is pinned deliberately: `./crypto.js` resolving to `crypto.ts` is the
 bundler rewriting the extension, and the bundle shape is wrangler's too, so two

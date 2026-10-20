@@ -34,8 +34,8 @@ import {
   LICENSE_HEADER,
 } from "../../infra/license-update-worker/src/worker.js";
 import type {
-  IssuedLicenseMetadata,
   LicenseEntitlement,
+  LicenseMetadata,
 } from "../../src/server/license/license-types.js";
 import { buildKeyMap, keyIdForPublicKey } from "../../src/server/license/public-key.js";
 import {
@@ -62,7 +62,7 @@ function decodeBlob(blob: string): DecodedBlob {
 
 function blobVerifies(blob: string): boolean {
   try {
-    _verifyAgainstForTests(blob, TEST_KEYS_BY_ID, TEST_KEY_ID);
+    _verifyAgainstForTests(blob, TEST_KEYS_BY_ID);
     return true;
   } catch {
     return false;
@@ -137,8 +137,7 @@ interface TestDeps extends IssuanceDeps {
   log: NonNullable<IssuanceDeps["log"]> & ReturnType<typeof vi.fn>;
 }
 
-const buyer = (email = "buyer@example.com", name: string | null = "Jane Buyer") =>
-  vi.fn(async () => ({ ok: true as const, email, name }));
+const buyer = (email = "buyer@example.com") => vi.fn(async () => ({ ok: true as const, email }));
 
 function baseDeps(overrides: Partial<IssuanceDeps> = {}): TestDeps {
   let counter = 0;
@@ -217,7 +216,6 @@ interface LedgerRec {
   orderId: string;
   licenseId: string;
   email: string;
-  name: string;
   type: string;
   createdAt: string;
   updateWindowEnd: string | null;
@@ -280,9 +278,8 @@ describe("crypto: signLicense round-trips through the real verifier path", () =>
     // Typed as the on-device LicenseMetadata so a field drift in the Worker's
     // metadata shape is a compile error here, not a production activation
     // failure.
-    const metadata: IssuedLicenseMetadata = {
+    const metadata: LicenseMetadata = {
       id: "lic-x",
-      name: "Jane Buyer",
       email: "buyer@example.com",
       type: "personal",
       createdAt: new Date(NOW).toISOString(),
@@ -308,9 +305,8 @@ describe("crypto: production WebCrypto signing path", () => {
   it("importPkcs8Ed25519 + webCryptoSigner produce a blob the real verifier accepts", async () => {
     const pem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
     const key = await importPkcs8Ed25519(pem);
-    const metadata: IssuedLicenseMetadata = {
+    const metadata: LicenseMetadata = {
       id: "lic-wc",
-      name: "Web Crypto",
       email: "wc@example.com",
       type: "personal",
       createdAt: new Date(NOW).toISOString(),
@@ -404,7 +400,7 @@ describe("handleIssuance: transaction.completed happy path", () => {
     expect(deps.ledgerKv.map.get(`txnlic:live:txn_1:${rec.licenseId}`)).toBe("");
     expect(deps.ledgerKv.putOptions.get(`txnlic:live:txn_1:${rec.licenseId}`)).toBeUndefined();
     expect(deps.lookupCustomer).toHaveBeenCalledExactlyOnceWith("ctm_1");
-    const blob = deps.sendEmail.mock.calls[0][2] as string;
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
     expect(blobVerifies(blob)).toBe(true);
     expect(decodeBlob(blob).metadata.keyId).toBe(TEST_KEY_ID);
   });
@@ -420,7 +416,7 @@ describe("handleIssuance: transaction.completed happy path", () => {
 
   it("never returns the blob and logs only { result, ts } on success", async () => {
     const res = await handleIssuance(makeRequest(paidBody()), deps);
-    const blob = deps.sendEmail.mock.calls[0][2] as string;
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
     expect(JSON.stringify(await res.json())).not.toContain(blob.slice(0, 20));
     for (const [entry] of deps.log.mock.calls) {
       expect(Object.keys(entry as object).sort()).toEqual(["result", "ts"]);
@@ -433,13 +429,40 @@ describe("handleIssuance: transaction.completed happy path", () => {
     expect(ledgerRec(deps, "txn_gf").type).toBe("grandfathered");
   });
 
-  it("clamps an over-long name from the lookup and still produces a verifiable blob", async () => {
-    deps = baseDeps({ lookupCustomer: buyer("buyer@example.com", "x".repeat(500)) });
+  it("a maximum-length (254-char) email still produces a verifiable blob under the size cap", async () => {
+    const longEmail = `${"x".repeat(254 - "@example.com".length)}@example.com`;
+    expect(longEmail).toHaveLength(254);
+    deps = baseDeps({ lookupCustomer: buyer(longEmail) });
     await handleIssuance(makeRequest(paidBody()), deps);
-    const blob = deps.sendEmail.mock.calls[0][2] as string;
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
     expect(blobVerifies(blob)).toBe(true);
-    expect((decodeBlob(blob).metadata.name as string).length).toBe(128);
+    expect(decodeBlob(blob).metadata.email).toBe(longEmail);
     expect(base64ToBytes(blob).length).toBeLessThan(4096);
+  });
+
+  it("mints metadata with no `name`, even when Paddle's customer record has one", async () => {
+    // A license carries the email alone (docs/licensing-operations.md §0,
+    // decision 2); the Paddle lookup may still return a name, and it is ignored.
+    deps = baseDeps({
+      lookupCustomer: vi.fn(async () => ({
+        ok: true as const,
+        email: "buyer@example.com",
+        name: "Jane Buyer",
+      })),
+    });
+    await handleIssuance(makeRequest(paidBody()), deps);
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
+    expect(blobVerifies(blob)).toBe(true);
+    expect(Object.keys(decodeBlob(blob).metadata).sort()).toEqual([
+      "createdAt",
+      "email",
+      "expiresAt",
+      "id",
+      "keyId",
+      "type",
+      "version",
+    ]);
+    expect(ledgerRec(deps)).not.toHaveProperty("name");
   });
 
   it("two paidBody() calls without eventId get DIFFERENT event ids", () => {
@@ -663,10 +686,37 @@ describe("handleIssuance: buyer lookup mapping", () => {
     }
   });
 
-  it("null name → 'Valued Customer'; unusable email → dropped", async () => {
-    const deps = baseDeps({ lookupCustomer: buyer("buyer@example.com", null) });
+  it("re-drives a ledger record that still carries a pre-2026-10-20 `name`, signing none", async () => {
+    // Extra fields are tolerated, so an old-shape record is not "corrupt"; the
+    // re-signed blob is built field by field and leaves the name out.
+    const deps = baseDeps();
+    deps.ledgerKv.map.set(
+      "order:live:txn_1",
+      JSON.stringify({
+        orderId: "txn_1",
+        licenseId: "lic-old",
+        email: "buyer@example.com",
+        name: "Jane Buyer",
+        type: "personal",
+        createdAt: new Date(NOW).toISOString(),
+        updateWindowEnd: null,
+        emailSent: false,
+        refunded: false,
+      }),
+    );
     await handleIssuance(makeRequest(paidBody()), deps);
-    expect(ledgerRec(deps).name).toBe("Valued Customer");
+    expect(lastLog(deps).result).toBe("duplicate");
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
+    expect(blobVerifies(blob)).toBe(true);
+    expect(decodeBlob(blob).metadata).not.toHaveProperty("name");
+    expect(decodeBlob(blob).metadata.id).toBe("lic-old");
+    // Re-saving the record also drops the name from the ledger itself.
+    const stored = JSON.parse(deps.ledgerKv.map.get("order:live:txn_1") as string);
+    expect(stored.emailSent).toBe(true);
+    expect(stored).not.toHaveProperty("name");
+  });
+
+  it("unusable email → dropped", async () => {
     const bad = baseDeps({ lookupCustomer: buyer("not-an-email@nodot") });
     await handleIssuance(makeRequest(paidBody()), bad);
     expect(lastLog(bad).result).toBe("dropped");
@@ -1048,7 +1098,6 @@ describe("handleIssuance: pre-commit recheck", () => {
       orderId: "txn_ri",
       licenseId: "",
       email: "",
-      name: "",
       type: "personal",
       createdAt: new Date(NOW).toISOString(),
       updateWindowEnd: null,
@@ -1213,6 +1262,13 @@ describe("default fetch wiring (env → deps)", () => {
     expect(sent.reply_to).toBe("support@tandem.test");
     const fileBytes = Buffer.from(sent.attachments[0].content, "base64").toString("utf-8");
     expect(blobVerifies(fileBytes)).toBe(true);
+    // Paddle answered with a name ("Jane"); none of it reaches the key, the
+    // ledger or the greeting.
+    expect(decodeBlob(fileBytes).metadata).not.toHaveProperty("name");
+    expect(JSON.parse(env.LEDGER_KV.map.get("order:live:txn_w") as string)).not.toHaveProperty(
+      "name",
+    );
+    expect(sent.text).not.toContain("Jane");
     for (const line of (sent.text as string).split("\n"))
       expect(line.length).toBeLessThanOrEqual(72);
   });
@@ -1527,7 +1583,7 @@ describe("default fetch wiring (env → deps)", () => {
     const atCeiling = `${"a".repeat(70 - "@tandem.ink".length)}@tandem.ink`;
     expect(atCeiling).toHaveLength(72 - 2);
     expect(supportEmailProblem(atCeiling)).toBeNull();
-    for (const line of licenseEmailText("Ada", "QUJD", atCeiling).split("\n")) {
+    for (const line of licenseEmailText("QUJD", atCeiling).split("\n")) {
       expect(line.length).toBeLessThanOrEqual(72);
     }
     expect(supportEmailProblem(`a${atCeiling}`)).toBe("too-long");
@@ -1535,14 +1591,14 @@ describe("default fetch wiring (env → deps)", () => {
 
   it("the license email promises all future updates and no window or renewal (A5)", () => {
     // Joined so a reflow of the copy cannot split a phrase across lines.
-    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink").replace(/\s+/g, " ");
+    const text = licenseEmailText("QUJD", "support@tandem.ink").replace(/\s+/g, " ");
     expect(text).toContain("never expires");
     expect(text).toContain("includes all future updates");
     expect(text).not.toMatch(/first year|renew|one year|update window/i);
   });
 
   it("the license email links the Terms, the Refund Policy and Paddle's buyer support", () => {
-    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink");
+    const text = licenseEmailText("QUJD", "support@tandem.ink");
     expect(text).toContain("https://tandem.ink/terms");
     expect(text).toContain("https://tandem.ink/refunds");
     expect(text).toContain("https://paddle.net");
@@ -1551,7 +1607,7 @@ describe("default fetch wiring (env → deps)", () => {
   it("the license email speaks as one person and does not invite a reply under the key", () => {
     // Sales copy is in the licensor's singular voice, and a reply would quote
     // the key printed above the support line.
-    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink").replace(/\s+/g, " ");
+    const text = licenseEmailText("QUJD", "support@tandem.ink").replace(/\s+/g, " ");
     expect(text).toContain("-- Bryan Kolb");
     expect(text).not.toMatch(/\b(we|us|our|team)\b/i);
     expect(text).not.toMatch(/\breply\b/i);

@@ -13,8 +13,8 @@
  * holder even during a trial, where `aiNotice` is null by design.
  *
  * The status payload is loopback-full or LAN-scrubbed (see routes/license.ts);
- * this reads only fields present in BOTH shapes, plus the optional licensee name
- * (loopback only) used for the "Licensed to {name}" label.
+ * this reads only fields present in BOTH shapes, plus the optional licensee email
+ * (loopback only) used for the "Licensed to {email}" label.
  */
 import type { AiRefusalKind, LicenseUnverifiableCode } from "../../shared/license-copy";
 
@@ -32,7 +32,7 @@ export interface LicenseStatusResponse {
   /** Full (loopback) payload nests it under trial. */
   trial?: { daysRemaining: number };
   updateWindowCurrent: boolean;
-  license?: { name: string; type: string };
+  license?: { email: string; type: string };
   /**
    * A `license.json` exists on this device but did not verify, and WHY. Present
    * on the trial/restricted payloads only. Not PII — a closed enum about this
@@ -48,8 +48,8 @@ export interface LicenseStatusResponse {
    * rather than leaving the same "activate it now" hint on screen.
    */
   licenseInstalled?: boolean;
-  /** Dark-build only, loopback only. Display name from the installed license. */
-  licenseeName?: string;
+  /** Dark-build only, loopback only. Email from the installed license (it carries no name). */
+  licenseeEmail?: string;
   /**
    * Loopback only. Would an npm-installed `tandem activate` write where the
    * server that answered this actually reads? Gates the Settings → License CLI
@@ -127,7 +127,7 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
     aiOff: false,
     showTrialBanner: false,
     trialDaysRemaining: null,
-    statusLabel: state.license?.name ? `Licensed to ${state.license.name}` : "Licensed",
+    statusLabel: state.license?.email ? `Licensed to ${state.license.email}` : "Licensed",
   };
 }
 
