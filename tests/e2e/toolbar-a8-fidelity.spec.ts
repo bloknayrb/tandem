@@ -187,7 +187,7 @@ test("every bar control renders on the shared 26px control metrics", async ({ pa
   //    1 formatbar-hide-btn
   //
   // Count, not an id list: the heading button's accessible name tracks the
-  // level under the cursor ("Heading 1"), so pinning names here would couple
+  // level under the cursor ("Heading: H1"), so pinning names here would couple
   // this geometry sweep to the fixture document's structure.
   expect(
     measured.map((m) => m.id).sort(),

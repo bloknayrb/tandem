@@ -315,6 +315,11 @@ onDestroy(() => {
       `role="region"`, toggled by this persistent button which is the close
       control and therefore already holds focus at close time. Adding focus
       management here would be dead code or would fight the natural focus.
+
+      No aria-label: the name comes from the visible text ("No activity" /
+      "Activity 3") and aria-expanded carries open/closed. An "Open activity
+      tray" label omits the visible words, which fails WCAG 2.5.3 Label in Name
+      (axe `label-content-name-mismatch`, on by default since axe-core 4.14).
     -->
     <button
       bind:this={pillEl}
@@ -323,7 +328,6 @@ onDestroy(() => {
       data-testid="activity-pill"
       onclick={onToggle}
       aria-expanded={open}
-      aria-label={open ? "Close activity tray" : "Open activity tray"}
       aria-controls={open ? "activity-tray" : undefined}
     >
       <span class="led"></span>

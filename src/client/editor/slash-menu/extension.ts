@@ -220,9 +220,11 @@ function renderSlashCommandMenu(
     button.id = `slash-command-${command.id}`;
     button.className = "tandem-slash-menu__item";
     button.setAttribute("aria-selected", String(index === active.selectedIndex));
-    // The icon badge and shortcut alias are decorative (aria-hidden); the
-    // explicit aria-label keeps the option's accessible name exactly the label.
-    button.setAttribute("aria-label", command.label);
+    // The icon badge and shortcut alias are decorative (aria-hidden), so the
+    // name computed from content is exactly the label span. No explicit
+    // aria-label: axe's `label-content-name-mismatch` (on by default since
+    // axe-core 4.14) compares an aria-label against ALL visible text, aria-hidden
+    // included, and "Heading 2" does not contain the visible "H²" and "h2".
     button.dataset.commandId = command.id;
 
     button.appendChild(buildIconBadge(command.icon));
