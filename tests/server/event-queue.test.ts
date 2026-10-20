@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
 import {
+  deliveryItemKey,
   getDeliveryState,
   resetDeliveryStateForTests,
+  resolveDeliveryRound,
 } from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
@@ -20,6 +22,7 @@ import {
   subscribe,
   unsubscribe,
   wasEmittedViaChannel,
+  wasEmittedViaChannelInDocument,
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { defaultSubscribeToEvents } from "../../src/server/launcher/supervisor.js";
@@ -684,6 +687,168 @@ describe("wasEmittedViaChannel (ref-counted, subscriber-gated)", () => {
     detachObservers("import-doc-b");
     docA.destroy();
     docB.destroy();
+    cleanup();
+  });
+});
+
+// --- Document-scoped tracking (PR #2225 review) ---
+//
+// Since #2187 a default tandem_checkInbox returns the same imported comment once
+// per document, so the inbox asks "was THIS document's event pushed?". The global
+// bare-id answer above is unchanged; these rows pin the scoped one beside it.
+describe("wasEmittedViaChannelInDocument", () => {
+  const promoted = {
+    id: "import-scoped-shared",
+    type: "comment",
+    author: "user",
+    content: "Word comment",
+    status: "pending",
+    textSnapshot: "hello",
+    range: { from: 0, to: 5 },
+  };
+
+  it("answers for the document whose event was pushed, and only that one", () => {
+    const docA = new Y.Doc();
+    const docB = new Y.Doc();
+    attachObservers("scoped-doc-a", docA);
+    attachObservers("scoped-doc-b", docB);
+    const { cleanup } = collectEvents();
+
+    docA.getMap(Y_MAP_ANNOTATIONS).set(promoted.id, promoted);
+    // The same id sits in B, written with no event (MCP origin is skipped).
+    docB.transact(() => docB.getMap(Y_MAP_ANNOTATIONS).set(promoted.id, promoted), MCP_ORIGIN);
+
+    expect(wasEmittedViaChannel(promoted.id)).toBe(true);
+    expect(wasEmittedViaChannelInDocument(promoted.id, "scoped-doc-a")).toBe(true);
+    expect(wasEmittedViaChannelInDocument(promoted.id, "scoped-doc-b")).toBe(false);
+
+    cleanup();
+    detachObservers("scoped-doc-a");
+    detachObservers("scoped-doc-b");
+    docA.destroy();
+    docB.destroy();
+  });
+
+  it("untracks the scoped key on eviction, together with the bare one", () => {
+    const doc = new Y.Doc();
+    attachObservers("scoped-evict", doc);
+    const { cleanup } = collectEvents();
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    map.set(promoted.id, promoted);
+    expect(wasEmittedViaChannelInDocument(promoted.id, "scoped-evict")).toBe(true);
+
+    for (let i = 0; i < CHANNEL_EVENT_BUFFER_SIZE + 5; i++) {
+      map.set(`scoped_filler_${i}`, { ...promoted, id: `scoped_filler_${i}` });
+    }
+
+    expect(wasEmittedViaChannel(promoted.id)).toBe(false);
+    expect(wasEmittedViaChannelInDocument(promoted.id, "scoped-evict")).toBe(false);
+
+    cleanup();
+    detachObservers("scoped-evict");
+    doc.destroy();
+  });
+
+  it("is cleared by resetForTesting together with the bare map", () => {
+    const doc = new Y.Doc();
+    attachObservers("scoped-reset", doc);
+    const { cleanup } = collectEvents();
+    doc.getMap(Y_MAP_ANNOTATIONS).set(promoted.id, promoted);
+    expect(wasEmittedViaChannelInDocument(promoted.id, "scoped-reset")).toBe(true);
+    cleanup();
+    detachObservers("scoped-reset");
+    doc.destroy();
+
+    resetForTesting();
+
+    expect(wasEmittedViaChannelInDocument(promoted.id, "scoped-reset")).toBe(false);
+  });
+});
+
+// --- The delivery round's pending items (PR #2225 review) ---
+//
+// pushEvent hands the round the inbox item an annotation forward is waiting on,
+// so a poll that could not hand that item over leaves the round open.
+describe("pushEvent records which inbox item a forward waits on", () => {
+  const T = 1_700_000_000_000;
+
+  it("an annotation forward is held by its document being unreadable", () => {
+    const { cleanup } = collectEvents();
+    _pushEventForTests({
+      id: "ev-pending-ann",
+      type: "annotation:created",
+      timestamp: Date.now(),
+      documentId: "pending-doc",
+      payload: {
+        annotationId: "ann-pending",
+        annotationType: "comment",
+        content: "look",
+        textSnippet: "",
+      },
+    });
+
+    resolveDeliveryRound(T, { documents: new Set(["pending-doc"]), items: new Set() });
+    expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
+
+    // Only ITS key holds it: another item's refusal does not.
+    resolveDeliveryRound(T, {
+      documents: new Set(),
+      items: new Set([deliveryItemKey("pending-doc", "some-other-item")]),
+    });
+    expect(getDeliveryState(T, 1).state).toBe("polled");
+    cleanup();
+  });
+
+  it("a reply forward is keyed by its reply id", () => {
+    const { cleanup } = collectEvents();
+    _pushEventForTests({
+      id: "ev-pending-reply",
+      type: "annotation:reply",
+      timestamp: Date.now(),
+      documentId: "pending-doc",
+      payload: {
+        annotationId: "ann-parent",
+        replyId: "reply-pending",
+        replyAuthor: "user",
+        replyText: "hi",
+        textSnippet: "",
+        parentAuthor: "claude",
+      },
+    });
+
+    resolveDeliveryRound(T, {
+      documents: new Set(),
+      items: new Set([deliveryItemKey("pending-doc", "reply-pending")]),
+    });
+    expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
+    cleanup();
+  });
+
+  it("a chat naming an unreadable document still closes the round", () => {
+    // The inbox reads chat from CTRL_ROOM whatever document it names, so the
+    // document being unreadable says nothing about the chat's delivery.
+    const { cleanup } = collectEvents();
+    _pushEventForTests({
+      id: "ev-pending-chat",
+      type: "chat:message",
+      timestamp: Date.now(),
+      documentId: "pending-doc",
+      payload: { messageId: "msg-pending", text: "hello", replyTo: null, anchor: null },
+    });
+    expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
+
+    resolveDeliveryRound(T, { documents: new Set(["pending-doc"]), items: new Set() });
+    expect(getDeliveryState(T, 1).state).toBe("polled");
+    cleanup();
+  });
+
+  it("the Solo release wake names no item, so it closes normally", () => {
+    const { cleanup } = collectEvents();
+    emitModeReleaseWake();
+    expect(getDeliveryState(T, 1).state).toBe("awaiting-poll");
+
+    resolveDeliveryRound(T, { documents: new Set(["any-doc"]), items: new Set() });
+    expect(getDeliveryState(T, 1).state).toBe("polled");
     cleanup();
   });
 });

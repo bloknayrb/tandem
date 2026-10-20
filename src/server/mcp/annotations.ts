@@ -28,10 +28,9 @@ import { atomicWrite } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { splitsSurrogatePair } from "../positions.js";
-import { getCurrentDoc } from "./document.js";
 import type { FlatBreak } from "./document-model.js";
 import { extractTextWithBreaks } from "./document-model.js";
-import { getDocumentStore } from "./document-store.js";
+import { getDocumentStore, resolveAnnotationStore, type YDocStore } from "./document-store.js";
 import { getAnnotationsOutputShape } from "./output-schemas.js";
 import {
   mcpError,
@@ -46,6 +45,46 @@ import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-pr
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
 function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => void {
   return (event) => relaySanitizationEvent(hash, event);
+}
+
+/**
+ * The `documentId` describe text the four id-keyed tools share (PR #2225
+ * review). One string so the four cannot drift from `resolveAnnotationStore`.
+ */
+const ID_KEYED_DOCUMENT_ID_DESCRIPTION =
+  "Target document ID. Omit it to use the open document that holds this annotation id (the active document when none does).";
+
+/**
+ * Resolve an id-keyed tool's document ONCE, translating the two refusals into
+ * envelopes. Every later use of the document in the handler must read
+ * `store.documentId` — re-resolving from the caller's (possibly omitted)
+ * `documentId` would aim presence or a follow-up read at the active document
+ * while the write landed elsewhere (PR #2225 review).
+ */
+function resolveIdKeyedStore(
+  id: string,
+  documentId: string | undefined,
+):
+  | { store: YDocStore; error?: undefined }
+  | { store?: undefined; error: ReturnType<typeof mcpError> } {
+  const resolved = resolveAnnotationStore(id, documentId);
+  switch (resolved.kind) {
+    case "store":
+      return { store: resolved.store };
+    case "none":
+      return { error: noDocumentError() };
+    case "ambiguous":
+      // No new error code: INVALID_ARGUMENT with a `reason` keeps the
+      // error-code table untouched, and the remedy is one the caller can follow.
+      // The ids listed are only documents where the record is Claude-facing.
+      return {
+        error: mcpError(
+          "INVALID_ARGUMENT",
+          `Annotation ${id} is in ${resolved.documentIds.length} open documents; pass documentId`,
+          { reason: "ambiguous-document", documentIds: resolved.documentIds },
+        ),
+      };
+  }
 }
 
 /**
@@ -211,24 +250,38 @@ export function captureSnapshot(
 export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 // sanitizeAnnotation is also imported above for internal use within this file.
 
-/** Collect all annotations from the Y.Map as an array, skipping malformed entries.
- *  Applies sanitizeAnnotation() to normalize legacy shapes. */
-export function collectAnnotations(map: Y.Map<unknown>, docHashKey: string): Annotation[] {
-  const result: Annotation[] = [];
-  const onLossy = makeOnLossy(docHashKey);
-  map.forEach((value, key) => {
-    const ann = value as Record<string, unknown>;
-    if (
-      ann &&
+/**
+ * The structural pre-check a raw `Y_MAP_ANNOTATIONS` value must pass before it
+ * is handed to `sanitizeAnnotation`: an object with string `id`/`type`/`status`
+ * and a `range` carrying numeric `from`/`to`.
+ *
+ * Lifted out of {@link collectAnnotations} so the id-keyed tools' document
+ * resolver (`resolveAnnotationStore`, PR #2225 review) admits exactly the
+ * records the READ path admits — a record `tandem_getAnnotations` would skip as
+ * malformed must not make a document a candidate for a write either.
+ */
+export function hasAnnotationShape(value: unknown): value is Record<string, unknown> {
+  const ann = value as Record<string, unknown>;
+  return Boolean(
+    ann &&
       typeof ann === "object" &&
       typeof ann.id === "string" &&
       typeof ann.type === "string" &&
       typeof ann.status === "string" &&
       ann.range &&
       typeof (ann.range as Record<string, unknown>).from === "number" &&
-      typeof (ann.range as Record<string, unknown>).to === "number"
-    ) {
-      result.push(sanitizeAnnotation(ann as unknown as Annotation, onLossy));
+      typeof (ann.range as Record<string, unknown>).to === "number",
+  );
+}
+
+/** Collect all annotations from the Y.Map as an array, skipping malformed entries.
+ *  Applies sanitizeAnnotation() to normalize legacy shapes. */
+export function collectAnnotations(map: Y.Map<unknown>, docHashKey: string): Annotation[] {
+  const result: Annotation[] = [];
+  const onLossy = makeOnLossy(docHashKey);
+  map.forEach((value, key) => {
+    if (hasAnnotationShape(value)) {
+      result.push(sanitizeAnnotation(value as unknown as Annotation, onLossy));
     } else {
       console.warn(`[Tandem] Skipping malformed annotation entry: ${key}`);
     }
@@ -421,14 +474,11 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       id: z.string().describe("Annotation ID"),
       action: AnnotationActionSchema.describe("Action to take"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
     },
     withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
+      const { store, error } = resolveIdKeyedStore(id, documentId);
+      if (error) return error;
 
       // Route through the AnnotationLifecycle module (ADR-035 part 2/N).
       // The lifecycle owns sanitize → status-check → rev-bump → tagged
@@ -438,7 +488,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
       switch (result.kind) {
         case "ok":
-          return mcpSuccess({ id, status: result.data.status });
+          return mcpSuccess({ id, status: result.data.status, documentId: store.documentId });
         case "not-found":
           return mcpError("NOT_FOUND", `Annotation ${id} not found`);
         case "invalid-note":
@@ -491,14 +541,11 @@ export function registerAnnotationTools(server: McpServer): void {
       "There is no undo.",
     {
       id: z.string().describe("Annotation ID"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
     },
     withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
+      const { store, error } = resolveIdKeyedStore(id, documentId);
+      if (error) return error;
       // ADR-035 Unit 8e: the store delegates to `AnnotationLifecycle.remove`,
       // and this handler is the thin adapter translating arms to envelopes.
       // Arm-by-arm rather than a flattened `NOT_FOUND` — collapsing them made
@@ -508,7 +555,7 @@ export function registerAnnotationTools(server: McpServer): void {
       const result = store.removeAnnotation(id);
       switch (result.kind) {
         case "ok":
-          return mcpSuccess({ removed: true, id });
+          return mcpSuccess({ removed: true, id, documentId: store.documentId });
         case "not-found":
           return mcpError("NOT_FOUND", `Annotation ${id} not found`);
         case "invalid-note":
@@ -540,16 +587,13 @@ export function registerAnnotationTools(server: McpServer): void {
       content: z.string().optional().describe("New comment text"),
       newText: z.string().optional().describe("New replacement text (sets suggestedText)"),
       reason: z.string().optional().describe("Same as content; content wins if both are passed"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
     },
     withErrorBoundary(
       "tandem_editAnnotation",
       async ({ id, content, newText, reason, documentId }) => {
-        const store = getDocumentStore(documentId);
-        if (!store) return noDocumentError();
+        const { store, error } = resolveIdKeyedStore(id, documentId);
+        if (error) return error;
 
         // `reason` is a legacy alias for `content`; an explicit `content` wins.
         // When all three are undefined the resolved patch is empty, which the
@@ -604,6 +648,7 @@ export function registerAnnotationTools(server: McpServer): void {
               content: result.annotation.content,
               suggestedText: result.annotation.suggestedText,
               editedAt: result.annotation.editedAt,
+              documentId: store.documentId,
             });
         }
       },
@@ -915,16 +960,13 @@ export function registerAnnotationTools(server: McpServer): void {
             "it in the editor supersedes the parent's own suggestedText. Refused with " +
             "INVALID_ARGUMENT when the parent's live span overlaps heading markup.",
         ),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
     },
     withErrorBoundary(
       "tandem_annotationReply",
       async ({ annotationId, text, suggestedText, documentId }) => {
-        const store = getDocumentStore(documentId);
-        if (!store) return noDocumentError();
+        const { store, error } = resolveIdKeyedStore(annotationId, documentId);
+        if (error) return error;
 
         // #651 presence: surface the typing indicator on the specific card being
         // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
@@ -937,15 +979,21 @@ export function registerAnnotationTools(server: McpServer): void {
         // presence before it invokes that handler — so at the moment the id
         // reaches awareness the seam has refused nothing. This call is the only
         // ADR-027 check on the broadcast path.
+        //
+        // Both read `store.documentId`, never the caller's `documentId`: when it
+        // was omitted the store may be a BACKGROUND document (PR #2225 review),
+        // and keying presence on the caller's value would vet the id against —
+        // and mark typing on — the active document while the reply landed
+        // elsewhere. (`documentId` IS the registry's `docName`.)
         const safeId = sanitizeAnnotationIdForPresence(
-          getCurrentDoc(documentId)?.docName,
+          store.documentId,
           annotationId,
           Y_MAP_ANNOTATIONS,
         );
         return withTypingPresence(
           {
             tool: "tandem_annotationReply",
-            documentId,
+            documentId: store.documentId,
             ...(safeId ? { annotationId: safeId } : {}),
           },
           async () => {
@@ -959,7 +1007,11 @@ export function registerAnnotationTools(server: McpServer): void {
                 : { kind: "replacement", suggestedText },
             );
             if (result.kind === "ok") {
-              return mcpSuccess({ replyId: result.replyId, annotationId });
+              return mcpSuccess({
+                replyId: result.replyId,
+                annotationId,
+                documentId: store.documentId,
+              });
             }
             // The wire codes are unchanged from the ternary chain this replaces;
             // what moved is that a new arm now fails to compile inside

@@ -78,9 +78,10 @@ the names promise more than they deliver (#1293):
   aimed at it, and the `.docx` branch's post-write `SaveVerificationError` narrows it
   further. `/api/convert` and `/api/apply-changes` are the same shape but conditional on the
   active document being an on-disk `.docx`.
-  Measured, not inferred (express 5.2.1): `text/plain`, `application/x-www-form-urlencoded`,
-  `multipart/form-data` and a missing Content-Type all leave `req.body` undefined, so an
-  attacker reaches the handler but cannot inject a single field.
+  Measured, not inferred (express 5.2.1, re-measured on 5.3.0): `text/plain`,
+  `application/x-www-form-urlencoded`, `multipart/form-data` and a missing Content-Type all
+  leave `req.body` undefined, so an attacker reaches the handler but cannot inject a single
+  field.
 
   **Two of the six must never be given the origin gate**, and this is the trap in the
   obvious fix: the Tauri sidecar POSTs `open` via reqwest and the CLI POSTs `rotate-token`
