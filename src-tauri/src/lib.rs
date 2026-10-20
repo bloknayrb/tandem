@@ -2978,9 +2978,13 @@ async fn perform_install(
     let client = app.state::<reqwest::Client>().inner().clone();
 
     // Download FIRST, with the sidecar still up (#1808). `download` is exactly
-    // what `download_and_install` calls before `install`, and `verify_signature`
-    // runs at the end of it — so the split is behaviour-identical except for
-    // *when* the sidecar is down.
+    // what `download_and_install` calls first, and `verify_signature` runs at
+    // the end of it — so a signature failure still surfaces here, before the
+    // sidecar is stopped. The split differs from `download_and_install` only in
+    // *when* the sidecar is down, plus one redundant pass: since
+    // tauri-plugin-updater 2.14, `install` re-verifies the bytes it is handed
+    // (`download_and_install` skips that), which over the same bytes cannot
+    // newly fail.
     let bytes = match update
         .download(
             |chunk_len, total| {
