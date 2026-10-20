@@ -257,7 +257,9 @@ const SURFACES: Surface[] = [
     // unrelated component into the scan and make a failure here ambiguous.
     //
     // NOT covered by this surface: the unread pill. `useChatState` acknowledges every
-    // claude message while the chat tab is active, and this surface activates it, so
+    // claude message while the chat tab is active in the focused window (#2168 added the
+    // focus term; Playwright's focus emulation keeps the page focused), and this surface
+    // activates it, so
     // `unreadCount > 0` cannot hold *here*. That is a property of this surface, NOT an
     // impossibility — `chatVisible` requires the chat TAB to be active (App.svelte), and
     // these scans are deliberately unscoped (see the header), so seeding while the
@@ -282,6 +284,34 @@ const SURFACES: Surface[] = [
     // table three times and the SECOND pass's "chat panel" (empty) surface would scan a
     // panel that still holds this message — i.e. surface order silently becomes
     // load-bearing and the empty-state audit quietly stops auditing the empty state.
+    close: async () => {
+      try {
+        await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
+      } catch {
+        // Best-effort: a failure here must not mask the assertion that just ran.
+      }
+    },
+  },
+  {
+    name: "chat pickup row",
+    // The row under the user's latest message only exists once a USER message does, and
+    // no MCP tool writes one, so this surface sends through the composer — accepting that
+    // a UI send can also raise the push-delivery notice, which is then scanned too. Kept
+    // separate from "chat panel (with messages)" so that surface's scan stays unambiguous.
+    // The waiting row is the one scanned: it is the muted-colour variant, the contrast risk.
+    open: async (page) => {
+      await bootEditor(page);
+      const tab = page.locator("[data-testid='chat-tab']");
+      if ((await tab.count()) > 0) await tab.click();
+      const input = page.locator("[data-testid='chat-composer-input']");
+      await input.fill("Contrast probe for the pickup row");
+      await input.press("Enter");
+      await expect(page.locator("[data-testid='chat-pickup-status']")).toHaveAttribute(
+        "data-pickup",
+        "waiting",
+        { timeout: 10_000 },
+      );
+    },
     close: async () => {
       try {
         await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });

@@ -4,11 +4,18 @@ import { untrack } from "svelte";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { AI_CTA } from "../hooks/useAiReadiness.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
+import { AI_OFF_TITLE } from "../utils/license-ui";
+import { CLAUDE_CODE_OFFER_TEXT, showClaudeCodeOffer } from "./chat-claude-code-offer";
 import { localChatDateLabel } from "./chat-export";
+import { GREETING_LATE_TEXT, GREETING_RELAUNCH, type GreetingAction } from "./chat-greeting";
 import { renderMarkdown } from "./chat-markdown";
+import { chatPickup, chatPickupAnnouncement, chatPickupLabel } from "./chat-pickup";
+import { type ChatResume, chatResumeLabel } from "./chat-resume";
 import "./markdown-body.css";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
@@ -30,8 +37,6 @@ interface Props {
   editor: TiptapEditor | null;
   activeDocId: string | null;
   openDocs: Array<{ id: string; fileName: string }>;
-  claudeActive?: boolean;
-  claudeStatus?: string | null;
   visible?: boolean;
   capturedAnchor: CapturedAnchor | null;
   onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
@@ -43,6 +48,47 @@ interface Props {
   /** Bind to get a reference to the textarea element. */
   inputEl?: HTMLTextAreaElement | null;
   reduceMotion?: boolean;
+  /**
+   * The Start / Turn off control for Tandem's Claude (#2195): `turn-off` while
+   * it runs, `start` while it is in standby, `null` to hide. Required, with its
+   * two handlers: PanelSlot's loose `[key: string]: any` arm would otherwise let
+   * a forgotten prop compile and the control silently never render.
+   */
+  tandemClaudeControl: "start" | "turn-off" | null;
+  onStartClaude: () => void;
+  onTurnOffClaude: () => void;
+  /**
+   * The "Claude is resuming…" row (#2196) — see `chat-resume.ts`. While it is
+   * set it REPLACES the pickup row: "waiting for your AI to pick it up" beside
+   * "Claude is resuming" would be two answers to one question. Required, with
+   * its handler, for the same PanelSlot reason as `tandemClaudeControl`.
+   */
+  tandemClaudeResume: ChatResume | null;
+  /** Runs the failed row's remedy (`AI_CTA[remedy].action`). */
+  onResumeRemedy: (remedy: Extract<ChatResume, { kind: "failed" }>["remedy"]) => void;
+  /**
+   * The "hasn't said hello" note (#2197; `chat-greeting.ts`): its action, or
+   * null to hide. Below the resume row in precedence (a start under way says
+   * more), above the pickup row, which it replaces while shown. Required, with
+   * its handler, for the same PanelSlot reason as `tandemClaudeControl`.
+   */
+  tandemClaudeGreetingLate: GreetingAction | null;
+  onGreetingAction: (action: GreetingAction) => void;
+  /**
+   * The offer to set up Tandem's own Claude (#2199; `chat-claude-code-offer.ts`)
+   * may show — App's `claudeCodeOfferEligible`. The panel adds WHEN: an empty
+   * chat, or a message left waiting past the stall threshold. Required, with
+   * its two handlers, for the same PanelSlot reason as `tandemClaudeControl`.
+   */
+  claudeCodeOfferEligible: boolean;
+  onClaudeCodeOfferSetup: () => void;
+  onClaudeCodeOfferDismiss: () => void;
+  /**
+   * The licence refuses the AI (#1521). Disables the composer and send; the
+   * history stays fully readable. Required, with no default, so a mount that
+   * forgets it fails to compile rather than fail open.
+   */
+  aiDisabled: boolean;
 }
 
 let {
@@ -51,8 +97,6 @@ let {
   editor,
   activeDocId,
   openDocs,
-  claudeActive,
-  claudeStatus,
   visible,
   capturedAnchor,
   onCapturedAnchorChange,
@@ -63,7 +107,33 @@ let {
   canInsert = false,
   inputEl = $bindable(null),
   reduceMotion,
+  tandemClaudeControl,
+  onStartClaude,
+  onTurnOffClaude,
+  tandemClaudeResume,
+  onResumeRemedy,
+  tandemClaudeGreetingLate,
+  onGreetingAction,
+  claudeCodeOfferEligible,
+  onClaudeCodeOfferSetup,
+  onClaudeCodeOfferDismiss,
+  aiDisabled,
 }: Props = $props();
+
+// One lookup for the control's copy, keyed like the prop. A double click needs
+// no guard here: both actions take the launcher claim before any request, so
+// a second click while the first is in flight is refused with a notice.
+const TANDEM_CLAUDE_CONTROL = {
+  start: {
+    text: "Start Tandem's Claude",
+    title: "Start Tandem's Claude. Its conversation resumes.",
+  },
+  "turn-off": {
+    text: "Turn off Tandem's Claude",
+    title:
+      "Turn off Tandem's Claude. It stays off, including the next time Tandem starts, until you start it again.",
+  },
+} as const;
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
@@ -81,20 +151,64 @@ $effect(() => {
   inputEl = internalInputEl ?? null;
 });
 
-// Auto-scroll to bottom on new messages or when typing indicator appears
-let prevClaudeActive = false;
+// The pickup row (see `chat-pickup.ts`). `now` is the reactive clock, written only
+// by the interval below; it is stale whenever that tick is stopped. The
+// `Math.max` with `Date.now()` is what keeps a stale value from counting an
+// hours-old restored message as young: a chat change re-runs this derived and
+// reads the real time in the same evaluation. (Re-showing a hidden panel also
+// lands on the current time; `chat-panel-pickup.test.ts` pins that outcome.)
+let now = $state(Date.now());
+// Either row replaces the pickup row (one answer to "what is happening with my
+// message"); the template and the live region put the resume row first.
+const pickup = $derived(
+  tandemClaudeResume || tandemClaudeGreetingLate
+    ? null
+    : chatPickup(messages, Math.max(now, Date.now())),
+);
+const pickupKind = $derived(pickup?.kind ?? null);
+// Beside the pickup row, not instead of it: "still waiting" stays true.
+const claudeCodeOffer = $derived(
+  showClaudeCodeOffer(claudeCodeOfferEligible, messages.length, pickup),
+);
+// The primitive, for the scroll effect: `chatResume` returns a new object on
+// every recompute, and an effect reading the object would scroll a reader who
+// scrolled up back down on a change that moved nothing.
+const resumeKind = $derived(tandemClaudeResume?.kind ?? null);
+const greetingLateShown = $derived(tandemClaudeGreetingLate != null);
+
+// Tick only while a row is showing in a panel that is not hidden, so the elapsed
+// count moves and the age cap can retire the row. Keyed on the primitive kind, so
+// the timer survives message churn and stops the moment the row goes away.
+// `visible === false`, not `!visible`: a mount that never passes `visible` is one
+// where the panel is always shown.
 $effect(() => {
-  void messages; // track message changes
-  const active = !!claudeActive;
+  if (visible === false || pickupKind === null) return;
+  const timer = setInterval(() => {
+    now = Date.now();
+  }, 1000);
+  return () => clearInterval(timer);
+});
+
+// Auto-scroll to bottom on new messages or when the pickup row appears or changes
+// state — but not when the row going away is the ONLY change, which would yank a
+// reader who scrolled up. The result reply usually clears the row in the same
+// update that adds it, and that one must still scroll.
+let prevMessages: ChatMessage[] | null = null;
+$effect(() => {
+  // The resume row too (#2196): its change to the taller failed row carries
+  // the remedy button, which must not land below the fold.
+  // Read up front, not inside the chain: while the pickup row reads
+  // "waiting" the chain would short-circuit past it, and the offer row that
+  // joins it at the stall threshold would land below the fold.
+  const offer = claudeCodeOffer;
+  let kind: string | null = resumeKind;
+  if (kind === null && greetingLateShown) kind = "greeting";
+  kind ??= pickupKind ?? (offer ? "offer" : null);
   // untrack: reduceMotion pref change shouldn't re-trigger scroll.
   const sb = untrack(() => scrollBehavior);
-
-  if (!active && prevClaudeActive) {
-    prevClaudeActive = false;
-    return;
-  }
-  prevClaudeActive = active;
-  messagesEndEl?.scrollIntoView({ behavior: sb });
+  const messagesChanged = messages !== prevMessages;
+  prevMessages = messages;
+  if (messagesChanged || kind !== null) messagesEndEl?.scrollIntoView({ behavior: sb });
 });
 
 // Scroll to bottom when panel becomes visible
@@ -175,6 +289,7 @@ $effect(() => {
 });
 
 function sendMessage() {
+  if (aiDisabled) return;
   if (!inputText.trim()) return;
   if (onSend(inputText.trim()) === false) return;
   inputText = "";
@@ -256,10 +371,28 @@ async function exportChat() {
        overriding only `font-size`; the unread pill sets no weight of its own.
        All three inherit 600 from here, so dropping it demotes all three to 400.
        `--tandem-text-md` really was inert — nothing in the row consumes it. -->
-  {#if messages.length > 0}
+  {#if messages.length > 0 || tandemClaudeControl}
     <div
       style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; display: flex; align-items: center; justify-content: flex-end; gap: var(--tandem-space-2);"
     >
+      {#if tandemClaudeControl}
+        <!-- #2195. One button whose label flips, not two {#if} siblings, so
+             focus survives the change. Outside the messages gate: an empty
+             chat is exactly where Start is needed. Its name says "Tandem's
+             Claude" because a hand-started session may be attached too, and
+             this acts only on Tandem's own. -->
+        <button
+          type="button"
+          onclick={tandemClaudeControl === "start" ? onStartClaude : onTurnOffClaude}
+          data-testid="chat-tandem-claude-toggle"
+          data-action={tandemClaudeControl}
+          title={TANDEM_CLAUDE_CONTROL[tandemClaudeControl].title}
+          class="chat-header-action"
+          style="margin-right: auto;"
+        >
+          {TANDEM_CLAUDE_CONTROL[tandemClaudeControl].text}
+        </button>
+      {/if}
       {#if unreadCount > 0}
         <!-- The count was legible as "Chat 3" by adjacency; alone it is a bare
              number, so it needs the label the word used to supply. Matches how
@@ -271,23 +404,25 @@ async function exportChat() {
           {unreadCount}
         </span>
       {/if}
-      <button
-        onclick={exportChat}
-        disabled={exporting}
-        title="Export complete chat to a scratchpad"
-        class="chat-header-action"
-      >
-        {exporting ? "Exporting…" : "Export"}
-      </button>
-      <button
-        onclick={clearChat}
-        disabled={clearing}
-        title="Clear chat history"
-        data-testid="clear-chat-btn"
-        class="chat-header-action"
-      >
-        {clearing ? "Clearing…" : "Clear"}
-      </button>
+      {#if messages.length > 0}
+        <button
+          onclick={exportChat}
+          disabled={exporting}
+          title="Export complete chat to a scratchpad"
+          class="chat-header-action"
+        >
+          {exporting ? "Exporting…" : "Export"}
+        </button>
+        <button
+          onclick={clearChat}
+          disabled={clearing}
+          title="Clear chat history"
+          data-testid="clear-chat-btn"
+          class="chat-header-action"
+        >
+          {clearing ? "Clearing…" : "Clear"}
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -385,24 +520,131 @@ async function exportChat() {
       </div>
     {/each}
 
-    {#if claudeActive}
+    {#snippet typingDots()}
+      <span style="display: inline-flex; gap: 3px;">
+        {#each TYPING_DOT_DELAYS as delay (delay)}
+          <!-- Only the per-dot delay stays inline: it is the one value that
+               varies across the three dots, and it is what makes them bounce
+               in sequence rather than in unison. Everything else moved into
+               `.chat-typing-dot` so the reduce-motion guard has a rule to
+               beat — an inline `animation` shorthand can only be overridden
+               with `!important`. -->
+          <span class="chat-typing-dot" style="animation-delay: {delay}s"></span>
+        {/each}
+      </span>
+    {/snippet}
+    {#if tandemClaudeResume?.kind === "resuming"}
       <div
-        style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-2); font-size: 12px; color: var(--tandem-author-claude); display: flex; align-items: center; gap: var(--tandem-space-2);"
+        aria-hidden="true"
+        class="chat-status-row"
+        data-testid="chat-tandem-claude-resuming"
+        data-verb={tandemClaudeResume.verb}
+        style="color: var(--tandem-author-claude);"
       >
-        <span style="display: inline-flex; gap: 3px;">
-          {#each TYPING_DOT_DELAYS as delay (delay)}
-            <!-- Only the per-dot delay stays inline: it is the one value that
-                 varies across the three dots, and it is what makes them bounce
-                 in sequence rather than in unison. Everything else moved into
-                 `.chat-typing-dot` so the reduce-motion guard has a rule to
-                 beat — an inline `animation` shorthand can only be overridden
-                 with `!important`. -->
-            <span class="chat-typing-dot" style="animation-delay: {delay}s"></span>
-          {/each}
-        </span>
-        <span>{claudeStatus ?? "Your AI is thinking..."}</span>
+        {@render typingDots()}
+        <span>{chatResumeLabel(tandemClaudeResume)}</span>
+      </div>
+    {:else if tandemClaudeResume?.kind === "failed"}
+      {@const remedy = tandemClaudeResume.remedy}
+      <div
+        class="chat-status-row chat-status-row-wrap"
+        data-testid="chat-tandem-claude-resume-failed"
+        data-remedy={remedy}
+        style="color: var(--tandem-warning-fg-strong);"
+      >
+        <span aria-hidden="true">{chatResumeLabel(tandemClaudeResume)}</span>
+        <button
+          type="button"
+          class="chat-header-action"
+          data-testid="chat-tandem-claude-resume-remedy"
+          title={AI_CTA[remedy].title}
+          aria-label={AI_CTA[remedy].ariaLabel}
+          onclick={() => onResumeRemedy(remedy)}
+        >
+          {AI_CTA[remedy].label}
+        </button>
+      </div>
+    {:else if tandemClaudeGreetingLate}
+      {@const greet =
+        tandemClaudeGreetingLate === "relaunch"
+          ? GREETING_RELAUNCH
+          : AI_CTA[tandemClaudeGreetingLate]}
+      <div
+        class="chat-status-row chat-status-row-wrap"
+        data-testid="chat-greeting-late"
+        data-action={tandemClaudeGreetingLate}
+        style="color: var(--tandem-warning-fg-strong);"
+      >
+        <span aria-hidden="true">{GREETING_LATE_TEXT}</span>
+        <button
+          type="button"
+          class="chat-header-action"
+          data-testid="chat-greeting-late-action"
+          title={greet.title}
+          aria-label={greet.ariaLabel}
+          onclick={() => onGreetingAction(tandemClaudeGreetingLate)}
+        >
+          {greet.label}
+        </button>
+      </div>
+    {:else if pickup}
+      <div
+        aria-hidden="true"
+        class="chat-status-row"
+        data-testid="chat-pickup-status"
+        data-pickup={pickup.kind}
+        style="color: {pickup.kind === 'waiting' ? 'var(--tandem-fg-muted)' : 'var(--tandem-author-claude)'};"
+      >
+        {#if pickup.kind === "working"}
+          {@render typingDots()}
+        {/if}
+        <span>{chatPickupLabel(pickup)}</span>
       </div>
     {/if}
+    {#if claudeCodeOffer}
+      <!-- NOT aria-hidden (#2199): unlike the status rows above, it holds its
+           own buttons, so it must stay reachable in place. Its text is ALSO
+           announced through the live region below when it appears, so a
+           screen-reader user hears that it arrived. -->
+      <div
+        class="chat-status-row chat-status-row-wrap"
+        data-testid="chat-claude-code-offer"
+        style="color: var(--tandem-fg-muted);"
+      >
+        <span>{CLAUDE_CODE_OFFER_TEXT}</span>
+        <button
+          type="button"
+          class="chat-header-action"
+          data-testid="chat-claude-code-offer-setup"
+          title="Open setup to install and connect Claude Code for Tandem's own Claude"
+          onclick={onClaudeCodeOfferSetup}
+        >
+          Set up…
+        </button>
+        <button
+          type="button"
+          class="chat-header-action"
+          data-testid="chat-claude-code-offer-dismiss"
+          title="Hide this until Tandem next starts"
+          onclick={onClaudeCodeOfferDismiss}
+        >
+          Not now
+        </button>
+      </div>
+    {/if}
+    <!-- Announcer, not host: the row is a gapped flex item that comes and goes.
+         Keyed on the kind only, so the ticking seconds are never read out. -->
+    <LiveRegion
+      srOnly
+      message={tandemClaudeResume
+        ? chatResumeLabel(tandemClaudeResume)
+        : tandemClaudeGreetingLate
+          ? GREETING_LATE_TEXT
+          : claudeCodeOffer
+            ? CLAUDE_CODE_OFFER_TEXT
+            : chatPickupAnnouncement(pickupKind)}
+      data-testid="chat-pickup-live"
+    />
     <div bind:this={messagesEndEl}></div>
   </div>
 
@@ -437,7 +679,8 @@ async function exportChat() {
       value={inputText}
       oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
       onkeydown={handleKeyDown}
-      placeholder="Message your AI…"
+      disabled={aiDisabled}
+      placeholder={aiDisabled ? AI_OFF_TITLE : "Message your AI…"}
       rows={1}
       class="chat-textarea"
       data-multiline={composerMultiline}
@@ -445,7 +688,7 @@ async function exportChat() {
     ></textarea>
     <button
       onclick={sendMessage}
-      disabled={!inputText.trim()}
+      disabled={!inputText.trim() || aiDisabled}
       class="chat-send-btn"
       aria-label="Send message"
       title="Send · Enter"
@@ -544,6 +787,20 @@ async function exportChat() {
     height: 1px;
     flex: 1;
     background: var(--tandem-border);
+  }
+
+  /* The pickup row and the resume rows (#2196) share everything but colour. */
+  .chat-status-row {
+    padding: var(--tandem-space-2) var(--tandem-space-3);
+    margin-bottom: var(--tandem-space-2);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+  }
+
+  .chat-status-row-wrap {
+    flex-wrap: wrap;
   }
 
   /* Typing indicator dots. The bounce is looping/ambient, so under reduced

@@ -32,6 +32,7 @@ const SCAN_CAP_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
 import {
   CWD_DEPENDENT_CHECKS,
+  describeHealthSession,
   detectEnabledTandemPluginKey,
   evaluateAbsentChannelEntry,
   evaluateAppTranslocation,
@@ -812,12 +813,14 @@ describe("evaluateClaudeCli", () => {
     expect(result.fix).toContain("claude.com/claude-code");
   });
 
-  it("tells the user to restart Tandem, not just open a new terminal", () => {
-    // Doctor reads its own fresh process's PATH; the launcher spawns from the
-    // long-running server's env captured at start. A new terminal fixes what
-    // doctor sees, not what the launcher uses.
+  it("is about the user's terminal only: Tandem's launcher already finds ~/.local/bin (#2199)", () => {
+    // The launcher looks in the native install location itself, so no Tandem
+    // restart is owed — telling the user to restart would send them on an
+    // errand that changes nothing.
     const result = evaluateClaudeCli("INSTALLED_NOT_ON_PATH");
-    expect(result.fix).toContain("restart Tandem");
+    expect(result.fix).toContain("open a new terminal");
+    expect(result.fix).toContain("already looks in ~/.local/bin");
+    expect(result.fix).not.toContain("restart Tandem");
   });
 
   it("warns instead of passing when on PATH but not launchable", () => {
@@ -3083,4 +3086,31 @@ describe("resolveDoctorPortsFromEnv (#1806)", () => {
     },
     WIRING_TIMEOUT_MS,
   );
+});
+
+describe("describeHealthSession", () => {
+  it("reports an active session when one is live", () => {
+    expect(describeHealthSession({ hasSession: true, sessionCount: 1 })).toEqual({
+      label: "session active",
+      warning: null,
+    });
+  });
+
+  // A client that exited without disconnecting stays listed until reaped.
+  it("calls a leftover-only registry a leftover, and warns", () => {
+    const out = describeHealthSession({ hasSession: true, sessionCount: 0 });
+    expect(out.label).toBe("only a leftover MCP session");
+    expect(out.warning).toMatch(/No live MCP session/);
+  });
+
+  it("trusts hasSession when the server sends no count", () => {
+    expect(describeHealthSession({ hasSession: true }).label).toBe("session active");
+  });
+
+  it("warns that nothing has connected when there is no session", () => {
+    expect(describeHealthSession({ hasSession: false, sessionCount: 0 })).toEqual({
+      label: "no MCP session",
+      warning: "No active MCP session — Claude Code hasn't connected yet",
+    });
+  });
 });

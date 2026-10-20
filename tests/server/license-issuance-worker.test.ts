@@ -4,13 +4,17 @@ import {
   base64ToBytes,
   canonicalize as canonicalizeWorker,
   constantTimeEqual,
+  hexToBytes,
   importPkcs8Ed25519,
+  keyIdOfPkcs8Ed25519,
   signLicense,
-  verifyStandardWebhook,
+  verifyPaddleSignature,
   webCryptoSigner,
 } from "../../infra/license-issuance-worker/src/crypto.js";
 import issuanceWorker, {
   _resetAlertThrottleForTests,
+  _setTrustedKeyIdsForTests,
+  alertThrottleKey,
   EVENT_TTL_S,
   type FailStage,
   handleIssuance,
@@ -19,29 +23,33 @@ import issuanceWorker, {
   type KvNamespace,
   LICENSE_VERSION,
   licenseEmailText,
+  parsePriceIds,
   resendFromProblem,
+  sandboxSigningAllowed,
   supportEmailProblem,
+  TRUSTED_KEY_IDS,
 } from "../../infra/license-issuance-worker/src/worker.js";
 import {
   handleUpdateRequest,
   LICENSE_HEADER,
 } from "../../infra/license-update-worker/src/worker.js";
 import type {
+  IssuedLicenseMetadata,
   LicenseEntitlement,
-  LicenseMetadata,
 } from "../../src/server/license/license-types.js";
-import { canonicalize as canonicalizeServer } from "../../src/server/license/verifier.js";
+import { buildKeyMap, keyIdForPublicKey } from "../../src/server/license/public-key.js";
+import {
+  _verifyAgainstForTests,
+  canonicalize as canonicalizeServer,
+} from "../../src/server/license/verifier.js";
 
 // --- test crypto ------------------------------------------------------------
-// A real Ed25519 keypair. The Worker signs with the PRIVATE half (via injected
-// signBytes) and the test verifies with the PUBLIC half using Node's crypto —
-// independent of the Worker's WebCrypto path. Combined with the canonicalize
-// parity test below, this proves a Worker-produced blob verifies under the real
-// on-device `verifyLicenseSignature`.
 const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
 
 const signBytes = async (data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> =>
   new Uint8Array(crypto.sign(null, Buffer.from(data), privateKey));
+const TEST_KEY_ID = keyIdForPublicKey(publicKey);
+const TEST_KEYS_BY_ID = buildKeyMap([publicKey.export({ type: "spki", format: "pem" }).toString()]);
 
 interface DecodedBlob {
   metadata: Record<string, unknown>;
@@ -52,32 +60,29 @@ function decodeBlob(blob: string): DecodedBlob {
   return JSON.parse(Buffer.from(blob, "base64").toString("utf-8")) as DecodedBlob;
 }
 
-/** Verify a Worker-produced blob the way the real server verifier does. */
 function blobVerifies(blob: string): boolean {
-  const { metadata, signature } = decodeBlob(blob);
-  return crypto.verify(
-    null,
-    Buffer.from(canonicalizeServer(metadata)),
-    publicKey,
-    Buffer.from(signature, "hex"),
-  );
+  try {
+    _verifyAgainstForTests(blob, TEST_KEYS_BY_ID, TEST_KEY_ID);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-// --- webhook signing (test fixture; scheme independently pinned by the golden
-//     vector test) ------------------------------------------------------------
-const SECRET = `whsec_${Buffer.from("issuance-worker-test-secret").toString("base64")}`;
+// --- Paddle webhook signing --------------------------------------------------
+// Same construction as @paddle/paddle-node-sdk 3.10.0 `NodeCrypto.computeHmac`:
+// `createHmac('sha256', secret)` over `${ts}:${body}`, hex. The secret is the
+// raw destination-secret string, not decoded.
+const SECRET = "pdl_ntfset_01testsecret_abcdef";
 
-function signWebhook(id: string, ts: string, body: string, secret = SECRET): string {
-  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
-  const sig = crypto.createHmac("sha256", key).update(`${id}.${ts}.${body}`).digest("base64");
-  return `v1,${sig}`;
+function signPaddle(ts: string, body: string, secret = SECRET): string {
+  return crypto.createHmac("sha256", secret).update(`${ts}:${body}`).digest("hex");
 }
 
 const NOW = 1_700_000_000_000;
 const NOW_S = "1700000000";
 
 interface ReqOpts {
-  id?: string;
   ts?: string;
   secret?: string;
   method?: string;
@@ -85,17 +90,16 @@ interface ReqOpts {
 }
 
 function makeRequest(body: string, opts: ReqOpts = {}): Request {
-  const id = opts.id ?? "msg_1";
   const ts = opts.ts ?? NOW_S;
   const headers = new Headers();
-  headers.set("webhook-id", id);
-  headers.set("webhook-timestamp", ts);
-  headers.set("webhook-signature", opts.sig ?? signWebhook(id, ts, body, opts.secret ?? SECRET));
+  headers.set(
+    "Paddle-Signature",
+    opts.sig ?? `ts=${ts};h1=${signPaddle(ts, body, opts.secret ?? SECRET)}`,
+  );
   const method = opts.method ?? "POST";
   return new Request("https://issuance.example/", {
     method,
     headers,
-    // GET/HEAD requests may not carry a body.
     body: method === "GET" || method === "HEAD" ? undefined : body,
   });
 }
@@ -118,6 +122,10 @@ function makeKv(): KvNamespace & {
     delete: async (k) => {
       map.delete(k);
     },
+    list: async ({ prefix }) => ({
+      keys: [...map.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })),
+      list_complete: true,
+    }),
   };
 }
 
@@ -125,45 +133,86 @@ interface TestDeps extends IssuanceDeps {
   entitlementKv: ReturnType<typeof makeKv>;
   ledgerKv: ReturnType<typeof makeKv>;
   sendEmail: IssuanceDeps["sendEmail"] & ReturnType<typeof vi.fn>;
+  lookupCustomer: IssuanceDeps["lookupCustomer"] & ReturnType<typeof vi.fn>;
   log: NonNullable<IssuanceDeps["log"]> & ReturnType<typeof vi.fn>;
 }
+
+const buyer = (email = "buyer@example.com", name: string | null = "Jane Buyer") =>
+  vi.fn(async () => ({ ok: true as const, email, name }));
 
 function baseDeps(overrides: Partial<IssuanceDeps> = {}): TestDeps {
   let counter = 0;
   const defaults = {
     webhookSecret: SECRET,
     signBytes,
+    keyId: TEST_KEY_ID,
     entitlementKv: makeKv(),
     ledgerKv: makeKv(),
     sendEmail: vi.fn(async () => ({ ok: true })),
     isGrandfathered: () => false,
+    hasGrandfathers: false,
+    lookupCustomer: buyer(),
+    priceIds: ["pri_test1"],
     isTest: false,
     now: () => NOW,
     newLicenseId: () => `lic-${++counter}`,
     log: vi.fn(),
   } satisfies IssuanceDeps;
-  // Overrides may replace a narrowed field (e.g. a plain KvNamespace without
-  // `map`); tests that override only inspect what they inject.
   return { ...defaults, ...overrides } as TestDeps;
 }
 
-// --- payload fixtures + ledger inspection --------------------------------------
-const paidBody = (orderId = "ord_1", extra: Record<string, unknown> = {}) =>
+// --- payload fixtures ---------------------------------------------------------
+let autoEvt = 0;
+const nextEvt = () => `evt_auto${++autoEvt}`;
+
+interface PaidOpts {
+  eventId?: string;
+  txnId?: string;
+  customerId?: string | null;
+  totals?: Record<string, unknown>;
+  items?: unknown;
+  status?: string;
+}
+
+const paidBody = (o: PaidOpts = {}) =>
   JSON.stringify({
-    type: "order.paid",
+    event_id: o.eventId ?? nextEvt(),
+    event_type: "transaction.completed",
+    occurred_at: "2026-10-17T00:00:00Z",
+    notification_id: "ntf_x",
     data: {
-      id: orderId,
-      total_amount: 4900,
-      customer: { email: "buyer@example.com", name: "Jane Buyer" },
-      ...extra,
+      id: o.txnId ?? "txn_1",
+      status: o.status ?? "completed",
+      customer_id: o.customerId === undefined ? "ctm_1" : o.customerId,
+      items: o.items ?? [{ price: { id: "pri_test1" }, quantity: 1 }],
+      details: { totals: o.totals ?? { grand_total: "4500", total: "4500", balance: "0" } },
     },
   });
 
-const refundBody = (orderId: string, refunded = true) =>
-  JSON.stringify({ type: "order.refunded", data: { id: orderId, refunded } });
+interface RefundOpts {
+  eventId?: string;
+  eventType?: string;
+  adjId?: string;
+  txnId?: string;
+  action?: string;
+  status?: string;
+  type?: string;
+}
 
-/** Shape of the Worker's durable ledger record — the test's independent pin of
- * the on-wire format (deliberately NOT imported from the Worker). */
+const refundBody = (o: RefundOpts = {}) =>
+  JSON.stringify({
+    event_id: o.eventId ?? nextEvt(),
+    event_type: o.eventType ?? "adjustment.created",
+    occurred_at: "2026-10-17T00:00:00Z",
+    data: {
+      id: o.adjId ?? "adj_1",
+      transaction_id: o.txnId ?? "txn_1",
+      action: o.action ?? "refund",
+      status: o.status ?? "approved",
+      type: o.type ?? "full",
+    },
+  });
+
 interface LedgerRec {
   orderId: string;
   licenseId: string;
@@ -176,16 +225,9 @@ interface LedgerRec {
   refunded: boolean;
 }
 
-/** Read+parse an order's ledger record. The literal key format is the point —
- * it pins the mode-scoped `order:<mode>:<id>` convention against refactors. */
-const ledgerRec = (deps: TestDeps, orderId = "ord_1", mode = "live"): LedgerRec =>
-  JSON.parse(deps.ledgerKv.map.get(`order:${mode}:${orderId}`) as string) as LedgerRec;
+const ledgerRec = (deps: TestDeps, txnId = "txn_1", mode = "live"): LedgerRec =>
+  JSON.parse(deps.ledgerKv.map.get(`order:${mode}:${txnId}`) as string) as LedgerRec;
 
-/** A revoked entitlement is a TOMBSTONE, not an absence (#1786) — a deleted key
- *  and a LOST key read identically to the update Worker, which pages on the
- *  latter. Asserted as the exact parsed value, never `toBeDefined()`: a
- *  tombstone satisfies that as readily as a resurrected live entitlement, which
- *  is precisely what the resurrection tests exist to catch. */
 function expectRevoked(deps: TestDeps, licenseId: string): void {
   expect(JSON.parse(deps.entitlementKv.map.get(licenseId) as string)).toEqual({
     updateWindowEnd: null,
@@ -193,14 +235,17 @@ function expectRevoked(deps: TestDeps, licenseId: string): void {
   });
 }
 
-/** The complement: still LIVE. Also spelled as the exact value, for the same
- *  reason — `toBeDefined()` stopped discriminating the moment revocation began
- *  writing a key instead of removing one. */
 function expectLive(deps: TestDeps, licenseId: string): void {
-  const value = JSON.parse(deps.entitlementKv.map.get(licenseId) as string);
-  expect(value.status).toBe("personal");
-  expect(value.updateWindowEnd).not.toBeNull();
+  expect(JSON.parse(deps.entitlementKv.map.get(licenseId) as string)).toEqual({
+    updateWindowEnd: null,
+    status: "personal",
+    version: LICENSE_VERSION,
+  });
 }
+
+const lastLog = (deps: TestDeps) => deps.log.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+const noticeKeys = (deps: TestDeps) =>
+  [...deps.ledgerKv.map.keys()].filter((k) => k.startsWith("notice:"));
 
 // ===========================================================================
 describe("crypto: canonicalize parity with the server verifier", () => {
@@ -235,7 +280,7 @@ describe("crypto: signLicense round-trips through the real verifier path", () =>
     // Typed as the on-device LicenseMetadata so a field drift in the Worker's
     // metadata shape is a compile error here, not a production activation
     // failure.
-    const metadata: LicenseMetadata = {
+    const metadata: IssuedLicenseMetadata = {
       id: "lic-x",
       name: "Jane Buyer",
       email: "buyer@example.com",
@@ -243,6 +288,7 @@ describe("crypto: signLicense round-trips through the real verifier path", () =>
       createdAt: new Date(NOW).toISOString(),
       expiresAt: new Date(NOW).toISOString(),
       version: LICENSE_VERSION,
+      keyId: TEST_KEY_ID,
     };
     const blob = await signLicense(metadata, signBytes);
     expect(blobVerifies(blob)).toBe(true);
@@ -262,7 +308,7 @@ describe("crypto: production WebCrypto signing path", () => {
   it("importPkcs8Ed25519 + webCryptoSigner produce a blob the real verifier accepts", async () => {
     const pem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
     const key = await importPkcs8Ed25519(pem);
-    const metadata: LicenseMetadata = {
+    const metadata: IssuedLicenseMetadata = {
       id: "lic-wc",
       name: "Web Crypto",
       email: "wc@example.com",
@@ -270,6 +316,7 @@ describe("crypto: production WebCrypto signing path", () => {
       createdAt: new Date(NOW).toISOString(),
       expiresAt: null,
       version: LICENSE_VERSION,
+      keyId: await keyIdOfPkcs8Ed25519(pem),
     };
     const blob = await signLicense(metadata, webCryptoSigner(key));
     expect(blobVerifies(blob)).toBe(true);
@@ -280,543 +327,725 @@ describe("crypto: production WebCrypto signing path", () => {
   });
 });
 
-describe("crypto: verifyStandardWebhook (svix)", () => {
-  // Golden vector — reproduces svix's own published manual-verification example
-  // exactly, so it independently pins the whsec_-decode + HMAC construction.
-  it("accepts the svix published golden vector", async () => {
-    const ok = await verifyStandardWebhook(
-      {
-        id: "msg_p5jXN8AQM9LWM0D4loKWxJek",
-        timestamp: "1614265330",
-        signature: "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=",
-      },
-      '{"test": 2432232314}',
-      "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-      1614265330_000,
-      300,
-    );
-    expect(ok).toBe(true);
-  });
+describe("crypto: verifyPaddleSignature", () => {
+  const body = '{"event_id":"evt_1"}';
+  const good = signPaddle(NOW_S, body);
+  const v = (header: string | null, o: { body?: string; secret?: string; now?: number } = {}) =>
+    verifyPaddleSignature(header, o.body ?? body, o.secret ?? SECRET, o.now ?? NOW, 300);
 
-  // Wrapper with good-case defaults so each rejection case shows only what it
-  // varies.
-  const verifyWith = (o: {
-    id?: string | null;
-    ts?: string;
-    sig?: string;
-    body?: string;
-    secret?: string;
-    now?: number;
-  }) => {
-    const body = o.body ?? paidBody();
-    return verifyStandardWebhook(
-      {
-        id: o.id === undefined ? "msg_1" : o.id,
-        timestamp: o.ts ?? NOW_S,
-        signature: o.sig ?? signWebhook("msg_1", o.ts ?? NOW_S, body, o.secret ?? SECRET),
-      },
-      body,
-      o.secret ?? SECRET,
-      o.now ?? NOW,
-      300,
-    );
-  };
-
-  it("accepts a freshly signed payload and matches any of multiple v1 sigs", async () => {
-    const body = paidBody();
-    const good = signWebhook("msg_1", NOW_S, body);
-    const multi = `v1,AAAA${good.slice(5)}badpad== ${good}`; // first entry garbage, second good
-    expect(await verifyWith({ body, sig: multi })).toBe(true);
-  });
-
-  it("rejects a tampered body, a stale timestamp, and a wrong secret", async () => {
-    const body = paidBody();
-    const sig = signWebhook("msg_1", NOW_S, body);
-    expect(await verifyWith({ body: `${body} `, sig })).toBe(false); // tampered body
-    expect(await verifyWith({ body, sig, now: NOW + 600_000 })).toBe(false); // stale (10 min)
-    expect(await verifyWith({ body, sig, now: NOW - 600_000 })).toBe(false); // future-dated
-    // signed with the right secret, verified against a different one
+  it("accepts a vector computed exactly as the Paddle Node SDK computes it", async () => {
+    // Hardcoded: secret, ts, body and h1 from the SDK's construction.
+    const h1 = crypto
+      .createHmac("sha256", "pdl_ntfset_vector")
+      .update('1700000000:{"a":1}')
+      .digest("hex");
     expect(
-      await verifyWith({ body, sig, secret: `whsec_${Buffer.from("other").toString("base64")}` }),
-    ).toBe(false);
+      await verifyPaddleSignature(`ts=1700000000;h1=${h1}`, '{"a":1}', "pdl_ntfset_vector", NOW, 5),
+    ).toBe(true);
   });
 
-  it("rejects missing headers, non-integer timestamps, and wrong-length sigs", async () => {
-    expect(await verifyWith({ id: null, sig: "v1,x" })).toBe(false);
-    expect(await verifyWith({ ts: "12ab", sig: "v1,x" })).toBe(false);
-    // valid base64 but not 32 bytes -> skipped, no match, no throw
-    expect(await verifyWith({ sig: "v1,AAAA" })).toBe(false);
+  it("matches any of multiple h1 entries", async () => {
+    expect(await v(`ts=${NOW_S};h1=${"0".repeat(64)};h1=${good}`)).toBe(true);
+  });
+
+  it("refuses more than 8 h1 entries even when one matches", async () => {
+    const many = Array.from({ length: 8 }, () => `h1=${"0".repeat(64)}`).join(";");
+    expect(await v(`ts=${NOW_S};${many};h1=${good}`)).toBe(false);
+  });
+
+  it("refuses non-hex, short and uppercase-mismatched h1, missing/duplicate/stale ts", async () => {
+    expect(await v(`ts=${NOW_S};h1=zz${good.slice(2)}`)).toBe(false);
+    expect(await v(`ts=${NOW_S};h1=${good.slice(0, 62)}`)).toBe(false);
+    expect(await v(`h1=${good}`)).toBe(false);
+    expect(await v(`ts=${NOW_S};ts=${NOW_S};h1=${good}`)).toBe(false);
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW + 600_000 })).toBe(false);
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW - 600_000 })).toBe(false);
+    expect(await v(`ts=12ab;h1=${good}`)).toBe(false);
+    expect(await v(null)).toBe(false);
+  });
+
+  it("a one-whitespace body tamper fails, and a base64-decoded secret fails", async () => {
+    expect(await v(`ts=${NOW_S};h1=${good}`, { body: `${body} ` })).toBe(false);
+    const decoded = Buffer.from(SECRET.replace(/^pdl_ntfset_/, ""), "base64").toString("latin1");
+    expect(await v(`ts=${NOW_S};h1=${good}`, { secret: decoded })).toBe(false);
+  });
+
+  it("hexToBytes round-trips", () => {
+    expect([...hexToBytes("00ff10")]).toEqual([0, 255, 16]);
+    expect(() => hexToBytes("0")).toThrow();
   });
 });
 
 // ===========================================================================
-describe("handleIssuance: order.paid happy path", () => {
+describe("handleIssuance: transaction.completed happy path", () => {
   let deps: TestDeps;
   beforeEach(() => {
     deps = baseDeps();
   });
 
-  it("mints, entitles, emails, and marks the event done", async () => {
-    const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
+  it("mints, entitles, emails, indexes, and marks the event done", async () => {
+    const res = await handleIssuance(makeRequest(paidBody({ eventId: "evt_1" })), deps);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-
-    // ledger order record
     const rec = ledgerRec(deps);
     expect(rec.type).toBe("personal");
     expect(rec.email).toBe("buyer@example.com");
     expect(rec.emailSent).toBe(true);
-    expect(rec.updateWindowEnd).not.toBeNull();
-
-    // entitlement (no PII) written under the licenseId — typed as the canonical
-    // LicenseEntitlement so shape drift is a compile error (kv-store ↔ worker
-    // parity, same convention as license-update-worker.test.ts).
+    expect(rec.updateWindowEnd).toBeNull();
     const expected: LicenseEntitlement = {
       updateWindowEnd: rec.updateWindowEnd,
       status: "personal",
       version: LICENSE_VERSION,
     };
     expect(JSON.parse(deps.entitlementKv.map.get(rec.licenseId) as string)).toEqual(expected);
-
-    // event marked done — WITH the TTL; the order record itself must be
-    // durable (no TTL: it is the refund/dedup source of truth forever)
     expect(deps.ledgerKv.map.get("evt:live:evt_1")).toBe("done");
     expect(deps.ledgerKv.putOptions.get("evt:live:evt_1")).toEqual({ expirationTtl: EVENT_TTL_S });
-    expect(deps.ledgerKv.putOptions.get("order:live:ord_1")).toBeUndefined();
-
-    // email delivered a verifiable blob
-    expect(deps.sendEmail).toHaveBeenCalledOnce();
+    expect(deps.ledgerKv.putOptions.get("order:live:txn_1")).toBeUndefined();
+    expect(deps.ledgerKv.map.get(`txnlic:live:txn_1:${rec.licenseId}`)).toBe("");
+    expect(deps.ledgerKv.putOptions.get(`txnlic:live:txn_1:${rec.licenseId}`)).toBeUndefined();
+    expect(deps.lookupCustomer).toHaveBeenCalledExactlyOnceWith("ctm_1");
     const blob = deps.sendEmail.mock.calls[0][2] as string;
     expect(blobVerifies(blob)).toBe(true);
-    expect(decodeBlob(blob).metadata.email).toBe("buyer@example.com");
+    expect(decodeBlob(blob).metadata.keyId).toBe(TEST_KEY_ID);
   });
 
-  it("order.paid resolves its ledger key through the SAME helper as order.refunded", async () => {
-    // Today's fixtures emit `data.id` only, so nothing covered the disagreement:
-    // if `issue()` and `revoke()` derived the key differently, a refund would
-    // write its record beside the order's instead of onto it, and the
-    // entitlement would never be revoked. One shared helper makes them agree by
-    // construction; this is what pins that they still both use it.
-    const body = JSON.stringify({
-      type: "order.paid",
-      data: {
-        id: "ord_x",
-        order_id: "ord_y",
-        total_amount: 4900,
-        customer: { email: "buyer@example.com", name: "Jane Buyer" },
-      },
-    });
-    await handleIssuance(makeRequest(body, { id: "evt_pair" }), deps);
-    expect(deps.ledgerKv.map.get("order:live:ord_y")).toBeDefined();
-    expect(deps.ledgerKv.map.get("order:live:ord_x")).toBeUndefined();
-
-    // ...and a refund on the same pair finds it.
-    const refund = JSON.stringify({
-      type: "order.refunded",
-      data: { id: "ord_x", order_id: "ord_y", refunded: true },
-    });
-    await handleIssuance(makeRequest(refund, { id: "evt_pair_r" }), deps);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(ledgerRec(deps, "ord_y").refunded).toBe(true);
+  it("issued and adjustment events resolve the SAME ledger key (txnIdOf)", async () => {
+    await handleIssuance(makeRequest(paidBody({ txnId: "txn_pair" })), deps);
+    expect(deps.ledgerKv.map.get("order:live:txn_pair")).toBeDefined();
+    await handleIssuance(makeRequest(refundBody({ adjId: "adj_pair", txnId: "txn_pair" })), deps);
+    expect(lastLog(deps)).toEqual({ result: "revoked", ts: NOW / 1000 });
+    expect(ledgerRec(deps, "txn_pair").refunded).toBe(true);
+    expect(deps.ledgerKv.map.get("order:live:adj_pair")).toBeUndefined();
   });
 
-  it("never returns the blob in the HTTP response and logs only { result, ts }", async () => {
-    const res = await handleIssuance(makeRequest(paidBody(), { id: "evt_1" }), deps);
+  it("never returns the blob and logs only { result, ts } on success", async () => {
+    const res = await handleIssuance(makeRequest(paidBody()), deps);
     const blob = deps.sendEmail.mock.calls[0][2] as string;
     expect(JSON.stringify(await res.json())).not.toContain(blob.slice(0, 20));
-    expect(deps.log).toHaveBeenCalledWith({ result: "issued", ts: NOW / 1000 });
     for (const [entry] of deps.log.mock.calls) {
       expect(Object.keys(entry as object).sort()).toEqual(["result", "ts"]);
     }
   });
 
-  it("grandfathered email → type grandfathered, null update window", async () => {
-    deps = baseDeps({ isGrandfathered: (e) => e === "buyer@example.com" });
-    await handleIssuance(makeRequest(paidBody("ord_gf"), { id: "evt_gf" }), deps);
-    const rec = ledgerRec(deps, "ord_gf");
-    expect(rec.type).toBe("grandfathered");
-    expect(rec.updateWindowEnd).toBeNull();
-    const ent = JSON.parse(deps.entitlementKv.map.get(rec.licenseId) as string);
-    expect(ent.updateWindowEnd).toBeNull();
+  it("grandfathered email → type grandfathered", async () => {
+    deps = baseDeps({ isGrandfathered: (e) => e === "buyer@example.com", hasGrandfathers: true });
+    await handleIssuance(makeRequest(paidBody({ txnId: "txn_gf" })), deps);
+    expect(ledgerRec(deps, "txn_gf").type).toBe("grandfathered");
   });
 
-  it("clamps an over-long name and still produces a verifiable blob (C2)", async () => {
-    const body = paidBody("ord_long", {
-      customer: { email: "buyer@example.com", name: "x".repeat(500) },
-    });
-    await handleIssuance(makeRequest(body, { id: "evt_long" }), deps);
+  it("clamps an over-long name from the lookup and still produces a verifiable blob", async () => {
+    deps = baseDeps({ lookupCustomer: buyer("buyer@example.com", "x".repeat(500)) });
+    await handleIssuance(makeRequest(paidBody()), deps);
     const blob = deps.sendEmail.mock.calls[0][2] as string;
     expect(blobVerifies(blob)).toBe(true);
     expect((decodeBlob(blob).metadata.name as string).length).toBe(128);
     expect(base64ToBytes(blob).length).toBeLessThan(4096);
   });
 
-  it("falls back to data.user.email when data.customer is absent (M3)", async () => {
-    const body = JSON.stringify({
-      type: "order.paid",
-      data: { id: "ord_u", total_amount: 4900, user: { email: "u@example.com", name: "U" } },
-    });
-    await handleIssuance(makeRequest(body, { id: "evt_u" }), deps);
-    expect(ledgerRec(deps, "ord_u").email).toBe("u@example.com");
+  it("two paidBody() calls without eventId get DIFFERENT event ids", () => {
+    expect(JSON.parse(paidBody()).event_id).not.toBe(JSON.parse(paidBody()).event_id);
   });
 });
 
 describe("handleIssuance: idempotency & recovery", () => {
-  it("short-circuits a fully-processed replay (same webhook-id) without re-minting", async () => {
+  it("short-circuits a fully-processed replay (same event_id) without re-minting", async () => {
     const deps = baseDeps();
-    const body = paidBody("ord_1");
-    await handleIssuance(makeRequest(body, { id: "evt_1" }), deps);
-    const firstLicenseId = ledgerRec(deps).licenseId;
-
-    const res2 = await handleIssuance(makeRequest(body, { id: "evt_1" }), deps);
+    const body = paidBody({ eventId: "evt_1" });
+    await handleIssuance(makeRequest(body), deps);
+    const first = ledgerRec(deps).licenseId;
+    const res2 = await handleIssuance(makeRequest(body), deps);
     expect(res2.status).toBe(200);
-    expect(deps.sendEmail).toHaveBeenCalledOnce(); // not re-emailed
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
-    expect(ledgerRec(deps).licenseId).toBe(firstLicenseId); // no new license minted
+    expect(deps.sendEmail).toHaveBeenCalledOnce();
+    expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+    expect(ledgerRec(deps).licenseId).toBe(first);
   });
 
-  it("recovers a failed email on the retry (same webhook-id, not marked done)", async () => {
+  it("recovers a failed email on the retry (same event_id, not marked done)", async () => {
     let calls = 0;
-    const sendEmail = vi.fn(async () => ({ ok: ++calls > 1 })); // first fails, second ok
+    const sendEmail = vi.fn(async () => ({ ok: ++calls > 1 }));
     const deps = baseDeps({ sendEmail });
-    const body = paidBody("ord_1");
-
-    const res1 = await handleIssuance(makeRequest(body, { id: "evt_1" }), deps);
-    expect(res1.status).toBe(500); // Polar will retry
-    expect(deps.ledgerKv.map.get("evt:live:evt_1")).toBeUndefined(); // NOT marked done
-    expect(ledgerRec(deps).emailSent).toBe(false);
-    // entitlement was already written (before the email attempt)
-    expect(deps.entitlementKv.map.get(ledgerRec(deps).licenseId)).toBeDefined();
-
-    const res2 = await handleIssuance(makeRequest(body, { id: "evt_1" }), deps);
-    expect(res2.status).toBe(200);
-    expect(deps.ledgerKv.map.get("evt:live:evt_1")).toBe("done");
-    expect(ledgerRec(deps).emailSent).toBe(true);
-    expect(sendEmail).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns 500 (retryable) when the entitlement write fails", async () => {
-    const entitlementKv = makeKv();
-    entitlementKv.put = async () => {
-      throw new Error("KV down");
-    };
-    const deps = baseDeps({ entitlementKv });
-    const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
-    expect(res.status).toBe(500);
-    // ledger record persisted so the retry can recover
-    expect(deps.ledgerKv.map.get("order:live:ord_1")).toBeDefined();
+    const body = paidBody({ eventId: "evt_1" });
+    const res1 = await handleIssuance(makeRequest(body), deps);
+    expect(res1.status).toBe(500); // Paddle retries
     expect(deps.ledgerKv.map.get("evt:live:evt_1")).toBeUndefined();
-  });
-
-  it("re-drives a duplicate order arriving under a DIFFERENT webhook-id without re-minting", async () => {
-    // Polar re-delivering the same order as a fresh message (or a manual
-    // dashboard re-send) bypasses the evt marker and must hit the ledger dedup.
-    const deps = baseDeps();
-    await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
-    const firstLicenseId = ledgerRec(deps).licenseId;
-    // Spy AFTER the initial mint so the assertion below can only pass if the
-    // duplicate path itself calls put() again — asserting on end-state alone
-    // (map.has) would pass even if the "idempotent re-assert" call were deleted.
-    const putSpy = vi.spyOn(deps.entitlementKv, "put");
-
-    const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_2" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
-    expect(ledgerRec(deps).licenseId).toBe(firstLicenseId); // no re-mint
-    expect(deps.sendEmail).toHaveBeenCalledOnce(); // no re-email (emailSent)
-    // entitlement re-assert actually executed on the duplicate path, under the
-    // SAME id
-    expect(putSpy).toHaveBeenCalledExactlyOnceWith(firstLicenseId, expect.any(String));
-    expect(deps.entitlementKv.map.has(firstLicenseId)).toBe(true);
-  });
-
-  it("a resend of an already-paid order reporting $0 still re-drives instead of being ignored", async () => {
-    // Simulates a manual Polar resend/redelivery whose payload snapshot reads a
-    // later-adjusted amount. The ledger dedup/re-drive check must win over the
-    // coupon-containment gate, or an already-legitimate order with a stuck
-    // failed email would be silently "ignored" forever instead of recovered.
-    const sendEmail = vi.fn(async () => ({ ok: false })); // first attempt fails, stays unsent
-    const deps = baseDeps({ sendEmail });
-    const first = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
-    expect(first.status).toBe(500);
-    const licenseId = ledgerRec(deps).licenseId;
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // written before the failed send
-
-    sendEmail.mockResolvedValue({ ok: true });
-    const zeroBody = paidBody("ord_1", { total_amount: 0 });
-    const res = await handleIssuance(makeRequest(zeroBody, { id: "evt_2" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
-    expect(ledgerRec(deps).emailSent).toBe(true); // re-drove the stuck email
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // still entitled
-  });
-
-  it("a corrupt ledger record → retryable 500 tagged 'ledger', never a re-mint", async () => {
-    const deps = baseDeps();
-    deps.ledgerKv.map.set("order:live:ord_1", "{corrupt");
-    const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
-    expect(res.status).toBe(500);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "error", ts: NOW / 1000, stage: "ledger" });
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-    expect(deps.entitlementKv.map.size).toBe(0);
-
-    // Shape-invalid JSON is corrupt too — `{}` must not sign garbage metadata.
-    deps.ledgerKv.map.set("order:live:ord_1", "{}");
-    const res2 = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1b" }), deps);
-    expect(res2.status).toBe(500);
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-  });
-
-  it("a failed email logs stage 'email' with the upstream HTTP status", async () => {
-    const sendEmail = vi.fn(async () => ({ ok: false, status: 422 }));
-    const deps = baseDeps({ sendEmail });
-    const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
-    expect(res.status).toBe(500);
-    expect(deps.log).toHaveBeenLastCalledWith({
-      result: "error",
-      ts: NOW / 1000,
-      stage: "email",
-      status: 422,
-    });
-  });
-
-  it("an order with no usable email is 'dropped', NOT marked done, and recoverable by re-send", async () => {
-    const deps = baseDeps();
-    const bad = JSON.stringify({
-      type: "order.paid",
-      data: { id: "ord_1", total_amount: 4900, customer: { name: "No Email" } },
-    });
-    const res = await handleIssuance(makeRequest(bad, { id: "evt_1" }), deps);
-    expect(res.status).toBe(200); // a retry would carry the same bytes
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
-    expect(deps.ledgerKv.map.size).toBe(0); // no record AND no done-marker
-
-    // After fixing the upstream cause, a manual Polar re-send with the SAME
-    // webhook-id must reprocess (a done-marker would silently no-op it).
-    const res2 = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
+    const res2 = await handleIssuance(makeRequest(body), deps);
     expect(res2.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "issued", ts: NOW / 1000 });
+    expect(ledgerRec(deps).emailSent).toBe(true);
+    expect(deps.lookupCustomer).toHaveBeenCalledOnce(); // re-drive does no lookup
+  });
+
+  it("re-drives under a DIFFERENT event_id without re-minting", async () => {
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_1" })), deps);
+    const first = ledgerRec(deps).licenseId;
+    const putSpy = vi.spyOn(deps.entitlementKv, "put");
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_2" })), deps);
+    expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+    expect(putSpy).toHaveBeenCalledExactlyOnceWith(first, expect.any(String));
+  });
+
+  it("a corrupt ledger record → retryable 500 tagged 'ledger'", async () => {
+    const deps = baseDeps();
+    deps.ledgerKv.map.set("order:live:txn_1", "{corrupt");
+    const res = await handleIssuance(makeRequest(paidBody()), deps);
+    expect(res.status).toBe(500);
+    expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "ledger" });
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("a failed email logs stage 'email' with the upstream status", async () => {
+    const deps = baseDeps({ sendEmail: vi.fn(async () => ({ ok: false, status: 422 })) });
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "email", status: 422 });
   });
 });
 
-describe("handleIssuance: coupon containment & test mode", () => {
-  it("ignores a $0 order from a non-grandfathered buyer", async () => {
+describe("handleIssuance: issue() order of operations", () => {
+  async function ledgered(deps: TestDeps) {
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_first" })), deps);
+    deps.lookupCustomer.mockClear();
+  }
+
+  it("a redelivered ledgered order with customer_id null is re-driven, no lookup", async () => {
     const deps = baseDeps();
+    await ledgered(deps);
+    const res = await handleIssuance(makeRequest(paidBody({ customerId: null })), deps);
+    expect(res.status).toBe(200);
+    expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+    expect(deps.lookupCustomer).not.toHaveBeenCalled();
+  });
+
+  it("a redelivered ledgered order whose price was removed is re-driven, no lookup", async () => {
+    const deps = baseDeps();
+    await ledgered(deps);
+    deps.priceIds = ["pri_other"];
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+    expect(deps.lookupCustomer).not.toHaveBeenCalled();
+  });
+
+  it("a new order with a foreign price, an empty cart, or a mixed cart is dropped", async () => {
+    for (const items of [
+      [{ price: { id: "pri_foreign" } }],
+      [],
+      [{ price: { id: "pri_test1" } }, { price: { id: "pri_foreign" } }],
+    ]) {
+      const deps = baseDeps();
+      const res = await handleIssuance(makeRequest(paidBody({ items })), deps);
+      expect(res.status).toBe(200);
+      expect(lastLog(deps).result).toBe("dropped");
+      expect(deps.lookupCustomer).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a FREE order with a foreign price is ignored: no record, no alert, no lookup", async () => {
+    // Otherwise anyone holding the client token could drain the alert quota
+    // with free checkouts of some other $0 price.
+    const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => true });
     const res = await handleIssuance(
-      makeRequest(paidBody("ord_free", { total_amount: 0 }), { id: "evt_free" }),
+      makeRequest(
+        paidBody({
+          eventId: "evt_ff",
+          items: [{ price: { id: "pri_foreign" } }],
+          totals: { grand_total: "0", total: "0" },
+        }),
+      ),
       deps,
     );
     expect(res.status).toBe(200);
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-    expect(deps.ledgerKv.map.get("order:live:ord_free")).toBeUndefined();
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "ignored", ts: NOW / 1000 });
+    expect(lastLog(deps)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(noticeKeys(deps)).toEqual([]);
+    expect(deps.lookupCustomer).not.toHaveBeenCalled();
   });
 
-  it("issues a $0 order for a grandfathered buyer", async () => {
-    const deps = baseDeps({ isGrandfathered: () => true });
+  it("a sandbox Worker mints only for listed buyers; anyone else is ignored before minting", async () => {
+    const listed = baseDeps({ sandboxBuyers: new Set(["buyer@example.com"]) });
+    await handleIssuance(makeRequest(paidBody()), listed);
+    expect(lastLog(listed)).toEqual({ result: "issued", ts: NOW / 1000 });
+
+    const other = baseDeps({ sandboxBuyers: new Set(["bryan@example.com"]) });
+    await handleIssuance(makeRequest(paidBody()), other);
+    expect(lastLog(other)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(other.ledgerKv.map.has("order:live:txn_1")).toBe(false);
+    expect(other.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("status ≠ completed, a bad txn id, a bad customer id → dropped", async () => {
+    for (const o of [
+      { status: "paid" },
+      { txnId: "ord_1" },
+      { customerId: null },
+      { customerId: "x" },
+    ]) {
+      const deps = baseDeps();
+      await handleIssuance(makeRequest(paidBody(o)), deps);
+      expect(lastLog(deps).result).toBe("dropped");
+    }
+  });
+
+  it("a 100%-code order: grandfathered buyer → lookup then issued; anyone else → ignored", async () => {
+    const free = { grand_total: "0", total: "0" };
+    const gf = baseDeps({
+      hasGrandfathers: true,
+      isGrandfathered: (e) => e === "buyer@example.com",
+    });
+    await handleIssuance(makeRequest(paidBody({ totals: free })), gf);
+    expect(gf.lookupCustomer).toHaveBeenCalledOnce();
+    expect(lastLog(gf)).toEqual({ result: "issued", ts: NOW / 1000 });
+    expect(ledgerRec(gf).type).toBe("grandfathered");
+
+    const other = baseDeps({ hasGrandfathers: true, isGrandfathered: () => false });
+    const body = paidBody({ eventId: "evt_free", totals: free });
+    await handleIssuance(makeRequest(body), other);
+    expect(other.lookupCustomer).toHaveBeenCalledOnce();
+    expect(lastLog(other)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(other.ledgerKv.map.get("evt:live:evt_free")).toBeUndefined(); // not marked
+  });
+
+  it("a free order with an EMPTY grandfather list makes no lookup call", async () => {
+    const deps = baseDeps({ hasGrandfathers: false });
+    await handleIssuance(makeRequest(paidBody({ totals: { grand_total: "0", total: "0" } })), deps);
+    expect(deps.lookupCustomer).not.toHaveBeenCalled();
+    expect(lastLog(deps).result).toBe("ignored");
+  });
+
+  it("free-order totals: '4500' issues, unparseable either field → dropped, never reads balance", async () => {
+    const paid = baseDeps();
     await handleIssuance(
-      makeRequest(paidBody("ord_gf0", { total_amount: 0 }), { id: "evt_gf0" }),
+      makeRequest(paidBody({ totals: { grand_total: "4500", total: "4500", balance: "0" } })),
+      paid,
+    );
+    expect(lastLog(paid).result).toBe("issued");
+    for (const totals of [
+      { grand_total: 4500, total: "4500" },
+      { grand_total: "4500" },
+      { grand_total: "45.00", total: "4500" },
+      {},
+    ]) {
+      const deps = baseDeps();
+      await handleIssuance(makeRequest(paidBody({ totals })), deps);
+      expect(lastLog(deps).result).toBe("dropped");
+    }
+    // one positive → paid
+    const mixed = baseDeps();
+    await handleIssuance(
+      makeRequest(paidBody({ totals: { grand_total: "0", total: "100" } })),
+      mixed,
+    );
+    expect(lastLog(mixed).result).toBe("issued");
+  });
+});
+
+describe("handleIssuance: buyer lookup mapping", () => {
+  const fail = (status?: number) =>
+    vi.fn(async () =>
+      status === undefined ? { ok: false as const } : { ok: false as const, status },
+    );
+
+  it("404 and other 4xx → dropped; 401/403 → 500 paddle-api-auth; 429/5xx/network → 500 paddle-api", async () => {
+    const cases: [number | undefined, number, Record<string, unknown>][] = [
+      [404, 200, { result: "dropped" }],
+      [400, 200, { result: "dropped" }],
+      [422, 200, { result: "dropped" }],
+      [401, 500, { result: "error", stage: "paddle-api-auth", status: 401 }],
+      [403, 500, { result: "error", stage: "paddle-api-auth", status: 403 }],
+      [408, 500, { result: "error", stage: "paddle-api", status: 408 }],
+      [429, 500, { result: "error", stage: "paddle-api", status: 429 }],
+      [503, 500, { result: "error", stage: "paddle-api", status: 503 }],
+      [undefined, 500, { result: "error", stage: "paddle-api" }],
+    ];
+    for (const [status, http, expected] of cases) {
+      const deps = baseDeps({ lookupCustomer: fail(status) });
+      const res = await handleIssuance(makeRequest(paidBody()), deps);
+      expect(res.status).toBe(http);
+      expect(lastLog(deps)).toMatchObject(expected);
+      expect(deps.ledgerKv.map.has("order:live:txn_1")).toBe(false);
+    }
+  });
+
+  it("null name → 'Valued Customer'; unusable email → dropped", async () => {
+    const deps = baseDeps({ lookupCustomer: buyer("buyer@example.com", null) });
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(ledgerRec(deps).name).toBe("Valued Customer");
+    const bad = baseDeps({ lookupCustomer: buyer("not-an-email@nodot") });
+    await handleIssuance(makeRequest(paidBody()), bad);
+    expect(lastLog(bad).result).toBe("dropped");
+  });
+});
+
+describe("handleIssuance: gate and dispatcher", () => {
+  it("missing Paddle-Signature → 400; bad signature → 401, no side effects", async () => {
+    const deps = baseDeps();
+    const req = new Request("https://x/", { method: "POST", body: paidBody() });
+    expect((await handleIssuance(req, deps)).status).toBe(400);
+    const bad = await handleIssuance(
+      makeRequest(paidBody(), { sig: `ts=${NOW_S};h1=${"0".repeat(64)}` }),
       deps,
     );
-    expect(ledgerRec(deps, "ord_gf0").type).toBe("grandfathered");
+    expect(bad.status).toBe(401);
+    expect(deps.ledgerKv.map.size).toBe(0);
   });
 
-  it("does NOT treat a discounted-but-paid order as free (any positive amount issues)", async () => {
+  it("valid signature + non-JSON / missing event_type / missing event_id → dropped + notice record, not marked", async () => {
+    for (const body of [
+      "not json",
+      JSON.stringify({ event_id: "evt_nt", data: {} }),
+      JSON.stringify({ event_type: "transaction.completed", data: {} }),
+    ]) {
+      const deps = baseDeps();
+      const res = await handleIssuance(makeRequest(body), deps);
+      expect(res.status).toBe(200);
+      expect(lastLog(deps).result).toBe("dropped");
+      expect(noticeKeys(deps)).toHaveLength(1);
+      expect(noticeKeys(deps)[0]).toMatch(/^notice:live:dropped:(evt_nt|body_[0-9a-f]{16})$/);
+      expect([...deps.ledgerKv.map.keys()].some((k) => k.startsWith("evt:"))).toBe(false);
+    }
+  });
+
+  it("an oversized body still 400s before verification", async () => {
     const deps = baseDeps();
-    // net_amount low/zero but the buyer was charged a positive total_amount.
-    const body = paidBody("ord_disc", { net_amount: 0, total_amount: 4900 });
-    await handleIssuance(makeRequest(body, { id: "evt_disc" }), deps);
-    expect(deps.ledgerKv.map.get("order:live:ord_disc")).toBeDefined();
-    expect(deps.sendEmail).toHaveBeenCalledOnce();
+    const big = JSON.stringify({ event_id: "evt_big", pad: "x".repeat(300_000) });
+    expect((await handleIssuance(makeRequest(big), deps)).status).toBe(400);
+    expect(deps.ledgerKv.map.size).toBe(0);
   });
 
-  it("an order with NO amount fields at all is treated as paid (documented bias)", async () => {
-    // Pins the deliberate choice: order.paid already validated payment, so
-    // absent amount fields must not trip coupon containment. If Polar renames
-    // its amount fields, containment silently disables rather than dropping
-    // paying customers — this test makes that trade-off explicit.
+  it("unknown event type → ignored and marked done", async () => {
+    const deps = baseDeps();
+    const body = JSON.stringify({ event_id: "evt_x", event_type: "checkout.created", data: {} });
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(deps.ledgerKv.map.get("evt:live:evt_x")).toBe("done");
+  });
+
+  it("a Notice outcome replies 200 (not 500), records, marks done; a Failure still replies 500", async () => {
     const deps = baseDeps();
     const body = JSON.stringify({
-      type: "order.paid",
-      data: { id: "ord_na", customer: { email: "buyer@example.com", name: "J" } },
+      event_id: "evt_ak",
+      event_type: "api_key.expiring",
+      data: { id: "apikey_01abc" },
     });
-    await handleIssuance(makeRequest(body, { id: "evt_na" }), deps);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "issued", ts: NOW / 1000 });
+    const res = await handleIssuance(makeRequest(body), deps);
+    expect(res.status).toBe(200);
+    expect(lastLog(deps)).toEqual({
+      result: "noticed",
+      ts: NOW / 1000,
+      notice: "api-key-expiry",
+      ref: "apikey_01abc",
+    });
+    expect(
+      JSON.parse(deps.ledgerKv.map.get("notice:live:api-key-expiry:apikey_01abc") as string),
+    ).toEqual({
+      stage: "api-key-expiry",
+      eventType: "api_key.expiring",
+      at: new Date(NOW).toISOString(),
+    });
+    expect(deps.ledgerKv.map.get("evt:live:evt_ak")).toBe("done");
+
+    const failing = baseDeps({ sendEmail: vi.fn(async () => ({ ok: false })) });
+    expect((await handleIssuance(makeRequest(paidBody()), failing)).status).toBe(500);
   });
 
-  it("in sandbox (isTest) writes the ledger but NOT the entitlement", async () => {
+  it("an api_key event with an unexpected id shape falls back to event_id as ref", async () => {
+    const deps = baseDeps();
+    const body = JSON.stringify({
+      event_id: "evt_ak2",
+      event_type: "api_key.expired",
+      data: { id: "WEIRD" },
+    });
+    await handleIssuance(makeRequest(body), deps);
+    expect(noticeKeys(deps)).toEqual(["notice:live:api-key-expiry:evt_ak2"]);
+  });
+
+  it("a failed notice write → 500 and no marker", async () => {
+    const deps = baseDeps();
+    const realPut = deps.ledgerKv.put.bind(deps.ledgerKv);
+    deps.ledgerKv.put = async (k, v, o) => {
+      if (k.startsWith("notice:")) throw new Error("KV down");
+      return realPut(k, v, o);
+    };
+    const body = refundBody({ eventId: "evt_np", type: "partial" });
+    const res = await handleIssuance(makeRequest(body), deps);
+    expect(res.status).toBe(500);
+    expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "notice-write" });
+    expect(isAlertable({ result: "error", ts: 0, stage: "notice-write" })).toBe(true);
+    expect(deps.ledgerKv.map.get("evt:live:evt_np")).toBeUndefined();
+    // and a failed DROPPED record write too
+    const dres = await handleIssuance(makeRequest("not json"), deps);
+    expect(dres.status).toBe(500);
+    expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "notice-write" });
+  });
+
+  it("a malformed or over-long event_id is marked by its body digest, and a redelivery dedupes on it", async () => {
+    for (const eventId of ["EVT-not-paddle", `evt_${"a".repeat(600)}`]) {
+      const deps = baseDeps();
+      const body = paidBody({ eventId });
+      await handleIssuance(makeRequest(body), deps);
+      expect(lastLog(deps).result).toBe("issued");
+      const markers = [...deps.ledgerKv.map.keys()].filter((k) => k.startsWith("evt:"));
+      expect(markers).toHaveLength(1);
+      expect(markers[0]).toMatch(/^evt:live:body_[0-9a-f]{16}$/);
+      await handleIssuance(makeRequest(body), deps);
+      expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+      expect(deps.sendEmail).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("a dropped event writes notice:<mode>:dropped:<event_id> before replying, test mode keyed test", async () => {
     const deps = baseDeps({ isTest: true });
-    await handleIssuance(makeRequest(paidBody("ord_t"), { id: "evt_t" }), deps);
-    expect(deps.ledgerKv.map.get("order:test:ord_t")).toBeDefined();
-    expect(deps.entitlementKv.map.size).toBe(0);
-    expect(deps.sendEmail).toHaveBeenCalledOnce(); // blob still delivered for e2e
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_dr", status: "paid" })), deps);
+    expect(noticeKeys(deps)).toEqual(["notice:test:dropped:evt_dr"]);
+    expect(lastLog(deps)).toEqual({
+      result: "dropped",
+      ts: NOW / 1000,
+      notice: "dropped",
+      ref: "evt_dr",
+    });
+    // The record carries the transaction when one could be derived.
+    expect(JSON.parse(deps.ledgerKv.map.get("notice:test:dropped:evt_dr") as string)).toMatchObject(
+      {
+        stage: "dropped",
+        txnId: "txn_1",
+        eventType: "transaction.completed",
+      },
+    );
+  });
+
+  it("a dropped event's re-send after a fix reprocesses (not marked done)", async () => {
+    const deps = baseDeps({
+      lookupCustomer: vi.fn(async () => ({ ok: false as const, status: 404 })),
+    });
+    const body = paidBody({ eventId: "evt_re" });
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps).result).toBe("dropped");
+    deps.lookupCustomer = buyer();
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps)).toEqual({ result: "issued", ts: NOW / 1000 });
   });
 });
 
-describe("handleIssuance: order.refunded", () => {
-  async function issued() {
-    const deps = baseDeps();
-    await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
+describe("handleIssuance: adjustments (first-match table)", () => {
+  async function issued(o: { isTest?: boolean } = {}) {
+    const deps = baseDeps(o);
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_paid" })), deps);
     return deps;
   }
 
-  it("revokes the entitlement and marks the ledger refunded", async () => {
+  const rows: [string, string, string, string, string | null][] = [
+    // action, status, type, expected result, notice
+    ["refund", "approved", "full", "revoked", null],
+    ["refund", "approved", "partial", "noticed", "refund-partial"],
+    ["credit", "approved", "full", "revoked", null],
+    ["credit", "approved", "partial", "noticed", "credit-partial"],
+    ["chargeback", "approved", "full", "revoked", null],
+    ["chargeback", "approved", "partial", "revoked", null],
+    ["chargeback_warning", "approved", "full", "settled", null],
+    ["chargeback_warning_reverse", "approved", "partial", "settled", null],
+    ["chargeback_reverse", "approved", "full", "noticed", "chargeback-reverse"],
+    ["credit_reverse", "approved", "full", "noticed", "credit-reverse"],
+    ["refund", "pending_approval", "full", "settled", null],
+    ["refund", "rejected", "full", "settled", null],
+    ["refund", "reversed", "full", "noticed", "adjustment-reversed"],
+    ["chargeback", "reversed", "full", "noticed", "adjustment-reversed"],
+    ["refund", "weird", "full", "dropped", "dropped"],
+    ["weird", "approved", "full", "dropped", "dropped"],
+    ["refund", "approved", "weird", "dropped", "dropped"],
+  ];
+
+  for (const [action, status, type, result, notice] of rows) {
+    it(`${action}/${status}/${type} → ${result}${notice ? ` ${notice}` : ""}`, async () => {
+      const deps = await issued();
+      const licenseId = ledgerRec(deps).licenseId;
+      const res = await handleIssuance(
+        makeRequest(refundBody({ eventId: "evt_adj", action, status, type })),
+        deps,
+      );
+      expect(res.status).toBe(200);
+      expect(lastLog(deps).result).toBe(result);
+      if (notice) expect(lastLog(deps).notice).toBe(notice);
+      if (result === "revoked") {
+        expectRevoked(deps, licenseId);
+        expect(ledgerRec(deps).refunded).toBe(true);
+      } else {
+        expectLive(deps, licenseId);
+        expect(ledgerRec(deps).refunded).toBe(false);
+      }
+      const marked = deps.ledgerKv.map.get("evt:live:evt_adj") === "done";
+      expect(marked).toBe(result !== "dropped");
+      if (result === "noticed") {
+        const rec = JSON.parse(deps.ledgerKv.map.get(`notice:live:${notice}:adj_1`) as string);
+        expect(rec).toMatchObject({
+          stage: notice,
+          txnId: "txn_1",
+          eventType: "adjustment.created",
+        });
+      }
+    });
+  }
+
+  it("pending → approved: settles, then revokes on adjustment.updated", async () => {
     const deps = await issued();
     const licenseId = ledgerRec(deps).licenseId;
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined();
-
-    const res = await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_refund" }), deps);
-    expect(res.status).toBe(200);
+    await handleIssuance(makeRequest(refundBody({ status: "pending_approval" })), deps);
+    expect(lastLog(deps).result).toBe("settled");
+    expectLive(deps, licenseId);
+    await handleIssuance(makeRequest(refundBody({ eventType: "adjustment.updated" })), deps);
+    expect(lastLog(deps).result).toBe("revoked");
     expectRevoked(deps, licenseId);
-    expect(ledgerRec(deps).refunded).toBe(true);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
   });
 
-  it("ignores a refund event with an explicit refunded:false discriminator (H1)", async () => {
+  it("pending → rejected: settles twice, license kept", async () => {
     const deps = await issued();
     const licenseId = ledgerRec(deps).licenseId;
-    await handleIssuance(makeRequest(refundBody("ord_1", false), { id: "evt_r2" }), deps);
-    expectLive(deps, licenseId); // NOT revoked
-  });
-
-  it("a missing/ambiguous refunded field is 'dropped' — NOT revoked, NOT ignored, NOT marked done", async () => {
-    // Polar's exact field shape for order.refunded is unconfirmed. A payload
-    // that omits `refunded` entirely must neither silently revoke a paying
-    // customer's entitlement on a guessed-wrong field, nor silently swallow a
-    // real refund forever.
-    const deps = await issued();
-    const licenseId = ledgerRec(deps).licenseId;
-    const body = JSON.stringify({ type: "order.refunded", data: { id: "ord_1" } });
-    const res = await handleIssuance(makeRequest(body, { id: "evt_ambig" }), deps);
-    expect(res.status).toBe(200); // a retry carries the same bytes
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
-    expectLive(deps, licenseId); // NOT revoked on a guess
-    expect(deps.ledgerKv.map.get("evt:live:evt_ambig")).toBeUndefined(); // NOT marked done
-
-    // Once the real field shape is confirmed, a manual re-send with an
-    // explicit refunded:true revokes normally — the ambiguous attempt above
-    // did not poison anything.
-    const res2 = await handleIssuance(
-      makeRequest(refundBody("ord_1"), { id: "evt_confirmed" }),
+    await handleIssuance(makeRequest(refundBody({ status: "pending_approval" })), deps);
+    await handleIssuance(
+      makeRequest(refundBody({ eventType: "adjustment.updated", status: "rejected" })),
       deps,
     );
-    expect(res2.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expectRevoked(deps, licenseId);
+    expect(lastLog(deps).result).toBe("settled");
+    expectLive(deps, licenseId);
   });
 
-  it("does not resurrect a refunded entitlement when the paid event retries (H2)", async () => {
-    // Paid email FAILS first (so evt never marked done), then a refund revokes,
-    // then the paid event retries — it must not re-assert the entitlement.
-    const sendEmail = vi.fn(async () => ({ ok: false })); // always fail
-    const deps = baseDeps({ sendEmail });
-    await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps); // 500
-    const licenseId = ledgerRec(deps).licenseId;
-
-    await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_refund" }), deps);
-    expectRevoked(deps, licenseId);
-
-    // Retry the original paid event.
-    const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
-    expect(res.status).toBe(200);
-    expectRevoked(deps, licenseId); // NOT resurrected — still the tombstone
-  });
-
-  it("a refund that outraces the paid event writes a tombstone that blocks later issuance", async () => {
-    // Delivery order is not guaranteed. A refund for an order we have no
-    // record of must leave a durable mark — Polar won't redeliver a refund we
-    // 200'd, and the paid retry must not mint a live entitlement afterwards.
+  it("a partial refund before the paid event → notice only; the later paid event still issues", async () => {
     const deps = baseDeps();
-    const res = await handleIssuance(makeRequest(refundBody("ord_race"), { id: "evt_r3" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(ledgerRec(deps, "ord_race").refunded).toBe(true); // tombstone
+    await handleIssuance(makeRequest(refundBody({ type: "partial" })), deps);
+    expect(lastLog(deps).result).toBe("noticed");
+    expect(deps.ledgerKv.map.has("order:live:txn_1")).toBe(false);
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(lastLog(deps)).toEqual({ result: "issued", ts: NOW / 1000 });
+  });
 
-    // The paid event now arrives (fresh webhook-id) — must NOT mint.
-    const res2 = await handleIssuance(makeRequest(paidBody("ord_race"), { id: "evt_p" }), deps);
-    expect(res2.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
-    // A refund-before-paid record has `licenseId: ""`, which is the half
-    // `applyRefund`'s guard skips. Now that revocation WRITES a key rather than
-    // deleting one, this is the only assertion that would catch a tombstone
-    // landing under the empty key — a `LICENSE_KV[""]` the update Worker could
-    // never be asked about and nothing would ever clean up.
+  it("a full refund before the paid event tombstones and blocks issuance", async () => {
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(refundBody({ txnId: "txn_race" })), deps);
+    expect(lastLog(deps)).toEqual({ result: "revoked", ts: NOW / 1000 });
+    await handleIssuance(makeRequest(paidBody({ txnId: "txn_race" })), deps);
+    expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
     expect(deps.entitlementKv.map.size).toBe(0);
-    expect(deps.entitlementKv.map.has("")).toBe(false);
     expect(deps.sendEmail).not.toHaveBeenCalled();
   });
 
-  // --- the order id a payload is ABOUT (#1793) -------------------------------
-  // `revoke()` read `data.id`, which for an `order.refunded` delivery carrying a
-  // REFUND object is the refund's own id, not the order's. Measured consequence
-  // on real Polar shapes: such a payload carries no `refunded` boolean and exits
-  // "dropped" before the id is used, so this is a latent id assumption rather
-  // than a live silent-revocation miss — but it is wrong for any `order_id`-
-  // bearing payload, and `orderIdOf` is shared so `issue()` and `revoke()`
-  // cannot disagree about the ledger key.
-  //
-  // These assert on the LEDGER only. The post-refund entitlement key's value is
-  // the revocation tombstone, which lands in the same branch — an assertion on
-  // LICENSE_KV here would be green when written and red an hour later.
-
-  it("a payload carrying BOTH ids resolves through order_id, not the object id", async () => {
-    const deps = await issued();
-    const body = JSON.stringify({
-      type: "order.refunded",
-      data: { id: "ref_1", order_id: "ord_1", refunded: true },
-    });
-    const res = await handleIssuance(makeRequest(body, { id: "evt_both" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(ledgerRec(deps, "ord_1").refunded).toBe(true);
-    // The refund's own id must never become a ledger key: under `data.id` the
-    // real order's record stays untouched and a junk record accumulates here.
-    expect(deps.ledgerKv.map.get("order:live:ref_1")).toBeUndefined();
+  it("does not resurrect a refunded entitlement when the paid event retries", async () => {
+    const deps = baseDeps({ sendEmail: vi.fn(async () => ({ ok: false })) });
+    const paid = paidBody({ eventId: "evt_p1" });
+    await handleIssuance(makeRequest(paid), deps);
+    const licenseId = ledgerRec(deps).licenseId;
+    await handleIssuance(makeRequest(refundBody()), deps);
+    expectRevoked(deps, licenseId);
+    await handleIssuance(makeRequest(paid), deps);
+    expectRevoked(deps, licenseId);
   });
 
-  it("the shape that actually occurs — both ids, no `refunded` — is still dropped", async () => {
+  it("an adjustment with a malformed transaction_id is dropped, even when pending (placement guess)", async () => {
     const deps = await issued();
-    const before = new Map(deps.ledgerKv.map);
-    const body = JSON.stringify({
-      type: "order.refunded",
-      data: { id: "ref_1", order_id: "ord_1" },
-    });
-    const res = await handleIssuance(makeRequest(body, { id: "evt_nb" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
-    expect([...deps.ledgerKv.map]).toEqual([...before]); // nothing committed
-    expect(deps.ledgerKv.map.get("evt:live:evt_nb")).toBeUndefined(); // not marked done
+    await handleIssuance(
+      makeRequest(refundBody({ txnId: "bogus", status: "pending_approval" })),
+      deps,
+    );
+    expect(lastLog(deps).result).toBe("dropped");
   });
 
-  it("an ORDER-object payload (id only) still revokes — the preference is a fallback", async () => {
-    // Together with the both-ids case above, this pins the *preference* rather
-    // than a switch to `order_id` only, which would break every payload Polar
-    // sends today.
-    const deps = baseDeps();
-    await handleIssuance(makeRequest(paidBody("ord_2"), { id: "evt_2" }), deps);
-    const body = JSON.stringify({
-      type: "order.refunded",
-      data: { id: "ord_2", refunded: true },
-    });
-    const res = await handleIssuance(makeRequest(body, { id: "evt_only" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(ledgerRec(deps, "ord_2").refunded).toBe(true);
+  it("two notices / two drops for different refs both alert (throttle keyed by ref)", () => {
+    const a = {
+      result: "noticed" as const,
+      ts: 0,
+      notice: "refund-partial" as const,
+      ref: "adj_a",
+    };
+    const b = { ...a, ref: "adj_b" };
+    expect(alertThrottleKey(a)).not.toBe(alertThrottleKey(b));
+    expect(
+      alertThrottleKey({ result: "dropped", ts: 0, notice: "dropped", ref: "evt_a" }),
+    ).not.toBe(alertThrottleKey({ result: "dropped", ts: 0, notice: "dropped", ref: "evt_b" }));
+    expect(alertThrottleKey({ result: "error", ts: 0, stage: "email" })).toBe("error:email");
   });
 });
 
-describe("handleIssuance: pre-commit recheck narrows the double-mint/tombstone-clobber race", () => {
-  // These simulate a same-orderId write landing on a DIFFERENT concurrent
-  // request between our initial ledger read and our commit — the exact gap
-  // the pre-commit recheck in issue()/revoke() closes. Modeled by making the
-  // order key's second `get()` (the recheck) return what the "other" request
-  // would have just committed, rather than by spinning up real concurrency.
-
-  it("issue() defers to a refund tombstone that lands between its initial read and its commit", async () => {
+describe("handleIssuance: double mint", () => {
+  it("two mints for one txn → two txnlic keys; a full refund tombstones both", async () => {
     const deps = baseDeps();
-    const orderId = "ord_race_issue";
+    // Simulate the race: both requests read "no record" through the recheck.
+    const realGet = deps.ledgerKv.get.bind(deps.ledgerKv);
+    let blind = true;
+    deps.ledgerKv.get = vi.fn(async (k: string) =>
+      blind && k.startsWith("order:") ? null : realGet(k),
+    );
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_m1" })), deps);
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_m2" })), deps);
+    blind = false;
+    const idx = [...deps.ledgerKv.map.keys()].filter((k) => k.startsWith("txnlic:live:txn_1:"));
+    expect(idx).toHaveLength(2);
+    const ids = idx.map((k) => k.split(":").at(-1) as string);
+    expect(ledgerRec(deps).licenseId).toBe(ids[1]); // ledger holds only the second
+    await handleIssuance(makeRequest(refundBody()), deps);
+    for (const id of ids) expectRevoked(deps, id);
+  });
+
+  it("applyRefund pages through a multi-page list", async () => {
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(paidBody()), deps);
+    deps.ledgerKv.map.set("txnlic:live:txn_1:lic-extra", "");
+    const realList = deps.ledgerKv.list;
+    deps.ledgerKv.list = vi.fn(async (o: { prefix: string; cursor?: string }) => {
+      const all = (await realList(o)).keys;
+      return o.cursor === undefined
+        ? { keys: all.slice(0, 1), list_complete: false, cursor: "c1" }
+        : { keys: all.slice(1), list_complete: true };
+    });
+    await handleIssuance(makeRequest(refundBody()), deps);
+    expectRevoked(deps, "lic-1");
+    expectRevoked(deps, "lic-extra");
+  });
+
+  it("the index entry is written BEFORE the ledger record (index ⊇ ledger)", async () => {
+    const deps = baseDeps();
+    const realPut = deps.ledgerKv.put.bind(deps.ledgerKv);
+    deps.ledgerKv.put = async (k, v, o) => {
+      if (k.startsWith("txnlic:")) throw new Error("KV down");
+      return realPut(k, v, o);
+    };
+    const res = await handleIssuance(makeRequest(paidBody()), deps);
+    expect(res.status).toBe(500);
+    expect(deps.ledgerKv.map.has("order:live:txn_1")).toBe(false);
+  });
+
+  it("a refund still revokes the ledger's own license when the index listing is stale", async () => {
+    // KV list() lags writes by up to ~60 s; the ledger's licenseId is the
+    // backstop for a refund that lands inside that window.
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(paidBody()), deps);
+    deps.ledgerKv.list = vi.fn(async () => ({ keys: [], list_complete: true }));
+    await handleIssuance(makeRequest(refundBody()), deps);
+    expectRevoked(deps, "lic-1");
+  });
+
+  it("a refund writes the ledger flag BEFORE the entitlements", async () => {
+    // So a redelivery racing the refund sees `refunded` and cannot re-drive the
+    // live entitlement back over the tombstone.
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(paidBody()), deps);
+    deps.entitlementKv.put = vi.fn(async () => {
+      throw new Error("KV down");
+    });
+    const res = await handleIssuance(makeRequest(refundBody()), deps);
+    expect(res.status).toBe(500);
+    expect(ledgerRec(deps).refunded).toBe(true);
+  });
+
+  it("in test mode the index is mode-scoped and no entitlement is written", async () => {
+    const deps = baseDeps({ isTest: true });
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(deps.ledgerKv.map.has("txnlic:test:txn_1:lic-1")).toBe(true);
+    await handleIssuance(makeRequest(refundBody()), deps);
+    expect(deps.entitlementKv.map.size).toBe(0);
+    expect(ledgerRec(deps, "txn_1", "test").refunded).toBe(true);
+  });
+});
+
+describe("handleIssuance: pre-commit recheck", () => {
+  it("issue() defers to a refund tombstone that lands between its read and commit", async () => {
+    const deps = baseDeps();
     const tombstone = JSON.stringify({
-      orderId,
+      orderId: "txn_ri",
       licenseId: "",
       email: "",
       name: "",
@@ -829,109 +1058,18 @@ describe("handleIssuance: pre-commit recheck narrows the double-mint/tombstone-c
     let calls = 0;
     const realGet = deps.ledgerKv.get.bind(deps.ledgerKv);
     deps.ledgerKv.get = vi.fn(async (k: string) => {
-      if (k === `order:live:${orderId}`) {
-        calls++;
-        // 1st call = issue()'s initial read (no record yet, so it proceeds to
-        // mint). Every call after = the pre-commit recheck — simulate a
-        // concurrent revoke() having committed its tombstone in between.
-        return calls > 1 ? tombstone : null;
-      }
+      if (k === "order:live:txn_ri") return ++calls > 1 ? tombstone : null;
       return realGet(k);
     });
-
-    const res = await handleIssuance(
-      makeRequest(paidBody(orderId), { id: "evt_race_issue" }),
-      deps,
-    );
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
-    expect(deps.sendEmail).not.toHaveBeenCalled(); // never resurrected/emailed
-    expect(deps.entitlementKv.map.size).toBe(0); // never entitled
-    expect(calls).toBeGreaterThan(1); // the recheck actually ran
-  });
-
-  it("revoke() defers to a mint that lands between its initial read and its tombstone write, revoking it instead of orphaning it", async () => {
-    const deps = baseDeps();
-    const orderId = "ord_race_revoke";
-    const mintedRec = {
-      orderId,
-      licenseId: "lic-race",
-      email: "buyer@example.com",
-      name: "Jane Buyer",
-      type: "personal",
-      createdAt: new Date(NOW).toISOString(),
-      updateWindowEnd: new Date(NOW + 1000).toISOString(),
-      emailSent: true,
-      refunded: false,
-    };
-    // Pre-seed the entitlement as if the concurrent mint's own
-    // entitlementKv.put already landed.
-    deps.entitlementKv.map.set(
-      "lic-race",
-      JSON.stringify({
-        updateWindowEnd: mintedRec.updateWindowEnd,
-        status: "personal",
-        version: LICENSE_VERSION,
-      }),
-    );
-
-    let calls = 0;
-    const realGet = deps.ledgerKv.get.bind(deps.ledgerKv);
-    deps.ledgerKv.get = vi.fn(async (k: string) => {
-      if (k === `order:live:${orderId}`) {
-        calls++;
-        // 1st call = revoke()'s initial read (no record yet). Every call
-        // after = the pre-commit recheck — simulate the concurrent mint
-        // having committed in between.
-        return calls > 1 ? JSON.stringify(mintedRec) : null;
-      }
-      return realGet(k);
-    });
-
-    const res = await handleIssuance(
-      makeRequest(refundBody(orderId), { id: "evt_race_revoke" }),
-      deps,
-    );
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expectRevoked(deps, "lic-race"); // revoked, not orphaned
-    expect(calls).toBeGreaterThan(1); // the recheck actually ran
-  });
-});
-
-describe("handleIssuance: input hygiene hardening", () => {
-  it("rejects an oversized body before any HMAC/JSON work", async () => {
-    const deps = baseDeps();
-    const bigBody = JSON.stringify({
-      type: "order.paid",
-      data: {
-        id: "ord_big",
-        total_amount: 4900,
-        customer: { email: "a@b.co", name: "x".repeat(100_000) },
-      },
-    });
-    const res = await handleIssuance(makeRequest(bigBody, { id: "evt_big" }), deps);
-    expect(res.status).toBe(400);
-    expect(deps.ledgerKv.map.size).toBe(0);
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-  });
-
-  it("drops an order whose email fails the minimal shape check (no domain dot)", async () => {
-    const deps = baseDeps();
-    const body = paidBody("ord_bademail", { customer: { email: "not-an-email@nodot", name: "X" } });
-    const res = await handleIssuance(makeRequest(body, { id: "evt_bademail" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
-    expect(deps.ledgerKv.map.size).toBe(0);
+    await handleIssuance(makeRequest(paidBody({ txnId: "txn_ri" })), deps);
+    expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+    expect(deps.entitlementKv.map.size).toBe(0);
+    expect([...deps.ledgerKv.map.keys()].some((k) => k.startsWith("txnlic:"))).toBe(false);
   });
 });
 
 describe("issuance → update Worker contract", () => {
-  // Behavioral parity across the two separately-built Workers: the entitlement
-  // handleIssuance writes must be readable by handleUpdateRequest. This pins
-  // the whole issuance→update KV contract, not just the type shape.
   const MANIFEST = '{"version":"9.9.9","platforms":{}}';
-
   function checkUpdate(deps: TestDeps, licenseId: string) {
     const headers = new Headers();
     headers.set(LICENSE_HEADER, licenseId);
@@ -942,97 +1080,31 @@ describe("issuance → update Worker contract", () => {
       now: () => NOW,
     });
   }
-
-  it("an issued license is served an update; after a refund it gets 204", async () => {
+  it("an issued license is served an update; after a full refund it gets 204", async () => {
     const deps = baseDeps();
-    await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
+    await handleIssuance(makeRequest(paidBody()), deps);
     const { licenseId } = ledgerRec(deps);
-
-    const served = await checkUpdate(deps, licenseId);
-    expect(served.status).toBe(200);
-    expect(await served.text()).toBe(MANIFEST);
-
-    await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_r" }), deps);
-    const denied = await checkUpdate(deps, licenseId);
-    expect(denied.status).toBe(204);
-  });
-
-  it("a grandfathered license (null window) is served far in the future", async () => {
-    const deps = baseDeps({ isGrandfathered: () => true });
-    await handleIssuance(makeRequest(paidBody("ord_gf"), { id: "evt_gf" }), deps);
-    const { licenseId } = ledgerRec(deps, "ord_gf");
-    const headers = new Headers();
-    headers.set(LICENSE_HEADER, licenseId);
-    const res = await handleUpdateRequest(
-      new Request("https://updates.example/latest.json", { headers }),
-      {
-        kv: deps.entitlementKv,
-        latestJsonUrl: "https://example.com/latest.json",
-        fetchFn: (async () => new Response(MANIFEST, { status: 200 })) as unknown as typeof fetch,
-        now: () => NOW + 10_000 * 24 * 60 * 60 * 1000, // ~27 years on
-      },
-    );
-    expect(res.status).toBe(200);
+    expect((await checkUpdate(deps, licenseId)).status).toBe(200);
+    await handleIssuance(makeRequest(refundBody()), deps);
+    expect((await checkUpdate(deps, licenseId)).status).toBe(204);
   });
 });
 
 describe("handleIssuance: fail-closed gates", () => {
-  it("rejects a bad signature with 401 and no side effects", async () => {
-    const deps = baseDeps();
-    const req = makeRequest(paidBody(), {
-      id: "evt_1",
-      sig: "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-    });
-    const res = await handleIssuance(req, deps);
-    expect(res.status).toBe(401);
-    expect(deps.ledgerKv.map.size).toBe(0);
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-  });
-
-  it("400 on missing headers", async () => {
-    const deps = baseDeps();
-    const req = new Request("https://x/", { method: "POST", body: paidBody() });
-    expect((await handleIssuance(req, deps)).status).toBe(400);
-  });
-
-  it("400 on a validly-signed non-JSON body", async () => {
-    const deps = baseDeps();
-    const res = await handleIssuance(makeRequest("not json", { id: "evt_1" }), deps);
-    expect(res.status).toBe(400);
-  });
-
-  it("503 when the webhook secret is unconfigured", async () => {
-    const deps = baseDeps({ webhookSecret: "" });
-    // signature can't be valid without a secret; the 503 short-circuits first
-    const res = await handleIssuance(makeRequest(paidBody(), { id: "evt_1" }), deps);
-    expect(res.status).toBe(503);
-  });
-
-  it("405 on non-POST", async () => {
-    const deps = baseDeps();
-    const res = await handleIssuance(makeRequest(paidBody(), { id: "evt_1", method: "GET" }), deps);
-    expect(res.status).toBe(405);
-  });
-
-  it("ignores an unknown event type and marks it done", async () => {
-    const deps = baseDeps();
-    const body = JSON.stringify({ type: "checkout.created", data: {} });
-    const res = await handleIssuance(makeRequest(body, { id: "evt_x" }), deps);
-    expect(res.status).toBe(200);
-    expect(deps.log).toHaveBeenLastCalledWith({ result: "ignored", ts: NOW / 1000 });
-    expect(deps.ledgerKv.map.get("evt:live:evt_x")).toBe("done");
+  it("503 when the webhook secret is unconfigured; 405 on non-POST", async () => {
+    expect(
+      (await handleIssuance(makeRequest(paidBody()), baseDeps({ webhookSecret: "" }))).status,
+    ).toBe(503);
+    expect(
+      (await handleIssuance(makeRequest(paidBody(), { method: "GET" }), baseDeps())).status,
+    ).toBe(405);
   });
 
   it("the done-marker short-circuit is unreachable without a valid signature", async () => {
-    // If the evt check ever moved above signature verification, the marker
-    // would become an unauthenticated processed-event oracle.
     const deps = baseDeps();
     deps.ledgerKv.map.set("evt:live:evt_1", "done");
     const res = await handleIssuance(
-      makeRequest(paidBody(), {
-        id: "evt_1",
-        sig: "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-      }),
+      makeRequest(paidBody({ eventId: "evt_1" }), { sig: `ts=${NOW_S};h1=${"0".repeat(64)}` }),
       deps,
     );
     expect(res.status).toBe(401);
@@ -1041,17 +1113,15 @@ describe("handleIssuance: fail-closed gates", () => {
 
 // ===========================================================================
 describe("default fetch wiring (env → deps)", () => {
-  // The pure-handler tests inject deps; this suite exercises the real
-  // Cloudflare wiring: PEM import + signer cache, grandfather parsing, isTest
-  // resolution, and the Resend call — with globalThis.fetch stubbed.
   const pem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
-  // Signatures must be fresh against real Date.now() here (the wiring injects
-  // its own clock).
   const nowTs = () => Math.floor(Date.now() / 1000).toString();
+  const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString();
 
   function makeEnv(overrides: Record<string, unknown> = {}) {
     return {
-      POLAR_WEBHOOK_SECRET: SECRET,
+      PADDLE_WEBHOOK_SECRET: SECRET,
+      PADDLE_API_KEY: "pdl_live_apikey_test1",
+      PADDLE_PRICE_IDS: "pri_test1",
       TANDEM_PRIVATE_KEY: pem,
       RESEND_API_KEY: "re_test",
       RESEND_FROM: "Tandem <noreply@example.com>",
@@ -1062,278 +1132,357 @@ describe("default fetch wiring (env → deps)", () => {
     };
   }
 
-  beforeEach(() => {
-    // The alert throttle is per-isolate module state. Without this reset the
-    // second test to provoke a given (result, stage) is silently suppressed,
-    // and every "does not alert" assertion would pass vacuously.
-    _resetAlertThrottleForTests();
-  });
+  /** Routes by host: Paddle → a customer, Resend → an email id, else 200 {}. */
+  function routedFetch(o: { resend?: number; paddle?: number } = {}) {
+    return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith("https://api.paddle.com/") ||
+        url.startsWith("https://sandbox-api.paddle.com/")
+      ) {
+        return o.paddle && o.paddle !== 200
+          ? new Response("{}", { status: o.paddle })
+          : new Response(JSON.stringify({ data: { email: "buyer@example.com", name: "Jane" } }), {
+              status: 200,
+            });
+      }
+      if (url === "https://api.resend.com/emails") {
+        return new Response('{"id":"em_1"}', { status: o.resend ?? 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+  }
+  const callsTo = (m: ReturnType<typeof routedFetch>, prefix: string) =>
+    m.mock.calls.filter(([u]) => String(u).startsWith(prefix));
 
+  async function captureLogs(fn: () => Promise<unknown>) {
+    const logs: Record<string, unknown>[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(JSON.parse(line));
+    });
+    try {
+      await fn();
+    } finally {
+      spy.mockRestore();
+    }
+    return logs.filter((e) => e.result === "error").map((e) => e.stage);
+  }
+
+  beforeEach(() => {
+    _resetAlertThrottleForTests();
+    _setTrustedKeyIdsForTests([TEST_KEY_ID]);
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
+    _setTrustedKeyIdsForTests();
   });
 
-  it("production default: mints, entitles, and emails via the Resend REST API", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response('{"id":"em_1"}', { status: 200 }),
-    );
+  it("a signing key no build trusts → 503 at stage config", async () => {
+    _setTrustedKeyIdsForTests(TRUSTED_KEY_IDS);
+    const env = makeEnv();
+    const stages = await captureLogs(async () => {
+      const res = await issuanceWorker.fetch(
+        makeRequest(paidBody(), { ts: nowTs() }),
+        env as never,
+      );
+      expect(res.status).toBe(503);
+    });
+    expect(stages).toContain("config");
+    expect(env.LEDGER_KV.map.size).toBe(0);
+  });
+
+  it("production: looks up the buyer at api.paddle.com, mints, emails via Resend", async () => {
+    const fetchMock = routedFetch();
     vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv();
     const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_w"), { id: "evt_w", ts: nowTs() }),
+      makeRequest(paidBody({ txnId: "txn_w" }), { ts: nowTs() }),
       env as never,
     );
     expect(res.status).toBe(200);
-    // TANDEM_ISSUANCE_ENV unset → production → live keys + entitlement written
-    expect(env.LEDGER_KV.map.has("order:live:ord_w")).toBe(true);
+    expect(env.LEDGER_KV.map.has("order:live:txn_w")).toBe(true);
     expect(env.LICENSE_KV.map.size).toBe(1);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://api.resend.com/emails");
-    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer re_test");
+    const [lookup] = callsTo(fetchMock, "https://api.paddle.com/");
+    expect(String(lookup[0])).toBe("https://api.paddle.com/customers/ctm_1");
+    expect((lookup[1]?.headers as Record<string, string>).Authorization).toBe(
+      "Bearer pdl_live_apikey_test1",
+    );
+    const [[, init]] = callsTo(fetchMock, "https://api.resend.com/emails");
     const sent = JSON.parse(init?.body as string);
     expect(sent.to).toBe("buyer@example.com");
-
-    // The ATTACHMENT is the primary delivery path. Its `content` must be base64
-    // of the file's BYTES — and the blob is already base64 text, so it is
-    // double-encoded. Passing the blob straight through would produce a
-    // `.license` file containing raw JSON, which `activateLicense` rejects.
-    const attachment = sent.attachments[0];
-    expect(attachment.filename).toBe("tandem.license");
-    const fileBytes = Buffer.from(attachment.content, "base64").toString("utf-8");
+    expect(sent.reply_to).toBe("support@tandem.test");
+    const fileBytes = Buffer.from(sent.attachments[0].content, "base64").toString("utf-8");
     expect(blobVerifies(fileBytes)).toBe(true);
-
-    // The inline copy is hard-wrapped so an MTA doesn't re-encode the body as
-    // quoted-printable (whose soft line breaks silently truncate base64). It
-    // must still rejoin to exactly the same blob.
-    const inline = (sent.text as string)
-      .split("\n")
-      .filter((l: string) => /^[A-Za-z0-9+/=]{20,}$/.test(l))
-      .join("");
-    expect(inline).toBe(fileBytes);
-    expect(blobVerifies(inline)).toBe(true);
-    // Pin BOTH properties the wrap depends on, because the previous version of
-    // this test asserted `<= 80` — which passes at 72, 76 and 80 alike, so it
-    // pinned nothing — and asserted nothing about ASCII, which is how an em
-    // dash shipped in a body whose own doc comment promised 7-bit purity.
-    for (const line of (sent.text as string).split("\n")) {
+    for (const line of (sent.text as string).split("\n"))
       expect(line.length).toBeLessThanOrEqual(72);
-    }
-    // A single 8-bit byte anywhere is enough to make an MTA re-encode the whole
-    // body as quoted-printable, whose soft break truncates the key.
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching the 7-bit range is the point
-    expect(sent.text as string).toMatch(/^[\x00-\x7F]*$/);
   });
 
-  it("alerts the operator when an event is dropped", async () => {
-    // `dropped` means a payload we couldn't fulfil — a paid sale may be behind
-    // it, and nothing durable was written. It is the result worth waking for.
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }),
-    );
+  it("a sandbox key derives the sandbox host", async () => {
+    const fetchMock = routedFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/xyz" });
-    const body = JSON.stringify({ type: "order.paid", data: { id: "ord_d" } }); // no email
-    await issuanceWorker.fetch(makeRequest(body, { id: "evt_drop_1", ts: nowTs() }), env as never);
-    const alert = fetchMock.mock.calls.find(([u]) => u === "https://hooks.example.com/xyz");
-    expect(alert).toBeDefined();
-    expect(JSON.parse(alert?.[1]?.body as string).text).toMatch(/could not be fulfilled/);
+    const env = makeEnv({
+      PADDLE_API_KEY: "pdl_sdbx_apikey_test1",
+      TANDEM_ISSUANCE_ENV: "sandbox",
+      SANDBOX_SIGNING_UNTIL: inDays(3),
+      SANDBOX_BUYER_EMAILS: "buyer@example.com",
+    });
+    const res = await issuanceWorker.fetch(
+      makeRequest(paidBody({ txnId: "txn_s" }), { ts: nowTs() }),
+      env as never,
+    );
+    expect(res.status).toBe(200);
+    expect(callsTo(fetchMock, "https://sandbox-api.paddle.com/customers/")).toHaveLength(1);
+    expect(env.LEDGER_KV.map.has("order:test:txn_s")).toBe(true);
+    expect(env.LICENSE_KV.map.size).toBe(0);
   });
 
-  it("routes an EMAIL failure away from Resend — the channel that just failed", async () => {
-    // Alerting a Resend outage through Resend is a no-op exactly when it matters.
-    const fetchMock = vi.fn(async (url: string) =>
-      url === "https://api.resend.com/emails"
-        ? new Response("unverified sender", { status: 422 })
-        : new Response("{}", { status: 200 }),
+  it("does not alert on an ordinary successful issuance — and issuance happened", async () => {
+    const fetchMock = routedFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/quiet" });
+    await issuanceWorker.fetch(
+      makeRequest(paidBody({ txnId: "txn_q" }), { ts: nowTs() }),
+      env as never,
     );
+    expect(env.LEDGER_KV.map.has("order:live:txn_q")).toBe(true);
+    expect(callsTo(fetchMock, "https://hooks.example.com/quiet")).toHaveLength(0);
+  });
+
+  it("routes an EMAIL failure away from Resend", async () => {
+    const fetchMock = routedFetch({ resend: 422 });
     vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv({
       ALERT_WEBHOOK_URL: "https://hooks.example.com/xyz",
       ALERT_EMAIL: "ops@example.com",
     });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_mailfail"), { id: "evt_mailfail", ts: nowTs() }),
-      env as never,
-    );
-    // Retryable for THIS order...
+    const res = await issuanceWorker.fetch(makeRequest(paidBody(), { ts: nowTs() }), env as never);
     expect(res.status).toBe(500);
-    // ...and the alert went to the webhook, not to Resend.
-    const urls = fetchMock.mock.calls.map(([u]) => u);
-    expect(urls).toContain("https://hooks.example.com/xyz");
-    expect(urls.filter((u) => u === "https://api.resend.com/emails")).toHaveLength(1);
+    expect(callsTo(fetchMock, "https://hooks.example.com/xyz")).toHaveLength(1);
+    expect(callsTo(fetchMock, "https://api.resend.com/emails")).toHaveLength(1);
   });
 
-  it("does not alert on an ordinary successful issuance", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }),
-    );
+  it("a dropped event alerts with the 200-reply tail and carries no ids", async () => {
+    const fetchMock = routedFetch();
     vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/quiet" });
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/d" });
     await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_quiet"), { id: "evt_quiet", ts: nowTs() }),
+      makeRequest(paidBody({ eventId: "evt_dropx", txnId: "txn_dropx", status: "paid" }), {
+        ts: nowTs(),
+      }),
       env as never,
     );
-    const urls = fetchMock.mock.calls.map(([u]) => u);
-    expect(urls).not.toContain("https://hooks.example.com/quiet");
+    const [alert] = callsTo(fetchMock, "https://hooks.example.com/d");
+    const text = JSON.parse(alert[1]?.body as string).text as string;
+    expect(text).toMatch(/could not be fulfilled/);
+    expect(text).toMatch(/Paddle will not retry this/);
+    expect(text).not.toContain("evt_dropx");
+    expect(text).not.toContain("txn_dropx");
   });
 
-  it("alert bodies carry no PII — not the buyer's email, not the license id", async () => {
-    const fetchMock = vi.fn(async (url: string) =>
-      url === "https://api.resend.com/emails"
-        ? new Response("nope", { status: 422 })
-        : new Response("{}", { status: 200 }),
-    );
+  it("two drops for different events within 5 minutes both alert", async () => {
+    const fetchMock = routedFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/t" });
+    for (const id of ["evt_da", "evt_db"]) {
+      await issuanceWorker.fetch(
+        makeRequest(paidBody({ eventId: id, status: "paid" }), { ts: nowTs() }),
+        env as never,
+      );
+    }
+    expect(callsTo(fetchMock, "https://hooks.example.com/t")).toHaveLength(2);
+  });
+
+  it("a paddle-api-auth failure alerts with its own arm", async () => {
+    const fetchMock = routedFetch({ paddle: 401 });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/a" });
+    const res = await issuanceWorker.fetch(makeRequest(paidBody(), { ts: nowTs() }), env as never);
+    expect(res.status).toBe(500);
+    const [alert] = callsTo(fetchMock, "https://hooks.example.com/a");
+    const text = JSON.parse(alert[1]?.body as string).text as string;
+    expect(text).toContain("lacks customer.read");
+    expect(text).toContain("60 attempts");
+  });
+
+  it("alert bodies carry no PII", async () => {
+    const fetchMock = routedFetch({ resend: 422 });
     vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/pii" });
     await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_pii"), { id: "evt_pii", ts: nowTs() }),
+      makeRequest(paidBody({ txnId: "txn_pii" }), { ts: nowTs() }),
       env as never,
     );
-    const alert = fetchMock.mock.calls.find(
-      ([u]) => u === "https://hooks.example.com/pii",
-    ) as unknown as [string, RequestInit];
-    const text = JSON.parse(alert[1].body as string).text as string;
+    const [alert] = callsTo(fetchMock, "https://hooks.example.com/pii");
+    const text = JSON.parse(alert[1]?.body as string).text as string;
     expect(text).not.toContain("buyer@example.com");
-    expect(text).not.toContain("ord_pii");
+    expect(text).not.toContain("txn_pii");
   });
 
-  it("TANDEM_ISSUANCE_ENV=sandbox → test-mode ledger keys and NO entitlement", async () => {
+  it("grandfather matching is case-insensitive and a 100% order from a listed buyer issues", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", { status: 200 })),
-    );
-    const env = makeEnv({ TANDEM_ISSUANCE_ENV: "sandbox" });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_s"), { id: "evt_s", ts: nowTs() }),
-      env as never,
-    );
-    expect(res.status).toBe(200);
-    expect(env.LEDGER_KV.map.has("order:test:ord_s")).toBe(true);
-    expect(env.LICENSE_KV.map.size).toBe(0);
-  });
-
-  it("grandfather matching is case-insensitive across env list and payload", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("{}", { status: 200 })),
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).startsWith("https://api.paddle.com/")
+          ? new Response(JSON.stringify({ data: { email: "alice@EXAMPLE.com", name: "A" } }))
+          : new Response("{}"),
+      ),
     );
     const env = makeEnv({ GRANDFATHER_EMAILS: "Alice@Example.com, bob@x.co" });
-    const body = paidBody("ord_g", {
-      customer: { email: "alice@EXAMPLE.com", name: "Alice" },
-    });
-    await issuanceWorker.fetch(makeRequest(body, { id: "evt_g", ts: nowTs() }), env as never);
-    const rec = JSON.parse(env.LEDGER_KV.map.get("order:live:ord_g") as string);
-    expect(rec.type).toBe("grandfathered");
-    expect(rec.updateWindowEnd).toBeNull();
-  });
-
-  it("a bad signing key → 503 fail-closed, and the failure is NOT cached", async () => {
-    const env = makeEnv({ TANDEM_PRIVATE_KEY: "garbage-not-a-pem" });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_k"), { id: "evt_k", ts: nowTs() }),
-      env as never,
-    );
-    expect(res.status).toBe(503);
-    expect(env.LEDGER_KV.map.size).toBe(0); // nothing processed
-
-    // Fixing the key recovers immediately (failed import was never cached).
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("{}", { status: 200 })),
-    );
-    const good = makeEnv();
-    const res2 = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_k"), { id: "evt_k2", ts: nowTs() }),
-      good as never,
-    );
-    expect(res2.status).toBe(200);
-  });
-
-  // --- SUPPORT_EMAIL fail-closed guard (#1289) ------------------------------
-  // Two silent failures used to be reachable from `[vars]` alone: an unset
-  // value dropped the support block from the email AND the `reply_to` header,
-  // so a buyer whose activation failed replied into a noreply; and the shipped
-  // placeholder went out on the wire and printed in the body of a mail sent to
-  // someone who had just paid.
-
-  it("a placeholder SUPPORT_EMAIL → 503 before anything is minted or emailed", async () => {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    // The literal value shipped in infra/license-issuance-worker/wrangler.toml.
-    const env = makeEnv({ SUPPORT_EMAIL: "REPLACE_WITH_SUPPORT_INBOX" });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_se"), { id: "evt_se", ts: nowTs() }),
-      env as never,
-    );
-    expect(res.status).toBe(503);
-    // Fails BEFORE any durable write, so Polar's re-delivery fulfils the event
-    // unchanged once the var is fixed — no orphan license, no half-written order.
-    expect(env.LEDGER_KV.map.size).toBe(0);
-    expect(env.LICENSE_KV.map.size).toBe(0);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("an unset SUPPORT_EMAIL → 503, not a license email with no reply channel", async () => {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv({ SUPPORT_EMAIL: undefined });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_se2"), { id: "evt_se2", ts: nowTs() }),
-      env as never,
-    );
-    expect(res.status).toBe(503);
-    expect(env.LEDGER_KV.map.size).toBe(0);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("the guard's stage is distinguishable from the signing key's", async () => {
-    // Both fail closed with an identical 503, so the log stage is the only
-    // thing telling an operator whether to re-put a secret or edit a [vars]
-    // line. Collapsing them into `config` would make the 503 undiagnosable.
-    const logs: unknown[] = [];
-    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
-      logs.push(JSON.parse(line));
-    });
-    try {
-      await issuanceWorker.fetch(
-        makeRequest(paidBody("ord_se3"), { id: "evt_se3", ts: nowTs() }),
-        makeEnv({ SUPPORT_EMAIL: "  " }) as never,
-      );
-      await issuanceWorker.fetch(
-        makeRequest(paidBody("ord_se4"), { id: "evt_se4", ts: nowTs() }),
-        makeEnv({ TANDEM_PRIVATE_KEY: "garbage-not-a-pem" }) as never,
-      );
-    } finally {
-      spy.mockRestore();
-    }
-    // Filter to the ERROR lines before mapping. Config stages are alertable
-    // now, and `makeEnv()` configures no alert channel, so `sendOperatorAlert`
-    // reaches its `alert-undeliverable` console.log synchronously inside
-    // `log()` — an unfiltered collector interleaves those and the stage list
-    // stops being the thing under test.
-    expect(
-      logs
-        .filter((e) => (e as { result?: string }).result === "error")
-        .map((e) => (e as { stage?: string }).stage),
-    ).toEqual(["config-support-email", "config"]);
-  });
-
-  it("a configured SUPPORT_EMAIL reaches both reply_to and the email body", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response('{"id":"em_2"}', { status: 200 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv();
     await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_se5"), { id: "evt_se5", ts: nowTs() }),
+      makeRequest(paidBody({ txnId: "txn_g", totals: { grand_total: "0", total: "0" } }), {
+        ts: nowTs(),
+      }),
       env as never,
     );
-    const [, init] = fetchMock.mock.calls[0];
-    const sent = JSON.parse(init?.body as string);
-    expect(sent.reply_to).toBe("support@tandem.test");
-    expect(sent.text as string).toContain("support@tandem.test");
+    expect(JSON.parse(env.LEDGER_KV.map.get("order:live:txn_g") as string).type).toBe(
+      "grandfathered",
+    );
+  });
+
+  it("config guard order: key → support → resend → api-key → price-ids → env-mismatch → sandbox-until", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    const stages = await captureLogs(async () => {
+      const envs = [
+        { RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER", PADDLE_API_KEY: undefined },
+        { SUPPORT_EMAIL: "  ", RESEND_FROM: undefined },
+        { TANDEM_PRIVATE_KEY: "garbage-not-a-pem", SUPPORT_EMAIL: "  " },
+        { PADDLE_API_KEY: undefined, PADDLE_PRICE_IDS: "" },
+        { PADDLE_API_KEY: "legacy_key_format" },
+        { PADDLE_PRICE_IDS: "", TANDEM_ISSUANCE_ENV: "sandbox" },
+        { PADDLE_PRICE_IDS: "pri_ok, PRI_bad" },
+        { TANDEM_ISSUANCE_ENV: "sandbox" },
+        { PADDLE_API_KEY: "pdl_sdbx_apikey_x" },
+        { PADDLE_API_KEY: "pdl_sdbx_apikey_x", SANDBOX_SIGNING_UNTIL: inDays(3) },
+      ];
+      for (const o of envs) {
+        await issuanceWorker.fetch(makeRequest(paidBody(), { ts: nowTs() }), makeEnv(o) as never);
+      }
+    });
+    expect(stages).toEqual([
+      "config-resend-from",
+      "config-support-email",
+      "config",
+      "config-paddle-api-key",
+      "config-paddle-api-key",
+      "config-price-ids",
+      "config-price-ids",
+      "config-env-mismatch",
+      "config-sandbox-until",
+      "config-sandbox-buyers",
+    ]);
+  });
+
+  it("SANDBOX_SIGNING_UNTIL: missing, past, > 7 days → 503; valid date → allowed; nothing minted when refused", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    for (const until of [undefined, inDays(-1), inDays(8), "garbage"]) {
+      const env = makeEnv({ PADDLE_API_KEY: "pdl_sdbx_apikey_x", SANDBOX_SIGNING_UNTIL: until });
+      const res = await issuanceWorker.fetch(
+        makeRequest(paidBody(), { ts: nowTs() }),
+        env as never,
+      );
+      expect(res.status).toBe(503);
+      expect(env.LEDGER_KV.map.size).toBe(0);
+    }
+    // the ops §8 end-to-end configuration: sandbox key + production
+    const ok = makeEnv({
+      PADDLE_API_KEY: "pdl_sdbx_apikey_x",
+      SANDBOX_SIGNING_UNTIL: inDays(3),
+      SANDBOX_BUYER_EMAILS: "Buyer@Example.com",
+    });
+    expect(
+      (await issuanceWorker.fetch(makeRequest(paidBody(), { ts: nowTs() }), ok as never)).status,
+    ).toBe(200);
+    expect(ok.LEDGER_KV.map.has("order:live:txn_1")).toBe(true); // listed buyer → minted
+  });
+
+  it("a sandbox key with an empty, placeholder or malformed SANDBOX_BUYER_EMAILS → 503 config-sandbox-buyers, nothing minted", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    // The middle value is the literal wrangler.toml ships.
+    for (const buyers of [" , ", "REPLACE_WITH_YOUR_OWN_TEST_EMAIL", "me@x.co, oops"]) {
+      const env = makeEnv({
+        PADDLE_API_KEY: "pdl_sdbx_apikey_x",
+        SANDBOX_SIGNING_UNTIL: inDays(3),
+        SANDBOX_BUYER_EMAILS: buyers,
+      });
+      const stages = await captureLogs(async () => {
+        const res = await issuanceWorker.fetch(
+          makeRequest(paidBody(), { ts: nowTs() }),
+          env as never,
+        );
+        expect(res.status).toBe(503);
+      });
+      expect(stages, buyers).toEqual(["config-sandbox-buyers"]);
+      expect(env.LEDGER_KV.map.size).toBe(0);
+    }
+  });
+
+  it("a free order with GRANDFATHER_EMAILS unset makes no Paddle API call (wiring)", async () => {
+    const f = routedFetch();
+    vi.stubGlobal("fetch", f);
+    const env = makeEnv();
+    const body = paidBody({ totals: { grand_total: "0", total: "0" } });
+    await captureLogs(() => issuanceWorker.fetch(makeRequest(body, { ts: nowTs() }), env as never));
+    expect(callsTo(f, "https://api.paddle.com/")).toHaveLength(0);
+    expect(env.LEDGER_KV.map.has("order:live:txn_1")).toBe(false);
+  });
+
+  it("a Paddle network error or a non-JSON 200 is retryable (500 paddle-api), never dropped", async () => {
+    for (const respond of [
+      async () => {
+        throw new TypeError("network");
+      },
+      async () => new Response("<html>oops</html>", { status: 200 }),
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) =>
+          String(input).startsWith("https://api.paddle.com/")
+            ? respond()
+            : new Response('{"id":"em_1"}', { status: 200 }),
+        ),
+      );
+      const env = makeEnv();
+      let status = 0;
+      const stages = await captureLogs(async () => {
+        status = (
+          await issuanceWorker.fetch(makeRequest(paidBody(), { ts: nowTs() }), env as never)
+        ).status;
+      });
+      expect(status).toBe(500);
+      expect(stages).toEqual(["paddle-api"]);
+      expect([...env.LEDGER_KV.map.keys()].filter((k) => k.startsWith("notice:"))).toEqual([]);
+    }
+  });
+
+  it("SANDBOX_SIGNING_UNTIL must be a full zoned ISO timestamp; a date-only value is refused", () => {
+    const now = Date.parse("2026-10-17T15:00:00Z");
+    // Date-only parses as UTC midnight, so it is refused even when in range.
+    expect(sandboxSigningAllowed("2026-10-18", now)).toBe(false);
+    expect(sandboxSigningAllowed("2026-10-18T00:00", now)).toBe(false); // no zone
+    expect(sandboxSigningAllowed("2026-10-17T14:59:59Z", now)).toBe(false); // past
+    expect(sandboxSigningAllowed("2026-10-18T00:00:00Z", now)).toBe(true);
+    expect(sandboxSigningAllowed("2026-10-18T00:00:00-04:00", now)).toBe(true);
+    expect(sandboxSigningAllowed("2026-10-24T15:00:00Z", now)).toBe(true); // exactly 7 days
+    expect(sandboxSigningAllowed("2026-10-24T15:00:01Z", now)).toBe(false);
+  });
+
+  it("PADDLE_PRICE_IDS ignores empty entries but still refuses a malformed one", () => {
+    expect(parsePriceIds("pri_a,")).toEqual(["pri_a"]);
+    expect(parsePriceIds("pri_a,, pri_b")).toEqual(["pri_a", "pri_b"]);
+    expect(parsePriceIds(" , ")).toBeNull();
+    expect(parsePriceIds("pri_a,PRI_b")).toBeNull();
+    expect(parsePriceIds(undefined)).toBeNull();
+  });
+
+  it("a pdl_live_ key in a non-production Worker → 503 env mismatch, nothing minted", async () => {
+    const fetchMock = routedFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ TANDEM_ISSUANCE_ENV: "sandbox" });
+    expect(
+      (await issuanceWorker.fetch(makeRequest(paidBody(), { ts: nowTs() }), env as never)).status,
+    ).toBe(503);
+    expect(env.LEDGER_KV.map.size).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("supportEmailProblem names the misconfiguration it found", () => {
@@ -1384,30 +1533,43 @@ describe("default fetch wiring (env → deps)", () => {
     expect(supportEmailProblem(`a${atCeiling}`)).toBe("too-long");
   });
 
+  it("the license email promises all future updates and no window or renewal (A5)", () => {
+    // Joined so a reflow of the copy cannot split a phrase across lines.
+    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink").replace(/\s+/g, " ");
+    expect(text).toContain("never expires");
+    expect(text).toContain("includes all future updates");
+    expect(text).not.toMatch(/first year|renew|one year|update window/i);
+  });
+
+  it("the license email links the Terms, the Refund Policy and Paddle's buyer support", () => {
+    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink");
+    expect(text).toContain("https://tandem.ink/terms");
+    expect(text).toContain("https://tandem.ink/refunds");
+    expect(text).toContain("https://paddle.net");
+  });
+
+  it("the license email speaks as one person and does not invite a reply under the key", () => {
+    // Sales copy is in the licensor's singular voice, and a reply would quote
+    // the key printed above the support line.
+    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink").replace(/\s+/g, " ");
+    expect(text).toContain("-- Bryan Kolb");
+    expect(text).not.toMatch(/\b(we|us|our|team)\b/i);
+    expect(text).not.toMatch(/\breply\b/i);
+    // The CLI route is the npm install's alone: the desktop bundle ships no
+    // `tandem` command, and an npm CLI activates its own app-data directory.
+    expect(text).toContain("If you installed Tandem with npm");
+  });
+
   it("an unset RESEND_API_KEY → retryable 500, not a silent drop", async () => {
-    // RESEND_API_KEY is a *secret*, deliberately NOT validated up front (the
-    // fetch handler only guards `[vars]`), so this is still the point-of-use
-    // failure: mint, ledger, then an undeliverable email and an alertable
-    // `stage: "email"`. RESEND_FROM must stay VALID here — an unset one now
-    // 503s before the mint, and the ledger parse below would throw. That case
-    // is its own test in the RESEND_FROM block.
+    vi.stubGlobal("fetch", routedFetch());
     const env = makeEnv({ RESEND_API_KEY: undefined });
     const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_r"), { id: "evt_r", ts: nowTs() }),
+      makeRequest(paidBody({ txnId: "txn_r" }), { ts: nowTs() }),
       env as never,
     );
     expect(res.status).toBe(500);
-    // ledger holds the emailSent:false record for the retry to re-drive
-    const rec = JSON.parse(env.LEDGER_KV.map.get("order:live:ord_r") as string);
-    expect(rec.emailSent).toBe(false);
+    expect(JSON.parse(env.LEDGER_KV.map.get("order:live:txn_r") as string).emailSent).toBe(false);
   });
-
-  // --- RESEND_FROM fail-closed guard (#1793) --------------------------------
-  // The shipped `REPLACE_WITH_VERIFIED_SENDER` is *present*, so the old
-  // point-of-use `!env.RESEND_FROM` check passed it — after the license was
-  // minted, the entitlement written and the order ledgered. Resend then 422s,
-  // the handler returns a retryable 500, and Polar retries into endpoint
-  // auto-disable. Buyer charged, license issued, email never sent.
 
   it("resendFromProblem names the misconfiguration, diverging only on length", () => {
     expect(resendFromProblem(undefined)).toBe("unset");
@@ -1431,118 +1593,56 @@ describe("default fetch wiring (env → deps)", () => {
     expect(resendFromProblem(long)).toBeNull();
   });
 
-  /** 503, and NOTHING durable written: Polar simply re-delivers the untouched
-   *  event once the var is fixed. That last part is what kills the
-   *  mint-then-fail order the guard exists to prevent. */
-  async function expect503WithoutMint(
-    resendFrom: string | undefined,
-    orderId: string,
-    eventId: string,
-  ): Promise<void> {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv({ RESEND_FROM: resendFrom });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody(orderId), { id: eventId, ts: nowTs() }),
-      env as never,
-    );
-    expect(res.status).toBe(503);
-    expect(env.LEDGER_KV.map.size).toBe(0);
-    expect(env.LICENSE_KV.map.size).toBe(0);
-    expect(fetchMock).not.toHaveBeenCalled();
-  }
-
-  it("a placeholder RESEND_FROM → 503 before anything is minted or emailed", async () => {
-    await expect503WithoutMint("REPLACE_WITH_VERIFIED_SENDER", "ord_rf", "evt_rf");
-  });
-
-  // Its own `it()`, not a second case in the block above: both key on
-  // `error:config-resend-from`, `shouldAlert` suppresses a repeat for five
-  // minutes, and the reset is a `beforeEach` firing per `it()`. A suppressed
-  // alert produces exactly the "fetch never called" this asserts, so a shared
-  // block would pass vacuously.
-  it("an UNSET RESEND_FROM → 503 too, not a mint that can never be delivered", async () => {
-    // `if (env.RESEND_FROM && resendFromProblem(...) !== null)` would keep the
-    // old point-of-use behaviour for the one case a fresh deploy most likely
-    // hits, while leaving every other test green. This is what refuses it.
-    await expect503WithoutMint(undefined, "ord_rf2", "evt_rf2");
-  });
-
-  it("all three config stages are distinguishable in the log", async () => {
-    // Every one fails closed with an identical 503, so the stage is the only
-    // thing telling an operator which secret to re-put or which [vars] line to
-    // edit. Collapsing any pair makes the 503 undiagnosable.
-    const logs: unknown[] = [];
-    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
-      logs.push(JSON.parse(line));
-    });
-    try {
-      await issuanceWorker.fetch(
-        makeRequest(paidBody("ord_s1"), { id: "evt_s1", ts: nowTs() }),
-        makeEnv({ RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER" }) as never,
-      );
-      await issuanceWorker.fetch(
-        makeRequest(paidBody("ord_s2"), { id: "evt_s2", ts: nowTs() }),
-        makeEnv({ SUPPORT_EMAIL: "  " }) as never,
-      );
-      await issuanceWorker.fetch(
-        makeRequest(paidBody("ord_s3"), { id: "evt_s3", ts: nowTs() }),
-        makeEnv({ TANDEM_PRIVATE_KEY: "garbage-not-a-pem" }) as never,
-      );
-    } finally {
-      spy.mockRestore();
-    }
-    expect(
-      logs
-        .filter((e) => (e as { result?: string }).result === "error")
-        .map((e) => (e as { stage?: string }).stage),
-    ).toEqual(["config-resend-from", "config-support-email", "config"]);
-  });
-
-  it("isAlertable covers exactly dropped, email and the three config stages", () => {
+  it("isAlertable covers exactly dropped, noticed, email/paddle-api*/notice-write/ledger errors and the config stages", () => {
     expect(isAlertable({ result: "dropped", ts: 0 })).toBe(true);
-    expect(isAlertable({ result: "error", ts: 0, stage: "email" })).toBe(true);
-    expect(isAlertable({ result: "error", ts: 0, stage: "config" })).toBe(true);
-    expect(isAlertable({ result: "error", ts: 0, stage: "config-support-email" })).toBe(true);
-    expect(isAlertable({ result: "error", ts: 0, stage: "config-resend-from" })).toBe(true);
-
-    // These three kill a lazy `result === "error"`: they are transient failures
-    // that would storm an alert channel.
-    expect(isAlertable({ result: "error", ts: 0, stage: "ledger" })).toBe(false);
-    expect(isAlertable({ result: "error", ts: 0, stage: "unexpected" })).toBe(false);
-    expect(isAlertable({ result: "error", ts: 0, stage: "blob-size" })).toBe(false);
+    expect(isAlertable({ result: "noticed", ts: 0, notice: "refund-partial", ref: "adj_1" })).toBe(
+      true,
+    );
+    for (const stage of [
+      "email",
+      "paddle-api",
+      "paddle-api-auth",
+      "notice-write",
+      "ledger",
+    ] as FailStage[]) {
+      expect(isAlertable({ result: "error", ts: 0, stage })).toBe(true);
+    }
+    for (const stage of [
+      "config",
+      "config-support-email",
+      "config-resend-from",
+      "config-paddle-api-key",
+      "config-price-ids",
+      "config-env-mismatch",
+      "config-sandbox-until",
+      "config-sandbox-buyers",
+    ] as FailStage[]) {
+      expect(isAlertable({ result: "error", ts: 0, stage })).toBe(true);
+    }
+    for (const stage of ["unexpected", "blob-size", "delivery-check"] as FailStage[]) {
+      expect(isAlertable({ result: "error", ts: 0, stage })).toBe(false);
+    }
+    expect(isAlertable({ result: "settled", ts: 0 })).toBe(false);
     expect(isAlertable({ result: "issued", ts: 0 })).toBe(false);
-
-    // And this one kills `stage?.startsWith("config")`. Nothing else here can:
-    // `FailStage` holds no non-alerting stage beginning "config", so the rows
-    // above pass under either implementation. An unknown future `config-*`
-    // stage must NOT be adopted into alerting silently, which is the property
-    // the "enumerated, not prefix-matched" comment claims.
     expect(isAlertable({ result: "error", ts: 0, stage: "config-future" as FailStage })).toBe(
       false,
     );
   });
 
   it("a broken RESEND_FROM alerts via the webhook and NEVER via Resend", async () => {
-    // `sendOperatorAlert` returns the moment a webhook stub answers ok, so a
-    // Resend assertion against a HEALTHY webhook is vacuous whatever
-    // `resendIsSuspect` says. The stub 404s to exhaust the webhook channel:
-    // only then does the Resend fallback become reachable, and only then does
-    // leaving `resendIsSuspect` at `stage === "email"` go red.
     const calls: string[] = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      calls.push(String(input));
-      return new Response("gone", { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const logs: unknown[] = [];
-    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
-      logs.push(JSON.parse(line));
-    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        return new Response("gone", { status: 404 });
+      }),
+    );
     const pending: Promise<unknown>[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await issuanceWorker.fetch(
-        makeRequest(paidBody("ord_a1"), { id: "evt_a1", ts: nowTs() }),
+        makeRequest(paidBody(), { ts: nowTs() }),
         makeEnv({
           RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER",
           ALERT_WEBHOOK_URL: "https://hooks.example/tandem",
@@ -1555,35 +1655,75 @@ describe("default fetch wiring (env → deps)", () => {
       spy.mockRestore();
     }
     expect(calls).toEqual(["https://hooks.example/tandem"]);
-    expect(
-      logs.filter((e) => (e as { result?: string }).result === "alert-undeliverable"),
-    ).toHaveLength(1);
-
-    const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(init?.body as string).text as string;
-    expect(body).toContain("config-resend-from");
-    // The config arm, not the `dropped` one — a misconfigured Worker refuses
-    // every webhook, which is not the same story as one unfulfillable payload.
-    expect(body).not.toContain("a paid sale may be behind it");
   });
 
-  it("with only ALERT_EMAIL, a broken-RESEND_FROM alert is dropped, not sent from it", async () => {
-    const calls: string[] = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-      calls.push(String(input));
+  // --- scheduled delivery check ---------------------------------------------
+  function deliveryFetch(o: {
+    failed?: unknown[];
+    settings?: unknown[];
+    status?: number;
+    settingsStatus?: number;
+  }) {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/notifications?")) {
+        return new Response(JSON.stringify({ data: o.failed ?? [] }), { status: o.status ?? 200 });
+      }
+      if (url.endsWith("/notification-settings")) {
+        return new Response(
+          JSON.stringify({ data: o.settings ?? [{ id: "ntfset_1", active: true }] }),
+          { status: o.settingsStatus ?? o.status ?? 200 },
+        );
+      }
       return new Response("{}", { status: 200 });
     });
-    vi.stubGlobal("fetch", fetchMock);
-    const pending: Promise<unknown>[] = [];
-    await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_a2"), { id: "evt_a2", ts: nowTs() }),
-      makeEnv({
-        RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER",
-        ALERT_EMAIL: "ops@tandem.test",
-      }) as never,
-      { waitUntil: (p: Promise<unknown>) => pending.push(p) } as never,
+  }
+  const runScheduled = async (env: unknown) => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await issuanceWorker.scheduled({}, env as never);
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it("scheduled: quiet when nothing failed and every destination is active", async () => {
+    const f = deliveryFetch({});
+    vi.stubGlobal("fetch", f);
+    await runScheduled(makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/dc" }));
+    expect(
+      callsTo(f, "https://api.paddle.com/notifications?status=failed,needs_retry"),
+    ).toHaveLength(1);
+    expect(callsTo(f, "https://hooks.example.com/dc")).toHaveLength(0);
+  });
+
+  it("scheduled: alerts on a failed notification, an inactive destination, or an API failure", async () => {
+    for (const o of [
+      { failed: [{ id: "ntf_1", status: "failed" }] },
+      { settings: [{ id: "ntfset_1", active: false }] },
+      { settings: [] }, // no destination at all
+      { status: 401 },
+      { settingsStatus: 500 }, // the settings endpoint failing on its own
+    ]) {
+      _resetAlertThrottleForTests();
+      const f = deliveryFetch(o);
+      vi.stubGlobal("fetch", f);
+      await runScheduled(makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/dc" }));
+      const [alert] = callsTo(f, "https://hooks.example.com/dc");
+      expect(alert, JSON.stringify(o)).toBeDefined();
+      const text = JSON.parse(alert[1]?.body as string).text as string;
+      expect(text).toContain("delivery check");
+      expect(text).not.toContain("Paddle retries"); // the cron alert is about no one delivery
+    }
+  });
+
+  it("scheduled: a Worker with no Paddle API key alerts rather than reading as healthy", async () => {
+    _resetAlertThrottleForTests();
+    const f = deliveryFetch({});
+    vi.stubGlobal("fetch", f);
+    await runScheduled(
+      makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/dc", PADDLE_API_KEY: undefined }),
     );
-    await Promise.all(pending);
-    expect(calls).not.toContain("https://api.resend.com/emails");
+    expect(callsTo(f, "https://hooks.example.com/dc")).toHaveLength(1);
   });
 });

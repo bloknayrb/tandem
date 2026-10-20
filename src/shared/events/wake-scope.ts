@@ -40,6 +40,29 @@ export function isWakeWorthy(event: TandemEvent): boolean {
   return event.type.startsWith("annotation:") || event.type === "chat:message";
 }
 
+/**
+ * Which events START a Tandem's Claude that is not running by choice — Off,
+ * idle-stopped, or on-click not yet clicked (#2196). Narrower than
+ * `isWakeWorthy`, which only decides what to tell a Claude that is already
+ * running: starting a process is work, and Bryan's line for it is the user
+ * talking TO Claude — a chat message, or the user's reply on a thread Claude
+ * started. A new comment, a reply on the user's own highlight or an imported
+ * Word comment, and accept/dismiss are not, so they wait for the next start
+ * (they are still owed to it as wakes; see the supervisor's gap watch).
+ *
+ * The caller applies the Solo gate and the licence verdict BEFORE this
+ * (`wasForwardedExternally`), so this answers only "is it addressed to Claude",
+ * never "may Claude see it".
+ */
+export function isStartWorthy(event: TandemEvent): boolean {
+  if (event.type === "chat:message") return true;
+  return (
+    event.type === "annotation:reply" &&
+    event.payload.replyAuthor === "user" &&
+    event.payload.parentAuthor === "claude"
+  );
+}
+
 /** A wake notification: enough to know something happened, never what. */
 export interface WakeFrame {
   id: string;

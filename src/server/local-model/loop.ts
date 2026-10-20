@@ -12,8 +12,6 @@
  *    (exit "aborted"); under ADR-039 "one active agent at a time".
  *  - `history`: prior-turn conversation messages, so M1.2 can supply per-doc
  *    chat continuity (M1.1 defaults to none).
- *  - `isLicenseRestricted`: forwarded to dispatch so mutating tools honor the
- *    license gate.
  */
 import type * as Y from "yjs";
 import type { LocalModelConfig } from "./config.js";
@@ -31,7 +29,6 @@ export interface LoopMetrics {
   flatOnlyAnchors: number; // fullyAnchored === false on a successful anchor
   /** failed reply_to_annotation calls (bad/hallucinated id, wrong type) */
   replyFailures: number;
-  blockedByLicense: number;
   wallMs: number;
   /**
    * `timeout` is deliberately NOT folded into `max_turns` (#1295 L6). The
@@ -129,7 +126,6 @@ export interface RunLoopOpts {
    *  all of them together. */
   runDeadlineMs?: number;
   signal?: AbortSignal;
-  isLicenseRestricted?: () => boolean;
   /** When set, every turn streams and this fires per assistant content delta
    *  (#1123 M1.2). Tool-use turns stream too (their content is preamble); the
    *  loop's tool-call detection + metrics are unchanged. */
@@ -162,7 +158,6 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
     anchorResolutionFailures: 0,
     flatOnlyAnchors: 0,
     replyFailures: 0,
-    blockedByLicense: 0,
     wallMs: 0,
     exit: "clean",
   };
@@ -252,13 +247,11 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
 
         const outcome = dispatch(tc.name, tc.args, {
           ydoc,
-          isLicenseRestricted: opts.isLicenseRestricted,
           // #1123 M3: the byline identity is prebuilt on the config (one source,
           // no extra RunLoopOpts field, no per-dispatch allocation).
           agentIdentity: config.agentIdentity,
         });
         const eff = outcome.effect;
-        if (eff.kind === "blocked") metrics.blockedByLicense += 1;
         if ((eff.kind === "comment" || eff.kind === "replacement") && !eff.ok) {
           // Any anchor failure: quote-not-found OR a found-but-rejected span.
           metrics.anchorResolutionFailures += 1;

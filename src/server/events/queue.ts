@@ -19,6 +19,7 @@ import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
 } from "../documents/dirty.js";
+import { aiRefusal } from "../license/ai-refusal.js";
 import { installModeProvenanceObserver, readModeState } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -90,6 +91,24 @@ const emittedPayloadIds = new Map<string, number>();
  */
 let trackedEvents = new WeakSet<TandemEvent>();
 
+/**
+ * Events whose bound `forwardExternally` verdict was true at push — the Solo
+ * gate AND the licence refusal (#1521) together, exactly as the fan-out applied
+ * them to external subscribers. For an in-process subscriber that relays to an
+ * external consumer LATER: the supervisor's gap watch is `"internal"` (so the
+ * fan-out's external skip never applies to it), and it reads this rather than
+ * re-deciding, so it owes the next spawn a wake for exactly what the child's
+ * own external subscription would have received. (The local-model
+ * collaborator is different on purpose: it needs `document:*` regardless, and
+ * re-decides the licence per run.)
+ */
+let forwardedEvents = new WeakSet<TandemEvent>();
+
+/** Did this event forward externally when it was pushed? See `forwardedEvents`. */
+export function wasForwardedExternally(event: TandemEvent): boolean {
+  return forwardedEvents.has(event);
+}
+
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
 
@@ -108,6 +127,23 @@ const subscribers = new Set<EventCallback>();
  * something outside this process?" must count THIS set.
  */
 const externalSubscribers = new Set<EventCallback>();
+
+/**
+ * Revoke hooks for external subscribers (#1521): how a consumer is cut off when
+ * an event arrives while Tandem is unlicensed. SSE supplies one (end the
+ * response), the wake socket supplies one (close 4403). The launcher supervisor
+ * supplies none on purpose: it stays subscribed and is merely skipped, so a
+ * child still running at expiry is woken again after activation.
+ *
+ * Cleared alongside the subscriber by `unsubscribe` and `resetForTesting`.
+ */
+const revokeHooks = new Map<EventCallback, () => void>();
+
+/** Options for an external subscription. */
+export interface SubscribeOptions {
+  /** Called once, after `unsubscribe`, when a refused event cuts this consumer off. */
+  onRevoke?: () => void;
+}
 
 export function getAnnotationEditedChannelKey(annotationId: string, editedAt: number): string {
   return `edited:${annotationId}:${editedAt}`;
@@ -180,8 +216,11 @@ function trackPayloadId(event: TandemEvent): boolean {
  * reads "tandem" (409 otherwise) and does so in the same synchronous frame as
  * `emitModeReleaseWake` — no `await` between them — so mode reads `"tandem"`,
  * not indeterminate, at the moment the wake is delivered.
+ *
+ * Exported for the launcher's gap watch (#2181): an `"internal"` subscriber
+ * that must owe a wake for exactly the events an external one would receive.
  */
-function shouldForwardExternally(event: TandemEvent): boolean {
+export function shouldForwardExternally(event: TandemEvent): boolean {
   // Chat is the always-delivered channel in both directions, and it is also the
   // in-process collaborator's wake trigger. Never gate it.
   if (event.type === "chat:message") return true;
@@ -251,11 +290,20 @@ function pushEvent(event: TandemEvent): void {
 
   buffer.push(event);
 
+  // Licence admission (#1521), decided ONCE per event and folded into
+  // `forwardExternally` so every consumer of that binding — payload tracking
+  // (`alreadyPushed`), the unanswered-ask wake clock, and delivery — sees it. A
+  // refused event is never recorded as pushed. It IS still buffered: a consumer
+  // that reconnects after activation replays it (an accepted residual — it is
+  // the user's own chat reaching their now-licensed Claude).
+  const licenceRefused = aiRefusal() !== null;
+
   // Bound ONCE and reused, rather than re-read per site: `pushEvent` is
   // synchronous so two reads cannot currently disagree, but binding it is the
   // difference between correct and correct-by-accident. It sits HERE, above the
   // tracking, because tracking is one of its consumers (#1823 item 7).
-  const forwardExternally = shouldForwardExternally(event);
+  const forwardExternally = !licenceRefused && shouldForwardExternally(event);
+  if (forwardExternally) forwardedEvents.add(event);
 
   // Track only when the fan-out below is non-empty AND this event actually
   // forwards externally. The forward term is #1823 item 7: tracking used to run
@@ -335,6 +383,22 @@ function pushEvent(event: TandemEvent): void {
     recordWakeForward(now);
   }
 
+  // Revoke after a refused event, BEFORE the fan-out and never inside it:
+  // snapshot first, because `unsubscribe` mutates the sets the loop below
+  // iterates. `unsubscribe` (not a raw delete) so `noteExternalConsumersGone`
+  // still fires. A consumer's own cleanup calling `unsubscribe` again from
+  // inside `onRevoke` is a harmless no-op.
+  if (licenceRefused && revokeHooks.size > 0) {
+    for (const [cb, onRevoke] of [...revokeHooks]) {
+      unsubscribe(cb);
+      try {
+        onRevoke();
+      } catch (err) {
+        console.error("[EventQueue] Subscriber revoke hook threw:", err);
+      }
+    }
+  }
+
   for (const cb of subscribers) {
     // In-process subscribers (the local-model collaborator) are NOT gated: they
     // rely on `document:closed` / `document:switched` to abort in-flight runs,
@@ -396,11 +460,16 @@ export function getSubscriberCount(): number {
  *   `"internal"` for an in-process listener that must not count as push reach
  *   and must keep receiving `document:*` in Solo (the local-model collaborator).
  */
-export function subscribe(cb: EventCallback, kind: SubscriberKind): void {
+export function subscribe(
+  cb: EventCallback,
+  kind: SubscriberKind,
+  opts: SubscribeOptions = {},
+): void {
   subscribers.add(cb);
   if (kind !== "external") return;
   const wasEmpty = externalSubscribers.size === 0;
   externalSubscribers.add(cb);
+  if (opts.onRevoke) revokeHooks.set(cb, opts.onRevoke);
   // Symmetric with `unsubscribe`'s detach hook, and required for the same
   // reason: the abandoned latch is otherwise one-directional, so a crash-restart
   // or an SSE reconnect would leave `state: "consumer-detached"` standing beside
@@ -412,6 +481,7 @@ export function subscribe(cb: EventCallback, kind: SubscriberKind): void {
 export function unsubscribe(cb: EventCallback): void {
   subscribers.delete(cb);
   externalSubscribers.delete(cb);
+  revokeHooks.delete(cb);
   // The delivery join's push-half conjunct ("something was attached") is checked
   // at push time and would otherwise never be checked again. A shim whose host
   // exits, or a launcher child that crashes, would leave an outstanding forward
@@ -589,9 +659,11 @@ export function resetForTesting(): void {
   buffer.length = 0;
   subscribers.clear();
   externalSubscribers.clear();
+  revokeHooks.clear();
   emittedPayloadIds.clear();
   // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
   trackedEvents = new WeakSet<TandemEvent>();
+  forwardedEvents = new WeakSet<TandemEvent>();
   selectionBuffer.clear();
 
   for (const cleanups of docObservers.values()) {

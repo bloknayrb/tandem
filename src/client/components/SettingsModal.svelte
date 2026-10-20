@@ -49,6 +49,7 @@ export const SETTINGS_TAB_IDS = {
   network: "network",
   accessibility: "accessibility",
   collaboration: "collaboration",
+  notifications: "notifications",
   claudeCode: "claude-code",
   models: "models",
   shortcuts: "shortcuts",
@@ -89,7 +90,7 @@ import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import { createBugReportUrl } from "../hooks/useBugReportUrl.svelte";
 import { focusablesWithin, trapTab } from "../utils/focus-trap";
 import { activationKeydown } from "../utils/keyboard-activate";
-import { openServerPath } from "../utils/server-paths";
+import { hasOpenableExtension, openServerPath } from "../utils/server-paths";
 import SettingsReadonlyBanner from "./SettingsReadonlyBanner.svelte";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -97,6 +98,7 @@ import EditorSettings from "./EditorSettings.svelte";
 import NetworkSettings from "./NetworkSettings.svelte";
 import SettingsClaudeCodeTab from "./settings-tabs/SettingsClaudeCodeTab.svelte";
 import SettingsCollaborationTab from "./settings-tabs/SettingsCollaborationTab.svelte";
+import SettingsNotificationsTab from "./settings-tabs/SettingsNotificationsTab.svelte";
 import SettingsModelsTab from "./settings-tabs/SettingsModelsTab.svelte";
 import SettingsShortcutsTab from "./settings-tabs/SettingsShortcutsTab.svelte";
 import SettingsLicenseTab from "./settings-tabs/SettingsLicenseTab.svelte";
@@ -145,6 +147,12 @@ export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
     label: "Collaboration",
     icon: "M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM21 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11",
     component: SettingsCollaborationTab,
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0",
+    component: SettingsNotificationsTab,
   },
   {
     id: "claude-code",
@@ -249,6 +257,16 @@ let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
 let replayLoading = $state(false);
 let replayError = $state<string | null>(null);
+let licenseLoading = $state(false);
+let licenseError = $state<string | null>(null);
+// The licence must be displayable on every copy (LICENSE). The desktop bundle
+// ships it as LICENSE.txt so `/api/open` will take it; a dev or npm tree only
+// has the bare LICENSE, which `/api/open` refuses, so no button is offered
+// there rather than one that always fails. The About tab still shows the path.
+const licenseOpenPath = $derived.by(() => {
+  const p = appInfo.info?.licensePath;
+  return p && hasOpenableExtension(p) ? p : undefined;
+});
 // W9: narrow-viewport sidebar drawer. At <860px the sidebar collapses out
 // of the grid into an absolute drawer toggled by the header hamburger.
 // Reset to closed each time the modal opens.
@@ -315,7 +333,7 @@ $effect(() => {
  *     required to blur inert content — same for closing the drawer from a nav
  *     click or Escape;
  *   - narrow → wide flips the hamburger to `display: none`;
- *   - View Changelog / Replay tutorial `disabled` the button that was just
+ *   - View Changelog / View license / Replay tutorial `disabled` the button that was just
  *     activated, and on the error branch the dialog stays open around it;
  *   - a delete-confirm button removes the row it lives in, and
  *     `{#key activeTab.id}` destroys the whole tab body.
@@ -543,10 +561,11 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
-// Clear stale view-changelog / replay-tutorial errors when tab changes.
+// Clear stale view-changelog / view-license / replay-tutorial errors when tab changes.
 $effect(() => {
   activeTabId;
   changelogError = null;
+  licenseError = null;
   replayError = null;
 });
 
@@ -571,6 +590,27 @@ async function handleViewChangelog(): Promise<void> {
   }
 }
 
+async function handleViewLicense(): Promise<void> {
+  const filePath = licenseOpenPath;
+  if (!filePath) {
+    licenseError = "License file not found.";
+    return;
+  }
+  licenseLoading = true;
+  licenseError = null;
+  const result = await openServerPath(filePath, {
+    readOnly: true,
+    notFoundMessage: "License file not found.",
+    failureMessage: "Failed to open the license.",
+  });
+  licenseLoading = false;
+  if (result.ok) {
+    onClose();
+  } else {
+    licenseError = result.error;
+  }
+}
+
 async function handleReplayTutorial(): Promise<void> {
   const filePath = appInfo.info?.welcomePath;
   if (!filePath) {
@@ -580,8 +620,6 @@ async function handleReplayTutorial(): Promise<void> {
   replayLoading = true;
   replayError = null;
   // force:true clears the doc so the server re-injects fresh seed annotations.
-  // (The server license-gates the force sub-path — dark today; a post-v1.0
-  // restricted user would see the gate's error here rather than a silent no-op.)
   const result = await openServerPath(filePath, {
     force: true,
     notFoundMessage: "Welcome document not found.",
@@ -699,6 +737,26 @@ async function handleReplayTutorial(): Promise<void> {
           >
             {changelogError}
           </div>
+        {/if}
+        {#if licenseOpenPath}
+          <button
+            type="button"
+            data-testid="settings-modal-view-license-btn"
+            onclick={() => void handleViewLicense()}
+            disabled={licenseLoading || appInfo.loading}
+            class="settings-modal-sidebar-link"
+          >
+            {licenseLoading ? "Opening…" : "View license"}
+          </button>
+          {#if licenseError}
+            <div
+              role="alert"
+              data-testid="settings-modal-license-error"
+              style="font-size: 11px; color: var(--tandem-error-fg-strong); padding: 0 var(--tandem-space-2);"
+            >
+              {licenseError}
+            </div>
+          {/if}
         {/if}
         <!-- Replay tutorial (WS-E). Shown only when fully wired: the server
              exposes welcomePath (stripped prod builds may lack it — same

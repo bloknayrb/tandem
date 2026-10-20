@@ -8,7 +8,7 @@
  * raw `Y.Doc` — every origin tag, every range invariant and every ADR-027 gate
  * below the seam becomes optional at that point, and nothing else in the suite
  * would say a word: `audit:origins` cannot follow a write reached through a
- * helper, and the license-gate walk is scoped to registration sites.
+ * helper, and the tool-registration walks are scoped to registration sites.
  *
  * **Both surfaces are pinned, because pinning one is defeated for free.**
  * `readonly lifecycle` is public on the store and stays public. Adding

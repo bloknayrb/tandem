@@ -140,8 +140,10 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
   //
   //  - Omit it entirely and a `{updateWindowEnd: null}` tombstone is never
   //    `expired`, so it falls through to the upstream fetch and SERVES THE
-  //    MANIFEST to a refunded customer. The null window is exactly what a
-  //    grandfathered entitlement carries; that is the grandfathering hazard.
+  //    MANIFEST to a refunded customer. The null window is exactly what every
+  //    live entitlement carries (every key includes all future updates since
+  //    2026-10-09, ADR-040 decision A5), so the window cannot tell a refund
+  //    apart; only `status` can.
   //  - Put it AFTER the window comparison and a tombstone whose window has
   //    already passed reports `expired` instead of `revoked` — a mislabel, and
   //    `expired` is deliberately non-alertable, so the operator's own
@@ -151,7 +153,9 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
   //    only omitting the check does.
   if (entry.status === "revoked") return reject("revoked");
 
-  // null updateWindowEnd ⇒ never expires (grandfathered). Otherwise compare epochs.
+  // null updateWindowEnd ⇒ never expires: every issued key since A5, paid or
+  // grandfathered. A dated window survives only on a key hand-signed with
+  // `--expires`; compare epochs for those.
   const expired = entry.updateWindowEnd != null && new Date(entry.updateWindowEnd).getTime() < ts;
   if (expired) return reject("expired");
 

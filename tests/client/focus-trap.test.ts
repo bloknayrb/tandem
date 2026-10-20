@@ -108,7 +108,7 @@ describe("trapTab", () => {
    * The recovery branch — this is the one two of the hand-copies have and the
    * newest had lost.
    *
-   * NOTE ON REACHABILITY: `LicenseWall` binds `onkeydown` to the container, so
+   * NOTE ON REACHABILITY: for a dialog that binds `onkeydown` to the container,
    * a keypress originating outside it never reaches this function and the
    * branch cannot fire there. It is meaningful only for a window/document-level
    * listener, which is how `SettingsModal` and `CoworkAdminDeclinedModal` bind.

@@ -10,39 +10,61 @@
  * Rust side only, and the CLI scrub silently left Tandem's entries (auth token
  * included) wherever Claude Desktop used that root.
  *
- * The relation is EQUALITY. A TS side narrower than Rust leaves entries the
- * installer wrote; a TS side wider than Rust would scan packages the installer
- * never writes into, which is how a foreign package gets handed the scrub.
+ * The relation for the removal prefixes is EQUALITY. A TS side narrower than
+ * Rust leaves entries the installer wrote; a TS side wider than Rust would
+ * scan packages the installer never writes into, which is how a foreign
+ * package gets handed the scrub. The WRITE pattern (`MSIX_PACKAGE_PATTERN`) is
+ * a subset of them (#2144: Bryan decided the wider set is removal-only).
+ *
+ * #2144 added the temp-file sweep both scrubs run: each language matches the
+ * other's temp name, and both take the three registry locks in one order.
  *
  * Reads the Rust source rather than a generated list because nothing generates
- * one; the parse is anchored on the two function bodies so a match elsewhere in
- * the file cannot satisfy it.
+ * one; the parse is anchored on function bodies so a match elsewhere in the
+ * file cannot satisfy it.
  */
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  CLAUDE_PACKAGE_PREFIXES,
   MSIX_PACKAGES_DIR,
   MSIX_SESSIONS_SEGMENTS,
+  PLUGIN_FILES,
   ROAMING_SESSIONS_SEGMENTS,
+  SCRUB_TEMP_PREFIX,
 } from "../../src/cli/uninstall-scrub.js";
+import {
+  CLAUDE_PACKAGE_PREFIXES,
+  MSIX_PACKAGE_PATTERN,
+} from "../../src/server/integrations/apply.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const rustScan = readFileSync(
-  path.join(repoRoot, "src-tauri/src/cowork_workspace_scan.rs"),
-  "utf-8",
-);
+const readRust = (file: string) =>
+  readFileSync(path.join(repoRoot, "src-tauri/src", file), "utf-8");
+const rustScan = readRust("cowork_workspace_scan.rs");
+const rustAtomic = readRust("cowork_atomic_json.rs");
 
 /** The body of a top-level `[pub[(…)]] fn name(...)`, up to its closing column-0 brace. */
-function rustFnBody(name: string): string {
-  const start = rustScan.search(new RegExp(`^(?:pub(?:\\([^)]*\\))? )?fn ${name}\\b`, "m"));
-  expect(start, `fn ${name} not found in cowork_workspace_scan.rs`).toBeGreaterThanOrEqual(0);
-  const end = rustScan.indexOf("\n}", start);
+function rustFnBody(name: string, source = rustScan): string {
+  const start = source.search(new RegExp(`^(?:pub(?:\\([^)]*\\))? )?fn ${name}\\b`, "m"));
+  expect(start, `fn ${name} not found`).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf("\n}", start);
   expect(end).toBeGreaterThan(start);
-  return rustScan.slice(start, end);
+  return source.slice(start, end);
 }
+
+/** A top-level `[pub(crate) ]const NAME…;` item's text, to the `;` ending its
+ *  line (a type like `[&str; 3]` carries one of its own). */
+function rustConst(name: string, source: string): string {
+  const start = source.search(new RegExp(`^(?:pub(?:\\([^)]*\\))? )?const ${name}\\b`, "m"));
+  expect(start, `const ${name} not found`).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(";\n", start);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
+const stringLiterals = (text: string) => [...text.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
 
 function stringArgs(body: string, method: string): string[] {
   return [...body.matchAll(new RegExp(`\\.?${method}\\("([^"]*)"\\)`, "g"))].map((m) => m[1]);
@@ -79,5 +101,39 @@ describe("CLI and desktop Cowork scans agree (#2136)", () => {
   it("join the MSIX root under the same Packages folder", () => {
     // `Packages` is joined in the caller, outside `roots_under`.
     expect(rustFnBody("cowork_roots")).toContain(`.join("${MSIX_PACKAGES_DIR}")`);
+  });
+
+  it("keep every WRITE target inside the removal prefixes (#2144)", () => {
+    // On the pattern itself, not a sample table: anchored, one of the removal
+    // prefixes first, and no alternation that could add a second shape.
+    const source = MSIX_PACKAGE_PATTERN.source;
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(source.startsWith("^")).toBe(true);
+    expect(source.endsWith("$")).toBe(true);
+    expect(source).not.toContain("|");
+    expect(CLAUDE_PACKAGE_PREFIXES.some((p) => source.startsWith(`^${escape(p)}`))).toBe(true);
+  });
+});
+
+describe("the two scrubs sweep each other's temp files (#2144)", () => {
+  it("the CLI matcher assumes the shape the desktop writer generates", () => {
+    // `isOrphanedTempName`'s desktop regex is `.tandem-tmp-` plus three hex
+    // groups; these are the two literals that produce that name.
+    expect(rustFnBody("temp_name", rustAtomic)).toContain(
+      'format!(".tandem-tmp-{}", unique_suffix())',
+    );
+    expect(rustFnBody("unique_suffix", rustAtomic)).toContain('format!("{:x}-{:x}-{:x}"');
+  });
+
+  it("the desktop matcher knows the CLI's temp prefix", () => {
+    expect(stringLiterals(rustConst("CLI_SCRUB_TEMP_PREFIX", rustAtomic))).toEqual([
+      SCRUB_TEMP_PREFIX,
+    ]);
+  });
+
+  it("both sweeps take the three registry locks in one order", () => {
+    // Opposite orders would let two concurrent sweeps each hold one lock and
+    // time out on the other.
+    expect(stringLiterals(rustConst("PLUGIN_FILES", rustAtomic))).toEqual([...PLUGIN_FILES]);
   });
 });

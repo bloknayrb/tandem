@@ -154,7 +154,7 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * rule is now stated over the effect:
    *
    *  - PASSED by `tandem_edit`; by the SUGGESTION arm of the two annotation
-   *    creators — `YDocStore.anchorRange({purpose: "suggestion"})`
+   *    creators — `YDocStore.anchorRange(from, to, "suggestion", …)`
    *    (`tandem_comment` with `suggestedText`) and `local-model/tools.ts`'s
    *    `"replacement"` kind; and, since #1626, by the REPLY seam's
    *    `{kind: "replacement"}` arm (`annotations/lifecycle.ts`'s

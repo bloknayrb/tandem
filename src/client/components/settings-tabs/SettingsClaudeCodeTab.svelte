@@ -18,11 +18,15 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
 } from "../../../shared/launcher/contract";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
+import { licenseStore } from "../../hooks/useLicense.svelte";
 import { disabledControlStyle } from "../../utils/colors";
 import { API_BASE } from "../../utils/fileUpload";
+import { aiOffCopy } from "../../utils/license-ui";
+import "../warning-box.css";
 import { responseErrorMessage } from "../../utils/response-error";
 import PushRoutesInfo from "../PushRoutesInfo.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
+import SettingsTandemClaudeSection from "./SettingsTandemClaudeSection.svelte";
 
 // Map the server's stable `code` field (POST /api/launcher/working-directory,
 // `src/server/launcher/api-routes.ts`) to fixed client strings. We deliberately
@@ -252,6 +256,19 @@ function handleReset() {
 }
 </script>
 
+<!-- #1521: the licence refuses the AI. The tab stays reachable; one line says
+     why nothing here will bring Claude back until a license is in place. -->
+{#if licenseStore.ui.aiNotice !== null}
+  <div
+    data-testid="claude-code-ai-off-hint"
+    class="tandem-warning-box"
+    role="status"
+    style="margin-bottom: var(--tandem-space-3);"
+  >
+    {aiOffCopy(licenseStore.ui.aiNotice).sentence}
+  </div>
+{/if}
+
 {#if showConnectCallout}
   <div
     data-testid="settings-modal-connect-ai-callout"
@@ -408,6 +425,14 @@ function handleReset() {
       </div>
     {/if}
   </div>
+{/if}
+
+<!-- #2195: how Tandem's own Claude starts and how long it runs. Gated like the
+     working directory above: both describe the Claude Code integration's
+     launcher, and with no claude-code entry there is nothing for them to
+     govern. -->
+{#if wdLoaded && hasIntegration}
+  <SettingsTandemClaudeSection />
 {/if}
 
 <!-- #1432: the durable home for the push routes. Before this they existed only

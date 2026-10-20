@@ -162,9 +162,13 @@ once:
 
 ```sh
 TRIPLE=$(rustc -vV | sed -n 's/host: //p')
-mkdir -p src-tauri/binaries dist/{channel,server,client,stdio-bridge}
+mkdir -p src-tauri/binaries dist/{channel,server,client,stdio-bridge,desktop}
+touch dist/desktop/THIRD_PARTY_NOTICES.txt
 touch src-tauri/binaries/{node-sidecar,tandem-reaper}-$TRIPLE{,.exe}
 ```
+
+(`npm run build` also writes `dist/desktop/THIRD_PARTY_NOTICES.txt`, as a placeholder; the desktop
+build replaces it with the full third-party notices.)
 
 On Debian/Ubuntu also install:
 

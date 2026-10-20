@@ -23,7 +23,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Importing the module registers the actions as a top-level side effect.
 // `mountActionExecutor` is the documented seam for binding the dependency bag.
-import { relaunchClaudeCode } from "../../../src/client/actions/builtin.svelte.js";
+import {
+  relaunchClaudeCode,
+  relaunchClaudeHere,
+  startFreshClaudeCode,
+} from "../../../src/client/actions/builtin.svelte.js";
 import { type ActionExecutor, mountActionExecutor } from "../../../src/client/actions/executor.js";
 import { type Action, getActionsMap } from "../../../src/client/actions/registry.svelte.js";
 import { API_BASE } from "../../../src/client/utils/fileUpload.js";
@@ -66,6 +70,8 @@ function installFetchStub(
     available?: boolean;
     rejectCwd?: boolean;
     skillRefresh?: { code: "read-failed" | "write-failed"; message: string };
+    /** The `reason` an unavailable launcher reports. */
+    reason?: string;
   } = {},
 ): ReturnType<typeof vi.fn> {
   const available = opts.available ?? true;
@@ -82,7 +88,7 @@ function installFetchStub(
           })
         : jsonResponse(200, {
             available: false,
-            reason: "stdio-mode",
+            reason: opts.reason ?? "stdio-mode",
             ...(opts.skillRefresh ? { skillRefresh: opts.skillRefresh } : {}),
           });
     }
@@ -151,7 +157,10 @@ beforeEach(() => {
  * the empty state: no tab, hence no derivable cwd. */
 let executor: ActionExecutor | null = null;
 
-function wireDeps(activeDocumentPath: string | null): void {
+function wireDeps(
+  activeDocumentPath: string | null,
+  aiNotice: "unlicensed" | "unverifiable" | null = null,
+): void {
   // Superseding a live executor is a defined operation (HMR and an
   // ErrorBoundary recovery both produce it), so re-binding mid-test is fine.
   executor = mountActionExecutor(
@@ -162,6 +171,7 @@ function wireDeps(activeDocumentPath: string | null): void {
       // #1282: both relaunch entry points must re-probe launcher-derived state.
       // Captured so `relaunchClaudeHere`'s call can be asserted.
       afterLauncherAction,
+      aiNotice: () => aiNotice,
     }),
   );
 }
@@ -248,6 +258,17 @@ describe("launcher-relaunch-here", () => {
     getAction("launcher-relaunch-here").run();
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
     await new Promise((r) => setTimeout(r, 0));
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(false);
+  });
+
+  it("points a user with no Claude Code setup at Connect AI (#2180)", async () => {
+    const fetchSpy = installFetchStub({ available: false, reason: "not-configured" });
+    getAction("launcher-relaunch-here").run();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
+    await vi.waitFor(() =>
+      expect(notify).toHaveBeenCalledWith("info", expect.stringContaining("Use Connect AI")),
+    );
+    expect(notify).not.toHaveBeenCalledWith("warning", expect.stringContaining("Tandem build"));
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(false);
   });
 
@@ -420,7 +441,10 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     notify.mockClear();
     relaunchClaudeCode();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    expect(notify).toHaveBeenCalledWith("info", expect.stringContaining("Already restarting"));
+    expect(notify).toHaveBeenCalledWith(
+      "info",
+      expect.stringContaining("Another Claude action is still running"),
+    );
 
     // Positive control: exactly one relaunch was actually issued, so the notify
     // above is the guard reporting itself — not a second request going through.
@@ -540,5 +564,55 @@ describe("relaunch with a server-rejected cwd", () => {
     const posts = relaunchPosts(fetchSpy);
     expect(posts).toHaveLength(1);
     expect(posts[0]).toEqual({ cwd: "/home/user/project", nonce: TEST_NONCE });
+  });
+});
+
+/**
+ * #1521: while the licence refuses the AI, every launcher action refuses up
+ * front — before `claimLauncher`, the status probe, the nonce and `confirm()`.
+ * The server's 403 is the real guard; this keeps the UI from asking the user
+ * to confirm a restart it cannot do.
+ */
+describe("launcher actions while the AI is off", () => {
+  for (const [name, fn] of [
+    ["relaunchClaudeCode", relaunchClaudeCode],
+    ["relaunchClaudeHere", relaunchClaudeHere],
+    ["startFreshClaudeCode", startFreshClaudeCode],
+  ] as const) {
+    it(`${name} toasts and makes no fetch and no confirm()`, async () => {
+      wireDeps("/home/user/project/notes.md", "unlicensed");
+      const fetchSpy = installFetchStub();
+      fn();
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(globalThis.confirm as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(
+        "warning",
+        expect.stringContaining("AI features are off"),
+      );
+    });
+  }
+
+  it("an unverifiable licence is not told to activate", async () => {
+    wireDeps("/home/user/project/notes.md", "unverifiable");
+    installFetchStub();
+    relaunchClaudeCode();
+    await new Promise((r) => setTimeout(r, 0));
+    const message = String(notify.mock.calls[0]?.[1]);
+    expect(message).toContain("AI features are off");
+    expect(message).not.toMatch(/activate/i);
+  });
+
+  it("the twin: with no notice the relaunch reaches the status probe", async () => {
+    wireDeps("/home/user/project/notes.md", null);
+    const fetchSpy = installFetchStub();
+    relaunchClaudeCode();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
+    // Run it to the POST so nothing is still in flight when the stub is removed.
+    await vi.waitFor(() =>
+      expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(true),
+    );
+    await new Promise((r) => setTimeout(r, 0));
   });
 });

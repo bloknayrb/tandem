@@ -147,9 +147,9 @@ export function createCwdDrift(
   $effect(() => {
     const cwd = getCwd();
     // Subscribe to refresh requests. The launcher's own cwd is not observable
-    // from here — `GET /api/launcher/status` exposes it only to loopback callers
-    // and `useAiReadiness` does not surface it — so a relaunch's effect is picked
-    // up by re-probing, not by keying on the new value. Without this the pill
+    // from here — `useAiReadiness.launcherCwd` surfaces it, but this hook is not
+    // wired to it — so a relaunch's effect is picked up by re-probing, not by
+    // keying on the new value. Without this the pill
     // survives a successful relaunch, naming the folder Claude just moved out of,
     // because the document path never changed.
     //

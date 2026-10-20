@@ -11,9 +11,12 @@
  *
  * Readiness therefore folds in TWO signals:
  *   1. The launcher's `GET /api/launcher/status` — the supervised process.
- *   2. The server's `GET /health` `hasSession` field (loopback-only) — whether
- *      ANY MCP client transport is currently open, supervised or not. This is
- *      the authoritative "an agent is actually connected" signal for clients
+ *   2. The server's `GET /health` `hasSession` and `sessionCount` fields
+ *      (loopback-only). `hasSession` says whether ANY MCP session is in the
+ *      registry, supervised or not, including a client that went away without
+ *      disconnecting; `sessionCount` counts the LIVE ones. Together they are
+ *      the "an agent is actually connected" signal (`sessionLive`: a session
+ *      and a live count, or a session with no count reported) for clients
  *      that perform an MCP `initialize` handshake. MCP `2026-07-28` removed
  *      that handshake and protocol-level sessions, so the field goes silent
  *      about clients on that revision — see #1249 before treating a `false`
@@ -22,7 +25,7 @@
  *      `false` demotes both `state` and `liveIndicator` — as does a sustained
  *      inability to reach the server at all (see the fail-safe note below).
  *
- * An active MCP session means AI works regardless of launcher state, so it
+ * A live MCP session means AI works regardless of launcher state, so it
  * promotes readiness to `ready` and suppresses both the restart CTA and the
  * "no AI is connected" send notice. Without it, a manually-launched session
  * would show "Restart Claude Code" — and clicking it would spawn a SECOND agent
@@ -32,19 +35,25 @@
  * (the green "Synced" dot) and NOT `claudeActive` (Claude's *activity* presence:
  * it flaps to `false` every few seconds when Claude is idle between tool calls,
  * so gating a setup CTA on it would make a working user's chip oscillate).
- * `claudeActive` stays the idle/working animation on the status dot.
+ * `claudeActive` stays the idle/working animation on the status dot — except
+ * beside Tandem's own launched Claude, where the status pill shows only the
+ * supervisor's `busy` (`launcherBusy`), because presence can't be attributed to
+ * the chat's session (#2167).
  *
  * States:
  *   - `booting`      — not yet known (still connecting / first status read
- *                      pending). Render nothing; never flash a CTA on boot.
+ *                      pending, or a launcher stopped as `unlicensed` while
+ *                      the client's licence view still says AI is on — see
+ *                      `staleLicenceStop`). Render nothing; never flash a CTA.
  *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode,
- *                      disabled, or no claude-code integration) AND no active
- *                      MCP session. Prompt setup.
- *   - `stopped`      — configured but not running (`available: true,
- *                      running: false` — crashed/stopped) AND no active MCP
- *                      session. Prompt restart, NOT the setup wizard (the user
- *                      is already set up).
- *   - `ready`        — Claude Code running OR an MCP session is active.
+ *                      disabled, or `not-configured` — no launchable claude-code
+ *                      integration, #2180) AND no live MCP session. Prompt setup.
+ *   - `stopped`      — `available: true, running: false` AND no live MCP
+ *                      session. Prompt restart, NOT the setup wizard — unless
+ *                      the server says a restart is already under way
+ *                      (`restartPending`), when `chip` is null and the pill
+ *                      shows "Restarting Claude…" (`launcherRestarting`).
+ *   - `ready`        — Claude Code running OR an MCP session is live.
  *
  * `chip` folds in Solo-mode suppression: in Solo mode the user has deliberately
  * chosen to work without AI surfacing, so a persistent "Connect AI" nag would
@@ -76,15 +85,17 @@
  * messages, and before it existed they were indistinguishable — see the field's
  * doc on `AiReadiness`.
  */
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
 import {
   isTransientlyUnavailable,
   type LauncherErrorCode,
+  type LauncherStandby,
   type LauncherStatus,
 } from "../../shared/launcher/contract.js";
 import { deliveryStall } from "../status/delivery-stall.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import type { AiNotice } from "../utils/license-ui.js";
 
 /** Loopback `/health` response. `hasSession` and `push` are omitted for
  * non-loopback callers; the client only ever talks to 127.0.0.1 so they are
@@ -92,6 +103,9 @@ import { API_BASE } from "../utils/fileUpload.js";
 interface HealthResponse {
   status?: string;
   hasSession?: boolean;
+  /** Distinct MCP clients in the registry — an upper bound; see
+   *  `countDistinctClients` in `server/mcp/transport-registry.ts`. */
+  sessionCount?: number;
   push?: { subscribers?: number };
   /** The push↔pull join — see `server/events/delivery-state.ts`. */
   delivery?: { state?: string; waitingMs?: number | null };
@@ -121,6 +135,7 @@ type HealthRead =
   | {
       answered: true;
       hasSession: boolean | null;
+      sessionCount: number | null;
       pushAttached: boolean | null;
       /** The join's state string, verbatim. Unknown values pass through as-is
        *  and are simply not matched by `deliveryStall` — an older or newer
@@ -207,8 +222,20 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *   - `restart` — configured but stopped for any other reason, including
  *     `circuit-open` with a healthy CLI, `wake-delivery-failed`, and the rare
  *     `binary-not-found`. Plain restart.
+ *   - `start`   — configured and stopped BY CHOICE (`standby`, #2195): the
+ *     start mode is off, it is waiting for Start, or it stopped while idle.
+ *     Nothing failed, so it is never a restart nag; its action is the Start
+ *     control (`POST /api/launcher/start` with `userInitiated`).
+ *   - `ai-off`  — the AI is refused by the licence (#1521): `aiNotice` is set,
+ *     whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
+ *     Solo is a privacy choice, the licence refusal is a capability fact, and
+ *     every other CTA (connect, restart, start) would be refused by the server
+ *     anyway. Its copy is kind-neutral — see `AI_CTA["ai-off"]`.
  */
-export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
+export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "start" | "ai-off" | null;
+
+/** A chip that is present — what `AI_CTA` is keyed on, and what a remedy is. */
+export type AiRemedy = Exclude<AiChip, null>;
 
 /**
  * Everything a surface needs to render an `AiChip`'s call to action: its copy
@@ -226,6 +253,9 @@ export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
  *
  * With this map a fourth member is a type error at every consumer instead.
  */
+/** Every handler an `AI_CTA` entry can name. Dispatched by `ctaHandler` alone. */
+export type AiCtaAction = "connect" | "restart" | "start" | "open-license-settings";
+
 export const AI_CTA: Record<
   Exclude<AiChip, null>,
   {
@@ -236,7 +266,7 @@ export const AI_CTA: Record<
     ariaLabel: string;
     /** Which handler this CTA must invoke. `setup` resolves to `connect`: the
      * install flow IS the integration wizard, only with different copy. */
-    action: "connect" | "restart";
+    action: AiCtaAction;
   }
 > = {
   connect: {
@@ -269,18 +299,154 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code has stopped. Restart Claude Code.",
     action: "restart",
   },
+  start: {
+    label: "Start Tandem's Claude",
+    title: "Tandem's Claude isn't running. Click to start it.",
+    ariaLabel: "Start Tandem's Claude.",
+    action: "start",
+  },
+  // Kind-neutral (other comments point here): it also serves the unverifiable
+  // licence holder, who most likely already paid (ADR-040 decision 8), so it
+  // never says "unlicensed", "activate" or "trial ended" and carries no URL.
+  // Kind-specific copy comes from `aiOffCopy(readiness.aiNotice)`.
+  "ai-off": {
+    label: "AI off — see license",
+    title: "Tandem's AI features are off. Open Settings → License.",
+    ariaLabel: "AI features are off. Open license settings.",
+    action: "open-license-settings",
+  },
+};
+
+/**
+ * The ONE dispatcher from a CTA's `action` to its handler. A `switch` with a
+ * `never` default, so a new action is a compile error here rather than a binary
+ * ternary at a call site routing it to the wrong handler (#1521).
+ */
+export function ctaHandler(
+  action: AiCtaAction,
+  h: {
+    connect: () => void;
+    restart: () => void;
+    start: () => void;
+    openLicenseSettings: () => void;
+  },
+): () => void {
+  switch (action) {
+    case "connect":
+      return h.connect;
+    case "restart":
+      return h.restart;
+    case "start":
+      return h.start;
+    case "open-license-settings":
+      return h.openLicenseSettings;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
+  }
+}
+
+/** A stopped launcher's CTA — also a tripped Tandem Claude surfaced beside a
+ *  session that is still attached (`launcherFailure`). Never `start`: a
+ *  standby is a choice, not a failure (#2195). */
+export type LauncherFailure = Exclude<AiChip, null | "connect" | "start" | "ai-off">;
+
+/**
+ * The `lastError` → CTA decision for a stopped launcher. ONE function, used by
+ * both `chip` and `launcherFailure`, so the two cannot drift apart (#1268).
+ * See `AiChip` for why `cli-unusable` and not `circuit-open` means "install".
+ */
+function chipForStoppedLauncher(lastError: LauncherErrorCode | undefined): LauncherFailure {
+  if (lastError === "cli-unusable") return "setup";
+  if (lastError === "needs-login") return "sign-in";
+  return "restart";
+}
+
+type RunningLauncherStatus = Extract<LauncherStatus, { running: true }>;
+
+function isRunning(s: LauncherStatus): s is RunningLauncherStatus {
+  return s.available && s.running;
+}
+
+/**
+ * The `lastError` codes that mean Tandem's own Claude has stopped for good.
+ *
+ * A code alone does not say whether Tandem is still retrying: `spawn-failed`
+ * is set both with a restart scheduled and on a permanent stop, and a relaunch
+ * leaves the old code in place until its spawn clears it. The server's
+ * `restartPending` answers that (#2180), so `launcherFailure` also requires it
+ * to be absent; this table only says which codes mean "stopped" once nothing is
+ * retrying.
+ *
+ * `stop-failed` is set only when a reaper survived SIGKILL and was abandoned.
+ * A relaunch's own spawn clears it, so it survives a relaunch only when that
+ * relaunch spawned nothing: its plan found no integration (which reads as
+ * `not-configured`, masking it), or reading or persisting the plan threw. The
+ * abandoned process may still be alive, so "isn't running" can be imprecise
+ * there; Restart is still the right remedy.
+ *
+ * `status-check-failed` is the status ROUTE failing, not the supervisor, so it
+ * is not a stop.
+ *
+ * `unlicensed` (#1521) is false: the licence refusal trips no breaker, and the
+ * supervisor resumes on its own when a licence is activated in the app.
+ *
+ * A `Record` rather than a `Set` so a new server code fails to compile here
+ * until someone decides whether it means "stopped for good".
+ */
+const TRIPPED_FAILURE: Record<LauncherErrorCode, boolean> = {
+  "needs-login": true,
+  "binary-not-found": true,
+  "circuit-open": true,
+  "cli-unusable": true,
+  "wake-delivery-failed": true,
+  "spawn-failed": true,
+  "stop-failed": true,
+  "status-check-failed": false,
+  unlicensed: false,
+};
+
+/**
+ * Copy for the "Tandem's Claude isn't running" button, which renders BESIDE
+ * another attached session — so, unlike `AI_CTA`, every line names Tandem's
+ * own Claude, so the click can't be read as acting on the user's. The action
+ * comes from `AI_CTA[failure].action`, never from a second lookup here.
+ *
+ * `restart` says "isn't running" rather than "stopped" because
+ * `binary-not-found` maps to it and that Claude may never have started.
+ */
+export const TANDEM_CLAUDE_DOWN: Record<LauncherFailure, { label: string; title: string }> = {
+  restart: {
+    label: "Tandem's Claude isn't running",
+    title:
+      "Tandem's background Claude isn't running. Restart it — any Claude you started yourself is unaffected.",
+  },
+  "sign-in": {
+    label: "Tandem's Claude: sign in",
+    title:
+      "Tandem's background Claude isn't signed in. Run “claude” in a terminal to sign in, then click to check again — any Claude you started yourself is unaffected.",
+  },
+  setup: {
+    label: "Tandem's Claude can't start",
+    title:
+      "Tandem can't start its background Claude: the Claude CLI is missing or won't run. Click to set it up — already have it? Run “Relaunch Claude in this folder” from the command palette",
+  },
 };
 
 /**
  * The affirmative "an agent is connected" indicator, or `null` when there's
  * nothing positive to assert (no session, or still booting). Distinct from
- * `chip` (which is the *negative*-state CTA): `chip` and `liveIndicator` are
- * mutually exclusive in practice and MUST stay separate — folding an
+ * `chip` (which is the *negative*-state CTA). They MUST stay separate — folding an
  * affirmative value into `chip` would break the `chip === null` guards that
  * gate the "no AI is connected" send notice (App.svelte) and collide with the
- * titlebar CTA/default-model branches.
- *   - `connected`   — an MCP session is open and mode is Tandem: events flow.
- *   - `solo-paused` — an MCP session is open but mode is Solo: chat still works,
+ * titlebar CTA/default-model branches. They are NOT mutually exclusive: a
+ * leftover-only session (`hasSession` true, live `sessionCount` 0) gives
+ * `connected` beside a non-null `chip`, and the view renders that pair as "AI
+ * not connected" so the label agrees with the CTA (`aiIndicatorView` Rule 3).
+ *   - `connected`   — an MCP session is in the registry and mode is Tandem. It
+ *                     may be a leftover; `sessionCount` says whether one is live.
+ *   - `solo-paused` — a LIVE MCP session and mode is Solo: chat still works,
  *                     but the AI won't see the user's edits/comments (the server
  *                     withholds them — `server/events/queue.ts`
  *                     `isUserPrivacyHeld` + `shouldForwardExternally`).
@@ -302,8 +468,8 @@ export interface AiReadiness {
   /** Last scrubbed error code from supervisor when state is stopped. */
   readonly lastError?: LauncherErrorCode;
   /**
-   * The affirmative connected indicator, keyed on the authoritative MCP-session
-   * signal (`hasSession`) — NOT on `state`, which also reaches `ready` from the
+   * The affirmative connected indicator, keyed on `hasSession` (Solo: on a live
+   * session) — NOT on `state`, which also reaches `ready` from the
    * launcher's `running: true` with no open session (auto-launched desktop
    * startup window), where an "AI connected" badge would be a false green.
    */
@@ -332,6 +498,15 @@ export interface AiReadiness {
    */
   readonly pushDelivery: PushDelivery;
   /**
+   * The launcher found no Claude Code setup to run (#2199): the status's own
+   * `available: false, reason: "not-configured"`, read off the RAW status
+   * rather than `state` — a connected Claude Desktop makes `state` read
+   * "ready" first, and that user is exactly who the chat panel's offer is
+   * for. False off-loopback (the `reason` is redacted there) and while the
+   * server is unreachable.
+   */
+  readonly launcherNotConfigured: boolean;
+  /**
    * Has `/health` gone quiet for a full strike run?
    *
    * The question is about the SERVER, not the AI, and the two were previously
@@ -346,6 +521,94 @@ export interface AiReadiness {
    */
   readonly serverUnreachable: boolean;
   /**
+   * Tandem's own launched Claude is running: launcher status says
+   * `available && running` on the latest answered read, and the server is not
+   * unreachable. Both gates are load-bearing: `pollLauncherStatus` resets its
+   * strikes on ANY HTTP answer and keeps the last `status`, so a squatter on the
+   * port that answers non-OK, or a launcher route erroring while `/health` is
+   * fine, would otherwise pin this (and a stale `busy`) `true` forever.
+   */
+  readonly launcherRunning: boolean;
+  /** Increments each time Tandem's Claude is seen to start running. Lets a
+   *  dismissal of `launcherFailure` expire on the next successful run. */
+  readonly launcherRunEpoch: number;
+  /** The launched Claude's working folder, or `null` when not running or when
+   *  the field is absent (off-loopback, or an older server). */
+  readonly launcherCwd: string | null;
+  /** The launched Claude has a turn in flight — see `SupervisorStatus.busy`.
+   *  A missing field reads `false`, which is how an older server is silent. */
+  readonly launcherBusy: boolean;
+  /** The server matched a live MCP connection to this spawn of Tandem's Claude
+   *  (`LauncherStatus.attached`). `false` means "can't confirm", not "not
+   *  connected": it is only reachable when the child's connection forwards its
+   *  Claude session id. Gated like `launcherRunning`. */
+  readonly launcherAttached: boolean;
+  /** Tandem is already bringing its Claude back — a restart is scheduled, a
+   *  start or relaunch is running, or a killed child's exit is on its way
+   *  (`LauncherStatus.restartPending`, #2180). Drives the "Restarting Claude…"
+   *  view. Gated like `launcherRunning`; `chip` and `launcherFailure` instead
+   *  read the raw retained status, so a failed read mid-restart cannot bring a
+   *  Restart button back. */
+  readonly launcherRestarting: boolean;
+  /**
+   * The restart in progress is a Start from standby (#2195): the user clicked
+   * Start on a Claude that was off, waiting, or idle-stopped, and the server
+   * reports the standby beside `restartPending`. The pill says "Starting
+   * Claude…" then, because "Restarting" claims a Claude that never ran in this
+   * session.
+   */
+  readonly launcherStarting: boolean;
+  /**
+   * Why Tandem's Claude is not running by choice (`LauncherStatus.standby`,
+   * #2195), or `null`. Read off the RAW retained status like `chip`, so one
+   * failed read does not flip a Start control back to a Restart one. A
+   * `lastError` outranks it on the server, so this is never set beside a
+   * failure.
+   */
+  readonly launcherStandby: LauncherStandby | null;
+  /**
+   * The standby began within the last minute — the window in which the
+   * stopped child's own MCP entry can still read as a live session
+   * (`LIVE_RECENT_MS` server-side). The pill lets the standby outrank a live
+   * session only then; after it, a live session is someone else's and shows
+   * as connected.
+   */
+  readonly launcherStandbyRecent: boolean;
+  /**
+   * A chat message sent now would start Tandem's Claude
+   * (`LauncherStatus.startsOnMessage`, #2196): it is in standby, no other AI is
+   * attached and the licence admits it. Raw status, like `launcherStandby`, and
+   * false while the server is unreachable — a send then goes nowhere.
+   */
+  readonly launcherStartsOnMessage: boolean;
+  /**
+   * The remedy for a Tandem's Claude that is not running, UN-gated (#2196):
+   * `chip`'s decision without its Solo and live-session gates, which hide it
+   * whenever any session is live. The chat panel's "couldn't start" row needs
+   * the remedy even then, because it is about Tandem's Claude specifically.
+   * `"ai-off"` whenever the licence refuses the AI, running or not; otherwise
+   * `null` while it runs, while a start or restart is under way, while the
+   * status is unknown or transient, and while a server `unlicensed` waits on
+   * the client's licence re-read (`staleLicenceStop`).
+   */
+  readonly launcherRemedy: AiRemedy | null;
+  /** Tandem's Claude was asked for its one-time greeting and none reached the
+   *  chat (`LauncherStatus.greetingLate`, #2197). Raw status, either arm (a
+   *  dead server clears `status` through the launcher's own floor). Not gated
+   *  on Solo: chat works there. */
+  readonly greetingLate: boolean;
+  /** How many LIVE MCP clients `/health` counts (`isLiveEntry` +
+   *  `countDistinctClients`), or `null` when unknown or unreachable. */
+  readonly sessionCount: number | null;
+  /**
+   * Tandem's Claude has tripped (see `TRIPPED_FAILURE`) while ANOTHER live
+   * session is attached — the case `chip` hides, because a live session
+   * promotes `state` to `ready` (#1054). `null` otherwise, and in Solo.
+   * Deliberately separate from `chip`, which keeps its meaning for EmptyState
+   * and the send path.
+   */
+  readonly launcherFailure: LauncherFailure | null;
+  /**
    * How long the user's last message has gone unanswered, in ms — or `null`
    * when there is nothing sound to say.
    *
@@ -356,8 +619,21 @@ export interface AiReadiness {
    * gap it deliberately cannot cover.
    */
   readonly deliveryStalledMs: number | null;
+  /**
+   * The licence refusal, or null (#1521): the one derived read of
+   * `deps.aiNotice()` that also ranks `chip` first, so it is non-null exactly
+   * when `chip === "ai-off"`. Views
+   * key their AI-off rendering and copy on this value and their CTA on `chip`;
+   * because both come from here, the two cannot disagree. Pass this, never
+   * `licenseStore.ui.aiNotice` beside it.
+   */
+  readonly aiNotice: AiNotice | null;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
+  /** Re-poll launcher status alone. For the post-send `busy` read: it leaves
+   *  `/health` out so a user-triggered read never counts toward its strike run
+   *  (see `readHasSession`'s `fromPoll`). */
+  refreshLauncherStatus: () => void;
   /**
    * Fresh, awaitable MCP-session check for moment-of-send decisions (#1083).
    *
@@ -367,8 +643,10 @@ export interface AiReadiness {
    * live. Callers about to alarm on `chip !== null` should confirm with this
    * probe first.
    *
-   * `sessionLive` is `true` only when a fresh `/health` read confirms an open
-   * MCP transport. On fetch failure or a redacted body (no `hasSession` field)
+   * `sessionLive` is `true` only when a fresh `/health` read confirms a LIVE
+   * MCP session (`sessionCount > 0`, or `hasSession` when no count is
+   * reported) — a leftover from a client that went away does not count. On
+   * fetch failure or a redacted body (no `hasSession` field)
    * it falls back to the last-known polled value — mirroring the poll's "keep
    * prior value on a blip" fail-safe in both directions.
    *
@@ -385,11 +663,24 @@ export interface AiReadiness {
 }
 
 const POLL_MS = 8_000;
+/** Mirrors the server's `LIVE_RECENT_MS` (transport-registry.ts): how long a
+ * stopped client's MCP entry can still count as live. */
+const STANDBY_LEFTOVER_MS = 60_000;
 
 export function createAiReadiness(deps: {
   connected: () => boolean;
   firstRunSettled: () => boolean;
   soloMode: () => boolean;
+  /** The licence refusal, or null (#1521). Null on every dark build. */
+  aiNotice: () => AiNotice | null;
+  /**
+   * Re-read the licence now (#1521). Called when the launcher reports the
+   * server stopped Tandem's Claude as `unlicensed` while `aiNotice` is still
+   * null: at trial expiry the server knows before the client's licence poll
+   * does (up to 60 s later). Required, so no caller can leave that window open.
+   * The pill waits only until the returned promise settles.
+   */
+  refreshLicence: () => Promise<unknown> | void;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
   // Whether an MCP client transport is currently open (from `/health`). An
@@ -398,6 +689,15 @@ export function createAiReadiness(deps: {
   // Whether `/health` reported any SSE consumer. `null` = not yet known or
   // redacted, which is NOT the same as "none".
   let pushAttached = $state<boolean | null>(null);
+  // `/health`'s `sessionCount`; `null` = unknown (not yet read, redacted, or
+  // the server is unreachable).
+  let sessionCount = $state<number | null>(null);
+  // An AI session that is still THERE: `/health` saw a session and counts at
+  // least one live one. `hasSession` alone includes a client that went away
+  // without disconnecting, for up to ~35 min. A `null` count (not reported,
+  // e.g. a redacted or stubbed body) falls back to `hasSession` rather than
+  // demoting on the strength of a missing field.
+  const sessionLive = $derived(mcpSessionActive && sessionCount !== 0);
   // Has `/health` gone quiet for a full strike run — i.e. is the SERVER gone,
   // as distinct from an AI not being attached to a server that is fine? The
   // send path needs the difference: with the server down, a chat message is
@@ -419,6 +719,20 @@ export function createAiReadiness(deps: {
   // PROMOTES to ready (never demotes), so a missing first `/health` read can't
   // surface a false CTA.
   let settledOnce = $state(false);
+  // Did the LAST launcher read that the server answered carry a valid body?
+  // Gates `runningStatus` only; the CTA path keeps the prior status as before.
+  let launcherFresh = $state(false);
+  // Counts each observed start of Tandem's Claude (not-running → running), so
+  // a dismissal of its failure button lasts only until it next runs.
+  let launcherRunEpoch = $state(0);
+  // When the current standby was first seen, for `launcherStandbyRecent`.
+  // Kept by the poll, because it depends on the read history.
+  let standbySince = $state<number | null>(null);
+  // The licence refusal, read ONCE. `chip`, `launcherFailure`, the `aiNotice`
+  // getter and every other licence-keyed reader below key on this one value
+  // with one test (`!== null`), so "`aiNotice` non-null exactly when `chip` is
+  // `ai-off`" holds by construction rather than by each reader agreeing.
+  const notice = $derived(deps.aiNotice());
 
   // Drop stale async resolves for LAUNCHER reads (a poll that resolves after
   // the component is gone, or after a newer poll superseded it). Mirrors
@@ -481,20 +795,37 @@ export function createAiReadiness(deps: {
     }
     launcherStrikes.record(true);
     if (mine !== gen) return;
-    if (!res.ok) return; // real server error (e.g. 503 deferred) — keep prior status
+    // A non-OK, malformed or invalid answer keeps the prior `status` for the
+    // CTA (see above), but it is NOT a fresh sighting of a running launcher:
+    // `runningStatus` stops vouching for it, so a stale `busy: true` cannot keep
+    // "Tandem's Claude is working…" on screen while the route errors.
+    if (!res.ok) {
+      launcherFresh = false; // real server error (e.g. 503 deferred) — keep prior status
+      return;
+    }
     let body: unknown;
     try {
       body = await res.json();
     } catch {
-      return; // malformed body — keep prior status
+      launcherFresh = false; // malformed body — keep prior status
+      return;
     }
     // Validate before trusting. An unchecked cast here is not cosmetic: any
     // parseable non-`LauncherStatus` body — `{}` from a port squatter, an error
     // envelope — makes `available === false` and `running === true` both false,
     // which lands on `state === "stopped"` with no `lastError`, which renders a
     // working "Restart Claude Code" button derived from a body nobody checked.
-    if (typeof (body as LauncherStatus | null)?.available !== "boolean") return;
-    status = body as LauncherStatus;
+    if (typeof (body as LauncherStatus | null)?.available !== "boolean") {
+      launcherFresh = false;
+      return;
+    }
+    const next = body as LauncherStatus;
+    if (isRunning(next) && !(status !== null && isRunning(status))) launcherRunEpoch++;
+    const nextStandby = next.available && !next.running ? next.standby : undefined;
+    if (nextStandby === undefined) standbySince = null;
+    else if (standbySince === null) standbySince = Date.now();
+    status = next;
+    launcherFresh = true;
     settledOnce = true;
   }
 
@@ -563,6 +894,12 @@ export function createAiReadiness(deps: {
     return {
       answered: true,
       hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
+      sessionCount:
+        typeof body.sessionCount === "number" &&
+        Number.isInteger(body.sessionCount) &&
+        body.sessionCount >= 0
+          ? body.sessionCount
+          : null,
       pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
       deliveryState: typeof body.delivery?.state === "string" ? body.delivery.state : null,
       deliveryWaitingMs:
@@ -581,7 +918,7 @@ export function createAiReadiness(deps: {
    *  the same thing — `hasSession: null` alone cannot tell them apart. */
   async function readHasSession(
     fromPoll: boolean,
-  ): Promise<{ answered: boolean; hasSession: boolean | null }> {
+  ): Promise<{ answered: boolean; hasSession: boolean | null; sessionCount: number | null }> {
     const mine = ++healthSeq;
     const fresh = await fetchHealth();
 
@@ -622,6 +959,7 @@ export function createAiReadiness(deps: {
     const out = {
       answered: fresh.answered,
       hasSession: fresh.answered ? fresh.hasSession : null,
+      sessionCount: fresh.answered ? fresh.sessionCount : null,
     };
     if (mine !== healthSeq || destroyed) return out;
 
@@ -638,9 +976,13 @@ export function createAiReadiness(deps: {
       // outliving its evidence" failure this whole surface exists to remove.
       deliveryState = fresh.deliveryState;
       deliveryWaitingMs = fresh.deliveryWaitingMs;
+      // Unconditional for the same reason: a count the server no longer
+      // vouches for must not stay on the pill.
+      sessionCount = fresh.sessionCount;
     } else if (runIsLongEnough) {
       serverUnreachable = true;
       mcpSessionActive = false;
+      sessionCount = null;
       // NOT `false`. A server we cannot reach tells us nothing about how many
       // consumers are attached to it, and `pushAttached === false` is a load-
       // bearing claim: it is the confirmed zero that drives the "nothing is
@@ -668,7 +1010,11 @@ export function createAiReadiness(deps: {
    *  saying which of the two happened. */
   async function probeSession(): Promise<{ answered: boolean; sessionLive: boolean }> {
     const fresh = await readHasSession(false);
-    return { answered: fresh.answered, sessionLive: fresh.hasSession ?? mcpSessionActive };
+    // Same rule as `sessionLive`, applied to this read: a session that is only
+    // a leftover is not one the send path may call connected.
+    const live =
+      fresh.hasSession === null ? sessionLive : fresh.hasSession && fresh.sessionCount !== 0;
+    return { answered: fresh.answered, sessionLive: live };
   }
 
   function poll(): void {
@@ -679,10 +1025,92 @@ export function createAiReadiness(deps: {
 
   poll();
   const interval = setInterval(() => poll(), POLL_MS);
+
+  // When the licence refusal clears, read the launcher at once. The server has
+  // already respawned Tandem's Claude by then, but the retained `status` still
+  // carries `lastError: "unlicensed"`, which `chip` maps to Restart the moment
+  // the refusal stops outranking it — and a click on that relaunches over the
+  // fresh child. Keyed on the transition itself, so it covers every way the
+  // refusal clears: the Settings activate form and a CLI `tandem activate`
+  // picked up by the licence poll alike. `prev` is a plain `let`, not `$state`:
+  // as `$state` this effect would re-trigger on its own write. The follow-up
+  // reads at 2s and 5s mirror `refreshAiReadinessAfterLauncherAction`: the
+  // respawned child is usually still starting at the first read, and without
+  // them the pill waits for the next 8s poll to show it running. Every
+  // transition, either way, cancels follow-ups still pending from an earlier
+  // clearing: a refusal that returns within 5s must not leave them firing, and
+  // a second clearing must not stack a second pair on the first.
+  let prevAiOff: boolean | null = null;
+  const followUps: ReturnType<typeof setTimeout>[] = [];
+  const readLauncher = () => {
+    if (!destroyed) void pollLauncherStatus(++gen);
+  };
+  $effect(() => {
+    const aiOff = notice !== null;
+    const changed = prevAiOff !== null && aiOff !== prevAiOff;
+    const cleared = prevAiOff === true && !aiOff;
+    prevAiOff = aiOff;
+    if (!changed) return;
+    for (const t of followUps) clearTimeout(t);
+    followUps.length = 0;
+    if (!cleared) return;
+    untrack(readLauncher);
+    followUps.push(setTimeout(readLauncher, 2_000), setTimeout(readLauncher, 5_000));
+  });
   onDestroy(() => {
     gen++;
     destroyed = true;
     clearInterval(interval);
+    for (const t of followUps) clearTimeout(t);
+  });
+
+  // The server has stopped Tandem's Claude for want of a licence, but the
+  // client's licence view does not say so yet (`aiNotice` null): at trial
+  // expiry the licence poll can lag the server by up to 60 s. The launcher read
+  // is then ahead of the licence, so neither half is the truth on its own.
+  // `state` reads it as "we do not know yet" (booting), which keeps the
+  // Restart chip off — a click on it would only be refused — and keeps the
+  // pill from saying "unlicensed" with no kind to explain it, which an
+  // unverifiable licence holder must never see. `launcherFailure` already
+  // ignores `unlicensed` (`TRIPPED_FAILURE`).
+  //
+  // The wait is bounded by that one re-read, never by the sighting. The server
+  // can keep reporting `unlicensed` after the licence is valid — a CLI
+  // `tandem activate` never reaches the route that resumes the launcher, nor
+  // does a licence file that starts verifying, nor an activation after a user
+  // Stop — and a "booting" held for the whole sighting would then hide the
+  // pill, and the Restart that now succeeds, until the server restarts. So once
+  // the re-read settles with `aiNotice` still null, the client's licence view
+  // is the answer and `state` falls through to the ordinary stopped mapping.
+  const staleLicenceStop = $derived(
+    status !== null &&
+      status.available &&
+      !status.running &&
+      status.lastError === "unlicensed" &&
+      notice === null,
+  );
+  let licenceRereadPending = $state(false);
+  let sighting = 0;
+  // ...and ask the licence store to catch up, once per sighting: a `$derived`
+  // boolean re-runs this only when it CHANGES, so an 8 s poll repeating the
+  // same answer calls nothing; a different `lastError`, or `aiNotice` turning
+  // non-null, ends the sighting and the next one calls again. This effect
+  // writes `licenceRereadPending` but never reads it.
+  $effect(() => {
+    const mine = ++sighting;
+    if (!staleLicenceStop) {
+      licenceRereadPending = false;
+      return;
+    }
+    licenceRereadPending = true;
+    untrack(() => {
+      void Promise.resolve()
+        .then(() => deps.refreshLicence())
+        .catch(() => {})
+        .finally(() => {
+          if (mine === sighting && !destroyed) licenceRereadPending = false;
+        });
+    });
   });
 
   const state = $derived.by((): AiReadinessState => {
@@ -699,7 +1127,8 @@ export function createAiReadiness(deps: {
     }
     // An active MCP session means an agent is connected and AI works, whether
     // or not the launcher spawned it. Promote to ready and skip the CTA.
-    if (mcpSessionActive) return "ready";
+    if (sessionLive) return "ready";
+    if (staleLicenceStop && licenceRereadPending) return "booting";
     if (status.available === false) {
       // Autostart deferral (#1236): the app was launched by the OS at login and
       // deliberately held the Claude launcher back. Nothing is misconfigured —
@@ -725,24 +1154,98 @@ export function createAiReadiness(deps: {
   const lastError = $derived<LauncherErrorCode | undefined>(
     status !== null && status.available && !status.running ? status.lastError : undefined,
   );
+  // Off the RAW retained status, not the fresh-gated view flag below: a single
+  // failed read during a restart keeps the last status but clears
+  // `launcherFresh`, and keying the chip on the gated flag would put a Restart
+  // button back mid-restart — one that relaunches over the automatic retry.
+  const restartPending = $derived(
+    status !== null && status.available && !status.running && status.restartPending === true,
+  );
+  // Raw retained status, same reason as `restartPending`.
+  const launcherStandby = $derived<LauncherStandby | null>(
+    status !== null && status.available && !status.running ? (status.standby ?? null) : null,
+  );
+  // Re-read on every poll (the poll reassigns `status`), so it lapses within
+  // one poll of the window closing.
+  const launcherStandbyRecent = $derived(
+    status !== null && standbySince !== null && Date.now() - standbySince < STANDBY_LEFTOVER_MS,
+  );
+  const greetingLate = $derived(
+    status !== null && status.available && status.greetingLate === true,
+  );
+  const launcherNotConfigured = $derived(
+    status !== null &&
+      status.available === false &&
+      status.reason === "not-configured" &&
+      !serverUnreachable,
+  );
+  const launcherStartsOnMessage = $derived(
+    status !== null &&
+      status.available &&
+      !status.running &&
+      status.startsOnMessage === true &&
+      !serverUnreachable,
+  );
 
-  // `chip` is the ONE place the `lastError` → CTA decision is made (see the
-  // `AiChip` doc comment for why `cli-unusable` — a server-side probe taken at
-  // breaker-trip time — is the branch that means "go install Claude Code", and
-  // why `circuit-open` on its own does not). Views must render off this value
-  // alone, not re-derive their own copy of this ternary.
+  // `launcherRemedy` is the ONE place the `lastError` → CTA decision is made
+  // (see the `AiChip` doc comment for why `cli-unusable` — a server-side probe
+  // taken at breaker-trip time — is the branch that means "go install Claude
+  // Code", and why `circuit-open` on its own does not). `chip` is that remedy
+  // behind the Solo and state gates. Views must render off these values alone,
+  // not re-derive their own copy of this ternary. The licence refusal (#1521)
+  // outranks both, and Solo with them.
+  const launcherRemedy = $derived<AiRemedy | null>(
+    notice !== null
+      ? "ai-off"
+      : status === null || (staleLicenceStop && licenceRereadPending)
+        ? null
+        : !status.available
+          ? isTransientlyUnavailable(status.reason)
+            ? null
+            : "connect"
+          : status.running || restartPending
+            ? null
+            : launcherStandby !== null
+              ? "start"
+              : chipForStoppedLauncher(lastError),
+  );
+  // `state` is `unconfigured` or `stopped` only off a settled, non-transient
+  // status with no live session, so the remedy is exactly the chip there.
   const chip = $derived<AiChip>(
-    deps.soloMode()
-      ? null
-      : state === "unconfigured"
-        ? "connect"
-        : state === "stopped"
-          ? lastError === "cli-unusable"
-            ? "setup"
-            : lastError === "needs-login"
-              ? "sign-in"
-              : "restart"
-          : null,
+    notice !== null
+      ? "ai-off"
+      : deps.soloMode() || (state !== "unconfigured" && state !== "stopped")
+        ? null
+        : launcherRemedy,
+  );
+
+  // The running arm of `status`, or null. One gate, narrowed once, so the three
+  // getters below cannot drift apart. `serverUnreachable` is load-bearing — see
+  // `AiReadiness.launcherRunning`.
+  const runningStatus = $derived(
+    status !== null && isRunning(status) && launcherFresh && !serverUnreachable ? status : null,
+  );
+  const launcherRunning = $derived(runningStatus !== null);
+  // `?? null` is load-bearing: the contract types `cwd` as required, but the
+  // off-loopback body and older servers omit it.
+  const launcherCwd = $derived(runningStatus?.cwd ?? null);
+  const launcherBusy = $derived(runningStatus?.busy === true);
+  // Off `runningStatus`, never `status`: `status` keeps a stale running body
+  // for the CTA after a failed read, and a stale `attached: true` is a false
+  // green.
+  const launcherAttached = $derived(runningStatus?.attached === true);
+  const launcherRestarting = $derived(restartPending && launcherFresh && !serverUnreachable);
+  // Suppressed while the AI is refused: the chip already says why, and the
+  // launcher cannot be restarted until the licence returns.
+  const launcherFailure = $derived<LauncherFailure | null>(
+    notice === null &&
+      !deps.soloMode() &&
+      sessionLive &&
+      !restartPending &&
+      lastError !== undefined &&
+      TRIPPED_FAILURE[lastError]
+      ? chipForStoppedLauncher(lastError)
+      : null,
   );
 
   // The affirmative indicator keys on `mcpSessionActive` (an open MCP transport,
@@ -752,8 +1255,13 @@ export function createAiReadiness(deps: {
   // connected. When no session is open there is nothing affirmative to say
   // (`null`); Solo-with-no-session is still `null` — "AI won't see your edits"
   // only makes sense once an AI is actually connected.
+  //
+  // "connected" keys on ANY session so the pill can still show a leftover one
+  // (hollow, with copy saying it may have closed — the view reads
+  // `sessionCount`). Solo keys on a LIVE one: its pill exists only to say an AI
+  // is attached but held, which a leftover is not.
   const liveIndicator = $derived<AiLiveIndicator>(
-    !mcpSessionActive ? null : deps.soloMode() ? "solo-paused" : "connected",
+    !mcpSessionActive ? null : deps.soloMode() ? (sessionLive ? "solo-paused" : null) : "connected",
   );
 
   // Deliberately NOT folded into `liveIndicator` or `state`. Push delivery is
@@ -781,8 +1289,55 @@ export function createAiReadiness(deps: {
     get pushDelivery() {
       return pushDelivery;
     },
+    get launcherNotConfigured() {
+      return launcherNotConfigured;
+    },
     get serverUnreachable() {
       return serverUnreachable;
+    },
+    get launcherRunning() {
+      return launcherRunning;
+    },
+    get launcherRunEpoch() {
+      return launcherRunEpoch;
+    },
+    get launcherCwd() {
+      return launcherCwd;
+    },
+    get launcherBusy() {
+      return launcherBusy;
+    },
+    get launcherAttached() {
+      return launcherAttached;
+    },
+    get launcherRestarting() {
+      return launcherRestarting;
+    },
+    get launcherStarting() {
+      // The server keeps `standby` beside `restartPending` while a Start from
+      // standby runs, so this is a reading of the status, not of its history.
+      return launcherRestarting && launcherStandby !== null;
+    },
+    get launcherStandby() {
+      return launcherStandby;
+    },
+    get launcherStandbyRecent() {
+      return launcherStandbyRecent;
+    },
+    get launcherStartsOnMessage() {
+      return launcherStartsOnMessage;
+    },
+    get launcherRemedy() {
+      return launcherRemedy;
+    },
+    get greetingLate() {
+      return greetingLate;
+    },
+    get sessionCount() {
+      return sessionCount;
+    },
+    get launcherFailure() {
+      return launcherFailure;
     },
     // A getter over raw `$state` rather than a `$derived`, matching
     // `serverUnreachable` directly above and `yjsSync.connected`. Reactivity in
@@ -795,10 +1350,15 @@ export function createAiReadiness(deps: {
         state: deliveryState,
         waitingMs: deliveryWaitingMs,
         soloMode: deps.soloMode(),
+        aiOff: notice !== null,
         serverUnreachable,
       });
     },
+    get aiNotice() {
+      return notice;
+    },
     refresh: () => poll(),
+    refreshLauncherStatus: () => void pollLauncherStatus(++gen),
     probeSession,
   };
 }

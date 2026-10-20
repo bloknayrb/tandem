@@ -303,6 +303,10 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
     issue: 2037,
     why: "fixed on fix/security-applychanges-doc-swap-and-sentry-scrubbing-2037; register entry retained for the mechanism",
   },
+  {
+    issue: 2144,
+    why: "FIXED for planted reparse points, NARROWED for the swap race and not counted (Bryan, 2026-10-06)",
+  },
 ];
 
 /**

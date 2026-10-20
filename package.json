@@ -29,6 +29,8 @@
   "files": [
     "dist/",
     "!dist/perf-client",
+    "!dist/.third-party",
+    "!dist/desktop",
     "sample/",
     "CHANGELOG.md",
     ".claude-plugin/",
@@ -43,7 +45,7 @@
     "dev:standalone": "node scripts/dev-standalone.mjs",
     "dev:client": "vite",
     "dev:server": "tsx watch src/server/index.ts",
-    "build": "npm run typecheck && node scripts/build-client.mjs && node scripts/check-font-assets.mjs && tsup",
+    "build": "npm run typecheck && node scripts/build-client.mjs && node scripts/check-font-assets.mjs && tsup && node scripts/third-party-notices/generate.mjs npm",
     "build:server": "tsup",
     "check:fonts": "node scripts/check-font-assets.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --fail-on-warnings",

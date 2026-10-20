@@ -12,9 +12,9 @@
  * Security: adds NO new HTTP surface. `runDoctor()` is a side-effect-free
  * collector; the MCP transport is already loopback-gated, the same posture
  * that lets `/api/diagnostics` return the full report (paths/PIDs/config URLs)
- * loopback-only. Read-only, so it is deliberately NOT wrapped in `gatedTool()`
- * — diagnostics must stay available even when the license gate is restricted
- * (the read-only escape hatch).
+ * loopback-only. Like every MCP tool it is unreachable while Tandem is
+ * unlicensed, because the `/mcp` transport itself refuses (#1521); `tandem
+ * doctor` and `/api/diagnostics` stay available regardless.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

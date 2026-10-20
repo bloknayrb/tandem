@@ -20,6 +20,8 @@ import {
   API_BACKUPS_RESTORE,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
+  API_LAUNCHER_SETTINGS,
+  API_LAUNCHER_START,
   API_LAUNCHER_START_FRESH,
   API_LAUNCHER_STATUS,
   API_SAVE,
@@ -27,16 +29,34 @@ import {
 } from "../../shared/api-paths.js";
 import {
   isTransientlyUnavailable,
+  LAUNCHER_ERROR_IN_PROGRESS,
+  LAUNCHER_ERROR_OFF_NOT_SAVED,
   LAUNCHER_ERROR_PATH_REJECTED,
+  type LauncherSettings,
+  type LauncherSettingsPatch,
   type LauncherStatus,
+  parseLauncherSettings,
 } from "../../shared/launcher/contract.js";
 import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDismiss.svelte.js";
 import { logClientWarning } from "../utils/client-log.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import { AI_OFF_TITLE, aiOffCopy } from "../utils/license-ui.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
 import { type ActionDeps, notifyUser, runBoundAction } from "./executor.js";
 import { type Action, registerActions } from "./registry.svelte.js";
+
+/**
+ * Refuse a launcher action while the licence refuses the AI (#1521). Runs
+ * BEFORE `claimLauncher`, so a refusal neither claims the launcher nor asks the
+ * user to confirm a restart that the server would refuse anyway.
+ */
+function refusedByLicence(d: ActionDeps, verb: "restarted" | "started" = "restarted"): boolean {
+  const kind = d.aiNotice();
+  if (kind === null) return false;
+  d.notify("warning", `${AI_OFF_TITLE}, so Claude can't be ${verb}. ${aiOffCopy(kind).remedy}`);
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Save — mirrors useSaveShortcut.svelte.ts logic
@@ -617,7 +637,7 @@ type FetchResult<T> =
   | { ok: true; value: T }
   | { ok: false; kind: "not-built" | "network" | "server-error"; detail?: string };
 
-async function fetchLauncherStatus(): Promise<FetchResult<LauncherStatus>> {
+export async function fetchLauncherStatus(): Promise<FetchResult<LauncherStatus>> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
@@ -759,11 +779,51 @@ async function postLauncherMutation(
  */
 function claimLauncher(d: ActionDeps): boolean {
   if (launcherInflight) {
-    d.notify("info", "Already restarting Claude — hang on.");
+    d.notify("info", "Another Claude action is still running — hang on.");
     return false;
   }
   launcherInflight = true;
   return true;
+}
+
+/**
+ * Run one launcher action under the claim, and re-probe after it. `body`
+ * resolves to whether it attempted a mutation: an unavailable launcher or a
+ * cancelled confirm attempted nothing, so nothing is re-probed. One helper for
+ * every launcher action (relaunch, start fresh, Start, Turn off), so the
+ * claim release and the re-probe ordering — each with history — live once.
+ */
+async function withLauncherClaim(d: ActionDeps, body: () => Promise<boolean>): Promise<void> {
+  if (!claimLauncher(d)) return;
+  let attempted = false;
+  try {
+    attempted = await body();
+  } finally {
+    launcherInflight = false;
+    // Re-probe from HERE, not from the click. The callers used to fire this
+    // synchronously alongside `void relaunchHere(...)`, which runs the instant
+    // this function suspends at its first `await` — i.e. BEFORE the blocking
+    // `confirm()`, whose four lines a user may spend ten seconds reading while
+    // the staggered +2s/+5s refresh timers advance on wall clock. Both would
+    // then fire before the POST completed, answer with the pre-relaunch cwd, and
+    // leave the drift pill asserting Claude is in a folder it has already left —
+    // with nothing to re-arm it, since the drift effect keys only on document
+    // path and epoch.
+    //
+    // Gated on `attempted` so a cancelled confirm or an unavailable launcher
+    // probes nothing, and WRAPPED because a throw from a `finally` REPLACES the
+    // exception that was propagating: after teardown this facade member throws
+    // `ExecutorDisposedError`, which would discard whatever real error was on
+    // its way to the funnel and misreport the dropped member as this one rather
+    // than the first actually touched. The executor reports that drop itself.
+    if (attempted) {
+      try {
+        d.afterLauncherAction();
+      } catch {
+        // Reported by the executor's facade; see above.
+      }
+    }
+  }
 }
 
 /** Availability probe. Returns true when the caller should proceed, false when
@@ -803,6 +863,12 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
       d.notify("info", "Claude is starting up — try again in a moment.");
       return false;
     }
+    // #2180: the launcher IS present; there is just no Claude Code setup for
+    // it to start, so point at the fix rather than at the build.
+    if (status.reason === "not-configured") {
+      d.notify("info", "Claude Code isn't set up in Tandem yet. Use Connect AI to set it up.");
+      return false;
+    }
     d.notify("warning", "Claude launcher not active in this Tandem build.");
     return false;
   }
@@ -824,38 +890,12 @@ async function relaunchHere(
   d: ActionDeps,
   { cwdRequired }: { cwdRequired: boolean },
 ): Promise<void> {
-  if (!claimLauncher(d)) return;
-  let attempted = false;
-  try {
-    if (!(await checkLauncherAvailable(d))) return;
+  if (refusedByLicence(d)) return;
+  await withLauncherClaim(d, async () => {
+    if (!(await checkLauncherAvailable(d))) return false;
     await relaunchConfirmed(d, { cwdRequired });
-    attempted = true;
-  } finally {
-    launcherInflight = false;
-    // Re-probe from HERE, not from the click. The callers used to fire this
-    // synchronously alongside `void relaunchHere(...)`, which runs the instant
-    // this function suspends at its first `await` — i.e. BEFORE the blocking
-    // `confirm()`, whose four lines a user may spend ten seconds reading while
-    // the staggered +2s/+5s refresh timers advance on wall clock. Both would
-    // then fire before the POST completed, answer with the pre-relaunch cwd, and
-    // leave the drift pill asserting Claude is in a folder it has already left —
-    // with nothing to re-arm it, since the drift effect keys only on document
-    // path and epoch.
-    //
-    // Gated on `attempted` so a cancelled confirm or an unavailable launcher
-    // probes nothing, and WRAPPED because a throw from a `finally` REPLACES the
-    // exception that was propagating: after teardown this facade member throws
-    // `ExecutorDisposedError`, which would discard whatever real error was on
-    // its way to the funnel and misreport the dropped member as this one rather
-    // than the first actually touched. The executor reports that drop itself.
-    if (attempted) {
-      try {
-        d.afterLauncherAction();
-      } catch {
-        // Reported by the executor's facade; see above.
-      }
-    }
-  }
+    return true;
+  });
 }
 
 /** The half of `relaunchHere` that runs once the launcher is claimed and known
@@ -969,16 +1009,12 @@ export function startFreshClaudeCode(): void {
 }
 
 async function startFreshConversation(d: ActionDeps): Promise<void> {
-  // Claimed synchronously, ahead of every `await` — same window as
-  // `relaunchHere`'s, and the same two SIGTERMs if it is claimed any later.
-  if (!claimLauncher(d)) return;
-  let attempted = false;
-  try {
-    if (!(await checkLauncherAvailable(d))) return;
+  if (refusedByLicence(d)) return;
+  await withLauncherClaim(d, async () => {
+    if (!(await checkLauncherAvailable(d))) return false;
     if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
-      return;
+      return false;
     }
-    attempted = true;
     await postLauncherMutation(
       d,
       API_LAUNCHER_START_FRESH,
@@ -989,19 +1025,113 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
         successMessage: "Claude restarting with a fresh conversation.",
       },
     );
+    return true;
+  });
+}
+
+/**
+ * The Start control (#2195): start Tandem's Claude from standby (off, waiting
+ * for Start, or stopped while idle). Resumes its conversation. From `off` the
+ * server also saves the start mode as `on-click` (Bryan, 2026-10-13).
+ */
+export function startTandemClaude(): void {
+  runBoundAction("launcher-start", (d) =>
+    refusedByLicence(d, "started")
+      ? Promise.resolve()
+      : withLauncherClaim(d, async () => {
+          if (!(await checkLauncherAvailable(d))) return false;
+          await postLauncherMutation(
+            d,
+            API_LAUNCHER_START,
+            { userInitiated: true },
+            {
+              failPrefix: "Couldn't start Tandem's Claude",
+              requestFailPrefix: "Start request failed",
+              successMessage: "Starting Tandem's Claude.",
+            },
+          );
+          return true;
+        }),
+  );
+}
+
+/** An Off that stopped Claude but could not be saved (#2195). Fixed copy,
+ * shared with Settings: the server's own message is never rendered there. */
+export const OFF_NOT_SAVED_MESSAGE =
+  "Tandem's Claude is off now, but Tandem couldn't save that, so it may start again the next time Tandem starts.";
+
+/**
+ * The off switch (#2195): save the start mode as `off`, which also stops
+ * Tandem's Claude whatever state it is in. Sends ONLY `startMode` — a partial
+ * patch — so it can never put back a lifetime another window just changed.
+ * Confirms first when a turn is in flight, because stopping ends that turn.
+ */
+export function turnOffTandemClaude(): void {
+  runBoundAction("launcher-turn-off", (d) =>
+    withLauncherClaim(d, async () => {
+      const status = await fetchLauncherStatus();
+      const busy = status.ok && status.value.available && status.value.running && status.value.busy;
+      if (
+        busy &&
+        !confirm(
+          "Tandem's Claude is in the middle of a turn. Turn it off anyway?\n\nIt stays off, including the next time Tandem starts, until you start it again.",
+        )
+      ) {
+        return false;
+      }
+      const code = await postLauncherMutation(
+        d,
+        API_LAUNCHER_SETTINGS,
+        { patch: { startMode: "off" } },
+        {
+          failPrefix: "Couldn't turn off Tandem's Claude",
+          requestFailPrefix: "Turn-off request failed",
+          successMessage:
+            "Tandem's Claude is off, and stays off until you start it again from the status bar or the chat panel.",
+        },
+        { retryOnCode: LAUNCHER_ERROR_OFF_NOT_SAVED },
+      );
+      // It did stop; only the saved mode failed.
+      if (code === LAUNCHER_ERROR_OFF_NOT_SAVED) {
+        d.notify("warning", OFF_NOT_SAVED_MESSAGE);
+      }
+      return true;
+    }),
+  );
+}
+
+/**
+ * Save a partial patch of the start mode / lifetime of Tandem's Claude (#2195),
+ * for the Settings section. Shares the launcher claim with every other launcher
+ * action: the nonce is single-use and global, so a Settings save racing the
+ * chat panel's Turn off would otherwise fail one of them. Returns the stored
+ * settings, or the server's error `code` (or none) for the caller to map to a
+ * fixed string — Settings never renders the server's message.
+ */
+export async function saveLauncherSettings(
+  patch: LauncherSettingsPatch,
+): Promise<{ ok: true; settings: LauncherSettings } | { ok: false; code?: string }> {
+  if (launcherInflight) return { ok: false, code: LAUNCHER_ERROR_IN_PROGRESS };
+  launcherInflight = true;
+  try {
+    const nonce = await fetchLauncherNonce();
+    if (!nonce.ok) return { ok: false };
+    const res = await fetch(`${API_BASE}${API_LAUNCHER_SETTINGS}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nonce: nonce.value, patch }),
+    });
+    const body = (await res.json().catch(() => null)) as {
+      settings?: unknown;
+      code?: unknown;
+    } | null;
+    if (!res.ok) return { ok: false, code: typeof body?.code === "string" ? body.code : undefined };
+    const settings = parseLauncherSettings(body?.settings);
+    return settings ? { ok: true, settings } : { ok: false };
+  } catch {
+    return { ok: false };
   } finally {
     launcherInflight = false;
-    // Same reason as `relaunchHere`'s: measured from the mutation, not from a
-    // click that precedes an unbounded modal. Gated and wrapped for the same two
-    // reasons — a cancel sent no request, and a throw from a `finally` replaces
-    // the propagating exception.
-    if (attempted) {
-      try {
-        d.afterLauncherAction();
-      } catch {
-        // Reported by the executor's facade; see `relaunchHere`.
-      }
-    }
   }
 }
 
@@ -1387,6 +1517,22 @@ const BUILTINS: Action[] = [
       // `afterLauncherAction` lives, and a palette entry that reached past it
       // would silently be the one launcher action that never re-probes.
       startFreshClaudeCode();
+    },
+  },
+  {
+    id: "launcher-start",
+    label: "Start Tandem's Claude",
+    group: "claude",
+    run() {
+      startTandemClaude();
+    },
+  },
+  {
+    id: "launcher-turn-off",
+    label: "Turn off Tandem's Claude",
+    group: "claude",
+    run() {
+      turnOffTandemClaude();
     },
   },
   {

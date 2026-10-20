@@ -10,16 +10,19 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  * handler renders has already shipped one wrong-branch bug (see `AI_CTA`'s doc
  * comment, where a binary ternary sent `setup` users down the restart path).
  *
- * There are THREE distinct silences, and conflating them is the bug this exists
+ * There are FOUR distinct silences, and conflating them is the bug this exists
  * to prevent:
  *
  *   - `offline`  — the SERVER is gone, so the question "is an AI attached" has
- *     no meaningful answer. This is the newest branch and it exists because the
- *     other two both imply a working server. Without it the case fell into the
+ *     no meaningful answer. It exists because `no-agent` and `no-push` both
+ *     imply a working server. Without it the case fell into the
  *     `chip === null` hole below and produced NO notice at all: `state` is
  *     `booting` whenever `connected()` is false, so a send into a dead server
  *     was silent. That silence replaced a wrong message with no message, which
  *     is not the same as fixing it.
+ *   - `ai-off`   — the licence refuses the AI (#1521). Nothing can be attached,
+ *     and nothing will connect until a license is activated, so `no-agent`'s
+ *     "will be seen when one connects" would be a false promise.
  *   - `no-agent` — the server is fine, nothing is attached. The message waits.
  *   - `no-push`  — an agent IS attached and can read the document, but no
  *     real-time consumer is delivering to it, so it won't look until its next
@@ -29,13 +32,20 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *
  * Ordering rules (order is load-bearing):
  *   1. Solo outranks everything. The user deliberately opted out of AI
- *      surfacing, so all three notices contradict that intent — the same
+ *      surfacing, so every notice contradicts that intent — the same
  *      reasoning that makes `chip` null in Solo.
  *   2. Server-reachability outranks the AI questions, because both of those
  *      presuppose a server to be attached to. `sessionLive` is false when the
  *      server is gone, but only as a CONSEQUENCE — reading it as "no AI" and
  *      promising the message will be seen "when one connects" is a second false
  *      promise in place of the one this whole change removed.
+ *   2b. The licence refusal outranks the AI questions below: while it holds,
+ *      no agent can be connected and no restart would be allowed.
+ *   2c. A chat that is starting Tandem's Claude (#2196) gets no notice: the
+ *      chat panel's resume row is already saying what happens to it, and the
+ *      `start` chip's "nothing will answer until you start it" would
+ *      contradict that row. After rules 2 and 2b, because a server that has gone away
+ *      since the send makes the resume row's promise moot.
  *   3. A live session decides which of the remaining branches applies. Without
  *      one, only the agent-absence notice can be correct; with one, only the
  *      delivery notice can be.
@@ -50,7 +60,8 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  */
 export type AddressedAiNotice =
   | { kind: "offline" }
-  | { kind: "no-agent"; chip: Exclude<AiChip, null> }
+  | { kind: "ai-off" }
+  | { kind: "no-agent"; chip: Exclude<AiChip, null | "ai-off"> }
   | { kind: "no-push" };
 
 export function addressedAiNotice(input: {
@@ -70,12 +81,15 @@ export function addressedAiNotice(input: {
    * from a fresh one at this boundary. Only rule 5 consults it — see there.
    */
   probeAnswered: boolean;
-  /** Fresh `/health` confirmation that an MCP transport is open. */
+  /** Fresh `/health` confirmation that a LIVE MCP session is attached (a
+   *  leftover from a client that went away does not count). */
   sessionLive: boolean;
   /** Re-read after the probe — readiness may have settled while it was in flight. */
   chip: AiChip;
   /** Only `"none"` is actionable; `"attached"` and `"unknown"` stay silent. */
   pushDelivery: PushDelivery;
+  /** This send is a chat that is starting Tandem's Claude (rule 2c). */
+  startingForMessage: boolean;
 }): AddressedAiNotice | null {
   // Rule 1. Belt-and-braces: the production caller short-circuits on Solo
   // before reaching here (to skip the probe), so this branch is defensive —
@@ -87,6 +101,12 @@ export function addressedAiNotice(input: {
   // branch: with the server gone `sessionLive` is false too, so ordering these
   // the other way round would report the consequence and hide the cause.
   if (input.serverUnreachable) return { kind: "offline" };
+
+  // Rule 2b — the licence refuses the AI (#1521).
+  if (input.chip === "ai-off") return { kind: "ai-off" };
+
+  // Rule 2c — the chat panel's resume row speaks for this message.
+  if (input.startingForMessage) return null;
 
   // Rule 3 — no agent attached.
   if (!input.sessionLive) {
@@ -124,4 +144,86 @@ export function addressedAiNotice(input: {
 
   // Rule 6 — attached, but is anything delivering?
   return input.pushDelivery === "none" ? { kind: "no-push" } : null;
+}
+
+/** What App pushes for a notice: the toast, and the CTA chip it offers, if any. */
+export interface AddressedAiToast {
+  /** Id and dedup prefix; App appends the `via` key (and a timestamp for the id). */
+  idPrefix: string;
+  severity: "info" | "warning";
+  message: string;
+  /** The `AI_CTA` entry to offer, or null for no CTA. */
+  cta: Exclude<AiChip, null> | null;
+}
+
+/**
+ * The toast for each notice kind. An exhaustive `switch` with a `never`
+ * default, so a new kind is a compile error here rather than falling through to
+ * the `no-push` toast in App (#1521).
+ */
+export function noticeAction(notice: AddressedAiNotice, noun: string): AddressedAiToast {
+  switch (notice.kind) {
+    case "offline":
+      // The server is gone, so this is not an AI problem and must not be
+      // dressed as one. It is also the only branch here where the message may
+      // not survive: `chatState.send` writes to a LOCAL Y.Doc with nowhere to
+      // sync, and if the server returns on a new generation the stale-tab gate
+      // tears down every doc and rebuilds from empty ones — the write is
+      // dropped. So no "it'll be seen when one connects" promise, and no CTA:
+      // neither the wizard nor a Claude restart addresses a dead Tandem server,
+      // and offering one would repeat the #1268 mistake of pointing a user at a
+      // remedy for a different problem.
+      return {
+        idPrefix: "ai-offline",
+        severity: "warning",
+        message: `${noun} saved locally, but Tandem couldn't reach its server, so it wasn't delivered. If the server restarted, send it again.`,
+        cta: null,
+      };
+    case "ai-off":
+      // Reachable only for a send that races the licence flip: the chat
+      // composer and the comment segment are disabled while the AI is off.
+      // Kind-neutral copy — it serves both the unlicensed and unverifiable
+      // reader, so it says neither "unlicensed" nor "activate".
+      return {
+        idPrefix: "ai-off",
+        severity: "warning",
+        message: `${noun} saved. Claude won't see it while AI features are off. See Settings → License.`,
+        cta: "ai-off",
+      };
+    case "no-agent":
+      return {
+        idPrefix: "ai-not-ready",
+        severity: "warning",
+        // Past tense on the observation because `warning` never expires —
+        // see the tense rule on `TandemNotification.severity`.
+        // The `start` chip (#2195) is Tandem's Claude stopped by choice:
+        // "when one connects" would be wrong — nothing is going to connect
+        // until the user starts it.
+        message:
+          notice.chip === "start"
+            ? `${noun} saved. Tandem's Claude isn't running, so nothing will answer until you start it.`
+            : `${noun} saved while no AI was connected. It'll be seen when one connects.`,
+        cta: notice.chip,
+      };
+    case "no-push":
+      // An agent is attached, so nothing is wrong — this is a latency
+      // expectation, not a failure, hence `info` rather than `warning` and no CTA.
+      //
+      // The copy names the contradiction on purpose. The status pill says "AI
+      // attached" (truthfully — something IS connected), so a bare "it'll be seen
+      // later" reads as a non-sequitur. Saying "connected, but not being notified"
+      // is the whole point of the notice. Same voice as the pill's
+      // `CONNECTED_NO_PUSH`: "something", and a conditional check-in, because the
+      // attached client may be a script or a dead session's leftover connection.
+      return {
+        idPrefix: "ai-no-push",
+        severity: "info",
+        message: `${noun} saved. Something is connected to Tandem but isn't being notified. If it's a session you're using, it'll see this the next time it checks in.`,
+        cta: null,
+      };
+    default: {
+      const _exhaustive: never = notice;
+      return _exhaustive;
+    }
+  }
 }

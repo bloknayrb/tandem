@@ -2,15 +2,25 @@
 import { untrack } from "svelte";
 import WakeStallBanner from "../components/WakeStallBanner.svelte";
 import { type AiReadiness, createAiReadiness } from "../hooks/useAiReadiness.svelte";
+import type { AiNotice } from "../utils/license-ui";
 
 interface Props {
   onReady: (readiness: AiReadiness) => void;
   connected?: boolean;
   firstRunSettled?: boolean;
   soloMode?: boolean;
+  aiNotice?: AiNotice | null;
+  refreshLicence?: () => Promise<unknown> | void;
 }
 
-let { onReady, connected = true, firstRunSettled = true, soloMode = false }: Props = $props();
+let {
+  onReady,
+  connected = true,
+  firstRunSettled = true,
+  soloMode = false,
+  aiNotice = null,
+  refreshLicence = () => {},
+}: Props = $props();
 
 // Created once at mount (inside a real component context so the hook's
 // onDestroy/setInterval cleanup wires up). The deps read live prop values so a
@@ -20,6 +30,8 @@ const readiness = untrack(() =>
     connected: () => connected,
     firstRunSettled: () => firstRunSettled,
     soloMode: () => soloMode,
+    aiNotice: () => aiNotice,
+    refreshLicence: () => refreshLicence(),
   }),
 );
 $effect(() => {

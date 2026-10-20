@@ -1,10 +1,16 @@
 /**
  * HTTP routes for the Claude Code auto-launcher (#477 PR 4b).
  *
- * Seven endpoints, all under `/api/launcher/*`:
+ * Nine handlers on eight paths, all under `/api/launcher/*`:
  *   - `GET /status` — read-only; loopback returns full struct (with
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
+ *     `cwd`, `resuming`, `reaperPid`, `busy`, `attached`, `standby`,
+ *     `startsOnMessage` and `greetingLate` are loopback-only
+ *     for the same reason as `/health`'s session-presence fields: `busy` in
+ *     particular is an activity trace of the person at this machine, and the
+ *     CORS allowlist admits any 127.0.0.1 port, so any local page can read
+ *     it (docs/security.md#cors-allowlist).
  *   - `GET /nonce` — issues a one-shot single-use nonce that mutating
  *     routes require. Rotates on consumption (success or failure).
  *   - `POST /relaunch` — body `{ cwd, nonce }`. Origin + loopback gates,
@@ -16,13 +22,25 @@
  *     Narrow write to the first claude-code integration's
  *     `workingDirectory` field. Bypasses the integrations apply-nonce
  *     rotation that a full-array POST would trigger.
- *   - `POST /start` — promote a `deferred-autostart` launcher (#1236).
+ *   - `POST /start` — promote a `deferred-autostart` launcher (#1236), or,
+ *     with `userInitiated: true` and a supervisor present, start Tandem's
+ *     Claude from standby (#2195). `userInitiated` is a caller-asserted
+ *     discriminator that keeps the Rust shell's presence POST from ever
+ *     starting an on-click Claude; like the nonce, it is NOT proof that a
+ *     human clicked anything.
+ *   - `GET /settings` / `POST /settings` — the start mode and lifetime of
+ *     Tandem's Claude (#2195). POST merges a partial patch; see
+ *     `makeSettingsPostHandler`.
  *   - `POST /cwd-preview` — body `{ cwd }`. Read-only drift verdict (#1282);
  *     loopback-only, no nonce. See `makeCwdPreviewHandler`.
  *
  * The supervisor singleton is bridged via `() => Supervisor | null`. The
  * MUTATING routes return 503 + `NOT_AVAILABLE` when the getter returns null
- * (stdio mode, disabled-by-env, or no claude-code integration). The two
+ * (stdio mode, disabled-by-env, a deferred autostart, or a supervisor that
+ * failed to start). A supervisor that exists but found no launchable
+ * claude-code integration is NOT null: `GET /status` reports it as
+ * `available: false, reason: "not-configured"`, and relaunch / start-fresh
+ * answer 404 `NO_CLAUDE_INTEGRATION` (#2180). The two
  * read-only ones do not: `GET /status` answers `{ available: false }`, and
  * `POST /cwd-preview` answers `{ drifted: false }` — for both, "there is no
  * launcher" is a fact worth reporting rather than an error.
@@ -36,6 +54,7 @@ import {
   API_LAUNCHER_CWD_PREVIEW,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
+  API_LAUNCHER_SETTINGS,
   API_LAUNCHER_START,
   API_LAUNCHER_START_FRESH,
   API_LAUNCHER_STATUS,
@@ -45,16 +64,22 @@ import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.j
 import {
   isTransientlyUnavailable,
   LAUNCHER_CWD_MAX_LENGTH,
+  LAUNCHER_ERROR_CLI_UNUSABLE,
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_BODY,
   LAUNCHER_ERROR_INVALID_NONCE,
   LAUNCHER_ERROR_NO_INTEGRATION,
   LAUNCHER_ERROR_NOT_AVAILABLE,
+  LAUNCHER_ERROR_OFF_NOT_SAVED,
   LAUNCHER_ERROR_PATH_REJECTED,
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
+  LAUNCHER_ERROR_SETTINGS_NEWER,
+  LAUNCHER_ERROR_UNLICENSED,
   type LauncherCwdPreview,
+  type LauncherSettingsResponse,
   type LauncherStatus,
   type LauncherUnavailableReason,
+  parseLauncherSettingsPatch,
   REAPER_NOT_FOUND_MARKER,
   type SkillRefreshError,
 } from "../../shared/launcher/contract.js";
@@ -62,9 +87,16 @@ import { isLoopback } from "../auth/middleware.js";
 import { assertLoopbackForMutation, assertOriginAllowlisted } from "../integrations/api-routes.js";
 import type { IntegrationConfig } from "../integrations/schema.js";
 import type { IntegrationsStore } from "../integrations/storage.js";
+import { type AiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import type { Handler } from "../mcp/routes/_shared.js";
 import { previewCwdDrift } from "./cwd-preview.js";
-import { resolveRouteCwd, type Supervisor } from "./supervisor.js";
+import { readLauncherSettings, SettingsNewerError, updateLauncherSettings } from "./settings.js";
+import {
+  LicenseRefusedError,
+  type RespawnResult,
+  resolveRouteCwd,
+  type Supervisor,
+} from "./supervisor.js";
 
 /**
  * Single-use nonce gate for mutating launcher routes.
@@ -153,8 +185,14 @@ export interface LauncherRoutesDeps {
    * when `claude-code` integration is absent.
    */
   getSupervisor: () => Supervisor | null;
-  /** Reason the supervisor is unavailable (stdio mode, disabled, no integration).
-   * Surfaced via GET /status. */
+  /** Whether a live MCP connection from this Claude session id, opened at or
+   * after `sinceMs`, is in the transport registry (`isClaudeSessionAttached` in
+   * `mcp/server.ts`). Called with the supervisor's real UUID, which never leaves
+   * the server: only the boolean is sent. */
+  isClaudeSessionAttached: (claudeSessionId: string, sinceMs: number) => boolean;
+  /** Reason the supervisor is null (stdio mode, disabled, deferred, failed to
+   * start). Surfaced via GET /status. `not-configured` is NOT produced here: it
+   * comes from a live supervisor's own status (#2180). */
   unavailableReason: () => LauncherUnavailableReason;
   /** Create + start the supervisor from null. Idempotent and single-flighted in
    * `src/server/index.ts`. Only reachable via `POST /start` and only in the
@@ -162,6 +200,11 @@ export interface LauncherRoutesDeps {
   startSupervisor: () => Promise<void>;
   /** Reads/writes the integrations file. Same store passed to integrations routes. */
   store: IntegrationsStore;
+  /** Directory holding `launcher-settings.json` (the app-data dir). Used
+   * directly only while there is no supervisor (deferred, disabled, stdio):
+   * otherwise writes go through `Supervisor.updateSettings`, so they are
+   * serialized with the supervisor's own. */
+  settingsBase: string;
   /** Directories holding Tandem's own auto-opened documents, excluded from the
    * drift preview. Injected rather than imported: the paths are resolved in
    * `mcp/server.ts` (which registers these routes), and passing them keeps the
@@ -203,6 +246,10 @@ export function registerLauncherRoutes(app: Express, mw: Handler, deps: Launcher
 
   app.options(API_LAUNCHER_CWD_PREVIEW, mw);
   app.post(API_LAUNCHER_CWD_PREVIEW, mw, makeCwdPreviewHandler(deps));
+
+  app.options(API_LAUNCHER_SETTINGS, mw);
+  app.get(API_LAUNCHER_SETTINGS, mw, makeSettingsGetHandler(deps));
+  app.post(API_LAUNCHER_SETTINGS, mw, makeSettingsPostHandler(deps));
 }
 
 // --- Handlers -------------------------------------------------------------
@@ -241,11 +288,30 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       res.json(body);
       return;
     }
+    // Loopback-only, beside both stopped shapes below (#2195, #2196, #2197).
+    const standbyFields = raw.running
+      ? {}
+      : {
+          ...(raw.standby ? { standby: raw.standby } : {}),
+          ...(raw.startsOnMessage ? { startsOnMessage: true as const } : {}),
+          ...(raw.greetingLate ? { greetingLate: true as const } : {}),
+        };
     if (raw.running) {
       if (!loopback) {
         res.json({ available: true, running: true });
         return;
       }
+      // Green beside "Tandem's Claude" hangs on this, so a throw reads as "not
+      // attached" (an honest neutral) rather than escaping with the UUID in hand.
+      let attached = false;
+      try {
+        attached = deps.isClaudeSessionAttached(raw.sessionId, raw.spawnedAt);
+      } catch {
+        // stays false
+      }
+      // An explicit field list, never `{ ...raw }`: that copy is the only thing
+      // keeping a future internal `SupervisorStatus` field off the wire, and
+      // `raw.sessionId` is the real UUID (`raw.spawnedAt` stays internal too).
       const body: LauncherStatus = {
         available: true,
         running: true,
@@ -253,21 +319,127 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         cwd: raw.cwd,
         sessionId: "<set>",
         resuming: raw.resuming,
+        busy: raw.busy,
+        attached,
+        ...(raw.greetingLate ? { greetingLate: true as const } : {}),
         skillRefresh,
       };
       res.json(body);
       return;
     }
+    // A restart in progress outranks "not configured": a start or relaunch
+    // in flight is re-planning, so don't flash "Connect AI" meanwhile.
+    if (raw.restartPending) {
+      const body: LauncherStatus = loopback
+        ? {
+            available: true,
+            running: false,
+            lastError: raw.lastError,
+            restartPending: true,
+            // A Start from standby in progress (#2195): "Starting", not "Restarting".
+            ...standbyFields,
+            skillRefresh,
+          }
+        : { available: true, running: false };
+      res.json(body);
+      return;
+    }
+    if (raw.configured === false) {
+      // No launchable claude-code entry: there is nothing to restart, so this
+      // reads as unavailable and the client offers setup (#2180). Same
+      // loopback-only `reason` as the null-supervisor branch above.
+      const body: LauncherStatus = loopback
+        ? {
+            available: false,
+            reason: "not-configured",
+            ...(skillRefresh ? { skillRefresh } : {}),
+          }
+        : { available: false };
+      res.json(body);
+      return;
+    }
+    // `standby` (#2195) rides on the plain stopped shape, loopback-only. The
+    // supervisor never emits it beside a `lastError`.
     const body: LauncherStatus = loopback
-      ? { available: true, running: false, lastError: raw.lastError, skillRefresh }
+      ? {
+          available: true,
+          running: false,
+          lastError: raw.lastError,
+          ...standbyFields,
+          skillRefresh,
+        }
       : { available: true, running: false };
     res.json(body);
   };
 }
 
+/** A start that spawned nothing: no integration, or (#2199) no Claude Code
+ * program to start (409, a running Claude left alone). */
+function sendNotSpawned(
+  res: Response,
+  why: Extract<RespawnResult, { spawned: false }>["why"],
+): void {
+  if (why === "cli-unusable") {
+    res.status(409).json({
+      error: "CONFLICT",
+      code: LAUNCHER_ERROR_CLI_UNUSABLE,
+      message: "Tandem can't find Claude Code to start. Install it from Connect AI.",
+    });
+    return;
+  }
+  sendNoIntegration(res);
+}
+
+/** 404 for a relaunch / start-fresh whose plan found no launchable claude-code
+ * entry (#2180). The message is shown to the user verbatim by the client's
+ * launcher toast, so it says what to do. */
+function sendNoIntegration(res: Response): void {
+  res.status(404).json({
+    error: "NOT_FOUND",
+    code: LAUNCHER_ERROR_NO_INTEGRATION,
+    message: "Claude Code isn't set up in Tandem yet. Use Connect AI to set it up.",
+  });
+}
+
+/**
+ * The nonce GET's origin check. `assertOriginAllowlisted`, plus one case it
+ * cannot see: a browser sends NO `Origin` on a same-origin GET (measured
+ * against Chromium 2026-10-13: no `Origin`, `Sec-Fetch-Site: same-origin`; the
+ * same-origin POST carries `Origin`). The npm build serves the editor from the
+ * API's own origin (`tandem start` opens `http://127.0.0.1:<mcp port>`), so its
+ * every launcher action — Relaunch, Start fresh, and #2195's Start, Turn off
+ * and Settings save — failed here with a 403 before any of them could run.
+ *
+ * The `Sec-Fetch-*` headers are forbidden headers: a page cannot set them. A
+ * cross-site `<img>` probe (which also sends no `Origin`) says `cross-site`.
+ * A SAME-origin `<img>` — which a document opened in the npm build's editor
+ * can make, since its CSP allows `img-src 'self'` and root-relative image
+ * paths survive sanitizing — or a link the user clicks says `same-origin`
+ * too, so the admission also requires what only a script's `fetch()` sends:
+ * `Sec-Fetch-Dest: empty` with mode `cors` or `same-origin` (measured
+ * 2026-10-14: `<img>` is `no-cors`/`image`, an iframe `navigate`/`iframe`, a
+ * link `navigate`/`document`). Without that, document content could rotate the
+ * nonce between the client's GET and its POST and fail the user's action. A
+ * local non-browser process could forge all of these, but could equally forge
+ * `Origin`, so this widens nothing. Scoped to this one read rather than the
+ * shared gate.
+ */
+function refuseNonceOrigin(req: Request, res: Response): boolean {
+  const mode = req.headers["sec-fetch-mode"];
+  if (
+    req.headers.origin === undefined &&
+    req.headers["sec-fetch-site"] === "same-origin" &&
+    req.headers["sec-fetch-dest"] === "empty" &&
+    (mode === "cors" || mode === "same-origin")
+  ) {
+    return false;
+  }
+  return assertOriginAllowlisted(req, res, API_LAUNCHER_NONCE);
+}
+
 function makeNonceHandler(): Handler {
   return (req: Request, res: Response) => {
-    if (assertOriginAllowlisted(req, res, API_LAUNCHER_NONCE)) return;
+    if (refuseNonceOrigin(req, res)) return;
     if (assertLoopbackForMutation(req, res)) return;
     rotateNonce();
     res.json({ nonce: getGate().nonce });
@@ -314,6 +486,15 @@ function sendNotAvailable(res: Response, reason: LauncherUnavailableReason, mess
     reason,
     message,
   });
+}
+
+/** The bare loopback check the read-shaped routes use (`cwd-preview`,
+ * `GET /settings`): `enforceLoopbackMutation` does not cover them. Returns true
+ * when it answered 403. */
+function refuseNonLoopbackRead(req: Request, res: Response): boolean {
+  if (isLoopback(req.socket.remoteAddress)) return false;
+  res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
+  return true;
 }
 
 function sendInProgress(res: Response, message: string): void {
@@ -446,7 +627,11 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     inflight.relaunch = true;
     try {
       if (deps.relaunchHook) await deps.relaunchHook();
-      await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
+      const result = await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
+      if (!result.spawned) {
+        sendNotSpawned(res, result.why);
+        return;
+      }
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "relaunch failed");
@@ -494,7 +679,11 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     inflight.startFresh = true;
     try {
       if (deps.startFreshHook) await deps.startFreshHook();
-      await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
+      const result = await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
+      if (!result.spawned) {
+        sendNotSpawned(res, result.why);
+        return;
+      }
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "start-fresh failed");
@@ -532,10 +721,20 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     if (assertOriginAllowlisted(req, res, API_LAUNCHER_START)) return;
     if (assertLoopbackForMutation(req, res)) return;
 
-    // Idempotent: an already-started launcher is a success, not an error. The
-    // client fires this on every visibility change, so a second call after the
-    // first one won must not surface as a failure toast.
-    if (deps.getSupervisor() !== null) {
+    const existing = deps.getSupervisor();
+    if (existing !== null) {
+      // The Start control (#2195). Read through a guarded access, not
+      // `parseJsonObjectBody`: a body-less or `text/plain` POST (no preflight,
+      // `req.body` undefined) must keep getting the answer below, byte for
+      // byte, and must consume no nonce.
+      const raw = req.body as { userInitiated?: unknown; nonce?: unknown } | undefined;
+      if (raw !== null && typeof raw === "object" && raw.userInitiated === true) {
+        await startExistingByUser(existing, raw.nonce, res);
+        return;
+      }
+      // Idempotent: an already-started launcher is a success, not an error.
+      // The Rust shell posts this once per presence release, so a call that
+      // finds the supervisor already created must not surface as a failure.
       res.json({ ok: true, started: false });
       return;
     }
@@ -557,13 +756,53 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     inflight.start = true;
     try {
       await deps.startSupervisor();
-      res.json({ ok: true, started: deps.getSupervisor() !== null });
+      // Licence (#1521): NOT refused at the top. Refusing there would leave the
+      // supervisor null and the reason `deferred-autostart` forever, which the
+      // client reads as "booting" — and Rust posts this route exactly once,
+      // dropping a non-2xx. Instead the supervisor is created, `startInternal`
+      // refuses by returning, and `resumeAfterLicence` can bring it back after
+      // activation. What this route must not do is claim `started: true`.
+      const sup = deps.getSupervisor();
+      const refusal = sup?.licenceRefusal();
+      if (refusal) {
+        sendUnlicensed(res, refusal);
+        return;
+      }
+      // `started` reports that the launcher was PROMOTED (a supervisor now
+      // exists), not that Claude is running: a boot the start-mode setting
+      // holds back (#2195) creates the supervisor and spawns nothing, and the
+      // Rust caller only needs to know the deferral is over.
+      res.json({ ok: true, started: sup !== null });
     } catch (err) {
       sendUnexpected(res, err, "launcher start failed");
     } finally {
       inflight.start = false;
     }
   };
+}
+
+/** The `userInitiated` half of `POST /start` (#2195): a supervisor exists and
+ * the client's Start control asks for its Claude. Same nonce and exclusion
+ * group as relaunch, because it is the same stop+spawn underneath. */
+async function startExistingByUser(sup: Supervisor, nonce: unknown, res: Response): Promise<void> {
+  if (!consumeNonce(nonce, res)) return;
+  if (spawnOpInFlight()) {
+    sendInProgress(res, "another launcher start/relaunch is in progress");
+    return;
+  }
+  inflight.start = true;
+  try {
+    const result = await sup.startByUser();
+    if (!result.spawned) {
+      sendNotSpawned(res, result.why);
+      return;
+    }
+    res.json({ ok: true, started: true });
+  } catch (err) {
+    sendUnexpected(res, err, "start failed");
+  } finally {
+    inflight.start = false;
+  }
 }
 
 function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
@@ -632,6 +871,114 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
 }
 
 /**
+ * `GET /api/launcher/settings` (#2195) — the start mode and lifetime of
+ * Tandem's Claude.
+ *
+ * Bare loopback check, like `cwd-preview`: `enforceLoopbackMutation` does not
+ * cover GET, and the answer — two enums and an integer, no paths — is still a
+ * fact about the person at this machine. **No origin gate**: a browser sends no
+ * `Origin` on a same-origin GET, so the gate would refuse the npm build's own
+ * editor, and it adds nothing here — the read has no side effect, and CORS
+ * already keeps a cross-origin page from reading the answer. Answers with no
+ * supervisor (deferred, disabled, stdio) so Settings can show the choice in
+ * every runtime. Reads the file each call; nothing polls it.
+ */
+function makeSettingsGetHandler(deps: LauncherRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (refuseNonLoopbackRead(req, res)) return;
+    const read = await readLauncherSettings(deps.settingsBase);
+    const body: LauncherSettingsResponse = { settings: read.settings };
+    if (read.source === "file" && read.newer) body.readOnly = true;
+    // The file could not be read, so these are not a saved choice — and
+    // Settings must say so. Show what Tandem is actually acting on: the
+    // supervisor's last good read when it has one (a file that broke mid-run
+    // leaves Claude on the mode it had), else the fallback.
+    if (read.source === "fallback") {
+      body.unreadable = true;
+      const applied = deps.getSupervisor()?.appliedSettings() ?? null;
+      if (applied) {
+        body.settings = applied;
+        body.keptLastGood = true;
+      }
+    }
+    res.json(body);
+  };
+}
+
+/**
+ * `POST /api/launcher/settings` (#2195) — body `{ nonce, patch }`, where
+ * `patch` holds any non-empty subset of `startMode`, `lifetime`, `idleMinutes`.
+ *
+ * **A partial patch, never a whole object.** Every writer used to have to send
+ * all three fields, so a stale snapshot — a second window, a Settings tab
+ * opened before the chat panel's Turn off — put back a start mode the user had
+ * just changed. Merged server-side under one queue (`updateLauncherSettings`).
+ *
+ * With a supervisor the patch goes through `Supervisor.updateSettings`, under
+ * its op lock, which also applies it — switching to `off` stops Claude
+ * whatever state it is in. Without one it only writes the file. Neither path
+ * ever starts Claude: this route is `open` in the licence table because
+ * nothing here is an AI start, and turning Claude off must never be refused.
+ *
+ * Gates as `relaunch`: origin, `assertLoopbackForMutation`, a JSON object body
+ * (a `text/plain` simple request arrives as `undefined` and is a 400), and the
+ * single-use nonce, because the off switch stops a process.
+ */
+function makeSettingsPostHandler(deps: LauncherRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_LAUNCHER_SETTINGS)) return;
+    if (assertLoopbackForMutation(req, res)) return;
+    const body = parseJsonObjectBody(req, res);
+    if (body === null) return;
+    if (!consumeNonce(body.nonce, res)) return;
+    const parsed = parseLauncherSettingsPatch(body.patch);
+    if (!parsed.ok) {
+      sendBadRequest(
+        res,
+        LAUNCHER_ERROR_INVALID_BODY,
+        `patch.${parsed.field} is missing or invalid`,
+      );
+      return;
+    }
+    // No in-flight 429: writes queue behind the supervisor's lock and the
+    // settings module's queue, which is safe, so a second save waits rather
+    // than failing.
+    // Read once: the catch must speak for the supervisor that ran the patch,
+    // not one a concurrent Start promoted while this save was failing.
+    const sup = deps.getSupervisor();
+    try {
+      const settings = sup
+        ? await sup.updateSettings(parsed.patch)
+        : await updateLauncherSettings(deps.settingsBase, parsed.patch);
+      res.json({ ok: true, settings });
+    } catch (err) {
+      // `updateSettings` stops Claude for an Off even when the save fails, so
+      // the answer is "off now, not saved", never "couldn't turn off".
+      if (parsed.patch.startMode === "off" && sup) {
+        console.error("[Launcher] Turned Tandem's Claude off but could not save it:", err);
+        res.status(409).json({
+          error: "CONFLICT",
+          code: LAUNCHER_ERROR_OFF_NOT_SAVED,
+          message:
+            "Tandem's Claude is off now, but Tandem couldn't save that, so it may start again the next time Tandem starts.",
+        });
+        return;
+      }
+      if (err instanceof SettingsNewerError) {
+        res.status(409).json({
+          error: "CONFLICT",
+          code: LAUNCHER_ERROR_SETTINGS_NEWER,
+          message:
+            "These settings were saved by a newer version of Tandem. Update Tandem to change them.",
+        });
+        return;
+      }
+      sendUnexpected(res, err, "failed to save launcher settings");
+    }
+  };
+}
+
+/**
  * `POST /api/launcher/cwd-preview` (#1282) — read-only drift verdict.
  *
  * Gates, and why they are these gates:
@@ -660,10 +1007,7 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
 function makeCwdPreviewHandler(deps: LauncherRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
     if (assertOriginAllowlisted(req, res, API_LAUNCHER_CWD_PREVIEW)) return;
-    if (!isLoopback(req.socket.remoteAddress)) {
-      res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
-      return;
-    }
+    if (refuseNonLoopbackRead(req, res)) return;
     const body = parseJsonObjectBody(req, res);
     if (body === null) return;
     // A non-string `cwd` is a caller bug and gets a 400. Every other rejection —
@@ -758,7 +1102,23 @@ function runningCwd(sup: Supervisor | null): string | null {
  * (including a checked filesystem path) is safe to return, but bound it anyway. */
 const MAX_ERROR_DETAIL = 300;
 
+/**
+ * 403 for a launcher action the licence refused (#1521): the refusal envelope
+ * the supervisor recorded, plus the route's own `code`. The supervisor holds
+ * the refusal, so this module never makes the licence decision itself.
+ */
+function sendUnlicensed(res: Response, refusal: AiRefusal): void {
+  sendAiRefusal(res, refusal, { code: LAUNCHER_ERROR_UNLICENSED });
+}
+
 function sendUnexpected(res: Response, err: unknown, label: string): void {
+  if (err instanceof LicenseRefusedError) {
+    // Not unexpected, and not a 500: the relaunch was refused before anything
+    // was stopped. One line, no stack.
+    console.error(`[Launcher routes] ${label}: AI features are unlicensed`);
+    if (!res.headersSent) sendUnlicensed(res, err.refusal);
+    return;
+  }
   // Full error (stack, etc.) stays server-side; the wire gets a bounded message.
   console.error(`[Launcher routes] ${label}:`, err);
   if (res.headersSent) return;

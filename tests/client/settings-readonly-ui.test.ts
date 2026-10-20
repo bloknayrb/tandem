@@ -25,6 +25,7 @@ import ShortcutEditorList from "../../src/client/components/ShortcutEditorList.s
 import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
 import SettingsCollaborationTab from "../../src/client/components/settings-tabs/SettingsCollaborationTab.svelte";
 import SettingsModelsTab from "../../src/client/components/settings-tabs/SettingsModelsTab.svelte";
+import SettingsNotificationsTab from "../../src/client/components/settings-tabs/SettingsNotificationsTab.svelte";
 import { loadSettings, type TandemSettings } from "../../src/client/hooks/useTandemSettings";
 import { _resetTandemSettingsSingletonForTests } from "../../src/client/hooks/useTandemSettings.svelte.js";
 import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
@@ -157,6 +158,39 @@ const CASES: ControlCase[] = [
     component: SettingsCollaborationTab,
     testid: "settings-modal-solo-rail-hidden-toggle",
     innerInput: true,
+  },
+  {
+    name: "SettingsNotificationsTab enable checkbox",
+    component: SettingsNotificationsTab,
+    testid: "notifications-enable-toggle",
+    innerInput: true,
+  },
+  {
+    name: "SettingsNotificationsTab flash checkbox",
+    component: SettingsNotificationsTab,
+    testid: "notifications-flash-toggle",
+    innerInput: true,
+  },
+  {
+    name: "SettingsNotificationsTab visible-counts-as-active checkbox",
+    component: SettingsNotificationsTab,
+    testid: "notifications-visible-toggle",
+    innerInput: true,
+  },
+  {
+    name: "SettingsNotificationsTab content select",
+    component: SettingsNotificationsTab,
+    testid: "notifications-content-select",
+  },
+  {
+    name: "SettingsNotificationsTab sound select",
+    component: SettingsNotificationsTab,
+    testid: "notifications-sound-select",
+  },
+  {
+    name: "SettingsNotificationsTab volume slider",
+    component: SettingsNotificationsTab,
+    testid: "notifications-volume-slider",
   },
   {
     name: "NetworkSettings degraded-delay slider",

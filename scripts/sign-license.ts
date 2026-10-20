@@ -2,7 +2,7 @@
  * Mint a signed Tandem license locally (#1116, ADR-040).
  *
  * This is the operator's out-of-band issuance path — the one that does NOT go
- * through Polar. Two uses: a free/complimentary license, and handing a buyer
+ * through Paddle. Two uses: a free/complimentary license, and handing a buyer
  * their bytes directly when their mail provider quarantined the automated one
  * (re-sending through the same pipe cannot fix that case).
  *
@@ -27,18 +27,50 @@ import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { writeLicenseEntitlement } from "../src/server/license/kv-store.js";
-import type { LicenseMetadata, SignedLicense } from "../src/server/license/license-types.js";
+import type {
+  IssuedLicenseMetadata,
+  LicenseMetadata,
+  SignedLicense,
+} from "../src/server/license/license-types.js";
+import { KEYS_BY_ID, keyIdForPublicKey } from "../src/server/license/public-key.js";
 import { canonicalize } from "../src/server/license/verifier.js";
-
-/** Default update window for a paid/complimentary license, in days. Matches the
- *  issuance Worker's `YEAR_MS`. A `grandfathered` license never expires. */
-const DEFAULT_EXPIRES_DAYS = 365;
 
 const LICENSE_TYPES = ["personal", "commercial", "grandfathered"] as const;
 
 const USAGE =
   'Usage: npx tsx scripts/sign-license.ts --name "User Name" --email "user@example.com" ' +
-  "[--type personal|commercial|grandfathered] [--expires days|never] [--skip-entitlement]";
+  "[--type personal|commercial|grandfathered] [--expires days|never] [--key path] " +
+  "[--skip-entitlement]";
+
+/** The private key `--key` defaults to: where `generate-keys.ts` used to write. */
+const DEFAULT_PRIVATE_KEY = path.join("keys", "tandem-private-key.pem");
+
+/**
+ * Sign license metadata with a private key, stamping the key's id.
+ *
+ * The id is derived from the key itself, never passed in, so a license cannot
+ * name a key other than the one that signed it. A key no build trusts is
+ * refused BEFORE signing: its licenses would fail verification everywhere, and
+ * the buyer would be told their key is bad.
+ */
+export function signWithKey(
+  fields: Omit<IssuedLicenseMetadata, "keyId">,
+  privateKeyPem: string,
+  trustedKeysById: Readonly<Record<string, string>> = KEYS_BY_ID,
+): { metadata: IssuedLicenseMetadata; blob: string } {
+  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  const keyId = keyIdForPublicKey(crypto.createPublicKey(privateKey));
+  if (!Object.hasOwn(trustedKeysById, keyId)) {
+    throw new Error(
+      `This private key (id ${keyId}) is not in TRUSTED_PUBLIC_KEYS ` +
+        "(src/server/license/public-key.ts), so no build would accept its licenses.",
+    );
+  }
+  const metadata: IssuedLicenseMetadata = { ...fields, keyId };
+  const signature = crypto.sign(null, Buffer.from(canonicalize(metadata)), privateKey);
+  const signedLicense: SignedLicense = { metadata, signature: signature.toString("hex") };
+  return { metadata, blob: Buffer.from(JSON.stringify(signedLicense)).toString("base64") };
+}
 
 /**
  * Parse `--flag value` pairs.
@@ -77,38 +109,31 @@ function fail(message: string, showUsage = false): never {
 }
 
 /**
- * Resolve the update-window end from `--expires` and the license type.
+ * Resolve the update-window end from `--expires`.
  *
- * The default is load-bearing: the pre-fix script left `expiresAt` as `null`
- * whenever `--expires` was omitted, which reads downstream as "update window
- * never ends" and is the exact state D1 describes. Only `grandfathered`
- * (or an explicit `--expires never`) legitimately means null.
+ * Omitting `--expires` means `null` (no update window) for every license type,
+ * because every key includes all future updates (ADR-040, amended 2026-10-09,
+ * decision A5) and the issuance Worker mints paid keys with a null window too.
+ * The default used to be 365 days for `personal`/`commercial`, matching the
+ * one-year window that decision removed; a null default was the D1 bug then,
+ * and is the intended state now. `--expires <days>` still mints a windowed key,
+ * for a test or a deliberate exception; nothing sells one.
  *
  * Throws (rather than exiting) on bad input so it stays unit-testable.
  */
-export function resolveExpiresAt(
-  rawExpires: string | undefined,
-  type: LicenseMetadata["type"],
-  now: Date,
-): string | null {
-  if (rawExpires === "never") return null;
+export function resolveExpiresAt(rawExpires: string | undefined, now: Date): string | null {
+  if (rawExpires === undefined || rawExpires === "never") return null;
 
-  let days: number;
-  if (rawExpires === undefined) {
-    if (type === "grandfathered") return null;
-    days = DEFAULT_EXPIRES_DAYS;
-  } else {
-    // Strict, not `parseInt`: the prefix-lenient version silently read
-    // `--expires 30days` as 30 and `--expires 1e5` as 1.
-    if (!/^\d+$/.test(rawExpires)) {
-      throw new RangeError(
-        `--expires must be a whole number of days, or "never" (got "${rawExpires}")`,
-      );
-    }
-    days = Number(rawExpires);
-    if (days <= 0) {
-      throw new RangeError(`--expires must be greater than zero (got "${rawExpires}")`);
-    }
+  // Strict, not `parseInt`: the prefix-lenient version silently read
+  // `--expires 30days` as 30 and `--expires 1e5` as 1.
+  if (!/^\d+$/.test(rawExpires)) {
+    throw new RangeError(
+      `--expires must be a whole number of days, or "never" (got "${rawExpires}")`,
+    );
+  }
+  const days = Number(rawExpires);
+  if (days <= 0) {
+    throw new RangeError(`--expires must be greater than zero (got "${rawExpires}")`);
   }
 
   const d = new Date(now);
@@ -132,9 +157,9 @@ async function generateLicense(): Promise<void> {
   }
 
   // Load private key
-  const privKeyPath = path.join(process.cwd(), "keys", "tandem-private-key.pem");
+  const privKeyPath = path.resolve(process.cwd(), str(options, "key") ?? DEFAULT_PRIVATE_KEY);
   if (!fs.existsSync(privKeyPath)) {
-    fail(`Private key not found at ${privKeyPath}. Please run scripts/generate-keys.ts first.`);
+    fail(`Private key not found at ${privKeyPath}. Pass --key, or run scripts/generate-keys.ts.`);
   }
   const privateKey = fs.readFileSync(privKeyPath, "utf8");
 
@@ -143,31 +168,21 @@ async function generateLicense(): Promise<void> {
   const createdAt = new Date().toISOString();
   let expiresAt: string | null;
   try {
-    expiresAt = resolveExpiresAt(str(options, "expires"), type, new Date());
+    expiresAt = resolveExpiresAt(str(options, "expires"), new Date());
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
 
-  const metadata: LicenseMetadata = {
-    id,
-    name,
-    email,
-    type,
-    createdAt,
-    expiresAt,
-    version: "1.0",
-  };
-
-  // Sign data
-  const dataStr = canonicalize(metadata);
-  const signature = crypto.sign(null, Buffer.from(dataStr), privateKey);
-
-  const signedLicense: SignedLicense = {
-    metadata,
-    signature: signature.toString("hex"),
-  };
-
-  const base64License = Buffer.from(JSON.stringify(signedLicense)).toString("base64");
+  let signed: ReturnType<typeof signWithKey>;
+  try {
+    signed = signWithKey(
+      { id, name, email, type, createdAt, expiresAt, version: "1.0" },
+      privateKey,
+    );
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  const { metadata, blob: base64License } = signed;
 
   console.log("\n--- License Metadata ---");
   console.log(JSON.stringify(metadata, null, 2));

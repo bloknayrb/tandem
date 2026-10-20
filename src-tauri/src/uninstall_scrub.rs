@@ -15,7 +15,8 @@
 //!
 //! Exactly what the `.nsi` hook's own comment promises, plus the new autostart
 //! registration:
-//!   - Cowork plugin entries in every detected workspace (Windows)
+//!   - Cowork plugin entries in every detected workspace, and the temp copies
+//!     an interrupted Cowork write leaves beside them (Windows; #2144)
 //!   - The Tandem Cowork firewall rules (Windows)
 //!   - `cowork-meta.json`, the one app-data file the scrub removes (Windows;
 //!     ADR-055 — a surviving `enabled: true` would re-arm a later lit build)
@@ -208,7 +209,22 @@ pub fn run_uninstall_scrub() -> i32 {
             .all(|s| matches!(s, WriteStatus::Ok | WriteStatus::AlreadyPresent))
         }
 
-        let workspaces = crate::cowork_workspace_scan::find_cowork_workspaces();
+        // With stats: the scan's refusals go to `log::`, which is not
+        // initialised here, so without this line a refused folder (#2144) read
+        // as "cleared 0/0".
+        let (workspaces, stats) = crate::cowork_workspace_scan::find_cowork_workspaces_with_stats();
+        // Each one named: a refused folder can still hold Tandem's entries,
+        // token included, and this is the only line that says where.
+        for refused in &stats.refused {
+            eprintln!("[scrub] refused, left untouched: {refused}");
+        }
+        // Never entered, so the scan neither counts nor names what is there.
+        for folder in crate::cowork_workspace_scan::unc_known_folders() {
+            eprintln!(
+                "[scrub] {} is a network path and was not inspected; any Cowork entries there are left untouched",
+                folder.display()
+            );
+        }
         let mut removed = 0usize;
         for ws in &workspaces {
             match crate::cowork_installer::uninstall_tandem_plugin_from_workspace(ws) {
@@ -221,6 +237,31 @@ pub fn run_uninstall_scrub() -> i32 {
                     report.cowork_settings
                 ),
                 Err(e) => eprintln!("[scrub] workspace uninstall failed: {e}"),
+            }
+            // Separate from `removed`, which `fully_cleared` defines by the
+            // three registry files: a crashed write's temp copy can hold the
+            // token too (#2144).
+            match crate::cowork_installer::sweep_orphaned_temps(ws) {
+                Ok(outcome) => {
+                    if outcome.removed > 0 {
+                        eprintln!(
+                            "[scrub] removed {} leftover temp file(s) from {}",
+                            outcome.removed,
+                            ws.display()
+                        );
+                    }
+                    for failed in &outcome.failed {
+                        eprintln!("[scrub] could not remove leftover temp file (may hold the token): {failed}");
+                    }
+                    if outcome.left > 0 {
+                        eprintln!(
+                            "[scrub] left {} temp-named entr(y/ies) in {} (not a plain file, or written in the last minute)",
+                            outcome.left,
+                            ws.display()
+                        );
+                    }
+                }
+                Err(e) => eprintln!("[scrub] temp sweep failed for {}: {e}", ws.display()),
             }
         }
         eprintln!(

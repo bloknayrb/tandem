@@ -1,12 +1,12 @@
 /**
  * Tab focus trap for modal dialogs.
  *
- * Extracted because this was the fifth hand-copied instance in the client
+ * Extracted because the client had hand-copied this trap into several dialogs
  * (`SettingsModal`, `IntegrationWizardModal`, `CoworkAdminDeclinedModal`,
- * `HelpModal`, and now `LicenseWall`), and the copies had already drifted:
- * SettingsModal filters `:not([inert])`, others filter `offsetParent !== null`,
- * one filters nothing and omits `summary` from its selector. An accessibility
- * fix currently has to be made five times to actually land.
+ * `HelpModal`), and the copies had already drifted: SettingsModal filters
+ * `:not([inert])`, others filter `offsetParent !== null`, one filters nothing
+ * and omits `summary` from its selector. An accessibility fix has to be made in
+ * every copy to actually land.
  *
  * `SettingsModal` migrated in #1258 — its copy filtered `[inert]` but not
  * `offsetParent`, and the dialog has both a `display:none` control and an

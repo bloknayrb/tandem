@@ -8,7 +8,7 @@
  *
  * **This is not yet the one implementation, and a fix applied here does not
  * reach the rest.** Exactly two sites route through it — `src/client/App.svelte`
- * (`sidecar-restart-failed`) and `src/client/utils/sidecar-restart-toast.ts`
+ * (`sidecar-restart-failed`, and `notification-activated` since #2168) and `src/client/utils/sidecar-restart-toast.ts`
  * (`sidecar-restarted`), the #1959 pair it was extracted from. Hand-rolled
  * chains against the same dynamic import still live in
  * `src/client/App.svelte` (`open-integration-wizard`),

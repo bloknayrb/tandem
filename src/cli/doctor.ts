@@ -2035,11 +2035,10 @@ export function evaluateClaudeCli(
     return {
       status: "warn",
       message: "Claude Code CLI installed but not on PATH (found in ~/.local/bin)",
-      // Not just "open a new terminal": doctor reads its own fresh process's
-      // PATH, while the launcher spawns from the long-running server's env
-      // captured at start. A new terminal fixes what doctor sees, not what the
-      // launcher uses — Tandem itself has to be restarted.
-      fix: "Add ~/.local/bin to your PATH and open a new terminal; restart Tandem so its launcher picks up the new PATH too",
+      // Tandem's launcher looks in ~/.local/bin itself (#2199), so this is
+      // about the user's own terminal only. A shim earlier on PATH would still
+      // be what that terminal runs, which is worth knowing when the two differ.
+      fix: "Add ~/.local/bin to your PATH and open a new terminal so `claude` works there too (Tandem's own launcher already looks in ~/.local/bin, unless TANDEM_CLAUDE_CMD names another program)",
     };
   }
   return {
@@ -2414,6 +2413,8 @@ interface HttpGetResult {
     version?: string;
     transport?: string;
     hasSession?: boolean;
+    /** Loopback-only. Live MCP sessions; `hasSession` also counts leftovers. */
+    sessionCount?: number;
     /** Loopback-only. Diagnostics for the PUSH path — see `evaluatePushPath`. */
     push?: { subscribers?: number; lastEventAt?: number | null; eventCount?: number };
   } | null;
@@ -2490,7 +2491,177 @@ async function isViteDevServer(port: number): Promise<boolean> {
   return result?.status === 200;
 }
 
-async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Promise<boolean> {
+/**
+ * How `doctor` describes `/health`'s session fields. Exported for unit testing.
+ * `hasSession` includes a client that went away without disconnecting and is
+ * waiting to be reaped; `sessionCount` is the live subset, so "true beside 0"
+ * is a leftover, not an active session. A missing count (older server) trusts
+ * `hasSession`.
+ */
+export function describeHealthSession(d: { hasSession?: boolean; sessionCount?: number }): {
+  label: string;
+  warning: string | null;
+} {
+  if (!d.hasSession) {
+    return {
+      label: "no MCP session",
+      warning: "No active MCP session — Claude Code hasn't connected yet",
+    };
+  }
+  if (d.sessionCount === 0) {
+    return {
+      label: "only a leftover MCP session",
+      warning:
+        "No live MCP session — the one Tandem still lists looks like a client that has gone away",
+    };
+  }
+  return { label: "session active", warning: null };
+}
+
+// ── Check: license (AI features on/off) ─────────────────────────────
+
+/**
+ * The only licence fields doctor ever records (#1521). The loopback
+ * `/api/license/status` body also carries the licence holder's name and email,
+ * and `runDoctor` backs the shareable `/api/diagnostics` report — so nothing
+ * outside this picklist may reach a row's `data`.
+ */
+export interface DoctorLicenceState {
+  gateActive: true;
+  status: DoctorLicenceStatus;
+  licenseUnverifiable: string | null;
+}
+
+/**
+ * The server answered `/api/license/status`, but not with a state doctor can
+ * read: a non-OK status (`http-status`), or a 200 whose body is not a licence
+ * state doctor knows (`unrecognised`). Nothing from the body reaches the report.
+ */
+export interface DoctorLicenceUnreadable {
+  unreadable: true;
+  reason: "http-status" | "unrecognised";
+  httpStatus: number;
+}
+
+/** `parseDoctorLicence`'s answer: a state, an unreadable answer, or silence. */
+export type DoctorLicenceResult = DoctorLicenceState | DoctorLicenceUnreadable | null;
+
+/** The licence states the server emits. Anything else is unreadable, never "on". */
+const KNOWN_LICENCE_STATUSES = ["trial", "licensed", "restricted"] as const;
+type DoctorLicenceStatus = (typeof KNOWN_LICENCE_STATUSES)[number];
+
+function isKnownLicenceStatus(s: unknown): s is DoctorLicenceStatus {
+  return (KNOWN_LICENCE_STATUSES as readonly unknown[]).includes(s);
+}
+
+/**
+ * Narrow a `GET /api/license/status` result to the picklist.
+ *
+ * Silent (`null`, no row) on a dark build (`gateActive: false`, a 200), on an
+ * older server with no such route (404), and when nothing answered at all — the
+ * server-up and `/health` rows already own "no server", so a second row would
+ * only repeat them. Silence there keeps a dark build's report byte-for-byte
+ * what it was, and keeps a 404-everything test listener from changing warning
+ * counts.
+ *
+ * Unreadable on any other answer: a non-OK status (401, 500…), a body that will
+ * not parse, or a gated body whose `status` is missing or not one this doctor
+ * knows. Those must not fall silent, because silence there reads exactly like a
+ * build with the gate off, and the session rows then make claims the licence
+ * may contradict.
+ */
+export function parseDoctorLicence(result: HttpGetResult | null): DoctorLicenceResult {
+  if (!result || result.error || result.status === undefined) return null;
+  if (result.status === 404) return null;
+  if (result.status !== 200) {
+    return { unreadable: true, reason: "http-status", httpStatus: result.status };
+  }
+  const unrecognised: DoctorLicenceUnreadable = {
+    unreadable: true,
+    reason: "unrecognised",
+    httpStatus: result.status,
+  };
+  const d = result.data as {
+    gateActive?: unknown;
+    status?: unknown;
+    licenseUnverifiable?: unknown;
+  } | null;
+  if (!d || typeof d !== "object") return unrecognised;
+  if (d.gateActive === false) return null;
+  if (d.gateActive !== true || !isKnownLicenceStatus(d.status)) return unrecognised;
+  return {
+    gateActive: true,
+    status: d.status,
+    licenseUnverifiable: typeof d.licenseUnverifiable === "string" ? d.licenseUnverifiable : null,
+  };
+}
+
+function isReadableLicence(licence: DoctorLicenceResult): licence is DoctorLicenceState {
+  return licence !== null && !("unreadable" in licence);
+}
+
+/** "(unlicensed)" / "(license not verified)" when AI is refused, else `null`. */
+export function licenceOffLabel(licence: DoctorLicenceResult): string | null {
+  if (!isReadableLicence(licence) || licence.status !== "restricted") return null;
+  return licence.licenseUnverifiable ? "(license not verified)" : "(unlicensed)";
+}
+
+/** The licence row. `null` (no row) whenever `parseDoctorLicence` was silent. */
+export function evaluateLicence(licence: DoctorLicenceResult): EvalOutcome | null {
+  if (!licence) return null;
+  if (!isReadableLicence(licence)) {
+    return {
+      status: "warn",
+      message:
+        licence.reason === "unrecognised"
+          ? "License status unreadable (unrecognised answer)"
+          : `License status unreadable (HTTP ${licence.httpStatus})`,
+      fix: "Check Tandem's Settings → License. If this persists, restart Tandem.",
+      data: { httpStatus: licence.httpStatus },
+    };
+  }
+  const data = {
+    gateActive: licence.gateActive,
+    status: licence.status,
+    licenseUnverifiable: licence.licenseUnverifiable,
+  };
+  const off = licenceOffLabel(licence);
+  if (off) {
+    return {
+      status: "warn",
+      message: `AI features off ${off} — the editor is unaffected`,
+      fix: licence.licenseUnverifiable
+        ? "A license is installed but could not be verified. Open Tandem's Settings → License for what to do."
+        : "Activate a license in Tandem's Settings → License to turn Claude back on.",
+      data,
+    };
+  }
+  return { status: "pass", message: `AI features on (license: ${licence.status})`, data };
+}
+
+/** What the session / push / SSE rows say instead of pass or fault while AI is refused. */
+function licenceDeferred(what: string, off: string): EvalOutcome {
+  return {
+    status: "skip",
+    message: `${what} not checked — AI features off ${off}`,
+    data: { reason: "license" },
+  };
+}
+
+async function checkLicence(r: Recorder, mcpPort: number): Promise<DoctorLicenceResult> {
+  const licence = parseDoctorLicence(
+    await httpGet(`http://127.0.0.1:${mcpPort}/api/license/status`),
+  );
+  recordEvaluation(r, evaluateLicence(licence));
+  return licence;
+}
+
+async function checkHealth(
+  r: Recorder,
+  mcpPort: number,
+  startHint: string,
+  licenceOff: string | null = null,
+): Promise<boolean> {
   const result = await httpGet(`http://127.0.0.1:${mcpPort}/health`);
 
   if (!result) {
@@ -2510,16 +2681,35 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
 
   const d = result.data;
   if (d) {
-    const session = d.hasSession ? "session active" : "no MCP session";
-    r.pass(`Server healthy (v${d.version}, ${d.transport}, ${session})`, undefined, {
+    const healthData = {
       version: d.version,
       transport: d.transport,
       hasSession: !!d.hasSession,
-    });
-    if (!d.hasSession) {
-      r.warn("No active MCP session — Claude Code hasn't connected yet");
+    };
+    if (licenceOff) {
+      // #1521: while AI is refused, the session reading misreports both ways.
+      // A new handshake is refused, so "hasn't connected yet" may be false (it
+      // connected and was refused); and a session pinned by an open stream
+      // survives until its next request, which will be refused, so "session
+      // active" may be false too. Make no session claim, and defer to the
+      // licence row. `hasSession` stays in `data` as the raw fact.
+      r.pass(`Server healthy (v${d.version}, ${d.transport})`, undefined, healthData);
+      recordEvaluation(r, licenceDeferred("MCP session", licenceOff));
+    } else {
+      const session = describeHealthSession(d);
+      r.pass(
+        `Server healthy (v${d.version}, ${d.transport}, ${session.label})`,
+        undefined,
+        healthData,
+      );
+      if (session.warning) r.warn(session.warning);
     }
-    recordEvaluation(r, evaluatePushPath(d.push));
+    // #1521: an unlicensed server refuses push, so the push row defers to the
+    // licence row rather than reporting an attached-but-refused consumer.
+    recordEvaluation(
+      r,
+      licenceOff ? licenceDeferred("Push path", licenceOff) : evaluatePushPath(d.push),
+    );
   } else {
     r.pass("Server responded on /health (could not parse body)");
   }
@@ -3279,11 +3469,22 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   }
 
   if (mcp) {
+    // Licence first (#1521), fetched once, so the push row and the SSE probe
+    // can defer to it. Silent (no row) on a dark build, an older server, or no
+    // answer; a warning when the server answers unreadably — see
+    // `parseDoctorLicence`.
+    const licence = (await r.check("license", () => checkLicence(r, mcpPort))) ?? null;
+    const licenceOff = licenceOffLabel(licence);
     // A crashed health check means we never established health — don't run
     // the SSE check on an unverified server.
-    const healthy = (await r.check("health", () => checkHealth(r, mcpPort, startHint))) ?? false;
+    const healthy =
+      (await r.check("health", () => checkHealth(r, mcpPort, startHint, licenceOff))) ?? false;
     if (healthy) {
-      await r.check("sse", () => checkSseEndpoint(r, mcpPort));
+      await r.check("sse", () =>
+        licenceOff
+          ? recordEvaluation(r, licenceDeferred("SSE event stream", licenceOff))
+          : checkSseEndpoint(r, mcpPort),
+      );
     }
   }
 

@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  applyAiRefusal,
+  type DeliveryState,
   getDeliveryState,
   isUnansweredAsk,
   noteExternalConsumerAttached,
@@ -183,10 +185,11 @@ describe("delivery-state", () => {
 
   describe("a poll that bails out", () => {
     it("stamps pull-path liveness but does NOT close the join", () => {
-      // `tandem_checkInbox` against a closed document returns `noDocumentError`
-      // before collecting anything: no annotations, no replies, and it never
-      // reaches the CTRL_ROOM chat loop, so not one message is marked read. The
-      // user's message is still unseen.
+      // A poll that bails out before the CTRL_ROOM chat loop marks not one
+      // message read, so the user's message is still unseen. `tandem_checkInbox`
+      // used to do that on a closed document; it now reads chat with nothing
+      // open and closes the round (pinned in mcp-tool-integration.test.ts), so
+      // this is the recorder's contract for any bail-out, not a tool path.
       //
       // With the join closed at dispatch, /health reported
       // `{state: "polled", latencyMs: 240}` — "push delivered in a quarter
@@ -385,5 +388,51 @@ describe("delivery-state", () => {
       waitingMs: null,
       sincePollMs: null,
     });
+  });
+});
+
+/**
+ * #1521: a forward outstanding while Tandem refuses the AI is neither stalled
+ * nor detached. A pure read-time mapping, so the twin (not refused) must hand
+ * the input back untouched.
+ */
+describe("applyAiRefusal", () => {
+  const base: DeliveryState = {
+    pollCount: 3,
+    forwardCount: 4,
+    state: "awaiting-poll",
+    latencyMs: null,
+    waitingMs: 45_000,
+    sincePollMs: 50_000,
+  };
+
+  it("maps awaiting-poll to license-refused, with both clocks null", () => {
+    expect(applyAiRefusal(base, () => true)).toEqual({
+      ...base,
+      state: "license-refused",
+      waitingMs: null,
+      latencyMs: null,
+    });
+  });
+
+  it("maps consumer-detached to license-refused", () => {
+    const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
+    expect(applyAiRefusal(detached, () => true).state).toBe("license-refused");
+  });
+
+  it("leaves idle and polled alone — they make no claim — and never asks", () => {
+    const idle: DeliveryState = { ...base, state: "idle", waitingMs: null };
+    const polled: DeliveryState = { ...base, state: "polled", waitingMs: null, latencyMs: 900 };
+    const aiRefused = vi.fn(() => true);
+    expect(applyAiRefusal(idle, aiRefused)).toBe(idle);
+    expect(applyAiRefusal(polled, aiRefused)).toBe(polled);
+    // The refusal read is a licence file read plus a signature check.
+    expect(aiRefused).not.toHaveBeenCalled();
+  });
+
+  it("the twin: not refused returns the input unchanged", () => {
+    expect(applyAiRefusal(base, () => false)).toBe(base);
+    const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
+    expect(applyAiRefusal(detached, () => false)).toBe(detached);
   });
 });

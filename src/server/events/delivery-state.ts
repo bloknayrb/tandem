@@ -136,14 +136,18 @@ export function isUnansweredAsk(event: TandemEvent): boolean {
  * the join.
  *
  * Call at the point `tandem_checkInbox` DISPATCHES, not where it succeeds: a
- * poll against a closed document still tells us a model is reaching for the
+ * poll naming a closed document still tells us a model is reaching for the
  * inbox, which is the fact this stamp reports.
  *
  * Split from {@link resolveDeliveryRound} because the two facts are true at
  * different moments and one of them is a claim about the USER's message. A poll
- * that returns `noDocumentError()` collected no annotations, no replies, and
- * never reached the CTRL_ROOM chat loop — so it marked nothing read and the
- * user's message is still unseen. Closing the join there would report
+ * that bails out before the CTRL_ROOM chat loop marks nothing read, so the
+ * user's message is still unseen and the round must stay open. Since chat is
+ * delivered with no document open, `tandem_checkInbox` no longer returns
+ * `noDocumentError()` there; what still bails out is a throw in the document
+ * pass (refresh, replies, awareness), which the error boundary turns into an
+ * error result. That is why the handler resolves the round only after that
+ * pass, directly above the chat loop. Closing the join there would report
  * `{state: "polled", latencyMs: 240}` — "push delivered in a quarter second" —
  * for a message the model never received, which is the comforting-and-wrong
  * shape this module exists to eliminate.
@@ -156,9 +160,9 @@ export function recordInboxPoll(now: number = Date.now()): void {
 /**
  * The inbox poll actually collected. Closes any outstanding forward.
  *
- * Call only once the poll is committed to running its full pass — past the
- * document guard, so the chat loop's `read: true` writes and the `surfacedIds`
- * ledger updates are going to happen. See {@link recordInboxPoll} for why the
+ * Call only once the poll is committed to reading the chat bucket, so the chat
+ * loop's `read: true` writes are going to happen (and, when a document is open,
+ * the `surfacedIds` ledger updates). See {@link recordInboxPoll} for why the
  * split exists.
  */
 export function resolveDeliveryRound(now: number = Date.now()): void {
@@ -256,7 +260,13 @@ export type DeliveryJoinState =
   /** A forward is outstanding and something is still attached to receive it. */
   | "awaiting-poll"
   /** A forward was outstanding when the last external consumer detached. */
-  | "consumer-detached";
+  | "consumer-detached"
+  /**
+   * A forward is outstanding while Tandem refuses the AI (#1521). Neither
+   * stalled nor detached: nothing can answer it until a license is activated.
+   * Applied at read time by `applyAiRefusal`, never stored.
+   */
+  | "license-refused";
 
 export interface DeliveryState {
   pollCount: number;
@@ -352,4 +362,30 @@ export function resetDeliveryStateForTests(): void {
   pendingSince = null;
   pendingAbandoned = false;
   lastLatencyMs = null;
+}
+
+/**
+ * Re-read a delivery state through the licence refusal (#1521). While Tandem
+ * refuses the AI, an outstanding forward is neither stalled (`awaiting-poll`
+ * with a climbing clock — the launched child left running at expiry is closed
+ * at its next request, so no poll can land) nor detached (refusal revokes the
+ * SSE and wake consumers, which reads as the last consumer leaving). Both map
+ * to `license-refused`, with no clock: there is no wait to time.
+ *
+ * `consumer-detached` maps even when the detach predated expiry. While refused
+ * nothing can attach (`/api/events` and `/api/wake` refuse at entry), so the
+ * detach cannot be acted on until activation, and the refusal is the fact in
+ * the user's way. `idle` and `polled` make no claim and pass through.
+ *
+ * Read-time, not a latch, so there is no window between expiry and the next
+ * refused event, and nothing goes stale after activation. The refusal is
+ * passed in, the way `externalConsumerCount` is: this module imports no
+ * licence code, and the caller decides it with `aiRefusal()`. It is a thunk,
+ * asked only for a state it could remap, because answering it costs a licence
+ * file read and a signature check on every `/health` poll otherwise.
+ */
+export function applyAiRefusal(state: DeliveryState, aiRefused: () => boolean): DeliveryState {
+  if (state.state !== "awaiting-poll" && state.state !== "consumer-detached") return state;
+  if (!aiRefused()) return state;
+  return { ...state, state: "license-refused", waitingMs: null, latencyMs: null };
 }

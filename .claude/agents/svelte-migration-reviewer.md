@@ -62,8 +62,8 @@ You are a specialized reviewer for Svelte 5 reactive patterns in the Tandem code
   })
   ```
 
-### 4. @keyframes Needs :global Wrapper
-- **Rule:** Svelte 5 scopes all `<style>` content. If a `@keyframes` animation is referenced via an inline `style=` attribute or a dynamic class, Svelte's scoping hash won't match. The keyframes must be wrapped in `:global`.
+### 4. Global @keyframes need the `-global-` prefix
+- **Rule:** Svelte 5 scopes all `<style>` content, keyframe names included. If a `@keyframes` animation is referenced via an inline `style=` attribute or from outside the component, Svelte's scoping hash won't match, so the name must be made global with the `-global-` prefix. Keyframes referenced only from the same `<style>` block stay scoped (see `src/client/tabs/NewTabMenu.svelte`).
 - **Bug pattern:**
   ```svelte
   <div style="animation: fadeIn 0.3s">...</div>
@@ -74,10 +74,10 @@ You are a specialized reviewer for Svelte 5 reactive patterns in the Tandem code
   Fix:
   ```svelte
   <style>
-    :global(@keyframes fadeIn) { ... }
+    @keyframes -global-fadeIn { ... }
   </style>
   ```
-- **Check:** Look for `@keyframes` in `<style>` blocks and verify they're wrapped in `:global()` if referenced from inline styles or dynamic attributes.
+- **Check:** Look for `@keyframes` in `<style>` blocks and verify they carry the `-global-` prefix when referenced from inline styles or outside the component.
 
 ### 5. bind:this + $effect Loop
 - **Rule:** Using `$state(null)` + `bind:this` + `$effect` that reads the bound ref creates an infinite reactive loop (`effect_update_depth_exceeded`). The bind assignment triggers the effect, which re-renders, which re-binds.
@@ -138,4 +138,4 @@ For each finding:
 - **Proof**: What user-visible behavior breaks (stale UI, crash, infinite loop)
 - **Recommendation**: Specific fix with code snippet
 
-Start by reading the most recently modified `.svelte` and `.svelte.ts` files (check `git diff` or `git log` for recent changes), then systematically check each focus area.
+Review the files or diff your prompt names against each focus area. If none is named, review the `.svelte` / `.svelte.ts` files in the current branch's diff against `master`.

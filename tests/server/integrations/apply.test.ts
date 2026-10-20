@@ -7,6 +7,8 @@ import {
   applyConfig,
   assertPathSafe,
   ConfigRefusalError,
+  detectRemovalTargets,
+  detectTargets,
   MAX_CONFIG_BYTES,
   type McpEntry,
   MSIX_PACKAGE_PATTERN,
@@ -201,6 +203,49 @@ describe("MSIX_PACKAGE_PATTERN", () => {
       expect(MSIX_PACKAGE_PATTERN.test(name)).toBe(matches);
     });
   }
+});
+
+describe("detectRemovalTargets — wider than detectTargets, for removal only (#2144)", () => {
+  // `platformOverride` so the Windows-only MSIX walk runs on every runner,
+  // including Linux CI, where a `skipIf(!win32)` describe would pass unrun.
+  let home: string;
+  let localAppData: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-2144-detect-"));
+    localAppData = path.join(home, "AppData", "Local");
+    // The last two are foreign packages staging Claude's layout: the removal
+    // set is publisher-anchored, so a substring match would reach them.
+    for (const pkg of [
+      "Claude_pzs8sxrjxfjjc",
+      "AnthropicPBC.Claude_8wekyb3d8bbwe",
+      "EvilCorp.TotallyClaude_x1",
+      "NotClaude_x1",
+    ]) {
+      const dir = path.join(localAppData, "Packages", pkg, "LocalCache", "Roaming", "Claude");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "claude_desktop_config.json"), "{}");
+    }
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const msixPackages = (detect: typeof detectTargets) =>
+    detect({ homeOverride: home, localAppDataOverride: localAppData, platformOverride: "win32" })
+      .map((t) => t.configPath.split(path.sep).find((seg) => seg.includes("Claude_")))
+      .filter((seg) => seg !== undefined)
+      .sort();
+
+  it("reaches an AnthropicPBC.Claude* package's config only on the removal pass", () => {
+    expect(msixPackages(detectRemovalTargets)).toEqual([
+      "AnthropicPBC.Claude_8wekyb3d8bbwe",
+      "Claude_pzs8sxrjxfjjc",
+    ]);
+    // Every WRITE path uses `detectTargets`, which still never receives it.
+    expect(msixPackages(detectTargets)).toEqual(["Claude_pzs8sxrjxfjjc"]);
+  });
 });
 
 describe("applyConfig — explicit removals", () => {

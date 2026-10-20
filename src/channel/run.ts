@@ -26,11 +26,14 @@ import {
   CHANNEL_REPLY_FETCH_TIMEOUT_MS,
   DEFAULT_MCP_PORT,
 } from "../shared/constants.js";
+import { LICENSE_REFUSED_EVENT_TYPE, TANDEM_EVENT_TYPES } from "../shared/events/types.js";
 import {
   describeFetchError,
   fetchWithTimeout,
   isAbortOrTimeoutError,
 } from "../shared/fetch-with-timeout.js";
+import { CHAT_ACK_RULE } from "../shared/launcher/contract.js";
+import { licenseRefusalMessage } from "../shared/sse-consumer.js";
 import { startEventBridge } from "./event-bridge.js";
 
 export interface RunChannelOptions {
@@ -59,13 +62,14 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
       instructions: [
         'Events from Tandem arrive as <channel source="tandem-channel" event_type="..." document_id="...">.',
         "These are real-time push notifications of user actions in the collaborative document editor.",
-        "Event types: annotation:created, annotation:accepted, annotation:dismissed, annotation:reply,",
-        "chat:message, document:opened, document:closed, document:switched.",
+        `Event types: ${TANDEM_EVENT_TYPES.join(", ")},`,
+        `and ${LICENSE_REFUSED_EVENT_TYPE} (a notice, sent once per refused stretch, that Tandem's licence refused this event stream).`,
         "Chat messages may include a 'selection' field with buffered selection context.",
         "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_edit, etc.) to act on them.",
         "Reply to chat messages using tandem_reply. Pass document_id from the tag attributes.",
+        CHAT_ACK_RULE,
         "Do not reply to non-chat events — just act on them using tools.",
-        "If you haven't received channel notifications recently, call tandem_checkInbox as a fallback.",
+        "Push is best-effort and can drop events; tandem_checkInbox is the authority on user activity, so keep polling it between steps.",
       ].join(" "),
     },
   );
@@ -74,7 +78,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     tools: [
       {
         name: "tandem_reply",
-        description: "Reply to a chat message in Tandem",
+        description: `Reply to a chat message in Tandem. ${CHAT_ACK_RULE}`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -85,7 +89,13 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
             },
             replyTo: {
               type: "string",
-              description: "Message ID being replied to (optional)",
+              description:
+                "The chat event's message_id (optional). If several arrived together, use the latest.",
+            },
+            inProgress: {
+              type: "boolean",
+              description:
+                "true when this reply acknowledges work you are about to do (optional); send the result later without it.",
             },
           },
           required: ["text"],
@@ -168,6 +178,11 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     }),
   });
 
+  // Latched for one refused stretch (#1521): the relay logs the licence refusal
+  // once, and a later successful relay re-arms it. Inside `runChannel`, never at
+  // module level, so two shims in one process (or two tests) never share it.
+  let permissionRelayRefused = false;
+
   mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     try {
       const res = await fetchWithTimeout(
@@ -183,10 +198,25 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
         },
         CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
       );
-      if (!res.ok) {
-        console.error(
-          `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
-        );
+      if (res.ok) {
+        permissionRelayRefused = false;
+      } else {
+        // The body read is bounded by the request's own AbortSignal.timeout.
+        const refusal = await licenseRefusalMessage(res);
+        if (refusal !== null) {
+          if (!permissionRelayRefused) {
+            permissionRelayRefused = true;
+            console.error(
+              // Kind-neutral: the refusal may be an unverifiable licence, and its
+              // own message (appended) already names which.
+              `[Channel] Permission relay refused — Tandem's AI features are off; approve or deny in Claude Code instead. (${refusal})`,
+            );
+          }
+        } else {
+          console.error(
+            `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
+          );
+        }
       }
     } catch (err) {
       console.error(

@@ -58,6 +58,29 @@ function notSymlink() {
   return { isSymbolicLink: () => false };
 }
 
+/**
+ * `lstat` by the path's SHAPE, for the describes that drive `rewriteJson` and
+ * `scrubCoworkWorkspace` (#2144 screens every level): a `.json` file is a
+ * regular file, a lockfile is absent, anything else is a folder, and paths in
+ * `links` are reparse points. By shape rather than by full path because the
+ * path guard `lstat`s `path.resolve`d ancestors, which gain a drive letter on
+ * Windows. Installed per describe, never inherited: Vitest's `restoreAllMocks`
+ * does not reset a `vi.fn` implementation.
+ */
+function registryStats(links: ReadonlySet<string> = new Set()): void {
+  _lstatSpy.mockReset().mockImplementation(async (p: string) => {
+    const link = links.has(p);
+    const name = path.basename(p);
+    if (!link && name.endsWith(".tandem-lock")) throw makeNotFoundError();
+    const isFile = !link && name.endsWith(".json");
+    return {
+      isSymbolicLink: () => link,
+      isFile: () => isFile,
+      isDirectory: () => !link && !isFile,
+    };
+  });
+}
+
 // ── removeInstalledPlugins ────────────────────────────────────────────────────
 
 describe("removeInstalledPlugins", () => {
@@ -146,6 +169,7 @@ describe("rewriteJson", () => {
     _writeFileSpy.mockReset().mockResolvedValue(undefined);
     _renameSpy.mockReset().mockResolvedValue(undefined);
     _unlinkSpy.mockReset().mockResolvedValue(undefined);
+    registryStats();
   });
 
   afterEach(() => {
@@ -153,6 +177,11 @@ describe("rewriteJson", () => {
   });
 
   it("returns false on ENOENT (file absent)", async () => {
+    // Absent at `lstat` — the screen answers before any read is attempted.
+    _lstatSpy.mockImplementation(async (p: string) => {
+      if (p === "/fake/path.json") throw makeNotFoundError();
+      return { isSymbolicLink: () => false, isFile: () => false, isDirectory: () => true };
+    });
     _readFileSpy.mockRejectedValue(makeNotFoundError());
 
     const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
@@ -165,6 +194,8 @@ describe("rewriteJson", () => {
     };
     const result = await rewriteJson("/fake/path.json", () => true, logger);
     expect(result).toBe(false);
+    expect(_readFileSpy).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
     expect(_writeFileSpy).not.toHaveBeenCalled();
   });
 
@@ -184,6 +215,8 @@ describe("rewriteJson", () => {
     };
     const result = await rewriteJson("/fake/installed_plugins.json", () => true, logger);
     expect(result).toBe(false);
+    // Reached the parse: a screening refusal would also warn once with the path.
+    expect(_readFileSpy).toHaveBeenCalledOnce();
     expect(_writeFileSpy).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledOnce();
     const line = logger.warn.mock.calls[0][0] as string;
@@ -253,6 +286,7 @@ describe("rewriteJson — takes the Cowork lock (#1600)", () => {
 
   beforeEach(async () => {
     fsConstants = (await vi.importActual<typeof import("node:fs")>("node:fs")).constants;
+    registryStats();
     _readFileSpy.mockReset().mockResolvedValue(withTandem);
     _writeFileSpy.mockReset().mockResolvedValue(undefined);
     _renameSpy.mockReset().mockResolvedValue(undefined);
@@ -347,12 +381,58 @@ describe("rewriteJson — takes the Cowork lock (#1600)", () => {
     expect(await rewriteJson(FILE, () => false, makeLogger(), { sleep: vi.fn() })).toBe(false);
     expect(_openSpy).not.toHaveBeenCalled();
   });
+
+  // ── #2144: nothing here is followed ──
+  //
+  // `readFile` and `open` follow a link at the path, and `O_CREAT` creates the
+  // target of a dangling one. Each row asserts the following call never
+  // happened, not just the return value (false for a clean file too).
+
+  it.each([
+    ["the data file", FILE],
+    ["cowork_plugins", "/fake"],
+  ])("does not read through a link at %s", async (_label, at) => {
+    registryStats(new Set([at]));
+    const logger = makeLogger();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await rewriteJson(FILE, dropTandem, logger, { sleep: vi.fn() })).toBe(false);
+    expect(_readFileSpy).not.toHaveBeenCalled();
+    expect(_openSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(`refusing to follow a reparse point: ${at}`);
+  });
+
+  it("does not open or create through a link at the lockfile", async () => {
+    registryStats(new Set([LOCK]));
+    const logger = makeLogger();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await rewriteJson(FILE, dropTandem, logger, { sleep: vi.fn() })).toBe(false);
+    expect(_openSpy).not.toHaveBeenCalled();
+    expect(_writeFileSpy).not.toHaveBeenCalled();
+    expect(_renameSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(`refusing to follow a reparse point: ${LOCK}`);
+  });
+
+  it("refuses a data file it cannot inspect rather than reading it", async () => {
+    _lstatSpy.mockImplementation(async (p: string) => {
+      if (p === FILE) throw errno("EACCES");
+      return { isSymbolicLink: () => false, isFile: () => false, isDirectory: () => true };
+    });
+    const logger = makeLogger();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await rewriteJson(FILE, dropTandem, logger, { sleep: vi.fn() })).toBe(false);
+    expect(_readFileSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`cannot inspect ${FILE}`));
+  });
 });
 
 // ── scrubCoworkWorkspace: what the log says per workspace ─────────────────────
 
 describe("scrubCoworkWorkspace", () => {
   const WS = path.join("/fake", "ws", "vm");
+  const workspace = { path: WS, realRoot: "/fake" };
   const file = (name: string) => path.join(WS, "cowork_plugins", name);
 
   /** A logger that counts warnings, as the real one does. */
@@ -383,6 +463,10 @@ describe("scrubCoworkWorkspace", () => {
     _writeFileSpy.mockReset().mockResolvedValue(undefined);
     _renameSpy.mockReset().mockResolvedValue(undefined);
     _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+    registryStats();
+    // The path-guard re-screen resolves, and the sweep lists `cowork_plugins`.
+    _realpathSpy.mockReset().mockImplementation(async (p: string) => p);
+    _readdirSpy.mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -400,7 +484,7 @@ describe("scrubCoworkWorkspace", () => {
     const logger = countingLogger();
     const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
 
-    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(await scrubCoworkWorkspace(workspace, logger)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       `removed Tandem entries from installed_plugins.json, cowork_settings.json in ${WS}`,
     );
@@ -411,7 +495,7 @@ describe("scrubCoworkWorkspace", () => {
     const logger = countingLogger();
     const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
 
-    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(await scrubCoworkWorkspace(workspace, logger)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(`no Tandem entries in ${WS}`);
   });
 
@@ -422,7 +506,7 @@ describe("scrubCoworkWorkspace", () => {
     const logger = countingLogger();
     const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
 
-    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(await scrubCoworkWorkspace(workspace, logger)).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining(file("installed_plugins.json")),
     );
@@ -441,11 +525,182 @@ describe("scrubCoworkWorkspace", () => {
     const logger = countingLogger();
     const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
 
-    expect(await scrubCoworkWorkspace(WS, logger)).toBe(false);
+    expect(await scrubCoworkWorkspace(workspace, logger)).toBe(false);
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`scrub failed for ${WS}`));
     expect(logger.info).toHaveBeenCalledWith(
       `removed Tandem entries from installed_plugins.json in ${WS}`,
     );
+  });
+
+  it("re-screens the workspace and touches nothing when it no longer passes the guard", async () => {
+    // #2144: the scan screened every workspace before any was rewritten, so a
+    // later one can have been swapped for a junction in between.
+    // `path.resolve`d, because that is the spelling the guard's chain walk lstats.
+    registryStats(new Set([path.resolve(WS)]));
+    withFiles({ "installed_plugins.json": JSON.stringify({ mcpServers: { tandem: {} } }) });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    // A refusal is a warning, not a failure.
+    expect(await scrubCoworkWorkspace(workspace, logger)).toBe(true);
+    expect(_readFileSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(`skipping ${WS}: it no longer passes the path guard`);
+  });
+
+  it("reports swept temps on their own line, never as Tandem entries or as 'none'", async () => {
+    withFiles({ "installed_plugins.json": JSON.stringify({ mcpServers: {} }) });
+    const orphan = ".tandem-tmp-1a2b-18f0c3d2e4-0";
+    _readdirSpy.mockResolvedValue([orphan]);
+    const fileStat = _lstatSpy.getMockImplementation();
+    _lstatSpy.mockImplementation(async (p: string) =>
+      path.basename(p) === orphan
+        ? { isSymbolicLink: () => false, isFile: () => true, isDirectory: () => false, mtimeMs: 0 }
+        : fileStat?.(p),
+    );
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(workspace, logger, { sleep: vi.fn() })).toBe(true);
+    expect(_unlinkSpy).toHaveBeenCalledWith(file(orphan));
+    expect(logger.info).toHaveBeenCalledWith(`removed 1 leftover temp file(s) from ${WS}`);
+    expect(logger.info).not.toHaveBeenCalledWith(`no Tandem entries in ${WS}`);
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining("removed Tandem entries"));
+  });
+});
+
+// ── sweepOrphanedTemps (#2144) ────────────────────────────────────────────────
+
+describe("sweepOrphanedTemps", () => {
+  const DIR = path.join("/fake", "ws", "vm", "cowork_plugins");
+  const NOW = 10_000_000;
+  const OLD = {
+    isSymbolicLink: () => false,
+    isFile: () => true,
+    isDirectory: () => false,
+    mtimeMs: 0,
+  };
+  const rustOrphan = ".tandem-tmp-1a2b-18f0c3d2e4-0";
+  const cliOrphan = `.tandem-scrub-tmp-${"0b30dd94-eb52-48e2-851c-025e7b9a45ad"}`;
+
+  const makeLogger = () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    warnings: vi.fn(() => 0),
+    close: async () => {},
+  });
+
+  /** Directory listing, and per-name `lstat` for the entries in it. */
+  function withEntries(entries: Record<string, object>): void {
+    _readdirSpy.mockReset().mockResolvedValue(Object.keys(entries));
+    _lstatSpy.mockReset().mockImplementation(async (p: string) => {
+      const name = path.basename(p);
+      if (name in entries) return entries[name];
+      if (name.endsWith(".tandem-lock")) throw makeNotFoundError();
+      return { isSymbolicLink: () => false, isFile: () => false, isDirectory: () => true };
+    });
+  }
+
+  beforeEach(() => {
+    _unlinkSpy.mockReset().mockResolvedValue(undefined);
+    _closeSpy.mockReset().mockResolvedValue(undefined);
+    _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+  });
+
+  it("matches exactly the two writers' temp shapes", async () => {
+    const { isOrphanedTempName, SCRUB_TEMP_PREFIX } = await import(
+      "../../src/cli/uninstall-scrub.js"
+    );
+    const { randomUUID } = await import("node:crypto");
+    // The CLI generator's own shape, not a copy of it.
+    expect(isOrphanedTempName(`${SCRUB_TEMP_PREFIX}${randomUUID()}`)).toBe(true);
+    expect(isOrphanedTempName(rustOrphan)).toBe(true);
+    // v0.8.0–v0.13.x CLIs: the old generator's own output, then an edge case.
+    expect(
+      isOrphanedTempName(`${SCRUB_TEMP_PREFIX}${Math.random().toString(36).slice(2, 10)}`),
+    ).toBe(true);
+    expect(isOrphanedTempName(`${SCRUB_TEMP_PREFIX}4f`)).toBe(true);
+    for (const name of [
+      ".tandem-scrub-tmp-k3j9x2ab9",
+      ".tandem-scrub-tmp-K3J9X2AB",
+      ".tandem-tmp-",
+      ".tandem-tmp-xyz",
+      ".tandem-tmp-1-2",
+      ".tandem-tmp-1-2-3-4",
+      ".tandem-tmp-1--3",
+      ".tandem-tmp-1A-2-3",
+      ".tandem-scrub-tmp-",
+      ".tandem-scrub-tmp-not-a-uuid",
+      ".tandem-meta-tmp-0b30dd94-eb52-48e2-851c-025e7b9a45ad",
+      ".installed_plugins.json.tandem-lock",
+      "installed_plugins.json",
+      "x.tandem-tmp-1-2-3",
+    ]) {
+      expect(isOrphanedTempName(name), name).toBe(false);
+    }
+  });
+
+  it("takes all three locks, in order, before deleting anything", async () => {
+    withEntries({ [rustOrphan]: OLD, [cliOrphan]: OLD, "installed_plugins.json": OLD });
+    const { sweepOrphanedTemps, PLUGIN_FILES } = await import("../../src/cli/uninstall-scrub.js");
+
+    const outcome = await sweepOrphanedTemps(DIR, makeLogger(), { sleep: vi.fn(), now: () => NOW });
+
+    expect(outcome).toEqual({ removed: 2, left: 0 });
+    expect(_openSpy.mock.calls.map((c) => path.basename(c[0] as string))).toEqual(
+      PLUGIN_FILES.map((f) => `.${f}.tandem-lock`),
+    );
+    const lastLock = Math.max(..._openSpy.mock.invocationCallOrder);
+    expect(Math.min(..._unlinkSpy.mock.invocationCallOrder)).toBeGreaterThan(lastLock);
+    expect(_unlinkSpy.mock.calls.map((c) => c[0])).toEqual([
+      path.join(DIR, rustOrphan),
+      path.join(DIR, cliOrphan),
+    ]);
+    // Every lock released.
+    expect(_closeSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("creates no lockfile when there is nothing to sweep", async () => {
+    withEntries({ "installed_plugins.json": OLD });
+    const { sweepOrphanedTemps } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await sweepOrphanedTemps(DIR, makeLogger())).toEqual({ removed: 0, left: 0 });
+    expect(_openSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a temp younger than the gate, and a link or folder named like one", async () => {
+    withEntries({
+      [rustOrphan]: { ...OLD, mtimeMs: NOW - 1_000 },
+      [cliOrphan]: { ...OLD, isSymbolicLink: () => true, isFile: () => false },
+      ".tandem-tmp-d-e-f": { ...OLD, isFile: () => false, isDirectory: () => true },
+    });
+    const { sweepOrphanedTemps } = await import("../../src/cli/uninstall-scrub.js");
+
+    const outcome = await sweepOrphanedTemps(DIR, makeLogger(), { sleep: vi.fn(), now: () => NOW });
+
+    expect(outcome).toEqual({ removed: 0, left: 3 });
+    expect(_unlinkSpy).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing when a lock is refused, and releases what it took", async () => {
+    withEntries({ [rustOrphan]: OLD });
+    const known = ".known_marketplaces.json.tandem-lock";
+    const base = _lstatSpy.getMockImplementation();
+    _lstatSpy.mockImplementation(async (p: string) =>
+      path.basename(p) === known
+        ? { isSymbolicLink: () => true, isFile: () => false, isDirectory: () => false }
+        : base?.(p),
+    );
+    const logger = makeLogger();
+    const { sweepOrphanedTemps } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await sweepOrphanedTemps(DIR, logger, { sleep: vi.fn(), now: () => NOW })).toEqual({
+      removed: 0,
+      left: 0,
+    });
+    expect(_unlinkSpy).not.toHaveBeenCalled();
+    expect(_closeSpy).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("could not take"));
   });
 });
 
@@ -538,7 +793,7 @@ describe("findCoworkWorkspaces", () => {
 
   async function scan(): Promise<string[]> {
     const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
-    return findCoworkWorkspaces(logger as never);
+    return (await findCoworkWorkspaces(logger as never)).map((ws) => ws.path);
   }
 
   // ── Which roots are scanned (#2136) ──
@@ -786,6 +1041,12 @@ describe("findCoworkWorkspaces", () => {
     });
 
     expect(await scan()).toEqual([resolvedVm]);
+    // And hands back that resolved root, which the per-workspace re-screen
+    // (#2144) contains the workspace under.
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([
+      { path: resolvedVm, realRoot: resolvedSessions },
+    ]);
   });
 
   it("skips a sessions root whose realpath fails rather than using it unresolved", async () => {

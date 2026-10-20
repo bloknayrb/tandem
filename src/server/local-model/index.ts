@@ -39,7 +39,6 @@ export interface RunTurnOpts {
   /** Raw response-byte ceiling per model call (#1292). See `RunLoopOpts`. */
   maxResponseBytes?: number;
   signal?: AbortSignal;
-  isLicenseRestricted?: () => boolean;
   /** Per assistant content delta, for token streaming (#1123 M1.2). */
   onContentDelta?: (delta: string) => void;
   /** Per turn boundary (after `chat()`), for the streaming sink (#1123 M1.2). */
@@ -64,7 +63,6 @@ export async function runLocalModelTurn(opts: RunTurnOpts): Promise<LoopResult> 
     timeoutMs: opts.timeoutMs,
     maxResponseBytes: opts.maxResponseBytes,
     signal: opts.signal,
-    isLicenseRestricted: opts.isLicenseRestricted,
     onContentDelta: opts.onContentDelta,
     onTurnEnd: opts.onTurnEnd,
     // #2039: this forward is the ONLY thing that makes `doc-swapped` reachable

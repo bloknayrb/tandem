@@ -2,6 +2,7 @@ mod autostart;
 mod context_menu;
 mod cowork_commands;
 mod native_theme;
+mod notifications;
 mod pending_update;
 pub mod keychain;
 mod sentry_reporting;
@@ -1113,6 +1114,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_FLAG]),
         ))
+        // Chat-reply notifications (#2168). Order-insensitive; it only has to
+        // be registered before `setup()`, which installs its click handler.
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
@@ -1200,6 +1204,12 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Chat-reply notification clicks (#2168). Registered once, here, and
+            // early: the plugin reports nothing for notifications shown before a
+            // handler exists. After the log plugin so a registration warning is
+            // not lost.
+            notifications::register_click_handler(app.handle());
 
             // UI element inspector permission grant (`ui-inspector` feature).
             //
@@ -1668,6 +1678,11 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Resized(_)) {
                 apply_window_chrome(window);
             }
+            if matches!(event, tauri::WindowEvent::Focused(true))
+                && window.label() == MAIN_WINDOW_LABEL
+            {
+                notifications::on_main_window_focused(window.app_handle());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if tray_flag_for_close.load(Ordering::Acquire) {
                     // Tray available: hide to tray, server keeps running
@@ -1714,6 +1729,10 @@ pub fn run() {
             keychain::keychain_delete,
             autostart::autostart_get_status,
             autostart::autostart_set_enabled,
+            notifications::notify_chat_reply,
+            notifications::notify_test,
+            notifications::request_attention,
+            notifications::clear_attention,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
@@ -2397,21 +2416,27 @@ fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
 /// test` reaches the copy without an `AppHandle`.
 ///
 /// The body reports THIS DEVICE'S OWN VIEW, never a verdict. `expiresAt` is
-/// read out of the locally stored license, so after a KV-only renewal the
+/// read out of the locally stored license, so after the entitlement is extended
+/// KV-side by hand (there is no renewal product, ADR-040 decision B6) the
 /// Worker may still consider the device entitled while this flag says the
 /// window ended. That is accepted rather than papered over: `SettingsLicenseTab`
 /// already asserts the same thing from the same field, and the authoritative
 /// detector is the Worker's `reason` (#1786), which is invisible through the
 /// `Ok(None)` this branch fires on.
 ///
-/// No purchase/renewal URL literal lives here: `TANDEM_PURCHASE_URL` lives once
-/// in `src/shared/constants.ts`, and a native message dialog holds no link
-/// anyway -- so the copy points at Settings -> License, which carries the
-/// clickable one. That is a claim about the WebView, and it is true only because
-/// `SettingsLicenseTab.svelte`'s `license-update-window-ended` warning now holds
-/// a `license-renew-link` to `TANDEM_PURCHASE_URL` (review round 2: before it,
-/// that tab offered a license HOLDER nothing but "Don't have one yet? Buy a
-/// license", so this dialog completed a loop with no exit).
+/// There is no renewal to offer (ADR-040, 2026-10-09, decisions A5 and B6):
+/// every key Tandem issues includes all future updates, so an ended window
+/// exists only on a key hand-signed with `--expires`, or means something went
+/// wrong. The copy therefore sends the reader to support, not to a purchase.
+///
+/// No support-address literal lives here: `TANDEM_SUPPORT_EMAIL` lives once in
+/// `src/shared/constants.ts`, and a native message dialog holds no link anyway
+/// -- so the copy points at Settings -> License, which carries the clickable
+/// one. That is a claim about the WebView, and it is true only because
+/// `SettingsLicenseTab.svelte`'s `license-update-window-ended` warning holds a
+/// `license-window-support-link` (review round 2, #1819: before a link existed
+/// there, the tab offered a license HOLDER nothing but "Don't have one yet? Buy
+/// a license", so this dialog completed a loop with no exit).
 /// `tests/client/settings-license-tab.test.ts` pins that link, so deleting it
 /// turns this sentence red rather than leaving it quietly false.
 fn window_ended_copy(version: &str) -> (&'static str, String) {
@@ -2420,8 +2445,9 @@ fn window_ended_copy(version: &str) -> (&'static str, String) {
         format!(
             "This device's license shows an update window that has ended, so new releases \
              may no longer be offered here.\n\n\
-             Tandem v{version} keeps running forever — a license never stops working. To \
-             receive new releases again, renew from Settings -> License."
+             Tandem v{version} keeps running forever — a license never stops working. \
+             Licenses normally include all future updates, so if you didn't expect this, \
+             contact support from Settings -> License."
         ),
     )
 }
@@ -2601,7 +2627,8 @@ fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> Update
 ///
 /// **This is the LOCAL view, never a verdict** (#1819). `update_window_current`
 /// is computed from the `expiresAt` inside the stored license, so after a
-/// KV-only renewal the Worker may still consider the device entitled while this
+/// KV-side extension by hand (no renewal product exists, decision B6) the
+/// Worker may still consider the device entitled while this
 /// says the window ended. That disagreement is accepted rather than papered
 /// over: `SettingsLicenseTab`'s `license-update-window-ended` line already
 /// asserts the same thing from the same field, and the authoritative detector
@@ -4195,8 +4222,9 @@ mod update_route_tests {
     /// direction.
     ///
     /// Asserted on substance, not phrasing: it must name the window, must point
-    /// at the surface that can renew (Settings), and must not claim the install
-    /// is current.
+    /// at the surface that holds the support link (Settings), must not claim the
+    /// install is current, and must not tell anyone to renew -- there is no
+    /// renewal product (ADR-040, 2026-10-09, decision B6).
     #[test]
     fn window_ended_copy_names_the_window_and_points_at_settings() {
         let (title, body) = window_ended_copy("9.9.9");
@@ -4207,7 +4235,11 @@ mod update_route_tests {
         );
         assert!(
             body.contains("Settings"),
-            "a native dialog holds no link, so it must name the surface that can renew: {body}"
+            "a native dialog holds no link, so it must name the surface that holds one: {body}"
+        );
+        assert!(
+            !body.to_lowercase().contains("renew"),
+            "there is nothing to renew: every key includes all future updates: {body}"
         );
         assert!(
             !body.contains("latest version"),

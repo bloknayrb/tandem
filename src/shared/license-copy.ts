@@ -3,7 +3,7 @@
  *
  * In `shared/` because all three surfaces need it and none of them should reach
  * into another's tree: the HTTP route and `tandem activate` render activation
- * failures, while the client wall, Settings, and `tandem license` render the
+ * failures, while the client's AI-off notice, Settings, and `tandem license` render the
  * "installed but unverifiable" case. The alternative was the same paragraph
  * hand-written in three components plus the CLI, which is exactly how the three
  * copies drifted before.
@@ -11,7 +11,73 @@
  * Contains no secrets and no I/O — pure string mapping, safe in the browser
  * bundle.
  */
-import { TANDEM_SUPPORT_EMAIL } from "./constants.js";
+import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "./constants.js";
+
+/**
+ * The wire discriminant every AI refusal carries (#1521): the `/api` 403 body's
+ * `error`, the MCP JSON-RPC error's `data.error`, and the wake socket's close
+ * reason. Consumers bundled WITHOUT the licence `define` (the stdio bridge, the
+ * channel shim, the plugin monitor, the shared SSE consumer) key on this string
+ * alone and never import the server's licence modules.
+ */
+export const LICENSE_REQUIRED = "LICENSE_REQUIRED";
+
+/**
+ * JSON-RPC error code for a licence refusal on `/mcp`. Implementation-defined
+ * server-error range (JSON-RPC 2.0 §5.1); unused by the MCP SDK 1.30/1.31.
+ */
+export const LICENSE_REQUIRED_RPC_CODE = -32003;
+
+/** Why the AI is refused: no licence at all, or a licence on disk that fails to verify. */
+export type AiRefusalKind = "unlicensed" | "unverifiable";
+
+/**
+ * The first sentence of each refusal message, without its full stop. The shipped
+ * skill tells Claude which remedy to give by which of these a message starts
+ * with, so every message below is composed from them and a copy change here
+ * reaches the skill's contract test instead of silently de-keying it.
+ */
+export const AI_REFUSAL_UNLICENSED_OPENING =
+  "Tandem is unlicensed, so its AI features are turned off";
+export const AI_REFUSAL_UNVERIFIABLE_OPENING =
+  "Tandem's AI features are off because your license could not be verified";
+
+/**
+ * Refusal copy for a keyless install (trial over, no licence). Carries the
+ * purchase URL, because Claude is its first reader and invents a link without one.
+ */
+export const AI_REFUSAL_UNLICENSED_MESSAGE =
+  `${AI_REFUSAL_UNLICENSED_OPENING}. Your document is unaffected and ` +
+  `stays fully editable. Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
+
+/**
+ * Appended only to a refused `initialize`. Claude Code marks the server failed
+ * after one (measured over HTTP and the stdio bridge, 2026-10-12), and whether
+ * any host handshakes again by itself is unmeasured, so activating alone may
+ * not bring the AI back.
+ * A refusal mid-session needs no hint: the next call heals on its own.
+ */
+export const AI_REFUSAL_RECONNECT_HINT =
+  "Once that is done, reconnect Tandem in your AI client (in Claude Code, run /mcp).";
+
+/**
+ * The local-model loop's stderr line for the unlicensed refusal. Its own copy
+ * because the shared one reassures about "your document", which reads wrong in
+ * a server log with no document in view.
+ */
+export const AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE =
+  `${AI_REFUSAL_UNLICENSED_OPENING}. ` +
+  `Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
+
+/**
+ * Refusal copy for an installed licence that does not verify. **Never carries
+ * the purchase URL** (ADR-040 decision 8): this reader most likely already paid,
+ * and the remedy is a fix or a reissue, not a purchase. The prefix is what says
+ * the AI is off — `unverifiableLicenseMessage` alone does not.
+ */
+export function aiRefusalUnverifiableMessage(code: LicenseUnverifiableCode): string {
+  return `${AI_REFUSAL_UNVERIFIABLE_OPENING}. ` + unverifiableLicenseMessage(code);
+}
 
 /**
  * Why a signature check failed. Produced by `verifyLicenseSignature`.
@@ -26,7 +92,10 @@ export type LicenseVerifyCode =
   | "TOO_LONG"
   /** Not base64, not JSON, or missing metadata/signature. */
   | "MALFORMED"
-  /** Well-formed, but not signed by the key this build trusts. */
+  /**
+   * Well-formed, but not signed by any key this build trusts: a bad signature,
+   * or a key id this build does not carry (a retired or newer signing key).
+   */
   | "BAD_SIGNATURE";
 
 /**

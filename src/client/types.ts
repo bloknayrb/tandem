@@ -214,4 +214,7 @@ export interface AppInfoData {
   /** Absolute path to sample/welcome.md on the server host. Undefined if not found at startup.
    *  Consumed by the "Replay tutorial" affordance to reopen the welcome doc. */
   welcomePath?: string;
+  /** Absolute path to the licence text on the server host: `LICENSE.txt` in the desktop
+   *  bundle, the bare `LICENSE` in a dev or npm tree. Undefined if not found at startup. */
+  licensePath?: string;
 }

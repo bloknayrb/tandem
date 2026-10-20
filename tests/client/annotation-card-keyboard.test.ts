@@ -28,7 +28,7 @@ describe("AnnotationCard — keyboard activation (C2)", () => {
   it("is tabbable (tabindex=0) when onClick is provided", () => {
     const onClick = vi.fn();
     const { container } = render(AnnotationCard, {
-      props: { annotation: makeAnnotation(), onClick },
+      props: { aiDisabled: false, annotation: makeAnnotation(), onClick },
     });
     const card = container.querySelector("[data-testid='annotation-card-annotation-1']");
     expect(card?.getAttribute("tabindex")).toBe("0");
@@ -36,7 +36,7 @@ describe("AnnotationCard — keyboard activation (C2)", () => {
 
   it("is NOT tabbable when onClick is absent", () => {
     const { container } = render(AnnotationCard, {
-      props: { annotation: makeAnnotation() },
+      props: { aiDisabled: false, annotation: makeAnnotation() },
     });
     const card = container.querySelector("[data-testid='annotation-card-annotation-1']");
     expect(card?.hasAttribute("tabindex")).toBe(false);
@@ -45,7 +45,7 @@ describe("AnnotationCard — keyboard activation (C2)", () => {
   it("fires onClick exactly once on Enter", async () => {
     const onClick = vi.fn();
     const { container } = render(AnnotationCard, {
-      props: { annotation: makeAnnotation(), onClick },
+      props: { aiDisabled: false, annotation: makeAnnotation(), onClick },
     });
     const card = container.querySelector("[data-testid='annotation-card-annotation-1']") as Element;
     await fireEvent.keyDown(card, { key: "Enter" });
@@ -55,7 +55,7 @@ describe("AnnotationCard — keyboard activation (C2)", () => {
   it("fires onClick exactly once on Space", async () => {
     const onClick = vi.fn();
     const { container } = render(AnnotationCard, {
-      props: { annotation: makeAnnotation(), onClick },
+      props: { aiDisabled: false, annotation: makeAnnotation(), onClick },
     });
     const card = container.querySelector("[data-testid='annotation-card-annotation-1']") as Element;
     await fireEvent.keyDown(card, { key: " " });
@@ -66,11 +66,7 @@ describe("AnnotationCard — keyboard activation (C2)", () => {
     const onClick = vi.fn();
     const onReply = vi.fn(async () => true);
     const { container } = render(AnnotationCard, {
-      props: {
-        annotation: makeAnnotation(),
-        onClick,
-        onReply,
-      },
+      props: { aiDisabled: false, annotation: makeAnnotation(), onClick, onReply },
     });
 
     // Open the reply composer.

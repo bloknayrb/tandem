@@ -34,8 +34,13 @@ import { narrowConflict } from "../session/manager.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
-import { gatedTool } from "./license-gate.js";
-import { lockOrPermissionCode, mcpError, mcpSuccess, noDocumentError } from "./response.js";
+import {
+  lockOrPermissionCode,
+  mcpError,
+  mcpSuccess,
+  noDocumentError,
+  withErrorBoundary,
+} from "./response.js";
 
 // ---------------------------------------------------------------------------
 // Shared core logic (used by both MCP tool and API endpoint)
@@ -539,7 +544,7 @@ export function registerApplyTools(server: McpServer): void {
           .optional()
           .describe("Custom backup path (default: {name}.backup.docx)"),
       },
-      gatedTool("tandem_applyChanges", async (args) => {
+      withErrorBoundary("tandem_applyChanges", async (args) => {
         try {
           const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
           return mcpSuccess(result);
@@ -599,8 +604,9 @@ export function registerApplyTools(server: McpServer): void {
         ? "For .docx the list also includes the {name}.backup.docx sidecar written by " +
           "tandem_applyChanges, listed last; restore it by name like any snapshot. "
         : "") +
-      "Restoring " +
-      "reloads the open document in place — annotations are preserved and re-anchored.",
+      "Restoring overwrites the file on disk with the snapshot and reloads the open document in " +
+      "place, discarding unsaved in-memory edits; annotations are preserved and re-anchored. Refused " +
+      "for read-only, uploaded and scratchpad documents.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
       backup: z
@@ -608,7 +614,7 @@ export function registerApplyTools(server: McpServer): void {
         .optional()
         .describe("Snapshot filename to restore. Omit to list available snapshots."),
     },
-    gatedTool("tandem_restoreBackup", async (args) => {
+    withErrorBoundary("tandem_restoreBackup", async (args) => {
       // path.basename on the ID strips any directory components so CodeQL
       // does not trace args.documentId through Map.get to existing.filePath.
       // Valid IDs (64-char hex / upload_*) have no separators, so this is a

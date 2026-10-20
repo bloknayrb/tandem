@@ -19,16 +19,13 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-09-28 (v0.28.0).
 
 ### Where v1.0 stands
 
-The code is essentially complete. What remains is one engineering reshape, the commercial
-setup, hardware verification, and two flag flips.
+The code is essentially complete. What remains is the licence gate's last checks, the
+commercial setup, hardware verification, and two flag flips.
 
-1. **The license surface gate (#1521) has to land dark before the flip.** Its policy is
-   **Decision F** (2026-09-06, recorded on #1827 and #1788): restricted mode is *symmetric
-   read-only*, and the annotation mutators move from ungated to gated in both halves.
-   #1521's own acceptance criteria predate that decision and contradict it (see its
-   2026-09-08 comment), so reconcile the issue with Decision F before implementing anything.
-   Flipping `LICENSE_GATE_ENABLED` on today's per-tool gate would ship a shape ADR-040 no
-   longer describes.
+1. **The license surface gate (#1521) is built, dark; two things remain before the flip.**
+   #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
+   and real-key activation), which needs a signed key. #2205: `tandem activate` from the CLI
+   should resume Tandem's Claude the way activating in Settings does.
 2. **Commercial readiness** — see [the exit criteria](#v100-exit-criteria). The live
    checklist is [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay),
    and all of it is unchecked. #1117, the old commercial-infra tracker, was closed on
@@ -42,19 +39,16 @@ setup, hardware verification, and two flag flips.
    - **Local models.** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
      whole M1a→M4 track is merged dark and has been in the tree since v0.20.0. What remains
      is the flip and its gates.
-5. **The pre-v1.0 review's remainder.** 10 of 93 `v1-review` issues are open: #1792, #1822,
-   #1823, #1825, #1827, #1920, #1942, #1943, #2001, and #1754 (moot while `.docx` is dark).
-   #1942 (key rotation) is dated 2027-03-01 and does not block.
+5. **The pre-v1.0 review's remainder.** 9 of 93 `v1-review` issues are open: #1792, #1822,
+   #1823, #1825, #1827, #1920, #1943, #2001, and #1754 (moot while `.docx` is dark).
 
 ### Decisions still owed
 
 | Question | Where | Why it blocks |
 |---|---|---|
-| **What `LICENSE` covers.** It names only the npm package, not the desktop app. | #1908 | It has to be decided before the gate flips |
-| **Counsel review of the current `LICENSE`.** #1909 rewrote the grant on 2026-09-08 (free during the beta, then a 14-day trial), after counsel's §5 text. Nothing records counsel reviewing the new wording. | #1909, ADR-040 §5 | The commercial gate treats `LICENSE` as counsel-drafted |
-| **LLC, accountant and pricing.** ADR-040 §6 requires the LLC and accountant before taking money, and pricing is still unset. #1117 tracked both and closed with them unchecked, and licensing-operations.md §8 has neither. | ADR-040 §6 | Nothing else tracks them |
+| **Pricing.** Still unset. #1117 tracked it and closed with it unchecked, and licensing-operations.md §8 does not have it. ADR-040 §6's LLC requirement was withdrawn on 2026-10-09 (no company will be formed); whether an accountant is wanted before taking money was not decided then and stays here. | ADR-040 §6 | Nothing else tracks it |
 | **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
-| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | Counsel's answer decides whether it joins the commercial gate |
+| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether it joins the commercial gate |
 | **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
 
 **"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision
@@ -78,7 +72,6 @@ outcome is keep, replace or retire.
 | 2027-02-24 | #1599 | Accepted: config-mutation lost-update race |
 | 2027-02-26 | #1633 | ui-inspector screenshots on Windows |
 | 2027-02-28 | #1671 | Accepted: caller-named write destinations |
-| 2027-03-01 | #1942 | Rotate the license signing key |
 
 ### Open work that bears on v1.0
 
@@ -91,6 +84,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #1997, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523.
 - **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch).
+- **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
 - **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1862, #1911, #1937, #2073, #1333, #1734.
@@ -167,12 +161,11 @@ v0.26.0, v0.27.0 or v0.28.0.
 - **If a run fails, that is a finding to fix, not a reason to relax the numbers.** [perf-gate-results.md](perf-gate-results.md) relies on this rule.
 
 **Commercial readiness.** UNMET. This gates the license flip. If it is not ready at code-complete, the date floats and **the gate flag does not ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
-- ADR-040 §5 (BUSL re-scope) is Accepted. `LICENSE` has been rewritten since counsel's text (#1909), and #1908 and the counsel-review row above still apply.
-- LLC, accountant and pricing settled (ADR-040 §6; see above).
+- Pricing settled, and the accountant question answered (ADR-040 §6; see above).
 - **MoR checkout live end to end:** a test purchase goes through the issuance webhook, the signed license is delivered, and it activates a gate-ON build.
 - Grandfather licenses issued to the cohort decided under §1c.
 - **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) is complete.** §8 owns the item list, and several of its items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and a failure there returns 503 on every webhook. Two items need more than their checkbox says:
-  - **Terms, refund policy and privacy notice.** None exists. [licensing-terms.md](licensing-terms.md) is a working draft that has not been to counsel.
+  - **Terms, refund policy and privacy notice.** None exists. [licensing-terms.md](licensing-terms.md) is a working draft. No counsel is being consulted, so the licensor writes the final versions.
   - **The beta-cohort claim path.** Decide who is grandfathered, and make the banner and wall copy name the beta offer (§1c item 2). Keys go out privately, never in an issue or comment: verification is offline, so anyone can activate a key that has been posted publicly.
 
 **Accessibility.** PARTIAL. See [a11y-gate-results.md](a11y-gate-results.md).
@@ -187,7 +180,6 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Documentation gates**
 - CHANGELOG `[1.0.0]` section finalized.
-- `LICENSE` present, with the BUSL change date confirmed and #1908 decided.
 - Every redesign artboard is either shipped or deferred with a reason.
 - Every locked design decision (D1–D12, in the history file) is linked to an ADR or PR.
 - **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. None exists today.

@@ -1,23 +1,27 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import type { LauncherStandby } from "../../shared/launcher/contract";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import type {
   AiChip,
   AiLiveIndicator,
   AiReadinessState,
+  LauncherFailure,
   PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
-import { AI_CTA } from "../hooks/useAiReadiness.svelte";
+import { AI_CTA, ctaHandler, TANDEM_CLAUDE_DOWN } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
+import type { AiNotice } from "../utils/license-ui";
 import CwdDriftPill from "./CwdDriftPill.svelte";
 import {
   type AiIndicatorTone,
   type AiIndicatorView,
   aiIndicatorView,
   type CwdDriftPill as CwdDriftPillView,
+  sessionCountLabel,
 } from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
@@ -34,10 +38,41 @@ interface Props {
    * single home for AI-connection state.
    */
   aiLiveIndicator: AiLiveIndicator;
-  /** Full readiness state — needed to distinguish "running but no session yet"
-   *  (render nothing) from genuinely-down (`unconfigured`/`stopped` → "AI not
-   *  connected"). A boolean can't carry that; see `aiIndicatorView`. */
+  /** Full readiness state — needed to distinguish "booting" (render nothing)
+   *  from genuinely-down (`unconfigured`/`stopped` → "AI not connected"). A
+   *  boolean can't carry that; see `aiIndicatorView`. */
   aiState: AiReadinessState;
+  /** Tandem's own launched Claude is running (`useAiReadiness.launcherRunning`). */
+  aiLauncherRunning?: boolean;
+  /** Its working folder, or null when unknown. */
+  aiLauncherCwd?: string | null;
+  /** It has a turn in flight — the only activity shown beside "Tandem's Claude". */
+  aiLauncherBusy?: boolean;
+  /** The server matched a live connection to it — the only thing that turns
+   *  "Tandem's Claude" green. Required (as is `aiSessionCount`) so a mount that
+   *  forgets to wire it is a type error, not a permanently neutral dot. */
+  aiLauncherAttached: boolean;
+  /** Tandem is restarting its own Claude → "Restarting Claude…" (#2180).
+   *  Required for the same reason as `aiLauncherAttached`. */
+  aiLauncherRestarting: boolean;
+  /** That restart is a Start from standby → "Starting Claude…" (#2195). */
+  aiLauncherStarting: boolean;
+  /** Tandem's Claude is not running by choice (#2195) → the standby pill.
+   *  Required for the same reason as `aiLauncherAttached`: forgotten wiring
+   *  would land on "AI not connected", whose hover text says to run /mcp. */
+  aiLauncherStandby: LauncherStandby | null;
+  /** The standby began within the leftover-session window. */
+  aiLauncherStandbyRecent: boolean;
+  /** `/health`'s session count, or null when unknown. */
+  aiSessionCount: number | null;
+  /** It tripped while another live session is attached → the sibling button.
+   *  The raw value; `aiLauncherFailureDismissed` decides whether it shows. */
+  aiLauncherFailure?: LauncherFailure | null;
+  /** The user dismissed the sibling button for this failure (the caller owns
+   *  the rule — `visibleLauncherFailure`). Hides the button only. */
+  aiLauncherFailureDismissed?: boolean;
+  /** Hide the sibling button (the caller tracks which failure was dismissed). */
+  onDismissLauncherFailure?: () => void;
   /**
    * When present, the AI status indicator becomes the Connect/Setup/Restart
    * control. This is the ONLY signal the CTA lookup below switches on — the
@@ -47,6 +82,21 @@ interface Props {
   aiChip?: AiChip;
   onConnectAi?: () => void;
   onRestartClaude?: () => void;
+  /** The Start control (#2195). Required: an optional one would make a
+   *  forgotten mount a dead Start button rather than a type error. */
+  onStartClaude: () => void;
+  /**
+   * Open Settings → License — the `ai-off` chip's action (#1521). Required,
+   * like `aiLauncherAttached`: a default would let a mount that forgets it
+   * render a CTA that does nothing.
+   */
+  onOpenLicenseSettings: () => void;
+  /**
+   * The licence refusal (#1521): pass `aiReadiness.aiNotice`, never
+   * `licenseStore.ui.aiNotice` — readiness guarantees it is non-null exactly
+   * when `aiChip` is `"ai-off"`. Drives the pill's ai-off state and copy.
+   */
+  aiNotice: AiNotice | null;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
   /** Whether anything is delivering real-time events. Only `"none"` changes the
@@ -107,9 +157,24 @@ let {
   claudeActive,
   aiLiveIndicator,
   aiState,
+  aiLauncherRunning = false,
+  aiLauncherCwd = null,
+  aiLauncherBusy = false,
+  aiLauncherAttached,
+  aiLauncherRestarting,
+  aiLauncherStarting,
+  aiLauncherStandby,
+  aiLauncherStandbyRecent,
+  aiSessionCount,
+  aiLauncherFailure = null,
+  aiLauncherFailureDismissed = false,
+  onDismissLauncherFailure,
   aiChip = null,
   onConnectAi,
   onRestartClaude,
+  onStartClaude,
+  onOpenLicenseSettings,
+  aiNotice,
   soloMode,
   pushDelivery = "unknown",
   claudeWorkingTool = null,
@@ -239,7 +304,48 @@ const labelColor = $derived(
 // Consolidated AI-connection indicator (replaces the old titlebar pill + the
 // former "Assistant · idle" segment). The view is a pure mapping — MUST be
 // `$derived` so it recomputes as the reactive props flip connected→solo→down.
-const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode, pushDelivery));
+const aiView = $derived(
+  aiIndicatorView({
+    state: aiState,
+    liveIndicator: aiLiveIndicator,
+    soloMode,
+    pushDelivery,
+    launcherRunning: aiLauncherRunning,
+    launcherCwd: aiLauncherCwd,
+    launcherBusy: aiLauncherBusy,
+    launcherAttached: aiLauncherAttached,
+    launcherRestarting: aiLauncherRestarting,
+    launcherStarting: aiLauncherStarting,
+    launcherStandby: aiLauncherStandby,
+    launcherStandbyRecent: aiLauncherStandbyRecent,
+    docSyncConnected: connected,
+    sessionCount: aiSessionCount,
+    aiNotice,
+  }),
+);
+
+// The handlers every CTA may name, for `ctaHandler`. Built inside each
+// `$derived` below (never a top-level object) so the closures read live props.
+function ctaHandlers() {
+  return {
+    connect: () => onConnectAi?.(),
+    restart: () => onRestartClaude?.(),
+    start: () => onStartClaude(),
+    openLicenseSettings: () => onOpenLicenseSettings(),
+  };
+}
+
+// The "Tandem's Claude isn't running" sibling: copy from `TANDEM_CLAUDE_DOWN`,
+// handler choice from `AI_CTA[failure].action` — one lookup each, never a
+// parallel ternary (#1268).
+const launcherDown = $derived(
+  aiLauncherFailure && !aiLauncherFailureDismissed
+    ? {
+        ...TANDEM_CLAUDE_DOWN[aiLauncherFailure],
+        onclick: ctaHandler(AI_CTA[aiLauncherFailure].action, ctaHandlers()),
+      }
+    : null,
+);
 
 // #1282. A sibling of the AI indicator rather than part of it — see
 // `cwdDriftPill` for why, and why it is composed by the caller rather than here.
@@ -260,22 +366,40 @@ const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode, push
  * props, so they're bound inside `aiCta` here: a plain top-level object would
  * freeze stale closures over the props' initial values.
  */
-const aiCta = $derived(
-  aiChip
-    ? {
-        title: AI_CTA[aiChip].title,
-        ariaLabel: AI_CTA[aiChip].ariaLabel,
-        onclick: AI_CTA[aiChip].action === "restart" ? onRestartClaude : onConnectAi,
-      }
-    : null,
-);
+//
+// The standby pill (#2195) shows its own label ("Tandem's Claude is off"), so
+// its accessible name leads with that label and then names the action: WCAG
+// 2.5.3 wants the visible text inside the name, and without it the three
+// standbys would collapse to one screen-reader string.
+//
+// The `ai-off` chip takes its title/aria from the ai-off view, which holds
+// the kind-specific copy (#1521). `AI_CTA["ai-off"]` is the type-level fallback
+// only, which is why it must stay kind-neutral (see its comment).
+const aiCta = $derived.by(() => {
+  if (!aiChip) return null;
+  if (aiChip === "ai-off" && aiView?.dataState === "ai-off") {
+    return {
+      title: aiView.title,
+      ariaLabel: aiView.ariaLabel,
+      onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),
+    };
+  }
+  const lead = aiChip === "start" && aiView ? `${aiView.label}. ` : "";
+  return {
+    title: lead + AI_CTA[aiChip].title,
+    ariaLabel: lead + AI_CTA[aiChip].ariaLabel,
+    onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),
+  };
+});
 
 // Activity latch (D3): `claudeActive` flaps to false every few seconds while
 // Claude idles between tool calls. Animating the now-full-opacity dot straight
 // off it would strobe, so latch it — hold "recently active" for a trailing
 // window after each active pulse. The indicator animates only when it's a live
 // state (`aiView.canAnimate`) AND recently active, so a disconnected dot never
-// pulses "as if working".
+// pulses "as if working". A view's `pulse` override outranks all of this: where
+// Tandem's Claude runs, only the supervisor's own `busy` pulses the dot, because
+// presence activity can't be attributed to the chat's session.
 //
 // `debounce` IS the trailing-window pattern: each active pulse refreshes the
 // reset; on the active→idle edge we simply stop calling it so the pending reset
@@ -292,7 +416,21 @@ $effect(() => {
   releaseLatch(); // (re)arm the trailing reset
 });
 onDestroy(() => releaseLatch.cancel());
-const aiAnimating = $derived((aiView?.canAnimate ?? false) && (claudeActive || recentlyActive));
+const aiAnimating = $derived(
+  aiView?.pulse ?? ((aiView?.canAnimate ?? false) && (claudeActive || recentlyActive)),
+);
+
+// The working pill's text. With an override active it shows only the launched
+// Claude's own turn; otherwise today's per-tool presence flash.
+const workingText = $derived(
+  aiView && aiView.pulse !== null
+    ? aiView.ownActivity === "working"
+      ? "Tandem's Claude is working"
+      : null
+    : claudeWorkingTool && aiView?.canAnimate
+      ? `${agentLabel.specific} is ${claudeWorkingLabel(claudeWorkingTool)}`
+      : null,
+);
 
 // Tone → CSS vars for the AI indicator's dot fill + text. A tone-keyed map
 // (single source of truth) mirrors the `dotColor`/`labelColor` convention above
@@ -301,6 +439,9 @@ const AI_TONE: Record<AiIndicatorTone, { dot: string; text: string }> = {
   connected: { dot: "var(--tandem-success)", text: "var(--tandem-success-fg-strong)" },
   solo: { dot: "var(--tandem-warning)", text: "var(--tandem-warning-fg-strong)" },
   "not-connected": { dot: "var(--tandem-fg-subtle)", text: "var(--tandem-fg-subtle)" },
+  // Told apart from not-connected by SHAPE (a hollow ring, see the dot's
+  // `class:pending-ring`), since muted-grey tokens differ by ~0.03 lightness.
+  pending: { dot: "transparent", text: "var(--tandem-fg-muted)" },
 };
 
 // Word-count cycle (W5). Mode persists in localStorage. The chip click
@@ -440,6 +581,7 @@ function cycleWordMode() {
   {#snippet aiIndicatorContent(view: AiIndicatorView)}
       <span
         class="claude-dot"
+        class:pending-ring={view.tone === "pending"}
         style="width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: {AI_TONE[view.tone].dot}; animation: {aiAnimating ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
       ></span>
       <span class="status-label-fade" style="color: {AI_TONE[view.tone].text}">
@@ -457,8 +599,12 @@ function cycleWordMode() {
 
              Only appended in Solo (`view.tone === "solo"`); the connected and
              no-push states make no forwarding promise for activity to
-             contradict. -->
-        {view.label}{#if claudeStatus && view.canAnimate} · {claudeStatus}{#if view.tone === "solo"} (not your comments){/if}{/if}
+             contradict.
+
+             Never appended while a `pulse` override is set: beside Tandem's
+             Claude, `claudeStatus` may be another session's, and the chat UI
+             shows status only for the chat's attached session. -->
+        {view.label}{#if view.sessionCount !== null}<span data-testid="status-ai-session-count">{` · ${sessionCountLabel(view.sessionCount)}`}</span>{/if}{#if claudeStatus && view.canAnimate && view.pulse === null}{` · ${claudeStatus}`}{#if view.tone === "solo"}{" (not your comments)"}{/if}{/if}
       </span>
   {/snippet}
   {#if aiView}
@@ -488,9 +634,38 @@ function cycleWordMode() {
       </div>
     {/if}
   {/if}
-  <!-- #1282 working-folder drift. Deliberately NOT nested inside `{#if aiView}`:
-       `aiIndicatorView` returns null for "launcher running, no MCP session yet",
-       which is exactly the auto-launched startup window this nudge exists for. -->
+  <!-- Tandem's own Claude has tripped while another session keeps the pill
+       up. A sibling, not the pill's own CTA: the pill still truthfully
+       reports the attached session, and EmptyState / the send path keep
+       reading `aiChip` unchanged. Dismissal is tracked by the caller. -->
+  {#if launcherDown}
+    <span class="status-launcher-down">
+      <button
+        type="button"
+        class="status-ai-indicator actionable"
+        data-testid="status-tandem-claude-down"
+        title={launcherDown.title}
+        aria-label={launcherDown.title}
+        onclick={launcherDown.onclick}
+      >
+        <span
+          class="claude-dot"
+          style="width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--tandem-fg-subtle);"
+        ></span>
+        <span style="color: var(--tandem-fg-muted)">{launcherDown.label}</span>
+      </button>
+      <button
+        type="button"
+        class="status-launcher-down-dismiss"
+        data-testid="status-tandem-claude-down-dismiss"
+        aria-label="Dismiss"
+        title="Dismiss"
+        onclick={() => onDismissLauncherFailure?.()}
+      >×</button>
+    </span>
+  {/if}
+  <!-- #1282 working-folder drift. A sibling of the AI indicator: it describes
+       the folder, not the connection — see `cwdDriftPill`. -->
   {#if cwdDriftView}
     <CwdDriftPill
       pill={cwdDriftView}
@@ -502,8 +677,11 @@ function cycleWordMode() {
   <!-- #651 "Claude is {verb}…" pill. Gated on a live session (`aiView.canAnimate`)
        as well as an in-flight tool so it can never render "working" while the
        connection indicator shows nothing (an incoherent activity-without-
-       connection micro-state). -->
-  {#if claudeWorkingTool && aiView?.canAnimate}
+       connection micro-state). Beside "Tandem's Claude" it is re-sourced to the
+       supervisor's own `busy` (`workingText`), since a tool flash may be another
+       session's. It now stays up for a whole turn, so `aria-live` announces
+       once per turn rather than per tool call. -->
+  {#if workingText}
     <span
       data-testid="claude-working-indicator"
       class="claude-working-pill"
@@ -513,7 +691,7 @@ function cycleWordMode() {
       <span class="claude-working-dot"></span>
       <span class="claude-working-dot"></span>
       <span class="claude-working-dot"></span>
-      <span style="margin-left: 4px;">{agentLabel.specific} is {claudeWorkingLabel(claudeWorkingTool)}…</span>
+      <span style="margin-left: 4px;">{workingText}…</span>
     </span>
   {/if}
 </div>
@@ -653,6 +831,37 @@ function cycleWordMode() {
       outline: 1px solid ButtonText;
       outline-offset: 1px;
     }
+  }
+
+  /* "Tandem's Claude" before any session is seen: a hollow ring, so it reads
+     apart from not-connected's solid muted dot by shape, not by a grey the eye
+     can't separate. A border, never an inline `animation:` — the reduce-motion
+     guard counts exactly two inline animations in this file. */
+  .claude-dot.pending-ring {
+    box-sizing: border-box;
+    border: 1.5px solid var(--tandem-fg-muted);
+  }
+
+  .status-launcher-down {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  /* 24×24 minimum target (WCAG 2.5.8) — the reason CwdDriftPill puts its
+     dismiss in a menu instead of a bare glyph. */
+  .status-launcher-down-dismiss {
+    background: none;
+    border: none;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0 4px;
+    cursor: pointer;
+    color: var(--tandem-fg-subtle);
+    font-size: var(--tandem-text-xs);
+    line-height: 1;
+  }
+  .status-launcher-down-dismiss:hover {
+    color: var(--tandem-fg);
   }
 
   /* #651 generic "Claude is …" typing-presence pill. Sits next to the

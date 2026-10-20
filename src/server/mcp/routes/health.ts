@@ -1,19 +1,24 @@
 import type { Request, Response } from "express";
 import { isLoopback } from "../../auth/middleware.js";
-import type { DeliveryState } from "../../events/delivery-state.js";
+import { applyAiRefusal, type DeliveryState } from "../../events/delivery-state.js";
 import type { Handler } from "./_shared.js";
 
 export interface HealthHandlerDeps {
   version: string;
   /**
-   * True when at least one MCP transport has completed `initialize`.
+   * True when any MCP transport that completed `initialize` is still in the
+   * registry — including one whose client has gone away without `DELETE /mcp`
+   * and is waiting to be reaped. `sessionCount` is the live subset, so
+   * `hasSession: true` beside `sessionCount: 0` means "only leftovers".
    *
    * Scoped to handshake-era clients by construction: MCP `2026-07-28` removed
    * both the handshake and protocol-level sessions, so a client on that revision
-   * never increments this. Supplementing it without inverting its failure mode
-   * is #1249; see ADR-045's 2026-07-30 amendment.
+   * never increments either. Supplementing them without inverting their failure
+   * mode is #1249; see ADR-045's 2026-07-30 amendment.
    */
   hasSession: () => boolean;
+  /** Distinct LIVE MCP clients (`isLiveEntry` + `countDistinctClients`). */
+  sessionCount: () => number;
   /** Live count of event-queue subscribers (the SSE fan-out). */
   getSubscriberCount: () => number;
   /** Consumer heartbeat counters — see events/push-liveness.ts. */
@@ -33,6 +38,18 @@ export interface HealthHandlerDeps {
    */
   getDeliveryState: (externalConsumerCount: number) => DeliveryState;
   /**
+   * Does Tandem refuse the AI right now (#1521)? `aiRefusal() !== null`, wired
+   * in the server. Maps an outstanding forward to `delivery.state:
+   * "license-refused"` instead of a misleading `consumer-detached` or climbing
+   * `awaiting-poll`.
+   *
+   * REQUIRED, with no default: a forgotten wiring would silently restore the
+   * misdiagnosis. It costs a licence file read and a signature check, so it is
+   * read only inside the loopback branch (a LAN poll is never sent the result)
+   * and only for an outstanding forward (`applyAiRefusal` asks lazily).
+   */
+  aiRefused: () => boolean;
+  /**
    * True once `shutdown()` has begun. Flips `status` from `"ok"` to
    * `"shutting-down"` — see the note on that field below, and
    * `server/shutdown-state.ts` for why it is the field and not the status code.
@@ -44,7 +61,7 @@ export interface HealthHandlerDeps {
  * GET /health — public liveness, plus loopback-only diagnostics.
  *
  * Public: `status`, `version`, `transport`. Loopback-only: `pid`, `hasSession`,
- * `push` and `delivery`.
+ * `sessionCount`, `push` and `delivery`.
  *
  * `status` is `"ok"` until `shutdown()` starts and `"shutting-down"` after, and
  * the response stays a 200 in both states. That distinction is what stops a
@@ -63,7 +80,8 @@ export interface HealthHandlerDeps {
  * provider's auth token, so that would hand a connection credential to any
  * loopback page.
  *
- * The other three gated fields are session-presence signals — whether an AI is attached,
+ * The other gated fields are session-presence signals — whether an AI is attached
+ * and how many,
  * whether a real-time consumer is receiving, and whether a model has polled since
  * something was handed out — so they are withheld from LAN callers for the same
  * reason. `delivery` is the most sensitive of them, not the least: its counters
@@ -117,6 +135,7 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       body.pid = process.pid;
       const subscribers = deps.getSubscriberCount();
       body.hasSession = deps.hasSession();
+      body.sessionCount = deps.sessionCount();
       body.push = {
         subscribers,
         ...deps.getPushLiveness(),
@@ -124,7 +143,7 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       // Read once and shared, so `push.subscribers` and the join's re-evaluation
       // can never disagree within a single response — which is the exact
       // contradiction ("subscribers: 0" beside "awaiting-poll") this fixes.
-      body.delivery = deps.getDeliveryState(subscribers);
+      body.delivery = applyAiRefusal(deps.getDeliveryState(subscribers), deps.aiRefused);
     }
 
     res.json(body);

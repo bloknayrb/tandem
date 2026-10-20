@@ -8,9 +8,10 @@
  *   outside `[homedir(), tmpdir()]`. Prevents a compromised account from
  *   replacing `~/.claude.json` with a symlink to `/etc/shadow` or a
  *   Windows junction redirecting `~/.claude` into a protected dir.
- * - MSIX detection is anchored to `/^Claude_[A-Za-z0-9]+$/` and the
- *   `%LOCALAPPDATA%` realpath must resolve under home (defeats an
- *   attacker who controls env).
+ * - MSIX detection for every WRITE is anchored to `/^Claude_[A-Za-z0-9]+$/`
+ *   and the `%LOCALAPPDATA%` realpath must resolve under home (defeats an
+ *   attacker who controls env). Only the uninstall scrub's removal pass
+ *   (`detectRemovalTargets`) accepts the wider Cowork-scan prefixes (#2144).
  * - Malformed JSON is never rewritten: both `applyConfig` and
  *   `readConfigForMutation` refuse the file and leave it as found (#1802).
  *   Refusal messages carry no parse detail — V8 `SyntaxError` text embeds a
@@ -607,7 +608,10 @@ function realpathCached(p: string): string {
  * who swaps a regular file for a symlink between check and write. Node's
  * `fs` doesn't expose `O_NOFOLLOW` / `openat`-style per-component
  * traversal, so the window is unavoidable without native bindings. The
- * realpath check shrinks the practical attack but doesn't close it.
+ * realpath check shrinks the practical attack but doesn't close it. On
+ * Windows `O_CREAT | O_EXCL` is no substitute: it creates the TARGET of a
+ * dangling symlink (measured 2026-10-06, #2144), so the CLI uninstall scrub's
+ * `rewriteJson` carries the same window.
  *
  * Defaults to `[homedir(), tmpdir()]`. Callers may nominate alternate
  * roots (e.g., test fixtures that operate inside a specific tmpdir).
@@ -671,8 +675,40 @@ export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string
   }
 }
 
-/** MSIX package families that match Claude's installer. Anchored on both ends. */
+/**
+ * MSIX package families that match Claude's installer. Anchored on both ends.
+ * Every config WRITE (setup, the wizard, rotate-token, the boot repair) is
+ * confined to these.
+ */
 export const MSIX_PACKAGE_PATTERN = /^Claude_[A-Za-z0-9]+$/;
+
+/**
+ * MSIX package-name prefixes a REMOVAL pass must reach: the Cowork scans'
+ * set, publisher-anchored, never a bare `includes("Claude")`, because a
+ * foreign package could stage the sessions layout in its own container.
+ *
+ * Deliberately wider than {@link MSIX_PACKAGE_PATTERN}. A removal pass must
+ * be as wide as everywhere a Tandem entry could have ended up: the desktop's
+ * Cowork installer writes under `AnthropicPBC.Claude*`, and a Claude Desktop
+ * re-published under that name could carry its config, Tandem's entry
+ * included, with it. Setup never writes there (#2144, decided by Bryan
+ * 2026-10-06: widen removal only).
+ *
+ * The TS twin of `is_claude_package_name` in
+ * `src-tauri/src/cowork_workspace_scan.rs`. Drift between the two is what
+ * #2136 was, so `tests/build/cowork-scan-alignment.test.ts` reads the Rust
+ * source and fails when they disagree, and also pins
+ * {@link MSIX_PACKAGE_PATTERN} as a subset of these.
+ */
+export const CLAUDE_PACKAGE_PREFIXES = ["Claude_", "AnthropicPBC.Claude"] as const;
+
+/**
+ * A bare prefix match, equal to the Rust scan's. Safe for a name read from
+ * `readdir`, which is always a single path component.
+ */
+export function isClaudePackageName(name: string): boolean {
+  return CLAUDE_PACKAGE_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
 
 export interface DetectOptions {
   /**
@@ -769,7 +805,28 @@ export function detectionRefusal(opts: DetectOptions = {}): string | null {
   return rejectUnsafeWindowsPrefix(opts.homeOverride ?? homedir());
 }
 
+/** Every config Tandem may WRITE its entries into. */
 export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
+  return detectWith(opts, (name) => MSIX_PACKAGE_PATTERN.test(name));
+}
+
+/**
+ * Every config a Tandem entry may have to be REMOVED from: {@link detectTargets}
+ * plus MSIX packages under the wider {@link CLAUDE_PACKAGE_PREFIXES}.
+ *
+ * A separate function rather than a `DetectOptions` flag, because options
+ * objects are forwarded whole (`readExistingTandemEntries` does), and a flag
+ * would ride along into a write path. Only the uninstall scrub may import
+ * this; `tests/server/integrations/detect-removal-seam.test.ts` pins that.
+ */
+export function detectRemovalTargets(opts: DetectOptions = {}): DetectedTarget[] {
+  return detectWith(opts, isClaudePackageName);
+}
+
+function detectWith(
+  opts: DetectOptions,
+  isMsixPackage: (name: string) => boolean,
+): DetectedTarget[] {
   const home = opts.homeOverride ?? homedir();
   const targets: DetectedTarget[] = [];
 
@@ -817,10 +874,11 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   // MSIX-packaged installs (Microsoft Store) redirect %APPDATA% to a per-package
   // LocalCache dir. The config lives under %LOCALAPPDATA%\Packages\Claude_*\
   // LocalCache\Roaming\Claude\. Multiple package families may exist.
-  // Package name is constrained to `Claude_[A-Za-z0-9]+` so an attacker can't
-  // smuggle a write target through a hand-crafted package directory like
-  // `Claude_../../Windows/System32` (the path constructor would reject such
-  // a name on most platforms but we belt-and-suspender).
+  // For writes the package name is constrained to `Claude_[A-Za-z0-9]+` so an
+  // attacker can't smuggle a write target through a hand-crafted package
+  // directory like `Claude_../../Windows/System32` (the path constructor would
+  // reject such a name on most platforms but we belt-and-suspender). The
+  // removal filter is wider; see `detectRemovalTargets`.
   if ((opts.platformOverride ?? process.platform) === "win32") {
     const localAppData =
       opts.localAppDataOverride ?? process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
@@ -861,7 +919,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
         return targets;
       }
       const entries = readdirSync(packagesDir);
-      const matching = entries.filter((n) => MSIX_PACKAGE_PATTERN.test(n));
+      const matching = entries.filter(isMsixPackage);
       for (const pkg of matching) {
         if (isReparsePoint(join(packagesDir, pkg))) {
           // Named, because with two packages installed one silently vanishing

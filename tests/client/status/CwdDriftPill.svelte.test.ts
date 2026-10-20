@@ -31,6 +31,15 @@ const baseProps = {
   claudeStatus: null,
   claudeActive: false,
   aiLiveIndicator: null,
+  aiLauncherAttached: false,
+  aiLauncherRestarting: false,
+  aiLauncherStarting: false,
+  aiLauncherStandby: null,
+  aiLauncherStandbyRecent: false,
+  onStartClaude: () => {},
+  aiSessionCount: null as number | null,
+  aiNotice: null,
+  onOpenLicenseSettings: () => {},
   aiState: "ready" as const,
   soloMode: false,
 };
@@ -42,12 +51,12 @@ function mount(over: Record<string, unknown> = {}) {
 }
 
 describe("drift pill placement", () => {
-  it("renders in the launcher-running-but-no-session state", () => {
-    // `aiState: "ready"` with `aiLiveIndicator: null` is the auto-launched
-    // desktop startup window, where `aiIndicatorView` returns null. If the pill
-    // were nested inside `{#if aiView}` this query would fail.
-    const { getByTestId, queryByTestId } = mount();
-    expect(queryByTestId("status-ai-indicator")).toBeNull();
+  it("renders in the launcher-running-but-no-session state, beside the pending pill", () => {
+    // The auto-launched desktop startup window: the launcher runs, no MCP
+    // session yet. The AI indicator now shows "Tandem's Claude" (pending) there,
+    // and the drift pill is a sibling, so both render.
+    const { getByTestId } = mount({ aiLauncherRunning: true });
+    expect(getByTestId("status-ai-indicator").getAttribute("data-ai-state")).toBe("tandem-claude");
     expect(getByTestId("cwd-drift-pill")).toBeTruthy();
   });
 

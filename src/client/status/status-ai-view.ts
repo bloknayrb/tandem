@@ -1,92 +1,248 @@
+import type { LauncherStandby } from "../../shared/launcher/contract";
 import type {
   AiChip,
   AiLiveIndicator,
   AiReadinessState,
+  LauncherFailure,
   PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
 import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
+import { type AiNotice, aiOffCopy } from "../utils/license-ui";
 
 /**
  * Consolidated AI-status indicator for the status pill (replaces the old
  * titlebar "AI connected" pill + the status bar's "Assistant · idle" segment).
  *
- * This pure mapping is the spec: given the readiness `state`, the affirmative
- * `liveIndicator`, and whether the user is in Solo mode, decide what the single
- * status-pill indicator renders. Extracted (not inlined) so the multi-state
- * logic — especially the ordering rules below — is unit-tested, not mounted.
+ * This pure mapping is the spec: given readiness, the affirmative
+ * `liveIndicator`, the launcher's own facts, and whether the user is in Solo
+ * mode, decide what the single status-pill indicator renders. Extracted (not
+ * inlined) so the multi-state logic — especially the ordering rules below — is
+ * unit-tested, not mounted.
+ *
+ * The pill says WHO is attached, not merely that something is. "AI connected"
+ * keyed on any MCP transport collapsed six realities into one green dot — a
+ * terminal session idle at its prompt, Claude Desktop, an inert shim, a closed
+ * terminal's leftover connection, a script, and Tandem's own launched Claude —
+ * and only the last is something the server knows it will wake.
  *
  * Ordering rules (order is load-bearing):
- *   1. A present `liveIndicator` ("connected"/"solo-paused") is a PROVEN-connected
- *      fact — `mcpSessionActive`, an actual MCP `initialize` round-trip — and is
- *      independent of both document-sync connectivity and launcher status. So it
- *      OUTRANKS the booting gate. Gating it on `state` would blank a genuinely
- *      connected AI during a doc-sync blip, or mask a live *manually-launched*
- *      session when the launcher route never settles (#1054) — exactly the case
- *      the old titlebar pill (which rendered purely off `liveIndicator`) handled.
- *   2. Only the NEGATIVE / absent states are gated on `booting`, so we never flash
- *      "AI not connected" before readiness settles. `state === "ready"` with no
- *      session is the launcher's running-but-no-session startup window → render
- *      nothing (don't alarm). In Solo with no session we suppress entirely,
- *      mirroring `useAiReadiness`'s deliberate Solo `chip` silence — the user
- *      opted out of AI, so nagging them to connect contradicts that intent.
+ *   0. AI off by licence (#1521), keyed on `aiNotice` — readiness's own value,
+ *      non-null exactly when its `chip` is `"ai-off"` and so selects the
+ *      pill's CTA wrapper, so the label and its action agree by construction
+ *      (see `AiReadiness.aiNotice`). A launcher child still running at expiry would
+ *      otherwise read "Tandem's Claude" beside an "AI off" CTA. It outranks
+ *      Solo for the reason the chip does: Solo is a privacy choice, the
+ *      refusal is a capability fact.
+ *   1. Solo first: the user opted out of AI surfacing, so the Solo pill (or
+ *      nothing) wins over every connection claim.
+ *   2. Tandem's own Claude (`launcherRunning`). The supervisor wakes it over
+ *      stdin, so this is the one tier whose wake claim the server can back. It
+ *      outranks `booting`, as a live session does: gating it on `state` would
+ *      blank a running launcher during a doc-sync blip. Its restarting state
+ *      (`launcherRestarting`, #2180) sits at the same tier: the dead child's
+ *      own MCP entry reads live for up to a minute after it exits, and rule 3
+ *      would otherwise call that "AI attached" for the whole retry.
+ *   3. Any other attached session (`liveIndicator === "connected"`) — a proven
+ *      `initialize`, which also outranks `booting` (#1054). Its copy claims only
+ *      what that proves: something is connected.
+ *   4. Only the NEGATIVE / absent states are gated on `booting`, so we never flash
+ *      "AI not connected" before readiness settles.
+ *
+ * Activity (the dot pulse, the `· {status}` suffix, the working pill) follows
+ * Bryan's rule that the chat UI shows status only for the chat's attached
+ * session. The chat is a shared inbox, so `claudeActive` / `claudeStatus` /
+ * `claudeWorking` — written by whichever session called a tool — can't be
+ * attributed to it. Where Tandem's Claude is running, the views carry `pulse`
+ * and `ownActivity` overrides driven by the supervisor's own `busy` instead;
+ * elsewhere they stay `null` and StatusBar keeps its old logic until #2167
+ * attributes activity to the session that picked up the chat.
  */
-export type AiIndicatorTone = "connected" | "solo" | "not-connected";
+export type AiIndicatorTone = "connected" | "solo" | "not-connected" | "pending";
 
 export interface AiIndicatorView {
   /** User-facing label. */
   label: string;
   /** Drives dot + text color. */
   tone: AiIndicatorTone;
-  /** `data-ai-state` attribute (kept in sync with the old titlebar values). */
-  dataState: "connected" | "solo-paused" | "not-connected";
+  /** `data-ai-state` attribute. */
+  dataState:
+    | "connected"
+    | "connected-stale"
+    | "solo-paused"
+    | "not-connected"
+    | "tandem-claude"
+    | "restarting"
+    /** Tandem's Claude is not running by choice (#2195); see `STANDBY`. */
+    | "standby"
+    | "ai-off";
   /**
-   * Whether this state may animate its dot when Claude is actively working.
-   * Only ever true when a session is live (connected/solo) — a disconnected
-   * indicator must never pulse "as if working" (an incoherent micro-state).
+   * Whether this state may animate its dot off presence activity. Only ever
+   * true when a session is live (connected/solo) — a disconnected indicator
+   * must never pulse "as if working". Ignored whenever `pulse` is non-null.
    */
   canAnimate: boolean;
+  /**
+   * Override for the dot pulse. `null` = StatusBar's presence-driven logic
+   * (`canAnimate` + `claudeActive`); a boolean replaces it entirely, so presence
+   * activity from some other session can never pulse this view.
+   */
+  pulse: boolean | null;
+  /**
+   * Activity attributable to the chat's session, or `null`. Non-null only for a
+   * busy launched Claude. While `pulse` is non-null this is the ONLY activity
+   * StatusBar shows.
+   */
+  ownActivity: "working" | null;
   /** Hover tooltip — carries the explanation the terse label omits. */
   title: string;
   /** Screen-reader label (the visible text under-specifies "Solo · edits held"). */
   ariaLabel: string;
+  /**
+   * How many MCP clients `/health` counts, for the ` · N sessions` suffix, or
+   * `null` to show none. Already folded into `title` and `ariaLabel`.
+   */
+  sessionCount: number | null;
 }
 
-const CONNECTED: AiIndicatorView = {
-  label: "AI connected",
+/** No override: StatusBar's presence-driven activity logic applies. */
+const NO_OVERRIDE = { pulse: null, ownActivity: null } as const;
+/** A view before `withSessionCount`, its single writer of `sessionCount`. */
+type BaseView = Omit<AiIndicatorView, "sessionCount">;
+/** Suppress presence-driven activity without claiming any of our own. */
+const QUIET = { pulse: false, ownActivity: null } as const;
+
+/**
+ * A session is connected, and it is not (provably) Tandem's own Claude.
+ *
+ * "Something is connected to Tandem" is exactly what `liveIndicator` proves — a
+ * completed MCP `initialize`. Not "Claude", not "a session you started", not
+ * "has the tools": the attached client may be a terminal, Claude Desktop, a
+ * script, or the leftover connection of a Claude that has since died, and every
+ * stronger noun is false for one of those. The check-in claim is conditional
+ * ("if it's a session you're using") for the same reason.
+ */
+const CONNECTED: BaseView = {
+  label: "AI attached",
   tone: "connected",
   dataState: "connected",
   canAnimate: true,
-  // Scoped to what `liveIndicator` actually proves: an MCP session exists, so
-  // Claude can READ the document when it asks. The previous copy ("receiving
-  // your work" / "it can see your … comments") asserted the delivery half too,
-  // and was false for the pull-only session this indicator has to describe.
-  title: "Claude is connected and can read your document",
-  ariaLabel: "Claude is connected and can read your document",
+  ...NO_OVERRIDE,
+  title:
+    "Something is connected to Tandem. Tandem can't tell whether it's being notified, so if it's a session you're using, it may only see your messages when it next checks in.",
+  ariaLabel:
+    "AI attached. Something is connected to Tandem; Tandem can't tell whether it's being notified, so it may only see your messages when it next checks in.",
 };
 
 /**
  * Connected, but demonstrably nothing is delivering events.
  *
- * Same label and tone as `CONNECTED` on purpose. The pill is not lying — Claude
- * really is attached — and recolouring it would read as a fault when nothing is
- * broken. What changes is the hover text, which previously said nothing at all
- * about delivery and so left "AI connected" to be read as "AI is watching".
- * That silence is what makes a delayed comment feel like a bug: the user is
- * told the AI is right there, then sees nothing happen.
- *
- * Only rendered on a CONFIRMED zero — `pushDelivery === "none"`. An unknown or
- * positive count keeps the plain `CONNECTED` copy, because a positive count
+ * Same label and tone as `CONNECTED` on purpose: something really is attached,
+ * and recolouring would read as a fault when nothing is broken. What changes is
+ * the hover text. Only rendered on a CONFIRMED zero — `pushDelivery === "none"`.
+ * An unknown or positive count keeps `CONNECTED`, because a positive count
  * includes an attached-but-inert consumer and cannot prove delivery either way.
  */
-const CONNECTED_NO_PUSH: AiIndicatorView = {
-  label: "AI connected",
-  tone: "connected",
-  dataState: "connected",
-  canAnimate: true,
+const CONNECTED_NO_PUSH: BaseView = {
+  ...CONNECTED,
   title:
-    "Claude is connected and can read your document, but nothing is notifying it in real time — it'll see your comments and messages the next time it checks in",
+    "Something is connected to Tandem, but nothing is notifying it. If it's a session you're using, it sees your messages only when it next checks in, so you may need to prompt it.",
   ariaLabel:
-    "Claude is connected and can read your document, but is not notified in real time. It will see your comments the next time it checks in.",
+    "AI attached, but nothing is notifying it. If it's a session you're using, it sees your messages only when it next checks in.",
+};
+
+/**
+ * A session is in Tandem's list but none is live: no open stream and no request
+ * in the last minute (`isLiveEntry`, server-side). Almost always a client that
+ * went away without disconnecting, kept until the reaper takes it (~35 min).
+ *
+ * Same label as `CONNECTED` because something did attach and the claim is
+ * hedged in the copy; the hollow ring is what stops the colour claiming it is
+ * still there. Measured clients (Claude Code, the plugin bridge) hold a stream
+ * for their whole life, so for them this means gone; a client that never opens
+ * a stream lands here between calls, which "may be" covers.
+ */
+const CONNECTED_STALE: BaseView = {
+  label: "AI attached",
+  tone: "pending",
+  dataState: "connected-stale",
+  canAnimate: false,
+  // Its presence activity is no more trustworthy than its connection.
+  ...QUIET,
+  title:
+    "Something connected to Tandem earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
+  ariaLabel:
+    "AI attached earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
+};
+
+/**
+ * Tandem is already bringing its own Claude back (#2180): a crash restart is
+ * scheduled, a start or relaunch is running (including one the user just
+ * clicked, so the copy does not claim Tandem did it on its own), or a killed
+ * child is exiting. No
+ * button — a Restart here would race the retry — and no pulse, because
+ * nothing is working yet. The hollow ring is the same "not confirmed" signal
+ * the leftover view uses.
+ */
+const RESTARTING: BaseView = {
+  label: "Restarting Claude…",
+  tone: "pending",
+  dataState: "restarting",
+  canAnimate: false,
+  ...QUIET,
+  title: "Tandem is starting its Claude. There's nothing you need to do.",
+  ariaLabel: "Restarting Claude. Tandem is starting its Claude.",
+};
+
+/** A Start from standby (#2195) in progress — "Restarting" would claim a
+ *  Claude that never ran this session. Otherwise identical to RESTARTING. */
+const STARTING: BaseView = {
+  ...RESTARTING,
+  label: "Starting Claude…",
+  title: "Tandem is starting its Claude. There's nothing you need to do.",
+  ariaLabel: "Starting Claude. Tandem is starting its Claude.",
+};
+
+/**
+ * Tandem's Claude is not running BY CHOICE (#2195). Never the failure tone and
+ * never "AI not connected": nothing is broken, and the pill is the Start
+ * button (`AI_CTA.start`) whenever the chip is `start`.
+ *
+ * Shown at tier 2, beside RESTARTING, for the first minute of a standby: the
+ * child's own MCP entry still reads live for up to a minute after it exits
+ * (`LIVE_RECENT_MS`), and below tier 2 that leftover would show a green "AI
+ * attached" right after the user turned Claude off. After that minute a live
+ * session is someone else's, and Rule 3 shows it as connected.
+ *
+ * The titles name the chat panel: when the pill is the Start button its hover
+ * text comes from `AI_CTA.start` instead, so these show only when it is not.
+ */
+const STANDBY_BASE = {
+  tone: "not-connected",
+  dataState: "standby",
+  canAnimate: false,
+  ...QUIET,
+} as const satisfies Partial<BaseView>;
+
+const STANDBY: Record<LauncherStandby, BaseView> = {
+  off: {
+    ...STANDBY_BASE,
+    label: "Tandem's Claude is off",
+    title: "Tandem's Claude is turned off. Start it from the chat panel.",
+    ariaLabel: "Tandem's Claude is turned off.",
+  },
+  "awaiting-start": {
+    ...STANDBY_BASE,
+    label: "Tandem's Claude hasn't started",
+    title: "Tandem's Claude is set to start when you click Start in the chat panel.",
+    ariaLabel: "Tandem's Claude hasn't started. It starts when you click Start.",
+  },
+  idle: {
+    ...STANDBY_BASE,
+    label: "Tandem's Claude stopped (idle)",
+    title:
+      "Tandem's Claude stopped after being idle, as set in Settings. Start it again any time; its conversation resumes.",
+    ariaLabel: "Tandem's Claude stopped while idle.",
+  },
 };
 
 /**
@@ -100,51 +256,288 @@ const CONNECTED_NO_PUSH: AiIndicatorView = {
  * annotation comments and replies aren't pushed to Claude's inbox until you
  * switch back to Tandem.
  */
-const SOLO_PAUSED: AiIndicatorView = {
+const SOLO_PAUSED: BaseView = {
   label: "Solo · comments held",
   tone: "solo",
   dataState: "solo-paused",
   canAnimate: true,
+  ...NO_OVERRIDE,
   title:
     "Solo mode — your comments and replies aren't sent to the AI until you switch to Tandem (chat and document edits still work).",
   ariaLabel:
     "Solo mode — the AI is connected, but your comments and replies aren't forwarded until you switch to Tandem",
 };
 
-const NOT_CONNECTED: AiIndicatorView = {
+/** Solo with a session while Tandem's Claude runs: the session's presence
+ *  activity is no more attributable here than in Tandem mode, so toggling Solo
+ *  must not bring it back. */
+const SOLO_PAUSED_QUIET: BaseView = { ...SOLO_PAUSED, ...QUIET };
+
+/**
+ * Solo, Tandem's Claude running, no session seen. Makes no claim that chat
+ * reaches it: with no `hasSession`, Tandem can't say the child has its tools.
+ */
+const SOLO_PAUSED_LAUNCHER: BaseView = {
+  ...SOLO_PAUSED,
+  canAnimate: false,
+  ...QUIET,
+  title:
+    "Solo mode — Tandem's Claude is running, but Tandem hasn't seen it connect. Your comments and replies aren't sent to it until you switch to Tandem.",
+  ariaLabel:
+    "Solo mode. Tandem's Claude is running, but Tandem hasn't seen it connect. Your comments and replies aren't forwarded until you switch to Tandem.",
+};
+
+const NOT_CONNECTED: BaseView = {
   label: "AI not connected",
   tone: "not-connected",
   dataState: "not-connected",
   canAnimate: false,
+  ...NO_OVERRIDE,
   title: "No AI is connected. Start Claude Code and run /mcp to connect.",
   ariaLabel: "No AI is connected",
 };
 
 /**
- * Returns the indicator view, or `null` to render nothing (booting with no live
- * session, the running-but-no-session startup window, or Solo-with-no-session).
+ * Collapse a home directory to `~` for display, so the OS username stays out of
+ * an always-present tooltip (and out of screenshots of it). Cosmetic, not a
+ * security boundary: it only recognises the three conventional home layouts.
+ * (The server-side redactors, `src/shared/redact-user-paths.ts`, cover the same
+ * layouts for diagnostics; this client copy has no `homedir()` to anchor on.)
  */
-export function aiIndicatorView(
-  state: AiReadinessState,
-  liveIndicator: AiLiveIndicator,
-  soloMode: boolean,
-  pushDelivery: PushDelivery = "unknown",
-): AiIndicatorView | null {
-  // Rule 1: a proven-connected session outranks everything (incl. booting).
-  if (liveIndicator === "connected") {
-    return pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
-  }
-  // Solo already tells the user their edits are withheld, which is a stronger
-  // and more relevant statement than "nothing is delivering them" — so the
-  // push state is deliberately not folded in here.
-  if (liveIndicator === "solo-paused") return SOLO_PAUSED;
+export function displayPath(path: string): string {
+  // Case-insensitive because Windows paths are (`c:\users\…`), and an optional
+  // `\\?\` extended-length prefix in case one reaches the server unstripped.
+  const match =
+    /^(?:\\\\\?\\)?([A-Za-z]:[\\/]Users[\\/][^\\/]+|\/home\/[^/]+|\/Users\/[^/]+)(?=$|[\\/])/i.exec(
+      path,
+    );
+  return match ? `~${path.slice(match[0].length)}` : path;
+}
 
-  // liveIndicator === null below (no MCP session open).
-  // Rule 2: gate the negative/absent states so we never flash "not connected".
-  if (state === "booting") return null; // readiness not settled — don't flash
-  if (state === "ready") return null; // launcher running, no session yet
-  if (soloMode) return null; // opted out of AI — don't nag
+/** Appended when a session is connected but the server could not match it to
+ *  Tandem's own Claude — the usual case for the direct-HTTP config entry, which
+ *  carries no Claude session id. */
+const UNATTRIBUTED = " Tandem can't confirm that any connection is this Claude.";
+
+/**
+ * Tandem's own launched Claude is running.
+ *
+ * "Wakes it when you send a message" is the one wake claim in this file the
+ * server can back: the supervisor writes a turn to the child's stdin. There is
+ * deliberately no reply/latency clause — the attached session may be some other
+ * client while this child has not connected. With no session seen, the pending
+ * variant drops even the wake claim and says only "hasn't seen it connect":
+ * "seen", not "connected", because a working stateless (#1249) child never sets
+ * `hasSession`, and the copy has to stay true there.
+ */
+function tandemClaudeView(input: {
+  attached: boolean;
+  sessionSeen: boolean;
+  cwd: string | null;
+  busy: boolean;
+  docSyncConnected: boolean;
+}): BaseView {
+  const where = input.cwd === null ? "" : ` in ${displayPath(input.cwd)}`;
+  let title: string;
+  if (!input.sessionSeen) {
+    title = input.busy
+      ? `Tandem's Claude is running${where} and working on a turn; Tandem hasn't seen it connect.`
+      : `Tandem's Claude is running${where}; Tandem hasn't seen it connect.`;
+  } else if (!input.docSyncConnected) {
+    // With sync down the send toast is suppressed (state is `booting`), so this
+    // is the only place that can say the message won't get there.
+    title =
+      `Tandem's Claude is running${where}. Document sync is down, so what you send now won't reach it until sync reconnects.` +
+      (input.busy ? " It is in the middle of a turn." : "");
+  } else if (input.busy) {
+    // The wait is on the WAKE, not the message: Claude polls its inbox mid-turn,
+    // and the chat pickup row (#2165) may show the message picked up first.
+    title = `Tandem's Claude is running${where} and is in the middle of a turn. Tandem wakes it again when that turn finishes, if it hasn't picked up your message already.`;
+  } else {
+    // The background disclosure (#2195) lives here because auto-mode users
+    // never open Settings, where the longer version is.
+    title = `Tandem's Claude is running${where} in the background. Tandem wakes it when you send a message.`;
+  }
+  if (input.sessionSeen && !input.attached) title += UNATTRIBUTED;
+  return {
+    label: "Tandem's Claude",
+    // Green only when the server matched a live connection to THIS child. A
+    // session that may be some other client is no evidence about this one.
+    tone: input.attached ? "connected" : "pending",
+    dataState: "tandem-claude",
+    canAnimate: input.attached,
+    // Only the supervisor-observed turn drives activity here (Bryan's rule).
+    pulse: input.busy,
+    ownActivity: input.busy ? "working" : null,
+    title,
+    ariaLabel: `Tandem's Claude. ${title}`,
+  };
+}
+
+/** The AI is refused by the licence (#1521); `kind` picks the copy. */
+function aiOffView(kind: AiNotice): BaseView {
+  const title = aiOffCopy(kind).sentence;
+  return {
+    label: "AI off",
+    tone: "not-connected",
+    dataState: "ai-off",
+    canAnimate: false,
+    ...QUIET,
+    title,
+    ariaLabel: `AI off. ${title}`,
+  };
+}
+
+/** The visible suffix: "1 session", "3 sessions". */
+export function sessionCountLabel(count: number): string {
+  return count === 1 ? "1 session" : `${count} sessions`;
+}
+
+/**
+ * Attach `/health`'s session count to a view. The count is an upper bound (see
+ * `countDistinctClients` server-side), so the sentence names its main
+ * overcount; the rest of its limits are in docs/troubleshooting.md. Nothing at
+ * zero or unknown, and never on "AI not connected", whose label already says it.
+ */
+function withSessionCount(view: BaseView, count: number | null): AiIndicatorView {
+  // Nor on "AI off": a refused handshake leaves at most a leftover connection.
+  if (
+    count == null ||
+    count < 1 ||
+    view.dataState === "not-connected" ||
+    view.dataState === "ai-off"
+  ) {
+    return { ...view, sessionCount: null };
+  }
+  const sentence = `${sessionCountLabel(count)} ${count === 1 ? "is" : "are"} connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.`;
+  return {
+    ...view,
+    sessionCount: count,
+    title: `${view.title} ${sentence}`,
+    ariaLabel: `${view.ariaLabel} ${sentence}`,
+  };
+}
+
+/**
+ * Returns the indicator view, or `null` to render nothing (booting with no live
+ * session, Solo with nothing running, or a stale-running launcher behind an
+ * unreachable server).
+ */
+export function aiIndicatorView(input: AiIndicatorInput): AiIndicatorView | null {
+  const view = baseIndicatorView(input);
+  return view === null ? null : withSessionCount(view, input.sessionCount);
+}
+
+export interface AiIndicatorInput {
+  state: AiReadinessState;
+  liveIndicator: AiLiveIndicator;
+  soloMode: boolean;
+  pushDelivery: PushDelivery;
+  launcherRunning: boolean;
+  launcherCwd: string | null;
+  launcherBusy: boolean;
+  /** The server matched a live connection to this spawn of Tandem's Claude. */
+  launcherAttached: boolean;
+  /** Tandem is restarting its own Claude (`AiReadiness.launcherRestarting`). */
+  launcherRestarting: boolean;
+  /** That restart is a Start from standby (`AiReadiness.launcherStarting`). */
+  launcherStarting: boolean;
+  /** Tandem's Claude is not running by choice (`AiReadiness.launcherStandby`). */
+  launcherStandby: LauncherStandby | null;
+  /** That standby began within the leftover-session window
+   *  (`AiReadiness.launcherStandbyRecent`). */
+  launcherStandbyRecent: boolean;
+  docSyncConnected: boolean;
+  /** `/health`'s session count, or `null` when unknown. */
+  sessionCount: number | null;
+  /** The licence refusal (`AiReadiness.aiNotice`) — the ONE source of the
+   *  pill's ai-off state and its copy. */
+  aiNotice: AiNotice | null;
+}
+
+function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
+  // Rule 0: the licence refuses the AI.
+  if (input.aiNotice !== null) return aiOffView(input.aiNotice);
+
+  // Rule 1: Solo. Solo already tells the user their comments are withheld,
+  // which is a stronger and more relevant statement than any delivery state.
+  if (input.liveIndicator === "solo-paused") {
+    return input.launcherRunning ? SOLO_PAUSED_QUIET : SOLO_PAUSED;
+  }
+  if (input.soloMode) return input.launcherRunning ? SOLO_PAUSED_LAUNCHER : null;
+
+  // Rule 2: Tandem's own Claude.
+  if (input.launcherRunning) {
+    return tandemClaudeView({
+      attached: input.launcherAttached,
+      // The two come from separate polls; a match on the launcher read is a
+      // session seen even if `/health` has not caught up yet.
+      // A leftover session (count 0) is not a sighting of this child.
+      sessionSeen:
+        (input.liveIndicator === "connected" && input.sessionCount !== 0) || input.launcherAttached,
+      cwd: input.launcherCwd,
+      busy: input.launcherBusy,
+      docSyncConnected: input.docSyncConnected,
+    });
+  }
+  if (input.launcherRestarting) return input.launcherStarting ? STARTING : RESTARTING;
+  // A standby outranks a live session only while that session can still be the
+  // stopped child's own leftover entry; after that it is someone else's, and
+  // Rule 3 shows it as connected.
+  if (
+    input.launcherStandby !== null &&
+    (input.liveIndicator !== "connected" || input.sessionCount === 0 || input.launcherStandbyRecent)
+  ) {
+    return STANDBY[input.launcherStandby];
+  }
+
+  // Rule 3: anything else attached.
+  if (input.liveIndicator === "connected") {
+    // Green only for a live session. A `null` count (not reported) trusts
+    // `hasSession`, the same fallback the hook's `sessionLive` uses.
+    if (input.sessionCount === 0) {
+      // With nothing live, `state` is no longer promoted to ready, so in
+      // `unconfigured` / `stopped` the pill is the setup or restart button.
+      // Its hover and screen-reader text come from that CTA, so the label must
+      // agree with it: fall through to "AI not connected". The hollow
+      // leftover view is for the states with no CTA (booting, ready).
+      if (input.state === "booting" || input.state === "ready") return CONNECTED_STALE;
+    } else {
+      return input.pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
+    }
+  }
+
+  // Rule 4: gate the negative/absent states so we never flash "not connected".
+  if (input.state === "booting") return null; // readiness not settled — don't flash
+  // `ready` with nothing attached and no running launcher: the launcher status
+  // is a stale `running: true` while the server is unreachable (which gates
+  // `launcherRunning` off). Say nothing — the offline banner tells that story.
+  if (input.state === "ready") return null;
   return NOT_CONNECTED; // unconfigured / stopped, Tandem: honest "not connected"
+}
+
+/** What the user dismissed: the failure, and the run epoch it happened in. */
+export interface LauncherFailureDismissal {
+  failure: LauncherFailure;
+  epoch: number;
+}
+
+/**
+ * The "Tandem's Claude isn't running" button's visibility after a dismissal.
+ * Hidden only while it is the SAME failure in the SAME run epoch: a different
+ * failure is new information, and so is the same one after Tandem's Claude has
+ * run again in between (`launcherRunEpoch`), because that is a second outage,
+ * not the one the user waved away. In memory only — a reload shows it again.
+ */
+export function visibleLauncherFailure(
+  failure: LauncherFailure | null,
+  dismissed: LauncherFailureDismissal | null,
+  epoch: number,
+): LauncherFailure | null {
+  if (failure === null) return null;
+  return dismissed !== null && dismissed.failure === failure && dismissed.epoch === epoch
+    ? null
+    : failure;
 }
 
 // --- Working-directory drift qualifier (#1282) -----------------------------
@@ -166,30 +559,41 @@ export interface CwdDriftPill {
  * The working-directory drift pill, or `null` to render nothing.
  *
  * **Why this is a sibling of the AI indicator and not folded into it.** The
- * obvious placement — inside `aiIndicatorView`'s returned view — is dead code
- * in exactly the state the nudge exists for: `aiIndicatorView` returns `null`
- * when `state === "ready"` with no live MCP session, which is precisely the
- * auto-launched desktop startup window where the launcher is running (and so
- * has a cwd to be wrong about) but no agent has connected yet. Anything nested
- * inside `{#if aiView}` would never render there.
+ * drift pill describes the FOLDER, not the connection, and it carries its own
+ * act-on-it menu. Folding it into `aiIndicatorView` would make one pill carry
+ * two unrelated claims and two actions.
  *
  * **Why two adjacent Claude chips is not the #1268 shape.** That failure was two
  * CTAs for the same situation, describing it differently and wired to different
- * handlers. These two cannot coexist by construction: `aiChip` is non-null only
- * for `unconfigured` / `stopped`, both of which mean the supervised launcher is
- * not running — and the server reports drift only when it IS. They can overlap
- * only transiently, when Claude dies between a drift probe and the next
- * readiness poll, so `aiChip` wins outright. This is a staleness gate, not a
- * second copy of the server's predicate: it never turns a `false` into a `true`.
+ * handlers. The drift pill cannot coexist with either stopped-launcher CTA:
+ * `aiChip` is non-null only for `unconfigured` / `stopped`, and
+ * `launcherFailure` only for a tripped launcher beside another session — both
+ * mean the supervised launcher is not running, and the server reports drift only
+ * when it IS. A restart in progress (`launcherRestarting`, #2180) hides it for
+ * the same reason: no CTA is shown then, so nothing else would. They can
+ * overlap only through staleness: `useCwdDrift` does not poll, so a drift
+ * answer from before an unattended trip stays live. So either one wins
+ * outright. This is a staleness gate, not a second copy of the server's
+ * predicate: it never turns a `false` into a `true`.
  *
  * `drift` being non-null already means "the server says nudge"; suppression the
  * USER asked for (per-pair dismissal, session backstop, permanent opt-out) is
  * applied by the caller before this point, so it stays in one place —
  * `cwdDriftDismiss` — rather than half here and half there.
  */
-export function cwdDriftPill(drift: CwdDrift | null, aiChip: AiChip): CwdDriftPill | null {
+export function cwdDriftPill(
+  drift: CwdDrift | null,
+  aiChip: AiChip,
+  launcherFailure: LauncherFailure | null,
+  launcherRestarting: boolean,
+  launcherStandby: LauncherStandby | null,
+): CwdDriftPill | null {
   if (drift === null) return null;
-  if (aiChip !== null) return null;
+  if (aiChip !== null || launcherFailure !== null || launcherRestarting) return null;
+  // A stopped Claude has no folder to be wrong about (#2195). `useCwdDrift`
+  // does not poll, so an answer from before an idle stop would otherwise stay
+  // up — and its action would start Claude somewhere.
+  if (launcherStandby !== null) return null;
   // Names the consequence, not the state. "AI · other folder" reads as a
   // connection status and leaves the user with no idea what is actually
   // degraded — the document syncs fine and Claude can still edit it; what it

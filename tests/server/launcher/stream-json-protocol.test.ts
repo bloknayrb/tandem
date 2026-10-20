@@ -29,16 +29,23 @@ import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
 import { buildClaudeArgs, createSupervisor } from "../../../src/server/launcher/supervisor.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
+  SUPERVISOR_GREETING_PROMPT,
   SUPERVISOR_INITIAL_PROMPT,
   SUPERVISOR_NO_ARM_CLAUSE,
+  SUPERVISOR_NO_UNASKED_WORK_CLAUSE,
   SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STUB_SOURCE = path.join(HERE, "stub-claude-cli.cjs");
 /** Sentinel for `TANDEM_CLAUDE_CMD`, so the recorded argv proves the binary the
- * supervisor chose actually reached the reaper's argument vector. */
-const CLAUDE_BIN_SENTINEL = "tandem-stub-claude-sentinel";
+ * supervisor chose actually reached the reaper's argument vector. A real,
+ * executable file at an ABSOLUTE path, minted per test: the launcher resolves
+ * its command before spawning and spawns nothing for a name that resolves to
+ * no startable file (#2199). Never run — the reaper here is node, which runs
+ * the pid-named stub instead. */
+const CLAUDE_BIN_NAME = `tandem-stub-claude-sentinel${process.platform === "win32" ? ".exe" : ""}`;
+let CLAUDE_BIN_SENTINEL: string;
 const VALID_UUID = "550e8400-e29b-41d4-a716-446655440000";
 
 const ENV_KEYS = [
@@ -193,6 +200,8 @@ beforeEach(() => {
   process.env.NODE_ENV = "test";
   delete process.env.TANDEM_TAURI_SIDECAR;
   process.env.TANDEM_REAPER_PATH = process.execPath;
+  CLAUDE_BIN_SENTINEL = path.join(recordDir, CLAUDE_BIN_NAME);
+  fs.writeFileSync(CLAUDE_BIN_SENTINEL, "", { mode: 0o755 });
   process.env.TANDEM_CLAUDE_CMD = CLAUDE_BIN_SENTINEL;
   process.env.TANDEM_STUB_CLAUDE_RECORD_DIR = recordDir;
 });
@@ -1045,8 +1054,8 @@ describe("supervisor restart lifecycle after relaunch/startFresh (#1267)", () =>
     const sup = createSupervisor({ integrationsBase: tmpDir });
     try {
       await sup.startFresh(spawnDir);
-      await expect(sup.startFresh(spawnDir)).resolves.toBeUndefined();
-      await expect(sup.relaunch(spawnDir)).resolves.toBeUndefined();
+      await expect(sup.startFresh(spawnDir)).resolves.toEqual({ spawned: true });
+      await expect(sup.relaunch(spawnDir)).resolves.toEqual({ spawned: true });
       expect(sup.status().running).toBe(true);
     } finally {
       await sup.stop();
@@ -1396,7 +1405,65 @@ describe("the supervisor's turns tell a launched session not to self-arm", () =>
     expect(SUPERVISOR_WAKE_PROMPT).toContain("tandem_checkInbox");
   });
 
+  it("tells both turns to do no work the user didn't ask for", () => {
+    // Bryan, 2026-10-12: no review without the user asking. The wake turn is
+    // the one a resumed or compacted session actually sees.
+    expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
+    expect(SUPERVISOR_WAKE_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
+    // The greeting (#2197) is the ONE unasked turn, and still carries the
+    // clause for everything after the hello.
+    expect(SUPERVISOR_GREETING_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("unless the user asked you to");
+    // An accept/dismiss wakes the session into a non-empty inbox that asks
+    // for nothing; the tutorial invites exactly those clicks.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("accept or dismiss is not a request");
+    // The bootstrap answers replies too, since it discharges an owed wake.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("replies");
+  });
+
+  it("lets the session answer chat and open a document on request with none open", () => {
+    // Bryan: "the desired behavior is that tandem's claude can open documents
+    // for the user, even if none are already open". #2193's first wording told
+    // a no-document session to "just wait", which forbade that.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).not.toContain("do not open one");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).not.toContain("just wait");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain(
+      "Chat reaches you even when no document is open",
+    );
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain(
+      "if the user asks you to open a file, open it with tandem_open",
+    );
+  });
+
   it("names Monitor explicitly, so the instruction is actionable", () => {
     expect(SUPERVISOR_NO_ARM_CLAUSE).toContain("Monitor");
+  });
+});
+
+describe("SUPERVISOR_GREETING_PROMPT (#2197)", () => {
+  it("reads the inbox before greeting, so a user who already wrote gets an answer", () => {
+    const inbox = SUPERVISOR_GREETING_PROMPT.indexOf("tandem_checkInbox");
+    const greet = SUPERVISOR_GREETING_PROMPT.indexOf("say hello in the chat with tandem_reply");
+    expect(inbox).toBeGreaterThan(-1);
+    expect(greet).toBeGreaterThan(inbox);
+    // The hello goes to the chat even when what was waiting was a comment:
+    // a hello left in a thread is one the user may never see.
+    expect(SUPERVISOR_GREETING_PROMPT).toMatch(/even if what was waiting was a comment/);
+    expect(SUPERVISOR_GREETING_PROMPT).toContain("you wait to be asked");
+  });
+
+  it("claims no 'first session' — the v1.0 re-arm reaches existing users", () => {
+    expect(SUPERVISOR_GREETING_PROMPT).not.toMatch(/first session/i);
+  });
+
+  it("asks for one hello, nothing else unasked: no review, no opening documents", () => {
+    expect(SUPERVISOR_GREETING_PROMPT).toMatch(/say hello to the user once/);
+    // The greeting's own text, before the shared clause (which itself names
+    // "review" only to forbid it).
+    const own = SUPERVISOR_GREETING_PROMPT.slice(
+      0,
+      SUPERVISOR_GREETING_PROMPT.indexOf(SUPERVISOR_NO_UNASKED_WORK_CLAUSE),
+    );
+    expect(own).not.toMatch(/review|annotate|open a/i);
   });
 });
