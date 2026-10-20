@@ -245,9 +245,15 @@ describe("exportYDocToDocx — comment emission", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const d = docFromHtml("<p>Hello brave world</p>");
     addAnnotation(d, 6, 11, { content: "Good one" });
-    // Out-of-bounds flat range with no CRDT anchor: relRange resolution can't
-    // help, lazy re-anchoring fails, and the flat offsets exceed the document.
-    addAnnotation(d, 500, 510, { content: "Stale one", relRange: undefined });
+    // Out-of-bounds flat range with no CRDT anchor, and a snapshot the stored
+    // slice contradicts: lazy re-anchoring is refused (#1764), so the flat
+    // offsets reach the resolver still past the end. Without the snapshot the
+    // lazy arm would clamp the range to the document's end (#2188).
+    addAnnotation(d, 500, 510, {
+      content: "Stale one",
+      relRange: undefined,
+      textSnapshot: "text that is no longer there",
+    });
 
     const buffer = await exportYDocToDocx(d);
     const extracted = await extractDocxComments(buffer);
@@ -658,7 +664,11 @@ describe("exportYDocToDocx — import/export idempotency", () => {
     // that survives every gate and then fails range resolution. It is equally
     // invisible to an allocator seeded from `resolved`, and equally still holds
     // its stored id.
-    const d = docFromHtml("<p>Hello brave world</p>");
+    // The document ends in a horizontal rule, which no anchor can land in, so
+    // the lazy arm cannot re-anchor this snapshot-less record (an imported Word
+    // comment carries no snapshot) and its range stays unresolvable. Ending in
+    // a paragraph instead, #2188's clamp would park it at the end — next spec.
+    const d = docFromHtml("<p>Hello brave world</p><hr>");
     addAnnotation(d, 0, 5, {
       content: "Unresolvable",
       author: "import",
@@ -679,6 +689,30 @@ describe("exportYDocToDocx — import/export idempotency", () => {
     expect(prepared).toHaveLength(1);
     expect(prepared[0].bodyParagraphs[0]).toBe("Needs a fresh id");
     expect(prepared[0].id).not.toBe(1);
+  });
+
+  it("exports a snapshot-less import record past the end as a point at the end (#2188)", () => {
+    // The realistic shape of the record above: an imported Word comment has no
+    // snapshot, and on a document ending in a paragraph its range past the end
+    // is clamped to {L, L} on the first refresh. That is where master put it
+    // after any read had refreshed it; it now no longer depends on one.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      content: "Was past the end",
+      author: "import",
+      type: "note",
+      audience: "private",
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+      range: { from: toFlatOffset(9000), to: toFlatOffset(9010) },
+      relRange: undefined,
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].bodyParagraphs[0]).toBe("Was past the end");
+    expect(prepared[0].from).toBe(17);
+    expect(prepared[0].to).toBe(17);
+    expect(prepared[0].id).toBe(1);
   });
 
   it("writes one Word comment when two records name one stored w:id (#1693)", () => {
