@@ -70,12 +70,17 @@ describe("resolveClaudeLaunch", () => {
       ).toBe(join(nativeDir(), "claude"));
     });
 
-    it("skips a file without the execute bit, as execvp does", () => {
-      seed(join(root, "noexec"), "claude", 0o644);
-      const ok = seed(join(root, "bin"), "claude");
-      const pathOverride = [join(root, "noexec"), join(root, "bin")].join(delimiter);
-      expect(resolveClaudeLaunch({ ...base, pathOverride, homeOverride: home }).command).toBe(ok);
-    });
+    // Windows has no execute bit (`X_OK` passes for any file there), so this
+    // runs on the POSIX CI legs only (#2230).
+    it.skipIf(process.platform === "win32")(
+      "skips a file without the execute bit, as execvp does",
+      () => {
+        seed(join(root, "noexec"), "claude", 0o644);
+        const ok = seed(join(root, "bin"), "claude");
+        const pathOverride = [join(root, "noexec"), join(root, "bin")].join(delimiter);
+        expect(resolveClaudeLaunch({ ...base, pathOverride, homeOverride: home }).command).toBe(ok);
+      },
+    );
 
     it("never takes a relative PATH entry — that would mean the working directory", () => {
       const rel = relative(process.cwd(), join(root, "rel"));

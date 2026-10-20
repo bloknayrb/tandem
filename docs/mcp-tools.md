@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem registers 33 tools in source (28 active, 2 shipped dark, 3 deprecated stubs); a release exposes 31 over MCP HTTP. The deprecated stubs return MCP error responses with code `DEPRECATED`. The two dark tools, `tandem_applyChanges` and `tandem_convertToMarkdown`, are `.docx`-only and are registered only when `.docx` is enabled ([ADR-053](decisions.md#adr-053-docx-ships-dark)). 
+Tandem registers 30 tools in source (28 active, 2 shipped dark); a release exposes 28 over MCP HTTP. The two dark tools, `tandem_applyChanges` and `tandem_convertToMarkdown`, are `.docx`-only and are registered only when `.docx` is enabled ([ADR-053](decisions.md#adr-053-docx-ships-dark)). 
 
 **`.docx` ships dark.** A release refuses `.docx` files, so every `.docx` behaviour described below (Word comment import and export, `allowImageLoss`, the `.docx` sidecar backup, the error codes only the two dark tools return) is reachable only in a build with `.docx` enabled. It stays documented so the re-enable starts from an accurate reference.
 
@@ -59,7 +59,6 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied): `EACCES`, or on Windows `EPERM` from `open`, which is how a folder you can read but not write, or a file you cannot read, fails there. `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer these with it. |
-| `DEPRECATED` | A removed tool or parameter was used — the deprecated stubs (`tandem_highlight`, `tandem_suggest`, `tandem_flag`) and `tandem_comment`'s `directedAt`. |
 | `READ_ONLY` | The document is read-only, so the mutation was refused: `tandem_edit`, `tandem_editList`, `tandem_appendContent`, `tandem_applyChanges`, `tandem_restoreBackup` and `tandem_rename`. `tandem_save` instead succeeds session-only with `saved: false` and `reason: "read-only"`, and the annotation tools do not check `readOnly` at all -- annotations are not document content and never reach the file. |
 | `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
 | `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
@@ -85,7 +84,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 
 `INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
 
-**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact. `tandem_suggest` is a deprecated stub that returns before any range is validated, so it is not one of the two.
+**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact.
 
 ## Coordinate System
 
@@ -283,7 +282,7 @@ Two details worth knowing, because they are asymmetries in the coordinate system
 
 ### tandem_edit
 
-Replace text at a specific range. Single-paragraph replacements only.
+Replace the text in `[from, to)` with `newText`, inserted literally and never parsed as Markdown. `from === to` is a point insertion. A range inside one block edits that block; a range whose ends are in different top-level blocks merges them (and is refused with `INVALID_RANGE` if either end is inside a list, blockquote or table). Use `tandem_appendContent` or `tandem_editList` for new block structure.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -307,7 +306,7 @@ An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rat
 | `non-integer` | `from` or `to` is not an integer. (The schema also rejects this, so you normally see a protocol error first.) |
 | `inverted` | `from > to`. |
 | `out-of-bounds` | `from < 0`, or `to` past the end of the document. `to === length` is valid. |
-| `empty` | For `tandem_edit`, `from === to` **and** an empty `newText` — the one genuine no-op. **Point insertion is supported:** `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n`, and it is the only mid-document insert path. Two things to know about it: **omit `textSnapshot`** (a zero-length range matches no text, so a snapshot always looks stale — the call is refused with `INVALID_ARGUMENT` rather than letting the `RANGE_MOVED` retry turn your insert into a replacement), and `from: 0` on a document that opens with a heading is `HEADING_OVERLAP`, since offset 0 sits inside the `# ` prefix — insert after the prefix, or at the start of the first body block. For `tandem_comment` / `tandem_suggest` / `tandem_flag`, `from === to` alone, since an annotation needs a span to anchor to. |
+| `empty` | For `tandem_edit`, `from === to` **and** an empty `newText` — the one genuine no-op. **Point insertion is supported:** `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n`, and it is the only mid-document insert path. Two things to know about it: **omit `textSnapshot`** (a zero-length range matches no text, so a snapshot always looks stale — the call is refused with `INVALID_ARGUMENT` rather than letting the `RANGE_MOVED` retry turn your insert into a replacement), and `from: 0` on a document that opens with a heading is `HEADING_OVERLAP`, since offset 0 sits inside the `# ` prefix — insert after the prefix, or at the start of the first body block. For `tandem_comment`, `from === to` alone, since an annotation needs a span to anchor to. |
 | `surrogate` | An offset falls between the two halves of a surrogate pair (inside an emoji or other astral character). Move it to either side of the character. |
 | `unresolvable` | The offsets could not be resolved against the document structure. Only `tandem_edit` can reach it, only at `(0, 0)`, and only on a document whose top-level children are not block elements — a shape no writer in Tandem produces. An actually-empty document answers `EMPTY_DOCUMENT` instead. |
 
@@ -325,7 +324,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 
 **Notes:**
 - Always use `tandem_resolveRange` first to get safe offsets.
-- Newlines in `newText` are inserted as literal characters, not new paragraphs — **in a markdown or `.docx` document. In a plaintext one (`.txt`, `.html`, `.log`, `.csv`, any unknown extension) a newline is REFUSED with `INVALID_ARGUMENT` (#1460).** Those formats spell a paragraph boundary and an intra-paragraph break identically, so a literal newline would save to bytes that reopen as two paragraphs — the document coming back a different shape than the one written. Issue one `tandem_edit` per line instead. (`tandem_appendContent` is not a substitute — it refuses any non-markdown document outright.) The refusal is deliberate rather than a silent split: this tool is a single-paragraph replacement and `RANGE_MOVED`'s retry contract assumes the range stays inside one block.
+- Newlines in `newText` are inserted as literal characters, not new paragraphs — **in a markdown or `.docx` document. In a plaintext one (`.txt`; `.html` is read-only and refused earlier) a newline is REFUSED with `INVALID_ARGUMENT` (#1460).** Those formats spell a paragraph boundary and an intra-paragraph break identically, so a literal newline would save to bytes that reopen as two paragraphs — the document coming back a different shape than the one written. Issue one `tandem_edit` per line instead. (`tandem_appendContent` is not a substitute — it refuses any non-markdown document outright.) The refusal is deliberate rather than a silent split: `newText` is inserted literally and never creates a block, and `RANGE_MOVED`'s retry contract assumes the inserted text stays inside one block.
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
 - Edits appear instantly in the editor.
 - Read-only documents (uploads, and files opened with `readOnly`) reject edits -- use annotations instead. A disk-opened `.docx` is **not** read-only (#576).
@@ -335,7 +334,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 
 ### tandem_appendContent
 
-Append **structured** markdown to the end of the document. Unlike `tandem_edit` (single-paragraph, literal newlines), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive -- existing content and annotations are untouched. Also seeds an empty document.
+Append **structured** markdown to the end of the document. Unlike `tandem_edit` (which inserts text literally into existing blocks), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive -- existing content and annotations are untouched. Also seeds an empty document.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -507,7 +506,7 @@ tandem_status({ text: "Done" })
 
 ### tandem_close
 
-Close a document. Closes the active document if no `documentId` specified.
+Close a document's tab (the active document if no `documentId` is specified); if it was the active document, another open document, if any, becomes active. **Closing does not save:** edits not yet written by `tandem_save` or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -611,15 +610,9 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 
 Annotations are metadata stored in `Y.Map('annotations')` on the shared document -- they don't modify the document text itself. Each annotation has an `id`, `author` (claude/user/import), `type`, `range`, `content`, `status` (pending/accepted/dismissed), and `timestamp`. The `import` author is used for Word comments extracted from `.docx` files on open.
 
-### tandem_highlight
-
-> **Deprecated.** Highlights are user-only. Use `tandem_comment` for AI-authored text annotations (the `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; the provider-keyed refactor is #2115). Always returns a `DEPRECATED` error.
-
----
-
 ### tandem_comment
 
-Add a comment attached to a text range. Appears in the side panel. Use `suggestedText` for replacement proposals.
+Add a comment attached to a text range. Appears in the side panel. Use `suggestedText` for replacement proposals. There is no tool for creating highlights; they are the user's. (An AI-authored comment's `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; the provider-keyed refactor is #2115.)
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -629,7 +622,6 @@ Add a comment attached to a text range. Appears in the side panel. Use `suggeste
 | `suggestedText` | string | no | Proposed replacement text. When set, the comment renders as a tracked-change suggestion with accept/reject controls. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted. Same caveat as `tandem_edit`: never pass back a snapshot flagged `textSnapshotTruncated`. |
-| `directedAt` | `"claude"` | no | **Deprecated (ADR-027).** Still accepted by the schema, but passing it returns `DEPRECATED` — omit it. |
 
 **Returns:**
 ```json
@@ -652,18 +644,6 @@ tandem_comment({
 
 ---
 
-### tandem_suggest
-
-> **Deprecated.** Always returns a `DEPRECATED` error. Use `tandem_comment` with the `suggestedText` parameter instead.
-
----
-
-### tandem_flag
-
-> **Deprecated.** Always returns a `DEPRECATED` error. Use `tandem_comment` instead.
-
----
-
 ### tandem_getAnnotations
 
 Read annotations, optionally filtered by author/type/status. For checking new user actions, prefer `tandem_checkInbox`.
@@ -675,7 +655,7 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment` — `highlight` returns nothing: every highlight is stamped `audience: "private"` (ADR-027) and `tandem_highlight` is a deprecated stub, so no outbound highlight exists to return |
+| `type` | enum | no | `highlight`, `comment` — `highlight` never returns a user highlight: every user highlight is stamped `audience: "private"` (ADR-027). Claude has no highlight-creating tool, so the only highlight it can see is a Claude-authored one the server seeded, such as the tutorial highlight on `sample/welcome.md` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -748,7 +728,7 @@ record never reads back as the user's own decision.
 
 ### tandem_removeAnnotation
 
-Delete an annotation permanently.
+Delete an annotation and its whole reply thread permanently. Prefer `tandem_resolveAnnotation` unless the annotation should leave no trace. Records private to the user (notes, private comments, the user's highlights) are refused with `INVALID_ARGUMENT`. There is no undo.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -856,7 +836,7 @@ tandem_annotationReply({
 
 ### tandem_exportAnnotations
 
-Export all annotations as a formatted summary. Useful for review reports.
+Export the annotations Claude can see — the same records `tandem_getAnnotations` returns — as a formatted summary. Useful for review reports.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -969,7 +949,7 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
 
 ### tandem_search
 
-Search for text in the document. Returns all matching positions.
+Find every occurrence of `query` in the document's flat text and return each match's `[from, to)` range and text. Matching is case-insensitive in both literal and regex mode. A result can be partial: it carries `truncated: true` at 10,000 matches or when a regex search times out.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

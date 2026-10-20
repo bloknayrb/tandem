@@ -47,7 +47,7 @@ const RelativeRangeSchema = z.object({
 /** Annotation types that may ever reach Claude-facing payloads (ADR-027: never "note"). */
 const VisibleAnnotationTypeSchema = z
   .enum(["highlight", "comment"])
-  .describe('User-private notes are never surfaced (ADR-027), so "note" cannot appear here.');
+  .describe('User-private notes are never surfaced, so "note" cannot appear here.');
 
 /** Sanitized annotation shape shared by tandem_getAnnotations and tandem_checkInbox. */
 const annotationBaseShape = {
@@ -178,7 +178,7 @@ export const statusOutputShape = {
   mode: TandemModeSchema.optional().describe('Read mode: "solo" (hold annotations) or "tandem"'),
   modeProvenance: modeProvenanceSchema
     .optional()
-    .describe("Read mode: who last wrote the mode key, when, and what it read then (#1733)"),
+    .describe("Read mode: who last wrote the mode key, when, and what it read then"),
   storeReadOnly: z.boolean().optional(),
   activeDocument: openDocumentEntry.omit({ readOnly: true }).nullable().optional(),
   openDocuments: z.array(openDocumentEntry).optional(),
@@ -229,12 +229,12 @@ export const getAnnotationsOutputShape = {
   notesExcluded: z
     .number()
     .optional()
-    .describe("How many user-private notes were filtered out (ADR-027); omitted when zero"),
+    .describe("How many user-private notes were filtered out; omitted when zero"),
   privateExcluded: z
     .number()
     .optional()
     .describe(
-      "How many non-note records were filtered out because their stored audience is not outbound — user highlights included (ADR-027, #1619/#1710); omitted when zero",
+      "How many non-note records were filtered out because the user has not shared them — user highlights included; omitted when zero",
     ),
 };
 
@@ -317,7 +317,7 @@ export const checkInboxOutputShape = {
   hasNew: z.boolean(),
   mode: TandemModeSchema,
   modeProvenance: modeProvenanceSchema.describe(
-    "Who last wrote the mode key, when, and what it read then; null before any write is observed (#1733)",
+    "Who last wrote the mode key, when, and what it read then; null before any write is observed",
   ),
   storeReadOnly: z.boolean(),
   userActions: z.array(userActionSchema).describe("New/edited user comments awaiting Claude"),
@@ -344,7 +344,7 @@ export const checkInboxOutputShape = {
       .string()
       .nullable()
       .describe(
-        "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. For a document not shown in an editor (a background tab, or no browser open) nothing updates the record, so after an edit it can be sliced from stale offsets: text the user never selected (#1997).",
+        "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. For a document not shown in an editor (a background tab, or no browser open) nothing updates the record, so after an edit it can be sliced from stale offsets: text the user never selected.",
       ),
     selectionAt: z
       .number()

@@ -8,7 +8,11 @@
  */
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { formatEventContent, formatEventMeta } from "../shared/events/types.js";
+import {
+  formatEventContent,
+  formatEventMeta,
+  LICENSE_REFUSED_EVENT_TYPE,
+} from "../shared/events/types.js";
 import { runEventConsumer } from "../shared/sse-consumer.js";
 import { CHANNEL_CONNECT_FAILED } from "../shared/types.js";
 
@@ -39,7 +43,7 @@ export async function startEventBridge(mcp: Server, tandemUrl: string): Promise<
       mcp
         .notification({
           method: "notifications/claude/channel",
-          params: { content: message, meta: { event_type: "license_refused" } },
+          params: { content: message, meta: { event_type: LICENSE_REFUSED_EVENT_TYPE } },
         })
         .catch((err: unknown) => {
           console.error("[Channel] Failed to send the licence-refusal notice:", err);

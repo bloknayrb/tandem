@@ -40,6 +40,6 @@ The suite runs on **reserved ports** from `scripts/test-ports.ts` — Vite on 45
    - No stale `openDocuments` entries causing phantom tab removal
 
 ## Test Conventions
-- Use `data-testid` selectors (kebab-case): `accept-btn`, `dismiss-btn`, `annotation-card-{id}`
+- Use `data-testid` selectors (kebab-case), e.g. `accept-btn-{id}`, `dismiss-btn-{id}`, `annotation-card-{id}`; the authoritative set is `tests/design-system-impl/__snapshots__/testid-set.snap.txt`
 - E2E tests live in `tests/e2e/`
 - McpTestClient helper simulates MCP tool calls without Claude Code

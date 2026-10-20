@@ -10,7 +10,7 @@ Start the Tandem development servers and verify everything is connected.
 
 ## Important Gotchas
 - The server MUST be running before Claude Code connects via MCP
-- `freePort()` kills any existing process on :3478/:3479 at startup — you cannot run two instances
+- At startup the server probes :3479 first. If a live Tandem already answers there — the desktop app included — the dev server **refuses to start** ("Tandem is already running") instead of killing it; quit that instance first. Only a holder that is not a live Tandem is SIGKILLed by `freePort()`. Either way, two instances cannot share 3478/3479
 - `freePort()` does NOT cover :5173 — an orphaned Vite from a killed `dev:standalone` survives, and because `vite.config.ts` sets `strictPort: true` the new Vite **exits with an error** rather than falling back to another port. The symptom is a dev server that won't start, not a silently-wrong URL (see step 2)
 - E2E tests (`npm run test:e2e`) do NOT touch :3478/:3479 — since #1492 they run on the reserved harness pair in `scripts/test-ports.ts` (Vite 4573, backend 4728/4729), so a suite run and a dev server coexist. What the harness does SIGKILL is anything holding 4728/4729.
 
@@ -63,7 +63,6 @@ Start the Tandem development servers and verify everything is connected.
 6. Open the editor at `http://127.0.0.1:5173` in the browser.
 
 ## Restarting After Server Code Changes
-If you changed server code, restart just the server:
-1. Stop the running `dev:standalone` process
-2. Run `npm run dev:standalone` again
-3. Run `/mcp` in Claude Code to reconnect
+`dev:standalone` runs the server under `tsx watch`, so it restarts itself when
+server code changes; Vite hot-reloads the client. The MCP session does not survive
+the server restart — run `/mcp` in Claude Code to reconnect.

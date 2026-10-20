@@ -154,14 +154,18 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // interactive): `<server> (-32003): "…"` at the handshake, the bare message mid-session.
   // The Error Recovery bullet now matches on the opening sentences. Outside the wake section;
   // the `LICENSE_REQUIRED` close paragraph is untouched.
-  // 35 makes `tandem_checkInbox` the exception to Multi-Document's "always pass
+  // 35 is the prompt-audit group (2026-10-13): Hard Rule 6's force-open reason, the User
+  // comments paragraph, the references to removed tools, the absent-tools intro and its
+  // maintainer note, the Scope note, the Hard Rules booster and the Review Workflow autosave.
+  // All outside the wake section.
+  // 36 makes `tandem_checkInbox` the exception to Multi-Document's "always pass
   // `documentId`" (#2187: a default poll now covers every open document, and an explicit id
   // narrows it back to one), tells Claude to act on an item with its own `documentId`, and
   // corrects the NO_DOCUMENT bullet: tabs open with none active now returns their items.
-  // Still unshipped, it also gained the `ambiguous-document` Error Recovery entry (PR #2225
+  // Before shipping it also gained the `ambiguous-document` Error Recovery entry (PR #2225
   // review: the four id-keyed annotation tools find the open document holding the id).
   // Outside the wake section.
-  expect(skill).toMatch(/^version:\s*35$/m);
+  expect(skill).toMatch(/^version:\s*36$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -487,6 +491,8 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(rules).toMatch(
       /force: true[\s\S]{0,250}(?:ask the user|the user resolves)|(?:ask the user|the user resolves)[\s\S]{0,250}force: true/i,
     );
+    // Since #1813 a forced open keeps notes; the old reason must not come back.
+    expect(rules).not.toMatch(/wiping the whole document's annotations/i);
 
     // Rule 2 addendum: textSnapshotTruncated.
     expect(rules).toContain("textSnapshotTruncated");
@@ -536,7 +542,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "35", bodyHash: "0bd8dd179eb0" });
+    ).toEqual({ version: "36", bodyHash: "ebabc881431a" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
