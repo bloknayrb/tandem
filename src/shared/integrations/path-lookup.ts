@@ -15,7 +15,7 @@ import { delimiter, join } from "node:path";
  *
  * The two PATH *walks* in `detect-claude-cli.ts` deliberately stay there. They
  * are not "find the binary" loops: `detectClaudeCli` returns a three-state
- * presence enum with a `~/.local/bin` fallback, and `isBareNameLaunchable`
+ * presence enum with a `~/.local/bin` fallback, and `resolveClaudeLaunch`
  * walks the WHOLE path tracking whether it saw a shim, because
  * `CreateProcessW` skips directories lacking a `.exe` and keeps searching.
  * Collapsing either into {@link resolveOnPath}'s first-hit semantics would

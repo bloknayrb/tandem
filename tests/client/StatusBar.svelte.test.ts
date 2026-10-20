@@ -15,6 +15,10 @@ const baseProps = {
   aiLiveIndicator: null,
   aiLauncherAttached: false,
   aiLauncherRestarting: false,
+  aiLauncherStarting: false,
+  aiLauncherStandby: null,
+  aiLauncherStandbyRecent: false,
+  onStartClaude: () => {},
   aiSessionCount: null as number | null,
   aiNotice: null,
   onOpenLicenseSettings: () => {},
@@ -436,5 +440,70 @@ describe("StatusBar — a leftover session", () => {
     const dot = pill.querySelector(".claude-dot") as HTMLElement;
     expect(dot.classList.contains("pending-ring")).toBe(true);
     expect(queryByTestId("status-ai-session-count")).toBeNull();
+  });
+});
+
+describe("StatusBar — Tandem's Claude in standby (#2195)", () => {
+  it("the standby pill is the Start button, named by its own label, and calls onStartClaude", async () => {
+    const onStartClaude = vi.fn();
+    const onRestartClaude = vi.fn();
+    const onConnectAi = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "stopped",
+        aiChip: "start",
+        aiLauncherStandby: "off",
+        onStartClaude,
+        onRestartClaude,
+        onConnectAi,
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.tagName).toBe("BUTTON");
+    expect(indicator.getAttribute("data-ai-state")).toBe("standby");
+    expect(indicator.getAttribute("data-ai-action")).toBe("start");
+    expect(indicator.textContent).toContain("Tandem's Claude is off");
+    // The visible label is inside the accessible name (WCAG 2.5.3).
+    expect(indicator.getAttribute("aria-label")).toBe(
+      "Tandem's Claude is off. Start Tandem's Claude.",
+    );
+    await fireEvent.click(indicator);
+    expect(onStartClaude).toHaveBeenCalledOnce();
+    // The #1268 pairing: a start CTA must never reach the wizard or a restart.
+    expect(onConnectAi).not.toHaveBeenCalled();
+    expect(onRestartClaude).not.toHaveBeenCalled();
+  });
+
+  it("each standby has its own label", () => {
+    const labels: Record<string, string> = {
+      off: "Tandem's Claude is off",
+      "awaiting-start": "Tandem's Claude hasn't started",
+      idle: "Tandem's Claude stopped (idle)",
+    };
+    for (const [standby, label] of Object.entries(labels)) {
+      const { getByTestId, unmount } = render(StatusBar, {
+        props: {
+          ...baseProps,
+          aiState: "stopped",
+          aiChip: "start",
+          aiLauncherStandby: standby as "off" | "awaiting-start" | "idle",
+        },
+      });
+      expect(getByTestId("status-ai-indicator").textContent).toContain(label);
+      unmount();
+    }
+  });
+
+  it("a start in progress reads 'Starting Claude…', not 'Restarting'", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "stopped",
+        aiLauncherRestarting: true,
+        aiLauncherStarting: true,
+      },
+    });
+    expect(getByTestId("status-ai-indicator").textContent).toContain("Starting Claude…");
   });
 });

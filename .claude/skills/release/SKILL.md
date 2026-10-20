@@ -6,11 +6,7 @@ disable-model-invocation: true
 
 # Cut a Tandem Release
 
-Codifies the release sequence used from v0.14.3 onward, and refined by every cut
-through v0.22.0 — including the global-install upgrade step, the two changelog
-gaps, the rebuild-before-retest step, and the duplicate-draft race described
-below. The version
-bump has **SEVEN surfaces**, none of which bump automatically. Surfaces 1–4 are
+The version bump has **SEVEN surfaces**, none of which bump automatically. Surfaces 1–4 are
 CI-guarded by `tests/plugin/plugin-version-pin.test.ts` (any divergence from
 `package.json` fails CI); surfaces 5–6 are **not guarded** — this skill is what
 prevents them drifting. Surface 7 is guarded more loosely and is bumped **last,
@@ -112,11 +108,11 @@ other six.
    **Read the survivors, don't just count them — they are not all bugs.**
    Expect three kinds: the surfaces themselves (before you bump them; surface
    7's `"ref": "v<old-version>"` is SUPPOSED to survive until step 10);
-   deliberate prose naming the outgoing version as history (this skill's
-   header, CLAUDE.md's Status); and source comments, which the exclusions do
-   NOT hide — `src/server/license/gate-flag.ts` carries a
-   `Default: false (v<version>)` marker. Judge each one; a straggler is a hit
-   that still *pins* the old version rather than describing it.
+   deliberate prose naming a version as history (this skill's own dated
+   plugin-install measurement — leave it alone); and source comments,
+   which the exclusions do NOT hide — `src/server/license/gate-flag.ts` carries a `Default: false (v<version>)`
+   marker. Judge each one; a straggler is a hit that still *pins* the old
+   version rather than describing it.
 
 2. Ask Bryan to run `/changelog` to generate the Keep a Changelog entry, then
    finalize the `## [<version>]` section in `CHANGELOG.md` (the in-app View
@@ -145,10 +141,7 @@ other six.
 3. **Rebuild before you retest.** `APP_VERSION` is a build-time tsup define, so
    `dist/` still carries the OUTGOING version until `npm run build` runs, and
    `tests/build/version-baked.test.ts` fails asserting the new string against a
-   stale bundle. It reads as a real regression and is not one. This has now
-   fired at three cuts (v0.19.0→v0.20.0, and again at v0.22.0 despite being
-   recorded in project memory both times), which is why it is a step here rather
-   than a note someone is expected to remember:
+   stale bundle. It reads as a real regression and is not one:
    ```bash
    npm run build
    ```
@@ -271,9 +264,10 @@ other six.
    doctor`. Record the outcome (platforms covered, anything skipped) on the
    release PR or tracking issue — an unstated skip reads as "verified".
 
-9. Update project memory: the CLAUDE.md **Status** section (what shipped in
-   this version) and the project memory SHIPPED entry (per the archive
-   rotation discipline).
+9. Update the project memory SHIPPED entry (per the archive rotation
+   discipline). CLAUDE.md carries no version stamp; edit its **Status**
+   section only if a flag flip, a dark system, a v1.0 blocker or the MCP tool
+   counts changed in this release.
 
 10. Bump surface 7 in its own PR: set the `tandem` entry's `source.ref` in
    `.claude-plugin/marketplace.json` to `v<version>`. Only after all three hold:

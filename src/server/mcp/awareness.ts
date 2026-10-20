@@ -24,6 +24,7 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
+import { getCurrentSessionId } from "../sessions/context.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
@@ -198,6 +199,36 @@ export function resetInbox(): void {
 
 /** What `appendClaudeChatMessage` returns: the new message id, or the licence refusal. */
 export type ClaudeChatAppend = { ok: true; id: string } | { ok: false; refusal: AiRefusal };
+
+/**
+ * Listeners told whenever a Claude Code session's `tandem_reply` lands a chat
+ * message (#2197): how the launcher supervisor learns its one-time greeting
+ * reached the chat. Two `tandem_reply` tools reach here — the MCP tool below,
+ * and the channel shim's, through `/api/channel-reply` (the shim ships in the
+ * plugin, so Tandem's own Claude can hold both). The local-model collaborator
+ * also appends Claude chat but never notifies: it is not Tandem's Claude. The
+ * listener gets the caller's `X-Claude-Session-Id` (undefined when the
+ * transport sends none) and no content, so the supervisor can tell its own
+ * child from another session. A seam rather than an import, because the
+ * supervisor must not reach the MCP layer; `index.ts` wires the two. A
+ * throwing listener is logged and never fails the reply.
+ */
+const tandemReplyListeners = new Set<(sessionId: string | undefined) => void>();
+
+export function onTandemReply(cb: (sessionId: string | undefined) => void): () => void {
+  tandemReplyListeners.add(cb);
+  return () => tandemReplyListeners.delete(cb);
+}
+
+export function notifyTandemReply(sessionId: string | undefined): void {
+  for (const cb of tandemReplyListeners) {
+    try {
+      cb(sessionId);
+    } catch (err) {
+      console.error("[Tandem] A chat listener failed:", err);
+    }
+  }
+}
 
 /**
  * Append a Claude-authored chat message to CTRL_ROOM's chat map — the single
@@ -602,7 +633,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
+        "Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server's side only. Does not return user notes or any other record the user has kept private — user highlights never appear here at all. Comments, replies and accept/dismiss responses cover the target document only; `chatMessages` holds every unread user chat message across all documents (with its documentId when it was sent from a document), and returning them marks them read. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets.",
       inputSchema: {
         documentId: z
           .string()
@@ -786,6 +817,7 @@ export function registerAwarenessTools(server: McpServer): void {
             kind: appended.refusal.kind,
           });
         }
+        notifyTandemReply(getCurrentSessionId());
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({
           sent: true,

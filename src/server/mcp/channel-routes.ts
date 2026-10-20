@@ -8,6 +8,7 @@ import {
   API_CHAT,
   API_EVENTS,
 } from "../../shared/api-paths.js";
+import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
 import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
 import { recordPushConsumerEvent } from "../events/push-liveness.js";
@@ -20,6 +21,7 @@ import type { Handler } from "./api-routes.js";
 import {
   appendClaudeChatMessage,
   markUserChatRead,
+  notifyTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
 } from "./awareness.js";
 
@@ -175,6 +177,10 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       sendAiRefusal(res, appended.refusal);
       return;
     }
+    // The shim's `tandem_reply` is a Claude Code session's reply like the MCP
+    // tool's, so it can be Tandem's own Claude saying hello (#2197). The shim
+    // forwards its session id (`withClaudeSessionHeader`).
+    notifyTandemReply(normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]));
     const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);
     res.json({
       sent: true,

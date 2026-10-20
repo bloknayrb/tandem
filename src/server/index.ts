@@ -27,12 +27,15 @@ import { attachCtrlObservers } from "./events/queue.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
+import { isWalkthroughPending } from "./integrations/walkthrough.js";
+import { armFirstRunGreeting, isGreetingOwed, markGreeted } from "./launcher/greeting.js";
 import { resolveInitialLauncherReason } from "./launcher/initial-reason.js";
 import {
   startLocalModelCollaborator,
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
 import { formatLogLine } from "./log-filter.js";
+import { onTandemReply } from "./mcp/awareness.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -49,9 +52,11 @@ import { shutdownSearchWorker } from "./mcp/search-worker.js";
 import {
   APP_VERSION,
   closeMcpSession,
+  isOtherMcpClientLive,
   startMcpServerHttp,
   startMcpServerStdio,
 } from "./mcp/server.js";
+import { readModeState } from "./mode.js";
 import { pushNotification } from "./notifications.js";
 import {
   decideStartupAction,
@@ -148,9 +153,25 @@ async function startLauncherSupervisor(): Promise<void> {
     // Assigned before `start()` so a supervisor that spawned a reaper and then
     // threw is still reachable by `shutdown()`. A non-null supervisor with a
     // `spawn-failed` reason is the pre-existing shape here.
+    const appData = resolveAppDataDir();
     launcherSupervisor = createSupervisor({
-      integrationsBase: resolveAppDataDir(),
+      integrationsBase: appData,
       reportDeliveryTrip: captureWarning,
+      // "Not if another AI is on" (#2196): a chat message starts Tandem's
+      // Claude only while no other MCP client is live.
+      otherAiAttached: isOtherMcpClientLive,
+      // The one-time greeting (#2197): its marker, and how the supervisor
+      // learns the hello reached the chat.
+      greeting: {
+        isOwed: () => isGreetingOwed(appData),
+        markDone: () => markGreeted(appData, APP_VERSION),
+      },
+      subscribeTandemReply: onTandemReply,
+      // Solo, or an unreadable mode, holds the hello for a Tandem-mode start.
+      greetingHeldBySolo: () => readModeState() !== "tandem",
+      // The v1.0 setup walkthrough holds the boot start until it is done
+      // (#2198; Bryan, 2026-10-14) — the same predicate the wizard opens on.
+      walkthroughPending: () => isWalkthroughPending(appData, APP_VERSION),
     });
     await launcherSupervisor.start();
   } catch (err) {
@@ -767,7 +788,7 @@ async function main() {
       // check — the stamp is written only once it resolves. Stamping first
       // meant a failed open lost that release's notes for good: the next
       // start reads `current`.
-      await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE, {
+      const versionChange = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE, {
         onUpgrade: async () => {
           await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
           // Version-change-neutral wording: a downgrade takes this arm too and
@@ -775,6 +796,15 @@ async function main() {
           console.error(`[Tandem] Opened CHANGELOG.md (now running v${APP_VERSION})`);
         },
       });
+      // The one-time greeting (#2197): owed on a first install, and once for
+      // everyone on the first run of v1.0. Before the launcher starts (below),
+      // so the first spawn reads it. Not into a read-only store.
+      if (!isStoreReadOnly()) {
+        await armFirstRunGreeting(resolveAppDataDir(), {
+          firstInstall: versionChange === "first-install",
+          appVersion: APP_VERSION,
+        });
+      }
     } catch (err) {
       console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
     }

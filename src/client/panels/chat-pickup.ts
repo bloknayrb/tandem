@@ -68,10 +68,16 @@ const PICKUP_TEXT = {
   working: "Your AI is working on it",
 } as const satisfies Record<ChatPickup["kind"], string>;
 
+/** The latest message has waited past the delivery-stall threshold: the row
+ * reads "still waiting", and the Claude Code offer may show beside it. */
+export function isPickupStalled(pickup: ChatPickup | null): boolean {
+  return pickup?.kind === "waiting" && pickup.waitedMs >= DELIVERY_STALL_MS;
+}
+
 /** The visible line for a pickup state. */
 export function chatPickupLabel(pickup: ChatPickup): string {
   if (pickup.kind !== "waiting") return PICKUP_TEXT[pickup.kind];
-  if (pickup.waitedMs >= DELIVERY_STALL_MS) return "Sent · still waiting for your AI";
+  if (isPickupStalled(pickup)) return "Sent · still waiting for your AI";
   if (pickup.waitedMs < 10_000) return PICKUP_TEXT.waiting;
   return `${PICKUP_TEXT.waiting} · ${formatWait(pickup.waitedMs)}`;
 }

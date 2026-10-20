@@ -170,7 +170,8 @@ describe("#1629: accept verifies the target text before mutating", () => {
     it("accepts across a heading prefix the flat text contains and PM does not", () => {
       // `validateRange` checks heading prefixes only at the two ENDPOINTS
       // (`positions.ts`), so a range legally runs from one block through the
-      // next block's "## " — which `tandem_suggest` will happily create.
+      // next block's "## " — which a stored suggestion predating the #1766
+      // interior screen can still carry.
       const editor = new Editor({
         extensions: buildSchemaExtensions(),
         content: "<p>alpha beta</p><h2>Title Here</h2>",

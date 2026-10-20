@@ -21,6 +21,7 @@ import {
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   CHAT_ACK_DIRECTIVE,
+  onTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
   registerAwarenessTools,
   resetInbox,
@@ -39,10 +40,6 @@ import {
   _resetModeProvenanceForTests,
   installModeProvenanceObserver,
 } from "../../src/server/mode.js";
-import {
-  getBuffer as getNotificationBuffer,
-  resetForTesting as resetNotifications,
-} from "../../src/server/notifications.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -542,11 +539,11 @@ describe("MCP tool integration — annotation tools", () => {
     expect(okParsed.data.annotationId).toMatch(/^ann_/);
   });
 
-  it("tandem_comment still spans a heading — the #1766 interior scan is tandem_edit's alone", async () => {
+  it("a plain tandem_comment still spans a heading — the #1766 interior scan is not on its arm", async () => {
     // **The sibling of the spec above, and the only thing in the suite that
     // would notice a fix that ORed the interior scan into `rejectHeadingOverlap`
-    // itself.** `YDocStore.anchorRange` hardcodes that flag for
-    // `tandem_comment` / `tandem_suggest`, so widening it here would refuse a
+    // itself.** `YDocStore.anchorRange` sets that flag only for the
+    // "suggestion" purpose, so widening it to a plain `tandem_comment` would refuse a
     // comment about a whole section and answer "target the text content only" —
     // advice with no followable form when the target IS two blocks and the
     // heading between them.
@@ -687,37 +684,12 @@ describe("MCP tool integration — annotation tools", () => {
     expect(map.size).toBe(0);
   });
 
-  // The no-args variants verify that deprecated stubs accept calls missing the
-  // legacy required params — the Zod schema must let them through so the handler
-  // can return DEPRECATED rather than a validation error.
-  it.each([
-    ["tandem_highlight", { from: 0, to: 5, color: "yellow" }, "mcp-ann-hl"],
-    ["tandem_highlight", {}, "mcp-ann-hl-noargs"],
-    ["tandem_flag", { from: 0, to: 5 }, "mcp-ann-flag"],
-    ["tandem_flag", {}, "mcp-ann-flag-noargs"],
-    ["tandem_suggest", { from: 0, to: 5, newText: "Hi", reason: "brevity" }, "mcp-ann-sug"],
-    ["tandem_suggest", {}, "mcp-ann-sug-noargs"],
-  ] as const)("%s returns DEPRECATED error (args: %j)", async (toolName, args, docId) => {
-    setupDoc(docId, "Hello world");
-    resetNotifications();
-
-    const result = await client.callTool({ name: toolName, arguments: args });
-    const parsed = parseResult(result);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-
-    // Deprecated stubs surface to the user via pushNotification — without it,
-    // Claude sees DEPRECATED but the user has no idea the call happened.
-    const notifications = getNotificationBuffer();
-    const found = notifications.find(
-      (n) => n.errorCode === "DEPRECATED" && n.toolName === toolName,
-    );
-    expect(found).toBeDefined();
-    expect(found?.severity).toBe("warning");
-    expect(found?.dedupKey).toBe(`deprecated:${toolName}`);
-  });
-
-  it("tandem_comment rejects directedAt with DEPRECATED error and creates no annotation", async () => {
+  it("tandem_comment ignores an extra directedAt and creates the comment", async () => {
+    // The `directedAt` parameter was removed. A client still sending it must
+    // not be refused: the input schema is a plain (strip-unknown) zod object,
+    // so the stale key is dropped before the handler runs. Switching the
+    // schema to `.strict()` would turn this into a protocol error, and this
+    // test is what notices.
     const ydoc = setupDoc("mcp-ann-da", "Hello world test content");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -726,10 +698,11 @@ describe("MCP tool integration — annotation tools", () => {
       arguments: { from: 0, to: 5, text: "Nice intro", directedAt: "claude" },
     });
     const parsed = parseResult(result);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-    // No annotation should have been created
-    expect(map.size).toBe(0);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.annotationId).toMatch(/^ann_/);
+    expect(map.size).toBe(1);
+    const stored = map.get(parsed.data.annotationId) as Record<string, unknown>;
+    expect(stored).not.toHaveProperty("directedAt");
   });
 
   it("tandem_getAnnotations returns created annotations", async () => {
@@ -1866,6 +1839,33 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.sent).toBe(true);
     expect(parsed.data.messageId).toMatch(/^msg_/);
+  });
+
+  it("tandem_reply tells the greeting's listeners (#2197), with no session id over an id-less transport", async () => {
+    setupDoc("mcp-aw-greet", "Hello world");
+    const seen = vi.fn();
+    const bad = vi.fn(() => {
+      throw new Error("listener bug");
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const off1 = onTandemReply(bad);
+    const off2 = onTandemReply(seen);
+    try {
+      const parsed = parseResult(
+        await client.callTool({ name: "tandem_reply", arguments: { text: "hello" } }),
+      );
+      // A throwing listener never fails the reply.
+      expect(parsed.data.sent).toBe(true);
+      expect(seen).toHaveBeenCalledTimes(1);
+      expect(seen).toHaveBeenCalledWith(undefined);
+      off2();
+      await client.callTool({ name: "tandem_reply", arguments: { text: "again" } });
+      expect(seen).toHaveBeenCalledTimes(1);
+    } finally {
+      off1();
+      off2();
+      errSpy.mockRestore();
+    }
   });
 
   it("tandem_checkInbox tells Claude to acknowledge chat, and only when chat is present", async () => {

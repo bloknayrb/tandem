@@ -26,6 +26,7 @@ import {
   CHANNEL_REPLY_FETCH_TIMEOUT_MS,
   DEFAULT_MCP_PORT,
 } from "../shared/constants.js";
+import { LICENSE_REFUSED_EVENT_TYPE, TANDEM_EVENT_TYPES } from "../shared/events/types.js";
 import {
   describeFetchError,
   fetchWithTimeout,
@@ -61,14 +62,14 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
       instructions: [
         'Events from Tandem arrive as <channel source="tandem-channel" event_type="..." document_id="...">.',
         "These are real-time push notifications of user actions in the collaborative document editor.",
-        "Event types: annotation:created, annotation:accepted, annotation:dismissed, annotation:reply,",
-        "chat:message, document:opened, document:closed, document:switched.",
+        `Event types: ${TANDEM_EVENT_TYPES.join(", ")},`,
+        `and ${LICENSE_REFUSED_EVENT_TYPE} (a notice, sent once per refused stretch, that Tandem's licence refused this event stream).`,
         "Chat messages may include a 'selection' field with buffered selection context.",
         "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_edit, etc.) to act on them.",
         "Reply to chat messages using tandem_reply. Pass document_id from the tag attributes.",
         CHAT_ACK_RULE,
         "Do not reply to non-chat events — just act on them using tools.",
-        "If you haven't received channel notifications recently, call tandem_checkInbox as a fallback.",
+        "Push is best-effort and can drop events; tandem_checkInbox is the authority on user activity, so keep polling it between steps.",
       ].join(" "),
     },
   );

@@ -1709,7 +1709,8 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 }
 
 /**
- * Close a document by ID. Saves the session, removes from tracking,
+ * Close a document by ID. Keeps the session only when an external conflict
+ * is pending (otherwise it is deleted), removes from tracking,
  * picks a new active doc if needed, stops auto-save if no docs remain,
  * and broadcasts the updated document list.
  */

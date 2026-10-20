@@ -20,31 +20,19 @@ Anything holding the reserved pair that *fails* the health check — wedged, non
 
 ## Pre-Flight Checklist
 
-Before running E2E tests, verify:
+The backend Playwright starts depends on `CI` (`playwright.config.ts` `webServer`): locally it runs the server **from source** through tsx (`scripts/e2e-server.mjs … src/server/index.ts`); under `CI` it runs the built `dist/server/index.js`. The client is always the Vite dev server on :4573, never `dist/client/`. So a local run needs no build — check only the reserved ports (a holder is either refused or killed — see above):
 
 ```bash
-# 1. Server bundle exists (E2E uses pre-built server, not tsx)
-ls dist/server/index.js
-
-# 2. Reserved ports are free (a holder is either refused or killed — see above)
 curl -sf http://127.0.0.1:4729/health && echo "⚠ Server on :4729 (stale E2E?)" || echo "✓ Port free"
 curl -sf http://127.0.0.1:4728 && echo "⚠ Something on :4728" || echo "✓ Port free"
-
-# 3. Client build exists (for webServer)
-ls dist/client/index.html
-```
-
-If `dist/server/index.js` is missing or stale:
-```bash
-npm run build:server
 ```
 
 ## Failure Categories
 
 ### Timeout waiting for health endpoint
 **Symptom**: `Timed out waiting for http://127.0.0.1:4729/health`
-**Cause**: `dist/server/` is stale or missing
-**Fix**: `npm run build:server` then retry
+**Cause**: locally, the source server failed to boot — read the webServer output above the timeout. Under `CI`, a stale or missing `dist/server/`.
+**Fix**: fix the boot error; for a `CI`-mode run, `npm run build:server` then retry.
 
 ### net::ERR_CONNECTION_REFUSED on :4573
 **Symptom**: Client page fails to load
@@ -58,16 +46,13 @@ does not.)
 
 ### Stale openDocuments / phantom tabs
 **Symptom**: Tests find unexpected documents open or wrong tab state
-**Cause**: Prior test crash left session state on disk
-**Fix**: Delete session directory:
-- Windows: `%LOCALAPPDATA%\tandem\Data\sessions\`
-- macOS: `~/Library/Application Support/tandem/sessions/`
-- Linux: `~/.local/share/tandem/sessions/`
+**Cause**: not leftover session files. Every E2E run's backend (root `playwright.config.ts`) uses an isolated `TANDEM_APP_DATA_DIR` (`tandem-e2e-data`) that `scripts/e2e-server.mjs` wipes at start, and the perf harness does the same with `tandem-perf-data` (`tests/perf/perf-server.mjs`). Look for state leaking between specs in the same run (a spec that opens documents and never closes them), or a hand-started Vite that Playwright reused instead of starting its own. A design-baselines run (`scripts/design-baselines/playwright.config.ts`) uses `/tmp/tandem-baselines-data`, which is not wiped.
+**Fix**: for a baselines run, delete `/tmp/tandem-baselines-data`. Never delete the per-OS `sessions/` directory for this — that is your real Tandem's session store, and the E2E backend does not read it.
 
 ### data-testid not found
 **Symptom**: `locator.click: Error: strict mode violation` or element not found
 **Cause**: testid was renamed or component restructured
-**Fix**: Check CLAUDE.md Critical Rule #7 for the current testid list. Use `[data-testid="..."]` selectors, not CSS classes.
+**Fix**: grep `tests/design-system-impl/__snapshots__/testid-set.snap.txt` for the current name — that snapshot is the authoritative set (CLAUDE.md Critical Rule 7). Use `[data-testid="..."]` selectors, not CSS classes.
 
 ### WebServer cold-start race
 **Symptom**: First test in suite fails, rest pass

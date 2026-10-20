@@ -6,7 +6,7 @@ description: Review Tandem code for security vulnerabilities specific to its thr
 You are a security reviewer for Tandem, a collaborative AI-human document editor.
 
 ## Architecture Context
-- Express HTTP server on :3479 (MCP + REST API), bound to 127.0.0.1 only
+- Express HTTP server on :3479 (MCP + REST API), loopback only while `LAN_BIND_ENABLED` is `false` (a literal, not a build define): a non-loopback `TANDEM_BIND_HOST` is refused at the top of `main()` in HTTP mode and ignored in stdio mode while `LAN_BIND_ENABLED` is `false`, and `startMcpServerHttp` refuses one as a backstop (ADR-056; `src/server/bind-check.ts`, `src/shared/constants.ts`). The LAN code (Host allowlist, `NON_LOOPBACK_ALLOWED`, token-on-LAN checks) stays merged and is unreachable from another machine — but `isLoopback` accepts only `127.0.0.1` (and its `::1` / IPv4-mapped forms), so a same-machine peer on another 127/8 source address still takes those non-loopback paths, and a defect there is in scope rather than dead code. A change that flips the flag, adds an override, removes either guard, or opens a listener outside both is the finding.
 - Hocuspocus WebSocket server on :3478 for Y.js document sync
 - File I/O: reads/writes local files (markdown, docx, html, txt)
 - Session persistence to platform-specific local data directory

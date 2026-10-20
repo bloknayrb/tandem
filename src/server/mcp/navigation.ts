@@ -219,10 +219,22 @@ export function registerNavigationTools(server: McpServer): void {
   server.registerTool(
     "tandem_search",
     {
-      description: "Search for text in the document. Returns matching positions.",
+      description:
+        "Find every occurrence of query in the document's flat text (the tandem_getTextContent " +
+        "coordinate system) and return each match's [from, to) range and matched text. Matching is " +
+        "case-insensitive in both literal and regex mode; use tandem_resolveRange for an exact-case " +
+        "match. Regex flags are fixed at gi: ^/$ anchor to the whole document, . does not match the " +
+        "newline between blocks, and a zero-length match returns an empty range. Results stop at " +
+        "10,000 matches, and a regex search stops after about two seconds; either way the result " +
+        "carries truncated: true with the matches found so far, so do not treat it as complete. An " +
+        "invalid or oversized query returns FORMAT_ERROR; SEARCH_BUSY means too many regex searches " +
+        "are running — retry shortly.",
       inputSchema: {
         query: z.string().describe("Text to find (literal unless `regex: true`)"),
-        regex: z.boolean().default(false).describe("Treat query as regex"),
+        regex: z
+          .boolean()
+          .default(false)
+          .describe("Treat query as a JavaScript regular expression (matched case-insensitively)"),
         documentId: z
           .string()
           .optional()
@@ -283,10 +295,18 @@ export function registerNavigationTools(server: McpServer): void {
 
   server.tool(
     "tandem_resolveRange",
-    "Find text and return a valid range. Safer than raw character offsets under concurrent editing.",
+    "Return the flat [from, to) range and text of the Nth occurrence of a literal string. Matching " +
+      "is literal and case-sensitive; only if there is no exact match at all does it retry treating " +
+      "other Unicode spaces (e.g. non-breaking) as ordinary spaces. The returned text is the " +
+      "document's actual characters. A miss returns INVALID_RANGE; the error message reports how " +
+      "many occurrences exist. The range can be passed to tandem_edit or tandem_comment unless it " +
+      'starts or ends in heading markup such as "## " (including a range ending at the newline before a ' +
+      "heading), or, for tandem_edit or a suggestion, runs through it — they refuse those. It describes " +
+      "the document at call " +
+      "time — pass the returned text as textSnapshot on the follow-up call to detect concurrent edits.",
     {
-      pattern: z.string().describe("Text to find"),
-      occurrence: z.number().optional().describe("Which occurrence (1-based, default 1)"),
+      pattern: z.string().describe("Literal text to find (not a regex; case-sensitive)"),
+      occurrence: z.number().optional().describe("Which occurrence to return, 1-based (default 1)"),
       documentId: z
         .string()
         .optional()

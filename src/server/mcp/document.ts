@@ -501,13 +501,15 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_open",
-    "Open a file in the Tandem editor as a new tab; returns a documentId. Does NOT launch or focus the editor — #477 removed browser auto-open, and nothing here reaches the desktop window's `show_main_window`; the user sees the tab when they next look at an editor that is already running. force=true reloads from disk if the file changed externally.",
+    "Open an existing file in the Tandem editor as a tab and make it the active document; returns a documentId. filePath must be fully qualified (on Windows, starting with a drive letter; anything else returns INVALID_PATH) and the file must already exist — this tool never creates one. Opening a file that is already open switches to its existing tab without reloading it; pass force=true to reload from disk. .html files open read-only (annotate them, don't edit). This does not launch, show or focus the editor window: the user sees the tab the next time they look at a running editor.",
     {
       filePath: z.string().describe("Absolute path to the file to open"),
       force: z
         .boolean()
         .optional()
-        .describe("Force reload from disk even if already open. Clears annotations and session."),
+        .describe(
+          'Reload from disk even if already open, discarding unsaved in-memory edits and the session. Annotations are kept and re-anchored to the reloaded text; any whose text changed may be reported with anchor: "degraded" by tandem_getAnnotations.',
+        ),
       authoredBy: z
         .literal("claude")
         .optional()
@@ -690,15 +692,34 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_edit",
-    "Edit text in the document at a specific range. For single-paragraph replacements only — newlines in newText are inserted as literal text.",
+    "Replace the text in [from, to) with newText. Offsets are flat offsets from tandem_getTextContent, " +
+      "tandem_search, tandem_resolveRange or tandem_getOutline (includeBlocks). from === to inserts newText " +
+      "at that point — the only way to insert text mid-document; omit textSnapshot there (it is refused with " +
+      "INVALID_ARGUMENT). A range inside one block (including one list item, table cell or quoted " +
+      "paragraph) edits that block. A range whose ends are in different top-level blocks merges " +
+      "them into one and deletes every block wholly inside it; a range spanning two blocks where " +
+      "either end is inside a list, blockquote or table (including two items of one list) returns " +
+      "INVALID_RANGE naming the two ranges to edit separately. A range whose start, end or " +
+      'interior overlaps heading markup such as "## " returns INVALID_RANGE; split the edit at the ' +
+      "heading. A to at the first character of that markup counts as overlapping, so end the range " +
+      "before the newline that precedes a heading. newText is inserted literally, never parsed as Markdown (use tandem_appendContent or " +
+      "tandem_editList for new block structure); a newline in it is refused with INVALID_ARGUMENT in a " +
+      "plain-text (.txt) document and otherwise stays a literal line break inside the same " +
+      "block (a heading saves it as a space). Returns " +
+      "READ_ONLY on a read-only document and EMPTY_DOCUMENT on an empty one.",
     {
       // `.int()` here rather than `.nonnegative()`: `validateRange` owns the
       // bounds (and answers with a `reason` the agent can branch on), but a
       // fractional offset has no meaningful coordinate at all — `String.slice`
       // would silently truncate it (#1752).
-      from: z.number().int().describe("Start position (character offset)"),
-      to: z.number().int().describe("End position (character offset)"),
-      newText: z.string().describe("Replacement text (single paragraph — no newlines)"),
+      from: z.number().int().describe("Start offset (flat text, inclusive)"),
+      to: z
+        .number()
+        .int()
+        .describe(
+          "End offset (flat text, exclusive — but a to at the start of heading markup is refused); equal to from for a point insertion",
+        ),
+      newText: z.string().describe("Replacement text, inserted literally"),
       documentId: z
         .string()
         .optional()
@@ -707,7 +728,7 @@ export function registerDocumentTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
+          "Expected text at [from, to) — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted. Omit for a point insertion (from === to); it is refused there.",
         ),
     },
     withErrorBoundary(
@@ -727,22 +748,23 @@ export function registerDocumentTools(server: McpServer): void {
             );
           }
 
-          // #1460: enforce what this tool's own description has always claimed.
+          // #1460: enforce what this tool's own description claims — a newline
+          // in newText is refused in a plain-text document.
           //
-          // "newlines in newText are inserted as literal text" is accurate, and
-          // in a markdown document it is also harmless — a literal `\n` is a soft
-          // wrap the serializer can spell, which is what `whitespace: "pre"`
-          // (#1448) exists to preserve. In a PLAINTEXT document it is a shape the
-          // file cannot store: save joins blocks with `\n`, so the bytes say two
-          // lines while the model says one block, and the next open believes the
-          // bytes. The AI's one-paragraph edit reopens as two.
+          // Inserting a newline literally is harmless in a markdown document —
+          // a literal `\n` is a soft wrap the serializer can spell, which is what
+          // `whitespace: "pre"` (#1448) exists to preserve. In a PLAINTEXT
+          // document it is a shape the file cannot store: save joins blocks with
+          // `\n`, so the bytes say two lines while the model says one block, and
+          // the next open believes the bytes. The AI's one-paragraph edit reopens
+          // as two.
           //
-          // Refusing rather than splitting, deliberately. This tool is documented
-          // and shaped as a single-paragraph replacement — every offset it
-          // returns, and `RANGE_MOVED`'s retry contract, assume the edit stays
-          // inside one textblock. Silently promoting it to a multi-block insert
-          // would change that contract for every caller to fix a case the caller
-          // can trivially avoid, and the error names the fix.
+          // Refusing rather than splitting, deliberately. newText is inserted
+          // literally into existing blocks and never creates one — every offset
+          // the tool returns, and `RANGE_MOVED`'s retry contract, assume the
+          // inserted text stays inside one textblock. Silently promoting it to a
+          // multi-block insert would change that contract for every caller to fix
+          // a case the caller can trivially avoid, and the error names the fix.
           if (isPlaintextFormat(docState?.format) && /[\r\n]/.test(newText)) {
             return mcpError(
               "INVALID_ARGUMENT",
@@ -842,7 +864,7 @@ export function registerDocumentTools(server: McpServer): void {
             }
             if (v.code === "HEADING_OVERLAP") {
               // `tandem_edit`'s OWN message, not `rangeFailureToError`'s — that
-              // one serves `tandem_comment` / `tandem_suggest`, which keep the
+              // one serves `tandem_comment`, whose plain arm keeps the
               // endpoint-only rule, and must stay as it is. Since #1766 this
               // range may overlap a heading in its INTERIOR, where "target the
               // text content only" is unfollowable: there is no sub-range of the
@@ -1243,7 +1265,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_appendContent",
-    "Append markdown to the END of the document, parsing headings/lists/paragraphs into real blocks (unlike tandem_edit, which is single-paragraph with literal newlines). Non-destructive; also seeds an empty document. Markdown documents only.",
+    "Append markdown to the END of the document, parsing headings/lists/paragraphs into real blocks (unlike tandem_edit, which inserts text literally into existing blocks). Non-destructive; also seeds an empty document. Markdown documents only.",
     {
       content: z
         .string()
@@ -1312,9 +1334,12 @@ export function registerDocumentTools(server: McpServer): void {
           "comments and returns `fidelityWarnings` when the export downgraded anything — report those " +
           "rather than claiming a clean round-trip. "
         : "") +
-      "If the file changed on disk since it was opened " +
-      "the save is REFUSED and a conflict is reported instead; it is never silently overwritten. " +
-      "Uploaded (upload://) documents have no path, so the save is session-only.",
+      "Check `saved` in the result: it is true only when the file on disk was written. When the " +
+      "disk write is skipped the call still succeeds, with saved: false, a machine-readable " +
+      "`reason` and only the session saved — for example upload (an uploaded document has no " +
+      "path), read-only, UNSUPPORTED_FORMAT (e.g. .html), FILE_MODIFIED (the file changed on disk " +
+      "since Tandem last loaded or wrote it) or SAVE_IN_PROGRESS. A document with an unresolved external-change " +
+      "conflict returns an EXTERNAL_CONFLICT error instead. The file on disk is never silently overwritten.",
     {
       documentId: z
         .string()
@@ -1445,7 +1470,7 @@ export function registerDocumentTools(server: McpServer): void {
           // reach. tandem_open force:true works in either mode.
           return mcpError(
             "EXTERNAL_CONFLICT",
-            `${r.filePath} changed on disk while it had unsaved edits. The session was saved, but the disk save was blocked. The user resolves this with Keep or Reload in the editor's banner; if no editor is attached, tandem_open with force: true reloads from disk and discards the unsaved edits (and annotations).`,
+            `${r.filePath} changed on disk while it had unsaved edits. The session was saved, but the disk save was blocked. The user resolves this with Keep or Reload in the editor's banner; if no editor is attached, tandem_open with force: true reloads from disk and discards the unsaved edits (annotations are kept and re-anchored).`,
             { documentId: r.docId, filePath: r.filePath },
           );
         }
@@ -1477,7 +1502,7 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_status",
     {
       description:
-        "Read editor status (no params) or set your status text (pass text), which may be shown in the editor's status bar.",
+        'Read or set editor status. Without `text`: returns the collaboration mode ("solo" means hold annotations, "tandem" means surface them), the active document, every open document with its readOnly flag, and the wake URL to arm a watch on (absent when no wake transport is running). With `text`: sets your status text for the target document, which the editor\'s status bar may show; focusParagraph/focusOffset optionally place your presence marker. A status is not a chat message — use tandem_reply to talk to the user.',
       inputSchema: {
         text: z.string().optional().describe("Status text to display — omit for read-only"),
         focusParagraph: z
@@ -1577,7 +1602,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_close",
-    "Close a document. Closes the active document if no documentId specified.",
+    "Close a document's tab (the active document when documentId is omitted); if it was the active document, another open document, if any, becomes active. Closing does not save: edits not yet written by tandem_save or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened.",
     {
       documentId: z
         .string()

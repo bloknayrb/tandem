@@ -294,8 +294,8 @@ function isPrivateForClaude(ann: Annotation): boolean {
  * notes and comments, and additionally refusing a highlight whose audience is
  * not `outbound` — which every user highlight is, since `sanitizeAnnotation`
  * demotes user-authored note/highlight/flag. Claude cannot MINT a highlight
- * (`tandem_highlight` is a deprecated stub), so nothing Claude authored is lost
- * to this.
+ * (it has no highlight-creating tool), so nothing Claude authored is lost to
+ * this.
  *
  * Module-PRIVATE for the same reason as its sibling; `isClaudeFacing` is a type-
  * and-audience predicate over a plain record, so importing it here adds no cycle

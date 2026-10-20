@@ -235,7 +235,11 @@ describe("launcher mutations", () => {
     expect(relaunches).toHaveBeenCalledTimes(1);
     expect(confirms).toBe(1);
     // And the second press is told why, rather than reading as a dead button.
-    expect(notify.mock.calls.some(([, m]) => String(m).includes("Already restarting"))).toBe(true);
+    expect(
+      notify.mock.calls.some(([, m]) =>
+        String(m).includes("Another Claude action is still running"),
+      ),
+    ).toBe(true);
   });
 
   it("does not re-probe the launcher when the confirm was CANCELLED", async () => {

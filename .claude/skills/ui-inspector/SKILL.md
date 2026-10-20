@@ -119,8 +119,9 @@ ui-inspector resolve @ui_01... --json
 Exit 5 means it no longer resolves *exactly*. That is a signal to inspect what
 the edit changed about the locators, not to accept a near match.
 
-For a visual before/after, ask Bryan to pick a fresh reference after the HMR
-reload and compare the two element crops.
+For a visual before/after, ask Bryan for screenshots — references carry no
+pixels (see "Pixels are OFF"). A fresh pick after the HMR reload still lets you
+compare the two references' metadata and locators.
 
 ## Other CLI subcommands
 
