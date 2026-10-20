@@ -226,6 +226,7 @@ Crash reporting is available but **strictly opt-in**: it activates only when you
 
 This describes the paid model arriving at v1.0; during the public beta Tandem is free for personal use and individual self-hosting, and needs no license key. The system is implemented but **ships dark behind a build flag** (`LICENSE_GATE_ENABLED`, off until v1.0), so beta builds enforce nothing. See [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) and `docs/licensing-operations.md`.
 
+- **The seller-side issuance Worker holds a Paddle API key that can read every buyer, not only its own records.** `infra/license-issuance-worker/` turns a completed Paddle transaction into a license. Paddle's webhook carries no email, so the Worker holds `PADDLE_API_KEY` with `customer.read` (to fetch the buyer's email and name) plus read access to notifications and notification settings (for its daily delivery check), and should hold nothing else. `customer.read` is account-wide: a compromise of the Worker or its secrets exposes **every Paddle customer's email and name**, not only those in its ledger, so the blast radius of this key is Paddle's whole customer list. What the Worker fetches lands only in `LEDGER_KV`, its own issuance-only namespace; the update Worker never binds it, and `LICENSE_KV` stays PII-free. Its log lines carry a result, a coarse stage and at most a Paddle id (`adj_…`, `evt_…`, `apikey_…`) or a truncated body digest (`body_…`), never an email or licence id, and its operator alerts carry no ids at all. The key expires (one year at most), and a live key in a test-mode Worker is refused on every request. A sandbox Worker signs with the production key, so a `pdl_sdbx_` key is refused unless `SANDBOX_BUYER_EMAILS` (the only buyers it will mint for) and `SANDBOX_SIGNING_UNTIL` (at most 7 days ahead) are both set; a sandbox checkout needs only a public token and a test card, and without those two a stranger reaching it would get a real licence. Webhooks are authenticated by `Paddle-Signature` before any parse; a bad signature is refused without an alert, so that unauthenticated traffic cannot spend the alert channel. None of this has run against a real Paddle account yet (`docs/licensing-operations.md` §8).
 - **Running the app validates a license offline.** The app verifies an Ed25519-signed license file locally against a public key embedded in the build. *Running needs no network call* — activation works air-gapped, and the signature is checked on your own machine. This is a separate key from the Ed25519/minisign key used to sign release artifacts. A valid license runs **forever**; the signature alone gates running, while `expiresAt` governs only the update window. Every issued key leaves it `null`, because every key includes all future updates (ADR-040, decision A5, 2026-10-09); only a key hand-signed with `--expires` carries a date.
 - **The license file binds a copy to its buyer.** It carries the buyer's name and email, an opaque license id, a type (`personal`/`commercial`/`grandfathered`), a creation date, and an update-window expiry (`null` on every issued key), all covered by the signature. It does **not** carry an order ID — the order number lives only in the seller-side issuance ledger, and is the identifier support will ask you for.
 - **Enforcement is server-side, not client-trust, and it refuses the AI, never the editor (#1521).** When the gate is active and a trial has expired with no license, the local server refuses Tandem's AI features where they get in: the `/mcp` handshake (a refused `initialize` creates no session; a live session is closed by its next request), Claude's chat writes and the channel approval relay, push and wake (SSE `/api/events`, WS `/api/wake`, and the fan-out behind them), the launcher's spawn of Claude Code, and the local-model loop. One function, `aiRefusal()` (`src/server/license/ai-refusal.ts`), decides, and it re-reads the licence state on every call, so a refusal lands on the next request or pushed event rather than on the next reconnect. The editor itself is never refused: there is no read-only clamp, and every browser write stays open. An installed licence that fails to verify is refused with fix-or-reissue copy and **never** a purchase link. Out of band, an unlicensed Claude Code with shell access can still edit the user's files or call Tandem's local endpoints directly — equivalent to editing the file on disk, which no licence check can stop. That and the other residuals listed in [licensing-explained.md](licensing-explained.md#the-gated-set) are **licence-enforcement residuals, not security findings**: an AI with shell access acts with the user's own privileges and crosses no trust boundary, so none of them is owed a row in the register below. The trial clock is deliberately **soft** (a local timestamp, no anti-rollback); the signed license is the only hard gate.
@@ -389,13 +390,18 @@ get past that anyway, and only the first was obvious:
    `tandem_checkInbox` call rather than filtering one row. Now gated.
 
 **What this does NOT close, and the CHANGELOG's first draft got this wrong by
-framing the identifier as the barrier.** `tandem_open({force: true})` clears the
-whole annotations map and the durable store in one transaction — every note and
-every private reply, with **no identifier needed at all**. `tandem_restoreBackup`
-and `tandem_applyChanges` reach the same wipe through the reload family. #1680
-closed the *targeted* case; the sledgehammer is untouched and is arguably
-intended (the tool's own conflict message advertises "(and annotations)"), but
-nobody should read this section as "the AI cannot destroy notes". Separately,
+framing the identifier as the barrier.** When #1680 shipped, `tandem_open({force: true})`
+cleared the whole annotations map and the durable store in one transaction — every
+note and every private reply, with **no identifier needed at all** — and
+`tandem_restoreBackup` and `tandem_applyChanges` reached the same wipe through the
+reload family. #1680 closed only the *targeted* case. Since #1813 a forced open
+flushes the durable envelope and re-merges it, and the other two never clear the
+map, so notes survive all three. A forced open can still lose them in two
+cases: its envelope flush fails (logged, and the reload continues), or the
+document's annotation store never wired this session (the user was warned when
+it opened). Outside the AI's tools, a scratchpad's source-view commit drops its
+notes (#2219). Even so, nobody should read this section as "the AI cannot
+destroy notes". Separately,
 `refreshRange` writes to note records on every Claude *read* — the sanctioned
 coordinate-repair exception, but it means "the AI never writes to a note" was
 never literally true either.
@@ -477,7 +483,7 @@ to stamp `resolvedBy: "claude"` on a user's private highlight and
 reported the same record only as a `privateExcluded` count. Those two families
 now use `isWithheldFromClaude` — literally `!isClaudeFacing` — so the write
 guards are no weaker than the read filter on any type. Claude cannot mint a
-highlight (`tandem_highlight` is a deprecated stub), so nothing Claude authored
+highlight (Claude has no highlight-creating tool), so nothing Claude authored
 is refused by the widening.
 
 **One regression shipped with the fix, deliberately.** If a legacy imported

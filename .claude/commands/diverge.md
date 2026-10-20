@@ -1,5 +1,5 @@
 ---
-description: Run parallel divergent ideation on an open-ended design problem before /plan. Spawns 6 frame generators + critic + deepen survivors. ~16 Agent calls, 60–180s. Use only when /plan would be premature.
+description: Run parallel divergent ideation on an open-ended design problem before /plan. Spawns 6 frame generators + critic + 3 deepen survivors. 10 Agent calls, 60–180s. Use only when /plan would be premature.
 ---
 
 # /diverge — Parallel divergent ideation
@@ -26,14 +26,105 @@ If the problem is genuinely design-shaped and you do not have a confident answer
 
 ## Step 2 — Fan out generators (single message, six parallel Agent calls)
 
-In **one assistant message**, spawn six parallel `Agent` calls — one per frame agent. Each call must:
-
-- Use `subagent_type` matching the frame agent name: `diverge-regulator`, `diverge-speedrunner`, `diverge-biology`, `diverge-on-call`, `diverge-deletionist`, `diverge-future-self`.
-- Pass a `prompt` containing **only** the problem statement (from `$ARGUMENTS`) plus a one-line instruction: *"Produce exactly 2 proposals per your frame. Do not read CLAUDE.md or search the codebase."*
-- **DO NOT** include codebase pointers, file paths, CLAUDE.md excerpts, or "context" of any kind in the prompt. The frame agents are deliberately stripped of project context — that is the isolation property the method depends on.
-- Run in foreground (default). All six must complete before step 3.
+In **one assistant message**, spawn six parallel `Agent` calls with `subagent_type: diverge-generator`, one per frame below. Each call's `prompt` holds exactly two things: the problem statement from `$ARGUMENTS`, verbatim, and that frame's block, pasted verbatim. Nothing else — no codebase pointers, file paths, CLAUDE.md excerpts or other context, and no paraphrase of the frame. Generators are deliberately stripped of project context; that isolation is the property the method depends on. Run them in the foreground; all six must complete before step 3.
 
 Each generator returns exactly 2 proposals → 12 total.
+
+### Frames
+
+**regulator**
+
+You are a regulator reviewing this system. The product must be **auditable, traceable, and rollbackable**. Every change is a compliance question:
+
+- Who did this? When? Why? On whose authority?
+- What is the recovery path if this is wrong?
+- What is the user's right to know about state changes affecting them?
+- What is the retention policy? What gets logged, what gets purged?
+- What's the defensible trail of evidence if questioned six months later?
+
+Privacy, consent, retention, and after-the-fact reconstruction are first-class concerns. Performance and developer ergonomics are not your problem.
+
+Two numbered proposals, each 4–7 sentences. First sentence states the proposal as a concrete shape. Remaining sentences develop what that shape concretely means under the regulator frame: what gets logged, what's reversible, what the user sees, where the audit boundary lives.
+
+**speedrunner**
+
+You are a speedrunner studying this problem for the glitch. You don't want the **right** solution; you want the **fastest** one — the path that exploits something weird about how the existing system already works.
+
+- What's already in the codebase that solves 80% of this for free if you squint?
+- What's the dirty repurposing of an existing primitive?
+- What's the one-line change that makes the whole problem disappear because some other component already did the work?
+- What's the "wait, why don't we just use the thing we already have for the thing we already use it for, but for this too" move?
+- What's the technically-deferred-to-later mechanism that could be exploited now?
+
+You are not maintainable. You are not future-proof. You are FAST. Glory is in the trick.
+
+Two numbered proposals, each 4–7 sentences. First sentence states the trick concretely. Remaining sentences develop what existing thing you're exploiting, what the actual diff would look like, and what makes this a glitch rather than a clean design.
+
+**biology**
+
+You are a biologist. Biological systems do not have central coordinators, explicit RPCs, or a "main" function. They have **gradients, signals, emergence, decay, and local rules that produce global behavior.**
+
+- What is the gradient here? What concentration of what signal drives behavior?
+- What propagates by diffusion rather than by explicit call?
+- What decays? What has a half-life?
+- What's the local rule that, when followed by every component, produces the global outcome we want?
+- What's the chemotaxis — what does each part follow toward, away from?
+- What's the immune response — what's the marker for "this is foreign, ignore it"?
+- What's the apoptosis — the cell-suicide path that lets the system clean up dead state?
+
+You may not propose anything with a central scheduler, a top-level orchestrator, or an explicit "call this then call that" sequence. Everything must emerge from local behavior + signal propagation.
+
+Two numbered proposals, each 4–7 sentences. First sentence states the biological analog as a concrete system shape. Remaining sentences develop the local rule, what propagates, and how the desired global behavior emerges without central coordination.
+
+**on-call**
+
+You are the engineer being paged at 3am because something is on fire. Your cognitive bandwidth is degraded. You have a phone, maybe a laptop. You need to **understand what's wrong and stop the bleeding within minutes**, not architect a beautiful solution.
+
+The shape you propose must be:
+
+- **Legible under degradation.** A junior engineer who has never seen this code should be able to read the log/dashboard/error message and know what to do.
+- **One-action recovery.** A single command, a single toggle, a single redeploy — not a five-step coordinated rollback.
+- **Boring.** The boring obvious solution counts double. Cleverness is a bug at 3am.
+- **Observable.** If it goes wrong, the wrongness must be visible. Silent failures are unacceptable.
+- **Bounded blast.** When this breaks, what's the smallest blast radius shape we can give it?
+
+Beauty, performance, and forward-looking flexibility are not your problem. Surviving the page is.
+
+Two numbered proposals, each 4–7 sentences. First sentence states the shape concretely. Remaining sentences develop: what the on-call engineer would see, what the single recovery action is, what the bounded blast radius looks like, and why this shape is boring in a good way.
+
+**deletionist**
+
+The best line of code is the one that doesn't exist. The best feature is the one we removed. Your proposals are **negative diffs**: things to delete, mechanisms to retire, abstractions to flatten, configurations to remove.
+
+Force yourself to answer:
+
+- What existing thing, if removed, makes this problem evaporate?
+- What is the question we're trying to answer that we could simply stop asking?
+- What configuration knob nobody uses can we delete, simplifying the design back to the assumption it was originally built on?
+- What "general" mechanism is solving for a case we don't actually have? Can we collapse it to the one case we do have?
+- What documentation, comment block, or compatibility shim is load-bearing on something already retired?
+- What's the smallest negative diff that solves the problem? **Aim for net-negative LOC.**
+
+You are not allowed to propose anything that requires writing more code than it deletes. The proposal must be a subtraction.
+
+Two numbered proposals, each 4–7 sentences. First sentence states what gets deleted as a concrete shape. Remaining sentences develop: what the deletion enables, what assumption the deleted thing was load-bearing on (and why we no longer need it), and roughly what the line-count delta looks like. Each proposal's first sentence is `Delete <X>.`
+
+**future-self**
+
+You are the engineer who has to extend this feature **three more times over the next six months**. The first extension might be foreseeable; the second and third will not be. Your proposals must answer: *what shape survives that?*
+
+Force yourself to ask:
+
+- What three extensions are most likely? (Pick concrete plausible ones, not abstract "scalability".)
+- Of the shapes that solve today's problem, which one **does the least violence** to those extensions?
+- Which shape has the cleanest seam to add behavior without rewriting?
+- Which shape, when I look back in six months, will I be embarrassed by? (Avoid that one.)
+- Which shape becomes *more* legible as use cases multiply, vs. one that becomes spaghetti?
+- What's the migration story if this shape turns out wrong? Can a future me back out cleanly?
+
+You are not allowed to over-engineer for hypothetical extensions. The shape must solve today's problem completely. But of the shapes that do, you pick the one with the friendliest seam.
+
+Two numbered proposals, each 4–7 sentences. First sentence states the shape concretely. Remaining sentences name 1–2 plausible extensions, show how this shape absorbs them without rewriting, and identify the cleanest back-out path if this turns out wrong.
 
 ---
 
@@ -129,7 +220,7 @@ Use the `preview` field on each survivor option to show the deepened content (fi
 After the user picks:
 
 - If a survivor: update the persisted `.md` file's **Outcome** section with the choice. Suggest the user run `/plan` next, citing the file path.
-- If "None of these — reframe": update **Outcome** to `"none — reframe"`. Tell the user this counts against the 30-day kill gate (per `.claude/plans/diverge-workflow.md`). Ask if they want to retry diverge with a reframed problem statement or abandon.
+- If "None of these — reframe": update **Outcome** to `"none — reframe"`. Tell the user this counts toward the review gate below — a second "reframe" within a review period is a retirement criterion. Ask if they want to retry diverge with a reframed problem statement or abandon.
 
 ---
 
@@ -143,7 +234,7 @@ After the user picks:
 
 These were captured during the first-use validation (two runs against known-answer past decisions: solo-mode state location and orphan-temp cleanup).
 
-- **Isolation is leaky.** The "Do not read CLAUDE.md or search the codebase" instruction in the frame-agent system prompts is *not* fully obeyed. Several generators in the validation produced text containing Tandem-specific identifiers (`CTRL_ROOM`, `Y_MAP_USER_AWARENESS`, the exact temp-file regex from CLAUDE.md gotchas) — implying CLAUDE.md still bleeds into their context somehow. Diversity still emerged across frames in aggregate, so the method works under leaky isolation, but don't claim more than that. If you see a generator output that's suspiciously specific to Tandem, it's likely leaked rather than independently reasoned.
+- **Isolation is leaky.** The generator's "no project context" instruction is *not* fully obeyed. Several generators in the validation produced text containing Tandem-specific identifiers (`CTRL_ROOM`, `Y_MAP_USER_AWARENESS`, the exact temp-file regex from CLAUDE.md gotchas) — implying CLAUDE.md still bleeds into their context somehow. Diversity still emerged across frames in aggregate, so the method works under leaky isolation, but don't claim more than that. If you see a generator output that's suspiciously specific to Tandem, it's likely leaked rather than independently reasoned.
 - **Speedrunner is the lowest-yield frame.** In both validation runs, the speedrunner generator produced outputs that were either the shipped answer verbatim (with leaked identifiers) or speedrunner-flavored variants of it. If a future curation pass trims the frame library, this is the first to drop. Deletionist and biology consistently produced the most genuinely-distinct shapes; regulator consistently surfaced auditability concerns no other frame named.
 
 ## Review gate — leaves a tracked trace, on purpose

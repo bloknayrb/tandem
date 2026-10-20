@@ -40,6 +40,7 @@ vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
 
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
+import { resetForTesting as resetAnnotationStoreForTesting } from "../../src/server/annotations/store.js";
 import { addDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
@@ -60,6 +61,7 @@ import {
   listDocBackups,
   snapshotBeforeFirstWrite,
 } from "../../src/server/file-io/doc-backup.js";
+import { unwatchAll } from "../../src/server/file-watcher.js";
 import { defaultSubscribeDuringGap } from "../../src/server/launcher/supervisor.js";
 import { aiRefusal } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
@@ -151,6 +153,12 @@ afterEach(() => {
 afterAll(async () => {
   await closeMcpSession();
   await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  // Quiesce before deleting the dirs, as production shutdown does. A watcher
+  // left on a deleted file EPERMs on Windows, and a debounced annotation save
+  // fires into a deleted dir; both log after this file has finished, and a log
+  // still in flight at worker teardown fails the whole run (#1937).
+  unwatchAll();
+  resetAnnotationStoreForTesting();
   // Restore by ABSENCE: `process.env.X = undefined` writes the STRING "undefined".
   if (savedAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
   else process.env.TANDEM_APP_DATA_DIR = savedAppDataDir;

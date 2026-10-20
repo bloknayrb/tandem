@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 34
+version: 35
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -11,20 +11,18 @@ description: >
 
 # Tandem — Collaborative Document Editor
 
-> **Scope:** This skill teaches Claude Code how to use Tandem effectively. Tandem's integration contract is MCP, and **Claude is the default integration** per [ADR-038](https://github.com/bloknayrb/tandem/blob/master/docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). This skill is a Claude-Code-specific resource shipped via the npm `skills/` folder; other MCP clients receive the tool descriptions directly through MCP and don't need this file.
-
 Tandem lets you annotate and edit documents alongside the user in real time. The user sees your changes in the editor; you interact via the tandem_* MCP tool suite.
 
 ## Hard Rules
 
-These prevent the most common failures. Follow them always.
+These prevent the most common failures.
 
 1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit` or `tandem_comment`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits, and they are not characters: offsets are **UTF-16 code units**, so every emoji or other non-BMP character in the document puts a hand-count off by one more, even on text you just read. An offset that lands between the two halves of a surrogate pair is refused with `INVALID_RANGE` and `details.reason: "surrogate"`.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document. The one exception is a point insertion (`from === to`), which carries none — a zero-length range matches no text, so a `textSnapshot` there is refused with `INVALID_ARGUMENT`. Before reusing a *stored* annotation's `textSnapshot` as a range guard elsewhere, check `textSnapshotTruncated` — a truncated snapshot (capped at 200 chars) resolves a shorter span than the annotation actually covers.
 3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
 4. **`tandem_edit` cannot create paragraphs, and newline handling is format-dependent.** In Markdown, a newline in `newText` becomes a literal soft-wrapped break, not a paragraph break. In a plaintext-adapted document (`.txt`, or an unrecognized extension), a literal newline is refused with `INVALID_ARGUMENT`. For multi-paragraph changes, use multiple `tandem_edit` calls, or reach for `tandem_appendContent` (Markdown-only, appends at the document end) or `tandem_editList` (Markdown only, list-shape changes) when they fit.
 5. **Write each paragraph as one continuous line and let the editor's own soft-wrap handle display — don't insert a mid-paragraph line break.** Tandem soft-wraps prose to the pane width, so there's nothing to gain by hard-wrapping generated text. A manual line break in the middle of a paragraph is exactly the literal-character case Rule 4 above warns about: it reads as its own visual break in the editor, and in a plaintext-adapted document is the shape Rule 4's `INVALID_ARGUMENT` refusal exists to prevent. Paragraph *boundaries* are made the way Rule 4 says — a separate `tandem_edit` per paragraph, or `tandem_appendContent` — never with a `\n` inside `newText`.
-6. **Never edit a Tandem-open file with `Edit`/`Write` on your own initiative.** You already know what's open from `tandem_status`/`tandem_listDocuments` — read it once this session if you haven't, before editing any file on disk. An out-of-band edit bypasses Tandem's self-write suppression, so the watcher sees a genuine unexplained external change: if the session holds unsaved edits, `tandem_save` later answers `EXTERNAL_CONFLICT` (the user resolves it via the editor's Keep/Reload banner — `tandem_open({ force: true })` also clears it, but destructively, wiping the whole document's annotations including private notes you cannot see, ADR-027 — so never call it on your own initiative, ask the user first); a clean session instead silently reloads from disk with annotations re-anchored, with no error at all. Treat every out-of-band edit as unsafe. This is a different scope from "Absence of the toolset means stop" below — that one covers a session with no `tandem_*` tools at all; this one covers a file that *is* open, with the real tools available.
+6. **Never edit a Tandem-open file with `Edit`/`Write` on your own initiative.** You already know what's open from `tandem_status`/`tandem_listDocuments` — read it once this session if you haven't, before editing any file on disk. An out-of-band edit bypasses Tandem's self-write suppression, so the watcher sees a genuine unexplained external change: if the session holds unsaved edits, `tandem_save` later answers `EXTERNAL_CONFLICT` (the user resolves it via the editor's Keep/Reload banner — `tandem_open({ force: true })` also clears it, but destructively: it throws away the session's unsaved edits and reloads from disk, and any annotation whose text the disk version changed or removed comes back degraded — so never call it on your own initiative, ask the user first); a clean session instead silently reloads from disk with annotations re-anchored, with no error at all. Treat every out-of-band edit as unsafe. This is a different scope from "Absence of the toolset means stop" below — that one covers a session with no `tandem_*` tools at all; this one covers a file that *is* open, with the real tools available.
 7. **A sub-agent must never call `tandem_checkInbox`.** In a multi-agent workflow (see [Multi-Model Workflow](https://github.com/bloknayrb/tandem/blob/master/docs/workflows.md#multi-model-workflow)), only the orchestrator polls. The surfaced-item ledger and the chat `read: true` stamp are process-global, not scoped per caller — a sub-agent's poll *writes into* that shared ledger and stamps the chat read, so the orchestrator's next poll filters those items out and comes back empty without the orchestrator ever seeing what surfaced. Polling again does not recover them: an annotation re-surfaces only when its `editedAt` moves. **The watch is orchestrator-only for the same reason** — see "Getting Woken While Idle".
 8. **A document can be read-only, and Word files don't open at all.** A document is read-only when it is an upload, carries an explicit `readOnly` flag, or has a format with no way back to disk — `.html` opens read-only for exactly that reason. When it is, `tandem_edit` returns `READ_ONLY` and annotations are the right surface. `tandem_save` on such a document answers `saved: false` with a `reason`; only the session is written. Word (`.docx`) files aren't supported in this version of Tandem: `tandem_open` refuses them with a message saying so. Pass that on, and suggest the user save a copy from Word as `.txt` to edit it, or as `.html` to review it read-only.
 
@@ -62,9 +60,9 @@ Choose the right type for each finding:
 
 **Accepting your own work is the user's decision, never yours.** `tandem_resolveAnnotation({ action: "accept" })` on your own annotation returns `ACCEPT_REFUSED`, as does accepting anything carrying `suggestedText` (an MCP accept flips a status and applies no text — only the user's accept in the editor writes the replacement). Accept on a user-authored comment with no `suggestedText` is permitted — but it records a decision on the user's own card, so do it only when they asked you to. What you *may* always do is **withdraw**: `action: "dismiss"` on your own annotation is how you take back a finding you no longer stand behind. Say so in chat when you do. A record you resolved is stamped `resolvedBy: "claude"` and is deliberately kept out of `userResponses`, so you will never read your own withdrawal back as the user agreeing with you.
 
-**Note annotations** (`type: "note"`) are user-personal — `tandem_checkInbox` does not surface them to you. Don't act on notes unless the user explicitly mentions one in chat. Highlights are also user-only; `tandem_highlight` is deprecated and returns an error.
+**Note annotations** (`type: "note"`) are user-personal — `tandem_checkInbox` does not surface them to you. Don't act on notes unless the user explicitly mentions one in chat. The user's highlights are theirs too; there is no tool for creating a highlight.
 
-**User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. A reply **on the annotation thread itself** goes through `tandem_annotationReply` — that's what keeps the reply visible on the thread rather than only in chat. Reserve `tandem_reply` for chat messages, and a fresh `tandem_comment` for a new textual annotation on different text. `tandem_annotationReply` refuses a resolved, note (ADR-027), highlight, private (non-outbound), or **user-authored** parent — fall back to `tandem_reply` for those. So the reply tool is for continuing *your own* threads; a user comment is answered in chat or with a new comment of your own. A reply may also carry `suggestedText`: a refined replacement proposed over the **parent's** range — the user accepts it in the editor, and doing so supersedes the parent's original proposal.
+**User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to, in chat or with a comment of your own (see above). `tandem_annotationReply` is for continuing *your own* threads — it keeps the reply on the thread rather than only in chat — and besides any parent you did not write it also refuses a resolved, note (ADR-027), highlight or private (non-outbound) one; fall back to `tandem_reply` for those. A reply may also carry `suggestedText`: a refined replacement proposed over the **parent's** range — the user accepts it in the editor, and doing so supersedes the parent's original proposal.
 
 **Before responding, check whether you already did.** None of `tandem_reply`, `tandem_comment`, or `tandem_annotationReply` is idempotent — sending the same answer twice leaves two chat bubbles or two annotation cards saying the same thing, which the user sees. A chat acknowledgement followed by the result (see Collaboration Etiquette) is the expected pair, not a duplicate. Your own memory of the conversation is the primary check: if you recognize the comment's text, you have probably already answered it.
 
@@ -151,19 +149,17 @@ If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` o
 
 Then pick an ending, and say which one you're doing:
 
-- **Leave it to the user.** Annotations stay in the session; the file is untouched until someone saves.
-- **`tandem_save`** — writes your edits back to the file. On a read-only document it answers `saved: false` with a `reason` instead.
+- **Leave it to the user.** Annotations stay in the session and never reach the file.
+- **`tandem_save`** — writes your edits back to the file now (an open `.md` or `.txt` file you can edit also auto-saves periodically). On a read-only document it answers `saved: false` with a `reason` instead.
 
 Tandem snapshots the file's bytes before its first write each run, so a save is reversible: `tandem_restoreBackup` with no `backup` lists snapshots, and with `backup` set restores one in place (annotations preserved and re-anchored). If something else changed the file on disk meanwhile, the save is refused and a conflict banner asks the user to keep or reload — `tandem_save` reports that instead of claiming a save that didn't happen.
 
 ## When the tandem_* Tools Are Absent
 
 **If this session has no `tandem_*` tools at all, do not work around it — read this.** Claude Code
-resolves `mcpServers.tandem` once at session start over direct HTTP, so the whole toolset is
-missing whenever that resolution did not produce a live connection. There is no failing tool call
-to read, because there is no tool — which is why this needs saying rather than being obvious
-(#1463). There may still be a failure reported for the Tandem server itself, and that is worth one
-look.
+connects to Tandem's MCP server once, at session start, so the whole toolset is missing whenever
+that connection was not made. There is no failing tool call to read, because there is no tool.
+There may still be a failure reported for the Tandem server itself, and that is worth one look.
 
 **Three causes, and they take different fixes.** Read the server's failure first (below the hard
 rule). Without a licence refusal, step 2 is almost always the right one, and step 3 tells you when it
@@ -215,17 +211,15 @@ enable and no MCP setting to hand-edit.
 listing will surface a server that never connected; it only adds latency before the user hears
 anything. One check is enough, and the answer is conclusive.
 
-The step-2 wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already returns as
-JSON-RPC `-32000` for Claude Desktop and Cowork, so every integration says the same thing. `-32000`
-is the bridge's own error for losing Tandem (not running, unhealthy, or the connection dropping). A
-licence refusal is Tandem's own `-32003`, which the bridge passes through, so its text is the licence
-message, never "server not running".
+When Tandem is reached through its stdio bridge (the Tandem plugin connects this way), a `-32000`
+error means the bridge lost Tandem or a request through it failed: treat it as step 2. A licence
+refusal stays `-32003`.
 
 ## Error Recovery
 
 - **`RANGE_MOVED`** — Text shifted since you read it. The response includes `resolvedFrom`/`resolvedTo` — use those coordinates for your next call.
 - **`RANGE_GONE`** — The text was deleted. Re-read the section with `tandem_getTextContent` and re-assess.
-- **`INVALID_RANGE`** — The range was refused. Read `details.reason` when it is present: `out-of-bounds` (negative, or past the end — `to === length` is fine), `inverted` (`from > to`), `empty`, `surrogate` (the offset falls inside an emoji — move it to either side of the character), `non-integer`, or `unresolvable`. **`empty` does NOT mean "point ranges are refused"**: `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n` and is the only way to insert mid-document — `empty` there means you also passed an empty `newText`, which is a no-op. Two rules go with a point insertion: **omit `textSnapshot`** — the standing "always pass it" advice does not apply, because a zero-length range matches no text, so the snapshot always looks stale and the `RANGE_MOVED` retry would replace text you meant to keep; the call is refused with `INVALID_ARGUMENT`. And `from: 0` answers `INVALID_RANGE` with no `reason` on a document that starts with a heading, since offset 0 sits inside the `# ` prefix. For `tandem_comment` / `tandem_suggest` / `tandem_flag`, `from === to` is `empty` on its own, since an annotation needs a span to anchor to. With **no** `reason` the cause is heading markup (e.g. `## `) or a pattern that was not found — target text content only, not the heading prefix. `tandem_resolveRange` gives you offsets that are correct by construction.
+- **`INVALID_RANGE`** — The range was refused. Read `details.reason` when it is present: `out-of-bounds` (negative, or past the end — `to === length` is fine), `inverted` (`from > to`), `empty`, `surrogate` (the offset falls inside an emoji — move it to either side of the character), `non-integer`, or `unresolvable`. **`empty` does NOT mean "point ranges are refused"**: `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n` and is the only way to insert mid-document — `empty` there means you also passed an empty `newText`, which is a no-op. Two rules go with a point insertion: **omit `textSnapshot`** — the standing "always pass it" advice does not apply, because a zero-length range matches no text, so the snapshot always looks stale and the `RANGE_MOVED` retry would replace text you meant to keep; the call is refused with `INVALID_ARGUMENT`. And `from: 0` answers `INVALID_RANGE` with no `reason` on a document that starts with a heading, since offset 0 sits inside the `# ` prefix. For `tandem_comment`, `from === to` is `empty` on its own, since an annotation needs a span to anchor to. With **no** `reason` the cause is heading markup (e.g. `## `) or a pattern that was not found — target text content only, not the heading prefix. `tandem_resolveRange` gives you offsets that are correct by construction.
 - **`READ_ONLY`** — The document is read-only (an upload, an explicit `readOnly` flag, or an `.html`, which opens read-only because no save path exists for it), so `tandem_edit`, `tandem_editList`, `tandem_appendContent` and the other content mutators refuse it. Use annotations instead.
 - **`FORMAT_ERROR`** — Usually the operation doesn't apply to this document's format: `tandem_appendContent` on a non-Markdown document, or a `tandem_editList` op the format cannot carry. It is also the fallback for a failed `tandem_save` or `tandem_open` that no more specific code covers, so read `details.errorCode` when it is present: `VERIFY_BLOCKED` means the save was refused before touching the file, and its message says why.
 - **`INVALID_PATH`** — The path was refused: a relative path (pass an absolute one), a UNC path, or `tandem_restoreBackup` on an upload or scratchpad, which has no on-disk location.

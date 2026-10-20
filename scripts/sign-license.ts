@@ -2,7 +2,7 @@
  * Mint a signed Tandem license locally (#1116, ADR-040).
  *
  * This is the operator's out-of-band issuance path — the one that does NOT go
- * through Polar. Two uses: a free/complimentary license, and handing a buyer
+ * through Paddle. Two uses: a free/complimentary license, and handing a buyer
  * their bytes directly when their mail provider quarantined the automated one
  * (re-sending through the same pipe cannot fix that case).
  *
@@ -27,14 +27,50 @@ import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { writeLicenseEntitlement } from "../src/server/license/kv-store.js";
-import type { LicenseMetadata, SignedLicense } from "../src/server/license/license-types.js";
+import type {
+  IssuedLicenseMetadata,
+  LicenseMetadata,
+  SignedLicense,
+} from "../src/server/license/license-types.js";
+import { KEYS_BY_ID, keyIdForPublicKey } from "../src/server/license/public-key.js";
 import { canonicalize } from "../src/server/license/verifier.js";
 
 const LICENSE_TYPES = ["personal", "commercial", "grandfathered"] as const;
 
 const USAGE =
   'Usage: npx tsx scripts/sign-license.ts --name "User Name" --email "user@example.com" ' +
-  "[--type personal|commercial|grandfathered] [--expires days|never] [--skip-entitlement]";
+  "[--type personal|commercial|grandfathered] [--expires days|never] [--key path] " +
+  "[--skip-entitlement]";
+
+/** The private key `--key` defaults to: where `generate-keys.ts` used to write. */
+const DEFAULT_PRIVATE_KEY = path.join("keys", "tandem-private-key.pem");
+
+/**
+ * Sign license metadata with a private key, stamping the key's id.
+ *
+ * The id is derived from the key itself, never passed in, so a license cannot
+ * name a key other than the one that signed it. A key no build trusts is
+ * refused BEFORE signing: its licenses would fail verification everywhere, and
+ * the buyer would be told their key is bad.
+ */
+export function signWithKey(
+  fields: Omit<IssuedLicenseMetadata, "keyId">,
+  privateKeyPem: string,
+  trustedKeysById: Readonly<Record<string, string>> = KEYS_BY_ID,
+): { metadata: IssuedLicenseMetadata; blob: string } {
+  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  const keyId = keyIdForPublicKey(crypto.createPublicKey(privateKey));
+  if (!Object.hasOwn(trustedKeysById, keyId)) {
+    throw new Error(
+      `This private key (id ${keyId}) is not in TRUSTED_PUBLIC_KEYS ` +
+        "(src/server/license/public-key.ts), so no build would accept its licenses.",
+    );
+  }
+  const metadata: IssuedLicenseMetadata = { ...fields, keyId };
+  const signature = crypto.sign(null, Buffer.from(canonicalize(metadata)), privateKey);
+  const signedLicense: SignedLicense = { metadata, signature: signature.toString("hex") };
+  return { metadata, blob: Buffer.from(JSON.stringify(signedLicense)).toString("base64") };
+}
 
 /**
  * Parse `--flag value` pairs.
@@ -121,9 +157,9 @@ async function generateLicense(): Promise<void> {
   }
 
   // Load private key
-  const privKeyPath = path.join(process.cwd(), "keys", "tandem-private-key.pem");
+  const privKeyPath = path.resolve(process.cwd(), str(options, "key") ?? DEFAULT_PRIVATE_KEY);
   if (!fs.existsSync(privKeyPath)) {
-    fail(`Private key not found at ${privKeyPath}. Please run scripts/generate-keys.ts first.`);
+    fail(`Private key not found at ${privKeyPath}. Pass --key, or run scripts/generate-keys.ts.`);
   }
   const privateKey = fs.readFileSync(privKeyPath, "utf8");
 
@@ -137,26 +173,16 @@ async function generateLicense(): Promise<void> {
     fail(err instanceof Error ? err.message : String(err));
   }
 
-  const metadata: LicenseMetadata = {
-    id,
-    name,
-    email,
-    type,
-    createdAt,
-    expiresAt,
-    version: "1.0",
-  };
-
-  // Sign data
-  const dataStr = canonicalize(metadata);
-  const signature = crypto.sign(null, Buffer.from(dataStr), privateKey);
-
-  const signedLicense: SignedLicense = {
-    metadata,
-    signature: signature.toString("hex"),
-  };
-
-  const base64License = Buffer.from(JSON.stringify(signedLicense)).toString("base64");
+  let signed: ReturnType<typeof signWithKey>;
+  try {
+    signed = signWithKey(
+      { id, name, email, type, createdAt, expiresAt, version: "1.0" },
+      privateKey,
+    );
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  const { metadata, blob: base64License } = signed;
 
   console.log("\n--- License Metadata ---");
   console.log(JSON.stringify(metadata, null, 2));

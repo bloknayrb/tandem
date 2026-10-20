@@ -64,7 +64,7 @@ export const TANDEM_SITE_URL = "https://tandem.ink";
  *
  * Points at the site root rather than a checkout path, because the path doesn't
  * exist yet and a 404 at the moment of purchase is worse than one extra click.
- * Repoint at the real Polar checkout URL at the v1.0 gate flip.
+ * Repoint at the real Paddle checkout URL at the v1.0 gate flip.
  */
 export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
 

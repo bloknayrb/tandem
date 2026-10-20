@@ -132,7 +132,8 @@ export const TOOLS: ToolSchema[] = [
   },
   {
     name: "reply_to_annotation",
-    description: "Reply to an existing pending comment thread by its annotation id.",
+    description:
+      "Reply to a pending comment thread you or another AI authored, by its annotation id. Comments written by the user cannot be replied to (NOT_OWNED, or INVALID_ARGUMENT for a private one); leave a new comment_on_quote instead.",
     parameters: {
       type: "object",
       properties: {

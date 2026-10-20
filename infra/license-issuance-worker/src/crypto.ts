@@ -8,9 +8,7 @@
  *  1. `canonicalize` is a BYTE-FOR-BYTE copy of the server verifier's
  *     (`src/server/license/verifier.ts`) so a blob signed here verifies there.
  *     A parity test asserts this against the real verifier.
- *  2. Standard-Webhooks (svix) signature verification exactly matches Polar's
- *     scheme — including the `whsec_`-prefix base64 decode of the secret, which
- *     is the single most common integration bug.
+ *  2. Paddle Billing's `Paddle-Signature` scheme (ts + h1 HMAC-SHA256 hex).
  */
 
 // ---------------------------------------------------------------------------
@@ -110,69 +108,69 @@ async function hmacSha256(
 }
 
 // ---------------------------------------------------------------------------
-// Standard-Webhooks (svix) verification — the scheme Polar uses.
-//   signed content = `${id}.${timestamp}.${rawBody}`
-//   key            = base64decode(secret without the `whsec_` prefix)
-//   expected       = base64( HMAC-SHA256(key, signed) )
-//   header value   = space-delimited `v<n>,<b64sig>` list; match any v1 entry.
-// Each retry attempt is freshly timestamped+signed with a constant webhook-id,
-// so a strict freshness window does not reject legitimate retries.
+// Paddle Billing webhook verification.
+//   header   = `Paddle-Signature: ts=<unix>;h1=<hex>[;h1=<hex>...]`
+//   signed   = `${ts}:${rawBody}`
+//   key      = UTF-8 bytes of the destination secret, used AS IS (inferred; the
+//              SDK test vector settles it)
+//   expected = hex( HMAC-SHA256(key, signed) ); match any h1 entry.
 // ---------------------------------------------------------------------------
 
-export interface WebhookHeaders {
-  id: string | null;
-  timestamp: string | null;
-  signature: string | null;
+/** Most `h1` entries a header may carry. Paddle sends more than one only during
+ * a secret rotation; an attacker-supplied header with hundreds of entries would
+ * otherwise buy that many compares for free. */
+export const MAX_H1_ENTRIES = 8;
+
+const HEX_SHA256 = /^[0-9a-f]{64}$/;
+
+/** Decode lowercase/uppercase hex to bytes. Throws on odd length or a non-hex
+ * character (callers pre-validate with a strict regex). */
+export function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) throw new Error("bad hex");
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
 }
 
-export async function verifyStandardWebhook(
-  headers: WebhookHeaders,
+export async function verifyPaddleSignature(
+  header: string | null,
   rawBody: string,
   secret: string,
   nowMs: number,
   toleranceS: number,
 ): Promise<boolean> {
-  const { id, timestamp, signature } = headers;
-  if (!id || !timestamp || !signature) return false;
-
-  // Strict integer parse — reject NaN/`123abc` outright.
-  const tsNum = Number.parseInt(timestamp, 10);
-  if (!Number.isFinite(tsNum) || String(tsNum) !== timestamp.trim()) return false;
+  if (!header || !secret) return false;
+  let ts: string | null = null;
+  const h1s: string[] = [];
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (k === "ts") {
+      if (ts !== null) return false; // a second ts is ambiguous: refuse
+      ts = v;
+    } else if (k === "h1") {
+      h1s.push(v);
+      if (h1s.length > MAX_H1_ENTRIES) return false;
+    }
+  }
+  if (ts === null || h1s.length === 0) return false;
+  if (!/^\d+$/.test(ts)) return false;
+  const tsNum = Number(ts);
+  if (!Number.isSafeInteger(tsNum)) return false;
   if (Math.abs(nowMs / 1000 - tsNum) > toleranceS) return false;
 
-  // Strip the `whsec_` prefix, then base64-DECODE the remainder to key bytes.
-  // Feeding the raw string (or the whole `whsec_...`) as the key is the classic
-  // integration bug — it computes a stable-but-wrong MAC that never matches.
-  let keyBytes: Uint8Array<ArrayBuffer>;
-  try {
-    keyBytes = base64ToBytes(secret.startsWith("whsec_") ? secret.slice(6) : secret);
-  } catch {
-    return false;
+  const expected = await hmacSha256(
+    textEncoder.encode(secret),
+    textEncoder.encode(`${ts}:${rawBody}`),
+  );
+  let matched = false;
+  for (const h of h1s) {
+    if (!HEX_SHA256.test(h)) continue;
+    if (constantTimeEqual(hexToBytes(h), expected)) matched = true;
   }
-
-  const signed = textEncoder.encode(`${id}.${timestamp}.${rawBody}`);
-  const expected = await hmacSha256(keyBytes, signed);
-
-  // The header may carry multiple space-delimited signatures (key rotation).
-  // Decode each `v1,<b64>` entry to raw bytes; skip malformed/wrong-length
-  // entries WITHOUT comparing (only fixed-length 32-byte candidates reach the
-  // constant-time compare).
-  for (const part of signature.split(" ")) {
-    const comma = part.indexOf(",");
-    if (comma < 0) continue;
-    if (part.slice(0, comma) !== "v1") continue;
-    const val = part.slice(comma + 1);
-    if (!val) continue;
-    let candidate: Uint8Array;
-    try {
-      candidate = base64ToBytes(val);
-    } catch {
-      continue;
-    }
-    if (candidate.length !== expected.length) continue;
-    if (constantTimeEqual(candidate, expected)) return true;
-  }
-  return false;
+  return matched;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +187,40 @@ export async function importPkcs8Ed25519(pem: string): Promise<CryptoKey> {
     .replace(/\s+/g, "");
   const der = base64ToBytes(b64);
   return globalThis.crypto.subtle.importKey("pkcs8", der, { name: "Ed25519" }, false, ["sign"]);
+}
+
+/** Decode base64url (RFC 4648 §5, unpadded as JWK emits it) to bytes. */
+export function base64UrlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  return base64ToBytes(b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), "="));
+}
+
+/**
+ * The key id of a PKCS#8 Ed25519 private key: lowercase hex of the first 8
+ * bytes of SHA-256 over its raw 32-byte public value. Must equal the server's
+ * `keyIdForPublicKey` (src/server/license/public-key.ts) for the same key pair.
+ *
+ * The public value is the JWK `x`, which WebCrypto exposes only for a key
+ * imported as extractable, so this import is separate from the signing import
+ * above, which stays non-extractable. `x` is base64url: plain `atob` throws on
+ * its `-`/`_`, and today's production key contains `_`.
+ */
+export async function keyIdOfPkcs8Ed25519(pem: string): Promise<string> {
+  const b64 = pem
+    .replace(/-----BEGIN [^-]+-----/, "")
+    .replace(/-----END [^-]+-----/, "")
+    .replace(/\s+/g, "");
+  const key = await globalThis.crypto.subtle.importKey(
+    "pkcs8",
+    base64ToBytes(b64),
+    { name: "Ed25519" },
+    true,
+    ["sign"],
+  );
+  const jwk = await globalThis.crypto.subtle.exportKey("jwk", key);
+  if (typeof jwk.x !== "string") throw new Error("Ed25519 JWK export has no public value");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", base64UrlToBytes(jwk.x));
+  return bytesToHex(new Uint8Array(digest).subarray(0, 8));
 }
 
 /**

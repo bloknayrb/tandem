@@ -63,10 +63,10 @@ Symptom: you ask Claude Code to open a document in Tandem and it says it can't, 
 such tool — **or, worse, it edits the file directly and tells you it's done.** You never see a
 connection error, because there wasn't one.
 
-**Cause: Tandem was not running when the Claude Code session started.** Claude Code resolves
-`mcpServers.tandem` once, at session start, over direct HTTP. If nothing answered then, the server
-never connected and the entire `tandem_*` toolset is simply absent from the session. There is no
-failing tool call to see, because there is no tool.
+**Cause: Tandem was not running when the Claude Code session started.** Claude Code connects to
+Tandem's MCP server once, at session start. If nothing answered then, the server never connected
+and the entire `tandem_*` toolset is simply absent from the session. There is no failing tool call
+to see, because there is no tool.
 
 This is why neither entry above fires. You are not told the connection failed, and `/mcp` is not
 somewhere you would think to look — the symptom reads as Claude not knowing what Tandem is.

@@ -234,11 +234,9 @@ describe("channel projection — claude accept and dismiss", () => {
     // Not a delta — the behaviour master had, preserved. It is here because
     // the test above reads like it covers all Claude highlights and does not.
     //
-    // No product path creates this record today: `createAnnotation` would
-    // stamp `audience: "outbound"` on it (`mcp/annotations.ts:383`), but
-    // `tandem_highlight` is a deprecated stub that errors before reaching it
-    // and nothing else passes "highlight" to a creator. So the accepted delta
-    // really is scoped to the tutorial seed. If a Claude-highlight creator is
+    // No product path creates this record today: Claude has no
+    // highlight-creating tool and nothing else passes "highlight" to a
+    // creator. So the accepted delta really is scoped to the tutorial seed. If a Claude-highlight creator is
     // ever reintroduced, this test is what says its events still flow, and the
     // decision to withhold highlights would then need making for real.
     const h = harness();
