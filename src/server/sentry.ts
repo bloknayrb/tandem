@@ -24,7 +24,7 @@
  * never document content or annotation bodies.
  */
 
-import type { ErrorEvent } from "@sentry/node";
+import type { ErrorEvent, NodeOptions } from "@sentry/node";
 
 import { redactPaths, redactSecrets, scrubSentryEvent } from "../shared/scrub-text.js";
 import { APP_VERSION } from "./mcp/server.js";
@@ -35,6 +35,24 @@ const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
 // `@sentry/node` into the process. Typed loosely to avoid a hard import.
 type SentryNode = typeof import("@sentry/node");
 let sentry: SentryNode | null = null;
+
+/**
+ * The most restrictive `dataCollection` the SDK accepts. Exported so a test can
+ * pin it against what `Sentry.init` actually receives.
+ */
+export const SIDECAR_DATA_COLLECTION = {
+  userInfo: false,
+  cookies: false,
+  httpHeaders: false,
+  httpBodies: [],
+  urlQueryParams: false,
+  graphQL: { document: false, variables: false },
+  genAI: { inputs: false, outputs: false },
+  databaseQueryData: false,
+  queues: false,
+  stackFrameVariables: false,
+  frameContextLines: 0,
+} satisfies NonNullable<NodeOptions["dataCollection"]>;
 
 function redactHome(input: string): string {
   const home = process.env.HOME || process.env.USERPROFILE;
@@ -84,8 +102,9 @@ export function scrub(input: string): string {
  * it, and an unwired fix would otherwise pass green.
  *
  * The four scrubbed surfaces — message, exception values, `server_name` and
- * exception stack-frame paths — and why `sendDefaultPii: false` covers none of
- * the last two live on [`scrubSentryEvent`], which the WebView hook
+ * exception stack-frame paths — and why the SDK's PII switch (`dataCollection`
+ * here, `sendDefaultPii` in the WebView) covers none of the last two live on
+ * [`scrubSentryEvent`], which the WebView hook
  * (`src/client/sentry.ts`) also calls so the two cannot drift apart again; the
  * Rust shell (`src-tauri/src/sentry_reporting.rs`) mirrors it by hand. The
  * hooks still differ on their OTHER surfaces, deliberately — `request.url` and
@@ -111,7 +130,13 @@ export async function initSidecarCrashReporting(): Promise<boolean> {
       dsn,
       release: APP_VERSION,
       debug: false,
-      sendDefaultPii: false,
+      // `@sentry/node` 11 removed `sendDefaultPii` and replaced it with
+      // `dataCollection`, whose defaults COLLECT everything (user info,
+      // cookies, headers, bodies, query params, stack-frame local variables,
+      // source context lines). Every category is switched off explicitly so
+      // the v10 `sendDefaultPii: false` posture survives even if an
+      // integration that reads one of them is ever enabled.
+      dataCollection: SIDECAR_DATA_COLLECTION,
       // We attach our own handlers and ship explicitly from handleFatalError;
       // don't let the SDK install duplicate global hooks that could double-ship
       // or alter the existing narrowed exception-handler contract.
