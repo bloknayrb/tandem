@@ -12,9 +12,9 @@
 //! ## What it captures (when enabled)
 //!
 //! - Rust panics in the shell (`sentry::init` installs a `panic::set_hook`).
-//! - Native minidumps from hard crashes (segfaults, aborts) via the plugin's
-//!   re-exported `minidump` handler — the one signal neither the Node sidecar
-//!   handlers nor the WebView `ErrorBoundary` can produce.
+//! - Native minidumps from hard crashes (segfaults, aborts) via `sentry`'s
+//!   `MinidumpIntegration` (Linux, macOS, Windows) — the one signal neither the
+//!   Node sidecar handlers nor the WebView `ErrorBoundary` can produce.
 //! - JavaScript errors / unhandled promise rejections, bridged from
 //!   `@sentry/browser` in the WebView over Tauri IPC to this Rust client
 //!   (see `src/client/sentry.ts`).
@@ -60,17 +60,13 @@ pub fn is_enabled() -> bool {
     SENTRY_ENABLED.load(Ordering::Acquire)
 }
 
-/// Opaque guard bundle that must outlive the Tauri event loop. Holding the
-/// `ClientInitGuard` keeps the Sentry client alive (it flushes on drop); the
-/// `minidump` guard (boxed, type-erased) keeps the out-of-process crash
-/// reporter alive. Dropping either early would silently disable reporting, so
+/// Opaque guard that must outlive the Tauri event loop. Holding the
+/// `ClientInitGuard` keeps the Sentry client alive (it flushes on drop), and
+/// with it the minidump integration, which owns the out-of-process crash
+/// reporter's handle. Dropping it early would silently disable reporting, so
 /// `run()` binds this to a `let _guard` that lives for the whole function.
 pub struct SentryGuard {
     client: sentry::ClientInitGuard,
-    // The minidump init returns a process guard whose concrete type we don't
-    // need to name; box it so a disabled build can store `None` uniformly.
-    #[allow(dead_code)]
-    _minidump: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl SentryGuard {
@@ -121,21 +117,27 @@ pub fn init() -> Option<SentryGuard> {
     }));
     // Belt-and-braces: ask the SDK not to attach IP / identifying data.
     options.send_default_pii = false;
+
+    // Out-of-process native crash handler (minidumps). Since
+    // tauri-plugin-sentry 0.7 this is `sentry`'s own `minidump` integration
+    // (enabled through the plugin's default `minidump` feature), registered on
+    // the options rather than started after `sentry::init`. It must be added
+    // BEFORE `sentry::init`: the crash-reporter process re-executes this binary
+    // and diverges inside `sentry::init` (it never returns there), so
+    // everything before that call runs in both processes. The reporter's client
+    // is cloned from these options, so `before_send` scrubbing still applies to
+    // the minidump event. The cfg matches the `sentry` re-export's own gate —
+    // the integration exists only on Linux, macOS and Windows.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        options =
+            options.add_integration(sentry::integrations::minidump::MinidumpIntegration::new());
+    }
+
     let client = sentry::init((dsn, options));
 
-    // Out-of-process native crash handler (minidumps). Re-exported by the
-    // plugin so no separate `sentry-rust-minidump` dependency is required.
-    // iOS is not a Tandem build target, but gate defensively to match the
-    // plugin's own contract ("everything before here runs in both the app and
-    // the crash-reporter process").
-    #[cfg(not(target_os = "ios"))]
-    let minidump: Option<Box<dyn std::any::Any + Send + Sync>> =
-        Some(Box::new(tauri_plugin_sentry::minidump::init(&client)));
-    #[cfg(target_os = "ios")]
-    let minidump: Option<Box<dyn std::any::Any + Send + Sync>> = None;
-
     SENTRY_ENABLED.store(true, Ordering::Release);
-    Some(SentryGuard { client, _minidump: minidump })
+    Some(SentryGuard { client })
 }
 
 /// Mutate an outgoing Sentry event in place to strip personally-identifying
