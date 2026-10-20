@@ -1407,7 +1407,11 @@ export default {
     // before any webhook processing. So does a key no shipped build trusts: its
     // licenses would fail verification on every device, and the buyer would be
     // told their key is bad, after the sale had already gone through.
-    if (signerCache?.pem !== env.TANDEM_PRIVATE_KEY) {
+    // `!signerCache` is not redundant: on a cold isolate with the secret unset,
+    // `signerCache?.pem` and the key are both undefined and compare equal, so the
+    // import would be skipped and the destructure below would throw a 500 that
+    // logs and alerts nothing.
+    if (!signerCache || signerCache.pem !== env.TANDEM_PRIVATE_KEY) {
       try {
         const key = await importPkcs8Ed25519(env.TANDEM_PRIVATE_KEY);
         const keyId = await keyIdOfPkcs8Ed25519(env.TANDEM_PRIVATE_KEY);
