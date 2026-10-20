@@ -1245,6 +1245,10 @@ fn kill_sidecar_inner(handle: &tauri::AppHandle) {
     };
     if let Some(child) = guard.take() {
         log::info!("Killing sidecar process");
+        // Since tauri-plugin-shell 2.5, `kill()` also blocks until the child is
+        // reaped, with this lock held. The drain task's `on_child_terminated`
+        // takes the same lock but the reap does not depend on it, so this is
+        // a bounded wait, not a deadlock.
         if let Err(e) = child.kill() {
             log::error!("Failed to kill sidecar: {e}");
         }
@@ -1282,8 +1286,8 @@ fn kill_sidecar_on_exit(handle: &tauri::AppHandle, _proof: graceful::GracefulAtt
 ///
 /// **A bare `take()` here would be a bug with teeth.** Drain tasks are per spawn
 /// attempt and are never cancelled, and `Terminated` is delivered over a
-/// `channel(1)` behind `child.wait()` plus a write lock
-/// (`tauri-plugin-shell` `process/mod.rs`), so child A's `Terminated` can land
+/// `channel(1)` behind `child.wait()` plus a join on both pipe-reader threads
+/// (`tauri-plugin-shell` 2.5 `process/mod.rs`), so child A's `Terminated` can land
 /// *after* child B has been stored. Clearing the slot then would orphan B and
 /// make the next Quit skip the flush — #1756 reintroduced by its own fix.
 ///

@@ -14,10 +14,14 @@ import {
 import { collectAnnotations } from "../../src/server/mcp/annotations.js";
 import {
   collectInboxUserReplies,
+  type InboxBucket,
+  type InboxItem,
+  type InboxLedger,
   type InboxPollContext,
   isUserActive,
   type ProcessUnsurfacedInboxAnnotationsParameters,
   processInboxAnnotations,
+  type ReplyLedger,
   registerAwarenessTools,
   resetInbox,
   safeSlice,
@@ -53,7 +57,13 @@ const DOC_KEY = "doc-awareness-tests";
 
 /** A Tandem-mode poll context for `DOC_KEY` with nothing channel-emitted; override per test. */
 function ctx(overrides: Partial<InboxPollContext> = {}): InboxPollContext {
-  return { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false, ...overrides };
+  return {
+    modeState: "tandem",
+    documentId: DOC_KEY,
+    wasChannelEmitted: () => false,
+    admit: () => true,
+    ...overrides,
+  };
 }
 
 function setupDoc(id: string, text: string) {
@@ -1070,21 +1080,21 @@ describe("InboxPollContext (#1702)", () => {
     // catches is an OPTIONAL or DEFAULTED positional parameter added to one
     // collector: it compiles at every call site, which is exactly the shape of
     // the 8j-2 `wasChannelEmitted = () => false` regression.
+    //
+    // The ledgers are the narrow `InboxLedger` / `ReplyLedger` (PR #2225
+    // review), not `Map` / `Set`: the handler hands the collectors a staged
+    // overlay that buffers only get/set/has/add, so a collector reaching
+    // `size` or iteration would silently read one pass's writes. Changed on
+    // purpose; the assignability rows below keep a real Map / Set passable.
     expectTypeOf(processInboxAnnotations).parameters.toEqualTypeOf<
-      [
-        Annotation[],
-        string,
-        Map<string, number>,
-        (anns: Annotation[]) => Annotation[],
-        InboxPollContext,
-      ]
+      [Annotation[], string, InboxLedger, (anns: Annotation[]) => Annotation[], InboxPollContext]
     >();
     expectTypeOf(collectInboxUserReplies).parameters.toEqualTypeOf<
       [
         Annotation[],
         string,
         (annotationId: string) => AnnotationReply[],
-        Set<string>,
+        ReplyLedger,
         InboxPollContext,
       ]
     >();
@@ -1093,8 +1103,23 @@ describe("InboxPollContext (#1702)", () => {
     // against a defaulted trailing parameter, so the two pins above cannot see
     // one added here.
     expectTypeOf<ProcessUnsurfacedInboxAnnotationsParameters>().toEqualTypeOf<
-      [Annotation[], string, Map<string, number>, InboxPollContext]
+      [Annotation[], string, InboxLedger, InboxPollContext]
     >();
+  });
+
+  it("pins the ledger interfaces to exactly what the staged overlay buffers", () => {
+    expectTypeOf<InboxLedger>().toEqualTypeOf<{
+      get(key: string): number | undefined;
+      set(key: string, value: number): unknown;
+      has(key: string): boolean;
+    }>();
+    expectTypeOf<ReplyLedger>().toEqualTypeOf<{
+      has(key: string): boolean;
+      add(key: string): unknown;
+    }>();
+    // A real Map / Set still satisfies them, so a test passes one directly.
+    expectTypeOf<Map<string, number>>().toMatchTypeOf<InboxLedger>();
+    expectTypeOf<Set<string>>().toMatchTypeOf<ReplyLedger>();
   });
 
   it("pins InboxPollContext's exact shape: every field required", () => {
@@ -1103,10 +1128,14 @@ describe("InboxPollContext (#1702)", () => {
     // fallback and left out of the handler's literal compiles everywhere — the
     // 8j-2 default under a new name. Written out literally so a new field of
     // ANY kind turns `typecheck:tests` red and has to be added here on purpose.
+    // `admit` (PR #2225 review) is added here deliberately: required, so a
+    // caller cannot leave the last gate out and stamp an item the SDK will
+    // reject.
     expectTypeOf<InboxPollContext>().toEqualTypeOf<{
       modeState: ModeState;
       documentId: string;
       wasChannelEmitted: (payloadId: string) => boolean;
+      admit: (bucket: InboxBucket, item: InboxItem) => boolean;
     }>();
   });
 

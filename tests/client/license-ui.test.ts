@@ -98,18 +98,18 @@ describe("deriveLicenseUi", () => {
     }
   });
 
-  it("labels a licensed device with the licensee name when available", () => {
+  it("labels a licensed device with the licensee email when available", () => {
     const ui = deriveLicenseUi({
       gateActive: true,
       status: "licensed",
       updateWindowCurrent: true,
-      license: { name: "Jane Doe", type: "grandfathered" },
+      license: { email: "jane@example.com", type: "grandfathered" },
     });
     expect(ui).toMatchObject({ aiNotice: null, showTrialBanner: false });
-    expect(ui.statusLabel).toBe("Licensed to Jane Doe");
+    expect(ui.statusLabel).toBe("Licensed to jane@example.com");
   });
 
-  it("falls back to a generic licensed label when the name is scrubbed", () => {
+  it("falls back to a generic licensed label when the email is scrubbed", () => {
     expect(
       deriveLicenseUi({ gateActive: true, status: "licensed", updateWindowCurrent: true })
         .statusLabel,

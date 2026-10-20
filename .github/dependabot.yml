@@ -115,3 +115,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # REMOVE together with the `<2.7` requirement on tauri-plugin-autostart in
+      # src-tauri/Cargo.toml (its comment has the reason: auto-launch 0.6's
+      # Windows `Dynamic` mode writes HKLM from any elevated launch, and the
+      # plugin cannot select CurrentUser). Without this hold the weekly group
+      # PR would widen the requirement straight back to 2.7.
+      - dependency-name: "tauri-plugin-autostart"
+        versions: [">=2.7.0"]

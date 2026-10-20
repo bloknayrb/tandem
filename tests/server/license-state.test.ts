@@ -72,12 +72,13 @@ function makeVerify(publicKey: string) {
 function meta(over: Partial<LicenseMetadata> = {}): LicenseMetadata {
   return {
     id: crypto.randomUUID(),
-    name: "Test User",
     email: "test@example.com",
     type: "personal",
     createdAt: new Date(0).toISOString(),
     expiresAt: null,
     version: "1.0",
+    // These tests inject a signature-only verifier, so any well-formed id does.
+    keyId: "0123456789abcdef",
     ...over,
   };
 }
@@ -210,7 +211,7 @@ describe("resolveLicenseState", () => {
     const { publicKey, privateKey } = tempKeyPair();
     const good = signBlob(privateKey, meta());
     const signed = JSON.parse(Buffer.from(good, "base64").toString("utf-8")) as SignedLicense;
-    signed.metadata.name = "Tampered";
+    signed.metadata.email = "tampered@example.com";
     const tampered = Buffer.from(JSON.stringify(signed)).toString("base64");
     fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: tampered }));
     const s = assertGateActive(
@@ -608,10 +609,10 @@ describe("activateLicense", () => {
   it("verifies + persists a valid license ⇒ licensed round-trip", async () => {
     const dir = tmp();
     const { publicKey, privateKey } = tempKeyPair();
-    const blob = signBlob(privateKey, meta({ name: "Paid User" }));
+    const blob = signBlob(privateKey, meta({ email: "paid@example.com" }));
     const state = assertGateActive(await activateLicense(dir, blob, makeVerify(publicKey)));
     expect(state.status).toBe("licensed");
-    expect(state.status === "licensed" && state.license.name).toBe("Paid User");
+    expect(state.status === "licensed" && state.license.email).toBe("paid@example.com");
     // license.json persisted with the exact blob (so the next resolve re-verifies).
     const saved = JSON.parse(fs.readFileSync(licenseFilePath(dir), "utf-8"));
     expect(saved.blob).toBe(blob);

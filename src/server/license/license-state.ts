@@ -452,7 +452,7 @@ export async function activateLicense(
   try {
     // `atomicWriteConfigFile` (not the generic `atomicWrite`) because it creates
     // the file 0o600 and does its own recursive mkdir. `license.json` embeds the
-    // buyer's name and email inside the signed blob — the only identity PII
+    // buyer's email address inside the signed blob — the only identity PII
     // Tandem writes to disk — so owner-only permissions are the right default,
     // and it's the same helper the other app-data config stores already share.
     await atomicWriteConfigFile(licenseFilePath(appDataDir), JSON.stringify(body));
