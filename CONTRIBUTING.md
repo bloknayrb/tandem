@@ -129,13 +129,23 @@ Three things about it that are easy to get wrong:
 | `npm run typecheck:tests` | tsc over `tests/` (three configs). `npm run typecheck` does not chain it |
 | `npm run test:e2e` | Playwright — starts its own servers on reserved harness ports, so it runs alongside a live Tandem (see [Running E2E tests](#running-e2e-tests)) |
 | `npm run check:tokens` | Raw hex/rgba scan over `src/client/` |
-| `npm run check:links` | Relative markdown links across the repo. Runs in neither CI nor the hooks |
+| `npm run check:links` | Relative Markdown links, anchors and images across the repo, plus docs-vault reachability. Runs in CI's `check` job, not in the hooks |
 | `npm run audit:origins` / `npm run audit:ymap-keys` | Static walks for the Y.Doc origin-tagging and Y.Map-key invariants |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | The Rust/Tauri layer |
 
 `npm run check:links` is the one to run after moving or renaming any Markdown file, since nothing
-else will catch the dangling links. It reads relative links only; `docs/workflows.md` opens inside
-the app and uses absolute GitHub URLs instead, which `tests/docs/shipped-doc-links.test.ts` checks.
+else will catch the dangling links before CI does. It reads relative links only; `docs/workflows.md`
+opens inside the app and uses absolute GitHub URLs instead, which
+`tests/docs/shipped-doc-links.test.ts` checks.
+
+**`docs/` is a linked vault.** [docs/README.md](docs/README.md) is its hub, and every live doc must
+be reachable from it by relative links — `check:links` reports an unlinked doc as an orphan, so a
+new doc needs an inbound link from the hub, a map or a neighbouring doc. Dated records (plans,
+spikes, reviews, archive; the `HISTORICAL` list in `scripts/check-doc-links.mjs`) are exempt from
+reachability and anchor checks but not from path checks. The repo root opens as an Obsidian vault:
+the tracked `.obsidian/app.json` makes Obsidian write relative Markdown links (never `[[wikilinks]]`,
+which GitHub and the checker cannot follow) and rewrite them when a file moves. The checker reads
+files from `git ls-files`, plus untracked files that are not ignored, so it needs a git checkout.
 
 ## What the git hooks actually run
 

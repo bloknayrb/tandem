@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { headingSlugs, stripCode } from "../../scripts/markdown-anchors.mjs";
+// GitHub's heading anchors and code stripping: the link checker's own helpers,
+// imported rather than mirrored so the two cannot disagree about what an anchor is.
+import { headingSlugs, stripCode } from "../../scripts/check-doc-links.mjs";
 import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js";
 
 /**

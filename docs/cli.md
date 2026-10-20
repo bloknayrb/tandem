@@ -200,7 +200,7 @@ Prints usage and exits.
 | `npm run lint` | ESLint across the repo. |
 | `npm run format` | Biome auto-format. |
 | `npm run check:tokens` | Scans `src/client/` for raw hex / rgba violations of the semantic-token system. |
-| `npm run check:links` | Resolves every relative Markdown link and `#anchor` in the repo. Run it before and after moving any doc — a moved file with a dangling inbound link is worse than one left where it was. |
+| `npm run check:links` | Resolves every relative Markdown link, `#anchor` and local image in the repo, and checks that every live doc is reachable from `docs/README.md`. CI's `check` job runs it; run it yourself before and after moving any doc — a moved file with a dangling inbound link is worse than one left where it was. |
 
 ### Audits
 

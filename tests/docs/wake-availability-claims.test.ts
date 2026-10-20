@@ -67,7 +67,21 @@ const CARRIERS = [
   "docs/troubleshooting.md",
   "docs/user-guide.md",
   "skills/tandem/SKILL.md",
+  // The docs vault's navigation surfaces. They summarise the connection paths, so a
+  // bare "nothing to install" line could land in one as easily as in the README.
+  "docs/README.md",
+  "docs/glossary.md",
+  "docs/maps/connecting-ai.md",
 ];
+
+/**
+ * Navigation notes that link to the trigger explanation rather than restating it. A hub
+ * or map that carried its own copy of WHEN the watch arms would be a second home for a
+ * fact that has already drifted once, so they are held to the no-bare-promise rule above
+ * and exempted from the positive-presence sweep below. The glossary is NOT exempt: its
+ * entry defines the term and must describe the trigger correctly.
+ */
+const NAVIGATION_ONLY = new Set(["docs/README.md", "docs/maps/connecting-ai.md"]);
 
 /**
  * The carriers that describe WHEN the automatic attempt happens. Derived from `CARRIERS`
@@ -78,7 +92,9 @@ const CARRIERS = [
  * because `skill-instruction-contract.test.ts` pins its trigger prose far more precisely.
  */
 const TRIGGER_CARRIERS = [
-  ...CARRIERS.filter((f) => f !== "CHANGELOG.md" && f !== "skills/tandem/SKILL.md"),
+  ...CARRIERS.filter(
+    (f) => f !== "CHANGELOG.md" && f !== "skills/tandem/SKILL.md" && !NAVIGATION_ONLY.has(f),
+  ),
   "docs/workflows.md",
 ];
 

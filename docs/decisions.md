@@ -2117,7 +2117,7 @@ three times (#1229), which is why the acceptance harness's step carries no `if:`
 no `continue-on-error` and no `|| true`, and why `check` fails when any of that
 changes.
 
-**Decision.** The pattern, now used nine times, is: **the job does the work; a
+**Decision.** The pattern, now used ten times, is: **the job does the work; a
 wiring test inside `check` pins the job's shape and the inputs it reads.** The
 work stays where it is cheap. The disarming becomes expensive, because disarming
 it means editing something a required check reads.
@@ -2135,6 +2135,7 @@ Instances:
 | `node-sidecar-pin` | `tests/scripts/node-sidecar-pin-wiring.test.ts` |
 | `check`'s vitest file anchor | `tests/scripts/vitest-file-anchor-wiring.test.ts` |
 | Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
+| `check`'s doc-link and vault-reachability step | `tests/scripts/check-links-wiring.test.ts` |
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
