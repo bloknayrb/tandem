@@ -365,6 +365,9 @@ function dismissLinkInput() {
 
     <!-- Heading dropdown (A8: leads the block group). -->
     <!-- Claims Escape while open — see the link wrapper above. -->
+    <!-- The active name must contain the visible "H1" readout (WCAG 2.5.3
+         Label in Name; axe `label-content-name-mismatch`, on by default since
+         axe-core 4.14). "Heading 1" alone does not — axe compares by word. -->
     <div
       use:clickOutside={closeHeadingMenu}
       style="position: relative;"
@@ -375,7 +378,7 @@ function dismissLinkInput() {
       role="presentation"
     >
       <ToolbarButton
-        ariaLabel={activeHeading ? `Heading ${activeHeading}` : "Heading"}
+        ariaLabel={activeHeading ? `Heading: ${headingLabel}` : "Heading"}
         disabled={isDisabled}
         active={activeHeading !== null}
         ariaHasPopup="menu"
