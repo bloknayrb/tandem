@@ -1,12 +1,12 @@
 /**
  * Tandem license ISSUANCE endpoint (Cloudflare Worker) — the public seam that
- * turns a paid Polar checkout into an Ed25519-signed license (#1116, ADR-040).
+ * turns a completed Paddle Billing transaction into an Ed25519-signed license
+ * (#1116, ADR-040; Paddle replaced Polar as merchant of record on 2026-10-17).
  *
- * This replaced the loopback-only server handler `src/server/license/webhook.ts`
- * (which Polar could never reach, and whose `verifyPolarSignature` invented a
- * wrong `t=,v1=` scheme). That handler is now deleted; issuance happens here and
- * nowhere else. The one remaining out-of-band minting path is the operator's own
- * `scripts/sign-license.ts`.
+ * This replaced the loopback-only server handler `src/server/license/webhook.ts`,
+ * which no merchant could reach. That handler is now deleted; issuance happens
+ * here and nowhere else. The one remaining out-of-band minting path is the
+ * operator's own `scripts/sign-license.ts`.
  *
  * Design mirrors the sibling `infra/license-update-worker/`: a pure
  * `handleIssuance(request, deps)` with ALL I/O injected, so the whole flow runs
@@ -15,29 +15,35 @@
  * real bindings.
  *
  * Security posture (see the design review folded into this file):
- *  - Signature verified (Standard-Webhooks/svix) BEFORE any parse or side effect.
+ *  - `Paddle-Signature` (HMAC-SHA256 over `ts:body`) verified BEFORE any parse
+ *    or side effect.
  *  - Fail-closed status mapping, in gate order: non-POST → 405; missing
- *    secret/key → 503; missing headers → 400; bad signature / stale
- *    timestamp → 401; bad JSON → 400.
- *  - Three idempotency layers: per-attempt timestamp freshness, a `webhook-id`
+ *    secret/key → 503; oversized body or missing header → 400; bad signature /
+ *    stale timestamp → 401, never alerted (anyone can send one). A validly
+ *    signed but unusable payload is `dropped`: Paddle signed it, so it is
+ *    schema drift, not an attacker.
+ *  - Three idempotency layers: per-attempt timestamp freshness, an `event_id`
  *    completion set (blocks replays of fully-processed events), and the durable
- *    `orderId` ledger (blocks re-mint; drives retry-based recovery). `issue()`
+ *    transaction ledger (blocks re-mint; drives retry-based recovery). `issue()`
  *    and `revoke()` each re-read the ledger immediately before their first
- *    commit (see the "pre-commit recheck" comments below) so a same-orderId
- *    write from a concurrent request — another `order.paid` delivery, or an
- *    `order.refunded` racing it — is deferred to instead of blindly
- *    overwritten. This SHRINKS the window (from the whole request, including
+ *    commit (see the "pre-commit recheck" comments below) so a same-transaction
+ *    write from a concurrent request — another `transaction.completed`
+ *    delivery, or an `adjustment.*` racing it — is deferred to instead of
+ *    blindly overwritten. This SHRINKS the window (from the whole request, including
  *    async Ed25519 signing, down to one KV round trip) but Workers KV has no
  *    compare-and-swap, so it does not make the pair atomic: two requests that
  *    are truly simultaneous through both reads can still both commit (a
  *    double-mint, or a mint that lands after a refund's tombstone recheck).
- *    Closing that residual gap needs a Durable Object per orderId — accepted
- *    as a follow-up (see README).
+ *    Closing that residual gap needs a Durable Object per transaction — accepted
+ *    as a follow-up (see README). Every license minted is indexed under
+ *    `txnlic:` so a refund revokes a double mint too.
  *  - PII (email/name) lives ONLY in the issuance-owned ledger KV, never in the
  *    entitlement KV the update Worker reads. Logs carry `{ result, ts }` plus a
  *    non-PII failure `stage` on errors — never an email or license id. The HTTP
- *    response NEVER contains the blob (that would leak it into Polar's delivery
- *    logs); it reaches the buyer by email alone.
+ *    response NEVER contains the blob (that would leak it into Paddle's
+ *    notification logs); it reaches the buyer by email alone. Paddle's webhook
+ *    carries no buyer email, so it is fetched from `GET /customers/{id}` with a
+ *    `customer.read` API key.
  */
 
 import {
@@ -45,7 +51,7 @@ import {
   keyIdOfPkcs8Ed25519,
   type SignBytes,
   signLicense,
-  verifyStandardWebhook,
+  verifyPaddleSignature,
   webCryptoSigner,
 } from "./crypto.js";
 
@@ -71,21 +77,31 @@ export function _setTrustedKeyIdsForTests(ids: readonly string[] = TRUSTED_KEY_I
   signerCache = null;
 }
 
-/** Standard-Webhooks freshness tolerance (svix guidance; each attempt is
- * freshly timestamped, so this does not reject legitimate retries). */
+/** `Paddle-Signature` freshness tolerance. Paddle's SDK uses 5 s; 300 s allows
+ * for clock skew. Whether a retry or a dashboard replay carries a FRESH `ts` is
+ * unverified (U1, docs/licensing-operations.md §8) and is a deploy gate: if it
+ * keeps the original, widen this to 4 days and lean on the `evt:` marker and
+ * the ledger for replay defence. */
 export const TIMESTAMP_TOLERANCE_S = 300;
-/** TTL for the `webhook-id` completion marker. Long enough for Polar's retry
- * span in practice; a late marker miss is harmless — the orderId ledger still
- * answers `duplicate` without re-minting or re-emailing. */
-export const EVENT_TTL_S = 24 * 60 * 60;
+/** TTL for the `event_id` completion marker: Paddle's live retry span is 60
+ * attempts over 3 days, plus a day. A late marker miss is harmless — the
+ * transaction ledger still answers `duplicate` without re-minting or
+ * re-emailing. */
+export const EVENT_TTL_S = 4 * 24 * 60 * 60;
+
+/** Linked from the license email; paths agreed with the tandem-website pages. */
+const TERMS_URL = "https://tandem.ink/terms";
+const REFUND_POLICY_URL = "https://tandem.ink/refunds";
+const PADDLE_BUYER_SUPPORT_URL = "https://paddle.net";
 
 const MAX_NAME_LEN = 128;
 const MAX_EMAIL_LEN = 254; // RFC 5321
-/** A real Polar order payload is well under 10KB; this is defense-in-depth
+/** Paddle's documented `transaction.completed` example is large (U8: measure a
+ * real one); 256 KiB leaves headroom. This is defense-in-depth
  * against forcing an unauthenticated caller's oversized body through HMAC +
  * JSON.parse before the signature check can reject it (the secret is not
  * needed to reach the body-read line). */
-const MAX_BODY_BYTES = 65_536;
+const MAX_BODY_BYTES = 262_144;
 /** The on-device verifier rejects a decoded blob whose length exceeds 4096
  * (`verifier.ts`, measured on the decoded string). Our `>=`-on-bytes check is
  * deliberately stricter (UTF-8 bytes ≥ UTF-16 units), so no blob that passes
@@ -105,50 +121,62 @@ export interface KvNamespace {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
+  list(opts: {
+    prefix: string;
+    cursor?: string;
+  }): Promise<{ keys: { name: string }[]; list_complete: boolean; cursor?: string }>;
 }
 
-/** Coarse, closed result enum for logging — deliberately NOT the fine-grained
- * internal reason in the HTTP response (which could become a discrimination
- * oracle). `"error"` is the one retryable outcome: it maps to a retryable 5xx
- * (500; 503 for config failures) so Polar re-delivers. `"dropped"` marks an
- * event whose payload could not be fulfilled — an `order.paid` with no usable
- * email/orderId (a paid sale may be behind it), OR an `order.refunded` whose
- * `refunded` discriminator field is missing/non-boolean (a real refund may be
- * behind it; Polar's exact field shape is unconfirmed — see `revoke()`) — so
- * it's the one result worth alerting on; it returns 200 (a retry carries the
- * same bytes) but is NOT marked done, so a manual Polar re-send after a fix
- * reprocesses it. */
+/** Coarse, closed result enum for logging. `settled` = an authenticated
+ * adjustment that needs no action; `noticed` = an authenticated event a human
+ * must act on (a durable `notice:` record is written first). */
 export type ResultKind =
   | "issued"
   | "duplicate"
   | "revoked"
   | "ignored"
+  | "settled"
+  | "noticed"
   | "dropped"
   | "rejected"
   | "error";
 
-/** Non-PII failure stage attached to error logs. Cloudflare's log stream is
- * operator-only (not attacker-visible), so tagging the failing stage — and the
- * upstream HTTP status for email — costs no security and makes a launch-day
- * Resend misconfiguration debuggable.
- *
- * `config` is the signing key; `config-support-email` is SUPPORT_EMAIL;
- * `config-resend-from` is RESEND_FROM. They are separate values on purpose —
- * all three fail closed with an identical 503, so the stage is the only thing
- * that tells an operator whether to re-put a secret or which `[vars]` line to
- * edit. */
 export type FailStage =
   | "config"
   | "config-support-email"
   | "config-resend-from"
+  | "config-paddle-api-key"
+  | "config-price-ids"
+  | "config-env-mismatch"
+  | "config-sandbox-until"
+  | "config-sandbox-buyers"
   | "email"
+  | "paddle-api"
+  | "paddle-api-auth"
+  | "delivery-check"
+  | "notice-write"
   | "blob-size"
   | "ledger"
   | "unexpected";
 
+export type NoticeStage =
+  | "api-key-expiry"
+  | "refund-partial"
+  | "credit-partial"
+  | "credit-reverse"
+  | "chargeback-reverse"
+  | "adjustment-reversed"
+  | "dropped";
+
 interface Failure {
   stage: FailStage;
   status?: number;
+}
+
+export interface Notice {
+  notice: NoticeStage;
+  ref: string;
+  txnId?: string;
 }
 
 export interface LogEntry {
@@ -157,10 +185,16 @@ export interface LogEntry {
   stage?: FailStage;
   /** Upstream HTTP status (email stage only). */
   status?: number;
+  notice?: NoticeStage;
+  ref?: string;
 }
 
-/** What issue()/revoke() produce: a terminal result, or a Failure (→ 500). */
-type EventOutcome = Exclude<ResultKind, "rejected" | "error"> | Failure;
+/** What issue()/revoke() produce. */
+type EventOutcome = Exclude<ResultKind, "rejected" | "error" | "noticed"> | Failure | Notice;
+
+export type CustomerLookup =
+  | { ok: true; email: unknown; name: unknown }
+  | { ok: false; status?: number };
 
 export interface IssuanceDeps {
   webhookSecret: string;
@@ -171,14 +205,21 @@ export interface IssuanceDeps {
   keyId: string;
   /** licenseId → LicenseEntitlement; read by the update Worker. NO PII. */
   entitlementKv: KvNamespace;
-  /** issuance-owned store: `order:<mode>:<id>` records + `evt:<mode>:<id>`. */
+  /** issuance-owned store: `order:`, `evt:`, `notice:`, `txnlic:` keys. */
   ledgerKv: KvNamespace;
-  /** Deliver the license blob to the buyer. Non-throwing; `status` is the
-   * upstream HTTP status when a response was received (absent on config or
-   * network failure). */
   sendEmail: (to: string, name: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
   isGrandfathered: (email: string) => boolean;
-  /** Deploy-time env flag: a sandbox deployment must not entitle updates. */
+  /** Whether `GRANDFATHER_EMAILS` has any entry. When it has none, a free
+   * order is ignored before the customer lookup, so a leaked 100% code cannot
+   * drive Paddle API traffic. */
+  hasGrandfathers: boolean;
+  /** Set only on a Worker holding a `pdl_sdbx_` key: the lower-cased buyer
+   * emails it may mint for (`SANDBOX_BUYER_EMAILS`). Anyone else is ignored. */
+  sandboxBuyers?: ReadonlySet<string>;
+  /** Paddle `GET /customers/{id}`. */
+  lookupCustomer: (customerId: string) => Promise<CustomerLookup>;
+  /** Parsed `PADDLE_PRICE_IDS`. */
+  priceIds: readonly string[];
   isTest: boolean;
   now: () => number;
   newLicenseId: () => string;
@@ -214,8 +255,11 @@ interface LedgerRecord {
 const modeOf = (isTest: boolean): string => (isTest ? "test" : "live");
 const orderKeyOf = (isTest: boolean, orderId: string): string =>
   `order:${modeOf(isTest)}:${orderId}`;
-const evtKeyOf = (isTest: boolean, webhookId: string): string =>
-  `evt:${modeOf(isTest)}:${webhookId}`;
+const evtKeyOf = (isTest: boolean, eventId: string): string => `evt:${modeOf(isTest)}:${eventId}`;
+const noticeKeyOf = (isTest: boolean, stage: NoticeStage, ref: string): string =>
+  `notice:${modeOf(isTest)}:${stage}:${ref}`;
+const txnLicPrefixOf = (isTest: boolean, txnId: string): string =>
+  `txnlic:${modeOf(isTest)}:${txnId}:`;
 
 /** A ledger record that exists but can't be parsed/validated. Surfaces as a
  * retryable 500 with `stage: "ledger"` — NEVER as a silent re-mint (a corrupt
@@ -275,7 +319,7 @@ function cleanName(raw: unknown): string {
 }
 
 // Minimal structural check (one "@", a non-empty local + domain part, a dot
-// somewhere in the domain not at either end) — not full RFC 5322. Polar is the
+// somewhere in the domain not at either end) — not full RFC 5322. Paddle is the
 // identity authority here; this only guards against schema drift producing an
 // obviously-unusable string, not against a legitimate-but-unusual address.
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -308,7 +352,7 @@ function metadataFrom(rec: LedgerRecord, keyId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// order.paid → mint (or idempotently re-drive) a license.
+// transaction.completed → mint (or idempotently re-drive) a license.
 // ---------------------------------------------------------------------------
 
 /** Re-assert entitlement / resend a stuck email for an order that ALREADY has
@@ -336,225 +380,235 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
   return "duplicate";
 }
 
-/** The order id a payload is about — the ledger key both `issue()` and
- *  `revoke()` derive everything else from.
- *
- *  `order_id` is preferred over `id` because `id` is the id of the OBJECT being
- *  delivered, which for an `order.refunded` payload carrying a refund object is
- *  the refund's own id, not the order's. Reading `data.id` there would key the
- *  ledger under a refund id: the live order record stays untouched (its
- *  entitlement never revoked) while a junk record accumulates beside it.
- *
- *  HONESTLY: the preference is a SHAPE GUESS until the real Polar sandbox
- *  fixtures land (docs/licensing-operations.md §8). It is one shared helper
- *  precisely so the two callers cannot drift — they agree on the ledger key by
- *  construction, and nothing has been deployed, so no stored record can be
- *  stranded if the guess turns out to be wrong. */
+// Paddle ids are a prefix plus 26 lower-case characters. The 64 bound keeps
+// every KV key built from them far below KV's 512-byte limit, so a drifted id
+// can never loop as a 500 on an over-long key.
+const TXN_ID = /^txn_[a-z0-9]{1,64}$/;
+const CTM_ID = /^ctm_[a-z0-9]{1,64}$/;
+const ADJ_ID = /^adj_[a-z0-9]{1,64}$/;
+const EVT_ID = /^evt_[a-z0-9]{1,64}$/;
+const APIKEY_ID = /^apikey_[a-z0-9]{1,64}$/;
+
+/** The transaction a payload is about — the ledger key both `issue()` and
+ * `revoke()` derive everything else from. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function orderIdOf(data: any): string | null {
-  if (typeof data?.order_id === "string") return data.order_id;
-  if (typeof data?.id === "string") return data.id;
-  return null;
+function txnIdOf(eventType: string, data: any): string | null {
+  const raw =
+    eventType === "transaction.completed"
+      ? data?.id
+      : eventType.startsWith("adjustment.")
+        ? data?.transaction_id
+        : undefined;
+  return typeof raw === "string" && TXN_ID.test(raw) ? raw : null;
+}
+
+/** Paddle `details.totals.*` are strings of integer minor units. */
+function parseMinor(v: unknown): number | null {
+  return typeof v === "string" && /^-?\d+$/.test(v) ? Number(v) : null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
-  // `data.customer` is Polar's authoritative buyer object; the extra fallbacks
-  // are belt-and-suspenders against schema drift so a paid customer is never
-  // silently dropped for a nesting change.
-  const email = cleanEmail(data?.customer?.email ?? data?.user?.email ?? data?.billing?.email);
-  // No usable identity → "dropped", not "ignored": a paid sale may be behind
-  // this. 200 (a retry carries the same bytes) but NOT marked done, so a manual
-  // re-send after a parser fix reprocesses it; the distinct result is the
-  // alert hook.
-  if (!email) return "dropped";
-
-  const name = cleanName(data?.customer?.name ?? data?.user?.name);
-  const orderId = orderIdOf(data);
-  if (!orderId) return "dropped";
-
-  const grandfathered = deps.isGrandfathered(email);
-
-  // Ledger dedup/re-drive MUST run before the coupon-containment gate below.
-  // A redelivery/resend of an already-ledgered order can carry a payload
-  // snapshot that differs from the original (e.g. a later partial adjustment
-  // reads the current total as ≤0) — if the free-order gate ran first, that
-  // resend would be silently "ignored" instead of hitting the re-drive branch,
-  // breaking the failed-email recovery story for a real, already-paid order.
-  const existing = await readOrder(deps, orderId);
+  // 1.
+  const txnId = txnIdOf("transaction.completed", data);
+  if (!txnId) return "dropped";
+  // 2.
+  if (data?.status !== "completed") return "dropped";
+  // 3. Ledger read before anything only the FIRST delivery needs: a redelivery
+  // must re-drive even if its price was since removed from PADDLE_PRICE_IDS
+  // (the kill switch) or the customer lookup would now fail.
+  const existing = await readOrder(deps, txnId);
   if (existing) return reDrive(existing, deps);
+  // 4. Totals. Never `balance` (reads 0 on a completed transaction). Unparseable
+  // is dropped, not "paid": failing open would let a leaked 100% code mint.
+  const grand = parseMinor(data?.details?.totals?.grand_total);
+  const total = parseMinor(data?.details?.totals?.total);
+  if (grand === null || total === null) return "dropped";
+  const free = grand <= 0 && total <= 0;
+  // 5. Price scope. A Paddle.js checkout takes a public client token plus ANY
+  // active price id, so without this a leftover test price would mint
+  // perpetual licenses. One transaction mints one license whatever the quantity.
+  // A FREE out-of-scope order is ignored rather than dropped: nobody paid, and
+  // a drop's record and alert per free checkout would let anyone holding the
+  // client token drain the Resend quota that delivers licenses.
+  const items = data?.items;
+  if (
+    !Array.isArray(items) ||
+    items.length === 0 ||
+    !items.every(
+      (it: any) => typeof it?.price?.id === "string" && deps.priceIds.includes(it.price.id),
+    )
+  ) {
+    return free ? "ignored" : "dropped";
+  }
+  // 6.
+  const customerId = data?.customer_id;
+  if (typeof customerId !== "string" || !CTM_ID.test(customerId)) return "dropped";
+  // 7. A leaked 100% code cannot drive Paddle API traffic.
+  if (free && !deps.hasGrandfathers) return "ignored";
+  // 8. Buyer lookup.
+  const found = await deps.lookupCustomer(customerId);
+  if (!found.ok) {
+    // A missing customer or a request Paddle calls malformed won't fix itself
+    // on retry → dropped. Auth, rate limiting, outages, network errors and any
+    // other status (1xx/3xx, an unparseable 200) are retried via a 500.
+    const s = found.status;
+    if (s === undefined) return { stage: "paddle-api" };
+    if (s === 401 || s === 403) return { stage: "paddle-api-auth", status: s };
+    if (s >= 400 && s < 500 && s !== 408 && s !== 429) return "dropped";
+    return { stage: "paddle-api", status: s };
+  }
+  const email = cleanEmail(found.email);
+  if (!email) return "dropped";
+  // A sandbox Worker signs with the PRODUCTION key, so anyone holding the
+  // sandbox client token and the 4242 test card would otherwise get a real,
+  // permanent run license while SANDBOX_SIGNING_UNTIL is open.
+  if (deps.sandboxBuyers && !deps.sandboxBuyers.has(email.toLowerCase())) return "ignored";
+  const name = cleanName(found.name);
+  // 9. Free-order gate, now that the email is known.
+  const grandfathered = deps.isGrandfathered(email);
+  if (free && !grandfathered) return "ignored";
 
-  // $0 / 100%-off coupon containment: a free order only yields a license for a
-  // listed grandfather email. A non-listed $0 order is an authorization gap (a
-  // leaked coupon → unbounded free licenses), so we ignore it. Only reached
-  // for a genuinely NEW order (no ledger record above).
-  if (isFreeOrder(data) && !grandfathered) return "ignored";
-
-  // Fresh issuance. NOTE: only `personal`/`grandfathered` are minted here. If a
-  // `commercial` SKU is ever sold through this same webhook it would be silently
-  // downgraded to `personal` — wire an SKU→type map at that milestone.
+  // 10. Fresh issuance.
   const licenseId = deps.newLicenseId();
   const type: LedgerRecord["type"] = grandfathered ? "grandfathered" : "personal";
-  const createdAt = new Date(nowMs).toISOString();
-  // Every key includes all future updates (ADR-040 §3 amendment, 2026-10-09,
-  // decision A5): there is no update window and no renewal product, so a paid
-  // key carries the same null window a grandfathered one always has. A null
-  // window is "never ends"; refunds are told apart by `status: "revoked"`, not
-  // by the window (see `applyRefund`).
-  const updateWindowEnd = null;
-
   const rec: LedgerRecord = {
-    orderId,
+    orderId: txnId,
     licenseId,
     email,
     name,
     type,
-    createdAt,
-    updateWindowEnd,
+    createdAt: new Date(nowMs).toISOString(),
+    updateWindowEnd: null,
     emailSent: false,
     refunded: false,
   };
 
   const blob = await signLicense(metadataFrom(rec, deps.keyId), deps.signBytes);
-  // Belt-and-suspenders on the verifier's 4096-byte ceiling: never email a blob
-  // the buyer's client would reject. Decoded size derived arithmetically from
-  // the (always correctly padded) base64 we just produced. With name≤128 and
-  // email≤254 the blob is ~0.6KB, so this only fires on a logic regression —
-  // and then fails LOUD (retryable 500 + error logs), not as a silent drop.
   const padding = blob.endsWith("==") ? 2 : blob.endsWith("=") ? 1 : 0;
   if ((blob.length / 4) * 3 - padding >= MAX_BLOB_DECODED_BYTES) return { stage: "blob-size" };
 
-  // Pre-commit recheck: Workers KV has no compare-and-swap, so another request
-  // (a concurrent `order.paid` delivery racing us, OR a `order.refunded`
-  // tombstone — see `revoke()`'s symmetric recheck) may have written a record
-  // for this orderId in the time since our read above (which included the
-  // await for Ed25519 signing). Re-reading immediately before the commit
-  // shrinks that window from "the whole request" down to one KV round trip and
-  // defers to whatever landed first instead of blindly overwriting it. This is
-  // NOT full atomicity — two requests can still both pass both reads if they
-  // are truly concurrent — closing that residual gap needs a Durable Object
-  // per orderId (see README).
-  const recheck = await readOrder(deps, orderId);
+  const recheck = await readOrder(deps, txnId);
   if (recheck) return reDrive(recheck, deps);
 
-  // Durable ledger first (holds everything needed to re-sign on retry). A
-  // failed entitlement write below throws → retryable 500; the retry hits the
-  // existing-record branch above (re-assert + resend).
+  // Index BEFORE the ledger, so the index is always a superset of it. A slow
+  // first request plus a retry can both pass the recheck and both mint; the
+  // index is what lets a later refund revoke both.
+  await deps.ledgerKv.put(`${txnLicPrefixOf(deps.isTest, txnId)}${licenseId}`, "");
   await writeOrder(deps, rec);
   if (!deps.isTest) await deps.entitlementKv.put(licenseId, entitlementValue(rec));
 
   const sent = await deps.sendEmail(email, name, blob);
-  if (!sent.ok) return { stage: "email", status: sent.status }; // 500 → retry re-sends
-
+  if (!sent.ok) return { stage: "email", status: sent.status };
   rec.emailSent = true;
-  // If THIS write fails, the exception below collapses to a retryable 500 with
-  // `emailSent` still false on disk — a retry re-sends the same (deterministic)
-  // blob rather than losing it. Accepted: duplicate delivery of a customer's
-  // own license is harmless, unlike a silently-dropped one.
   await writeOrder(deps, rec);
   return "issued";
 }
 
-/** A Polar order is "free" only when it carries at least one numeric amount
- * field and EVERY present amount field is ≤0. Amounts are integer minor units.
- * This deliberately biases toward NOT classifying a paying customer as free:
- * a discounted-but-paid order keeps a positive `total_amount` even if a
- * fee-adjusted `net_amount` reads low, so it still issues. When no amount field
- * is present at all we treat the order as paid (`order.paid` already validated
- * payment). The exact field semantics must be confirmed against a real Polar
- * sandbox payload before relying on the coupon path. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isFreeOrder(data: any): boolean {
-  const present: number[] = [];
-  for (const key of ["net_amount", "total_amount", "amount"]) {
-    const v = data?.[key];
-    if (typeof v === "number" && Number.isFinite(v)) present.push(v);
+const REVOKED_VALUE = JSON.stringify({ updateWindowEnd: null, status: "revoked" });
+
+/** Every licenseId minted for a transaction: the `txnlic:` index, listed to
+ * completion. */
+async function indexedLicenseIds(deps: IssuanceDeps, txnId: string): Promise<string[]> {
+  const prefix = txnLicPrefixOf(deps.isTest, txnId);
+  const ids: string[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await deps.ledgerKv.list(cursor === undefined ? { prefix } : { prefix, cursor });
+    for (const k of page.keys) ids.push(k.name.slice(prefix.length));
+    if (page.list_complete) break;
+    cursor = page.cursor;
   }
-  return present.length > 0 && present.every((v) => v <= 0);
+  return ids;
 }
 
-// ---------------------------------------------------------------------------
-// order.refunded → revoke the UPDATE entitlement (not the offline run-license,
-// which is perpetual by design). An ambiguous/unconfirmed `refunded` field
-// resolves to "dropped" (alert, no commit) rather than a guessed revoke/ignore.
-// ---------------------------------------------------------------------------
-
-/** Revoke an order that ALREADY has a ledger record: write a REVOCATION
- * TOMBSTONE over its entitlement (tombstones and never-entitled records have no
- * licenseId, so this is a no-op for them) and mark it refunded. Idempotent —
- * revoking an already-refunded record just re-writes the same state.
- *
- * WHY A TOMBSTONE RATHER THAN A DELETE (#1786). A deleted key and a LOST key
- * are the same absence, and the update Worker reads that absence as
- * `unknown-id` — the one reason worth paging an operator about, because it
- * means an entitlement nobody removed has gone. Deleting here would make every
- * refunded customer's update check page the operator for their own deliberate
- * action, forever, and a muted channel detects nothing. The tombstone lets the
- * update Worker answer `revoked` instead, which is retained and readable but
- * deliberately not alerted on.
- *
- * `{updateWindowEnd: null, status: "revoked"}` is NOT a `LicenseEntitlement`:
- * the null window is what EVERY live entitlement carries since every key
- * includes all future updates (2026-10-09, decision A5), so the update Worker
- * MUST read `status` before it compares the window, or it serves updates to a
- * refunded customer forever. See that file's own placement comment. */
 async function applyRefund(rec: LedgerRecord, deps: IssuanceDeps): Promise<EventOutcome> {
-  if (!deps.isTest && rec.licenseId) {
-    await deps.entitlementKv.put(
-      rec.licenseId,
-      JSON.stringify({ updateWindowEnd: null, status: "revoked" }),
-    );
-  }
+  // Ledger flag FIRST: a concurrent redelivery that reads the record between
+  // the two writes then sees `refunded` and declines to re-drive, instead of
+  // writing the live entitlement back over the tombstone. If an entitlement
+  // write below fails, the retry finds the flag and revokes again.
   rec.refunded = true;
   await writeOrder(deps, rec);
+  if (!deps.isTest) {
+    const ids = new Set(await indexedLicenseIds(deps, rec.orderId));
+    if (rec.licenseId) ids.add(rec.licenseId);
+    for (const id of ids) {
+      if (id) await deps.entitlementKv.put(id, REVOKED_VALUE);
+    }
+  }
   return "revoked";
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
-  // Only an EXPLICIT `false` is treated as a genuinely mis-routed non-refund
-  // event — routing here already required `type === "order.refunded"`, so
-  // this is defense-in-depth, not the primary discriminator. Polar's exact
-  // field name/shape for a refunded order is UNCONFIRMED against a real
-  // sandbox payload (same risk class as `isFreeOrder`'s amount-field guess).
-  // A missing/non-boolean field is therefore NEITHER auto-revoked (which
-  // would silently delete a paying customer's entitlement on a wrong guess)
-  // NOR auto-ignored (which would silently leave a real refund unprocessed
-  // forever) — it falls through to "dropped" below: alertable, not committed
-  // either way, recoverable via a manual Polar re-send once confirmed.
-  if (data?.refunded === false) return "ignored";
-  const orderId = orderIdOf(data);
-  if (!orderId) return "dropped";
-  if (data?.refunded !== true) return "dropped";
+const ADJ_ACTIONS = new Set([
+  "refund",
+  "credit",
+  "chargeback",
+  "chargeback_warning",
+  "chargeback_reverse",
+  "chargeback_warning_reverse",
+  "credit_reverse",
+]);
+const ADJ_STATUSES = new Set(["pending_approval", "approved", "rejected", "reversed"]);
+const ADJ_TYPES = new Set(["full", "partial"]);
 
-  const rec = await readOrder(deps, orderId);
+async function revoke(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload: any,
+  deps: IssuanceDeps,
+  nowMs: number,
+  fallbackRef: string,
+): Promise<EventOutcome> {
+  const data = payload?.data;
+  const { action, status, type } = data ?? {};
+  // First match wins, in this order. An undocumented enum value is schema
+  // drift, never a decision.
+  if (!ADJ_ACTIONS.has(action) || !ADJ_STATUSES.has(status) || !ADJ_TYPES.has(type)) {
+    return "dropped";
+  }
+  const txnId = txnIdOf(payload.event_type, data);
+  if (!txnId) return "dropped";
+  const ref = typeof data?.id === "string" && ADJ_ID.test(data.id) ? data.id : fallbackRef;
+  const notice = (n: NoticeStage): Notice => ({ notice: n, ref, txnId });
+
+  if (status === "pending_approval" || status === "rejected") return "settled";
+  // A reversal never re-revokes, whatever the action: a won dispute is
+  // restored by hand (ops §7).
+  if (status === "reversed") return notice("adjustment-reversed");
+  if (status !== "approved") return "dropped";
+  // Approved. Partials keep the license and leave a notice (Bryan, 2026-10-18):
+  // an automatic revoke-at-full needs an accumulator KV cannot keep safely.
+  // Revoking here tombstones the UPDATE entitlement only; the run license the
+  // buyer holds keeps working, as the Terms say.
+  let full = false;
+  switch (action) {
+    case "refund":
+      if (type === "partial") return notice("refund-partial");
+      full = true;
+      break;
+    case "credit":
+      if (type === "partial") return notice("credit-partial");
+      full = true;
+      break;
+    case "chargeback":
+      full = true;
+      break;
+    case "chargeback_warning":
+    case "chargeback_warning_reverse":
+      return "settled";
+    case "chargeback_reverse":
+      return notice("chargeback-reverse");
+    case "credit_reverse":
+      return notice("credit-reverse");
+  }
+  if (!full) return "dropped";
+
+  const rec = await readOrder(deps, txnId);
   if (rec) return applyRefund(rec, deps);
-
-  // No record yet — but this is the SAME KV-has-no-compare-and-swap gap as
-  // `issue()`'s pre-commit recheck: a concurrent `order.paid` mint may be
-  // committing right now, between our read above and the tombstone write
-  // below. Re-read immediately before writing the tombstone; if a mint landed,
-  // revoke IT (mark refunded, tombstone its entitlement) instead of blindly
-  // writing an empty-licenseId tombstone that would silently orphan its
-  // entitlement forever (Polar never redelivers a refund we've already 200'd,
-  // so there is no second chance to catch this).
-  //
-  // WHAT THIS ACTUALLY NARROWS, precisely — the two reads are adjacent, so it
-  // is tempting to call it a no-op and delete it. It is not `issue()`'s
-  // narrowing (that one spans the await for Ed25519 signing, i.e. most of the
-  // request); the window it closes is this second read's snapshot to the
-  // tombstone write below — ONE KV round trip. Small, real, and cheaper than
-  // the orphaned entitlement it prevents.
-  const recheck = await readOrder(deps, orderId);
+  const recheck = await readOrder(deps, txnId);
   if (recheck) return applyRefund(recheck, deps);
 
-  // Refund-before-paid: delivery order is not guaranteed, and a refund that
-  // outraces a (failed, still-retrying) paid event must not be lost — Polar
-  // won't redeliver a refund we 200'd. Write a TOMBSTONE so the later paid
-  // retry hits the `existing.refunded` tiebreaker instead of minting a live
-  // entitlement for a refunded order.
   const tombstone: LedgerRecord = {
-    orderId,
+    orderId: txnId,
     licenseId: "",
     email: "",
     name: "",
@@ -569,8 +623,7 @@ async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<Eve
 }
 
 // ---------------------------------------------------------------------------
-// Pure request handler. Fail-closed at every gate; a single top-level result is
-// logged (never PII). The body is a constant shape — never the blob.
+// Pure request handler.
 // ---------------------------------------------------------------------------
 
 function jsonResponse(status: number): Response {
@@ -580,52 +633,45 @@ function jsonResponse(status: number): Response {
   });
 }
 
+/** A `dropped` record's ref is normally the `event_id`, but a non-JSON or
+ * `event_id`-less payload has none. Fall back to a digest of the signed body,
+ * which a replay reproduces, so the record stays idempotent. */
+async function bodyRef(rawBody: string): Promise<string> {
+  const d = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(rawBody));
+  return `body_${[...new Uint8Array(d).subarray(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
 export async function handleIssuance(request: Request, deps: IssuanceDeps): Promise<Response> {
   const nowMs = deps.now();
   const ts = Math.floor(nowMs / 1000);
-  const reply = (status: number, result: ResultKind, fail?: Failure): Response => {
+  const reply = (status: number, result: ResultKind, extra?: Failure | Notice): Response => {
     const entry: LogEntry = { result, ts };
-    if (fail) {
-      entry.stage = fail.stage;
-      if (fail.status !== undefined) entry.status = fail.status;
+    if (extra && "stage" in extra) {
+      entry.stage = extra.stage;
+      if (extra.status !== undefined) entry.status = extra.status;
+    }
+    if (extra && "notice" in extra) {
+      entry.notice = extra.notice;
+      entry.ref = extra.ref;
     }
     deps.log?.(entry);
     return jsonResponse(status);
   };
   try {
     if (request.method !== "POST") return reply(405, "rejected");
-
-    // (1) Config present? Fail closed BEFORE reading anything.
     if (!deps.webhookSecret) return reply(503, "error", { stage: "config" });
 
-    // (1b) Reject an oversized body via its declared Content-Length BEFORE
-    // buffering it — the webhook secret isn't needed to reach this point, so
-    // an unauthenticated caller could otherwise force an arbitrarily large
-    // body through HMAC + JSON.parse before signature verification can reject
-    // it. A missing/unparsable header falls through to the read below (the
-    // platform's own request-size ceiling is the backstop).
     const declaredLength = Number(request.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
       return reply(400, "rejected");
     }
-
-    // (2) Read the raw body ONCE — signed content is over these exact bytes.
     const rawBody = await request.text();
     if (rawBody.length > MAX_BODY_BYTES) return reply(400, "rejected");
 
-    // (3) Headers present & well-formed?
-    const headers = {
-      id: request.headers.get("webhook-id"),
-      timestamp: request.headers.get("webhook-timestamp"),
-      signature: request.headers.get("webhook-signature"),
-    };
-    if (!headers.id || !headers.timestamp || !headers.signature) {
-      return reply(400, "rejected");
-    }
-
-    // (4) Signature + (5) freshness.
-    const ok = await verifyStandardWebhook(
-      headers,
+    const sigHeader = request.headers.get("paddle-signature");
+    if (!sigHeader) return reply(400, "rejected");
+    const ok = await verifyPaddleSignature(
+      sigHeader,
       rawBody,
       deps.webhookSecret,
       nowMs,
@@ -633,53 +679,96 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
     );
     if (!ok) return reply(401, "rejected");
 
-    // (6) Parse.
+    // Every notice and every drop leaves a durable record BEFORE the 200 reply,
+    // because Paddle will not retry a 200 and the alert is best-effort. A
+    // failed write is a 500 (alertable), so Paddle retries; the put is
+    // idempotent. Ids only, no PII.
+    const writeNotice = (n: Notice, eventType: unknown) =>
+      deps.ledgerKv.put(
+        noticeKeyOf(deps.isTest, n.notice, n.ref),
+        JSON.stringify({
+          stage: n.notice,
+          ...(n.txnId ? { txnId: n.txnId } : {}),
+          eventType: typeof eventType === "string" ? eventType : null,
+          at: new Date(nowMs).toISOString(),
+        }),
+      );
+    // A drop stays unmarked so a replay after the operator fixes the cause
+    // still works.
+    const drop = async (
+      ref: string,
+      eventType: unknown,
+      txnId?: string | null,
+    ): Promise<Response> => {
+      const n: Notice = { notice: "dropped", ref, ...(txnId ? { txnId } : {}) };
+      try {
+        await writeNotice(n, eventType);
+      } catch {
+        return reply(500, "error", { stage: "notice-write" });
+      }
+      return reply(200, "dropped", n);
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let payload: any;
     try {
       payload = JSON.parse(rawBody);
     } catch {
-      return reply(400, "rejected");
+      return drop(await bodyRef(rawBody), null);
     }
-    const type = payload?.type;
-    if (typeof type !== "string") return reply(400, "rejected");
-
-    // (7) Replay/idempotency: short-circuit fully-processed events. A retry of a
-    // FAILED delivery was never marked done, so it proceeds and re-drives via
-    // the orderId ledger.
-    const evtKey = evtKeyOf(deps.isTest, headers.id);
-    if ((await deps.ledgerKv.get(evtKey)) === "done") {
-      return reply(200, "duplicate");
+    const eventType = payload?.event_type;
+    const eventId = payload?.event_id;
+    if (typeof eventId !== "string" || eventId === "") {
+      return drop(await bodyRef(rawBody), eventType);
     }
+    const eventRef = EVT_ID.test(eventId) ? eventId : await bodyRef(rawBody);
+    if (typeof eventType !== "string") return drop(eventRef, eventType);
 
-    // (8) Route on an allowlisted event type only. Unknown event TYPES are
-    // terminally uninteresting → mark done so replays short-circuit.
+    // eventRef, not the raw id: an id outside the documented shape could be
+    // long enough to exceed KV's key limit and 500 on every retry.
+    const evtKey = evtKeyOf(deps.isTest, eventRef);
+    if ((await deps.ledgerKv.get(evtKey)) === "done") return reply(200, "duplicate");
+
     let outcome: EventOutcome;
-    if (type === "order.paid") {
+    if (eventType === "transaction.completed") {
       outcome = await issue(payload.data, deps, nowMs);
-    } else if (type === "order.refunded") {
-      outcome = await revoke(payload.data, deps, nowMs);
+    } else if (eventType === "adjustment.created" || eventType === "adjustment.updated") {
+      outcome = await revoke(payload, deps, nowMs, eventRef);
+    } else if (eventType === "api_key.expiring" || eventType === "api_key.expired") {
+      const id = payload?.data?.id;
+      outcome = {
+        notice: "api-key-expiry",
+        ref: typeof id === "string" && APIKEY_ID.test(id) ? id : eventRef,
+      };
     } else {
       await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
       return reply(200, "ignored");
     }
 
-    if (typeof outcome === "object") return reply(500, "error", outcome); // Polar retries
+    // Notice before Failure: both are objects, and a Notice routed to the
+    // Failure arm would reply 500 to an event that needs no retry.
+    if (typeof outcome !== "string" && "notice" in outcome) {
+      try {
+        await writeNotice(outcome, eventType);
+      } catch {
+        return reply(500, "error", { stage: "notice-write" });
+      }
+      await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
+      return reply(200, "noticed", outcome);
+    }
+    if (typeof outcome !== "string") return reply(500, "error", outcome);
+    if (outcome === "dropped") return drop(eventRef, eventType, txnIdOf(eventType, payload.data));
 
-    // (9) Mark done only for durable outcomes. `ignored`/`dropped` order events
-    // are deliberately NOT marked: nothing durable was written, reprocessing is
-    // idempotent, and the marker would make a manual Polar re-send (the
-    // recovery path after fixing a parser/coupon issue) silently no-op for the
-    // marker's TTL.
-    if (outcome === "issued" || outcome === "duplicate" || outcome === "revoked") {
+    if (
+      outcome === "issued" ||
+      outcome === "duplicate" ||
+      outcome === "revoked" ||
+      outcome === "settled"
+    ) {
       await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
     }
     return reply(200, outcome);
   } catch (err) {
-    // Any unexpected throw collapses to a static 500 — never re-thrown with
-    // payload content (which could echo body bytes into the runtime log). The
-    // stage distinguishes a corrupt ledger record (operator: inspect/repair the
-    // order key via `wrangler kv`) from everything else.
     return reply(500, "error", {
       stage: err instanceof LedgerCorruptError ? "ledger" : "unexpected",
     });
@@ -691,7 +780,15 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
 // ---------------------------------------------------------------------------
 
 interface WorkerEnv {
-  POLAR_WEBHOOK_SECRET: string;
+  PADDLE_WEBHOOK_SECRET: string;
+  /** `pdl_live_apikey_…` / `pdl_sdbx_apikey_…`, scope `customer.read` (+ the
+   *  notification read scopes for the scheduled delivery check). */
+  PADDLE_API_KEY?: string;
+  /** Comma-separated `pri_…` ids this Worker may mint for. REQUIRED. */
+  PADDLE_PRICE_IDS?: string;
+  /** Full ISO timestamp with a zone, ≤ 7 days ahead; REQUIRED on any Worker
+   *  holding a `pdl_sdbx_` key (`sandboxSigningAllowed`). */
+  SANDBOX_SIGNING_UNTIL?: string;
   TANDEM_PRIVATE_KEY: string; // PEM PKCS#8
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
@@ -704,6 +801,8 @@ interface WorkerEnv {
   LICENSE_KV: KvNamespace; // SAME namespace the update Worker reads
   LEDGER_KV: KvNamespace; // issuance-owned; holds PII
   GRANDFATHER_EMAILS?: string; // comma/space-separated, optional
+  /** Required with a `pdl_sdbx_` key: the only buyers a sandbox Worker mints for. */
+  SANDBOX_BUYER_EMAILS?: string;
   /** Incoming-webhook URL (Slack/Discord/ntfy) for operator alerts. Required to
    *  be alerted about EMAIL failures — those can't go through Resend. */
   ALERT_WEBHOOK_URL?: string;
@@ -718,16 +817,17 @@ interface WorkerEnv {
 let signerCache: { pem: string; signBytes: SignBytes; keyId: string } | null = null;
 let grandfatherCache: { raw: string; set: Set<string> } | null = null;
 
+function emailSetOf(raw: string): Set<string> {
+  return new Set(
+    raw
+      .split(/[,\s]+/)
+      .map((e) => e.toLowerCase().trim())
+      .filter(Boolean),
+  );
+}
+
 function grandfatherSetOf(raw: string): Set<string> {
-  if (grandfatherCache?.raw !== raw) {
-    const set = new Set(
-      raw
-        .split(/[,\s]+/)
-        .map((e) => e.toLowerCase().trim())
-        .filter(Boolean),
-    );
-    grandfatherCache = { raw, set };
-  }
+  if (grandfatherCache?.raw !== raw) grandfatherCache = { raw, set: emailSetOf(raw) };
   return grandfatherCache.set;
 }
 
@@ -852,6 +952,60 @@ export function resendFromProblem(raw: string | undefined | null): ResendFromPro
   return problem === "too-long" ? null : problem;
 }
 
+/** Paddle API host from the key prefix; null for a missing, legacy-format or
+ *  unrecognised key. */
+export function paddleApiBase(key: string | undefined): string | null {
+  if (!key) return null;
+  if (key.startsWith("pdl_sdbx_")) return "https://sandbox-api.paddle.com";
+  if (key.startsWith("pdl_live_")) return "https://api.paddle.com";
+  return null;
+}
+
+/** `PADDLE_PRICE_IDS` → ids, or null when any entry is malformed or none is
+ *  given. Empty entries (a trailing or doubled comma) are ignored. */
+export function parsePriceIds(raw: string | undefined): string[] | null {
+  const ids = (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+  if (ids.length === 0 || ids.some((s) => !/^pri_[a-z0-9]+$/.test(s))) return null;
+  return ids;
+}
+
+const SANDBOX_MAX_AHEAD_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** True when `SANDBOX_SIGNING_UNTIL` permits signing at `nowMs`: a full ISO
+ *  timestamp with a zone (`2026-10-24T00:00:00Z`), not past, at most 7 days
+ *  ahead. A date-only value is refused: it parses as UTC midnight, so the
+ *  operator's "until today" would already have expired. */
+export function sandboxSigningAllowed(raw: string | undefined, nowMs: number): boolean {
+  if (!raw || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(raw)) {
+    return false;
+  }
+  const until = Date.parse(raw);
+  if (!Number.isFinite(until)) return false;
+  return until >= nowMs && until - nowMs <= SANDBOX_MAX_AHEAD_MS;
+}
+
+async function lookupViaPaddle(
+  apiKey: string,
+  base: string,
+  customerId: string,
+): Promise<CustomerLookup> {
+  try {
+    const resp = await fetch(`${base}/customers/${encodeURIComponent(customerId)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!resp.ok) return { ok: false, status: resp.status };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json: any = await resp.json();
+    return { ok: true, email: json?.data?.email, name: json?.data?.name };
+  } catch {
+    // A network error or an unparseable 200 body: retryable (`paddle-api`).
+    return { ok: false };
+  }
+}
+
 async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: string) {
   // Not configured counts as a delivery failure so the event stays retryable
   // (the handler's 500 path logs it) rather than silently dropping a paid
@@ -939,6 +1093,16 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     // MTA to re-encode).
     `  ${supportEmail}`,
     "",
+    // Paddle is the merchant of record, and its seller handbook asks for the
+    // Terms, the Refund Policy and its own buyer-support site to be linked.
+    // The two tandem.ink pages must be live before a live Worker sends this.
+    "Your order was processed by Paddle, which handles payment, receipts",
+    "and refunds. For anything about the payment itself:",
+    `  ${PADDLE_BUYER_SUPPORT_URL}`,
+    "",
+    `Terms of sale: ${TERMS_URL}`,
+    `Refund policy: ${REFUND_POLICY_URL}`,
+    "",
     "-- Bryan Kolb",
   ].join("\n");
 }
@@ -951,12 +1115,15 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
 // nothing free that emails on a log condition. So the alert is raised in-band,
 // from the same log entry the handler already produces.
 //
-// Three classes are worth waking someone for:
+// Worth waking someone for (exact set in `isAlertable`):
 //   - `dropped`  — a payload we couldn't fulfil. A paid sale may be behind it.
+//   - `noticed`  — an adjustment or API-key event a human must act on.
 //   - `stage:"email"` — the license was minted but not delivered.
+//   - `paddle-api*` / `notice-write` — a sale is waiting on Paddle or on KV.
 //   - the `config*` stages — the Worker is 503ing every webhook, so no sale can
 //     complete at all. These are the only ones raised before signature
 //     verification; see `isAlertable` for that bound.
+//   - `delivery-check`, raised by the daily cron, not by a webhook.
 //
 // CRITICAL: the email-stage alert must NOT go through Resend, which is the thing
 // that just failed. It degrades to ALERT_WEBHOOK_URL (any incoming-webhook
@@ -965,7 +1132,8 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
 // through the broken path, and says so in the log.
 // ---------------------------------------------------------------------------
 
-/** Best-effort per-isolate throttle. Polar retries a failing delivery ~10 times;
+/** Best-effort per-isolate throttle. Paddle retries a failing delivery up to 60
+ *  times over 3 days;
  *  without this a single misconfiguration emits an alert per retry per order.
  *  Isolates are short-lived, so this narrows the storm rather than eliminating
  *  it — which is the right trade for an alert you must not miss entirely. */
@@ -997,31 +1165,74 @@ const CONFIG_STAGES: readonly FailStage[] = [
   "config",
   "config-support-email",
   "config-resend-from",
+  "config-paddle-api-key",
+  "config-price-ids",
+  "config-env-mismatch",
+  "config-sandbox-until",
+  "config-sandbox-buyers",
 ];
 
 function isConfigStage(stage: FailStage | undefined): boolean {
   return stage !== undefined && CONFIG_STAGES.includes(stage);
 }
 
+const NOTICE_TEXT: Record<NoticeStage, string> = {
+  "api-key-expiry": "The Paddle API key is expiring or has expired; replace it before sales fail",
+  "refund-partial":
+    "A partial refund was approved; the license was kept (revoke by hand if partials add up to a full refund)",
+  "credit-partial": "A partial credit was approved; the license was kept",
+  "credit-reverse":
+    "A credit was reversed; restore the license by hand (or hand-sign one if it was never issued)",
+  "chargeback-reverse":
+    "A chargeback was reversed; restore the license by hand (or hand-sign one if it was never issued)",
+  "adjustment-reversed":
+    "An adjustment was reversed; restore the license by hand (or hand-sign one if it was never issued)",
+  dropped: "A signed webhook event could not be fulfilled (a paid sale may be behind it)",
+};
+
+const STAGE_TEXT: Partial<Record<FailStage, string>> = {
+  email: "A license was minted but could NOT be emailed",
+  "paddle-api": "The Paddle API could not be reached to look up a buyer; the sale is waiting",
+  "paddle-api-auth":
+    "The Paddle API key is expired or lacks customer.read; every sale fails until it is replaced",
+  ledger:
+    "A ledger record is corrupt; every retry for that order fails until the record is repaired by hand",
+  "notice-write":
+    "A notice or dropped-event record could not be written to LEDGER_KV; Paddle will retry the event",
+  "delivery-check":
+    "The daily delivery check found failed Paddle notifications or an inactive destination (or could not run)",
+};
+
 /** Alert text. Carries the coarse result/stage ONLY — never an email, a license
- *  id, or payload bytes, so an alert channel is not a PII sink. */
+ *  id, a ref, or payload bytes, so an alert channel is not a PII sink. */
 function alertBody(entry: LogEntry): string {
-  // One arm per `isAlertable` class. The config arm names `stage` rather than a
-  // source line, because `config` is OVERLOADED across two secrets — a
-  // TANDEM_PRIVATE_KEY that will not import, and a missing POLAR_WEBHOOK_SECRET
-  // — so there is no one-to-one stage→line map to promise.
   const what = isConfigStage(entry.stage)
     ? "The Worker is refusing every webhook (misconfiguration) — no sale can complete"
-    : entry.stage === "email"
-      ? "A license was minted but could NOT be emailed"
-      : "A webhook event could not be fulfilled (a paid sale may be behind it)";
+    : entry.notice
+      ? NOTICE_TEXT[entry.notice]
+      : entry.result === "dropped"
+        ? NOTICE_TEXT.dropped
+        : ((entry.stage && STAGE_TEXT[entry.stage]) ??
+          "A webhook event could not be fulfilled (a paid sale may be behind it)");
+  const replied200 = entry.result === "dropped" || entry.result === "noticed";
   return [
     `Tandem license issuance: ${what}.`,
-    `result=${entry.result} stage=${entry.stage ?? "-"} status=${entry.status ?? "-"}`,
+    `result=${entry.result} stage=${entry.stage ?? entry.notice ?? "-"} status=${entry.status ?? "-"}`,
     "",
-    "Polar disables a webhook endpoint after repeated failures, after which",
-    "sales stop arriving silently. Check Polar's delivery log, then reconcile:",
-    "docs/licensing-operations.md §5.",
+    // The cron's own alert is about no particular delivery, so the retry tail
+    // would mislead.
+    ...(entry.stage === "delivery-check"
+      ? [
+          "Check Paddle > Developer tools > Notifications and the destination, then reconcile:",
+          "docs/licensing-operations.md §5.",
+        ]
+      : replied200
+        ? ["Paddle will not retry this; see the `notice:` keys in LEDGER_KV (ops §5)."]
+        : [
+            "Paddle retries for up to 3 days (60 attempts), then marks the notification failed.",
+            "Check Paddle > Developer tools > Notifications, replay after fixing, then reconcile:",
+            "docs/licensing-operations.md §5.",
+          ]),
   ].join("\n");
 }
 
@@ -1088,14 +1299,20 @@ async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void>
 /**
  * Does this log entry warrant waking the operator?
  *
- * The three `config*` stages come from `CONFIG_STAGES`, which is ENUMERATED
+ * The `config*` stages come from `CONFIG_STAGES`, which is ENUMERATED
  * rather than prefix-matched for the reason stated there. The other rejected
- * shorthand is `result === "error"`, which sweeps in `ledger` / `unexpected` /
- * `blob-size` — transient failures that would storm the channel.
+ * shorthand is `result === "error"`, which sweeps in `unexpected` and
+ * `blob-size` — transient failures that would storm the channel. `ledger` is
+ * listed: it means a corrupt record, which fails every retry for that one order
+ * until a human fixes it, so it is per-order rather than a storm. Every other
+ * alertable outcome is reached only AFTER `verifyPaddleSignature`, which is why
+ * a bad signature never alerts: a fresh header with a random `h1` costs an
+ * outsider nothing, and an alert per request would drain the Resend quota that
+ * delivers licenses. A wrong secret is caught by the daily delivery check.
  *
- * THE BOUND, written down because it is unusual: these three are the first
- * alertable class reachable BEFORE `verifyStandardWebhook` — both config guards
- * run in `default.fetch`, ahead of the signature gate — so their volume is
+ * THE BOUND, written down because it is unusual: the config stages are the only
+ * alertable class reachable BEFORE `verifyPaddleSignature` — every config guard
+ * runs in `default.fetch`, ahead of the signature gate — so their volume is
  * bounded by inbound requests rather than by authenticated ones, against a
  * per-isolate throttle. That is acceptable only because they fire exactly while
  * the Worker is already refusing every sale, which is the thing you must not
@@ -1103,7 +1320,80 @@ async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void>
  * `RESEND_FROM` back after the mint, which is the defect they exist to fix.
  */
 export function isAlertable(entry: LogEntry): boolean {
-  return entry.result === "dropped" || entry.stage === "email" || isConfigStage(entry.stage);
+  return (
+    entry.result === "dropped" ||
+    (entry.result === "error" &&
+      (entry.stage === "email" ||
+        entry.stage === "paddle-api" ||
+        entry.stage === "paddle-api-auth" ||
+        entry.stage === "notice-write" ||
+        entry.stage === "ledger")) ||
+    entry.result === "noticed" ||
+    isConfigStage(entry.stage)
+  );
+}
+
+/** Noticed/dropped throttle by ref, so two transactions never share a key. */
+export function alertThrottleKey(entry: LogEntry): string {
+  if (entry.result === "noticed" || entry.result === "dropped") {
+    return `${entry.result}:${entry.notice ?? "-"}:${entry.ref ?? "-"}`;
+  }
+  return `${entry.result}:${entry.stage ?? "-"}`;
+}
+
+async function paddleGet(apiKey: string, url: string): Promise<unknown | null> {
+  try {
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Daily delivery check. Signature failures never alert (see `isAlertable`),
+ * so a webhook secret regenerated in Paddle without a matching `wrangler secret
+ * put`, or a destination Paddle deactivated, would otherwise leave sales sitting
+ * in Paddle's failed list with no signal. Authenticated by the Worker's own API
+ * key, so no outsider can trigger it. Returns true when it raised an alert. */
+export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<boolean> {
+  const base = paddleApiBase(env.PADDLE_API_KEY);
+  let bad: boolean;
+  if (!base || !env.PADDLE_API_KEY) {
+    bad = true; // a check that cannot run must say so, or it reads as healthy
+  } else {
+    // Comma-separated `status` filter per Paddle's list-notifications
+    // reference; not yet exercised against a real account (ops §8).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notes: any = await paddleGet(
+      env.PADDLE_API_KEY,
+      `${base}/notifications?status=failed,needs_retry`,
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const settings: any = await paddleGet(env.PADDLE_API_KEY, `${base}/notification-settings`);
+    if (!Array.isArray(notes?.data) || !Array.isArray(settings?.data)) {
+      bad = true; // an API failure alerts too, for the same reason
+    } else {
+      bad =
+        notes.data.length > 0 ||
+        // No destination at all is the quietest way sales stop.
+        settings.data.length === 0 ||
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        settings.data.some((d: any) => d?.active === false);
+    }
+  }
+  if (!bad) return false;
+  const entry: LogEntry = {
+    result: "error",
+    ts: Math.floor(nowMs / 1000),
+    stage: "delivery-check",
+  };
+  console.log(JSON.stringify(entry));
+  // Alerts directly rather than via isAlertable: this is the cron's own entry,
+  // never a webhook's.
+  if (!shouldAlert(alertThrottleKey(entry), nowMs)) return false;
+  await sendOperatorAlert(env, entry);
+  return true;
 }
 
 export default {
@@ -1111,12 +1401,12 @@ export default {
     const log = (entry: LogEntry) => {
       console.log(JSON.stringify(entry));
       // Alert AFTER logging and outside the response path — `waitUntil` keeps
-      // the isolate alive for the send without delaying Polar's 200/500.
+      // the isolate alive for the send without delaying Paddle's 200/500.
       // `ctx` is always supplied by the real runtime; the optional guard keeps
       // the handler callable from a two-arg test harness. Falling back to a
       // floating promise (with its rejection swallowed) is right here: an alert
       // must never be able to fail the webhook it is reporting on.
-      if (isAlertable(entry) && shouldAlert(`${entry.result}:${entry.stage ?? "-"}`, Date.now())) {
+      if (isAlertable(entry) && shouldAlert(alertThrottleKey(entry), Date.now())) {
         const pending = sendOperatorAlert(env, entry).catch(() => {});
         if (ctx) ctx.waitUntil(pending);
       }
@@ -1148,7 +1438,7 @@ export default {
     // refusal would leave an issued-but-undeliverable license behind and a 500
     // retry loop that can never succeed, and it would only fire for buyers —
     // i.e. after a bad deploy has already cost a sale. Checking before any
-    // webhook processing means nothing durable is written, Polar simply
+    // webhook processing means nothing durable is written, Paddle simply
     // re-delivers, and the untouched event is fulfilled once the var is fixed.
     //
     // The three problem kinds share one stage: they name the same `[vars]` line
@@ -1168,8 +1458,8 @@ export default {
     // WHY HERE and not at the point of use in `sendViaResend`. That guard is a
     // bare `!env.RESEND_FROM`, which the SHIPPED value passes — the deploy
     // template's `REPLACE_WITH_VERIFIED_SENDER` is present, just not a sender.
-    // Resend answers 422, the handler collapses to a retryable 500, and Polar
-    // retries into endpoint auto-disable — AFTER the license was minted, the
+    // Resend answers 422, the handler collapses to a retryable 500, and Paddle
+    // retries until it marks the notification failed — AFTER the license was minted, the
     // entitlement written to LICENSE_KV and the order recorded in the ledger.
     // The buyer is charged, the license exists, and the email never sends.
     // Checking here means nothing durable is written, the untouched event is
@@ -1189,20 +1479,72 @@ export default {
       return jsonResponse(503);
     }
 
+    const configFail = (stage: FailStage) => {
+      log({ result: "error", ts: Math.floor(Date.now() / 1000), stage });
+      return jsonResponse(503);
+    };
+    const apiKey = env.PADDLE_API_KEY;
+    const apiBase = paddleApiBase(apiKey);
+    if (!apiKey || !apiBase) return configFail("config-paddle-api-key");
+    const priceIds = parsePriceIds(env.PADDLE_PRICE_IDS);
+    if (!priceIds) return configFail("config-price-ids");
+    // A live key never runs in a test-mode Worker. A sandbox key may run with
+    // `production` (the ops §8 end-to-end setup) only because it must also
+    // carry SANDBOX_SIGNING_UNTIL: a sandbox Worker signs with the PRODUCTION
+    // key, and a sandbox checkout needs only a public token and the 4242 test
+    // card, so a forgotten one would mint real licenses forever.
+    const isTest = (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production";
+    if (apiKey.startsWith("pdl_live_") && isTest) return configFail("config-env-mismatch");
+    if (
+      apiKey.startsWith("pdl_sdbx_") &&
+      !sandboxSigningAllowed(env.SANDBOX_SIGNING_UNTIL, Date.now())
+    ) {
+      return configFail("config-sandbox-until");
+    }
+    let sandboxBuyers: ReadonlySet<string> | undefined;
+    if (apiKey.startsWith("pdl_sdbx_")) {
+      sandboxBuyers = emailSetOf(env.SANDBOX_BUYER_EMAILS ?? "");
+      // Every entry must be address-shaped, so the shipped placeholder 503s
+      // like every other one instead of silently ignoring every test order.
+      if (sandboxBuyers.size === 0 || [...sandboxBuyers].some((e) => !EMAIL_SHAPE.test(e))) {
+        return configFail("config-sandbox-buyers");
+      }
+    }
+
     const grandfatherSet = grandfatherSetOf(env.GRANDFATHER_EMAILS ?? "");
 
     return handleIssuance(request, {
-      webhookSecret: env.POLAR_WEBHOOK_SECRET,
+      webhookSecret: env.PADDLE_WEBHOOK_SECRET,
       signBytes,
       keyId,
       entitlementKv: env.LICENSE_KV,
       ledgerKv: env.LEDGER_KV,
       sendEmail: (to, name, blob) => sendViaResend(env, to, name, blob),
       isGrandfathered: (email) => grandfatherSet.has(email.toLowerCase().trim()),
-      isTest: (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production",
+      hasGrandfathers: grandfatherSet.size > 0,
+      ...(sandboxBuyers ? { sandboxBuyers } : {}),
+      lookupCustomer: (id) => lookupViaPaddle(apiKey, apiBase, id),
+      priceIds,
+      isTest,
       now: () => Date.now(),
       newLicenseId: () => globalThis.crypto.randomUUID(),
       log,
     });
+  },
+
+  async scheduled(_controller: unknown, env: WorkerEnv, ctx?: ExecutionContext): Promise<void> {
+    const run = runDeliveryCheck(env, Date.now()).catch(() => {
+      // An alert that throws must not fail the cron, but it must not vanish.
+      console.log(
+        JSON.stringify({
+          result: "error",
+          ts: Math.floor(Date.now() / 1000),
+          stage: "delivery-check",
+        }),
+      );
+      return false;
+    });
+    if (ctx) ctx.waitUntil(run);
+    await run;
   },
 };
