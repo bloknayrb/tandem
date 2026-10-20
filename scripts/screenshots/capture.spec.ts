@@ -397,17 +397,23 @@ async function openExtraDocuments(): Promise<string[]> {
     },
   ];
   const ids: string[] = [];
-  for (const f of files) {
-    const fp = path.join(tmpDir, f.name);
-    fs.writeFileSync(fp, f.content);
-    const res = (await mcp.callTool("tandem_open", {
-      filePath: fp.replace(/\\/g, "/"),
-    })) as Envelope;
-    const id = res.data?.documentId as string | undefined;
-    if (!id) throw new Error(`tandem_open returned no documentId for ${f.name}`);
-    ids.push(id);
-  }
+  for (const f of files) ids.push((await openTempDocument(f.name, f.content)).id);
   return ids;
+}
+
+/** Write a Markdown file into this test's temp dir and open it. */
+async function openTempDocument(
+  name: string,
+  content: string,
+): Promise<{ filePath: string; id: string }> {
+  const filePath = path.join(tmpDir, name);
+  fs.writeFileSync(filePath, content);
+  const res = (await mcp.callTool("tandem_open", {
+    filePath: filePath.replace(/\\/g, "/"),
+  })) as Envelope;
+  const id = res.data?.documentId as string | undefined;
+  if (!id) throw new Error(`tandem_open returned no documentId for ${name}`);
+  return { filePath, id };
 }
 
 // ── Page helpers ─────────────────────────────────────────────────────────────
@@ -1235,6 +1241,12 @@ test("17-reply-thread-and-note", async ({ page }) => {
     .getByTestId(`reply-input-${commentId}`)
     .fill("Should it say that edits sync both ways, not just that we can both see it?");
   await page.getByTestId(`reply-send-btn-${commentId}`).click();
+  // Both replies are timestamped by the server on arrival and the thread sorts
+  // by timestamp, so Claude's answer must not be sent until the user's question
+  // has landed — otherwise the answer can render above the question it answers.
+  await expect(page.getByTestId(`reply-toggle-${commentId}`)).toContainText("1 reply", {
+    timeout: 10_000,
+  });
 
   const reply = (await mcp.callTool("tandem_annotationReply", {
     annotationId: commentId,
@@ -1262,67 +1274,57 @@ test("17-reply-thread-and-note", async ({ page }) => {
     .locator("[data-testid^='annotation-card-']")
     .filter({ has: page.getByTestId("annotation-private-pill") });
   await expect(noteCard).toBeVisible({ timeout: 10_000 });
-  await expect(noteCard).toContainText("promoted to a comment");
 
-  // Threads start collapsed; the toggle's count proves both replies landed.
-  const toggle = page.getByTestId(`reply-toggle-${commentId}`);
-  await expect(toggle).toContainText("2 replies", { timeout: 10_000 });
-  await toggle.click();
-  const thread = commentCard.getByTestId("comment-thread");
-  await expect(thread).toBeVisible();
-  await expect(thread).toContainText("edits sync both ways");
-  await expect(thread).toContainText("the stronger claim");
-
-  // Clear the selection so the popup is not floating over the editor, then
-  // check both cards sit wholly inside the captured box (see slot 03).
-  await page.keyboard.press("Escape");
-  await blurActiveElement(page);
-  const list = page.getByTestId("annotation-list-scroll-container");
-  await commentCard.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(400);
-  const listBox = await list.boundingBox();
-  if (!listBox) throw new Error("annotation list has no box");
-  for (const card of [commentCard, noteCard]) {
-    const box = await card.boundingBox();
-    if (!box) throw new Error("annotation card has no box");
-    expect(box.y).toBeGreaterThanOrEqual(listBox.y - 1);
-    expect(box.y + box.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
-  }
-
-  await page.evaluate(() => document.fonts.ready);
-  await list.screenshot({ path: path.join(screenshotsDir, "17-reply-thread-and-note.png") });
-
-  // Remove the note before the next step reopens welcome.md. `openWelcome`'s
-  // sweep lists through `tandem_getAnnotations`, which never returns a note
-  // (ADR-027) — the same blind spot `TUTORIAL_ANNOTATION_IDS` exists for — so
-  // without this the note survives into every later shot of the document; the
-  // first full run put it behind slot 22's Settings modal.
+  // Remove the note in a `finally`, before the next step reopens welcome.md.
+  // `openWelcome`'s sweep lists through `tandem_getAnnotations`, which never
+  // returns a note (ADR-027) — the same blind spot `TUTORIAL_ANNOTATION_IDS`
+  // exists for — so a note left behind survives into every later shot of the
+  // document (the first full run put it behind slot 22's Settings modal). A
+  // failed assertion below must not leave it there either.
   const noteTestId = await noteCard.getAttribute("data-testid");
   const noteId = noteTestId?.replace(/^annotation-card-/, "");
   if (!noteId) throw new Error("note card carries no annotation id");
-  await removeAnnotation(documentId, noteId);
+  try {
+    await expect(noteCard).toContainText("promoted to a comment");
+
+    // Threads start collapsed; the toggle's count proves both replies landed.
+    const toggle = page.getByTestId(`reply-toggle-${commentId}`);
+    await expect(toggle).toContainText("2 replies", { timeout: 10_000 });
+    await toggle.click();
+    const thread = commentCard.getByTestId("comment-thread");
+    await expect(thread).toBeVisible();
+    await expect(thread).toContainText("edits sync both ways");
+    await expect(thread).toContainText("the stronger claim");
+
+    // Clear the selection so the popup is not floating over the editor, then
+    // check both cards sit wholly inside the captured box (see slot 03).
+    await page.keyboard.press("Escape");
+    await blurActiveElement(page);
+    const list = page.getByTestId("annotation-list-scroll-container");
+    await commentCard.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    const listBox = await list.boundingBox();
+    if (!listBox) throw new Error("annotation list has no box");
+    for (const card of [commentCard, noteCard]) {
+      const box = await card.boundingBox();
+      if (!box) throw new Error("annotation card has no box");
+      expect(box.y).toBeGreaterThanOrEqual(listBox.y - 1);
+      expect(box.y + box.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
+    }
+
+    await page.evaluate(() => document.fonts.ready);
+    await list.screenshot({ path: path.join(screenshotsDir, "17-reply-thread-and-note.png") });
+  } finally {
+    await removeAnnotation(documentId, noteId);
+  }
 });
 
-/** Write a Markdown file into this test's temp dir and open it. */
-async function openTempDocument(
-  name: string,
-  content: string,
-): Promise<{ filePath: string; id: string }> {
-  const filePath = path.join(tmpDir, name);
-  fs.writeFileSync(filePath, content);
-  const res = (await mcp.callTool("tandem_open", {
-    filePath: filePath.replace(/\\/g, "/"),
-  })) as Envelope;
-  const id = res.data?.documentId as string | undefined;
-  if (!id) throw new Error(`tandem_open returned no documentId for ${name}`);
-  return { filePath, id };
-}
-
 /**
- * Make an unsaved edit in the ACTIVE document through the editor, then wait for
- * its tab's dirty dot — the browser-side proof that the edit registered. The
- * server's own dirty flag, which is what turns a disk change into a conflict
- * rather than a silent reload, is set by the same Y.Doc update.
+ * Make an unsaved edit in the ACTIVE document through the editor, then wait
+ * until the SERVER holds it. The tab's dirty dot is not enough: it comes from
+ * the browser's own Y.Doc, so a disk write issued as soon as the dot appears can
+ * race the WebSocket update. The watcher would then find a clean server
+ * document and silently reload instead of raising the conflict a caller wants.
  */
 async function makeUnsavedEdit(page: Page, documentId: string, typed: string): Promise<void> {
   const firstPara = page.locator(".ProseMirror p").first();
@@ -1332,6 +1334,7 @@ async function makeUnsavedEdit(page: Page, documentId: string, typed: string): P
   await expect(page.locator(`[data-testid='unsaved-indicator-${documentId}'] .dot`)).toBeVisible({
     timeout: 10_000,
   });
+  await expect.poll(() => documentText(documentId), { timeout: 10_000 }).toContain(typed.trim());
 }
 
 const BRIEF_MD =
@@ -1428,7 +1431,11 @@ test("21-activity-tray", async ({ page }) => {
     notes.filePath,
     "# Meeting Notes\n\nAgreed to ship the pilot on the second of the month.\n",
   );
-  await expect(page.getByTestId("activity-pill")).toContainText("1", { timeout: 15_000 });
+  // The count badge exactly: `toContainText("1")` on the whole pill also
+  // passes on "10" or "11".
+  await expect(page.getByTestId("activity-pill").locator(".count")).toHaveText("1", {
+    timeout: 15_000,
+  });
 
   await makeUnsavedEdit(page, brief.id, " Draft two.");
   fs.writeFileSync(brief.filePath, BRIEF_MD.replace("six weeks", "eight weeks"));
@@ -1438,7 +1445,12 @@ test("21-activity-tray", async ({ page }) => {
   // a pop leaves its tray entry, which is the point of the tray.
   const dismiss = page.locator("[data-testid^='toast-dismiss-']");
   await expect(dismiss).not.toHaveCount(0, { timeout: 5_000 });
-  while ((await dismiss.count()) > 0) await dismiss.first().click();
+  // Each click must take a toast away; one that does not fails here rather
+  // than spinning until the test timeout.
+  for (let n = await dismiss.count(); n > 0; n = await dismiss.count()) {
+    await dismiss.first().click();
+    await expect(dismiss).toHaveCount(n - 1);
+  }
 
   const pill = page.getByTestId("activity-pill");
   await pill.click();
