@@ -295,7 +295,11 @@ async function readOrder(deps: IssuanceDeps, orderId: string): Promise<LedgerRec
 }
 
 function writeOrder(deps: IssuanceDeps, rec: LedgerRecord): Promise<void> {
-  return deps.ledgerKv.put(orderKeyOf(deps.isTest, rec.orderId), JSON.stringify(rec));
+  // A record written before 2026-10-20 may still carry the buyer's `name`.
+  // Re-saving it (re-drive, refund) drops the field, so the ledger only ever
+  // shrinks toward holding no name (docs/data-locations.md).
+  const { name: _legacyName, ...clean } = rec as LedgerRecord & { name?: unknown };
+  return deps.ledgerKv.put(orderKeyOf(deps.isTest, rec.orderId), JSON.stringify(clean));
 }
 
 // ---------------------------------------------------------------------------

@@ -710,6 +710,10 @@ describe("handleIssuance: buyer lookup mapping", () => {
     expect(blobVerifies(blob)).toBe(true);
     expect(decodeBlob(blob).metadata).not.toHaveProperty("name");
     expect(decodeBlob(blob).metadata.id).toBe("lic-old");
+    // Re-saving the record also drops the name from the ledger itself.
+    const stored = JSON.parse(deps.ledgerKv.map.get("order:live:txn_1") as string);
+    expect(stored.emailSent).toBe(true);
+    expect(stored).not.toHaveProperty("name");
   });
 
   it("unusable email → dropped", async () => {
