@@ -1518,14 +1518,27 @@ describe("integrations API routes", () => {
 
         it("waits no longer than the bound for a decision", async () => {
           const configPath = path.join(tmpDir, "claude-config.json");
-          const started = Date.now();
+          // Timed from the hook call, not the request: the config write before
+          // it is real file I/O, and under full-suite load on Windows that alone
+          // ate the old 1.5 s slack (#2259).
+          let waitStarted = 0;
           const { status, tandemClaude } = await applyWith(
-            () => new Promise(() => {}),
+            () => {
+              waitStarted = Date.now();
+              return new Promise(() => {});
+            },
             () => [{ label: "Claude Code", configPath, kind: "claude-code" }],
           );
+          const waited = Date.now() - waitStarted;
           expect(status).toBe(200);
           expect(tandemClaude).toBe("unknown");
-          expect(Date.now() - started).toBeLessThan(TANDEM_CLAUDE_DECISION_MS + 1_500);
+          // It did wait for the bound (timers fire no earlier than scheduled)…
+          expect(waitStarted).toBeGreaterThan(0);
+          expect(waited).toBeGreaterThanOrEqual(TANDEM_CLAUDE_DECISION_MS - 50);
+          // …and stopped there. A never-settling hook with no bound would hang
+          // until the 15 s test timeout, so this ceiling only needs to sit below
+          // it with room for a loaded machine's late timer.
+          expect(waited).toBeLessThan(TANDEM_CLAUDE_DECISION_MS + 8_000);
         });
 
         it("guard: is not called when nothing applied", async () => {
