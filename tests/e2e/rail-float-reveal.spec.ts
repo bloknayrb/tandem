@@ -63,8 +63,10 @@ let tmpDir: string;
  *
  * The wait is on the computed width, the property the hover depends on; it
  * reads the in-flight value during the transition, so it passes only once the
- * shell is at rest (at most a frame before `transitionend`, with the width
- * already serialising as 14px).
+ * shell is within layout precision of 14px. That can be a frame or two before
+ * `transitionend`: the ease-out curve is nearly flat at the end, and layout
+ * rounds the width to 1/64 px. `animating` may still be set when the hover
+ * lands, which is harmless, because the shell is already at its resting box.
  * The `animating` class is NOT a substitute: the 400 ms fallback timer in
  * `handleRailVisChange` can clear it before `transitionend` if the transition
  * started late.
@@ -74,6 +76,35 @@ async function collapseRightRail(page: Page): Promise<Locator> {
   const shell = page.locator(SHELL);
   await expect(shell).toHaveCSS("width", COLLAPSED_WIDTH);
   return shell;
+}
+
+/** Read the two phase classes as exact `classList` tokens. */
+const readClasses = (page: Page) =>
+  page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    return {
+      closing: !!el?.classList.contains("float-closing"),
+      floating: !!el?.classList.contains("floating"),
+    };
+  }, SHELL);
+
+/**
+ * Sample the shell every ~50 ms across FLOAT_CLOSE_MS. Each sample asserts
+ * `float-closing` absent and `floating` present, starting with an immediate
+ * read. A plain sampling loop, NOT `expect.poll`: `expect.poll` retries until
+ * the assertion PASSES, so a poll for `float-closing === false` succeeds the
+ * moment the class clears and is green on unfixed master. This fails on the
+ * first true.
+ */
+async function expectNoRetreatAcrossCloseWindow(page: Page): Promise<void> {
+  const deadline = Date.now() + FLOAT_CLOSE_MS;
+  for (;;) {
+    const { closing, floating } = await readClasses(page);
+    expect(closing).toBe(false);
+    expect(floating).toBe(true);
+    if (Date.now() >= deadline) break;
+    await page.waitForTimeout(50);
+  }
 }
 
 test.beforeEach(async () => {
@@ -125,27 +156,8 @@ test("an open chat reveal never co-exists with the float-closing phase (#2014)",
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
   // `focusout` runs `maybeHideFloat` synchronously, so sample immediately and
-  // then across the whole closing window. A plain sampling loop, NOT
-  // `expect.poll`: `expect.poll` retries until the assertion PASSES, so a poll
-  // for `float-closing === false` succeeds the moment the class clears and is
-  // green on unfixed master. This fails on the first true.
-  const readClasses = () =>
-    page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      return {
-        closing: !!el?.classList.contains("float-closing"),
-        floating: !!el?.classList.contains("floating"),
-      };
-    }, SHELL);
-
-  const deadline = Date.now() + FLOAT_CLOSE_MS;
-  for (;;) {
-    const { closing, floating } = await readClasses();
-    expect(closing).toBe(false);
-    expect(floating).toBe(true);
-    if (Date.now() >= deadline) break;
-    await page.waitForTimeout(50);
-  }
+  // then across the whole closing window.
+  await expectNoRetreatAcrossCloseWindow(page);
 
   // The reveal is still usable at the end — kills a "fix" that closes the
   // reveal on focus-out instead.
@@ -202,26 +214,10 @@ test("a chat reveal opened DURING the retreat cancels it (#2014)", async ({ page
   expect(afterReveal.closing).toBe(false);
   expect(afterReveal.floating).toBe(true);
 
-  // Sampled across the rest of the window rather than polled, for the reason
-  // the first test states: a poll for `float-closing === false` passes the
-  // moment the timer drops it and is green on the defect.
-  const readClasses = () =>
-    page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      return {
-        closing: !!el?.classList.contains("float-closing"),
-        floating: !!el?.classList.contains("floating"),
-      };
-    }, SHELL);
-
-  const deadline = Date.now() + FLOAT_CLOSE_MS;
-  for (;;) {
-    const { closing, floating } = await readClasses();
-    expect(closing).toBe(false);
-    expect(floating).toBe(true);
-    if (Date.now() >= deadline) break;
-    await page.waitForTimeout(50);
-  }
+  // Sampled across the rest of the window rather than polled: a poll for
+  // `float-closing === false` passes the moment the timer drops it and is
+  // green on the defect.
+  await expectNoRetreatAcrossCloseWindow(page);
 
   await expect(page.locator(COMPOSER)).toBeVisible();
 });
