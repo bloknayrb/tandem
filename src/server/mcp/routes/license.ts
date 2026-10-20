@@ -34,7 +34,7 @@ export function toLicenseStatusWire(
    * Resolved separately (see `darkInstallInfo`) because the dark arm returns
    * before touching disk.
    */
-  darkInstall?: { installed: boolean; licenseeName?: string },
+  darkInstall?: { installed: boolean; licenseeEmail?: string },
 ): Record<string, unknown> {
   if (!state.gateActive) {
     return {
@@ -47,7 +47,7 @@ export function toLicenseStatusWire(
       // and the hint keeps saying "activate it now" whether or not they just
       // did. The README sends every beta user down exactly that path.
       licenseInstalled: darkInstall?.installed ?? false,
-      ...(darkInstall?.licenseeName ? { licenseeName: darkInstall.licenseeName } : {}),
+      ...(darkInstall?.licenseeEmail ? { licenseeEmail: darkInstall.licenseeEmail } : {}),
     };
   }
   return state;
@@ -61,21 +61,21 @@ export function toLicenseStatusWire(
  * called on the dark path, where the client polls once and then rests, so the
  * extra file read + Ed25519 verify is not on any hot path.
  */
-export function darkInstallInfo(): { installed: boolean; licenseeName?: string } {
+export function darkInstallInfo(): { installed: boolean; licenseeEmail?: string } {
   const full = resolveLicenseState({
     appDataDir: resolveAppDataDir(),
     now: () => Date.now(),
     gateEnabled: true,
   });
   if (full.gateActive && full.status === "licensed") {
-    return { installed: true, licenseeName: full.license.name };
+    return { installed: true, licenseeEmail: full.license.email };
   }
   return { installed: false };
 }
 
 /**
  * PII-scrubbed status for non-loopback (LAN / deprecated-browser) callers — drops
- * the licensee name/email/licenseId so they never reach the wire, while keeping
+ * the licensee email and licenseId so they never reach the wire, while keeping
  * enough for the client's licence surfaces and `tandem doctor`'s licence row.
  */
 export function scrubForNonLoopback(s: LicenseState): {
@@ -92,7 +92,7 @@ export function scrubForNonLoopback(s: LicenseState): {
       status: "licensed",
       daysRemaining: undefined,
       updateWindowCurrent: true,
-      // Boolean only — the licensee NAME stays on the loopback path.
+      // Boolean only — the licensee EMAIL stays on the loopback path.
       licenseInstalled: darkInstallInfo().installed,
     };
   }
@@ -133,7 +133,7 @@ function loopbackLicenseWire(state: LicenseState): Record<string, unknown> {
 
 /**
  * GET /api/license/status — current on-device license state, recomputed fresh.
- * Loopback callers get the full state (incl. licensee name + licenseId for the
+ * Loopback callers get the full state (incl. licensee email + licenseId for the
  * updater); non-loopback callers get the scrubbed subset. This is a read-only
  * route, so it checks `isLoopback` directly rather than going through the
  * mutation-gating helper (`assertLoopbackForMutation`), which is for handlers

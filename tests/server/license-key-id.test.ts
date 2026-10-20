@@ -17,11 +17,10 @@ import {
   keyIdOfPkcs8Ed25519,
 } from "../../infra/license-issuance-worker/src/crypto.js";
 import { TRUSTED_KEY_IDS } from "../../infra/license-issuance-worker/src/worker.js";
-import { signWithKey } from "../../scripts/sign-license.js";
+import { defaultPrivateKeyPath, signWithKey } from "../../scripts/sign-license.js";
 import {
   buildKeyMap,
   keyIdForPublicKey,
-  LEGACY_KEY_ID,
   TRUSTED_PUBLIC_KEYS,
 } from "../../src/server/license/public-key.js";
 import { _verifyAgainstForTests, canonicalize } from "../../src/server/license/verifier.js";
@@ -41,7 +40,6 @@ const B = keypair();
 
 const FIELDS = {
   id: "lic-1",
-  name: "Ada",
   email: "ada@example.com",
   type: "personal" as const,
   createdAt: "2026-10-15T00:00:00.000Z",
@@ -69,42 +67,37 @@ function code(fn: () => unknown): string | undefined {
 describe("verifier key selection", () => {
   const both = buildKeyMap([A.publicPem, B.publicPem]);
 
-  it("verifies a keyless license against the legacy key", () => {
-    const v = _verifyAgainstForTests(blob(FIELDS, A.privateKey), both, A.id);
-    expect(v.name).toBe("Ada");
+  it("refuses a keyless license as an unknown key, even when its signer is trusted", () => {
+    // BAD_SIGNATURE, not MALFORMED: the only keyless licenses were signed by the
+    // retired original key, and that code's copy ("predates a signing-key
+    // change, have it reissued") is the true story (docs/licensing-operations.md §0).
+    const b = blob(FIELDS, A.privateKey);
+    expect(code(() => _verifyAgainstForTests(b, both))).toBe("BAD_SIGNATURE");
+    expect(() => _verifyAgainstForTests(b, both)).toThrow(/unknown key/);
   });
 
   it("verifies a license naming its own key", () => {
-    const v = _verifyAgainstForTests(blob({ ...FIELDS, keyId: A.id }, A.privateKey), both, A.id);
+    const v = _verifyAgainstForTests(blob({ ...FIELDS, keyId: A.id }, A.privateKey), both);
     expect(v.keyId).toBe(A.id);
   });
 
   it("verifies a second key's license when both are trusted", () => {
-    const v = _verifyAgainstForTests(blob({ ...FIELDS, keyId: B.id }, B.privateKey), both, A.id);
+    const v = _verifyAgainstForTests(blob({ ...FIELDS, keyId: B.id }, B.privateKey), both);
     expect(v.keyId).toBe(B.id);
   });
 
   it("refuses a license signed by one key but naming the other", () => {
     expect(
-      code(() =>
-        _verifyAgainstForTests(blob({ ...FIELDS, keyId: A.id }, B.privateKey), both, A.id),
-      ),
+      code(() => _verifyAgainstForTests(blob({ ...FIELDS, keyId: A.id }, B.privateKey), both)),
     ).toBe("BAD_SIGNATURE");
   });
 
   it("answers BAD_SIGNATURE for a well-formed id no trusted key carries", () => {
     const onlyA = buildKeyMap([A.publicPem]);
     const b = blob({ ...FIELDS, keyId: B.id }, B.privateKey);
-    expect(code(() => _verifyAgainstForTests(b, onlyA, A.id))).toBe("BAD_SIGNATURE");
-    // Refused at the lookup, not by falling back to the legacy key and failing there.
-    expect(() => _verifyAgainstForTests(b, onlyA, A.id)).toThrow(/unknown key/);
-  });
-
-  it("retires keyless licenses when the legacy key leaves the list", () => {
-    const onlyB = buildKeyMap([B.publicPem]);
-    expect(code(() => _verifyAgainstForTests(blob(FIELDS, A.privateKey), onlyB, A.id))).toBe(
-      "BAD_SIGNATURE",
-    );
+    expect(code(() => _verifyAgainstForTests(b, onlyA))).toBe("BAD_SIGNATURE");
+    // Refused at the lookup, not by trying another key and failing there.
+    expect(() => _verifyAgainstForTests(b, onlyA)).toThrow(/unknown key/);
   });
 
   it.each([
@@ -117,9 +110,9 @@ describe("verifier key selection", () => {
     ["__proto__", "__proto__"],
     ["constructor", "constructor"],
   ])("answers MALFORMED for a keyId that is %s", (_label, keyId) => {
-    expect(
-      code(() => _verifyAgainstForTests(blob({ ...FIELDS, keyId }, A.privateKey), both, A.id)),
-    ).toBe("MALFORMED");
+    expect(code(() => _verifyAgainstForTests(blob({ ...FIELDS, keyId }, A.privateKey), both))).toBe(
+      "MALFORMED",
+    );
   });
 });
 
@@ -136,16 +129,20 @@ describe("key map", () => {
 });
 
 describe("key id derivation agrees across the server and the Worker", () => {
-  it("derives today's production id from its public value (which contains `_`)", async () => {
-    // A deterministic fixture: plain `atob` throws on this value, so a Worker
-    // decode that skipped base64url would fail here, not at the first webhook.
-    const x = "7gm5YEEylcqDgxr1rQ_gA_K8ZzOPfqmvUBtE6CI8QCk";
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", base64UrlToBytes(x));
-    const id = Buffer.from(digest).subarray(0, 8).toString("hex");
-    expect(id).toBe("79c10e75fb8cfa46");
-    expect(id).toBe(LEGACY_KEY_ID);
-    expect(keyIdForPublicKey(TRUSTED_PUBLIC_KEYS[0])).toBe(id);
-  });
+  it.each(TRUSTED_PUBLIC_KEYS.map((pem) => [keyIdForPublicKey(pem), pem]))(
+    "derives the shipped key %s's id identically with WebCrypto",
+    async (id, pem) => {
+      // The ids themselves are pinned by EXPECTED_KEYS (license.test.ts); this
+      // checks the Worker's derivation agrees on each real key. The fixed key
+      // below carries the `_`/`-` coverage, whatever the shipped key contains.
+      const { x } = crypto.createPublicKey(pem).export({ format: "jwk" });
+      const digest = await globalThis.crypto.subtle.digest(
+        "SHA-256",
+        base64UrlToBytes(x as string),
+      );
+      expect(Buffer.from(digest).subarray(0, 8).toString("hex")).toBe(id);
+    },
+  );
 
   it("derives the same id on both sides for a key whose public value has `_` and `-`", async () => {
     // Fixed, not random, so a Worker that decoded `jwk.x` with plain `atob`
@@ -171,7 +168,7 @@ describe("key id derivation agrees across the server and the Worker", () => {
   });
 
   it("the Worker trusts exactly the keys the server ships", () => {
-    // One commit adds a key to both lists (licensing-operations.md §0).
+    // One commit adds a key to both lists (docs/licensing-operations.md §0).
     const serverIds = TRUSTED_PUBLIC_KEYS.map((pem) => keyIdForPublicKey(pem));
     expect(serverIds.length).toBeGreaterThan(0);
     expect([...TRUSTED_KEY_IDS].sort()).toEqual([...serverIds].sort());
@@ -183,13 +180,20 @@ describe("sign-license script", () => {
     const trusted = buildKeyMap([A.publicPem]);
     const { metadata, blob: b } = signWithKey(FIELDS, A.privatePem, trusted);
     expect(metadata.keyId).toBe(A.id);
-    expect(_verifyAgainstForTests(b, trusted, A.id).keyId).toBe(A.id);
+    expect(_verifyAgainstForTests(b, trusted).keyId).toBe(A.id);
   });
 
   it("refuses to sign with a key no build trusts", () => {
     expect(() => signWithKey(FIELDS, B.privatePem, buildKeyMap([A.publicPem]))).toThrow(
       /not in TRUSTED_PUBLIC_KEYS/,
     );
+  });
+  it("defaults --key to keys/tandem-<id>.pem for the one trusted key, and to nothing for two", () => {
+    expect(defaultPrivateKeyPath(buildKeyMap([A.publicPem]))).toBe(
+      path.join("keys", `tandem-${A.id}.pem`),
+    );
+    // Mid-rotation there is no safe guess, so the operator must name the key.
+    expect(defaultPrivateKeyPath(buildKeyMap([A.publicPem, B.publicPem]))).toBeUndefined();
   });
 });
 
