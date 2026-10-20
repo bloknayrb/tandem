@@ -12,6 +12,7 @@ tooling. Back to the [docs hub](../README.md).
 
 - [CONTRIBUTING](../../CONTRIBUTING.md) answers "how do I build, run and check this before a pull
   request?" It covers prerequisites, [the checks](../../CONTRIBUTING.md#checks),
+  [what CI requires before a merge](../../CONTRIBUTING.md#what-ci-requires),
   [what the git hooks run](../../CONTRIBUTING.md#what-the-git-hooks-actually-run) and
   [running E2E tests](../../CONTRIBUTING.md#running-e2e-tests). Read it first.
 - [AGENTS.md](../../AGENTS.md) is the same ground for non-Claude coding agents, with the

@@ -12,7 +12,8 @@ it sends anywhere. Back to the [docs hub](../README.md).
 
 - [Troubleshooting](../troubleshooting.md) answers "why isn't this working?" Start with its
   [quick diagnostic](../troubleshooting.md#quick-diagnostic), which runs the built-in checks.
-- Common entries: [port already in use](../troubleshooting.md#port-already-in-use),
+- Common entries: [I sent a chat message or left a comment and nothing happened](../troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened),
+  [port already in use](../troubleshooting.md#port-already-in-use),
   [the editor lost its connection](../troubleshooting.md#editor-shows-server-unavailable-or-weve-lost-the-connection-to-the-tandem-server),
   [an empty editor](../troubleshooting.md#empty-editor-with-no-document),
   [a document will not open](../troubleshooting.md#a-document-will-not-open--a-tab-did-not-come-back),

@@ -150,7 +150,8 @@ so it needs no push setup. See [Tandem's Claude in chat](user-guide.md#tandems-c
 
 The server component that launches Tandem's Claude and wakes it. When a chat message or annotation
 event arrives, it writes a short turn telling Claude to check its inbox; the turn carries no
-content, and Solo holds apply to it. A chat message can also start a stopped Tandem's Claude. See
+content, and Solo holds apply to it. A chat message, or your reply on one of Claude's comment
+threads, can also start a stopped Tandem's Claude. See
 [Auto-launched sessions](architecture.md#auto-launched-sessions-do-not-use-the-channel-1266) and
 [A message starts a stopped Claude](architecture.md#a-message-starts-a-stopped-claude-2196).
 
@@ -174,8 +175,10 @@ Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the fal
 
 A watcher shipped in Tandem's Claude Code plugin. It starts the first time Claude uses Tandem's
 skill in a session, not before, so ask for Tandem by name. It shares the wake watch's per-account
-Monitor gate but does not need Git Bash on Windows. Start `claude` from a terminal so it can find
-Node. See [Plugin install](../README.md#plugin-install) and
+Monitor gate but does not need Git Bash on Windows. It needs Claude Code 2.1.212 or newer; on an
+older version the plugin installs but the monitor never runs. Start `claude` from a terminal so it
+can find Node. Where Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the
+fallback. See [Plugin install](../README.md#plugin-install) and
 [Plugin monitor](architecture.md#plugin-monitor).
 
 ## Channel shim
@@ -183,16 +186,19 @@ Node. See [Plugin install](../README.md#plugin-install) and
 An optional relay (`tandem-channel`) that delivers Tandem events into a Claude Code session through
 Claude Code's channels feature. It is opt-in: the setup wizard cannot register it; only
 `tandem setup --apply --with-channel-shim` does, and Claude Code must also be started with the
-channel flag each time, in an interactive session. It depends on no Monitor tool, which makes it
-the fallback when the other routes are unavailable. See
+channel flag each time, in an interactive session. The desktop app does not install the `tandem`
+command, so a desktop-only user needs the npm install to run that setup. It depends on no Monitor
+tool, which makes it the fallback when the other routes are unavailable. See
 [Real-time updates](../README.md#real-time-updates) and
 [Why the channel is opt-in](architecture.md#why-tandem-channel-is-opt-in).
 
 ## Push and pull
 
-Pull is the AI checking its [inbox](#inbox), and it is always authoritative. Push is any of the
-four routes that wake an idle Claude: the [supervisor](#supervisor), the [wake watch](#wake-watch),
-the [plugin monitor](#plugin-monitor) and the [channel shim](#channel-shim). Push is best-effort; a
+Pull is the AI checking its [inbox](#inbox), and it is always authoritative. Push is a route that
+wakes an idle Claude. Sessions Tandem launches are woken by the [supervisor](#supervisor), with no
+setup. For a Claude Code session you start yourself there are three routes: the
+[wake watch](#wake-watch), the [plugin monitor](#plugin-monitor) and the
+[channel shim](#channel-shim). Push is best-effort; a
 wake can be dropped or rate-limited, so Claude keeps polling. In Solo mode only chat messages are
 pushed. See [Real-time push](user-guide.md#real-time-push-recommended).
 
@@ -204,7 +210,8 @@ today, and turning one on follows its ADR's checklist. Five features ship dark:
 [.docx support](#docx-support), [Cowork setup](#cowork-setup), the
 [licensing gate](#licensing-gate), the [local-model collaborator](#local-model-collaborator) and
 the [LAN bind](#lan-bind). Licensing and the local model are inert at runtime; the `.docx` and
-Cowork switches still clean up after earlier versions. See [Status](../CLAUDE.md#status).
+Cowork switches still clean up after earlier versions. Each one's ADR is listed under
+[Internals → Decisions by topic](maps/internals.md#decisions-by-topic).
 
 ## .docx support
 
@@ -327,7 +334,8 @@ rewrite. The [internals map](maps/internals.md) groups the key ones by topic.
 
 ## Claim tests
 
-Tests under [`tests/docs/`](../tests/docs/) that read the documentation and fail when a sentence,
+Tests under `tests/docs/` (for example
+[`wake-availability-claims.test.ts`](../tests/docs/wake-availability-claims.test.ts)) that read the documentation and fail when a sentence,
 count or list in a doc stops matching the code, or when a claim already proven false comes back.
 If one fails after a doc edit, it has flagged a pinned phrase. See the
 [docs audit's method section](reviews/2026-10-20-docs-audit.md#2-method-and-scope).

@@ -133,11 +133,11 @@ describe("check:links inputs", () => {
   it("keeps the hub and the historical set exactly as reviewed", () => {
     expect(HUB).toBe("docs/README.md");
     expect(HISTORICAL).toEqual([
-      { path: "docs/plans/" },
-      { path: "docs/superpowers/" },
+      { path: "docs/plans/", except: ["docs/plans/README.md"] },
+      { path: "docs/superpowers/", except: ["docs/superpowers/README.md"] },
       { path: "docs/archive/" },
       { path: "docs/triage/" },
-      { path: "docs/design-history/" },
+      { path: "docs/design-history/", except: ["docs/design-history/README.md"] },
       {
         path: "docs/reviews/",
         except: ["docs/reviews/README.md", "docs/reviews/2026-10-20-docs-audit.md"],

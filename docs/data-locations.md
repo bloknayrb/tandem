@@ -259,6 +259,10 @@ favor), so your settings survive updates.
 tandem --uninstall-scrub        # or: npx tandem-editor --uninstall-scrub
 ```
 
+The desktop app does not install the `tandem` command, so a desktop-only user runs the `npx`
+form: it fetches the npm package and runs the same CLI without installing it, and needs
+Node.js 22.12.0 or newer.
+
 Then delete the app / `npm uninstall -g tandem-editor`.
 
 The scrub removes the cross-program entries listed above (MCP config keys,

@@ -37,7 +37,10 @@ logging/DevTools split are in [architecture.md](architecture.md). These bite sil
 
 Raw `doc.transact(...)` is forbidden anywhere in `src/`. Pick one of the six [origin-tagging](glossary.md#origin-tags) helpers from
 `src/shared/origins.ts`. **Picking the wrong one is a silent bug — the helper choice is the
-contract, not a label.** See ADR-031.
+contract, not a label.** Raw transact is forbidden because an untagged or mistyped origin still
+compiles and silently breaks echo prevention: observers decide whether to emit, persist or skip a
+write by its origin. See [ADR-031](decisions.md#adr-031-origin-tagged-transaction-wrappers) and
+[Architecture → Origin tagging](architecture.md#origin-tagging-echo-prevention).
 
 | Helper | Use for |
 |---|---|

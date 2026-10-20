@@ -55,6 +55,9 @@ Several features are built but switched off in releases. The docs call this "shi
 
 Open the repository root (the folder holding `README.md` and `docs/`) as an Obsidian vault. The
 links are ordinary relative Markdown links, so they work in Obsidian, on GitHub and in any editor;
-there are no wikilinks to convert. The maps, the glossary and the two index pages carry `tags` and
-`aliases` in their frontmatter, so Obsidian's tag pane and quick switcher find them by name. This
-page has no frontmatter because GitHub would render it as a table at the top.
+there are no wikilinks to convert. Contributor, internal and operations docs, the maps, the
+glossary and the index pages (such as the [spikes](spikes/README.md) and
+[reviews](reviews/README.md) indexes) carry `tags` and `aliases` in their frontmatter, so
+Obsidian's tag pane and quick switcher find them by name. User-facing pages, this one included,
+have none, because GitHub renders frontmatter as a table at the top of the page; their tags live on
+the maps that list them.

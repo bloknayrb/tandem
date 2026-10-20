@@ -58,4 +58,4 @@ on at v1.0.
 ## Related maps
 
 [Troubleshooting and your data](troubleshooting-and-data.md) · [Internals](internals.md) ·
-[Releases and operations](releases-and-ops.md) · [Glossary](../glossary.md#licensing-gate)
+[Releases and operations](releases-and-ops.md) · [Glossary → Licensing gate](../glossary.md#licensing-gate)

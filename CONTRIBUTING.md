@@ -151,6 +151,20 @@ the tracked `.obsidian/app.json` makes Obsidian write relative Markdown links (n
 which GitHub and the checker cannot follow) and rewrite them when a file moves. The checker reads
 files from `git ls-files`, plus untracked files that are not ignored, so it needs a git checkout.
 
+### What CI requires
+
+`.github/workflows/ci.yml` runs on every pull request, on pushes to `master` and on the merge
+queue. The checks a PR needs before it can merge are `check`, the three `rust-test` legs (Ubuntu,
+macOS and Windows, each running `cargo test`) and `windows-acl-proof`; `coverage` and CodeQL report
+but do not block. `check` is the broad one. On Ubuntu it runs ESLint (`npm run lint`), the Biome
+check, the doc-link check, the client, server, root and test typechecks, the build, the full vitest
+suite, the acceptance harness and the Playwright E2E suite, plus a few smaller verification steps.
+`master` merges through a GitHub merge queue: CI runs again on a temporary branch holding `master`,
+your PR and everything queued ahead of it, and the PR merges only if the required checks pass
+there. The queue's merge method is not recorded in any tracked file, and the required-check list
+was last measured on 2026-08-28, so re-measure branch protection before relying on either (the
+"Required checks" note in [CLAUDE.md](CLAUDE.md#status) says how).
+
 ## What the git hooks actually run
 
 This trips up every new clone, so it is stated exactly:

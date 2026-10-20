@@ -33,8 +33,9 @@ sooner (push), and none of them is the authority on what it sees.
 - [User guide → Real-time push](../user-guide.md#real-time-push-recommended) and
   [Polling remains authoritative](../user-guide.md#polling-remains-authoritative) give the same
   picture from inside the editor.
-- [Glossary → Wake watch](../glossary.md#wake-watch): the default route for a Claude Code session
-  you start yourself. It works only where Claude Code offers a Monitor tool; where it doesn't, the
+- [Glossary → Wake watch](../glossary.md#wake-watch): the route Tandem's skill tries first, where
+  Claude Code offers a Monitor tool, for a Claude Code session you start yourself. None of the
+  routes is the setup default; where there is no Monitor tool, the
   [channel shim](../glossary.md#channel-shim) is the fallback.
 - [Glossary → Plugin monitor](../glossary.md#plugin-monitor): starts the first time Claude uses
   Tandem's skill in a session.
@@ -94,7 +95,7 @@ sooner (push), and none of them is the authority on what it sees.
   and [Tandem says set up Claude Code, but it is installed](../troubleshooting.md#tandem-says-set-up-claude-code-but-claude-code-is-already-installed)
 - [Plugin monitor reports exit 127](../troubleshooting.md#plugin-monitor-reports-script-failed-exit-127)
   and [the plugin install fails to clone](../troubleshooting.md#claude-plugin-install-fails-to-clone-ssh-vs-https)
-- [The channel relay fails to start](../troubleshooting.md#channel-shim-fails-to-start)
+- [The channel shim fails to start](../troubleshooting.md#channel-shim-fails-to-start)
 - [Claude Desktop: failed to spawn process](../troubleshooting.md#failed-to-spawn-process-no-such-file-or-directory-claude-desktop)
 - [Sharing diagnostics](../troubleshooting.md#sharing-diagnostics) when you need to ask for help.
 
