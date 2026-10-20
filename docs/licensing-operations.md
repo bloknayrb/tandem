@@ -2,9 +2,13 @@
 
 > Operator guide for issuing Tandem licenses, grandfathering beta testers, and
 > running the license-checked update endpoint. Audience: the project owner
-> (Bryan). The on-device system is specified in
-> [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)
-> and `docs/superpowers/specs/2026-06-18-licensing-system-design.md`. The gate
+> (Bryan). The decision is
+> [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license);
+> the current on-device system is described in
+> [licensing-explained.md](licensing-explained.md).
+> `docs/superpowers/specs/2026-06-18-licensing-system-design.md` is the historical
+> design: its §4 still describes the per-tool and per-route gates (Surface A and
+> Surface B) that #1521 deleted, so read it for rationale, not for what ships. The gate
 > ships **dark** (`LICENSE_GATE_ENABLED = false` in `tsup.config.ts`) until v1.0.
 
 ## Vocabulary (use these words consistently)
@@ -51,7 +55,8 @@ explicitly, now:
    legal name.** Decide whether `name` belongs there at all.
 3. **Missing fields.** `version` is not stored in the ledger (so a future
    `LICENSE_VERSION` change would make a re-signed blob diverge from the one the
-   buyer holds), and there is no `orderId`.
+   buyer holds), and the signed metadata carries no `orderId` — the ledger
+   record has one, the blob the buyer holds does not.
 
 Then:
 
@@ -150,7 +155,8 @@ npx tsx scripts/sign-license.ts \
 
 The script prints the metadata and a base64 **license key**. Email that key to
 the tester (or save it as a `jane.license` text file and attach it). The tester
-activates with either:
+activates in **Settings → License** (paste the key) — on the desktop app that is
+the only route. On an npm install they can instead run:
 
 ```bash
 tandem activate <paste-the-license-key>
@@ -158,14 +164,16 @@ tandem activate <paste-the-license-key>
 tandem activate ./jane.license
 ```
 
-…or, once the GUI ships, **Settings → License → Activate** (paste field). Confirm
-with `tandem license` — it prints `Status: licensed`, the licensee, and
+A separately installed CLI writes its own app-data directory, so running
+`tandem activate` to license a desktop app succeeds and changes nothing the
+desktop can see (see [licensing-explained.md](licensing-explained.md)). On an npm
+install, confirm with `tandem license` — it prints `Status: licensed`, the licensee, and
 `Updates: all future updates included` (a hand-signed `--expires` key shows its
 window instead) even while enforcement still ships dark.
 
 > **Privacy:** the local signing script prints the licensee email to *your*
 > console (fine). Any **server/log** record of issuance must log the license
-> **id** only, never the email (§12 L1). The issuance Worker already does this.
+> **id** only, never the email (spec §12 L1, `docs/superpowers/specs/2026-06-18-licensing-system-design.md`). The issuance Worker already does this.
 
 > **Ledger caveat.** A script-issued license has no `LEDGER_KV` record, so it is
 > invisible to reconcile (§5) and to any future resend endpoint. **It is still
@@ -215,8 +223,8 @@ properties of Paddle discounts matter here:
 
 ### 1c. The cohort problem (settle this before the flip)
 
-`README.md` publicly promises that "existing beta users are grandfathered with a
-free license." **There is no list, and no way to build one** — no telemetry, no
+`README.md` publicly promises beta users a free grandfathered license that skips
+the trial. **There is no list, and no way to build one** — no telemetry, no
 analytics, no signup. Both grandfather mechanisms (§1a and §1b) need the email
 *in advance*, so every beta user has to contact you first.
 
@@ -231,12 +239,16 @@ The flip choreography also actively misleads them if left alone:
 
 Before flipping, decide and do:
 
-1. A **claim path** that works without a list — even "email `<support>` with
-   your first-install date" is enough, as long as it exists and is documented.
+1. ~~A **claim path** that works without a list.~~ **Done:** README.md's
+   "Claiming the beta license" paragraph asks beta users to email support with
+   roughly when they first installed, then activate in Settings → License as soon
+   as the key arrives.
 2. **Banner and wall copy naming the beta offer**, so a grandfathered user
-   doesn't read the countdown as a bill.
-3. Whether the README promise survives "we cannot identify beta users."
-   If not, reword it — a promise you can't honour is worse than a narrower one.
+   doesn't read the countdown as a bill. Still open: `LicenseBanner.svelte` names
+   no beta offer.
+3. Whether the README promise survives "we cannot identify beta users." Largely
+   answered by the same README paragraph, which says plainly that only people who
+   get in touch can be grandfathered.
 
 ## 2. Issuing a paid license manually (fallback)
 
@@ -266,8 +278,9 @@ non-zero if it can't. Don't deliver a key it refused to entitle.
 ## 3. The L3 update endpoint (Cloudflare — owner-deployed)
 
 Architecture (PII-free) is in spec §7. The repo ships the Worker source
-(`infra/license-update-worker/`), `wrangler.toml`, the webhook KV-write
-(`src/server/license/kv-store.ts`), and the Rust updater wiring. **You** own the
+(`infra/license-update-worker/`), `wrangler.toml`, the out-of-band KV entitlement writer used by
+`scripts/sign-license.ts` (`src/server/license/kv-store.ts`; the paid path writes
+KV inside the issuance Worker, §3.5), and the Rust updater wiring. **You** own the
 Cloudflare account, KV namespace, custom domain, and secrets.
 
 ### 3a. Provision
@@ -365,12 +378,13 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 > **Repair:** re-`PUT KV[licenseId]` from the ledger record — `entitlementValue`
 > is fully derivable, so nothing needs re-issuing. If the customer still has
 > their key, that works too: the blob carries id/name/email/type/createdAt/
-> expiresAt/version, i.e. everything a ledger record holds.
+> expiresAt/version/keyId, i.e. everything a ledger record holds (and the
+> signing key's id, which the ledger does not).
 
 ### 3c. Behavior
 
-- Updater asks `GET /api/license/status` (loopback). If `gateActive && licenseId && updateWindowCurrent`, it points at the Worker with an `X-Tandem-License-Id` header; otherwise it uses the public GitHub `latest.json`.
-- The Worker returns a **byte-identical no-update** response for unknown ids, expired windows and revocation tombstones (no existence oracle) and logs `{ result, reason, ts }` — the reason is a coarse enum about the *service's* state, never the license id.
+- The desktop app picks a route (`update_route` in `src-tauri/src/lib.rs`), in this order: (1) an empty `LICENSE_UPDATE_ENDPOINT` → the public GitHub `latest.json`, with no probe — the shipped state until the flip (#1785); (2) the loopback `GET /api/license/status` probe unreachable or non-2xx → no manifest at all (`status-unavailable`); (3) the sidecar reports the gate dark → public; (4) a license id present → the Worker with an `X-Tandem-License-Id` header, **whatever the local update window says** — an ended local window still routes to the Worker, which refuses it there, because KV is the authority; (5) `restricted` → no manifest (`no-entitlement`); (6) anything else, i.e. a trial device → public. §8 has the dialogs each arm produces.
+- The Worker returns a **byte-identical no-update** response (HTTP 204) for all six refusal reasons — `no-header`, `unknown-id`, `unparseable`, `expired`, `revoked` (the refund/revocation tombstone) and `upstream` — so it is no existence oracle, and logs `{ result, reason, ts }` — the reason is a coarse enum about the *service's* state, never the license id.
 - **The automatic detector is the alert on `unknown-id`/`unparseable`**; `[observability]` on both Workers is what retains the lines behind it; and the `revoked` tombstone is what keeps your own refunds and revocations out of the alert. Both halves are merged but **inert until the Workers are redeployed** with `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 
 ## 3.5. The issuance endpoint (Cloudflare — owner-deployed)
@@ -386,7 +400,7 @@ Paddle accounts (live and sandbox are separate accounts), the Worker, its KV
 namespaces, and its secrets.
 
 > **Nothing below has run against a real Paddle account yet.** The Worker is
-> built from Paddle's documentation and tested against hand-built payloads; ten
+> built from Paddle's documentation and tested against hand-built payloads; twelve
 > facts are unverified until a sandbox run (U1–U12, §8), and U1 is a hard gate
 > before any live deploy.
 
@@ -752,8 +766,9 @@ inert update window (#1785).
 5. Rebuild and release. On first launch of a gate-active build, each user starts
    a clean **14-day trial** (`trial.json` is only written when the gate is on, so
    prior dark installs don't pre-burn the clock).
-6. Grandfathered/paid testers who already ran `tandem activate` are `licensed`
-   immediately — no trial, no wall.
+6. Grandfathered/paid testers who already activated (Settings → License, or
+   `tandem activate` on an npm install) are `licensed` immediately — no trial,
+   no wall.
 
 ## 5. First-sale verification, and reconciling from Paddle
 
@@ -955,8 +970,10 @@ command**.
   must stay true about where PII lives.
 
 **Customers are a distributed backup, and this is why the copy-key button
-exists.** `metadataFrom` puts id, name, email, type, createdAt, expiresAt and
-version into the signed blob — so the blob *is* a complete ledger record. A
+exists.** `metadataFrom` puts id, name, email, type, createdAt, expiresAt,
+version and `keyId` into the signed blob — so the blob *is* a complete ledger record.
+`keyId` is not a ledger field, though: rebuilding the signed blob from a ledger
+record also needs the id of the key that signed it (§0). A
 customer who emails you their key hands you everything needed to rebuild their
 record and re-`PUT` their entitlement.
 
@@ -1235,8 +1252,8 @@ Then walk §5a steps 2–4 with that order number.
 | Generate keypair | `npx tsx scripts/generate-keys.ts` |
 | Sign grandfathered license | `npx tsx scripts/sign-license.ts --name N --email E --type grandfathered` |
 | Sign paid license (all future updates) | `npx tsx scripts/sign-license.ts --name N --email E --type personal` |
-| Activate (tester) | `tandem activate <key-or-path>` |
-| Check status (tester) | `tandem license` |
+| Activate (tester) | Settings → License (paste the key) — the only route on the desktop app; on an npm install, `tandem activate <key-or-path>` |
+| Check status (tester) | Settings → License; on an npm install, `tandem license` |
 | Deploy update Worker | `cd infra/license-update-worker && npx wrangler@4.130.0 deploy` |
 | Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler@4.130.0 deploy` |
 | Read an order's ledger record | `npx wrangler@4.130.0 kv key get "order:live:<txn_id>" --remote --namespace-id <LEDGER_KV>` |

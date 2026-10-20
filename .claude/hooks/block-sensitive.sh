@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook: block edits to .env and lock files
+# PreToolUse hook: block edits to paths ending in .env or package-lock.json
+# (only those two suffixes: .env.local, .env.example and Cargo.lock pass)
 # Exit code 2 = block the tool call
 
 set -euo pipefail

@@ -62,18 +62,26 @@ Inside either directory:
 | `launcher-session.json` | The conversation Tandem's own Claude resumes, and the folder it was started in. Deleting it makes the next start a fresh conversation. |
 | `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately; doing so does not re-run the one-time npm import. |
 | `npm-migration-complete` | **Desktop location only.** The record that the one-time copy from the npm directory already happened. Deleting it makes the next desktop launch re-import that directory, so leave it alone. |
-| `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory — the desktop keeps its token in the OS keychain and passes it to the sidecar. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
+| `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory. The desktop keeps its token in the OS keychain and passes it to the sidecar, but it also uses this npm-location file as its fallback: it reads the file when the keychain has no entry (adopting a token an npm install already minted), and writes it when the keychain is unavailable (for example Linux without Secret Service). So the file can exist on a machine with no npm install at all. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
-| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
+| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
 | `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized. Named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`; the three most recent are kept |
-| `.broken-backups/` | Quarantined copies of malformed config files (user-only permissions) |
+| `.broken-backups/` | Quarantined copies of Tandem's own malformed config files (user-only permissions): `integrations.json` (named `integrations-…`) and the bring-your-own-model store (named `models-…`). Claude's config files are never copied here — a malformed Claude config is refused and left untouched |
 | `last-seen-version` | Drives the "what's new" changelog on upgrade |
 | `autostart-seen` | Linux only, and only with start-at-login enabled — marks that a login launch has happened |
+| `update-pending.json` | **Desktop location only.** Marks an in-app update that was in flight, so the next launch can tell whether it landed. Removed once that is settled |
+| `sample/` | **Desktop location only.** The sample documents, including the welcome tutorial, copied in on first run |
+| `models.json` | The bring-your-own-model registry. Normally absent: that feature ships dark and no shipped UI writes it |
 
 You may also see `.tandem-tmp-*` files inside `sessions/` and `annotations/`. These are
 half-finished atomic writes orphaned when the process was killed between writing and renaming
-(a force-quit, a dev restart). Tandem sweeps ones older than an hour at boot; they are safe to
-delete, and never appear in your own document folders.
+(a force-quit, a dev restart). Tandem sweeps ones older than an hour at boot, and they are safe to
+delete.
+
+Saving a document writes the same kind of temporary file **next to the document**, in its own
+folder, then renames it into place. A failed save removes it, but a force-quit at exactly the
+wrong moment can leave one behind. Tandem never sweeps your document folders, so it will not
+remove that file for you; it is safe to delete.
 
 ## Logs
 
@@ -102,7 +110,9 @@ macOS Keychain, Linux Secret Service):
 
 - `tandem` — the desktop app's Bearer auth token, under the entry `auth-token`.
   Desktop app only; the npm install keeps its token in the `auth-token` file
-  listed above instead.
+  listed above instead. When the keychain is unavailable, the desktop app falls
+  back to that same file at the npm location (and reads it first if the keychain
+  holds no token), so it can create or adopt that file too.
 - `tandem-integrations` — Tandem's own integration auth tokens.
 - `tandem-models` — API keys for the bring-your-own-model integration, when that
   feature is enabled. Present only if you have added a key.
@@ -117,11 +127,16 @@ store on first use — and which has **no mock to fall through to**: on a platfo
 it cannot serve, `Entry::new` returns an error rather than silently succeeding.
 So the in-memory stand-in is gone by construction.
 
-What is still unconfirmed is narrower: nobody has run the round-trip on any
-platform (write a secret, restart, read it back), and Tandem never calls
-`Entry::store_status()`, so a machine whose credential store fails to initialise
-takes the file fallback with no diagnostic. Treat "these entries exist" as
-expected rather than observed. Nothing here is lost if they do not: the
+A machine whose credential store fails to initialise is no longer silent about it:
+the token store logs the store's own init error before it takes the file fallback,
+and a keychain error names why the store is unavailable (both via
+`Entry::store_status()`). CI also checks a round-trip across two separate `Entry`
+instances on Windows and macOS (it skips on Linux runners without Secret Service, and
+on macOS when platform storage is not accessible).
+
+What is still unconfirmed is narrower: nobody has run the full round-trip on real
+user machines (write a secret, restart the app, read it back). Treat "these entries
+exist" as expected rather than observed. Nothing here is lost if they do not: the
 consequence is that a secret has to be re-entered, not that it leaks.
 
 ## If you buy a license: what the seller keeps

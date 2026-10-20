@@ -16,12 +16,12 @@
     ]
   },
   "components": [
-    { "id": "desktop", "type": "frontend", "label": "Desktop App", "sublabel": "Rust sidecar + WebView", "pos": [40, 40], "size": [220, 64] },
+    { "id": "desktop", "type": "frontend", "label": "Desktop App", "sublabel": "Rust host + Node sidecar + WebView", "pos": [40, 40], "size": [220, 64] },
     { "id": "browser", "type": "frontend", "label": "Browser Client", "sublabel": "npm global install, static server", "pos": [40, 150], "size": [210, 64] },
     { "id": "hocuspocus", "type": "backend", "label": "Hocuspocus", "sublabel": "WebSocket :3478, Y.Doc CRDT sync", "pos": [320, 40], "size": [200, 64], "sources": [{ "path": "src/server/yjs/provider.ts" }] },
     { "id": "mcpserver", "type": "backend", "label": "MCP Server", "sublabel": "HTTP :3479, tools + /api routes", "pos": [320, 150], "size": [200, 64], "sources": [{ "path": "src/server/mcp/api-routes.ts" }] },
     { "id": "filewatcher", "type": "backend", "label": "File Watcher", "sublabel": "watches disk, reloads Y.Doc", "pos": [320, 250], "size": [200, 64], "sources": [{ "path": "src/server/file-watcher.ts" }] },
-    { "id": "localfiles", "type": "database", "label": "Local Files", "sublabel": ".md .txt .html .docx", "pos": [320, 350], "size": [200, 64] },
+    { "id": "localfiles", "type": "database", "label": "Local Files", "sublabel": ".md .txt .html (.docx dark)", "pos": [320, 350], "size": [200, 64] },
     { "id": "eventqueue", "type": "messagebus", "label": "Event Queue + SSE", "sublabel": "Y.Map observers, fan-out", "pos": [700, 40], "size": [200, 64], "sources": [{ "path": "src/server/events/queue.ts" }] },
     { "id": "wakesocket", "type": "backend", "label": "Wake Socket", "sublabel": "/api/wake ws, self-armed", "tag": "default", "pos": [620, 250], "size": [170, 64], "sources": [{ "path": "src/server/events/wake-socket.ts" }] },
     { "id": "pluginmonitor", "type": "backend", "label": "Plugin Monitor", "sublabel": "on-skill-invoke, flagless", "pos": [800, 250], "size": [170, 64], "sources": [{ "path": "src/monitor/index.ts" }] },
@@ -48,7 +48,7 @@
     { "id": "supervisor-to-claude", "from": "supervisor", "to": "claude", "label": "writes child stdin", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[1245, 395]], "labelDy": 24 }
   ],
   "cards": [
-    { "dot": "cyan", "title": "Editor", "items": ["Tauri desktop: Rust sidecar + WebView", "Browser: npm global install serves the same Tiptap editor"] },
+    { "dot": "cyan", "title": "Editor", "items": ["Tauri desktop: Rust host + Node sidecar + WebView", "Browser: npm global install serves the same Tiptap editor"] },
     { "dot": "emerald", "title": "Tandem Server", "items": ["Hocuspocus WS :3478 syncs the Y.Doc CRDT", "MCP HTTP :3479 serves tools + /api routes", "File watcher keeps disk and Y.Doc converged"] },
     { "dot": "violet", "title": "Four Wake Paths", "items": ["Self-armed /api/wake ws — the default, no install or flag", "Plugin monitor — flagless, arms on-skill-invoke", "Channel shim — opt-in, needs --with-channel-shim", "Supervisor — writes auto-launched sessions' stdin directly"] },
     { "dot": "amber", "title": "Pull wins", "items": ["tandem_checkInbox is authoritative over all four wake paths", "A wake only tells Claude to poll — it never carries the payload"] }

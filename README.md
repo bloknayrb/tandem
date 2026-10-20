@@ -59,27 +59,7 @@ Windows 10 version 22H2 or Windows 11; macOS 12 (Monterey) or later; Linux with 
 
 </details>
 
-<details>
-<summary><b>Real-time updates for hand-started sessions</b></summary>
-
-**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you, including the desktop app's **Relaunch Claude** button, get both and need no setup from you. A session you start yourself by typing `claude` begins with only the first. On the first Tandem response that carries a wake-stream address — opening a document (`tandem_open`), creating a scratchpad (`tandem_scratchpad`), or a read-mode `tandem_status` — Tandem's bundled skill tells it to attempt the second with the built-in Monitor, where that tool is available.
-
-The simplest route needs no installation at all: **the built-in Monitor watch starts automatically on first Tandem use.** The bundled skill reads the live wake-stream address from the first Tandem response that carries one — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — and arms one watch for the session. Claude Code ends each watch after at most 30 minutes, and the skill re-arms it when that happens. If the attempt got skipped, or the watch ended (for example after Tandem restarted), asking Claude to watch is a recovery step rather than normal setup. It does need a Claude Code that offers a built-in Monitor tool. That's enabled per account rather than per version, so upgrading won't add it, and on Windows it also needs Git Bash. The plugin monitor shares that same per-account gate, so it can't help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The third option below, the channel shim, avoids both requirements.
-
-The second route is to install the Tandem plugin, which also needs no flag. See [Real-time updates](#real-time-updates) below. It starts watching the first time Claude uses Tandem's skill in a session, so ask for Tandem by name ("let's work on this in Tandem") rather than expecting it to be listening before you've mentioned it. Start `claude` from a terminal window if you install it: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use.
-
-The third is the channel shim, which has to be registered once and then switched on for each session:
-
-```bash
-tandem setup --apply --with-channel-shim                              # once
-claude --dangerously-load-development-channels server:tandem-channel  # every session
-```
-
-Choose one setup route where possible. A plugin-backed session whose Claude Code also offers the built-in Monitor may start both automatically when it first uses Tandem's skill. Those wakes carry no message content, host rate limiting can hide the overlap, and the inbox de-duplicates what Claude reads. If wakes visibly double, ask Claude to stop its built-in watch with `TaskStop`.
-
-Without any of them nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it won't react on its own, which reads as Claude ignoring you. If that's what you're seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening. There's more detail in [Real-time updates](#real-time-updates).
-
-</details>
+**Starting Claude yourself?** A Claude Code session you start by typing `claude` can read and edit your document straight away, but whether it reacts on its own to your comments and chat messages depends on a real-time route, and the simplest one usually starts by itself. Sessions Tandem launches for you don't need one. [Real-time updates](#real-time-updates) below explains the three routes and which to pick.
 
 ## How you work with Tandem
 
@@ -93,7 +73,7 @@ Either way, the rest is the same:
 
 1. Type a question in the chat panel, or highlight text in the document to point the AI at a passage. It sees what you highlight as you highlight it.
 2. The AI's suggestions show up as cards beside the document. You decide what to accept.
-3. Save when you're finished.
+3. Save when you're finished. Edited `.md` and `.txt` files are also saved back to disk automatically every 60 seconds and when Tandem quits; a file you only opened to read is never rewritten.
 
 [docs/workflows.md](docs/workflows.md) has examples of what this looks like day to day.
 
@@ -145,7 +125,7 @@ Either way, the rest is the same:
 
 - Tandem runs on your computer and keeps your documents on your disk. I don't run any server that holds your files.
 - When you ask the AI to do something, the text you share with it goes to whichever AI service you're using. Connect Claude and that text goes to Anthropic under their terms. Tandem doesn't relay or copy your document anywhere else.
-- Tandem has a private notes feature. Notes you mark private are stripped out of every response the AI sees ([ADR-027](docs/decisions.md)).
+- Tandem has personal notes, and every note is private: notes are stripped out of everything the AI sees, and it can't read, edit or reply to them ([ADR-027](docs/decisions.md)).
 - **Solo mode holds your work back from the AI.** The Solo / Tandem toggle in the title bar (`Ctrl+Shift+M`) isn't just a notification setting. While you're in Solo, the comments and replies *you* write are withheld from what the AI is told and from what it can look up: its inbox, its reads of the annotation list, and the live updates pushed to it. Each held item shows an amber **Held** pill, the status bar keeps a running count, and switching back to Tandem releases the set together. The hold is enforced where the AI *reads*, not just where things are *displayed*, and that includes the annotation export, which reports how many items it withheld rather than quietly including them. What Solo doesn't cover: it holds comments and replies, not the document text itself, which the AI can still read. [The user guide](docs/user-guide.md#solo--tandem-mode) has the full boundary.
 - Tandem collects no telemetry and no analytics by default. No usage data, and **crash reporting is off unless you turn it on**. It activates only if you set `TANDEM_SENTRY_DSN` to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) endpoint of your own. Leave it unset, which is the default, and no crash data ever leaves your machine. Reports that do get sent are scrubbed of home-directory paths, API keys, and document payloads; [docs/security.md](docs/security.md) has the details.
 - When paid licensing arrives at v1.0, running the app will validate a signed license file on your own machine, with no network call. Update checks will stay network-only, carry no analytics, and the update service will log only what it needs to authorize the download. Once you activate a paid license it runs indefinitely, because the run check only verifies the signature. Which updates you're offered is separate from whether the app keeps working: every key includes all future updates, though no future update is guaranteed.
@@ -154,7 +134,7 @@ Either way, the rest is the same:
 
 ## Where Tandem is headed
 
-Tandem is close to v1.0, and I keep shipping. [CHANGELOG.md](CHANGELOG.md) records what landed in each release and [docs/roadmap.md](docs/roadmap.md) has the full plan. Today the supported integration is Claude (Claude Code or Claude Desktop) over MCP, set up by the in-app wizard. Local models (Ollama, LM Studio) are committed for v1.0. They're built and shipping in the app already, but switched off until then, so you won't see a Models tab in this release ([#1123](https://github.com/bloknayrb/tandem/issues/1123)). Same one-time license. Cloud API-key providers (OpenAI, Gemini) follow in v1.1. What's left is turnkey setup on macOS and Linux, and switching on the licensing that's already built in. Pricing is under [License](#license) below.
+Tandem is close to v1.0, and I keep shipping. [CHANGELOG.md](CHANGELOG.md) records what landed in each release and [docs/roadmap.md](docs/roadmap.md) has the full plan. Today the supported integration is Claude (Claude Code or Claude Desktop) over MCP, set up by the in-app wizard. Local models (Ollama, LM Studio) are committed for v1.0. They're built and shipping in the app already, but switched off until then, so you won't see a Models tab in this release ([#1123](https://github.com/bloknayrb/tandem/issues/1123)). Same one-time license. Cloud API-key providers (OpenAI, Gemini) follow in v1.1. What's left is verifying setup on real macOS and Linux machines, and switching on the licensing that's already built in. [License](#license) below explains the licence model and the free trial.
 
 ## Documentation and help
 
@@ -175,9 +155,9 @@ Tandem is close to v1.0, and I keep shipping. [CHANGELOG.md](CHANGELOG.md) recor
 
 ## License
 
-Tandem is free for personal use and individual self-hosting during the public beta — every pre-1.0 release, with no time limit and nothing to activate. At v1.0 it moves to a **one-time paid license** with a **14-day free trial**: install it, use everything for 14 days, then buy once. The key licenses whichever version you run, never expires and includes all future updates, though no future update is guaranteed. Without a key, v1.0 and later stay usable as a plain editor, for the same personal use and individual self-hosting, without the AI features (such as the MCP server, the chat panel and local-model support). There is no subscription, no renewal and no paid upgrade. The run gate checks a license's signature and nothing else (`src/server/license/verifier.ts`), so the copy you have keeps running indefinitely. Beta users are grandfathered with a free license and skip the trial entirely.
+Tandem is free for personal use and individual self-hosting during the public beta — every pre-1.0 release, with no time limit and nothing to activate. At v1.0 it moves to a **one-time paid license** with a **14-day free trial**: install it, use everything for 14 days, then buy once. The key licenses whichever version you run, never expires and includes all future updates, though no future update is guaranteed. Without a key, v1.0 and later stay usable as a plain editor, for the same personal use and individual self-hosting, without the AI features (such as the MCP server, the chat panel and local-model support). There is no subscription, no renewal and no paid upgrade. The run gate checks a license's signature and nothing else (`src/server/license/verifier.ts`), so the copy you have keeps running indefinitely. Beta users are grandfathered with a free license and skip the trial once they activate it.
 
-The code is under the Business Source License 1.1 (BUSL-1.1); [LICENSE](LICENSE) has the terms, and [docs/licensing-explained.md](docs/licensing-explained.md) explains the mechanism in plain English. None of it is enforced yet — the gate ships dark and flips at v1.0. Releases before v0.11.0 were published under the MIT License, which allows any use and requires its notice to be kept in copies; so were the v0.11.0 to v0.14.3 desktop builds, whose package metadata said MIT. Every other pre-1.0 release, including those whose own `LICENSE` offered only a thirty-day evaluation, is covered by the current beta grant.
+The code is under the Business Source License 1.1 (BUSL-1.1); [LICENSE](LICENSE) has the terms, and [docs/licensing-explained.md](docs/licensing-explained.md) explains the mechanism in plain English. None of it is enforced yet — the gate ships dark and flips at v1.0. The licence wording described here is the repository's current `LICENSE`, and it first ships with the next release; v0.26.0 to v0.28.0 carry an earlier wording in their own `LICENSE` file. Releases before v0.11.0 were published under the MIT License, which allows any use and requires its notice to be kept in copies; so were the v0.11.0 to v0.14.3 desktop builds, whose package metadata said MIT. Every other pre-1.0 release, including those whose own `LICENSE` offered only a thirty-day evaluation, is covered by the current beta grant.
 
 **Claiming the beta license:** Tandem has no telemetry, no analytics, and no signup, so there's no list of beta users to work from. I can only grandfather people who tell me they're here. If you've been using the beta, email <support@tandem.ink> with roughly when you first installed it, and I'll send you a free license before enforcement turns on. Activate it as soon as it arrives (Settings → License) rather than filing it away: the pre-v1.0 build tells you licensing isn't enforced yet, which is true, and is exactly why an unactivated key is easy to lose.
 
@@ -196,7 +176,30 @@ claude plugin marketplace add bloknayrb/tandem
 claude plugin install tandem@tandem-editor
 ```
 
-This activates the MCP tools, the bundled skill, and, on Claude Code 2.1.212 or newer, a monitor that delivers real-time events with no extra flag. [Real-time updates](#real-time-updates) covers how that compares to the other two.
+This activates the MCP tools, the bundled skill, and, on Claude Code 2.1.212 or newer, a monitor that delivers real-time events with no extra flag. The monitor starts once Claude uses Tandem's skill in a session, and only where Claude Code offers a Monitor tool, which it enables per account; where it doesn't, the channel shim is the fallback. The plugin also adds a `tandem-channel` entry for that shim, which stays inert unless you start the session with the channel flag. [Real-time updates](#real-time-updates) covers how the routes compare.
+
+## Real-time updates
+
+**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you (including restarts from the status bar or the command palette's **Relaunch Claude in this folder**) get both and need no setup from you: Tandem wakes them directly. A session you start yourself by typing `claude` begins with only the first. On the first Tandem response that carries a wake-stream address — opening a document (`tandem_open`), creating a scratchpad (`tandem_scratchpad`), or a read-mode `tandem_status` — Tandem's bundled skill tells it to attempt the second with the built-in Monitor, where that tool is available.
+
+The simplest route needs no installation at all: **the built-in Monitor watch starts automatically on first Tandem use.** The bundled skill reads the live wake-stream address from the first Tandem response that carries one — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — and arms one watch for the session. Claude Code ends each watch after at most 30 minutes, and the skill re-arms it when that happens. If the attempt got skipped, or the watch ended (for example after Tandem restarted), asking Claude to watch is a recovery step rather than normal setup. It does need a Claude Code that offers a built-in Monitor tool. That's enabled per account rather than per version, so upgrading won't add it, and on Windows it also needs Git Bash. The wake stream answers only on this computer, so it can't reach a Claude session running on another machine. The plugin monitor shares that same per-account gate, so it can't help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The third option below, the channel shim, avoids both requirements.
+
+The second route is to install the Tandem plugin (see [Plugin install](#plugin-install)), which also needs no flag. It needs **Claude Code 2.1.212 or newer**; on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so. It starts watching the first time Claude uses Tandem's skill in a session, so ask for Tandem by name ("let's work on this in Tandem") rather than expecting it to be listening before you've mentioned it. Start `claude` from a terminal window if you install it: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use. That failure shows up as [`exit 127`](docs/troubleshooting.md#plugin-monitor-reports-script-failed-exit-127).
+
+The third is the channel shim, the route Tandem has tested against longest. It is **not registered by default**, and registering it isn't enough on its own: every session has to be started with Claude Code's channel flag as well.
+
+```bash
+tandem setup --apply --with-channel-shim                              # once
+claude --dangerously-load-development-channels server:tandem-channel  # every session
+```
+
+The flag is Claude Code's marker for unstable features. It works only in an interactive session, so it does nothing in `claude -p`, and nothing can make it unnecessary: Claude Code's channel allowlist covers only plugins, and `tandem-channel` is a plain MCP server. If you set the shim up in an earlier version, your configuration is untouched and keeps working. To remove it, run `tandem setup --apply --without-channel-shim`.
+
+Choose one setup route where possible. A plugin-backed session whose Claude Code also offers the built-in Monitor may start both automatically when it first uses Tandem's skill. Those wakes carry no message content, host rate limiting can hide the overlap, and the inbox de-duplicates what Claude reads. If wakes visibly double, ask Claude to stop its built-in watch with `TaskStop`.
+
+In Solo mode all three routes deliver only chat messages, by design ([Privacy and trust](#privacy-and-trust) covers what Solo holds back). If you're testing real-time delivery and only chat arrives, check the mode toggle before you debug the route.
+
+Without any of them nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox (`tandem_checkInbox`). But it won't react on its own, which reads as Claude ignoring you. You can ask Claude to check periodically, for example with `/loop 30s check tandem inbox and respond to any new messages`. If Claude seems to be ignoring you, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening.
 
 ## Cowork
 
@@ -213,29 +216,6 @@ Building Tandem, running it from source, the git hooks, and the checks to run be
 
 Three layers: the editor (Tiptap inside a Tauri desktop app or a browser), the Tandem server (Hocuspocus on port 3478 for collaborative edits and an MCP HTTP server on port 3479 for AI tool calls), and the AI client (Claude Code, or any other MCP-capable client). The full file map and data flows are in [docs/architecture.md](docs/architecture.md). Tandem is built on [Tiptap](https://tiptap.dev) and [ProseMirror](https://prosemirror.net) for the editor, [Yjs](https://yjs.dev) and [Hocuspocus](https://github.com/ueberdosis/hocuspocus) for CRDT sync, [Tauri 2](https://v2.tauri.app) for the desktop shell, and [Svelte 5](https://svelte.dev) for the UI.
 
-### Real-time updates
-
-Real-time delivery gets events (annotation actions, chat messages) to the AI the moment they happen, so it doesn't have to wait until it next polls. There are three setup routes, and they aren't layers you configure together. When the plugin and the built-in Monitor are both available, though, first skill use can start both automatically, which is a safe but potentially wasteful overlap described below.
-
-None of them is needed for a session Tandem launches for you. Those get woken directly by Tandem over the session's own input and use none of the three; everything below is about sessions you start by hand.
-
-**A self-armed watch** needs nothing installed and no flag. On first Tandem use, the bundled skill reads the wake-stream address from the first Tandem response that carries one — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — and arms one built-in Monitor watch. Claude Code ends each watch after at most 30 minutes and says so, and the skill re-arms the same watch when that happens. It lasts for that session and disappears with it, which is also the point: nothing is left configured on your machine. Asking Claude to watch is the recovery path if the automatic attempt got skipped or the watch ended, for example after Tandem restarted. Two limits. It needs a Claude Code that offers a built-in Monitor tool, and the wake stream is **loopback-only**, so it doesn't reach a session running anywhere but this machine, Cowork included.
-
-**The plugin monitor** needs no flag either, and once installed it applies to every session. But it starts watching only when Claude first uses Tandem's skill in that session, not the moment the session opens. In practice that means asking for Tandem by name; a Claude that has never been told about Tandem isn't listening yet. That's deliberate. It used to start in every session including ones with nothing to do with Tandem, so when it couldn't run it reported a failure in all of them. Two more conditions: it needs **Claude Code 2.1.212 or newer** (on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so), and you should start `claude` from a terminal, because the monitor runs with whatever program path that session was given and a desktop-icon launch may not include Node. If it reports `exit 127`, that's this.
-
-**The channel shim** is the transport Tandem has tested against longest ([ADR-028](docs/decisions.md)). It is **not registered by default**. That changed in the release this note ships with, because a shim whose session never enables the flag connects, delivers nothing, and makes Tandem believe something is listening. Registering it isn't enough on its own either; the session has to be started with the flag as well:
-
-```bash
-tandem setup --apply --with-channel-shim                   # once
-claude --dangerously-load-development-channels server:tandem-channel   # every session
-```
-
-The flag is Claude Code's marker for unstable APIs. It works only in an interactive session, and it's required rather than optional: `tandem-channel` is a plain MCP server, and Claude Code's channel allowlist covers only plugins, so there's no list Tandem could join that would remove the need for it. If you already have it configured, your configuration is untouched and keeps working; the change is to what a *new* setup writes. To remove it, run `tandem setup --apply --without-channel-shim`.
-
-Choose one setup route where possible. A plugin-backed session may still start its packaged monitor and built-in watch automatically. Wakes carry no message content, the inbox de-duplicates what Claude reads, and host rate limiting can hide the overlap. If wakes visibly double, ask Claude to stop its built-in watch with `TaskStop`.
-
-Solo mode suppresses annotation events on all three by design; chat still comes through. If you're testing real-time delivery and only chat arrives, check the mode toggle before you debug the transport.
-
-Without any of them, the AI uses `tandem_checkInbox` to pull the same events on demand. You can also ask Claude to poll periodically with `/loop 30s check tandem inbox and respond to any new messages`.
+How hand-started Claude Code sessions get real-time updates is covered for everyone in [Real-time updates](#real-time-updates) above; [ADR-047](docs/decisions.md#adr-047-claude-code-push-transport-activation) and [ADR-049](docs/decisions.md) have the design history.
 
 </details>

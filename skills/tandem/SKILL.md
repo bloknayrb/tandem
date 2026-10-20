@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 35
+version: 36
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -243,7 +243,7 @@ When multiple documents are open, always pass `documentId` explicitly — omitti
 
 ## Project Context Discovery
 
-Tandem auto-launches you in a single working directory (the user's home by default, or whatever they configured under Settings → AI Assistant → Working directory). The document the user opens may live elsewhere — a different project, a different repo. When you're working on a file outside your launch cwd:
+Tandem auto-launches you in a single working directory (the user's home by default, or whatever they configured under Settings → AI Assistant → Claude working directory). The document the user opens may live elsewhere — a different project, a different repo. When you're working on a file outside your launch cwd:
 
 1. **Read `<docDir>/CLAUDE.md`** if it exists — it's the project's own playbook.
 2. **Walk up** the directory tree from `<docDir>` looking for `CLAUDE.md`, `.claude/`, `README.md`, or `package.json`/`Cargo.toml`/`pyproject.toml` to identify the project root.

@@ -1,5 +1,7 @@
 # Performance Baseline Procedure
 
+> **Status: historical.** The manual Phase 0j procedure; its Phase 5 results section was never added. The automated perf gate superseded it: `npm run perf:gate` (`tests/perf/`), with results in [`docs/perf-gate-results.md`](../perf-gate-results.md).
+
 Phase 0j of the design-system-impl umbrella. **This is a methodology doc, not a numbers doc.**
 
 ## Why not commit numbers in Phase 0

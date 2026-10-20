@@ -6,9 +6,13 @@ in the roadmap the way the security gate's one-line verdict is. Numbers only
 mean something compared against other numbers, and that needs a table.
 
 Run it with `npm run perf:gate` (builds first, then measures a production
-build). Close any running Tandem before starting: the server calls `freePort()`
-on every start, so the harness will take ports 3478/3479 from whatever holds
-them.
+build). A running Tandem can stay open: since #1492 the perf backend runs on
+its own reserved pair, `PERF_WS_PORT` 4378 and `PERF_MCP_PORT` 4379
+(`scripts/test-ports.ts`), with the preview client on 4318
+(`tests/perf/playwright.config.ts`), never the product's 3478/3479. That pair
+is reserved, not guarded: the perf server still calls `freePort()` on start,
+so whatever else holds 4378/4379 is killed (a Tandem answering there makes it
+refuse to start instead).
 
 ---
 

@@ -1,5 +1,7 @@
 # Manual QA — Phase 1 surfaces (sub-PRs 1.1–1.6)
 
+> **Status: historical.** A one-off QA pass for sub-PRs 1.1–1.6, which shipped in v0.13.0. The bundle kit it opens (`docs/design-system-impl/bundle/extracted/`) is the external design bundle and is not in this repo.
+
 Compare the **running app** against the **bundle kit**, ticking each box as you go.
 
 - **Bundle reference (visuals):** open `docs/design-system-impl/bundle/extracted/Tandem App UI Kit.html` in OpenDesign. It renders every surface with the real fonts. Default theme is **warm** — switch via the brand menu to check light/dark too.

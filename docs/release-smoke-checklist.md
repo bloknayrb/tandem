@@ -17,6 +17,7 @@ matrix across OS versions, observer soak, accessibility) live in
 - [x] `tauri-webdriver.yml` — **not applicable: disabled 2026-08-08.** Its tag trigger was removed because the job fails on every run for a cause that has resisted diagnosis (`DevToolsActivePort file doesn't exist`, with driver and runtime at an exact version match and the app provably alive in the same run — so the version-mismatch hypothesis is refuted, and there is no knob left to turn). See [#1197](https://github.com/bloknayrb/tandem/issues/1197). **This leaves packaged-desktop key interception unverified by CI** — the Playwright suite drives a real browser, not the Tauri WebView, so nothing else covers it. That gap is deliberate and is scheduled for review on 2026-11-01 in [#1345](https://github.com/bloknayrb/tandem/issues/1345). Ticking this box means "confirmed still disabled", not "confirmed passing" — if the workflow has been re-enabled, restore the original wording and check its run.
 - [ ] macOS arm64 **launch smoke** (the "Smoke-test bundled sidecar" step inside `tauri-release.yml`) green — confirms the bundled `node-sidecar` actually boots and serves `/health` on Apple Silicon. A red here means the app is dead-on-arrival even though signing/notarization passed (e.g. the #983 V8-init SIGTRAP), so it no longer falls to the manual macOS pass below.
 - [ ] macOS signing and notarization steps green. **A red here is the gate working** — since #1746 these fail closed rather than reporting success with the secrets absent, so check whether a certificate has rotated before assuming the workflow is broken. (The one-off "first run after #1746" box that used to sit here is gone: v0.25.0 was that run, both legs executed the gates with a real certificate and an `Accepted` notarization, and the outcome is recorded on [#1829](https://github.com/bloknayrb/tandem/issues/1829), now closed.)
+- [ ] `publish.yml` green (it runs when the release is published, so this row comes after the draft is published), and `npm view tandem-editor@<new version> version --prefer-online` prints that version — section 4 below installs it with `npm install -g`, so a failed or still-propagating publish makes those rows test the previous release.
 - [ ] CHANGELOG section for the version is final (the in-app View Changelog button serves this file).
 
 ## 1. Windows (10 22H2 or 11)
@@ -122,12 +123,21 @@ previous one. The RC pass also has to prove this release can update **forward**
 — the seam users actually hit after launch — and exercise the license gate
 before it meets a paying user.
 
-- [ ] **Forward-update**: verify the just-built RC updates to a *next* version.
-      Mechanic: the updater's `.sig` signs the artifact bytes and the
-      `latest.json` `version` field is independent of the signature — so
-      re-serve the **current RC's own signed artifact** under a bumped version
-      number in a staged `latest.json`, point the updater endpoint override at
-      it, and confirm: update dot appears → install → restart → app healthy.
+- [ ] **Forward-update — NOT RUNNABLE AS WRITTEN.** Goal: verify the
+      just-built RC updates to a *next* version. Mechanic: the updater's `.sig`
+      signs the artifact bytes and the `latest.json` `version` field is
+      independent of the signature — so re-serve the **current RC's own signed
+      artifact** under a bumped version number in a staged `latest.json`, point
+      the updater at it, and confirm: update dot appears → install → restart →
+      app healthy. **The pointing step has no mechanism today.** There is no
+      runtime updater-endpoint override: the endpoint list is fixed in
+      `src-tauri/tauri.conf.json` (the public GitHub `latest.json`), no
+      environment variable reaches the updater, and the only alternate route is
+      the compile-time `LICENSE_UPDATE_ENDPOINT` const in `src-tauri/src/lib.rs`,
+      which is empty while licensing ships dark. Running this row needs either a
+      staging build compiled with a different endpoint or a real override; which
+      one is a maintainer decision still to be made. Until then, record this row
+      as not run rather than ticking it.
       (Added 2026-06-11; once the updater authenticates against the
       license-checked endpoint — #1116 L3 — run this against the staging
       endpoint so the entitlement check is in the loop.)

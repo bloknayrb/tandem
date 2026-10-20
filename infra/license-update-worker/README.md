@@ -1,7 +1,7 @@
 # Tandem license-update Worker (L3)
 
 License-checked auto-update endpoint. Gates access to the signed release manifest
-on a valid, in-window license id. Part of the licensing system (#1116, ADR-040 §7).
+on a valid, in-window license id. Part of the licensing system (#1116; licensing design spec §7, `docs/superpowers/specs/2026-06-18-licensing-system-design.md`).
 
 - **Source:** `src/worker.ts` (pure `handleUpdateRequest` + default `fetch` export).
 - **Tests:** `tests/server/license-update-worker.test.ts` (mock KV + mock fetch — no Cloudflare runtime needed). Run with the normal `npm test`.
@@ -9,16 +9,24 @@ on a valid, in-window license id. Part of the licensing system (#1116, ADR-040 �
 
 ## How it works
 
-1. The Tauri updater (loopback) checks `GET /api/license/status`. If `gateActive && licenseId && updateWindowCurrent`, it points `updater_builder` at this Worker with an `X-Tandem-License-Id` header; otherwise it uses the public GitHub manifest.
-2. The Worker looks the id up in the `LICENSE_KV` namespace (written by the issuance webhook on a real purchase).
-3. Entitled + inside the update window → it proxies `PUBLIC_LATEST_JSON_URL` (the signed manifest; the minisign signature is unchanged and still verified by the Tauri client `pubkey`). Otherwise → **HTTP 204**, byte-identical for unknown ids and expired windows (no existence oracle).
+1. The desktop app picks a route (`update_route` in `src-tauri/src/lib.rs`), in this order:
+   1. `LICENSE_UPDATE_ENDPOINT` is empty → the public GitHub manifest, with no probe. **This is the shipped state: the licensed path is not armed yet (#1785).**
+   2. Its probe of the sidecar's `GET /api/license/status` is unreachable or non-2xx → no manifest at all (`status-unavailable`).
+   3. The sidecar reports the gate dark → the public manifest.
+   4. A license id is present → this Worker, with an `X-Tandem-License-Id` header — whatever the device's own copy of the update window says. The Worker's KV is the authority, so an ended window is refused here, not on the device.
+   5. The status is `restricted` → no manifest (`no-entitlement`).
+   6. Anything else (a trial device) → the public manifest.
 
-It logs `{ result, reason, ts }` — never the license id.
+   [`docs/licensing-operations.md`](../../docs/licensing-operations.md) §3c and §8 describe the same routing.
+2. The Worker looks the id up in the `LICENSE_KV` namespace (written by the issuance Worker on a real purchase, or out of band by `scripts/sign-license.ts`).
+3. Entitled + inside the update window → it proxies `PUBLIC_LATEST_JSON_URL` (the signed manifest; the minisign signature is unchanged and still verified by the Tauri client `pubkey`). Otherwise → **HTTP 204**, byte-identical for every refusal reason — `no-header`, `unknown-id`, `unparseable`, `expired`, `revoked` and `upstream` — so the response is no existence oracle.
+
+It logs `{ result, reason, ts }` — never the license id. `[observability]` in `wrangler.toml` retains those lines, and `sendOperatorAlert` POSTs to `ALERT_WEBHOOK_URL` on `unknown-id` and `unparseable` (#1786). Both are inert until the Worker is redeployed with the webhook set. Alerting is described in [`docs/licensing-operations.md`](../../docs/licensing-operations.md) §5c and §8.
 
 ## Deploy
 
 ```bash
-npx wrangler kv namespace create LICENSE_KV   # paste the id into wrangler.toml
+npx wrangler@4.130.0 kv namespace create LICENSE_KV   # paste the id into wrangler.toml
 # edit wrangler.toml: PUBLIC_LATEST_JSON_URL → your release manifest
 npx wrangler@4.130.0 deploy
 ```

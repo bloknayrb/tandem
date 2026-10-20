@@ -7,7 +7,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 `tandem doctor` (or `npm run doctor` from a source checkout) checks the most common setup issues at once:
 
 - Node.js ≥ 22.12.0 installed
-- `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
+- A project `.mcp.json`, if you have one, is valid and has a `tandem` entry (a `tandem-channel` entry is optional, because the channel shim is opt-in)
 - `~/.claude.json` MCP registration (when present)
 - Claude Desktop's own config file, and whether the entry Tandem wrote there has gone stale
 - The Node toolchain the MCP connection depends on
@@ -91,8 +91,8 @@ the editor and unreviewable. Current Tandem skill versions instruct Claude to re
 tell you the server isn't running instead; if you see it offer anyway, the installed skill is stale
 — run `tandem setup --apply` to refresh it.
 
-Claude Desktop and Cowork do not have this failure mode: they run Tandem through a stdio subprocess
-that pre-flights the server and returns a real error, so Claude can relay it.
+Claude Desktop does not have this failure mode: it runs Tandem through a stdio subprocess that
+pre-flights the server and returns a real error, so Claude can relay it.
 
 ## Tandem can't start Claude on Windows, but `claude` works in a terminal
 
@@ -150,7 +150,7 @@ except for one cause Tandem now recognises and names:
 The other common cause looks like any other crash, so it still gets the generic prompt:
 
 - **A saved conversation Claude can no longer resume.** **Start a fresh conversation** (the
-  secondary action beside Restart, or the palette command) drops it and starts clean —
+  secondary action beside Restart, or the palette command **Start fresh Claude conversation**) drops it and starts clean —
   irreversible, so it is never the default.
 
 ## Port already in use
@@ -215,7 +215,7 @@ tandem doctor
 
 Either way, look for the push line. `No real-time push consumer attached` means nothing is listening — that's the whole problem.
 
-**First, check which kind of session this is.** Sessions Tandem starts for you — the desktop app's **Relaunch Claude** button — are woken directly by Tandem and use none of the three below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
+**First, check which kind of session this is.** Sessions Tandem starts for you — including restarts from the status bar or the command palette's **Relaunch Claude in this folder** — are woken directly by Tandem and use none of the three below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
 
 **Fix it** — three setup routes; choose one setup route where possible.
 
@@ -459,15 +459,20 @@ npm uninstall -g tandem-editor
 
 (If you deliberately run a global CLI, upgrade it to match instead: `npm install -g tandem-editor@latest`.) Confirm with `tandem doctor`, which warns when a shadowing global is present.
 
-## Editor shows "Cannot reach the Tandem server"
+## Editor shows "Server unavailable" or "We've lost the connection to the Tandem server"
 
-The editor connects to the Hocuspocus WebSocket on `:3478`. If the message appears, the server isn't running or isn't reachable:
+The editor connects to the Hocuspocus WebSocket on `:3478`. When it can't, you see one of two messages:
+
+- **With no document open**, the empty editor shows **Server unavailable** ("Tandem can't reach its sync server…") with **Retry** and **Open settings** buttons. It appears after 3 seconds without a connection.
+- **With a document open**, a banner says **We've lost the connection to the Tandem server** with a **Retry now** button. It waits longer before appearing, 30 seconds by default, so a brief hiccup doesn't interrupt you. You can change the wait (5 to 120 seconds) under **Settings → Network → Advanced → Show degraded banner after**.
+
+Either way, the server isn't running or isn't reachable:
 
 - Desktop app: relaunch (the sidecar may have crashed; check the system tray or activity monitor).
 - npm install: run `tandem` in a terminal and watch for startup errors on stderr.
 - Source checkout: `npm run dev:standalone` (or `npm run dev:server` if you want backend only).
 
-The banner appears after 3 seconds of failed connection, so it's a real failure — not a transient retry.
+By the time either message shows, the connection has been down for a while, so it's a real failure, not a transient retry.
 
 ## Empty editor with no document
 
@@ -489,17 +494,27 @@ A link Tandem will not treat as safe also no longer *looks* clickable: it stays 
 
 If Tandem is your registered handler and you open a file it can't accept — an unsupported type, a path that no longer exists, or a folder — it now tells you so. Older builds sat on the welcome document with no message and recorded the reason only in the log.
 
-Tandem opens `.md`, `.markdown`, `.txt`, `.html` and `.htm`. Word (`.docx`) files aren't supported in this version and are refused with a message saying so; save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, instead. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
+Tandem opens `.md`, `.markdown`, `.txt`, `.html` and `.htm`. The desktop installer registers Tandem for `.md`, `.markdown`, `.txt` and `.html` only, so double-clicking an `.htm` file opens it in your default program instead; use **Open with** and choose Tandem, or open it from inside Tandem. Word (`.docx`) files aren't supported in this version and are refused with a message saying so; save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, instead. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
+
+## Settings say they are read-only
+
+If the Settings window shows **"Settings are read-only — they were saved by a newer version of Tandem"**, a newer Tandem saved your settings and you are now running an older one, for example after going back to a previous version. Tandem leaves those settings exactly as they are, so the newer version still finds them intact, and greys out the controls rather than overwriting them. Update to the current version and the settings become editable again.
+
+## "Tandem may not have finished updating"
+
+This banner appears in the desktop app when an update was being installed but Tandem came back on the previous version. Click **Check for updates** in the banner to try again. Without that click, Tandem does not offer the same update again for several hours. If it keeps failing, see [Reading server logs](#reading-server-logs) and [Sharing diagnostics](#sharing-diagnostics) to report it.
 
 ## Reset session state
 
-Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `__tandem_ctrl__.json` for cross-document state (chat history, Solo/Tandem mode). To find the directory per OS:
+Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `__tandem_ctrl__.json` for cross-document state (chat history, Solo/Tandem mode). The desktop app and the npm install keep separate folders, so reset the one you use. To find the directory per OS:
 
-| OS | Path |
-|---|---|
-| Windows | `%LOCALAPPDATA%\tandem\Data\sessions\` |
-| macOS | `~/Library/Application Support/tandem/sessions/` |
-| Linux | `$XDG_DATA_HOME/tandem/sessions/` (defaults to `~/.local/share/tandem/sessions/`) |
+| OS | npm install | Desktop app |
+|---|---|---|
+| Windows | `%LOCALAPPDATA%\tandem\Data\sessions\` | `%APPDATA%\com.tandem.editor\sessions\` |
+| macOS | `~/Library/Application Support/tandem/sessions/` | `~/Library/Application Support/com.tandem.editor/sessions/` |
+| Linux | `$XDG_DATA_HOME/tandem/sessions/` (defaults to `~/.local/share/tandem/sessions/`) | `$XDG_DATA_HOME/com.tandem.editor/sessions/` (defaults to `~/.local/share/com.tandem.editor/sessions/`) |
+
+[data-locations.md](data-locations.md#app-data-directory) lists everything else Tandem keeps in these folders.
 
 To reset all session state cleanly:
 

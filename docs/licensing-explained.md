@@ -4,7 +4,7 @@
 > **Part 2** is the engineering detail. **Part 3** is the failure modes, which
 > is the part worth reading twice.
 >
-> Related: [ADR-040](decisions.md) (the decision),
+> Related: [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) (the decision),
 > [licensing-operations.md](licensing-operations.md) (the runbook — what to *do*),
 > [licensing-terms.md](licensing-terms.md) (what a purchase grants),
 > [security.md](security.md), [data-locations.md](data-locations.md).
@@ -41,7 +41,7 @@ You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
 (**double-clicking the file does nothing** — Tandem registers no `.license` file
 association; its only associations are `.md`/`.markdown`, `.txt` and `.html`,
-`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working
+`bundle.fileAssociations` in `src-tauri/tauri.conf.json`), and Tandem is yours: it keeps working
 forever, with no internet connection required to prove it. Every future update
 is included too, with no time limit, though no one can promise that future
 updates will come.
@@ -89,15 +89,18 @@ activate.** That is the first paragraph of the BUSL Additional Use Grant in
 [LICENSE](../LICENSE), so it is a term you are granted rather than an enforcement
 gap you are getting away with. The grant also reaches back: it covers every
 pre-1.0 release that shipped under an earlier wording of the licence, including
-v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. Releases
+v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. This wording
+first ships with the next release: v0.26 to v0.28 still carry the earlier wording in their
+own `LICENSE`. Releases
 before v0.11.0, and the v0.11.0 to v0.14.3 desktop builds whose package metadata
 said MIT, are MIT-licensed. None of it is enforced: the gate ships dark, so a
 beta build has no trial clock running at all and the three states below are
 unreachable in it.
 
-At v1.0 the gate flips and the 14-day trial starts for new installs. **Beta users
-are grandfathered with a free license and skip the trial entirely** — see the
-claiming instructions in the README, which matter because Tandem has no telemetry
+At v1.0 the gate flips, and the 14-day trial starts on every install at its first
+launch of v1.0 or later — beta installs included — unless a key is already
+activated. **Beta users are grandfathered with a free license, and they skip the
+trial by activating it** — see the claiming instructions in the README, which matter because Tandem has no telemetry
 and therefore no list of beta users to work from.
 
 ## The three states Tandem can be in
@@ -135,7 +138,7 @@ that were entirely our fault.
 |---|---|
 | "That's longer than a license key…" | You pasted the whole email. Just the long block, or use the attachment. |
 | "That doesn't look like a license key." | Something got mangled in copying. |
-| "This key wasn't issued for this build…" | Genuinely ours to fix — email support and we'll reissue it. |
+| "This key wasn't issued for this build…" | Update Tandem first — a newer build may trust the key that signed it. If it still fails, it's genuinely ours to fix: email support and we'll reissue it. |
 | "This license needs a newer version of Tandem." | Update Tandem, then activate. |
 | "Your license is valid, but Tandem couldn't save it…" | Our problem, not your key. A permissions issue on your machine's app-data folder. |
 
@@ -215,7 +218,8 @@ Four moving parts:
     "type": "personal",       // personal | commercial | grandfathered
     "createdAt": "2026-07-26T…",
     "expiresAt": null,        // END OF UPDATE WINDOW (null = none, every issued key) — never end of the license
-    "version": "1.0"
+    "version": "1.0",
+    "keyId": "…16 hex…"       // fingerprint of the signing key; absent on licenses issued before 2026-10-15, which verify against LEGACY_KEY_ID
   },
   "signature": "…Ed25519 over canonicalize(metadata)…"
 }
@@ -280,8 +284,11 @@ aiRefusal()  ->  null                                     (dark build, trial, li
 re-reads disk on every call like `resolveLicenseState` does — no memo, because a cache is what caused
 the mid-session-expiry bugs. `kind: "unverifiable"` means a licence file is installed but fails to
 verify; its message is the fix-or-reissue copy from `unverifiableLicenseMessage()` and **never carries
-the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL.
-The wire envelope is that object everywhere: the `/api` 403 body, and the `data` of the MCP error.
+the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL
+in its message. On the wire, the `/api` 403 body is that object, `{ error, kind, message }`
+(`res.status(403).json({ ...extra, ...refusal })` in `ai-refusal.ts`). The MCP refusal is a JSON-RPC
+`-32003` error whose `message` is the refusal's message and whose `data` is `{ error, kind, purchaseUrl }`,
+with `purchaseUrl` present only for `unlicensed` (`licenseRefusalRpcError` in `src/server/mcp/server.ts`).
 
 Until #1521 enforcement worked the other way round, and that history explains several tests: **Surface
 A** marked Hocuspocus document rooms read-only, and **Surface B** (`gatedTool()` on 14 MCP write tools,
@@ -625,8 +632,9 @@ Worth stating plainly, because they look like bugs:
   key's update entitlement. A partial refund changes nothing automatically; the
   buyer keeps the license and the operator gets a notice (decided 2026-10-18).
 - **Nothing counts devices or people.** `LICENSE` sets no per-key limit either,
-  and customer copy deliberately states none: how a key is used is left to
-  good faith (decided 2026-10-15).
+  and customer copy states no device or person count: how a key is used is left
+  to good faith (decided 2026-10-15). Its only exclusion, until a commercial SKU
+  exists, is a shared or hosted deployment (see *What is not built yet*).
 - **In restricted mode a Claude Code with shell access can still reach Tandem
   out of band** — edit the file on disk (the watcher reloads it) or call
   Tandem's local endpoints directly. Tandem refuses the AI at its own admission

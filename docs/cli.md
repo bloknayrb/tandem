@@ -93,7 +93,7 @@ Runs the Tandem plugin monitor: subscribes to `/api/events` and writes a payload
 
 It **starts on first use of the Tandem skill**, not at session start: the manifest arms it with `on-skill-invoke`, so a session that never mentions Tandem never spawns it (#1354). It requires **Claude Code 2.1.212 or newer** (on older versions the plugin installs fine and the monitor simply never runs, with nothing to say so). And it must be able to resolve Node from the PATH Claude Code itself was started with: monitors are spawned through a non-login shell, so a GUI-launched Claude Code often cannot run it and reports `exit 127`. Start `claude` from a terminal.
 
-The fourth condition is the one nobody can act on: the plugin monitor sits behind the same `tengu_amber_sentinel` remote feature gate as Claude Code's own `Monitor` tool, and that flag **defaults to false**. Both read the identical flag — see [ADR-049](decisions.md) and its 2026-08-09 amendment, plus [docs/spikes/plugin-monitor-tty-activation.md](spikes/plugin-monitor-tty-activation.md). It is not observable from Tandem's source and no `tandem doctor` check can assert it, which is why the plugin monitor cannot cover for a Claude Code that offers no `Monitor` tool. The channel shim is the fallback that can.
+The fourth condition is the one nobody can act on: the plugin monitor sits behind the same remote, per-account Claude Code feature gate as Claude Code's own `Monitor` tool, and that gate **defaults to off**. Both read the identical gate — see [ADR-049](decisions.md) and its 2026-08-09 amendment, plus [docs/spikes/plugin-monitor-tty-activation.md](spikes/plugin-monitor-tty-activation.md). It is not observable from Tandem's source and no `tandem doctor` check can assert it, which is why the plugin monitor cannot cover for a Claude Code that offers no `Monitor` tool. The channel shim is the fallback that can.
 
 Neither this nor the channel shim is involved in a session Tandem auto-launches; those are woken over the supervisor's stdin ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)).
 
@@ -152,7 +152,7 @@ Prints usage and exits.
 
 ## npm run scripts (source checkouts only)
 
-These commands are available when running Tandem from a source checkout (`git clone` + `npm install`). They aren't shipped with the npm package.
+**For contributors.** These commands are available only when running Tandem from a source checkout (`git clone` + `npm install`). They aren't shipped with the npm package or the desktop app, and you don't need any of them to use Tandem. Setup and workflow for contributors are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### Development
 
@@ -187,7 +187,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run test:tauri-driver` | WebDriver-based Tauri shell tests. |
 | `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393), through the fail-closed runner `scripts/spikes/run_acceptance_tests.py` — launched by `scripts/spikes/run-acceptance-harness.mjs`, which resolves `python3` then `python`. Also run by CI's `check` job (#1399). The 82-test harness itself is still **not** run by `npm test` or the pre-push hook, but **Python is a prerequisite of those anyway**: `tests/scripts/acceptance-harness-wiring.test.ts` spawns that runner against broken fixtures and fails, rather than skips, with no interpreter on `PATH`. Preconditions: Python 3.10+ on `PATH` as `python3` or `python` (needed for `npm test` too), and — for this command alone — the `v0.21.0` tag present, which is where the harness reads its immutable v9 skill baseline. A fresh shallow clone has neither. Takes **no arguments**: unittest flags and selectors (`-v`, `-k`, `Class.test_name`) are refused with exit 2, because the runner always loads the whole module and honouring them is not possible — run `python -m unittest test_session_monitor_acceptance <args>` directly to narrow, remembering that bare `unittest` is not the gate. |
 | `npm run capture:screenshots` | Re-captures README screenshots via Playwright. |
-| `npm run capture:design-baselines` | Re-captures the design-system baseline screenshots. |
+| `npm run capture:design-baselines` | Regenerates the design-system baseline gallery, a single self-contained HTML page (`docs/design-system-impl/preview/baselines/baselines.html`) showing each covered surface in light and dark. |
 
 ### Diagnostics and linting
 

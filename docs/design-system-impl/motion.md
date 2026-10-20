@@ -1,5 +1,10 @@
 # Tandem — Motion Language (Phase 4 / #798 canon)
 
+> **Status: live.** The scene table, the surface-entrance principles and the
+> reduced-motion policy are current canon (code comments and the reduce-motion
+> guard tests point here). The release-gate section and the per-decision
+> *Verified* notes are dated snapshots and say so in place.
+
 > **What this is.** The canonical, repo-resident specification for threading the
 > Tandem design-system motion language across production surfaces. This is the
 > work tracked by [issue #798](https://github.com/bloknayrb/tandem/issues/798)
@@ -21,6 +26,10 @@
 ---
 
 ## Release gate — SATISFIED (verified against current master)
+
+> **Historical.** This section records the gate as it stood when this doc
+> landed (v0.13.5). The gate was met then and motion work has shipped since;
+> the "current" `[Unreleased]` block described below is long released.
 
 #798 prerequisite 3: motion thread-through should not begin until the
 design-system re-skin's CHANGELOG entries have **shipped in a release**, so motion
@@ -54,11 +63,12 @@ re-skin* block) no longer exists.
 
 ## Easing tokens
 
-Two curves carry the entire vocabulary. They do **not** exist in the repo yet —
-`index.html` defines 314 `--tandem-*` custom properties but zero easing tokens and
-zero `@keyframes`. The foundations sub-PR adds them to `index.html`'s `:root`
-(the same block that owns every other `--tandem-*` token), so they theme-compose
-with the rest of the system.
+Two curves carry the entire vocabulary. When this doc landed neither existed and
+`index.html` had no `@keyframes`; the foundations sub-PR added both tokens to
+`index.html`'s `:root` (the same block that owns every other `--tandem-*` token),
+so they theme-compose with the rest of the system. `index.html` now also carries
+global keyframes (e.g. the slash-menu entrance); per-scene keyframes otherwise
+live with the component that uses them.
 
 | Token | Curve | Use |
 |---|---|---|
@@ -78,9 +88,12 @@ The foundations sub-PR is **not** a blank-slate install — production already s
 incidental, component-local motion that the canon must compose with or replace,
 not clobber:
 
-- `StatusBar.svelte` ships `@keyframes tandem-reconnect-pulse`,
-  `tandem-status-pulse`, and `tandem-claude-working-pulse` inline. The **A9 bloom
-  state machine replaces these** (see canon decision 4).
+- `StatusBar.svelte` shipped `@keyframes tandem-reconnect-pulse`,
+  `tandem-status-pulse`, and `tandem-claude-working-pulse` inline (pre-Phase-4
+  snapshot). The **A9 bloom state machine replaced the reconnect pulse** (see
+  canon decision 4): the file now has `tandem-status-pulse`,
+  `tandem-conn-pulse` and `tandem-conn-bloom`, and still has the separate
+  `tandem-claude-working-pulse`.
 - `CommandPalette.svelte` ships only an ~80 ms row-background transition. **A11
   adds** scale-in + cascade on top (no conflict).
 - **The file count below was "10" and had gone stale silently** (#1425) — the
@@ -164,15 +177,15 @@ so that no row reads as drifting from a number it never owned by itself.
 | A18 | Find — all matches lit, active match's coral outline hops between hits | find/replace bar (`B4`) | outline `160ms`; background `160ms` | **ADD** |
 | A19 | ⛔ Selection-popup no-dwell pop | — | — | **RETIRED** (2026-05-31) — redundant with A28 entrance + A26 morph |
 | A20 | Typing `/` shows a caret chip; block picker drops in; rows cascade | slash menu (`B3`) | chip `200ms`; menu `240ms +520ms`; rows `180ms` 60ms stagger | **ADD** |
-| A21 | ⛔ Connection banner slide | — | — | **RETIRED** (2026-05-28) — banner surface dissolved; connection state moved to the A9 status pill |
+| A21 | ⛔ Connection banner slide | — | — | **RETIRED** (2026-05-28) — no dedicated scene. The recorded reason (the banner dissolving into the A9 status pill) did not hold: `ConnectionBanner.svelte` still ships in the banner stack. It enters with the shared banner slide-in from cluster 3.1 (`tandem-banner.css`), so a separate scene would duplicate it |
 | A22 | Onboarding stepper — progress line extends, next dot pops, panels cross-fade | onboarding tutorial (`D7`) | fill `280ms`; dot `200ms` scale 1.08; panel cross `220ms` | **ADD** |
 | A23 | Activity pill — idle→info→warning→error LED state machine; pill *is* the tray (single-shell two-phase morph) | Activity tray `.activity-shell` | P1 width/radius `340ms`; P2 max-height `480ms +340ms` (shared token, see note); row cascade `420ms` staggered; LED `1.4–1.6s ∞` | **SHIPPED** — morph + cascade wired. Cascade is anchored to a **snapshot of the ids present when the tray opened**, not `:nth-child`: a row arriving mid-window must not inherit a sibling's delay and hold at `opacity:0` |
 | A24 | Batch promote bar rises from rail bottom; persists; slides down on clear/send | `BatchPromoteBar.svelte` | enter `280ms`; exit `200ms cubic-bezier(.4,0,.2,1)`; spinner `700ms ∞`; hold LED `1.4s ∞` | **ADD** — implement as a class-toggled *transition*, not a re-firing animation |
 | A25 | Bulk mode — checkboxes cascade onto cards (40ms stagger), toolbar slides up; exit snappy | `BulkActions.svelte` | cascade `220ms` 40ms stagger; toolbar `280ms`; exit `180ms` no stagger | **ADD** |
 | A26 | Annotate button → note popover, two-stage single-shell morph (widen → unfurl) | selection popover (`editor/toolbar/`) | P1 width+radius+translate `340ms`; P2 height `480ms` sequenced (shared token, see note); reverses on close | **ADD** — use CSS transitions on `width`/`border-radius`/`height` (Phase 2 = delayed `max-height`), **not** a JS rAF loop |
 | A27 | Annotation fly-to-margin — on submit, card launches from popover footprint into its margin slot | A8 submit → `MarginColumn.svelte` left/right | fly `480ms` (FLIP translate+scale, opacity ramps); underline `220ms` | **ADD** for the motion — two-margin layout already ships; the side split is the fixed C3 lock in `panels/marginSides.ts`: **LEFT = private notes** (`type === "note"`), **RIGHT = outbound comments + imported Word comments** (`author === "import" || type === "comment"`). Imports render **RIGHT from arrival** (by `author`), not left-until-promoted; highlights are inline (neither side) |
-| A28 | Selection-popup entrance — origin-anchored unroll + unfurl + cascade | A8 popup (`popup-format-row` + `popup-annotate-row`) | dwell `360ms`; lead-row unroll `360ms`; cascade `200ms` staggered; trail row `320ms +170ms`; selection deepen `240ms` | **ADD** — **supersedes A7**; unroll = animate `width` + `overflow:hidden`, **never `clip-path`** (clips box-shadow) |
-| A29 | New-tab menu morph — `+` tab button *is* the menu, single-shell two-stage | `NewTabPopover` + `.pop-anchor` | P1 width+radius `340ms`; P2 height `480ms +P1dur` (shared token, see note); rows cascade `200ms` 60ms stagger | **ADD** — replaces the old 160ms `popIn` scale. **Homonym:** A29 is *surface* A7's morph, distinct from *motion-scene* A7 |
+| A28 | Selection-popup entrance — origin-anchored unroll + unfurl + cascade | A8 popup (`popup-format-row` + `popup-annotate-row`) | dwell = the `dwellTime` setting (1 s default); lead-row unroll `360ms`; cascade `200ms` staggered; trail row `320ms +170ms`; selection deepen `240ms` | **ADD** — **supersedes A7**; unroll = animate `width` + `overflow:hidden`, **never `clip-path`** (clips box-shadow) |
+| A29 | New-tab menu morph — `+` tab button *is* the menu, single-shell two-stage | `tabs/NewTabMenu.svelte` + `tabs/DocumentTabs.svelte` | P1 width+radius `340ms`; P2 height `480ms +P1dur` (shared token, see note); rows cascade `200ms` 60ms stagger | **SHIPPED** (`f833ef0`) — replaced the old 160ms `popIn` scale. **Homonym:** A29 is *surface* A7's morph, distinct from *motion-scene* A7 |
 | A30 | Tab reorder drag — pill lifts + scales on recognition, siblings part to open the slot, release settles into place | `DocumentTabs.svelte` (wrappers) + `TabItem.svelte` (lifted pill), tokens in `tabs/tabDragMotion.css` | lift `160ms`; sibling shift `200ms`; settle `200ms`; shadow crossfade `160ms`; chrome `150ms` | **SHIPPED** — the one scene that landed without an inventory row. Reduce-motion is handled by **zeroing the tokens**, not by per-selector guards: the wrappers' durations are JS-computed per drag frame, so there is no fixed selector/value pair a guard could target (see the token-zeroing note below) |
 | — (s3) | Tab close — active tab fades + collapses, adjacent tabs reflow | `DocumentTabs.svelte` close | CSS lives only in the bundle's Svelte scene | **ADD** — extract the CSS from the scene before porting |
 
@@ -198,7 +211,10 @@ directives are ungated and carry no `|global`.
 ## Five canon decisions Phase 4 must adopt
 
 These were locked by the design lane (2026-05-31, reconciled against
-`bloknayrb/tandem@master`) and **re-verified here against current `master`**. Four
+`bloknayrb/tandem@master`) and **re-verified against `master` when this doc
+landed**. The *Verified* notes below are pre-Phase-4 snapshots of what shipped
+*before* each decision; all five decisions have since been implemented (see the
+Definition of done). Four
 of the five *replace shipped behavior/interaction* — they are design-change PRs
 that need design review, kept off the mechanical-threading lane. Decision 2 is
 already satisfied.
@@ -212,21 +228,23 @@ already satisfied.
    cobalt / import neutral `--tandem-fg-subtle`. *Verified:* the same file already
    exports `leaderColorForAuthor` and tints by author. **MATCHES — no change.**
 3. **A13 reply → disclosure model.** "N replies" → chevron-rotate + max-height
-   unfold + 120 ms cascade, in `ReplyThread.svelte`. *Verified:* `ReplyThread.svelte`
-   renders an **inline** thread today (`isReplying` / `replyText` state + an inline
+   unfold + 120 ms cascade, in `ReplyThread.svelte`. *Verified (pre-ship snapshot):* `ReplyThread.svelte`
+   rendered an **inline** thread then (`isReplying` / `replyText` state + an inline
    textarea form, not a collapsed disclosure). The disclosure model **replaces** the
    inline thread. **REPLACE.**
 4. **A9 connection → bloom state machine.** offline→reconnecting→connected: red
    static → amber ring-pulse → green bloom → coral engaged-pulse, in
-   `StatusBar.svelte`. *Verified:* `StatusBar.svelte` ships `tandem-reconnect-pulse`
-   + `tandem-status-pulse` + a separate three-dot `tandem-claude-working-pulse`
-   today. The bloom state machine **replaces** the ad-hoc pulses (the
+   `StatusBar.svelte`. *Verified (pre-Phase-4 snapshot):* `StatusBar.svelte`
+   shipped `tandem-reconnect-pulse` + `tandem-status-pulse` + a separate
+   three-dot `tandem-claude-working-pulse` then. The bloom state machine
+   **replaces** the ad-hoc pulses (the
    `claude-working` presence pulse is a separate concern — reconcile, don't
    silently drop). **REPLACE.**
 5. **A15 filter → sliding-thumb chip bar.** Icon-gated chip bar + count pip-bump in
    `FilterBar.svelte`; extra axes (author/status) fold in as further chip rows.
-   *Verified:* `FilterBar.svelte` ships three `FilterSelect` **dropdowns** today (4
-   refs). The chip bar **replaces** the dropdowns. **REPLACE.**
+   *Verified (pre-ship snapshot):* `FilterBar.svelte` shipped three
+   `FilterSelect` **dropdowns** then (4 refs). The chip bar **replaces** the
+   dropdowns — and has: `FilterBar.svelte` now uses `ChipGroup`. **REPLACE.**
 
 ---
 
@@ -240,7 +258,8 @@ menu) arrives. These compose with the single-shell morph backlog below.
    the surface's above/below position**, so motion grows *away* from the text,
    never toward it. Read the same above/below decision the positioner already makes.
 2. **Dwell before reveal.** Selection-triggered surfaces wait the user's
-   `dwellTime` (~360 ms default) before appearing. Reuse
+   `dwellTime` setting (1 s default, `SELECTION_DWELL_DEFAULT_MS`) before
+   appearing. Reuse
    `animation-delay: calc(dwellTime * 1ms)` so entrance and gate stay in sync.
 3. **Tie the tool to the text.** The selection highlight **deepens** as the surface
    arrives (accent 22→32 % + a bottom underline) and holds while active. Entrance
@@ -275,7 +294,7 @@ center) instead.
 
 | Surface | Trigger → panel |
 |---|---|
-| **A29** New-tab menu | `+` tab button → new-tab popover (spec'd; `NewTabPopover` impl pending) |
+| **A29** New-tab menu | `+` tab button → new-tab menu (shipped `f833ef0`, `tabs/NewTabMenu.svelte`) |
 | **A4-pill** Status pill | status pill → connection/detail panel (pill grows upward, stays as the bottom edge/handle) |
 | **Brand menu** | Tandem icon → brand-menu popover (there is **no gear button**; Settings is an item *inside* the brand menu — the Settings *modal* stays a centered A11 modal) |
 | **B4** Find & Replace | find icon → find field (P1) → unfurl Replace row + toggles + scope pills (P2) |

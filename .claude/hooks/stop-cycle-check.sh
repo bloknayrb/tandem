@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stop hook.
 # Fires every agent turn end. If the session has uncommitted source edits,
-# emit one informational reminder per session.
+# emit one informational reminder per edit cycle (a successful commit re-arms
+# it; see track-workflow-events.sh).
 
 set -uo pipefail
 trap 'exit 0' ERR
