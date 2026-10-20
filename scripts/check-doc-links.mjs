@@ -87,10 +87,24 @@ export function isFixture(rel) {
   return /(^|\/)(fixtures|__snapshots__)\//.test(rel);
 }
 
+/**
+ * Inline HTML contributes no text to a slug. Repeated until stable so a nested
+ * or split tag (`<scr<b>ipt>`) cannot reassemble after one pass; the result is
+ * only ever compared against link fragments, never rendered.
+ */
+function stripTags(text) {
+  let prev;
+  let out = text;
+  do {
+    prev = out;
+    out = out.replace(/<[^>]*>/g, "");
+  } while (out !== prev);
+  return out;
+}
+
 /** GitHub's heading-to-anchor slug for one heading's raw Markdown text. */
 export function slugify(heading) {
-  return heading
-    .replace(/<[^>]*>/g, "") // inline HTML contributes no text
+  return stripTags(heading)
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // link / image text only
     .replace(/`/g, "")
     .trim()
