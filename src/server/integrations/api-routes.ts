@@ -6,9 +6,12 @@
  *                                                  detected in `~/.claude.json` etc.
  *   GET    /api/integrations                     — read the persisted `integrations.json`.
  *   POST   /api/integrations                     — write a new integrations file (Zod-validated).
- *   GET    /api/integrations/first-run-needed    — `{ needed, serverVersion, confirmationNonce }`.
+ *   GET    /api/integrations/first-run-needed    — `{ needed, walkthrough, serverVersion, confirmationNonce }`.
  *                                                  Wizard auto-opens when `needed === true`.
  *                                                  Nonce is consumed by apply.
+ *   POST   /api/integrations/walkthrough-confirm — the v1.0 walkthrough's Keep (#2198):
+ *                                                  the marker only. Origin + loopback
+ *                                                  gates + a JSON body; no nonce.
  *   POST   /api/integrations/apply               — write persisted entries to Claude's config.
  *                                                  Separates intent (POST /api/integrations) from
  *                                                  side-effect (apply) per ADR-038 §2b.
@@ -41,11 +44,13 @@
  * - Calls `installSkill()` exactly once after the per-integration loop, and
  *   records a declined install (#1790, newer skill on disk) on the
  *   skill-refresh error channel — the response shape does not carry it.
+ * - Then, if a `claude-code` entry applied, calls `onClaudeCodeApplied` so the
+ *   launcher re-reads whether it is configured (#2180) and, if it should, starts
+ *   Tandem's Claude (#2197); its decision rides the response as `tandemClaude`.
  * - Response never echoes entries / headers / tokens.
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
-
 import type { Express, Request, Response } from "express";
 import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../shared/constants.js";
 import {
@@ -55,6 +60,7 @@ import {
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
   API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+  API_INTEGRATIONS_WALKTHROUGH_CONFIRM,
   type ApplyItemErrorCode,
   type ApplyItemResult,
   type ClaudeCliStatusResponse,
@@ -74,9 +80,13 @@ import {
   ERROR_CODE_SECRET_MISSING,
   ERROR_CODE_TARGET_NOT_DETECTED,
   ERROR_CODE_UNSUPPORTED_PLATFORM,
+  ERROR_CODE_WALKTHROUGH_NOT_PENDING,
+  ERROR_CODE_WALKTHROUGH_VERSION_MISMATCH,
   ERROR_CODE_WRITE_FAILED,
   type InstallClaudeCodeResponse,
+  type WalkthroughConfirmRequest,
 } from "../../shared/integrations/contract.js";
+import type { TandemClaudeAfterSetup } from "../../shared/launcher/contract.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isLocalhostOrigin } from "../mcp/api-routes.js";
 import {
@@ -116,6 +126,7 @@ import {
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { type IntegrationConfig, IntegrationsFileSchema } from "./schema.js";
 import { IntegrationsFutureSchemaError, type IntegrationsStore } from "./storage.js";
+import type { WalkthroughVia } from "./walkthrough.js";
 
 export {
   API_INTEGRATIONS,
@@ -124,6 +135,7 @@ export {
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
   API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+  API_INTEGRATIONS_WALKTHROUGH_CONFIRM,
 } from "../../shared/integrations/contract.js";
 /** Express route pattern — `:ref` is filled in by the client via {@link apiIntegrationsSecretPath}. */
 export const API_INTEGRATIONS_SECRET = "/api/integrations/secrets/:ref";
@@ -179,6 +191,67 @@ export interface IntegrationsRoutesDeps {
    * real installer.
    */
   installClaudeCli?: typeof installClaudeCli;
+  /**
+   * Called once at the end of a successful apply in which at least one
+   * `claude-code` entry was written (#2180, #2197). Production wires it to the
+   * launcher supervisor's `startAfterSetup()`, which refreshes "configured" and
+   * starts Tandem's Claude when it should. The route waits at most
+   * `TANDEM_CLAUDE_DECISION_MS` for the decision and answers `"unknown"` past
+   * that or on a throw — the start itself still runs, and the config is
+   * already written, so nothing here can fail the apply.
+   */
+  onClaudeCodeApplied?: () => Promise<TandemClaudeAfterSetup> | undefined;
+  /**
+   * The v1.0 walkthrough marker (#2198; `walkthrough.ts`). Injected so tests
+   * never touch the shared app-data dir — every vitest file sees one. Absent
+   * means no walkthrough is ever owed, which is every server before v1.0 in
+   * effect and every test that does not opt in. Production wires the real file.
+   */
+  walkthrough?: {
+    isPending(): boolean;
+    markConfirmed(via: WalkthroughVia): Promise<void>;
+  };
+}
+
+/**
+ * This server process, for the wizard's "closed it this launch" (#2198): the
+ * v1.0 walkthrough comes back on the next launch, and for the browser
+ * distribution a launch is a server start, not a tab. Random per process and
+ * nothing else — deliberately NOT the Hocuspocus generation id, which doubles
+ * as the providers' auth token.
+ */
+const LAUNCH_ID = randomBytes(8).toString("hex");
+
+/** How long the apply waits for the launcher's after-setup decision (#2197).
+ * The decision is one plan read and one settings read; a lock held by a
+ * relaunch's SIGTERM wait can take far longer, and the apply must not. */
+export const TANDEM_CLAUDE_DECISION_MS = 2_000;
+
+async function decideTandemClaude(
+  hook: (() => Promise<TandemClaudeAfterSetup> | undefined) | undefined,
+): Promise<TandemClaudeAfterSetup> {
+  let pending: Promise<TandemClaudeAfterSetup> | undefined;
+  try {
+    pending = hook?.();
+  } catch (err) {
+    console.error("[Tandem] apply: starting Tandem's Claude failed:", err);
+    return "unknown";
+  }
+  if (!pending) return "unknown";
+  // Handled either way, so a late rejection is never unhandled (#2125).
+  const guarded = pending.catch((err: unknown) => {
+    console.error("[Tandem] apply: starting Tandem's Claude failed:", err);
+    return "unknown" as const;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"unknown">((resolve) => {
+    timer = setTimeout(() => resolve("unknown"), TANDEM_CLAUDE_DECISION_MS);
+  });
+  try {
+    return await Promise.race([guarded, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -266,6 +339,11 @@ export function registerIntegrationsRoutes(
 
   app.options(API_INTEGRATIONS_APPLY, mw);
   app.post(API_INTEGRATIONS_APPLY, mw, largeBody, makeApplyHandler(deps));
+
+  app.options(API_INTEGRATIONS_WALKTHROUGH_CONFIRM, mw);
+  // No `largeBody`: the body is `{ serverVersion }`, which the app's global
+  // JSON parser already reads.
+  app.post(API_INTEGRATIONS_WALKTHROUGH_CONFIRM, mw, makeWalkthroughConfirmHandler(deps));
 
   app.options(API_INTEGRATIONS_SECRET, mw);
   app.post(API_INTEGRATIONS_SECRET, mw, largeBody, makePostSecretHandler(deps));
@@ -639,17 +717,28 @@ function makeFirstRunHandler(deps: IntegrationsRoutesDeps): Handler {
       if (forceDisable) {
         res.json({
           needed: false,
+          walkthrough: false,
           serverVersion: deps.serverVersion,
+          launchId: LAUNCH_ID,
           confirmationNonce: gate.nonce,
         });
         return;
       }
-      const file = await deps.store.read();
-      const installs = await deps.readExisting();
-      const needed = file.integrations.length === 0 && !hasExistingTandemEntry(installs);
+      // The v1.0 walkthrough (#2198) opens the wizard for everyone, setup or
+      // not — so while it is owed, neither file needs reading. The client
+      // keys "closed it this launch" on `launchId`, never on the per-version
+      // localStorage dismissal.
+      const walkthrough = deps.walkthrough?.isPending() ?? false;
+      let needed = walkthrough;
+      if (!needed) {
+        const [file, installs] = await Promise.all([deps.store.read(), deps.readExisting()]);
+        needed = file.integrations.length === 0 && !hasExistingTandemEntry(installs);
+      }
       res.json({
         needed,
+        walkthrough,
         serverVersion: deps.serverVersion,
+        launchId: LAUNCH_ID,
         confirmationNonce: gate.nonce,
       });
     } catch (err) {
@@ -840,6 +929,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       const removals = body.data.removals ?? {};
       const results: ApplyItemResult[] = [];
       let anyApplied = false;
+      let claudeCodeApplied = false;
 
       const errorResult = (
         id: string,
@@ -955,6 +1045,9 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           await applyConfig(target.configPath, ops);
           results.push({ id: entry.id, status: "applied" });
           anyApplied = true;
+          // Results carry no kind, so track it here. A skipped entry does
+          // not count: the launcher does not launch `apply: "skip"`.
+          if (entry.kind === "claude-code") claudeCodeApplied = true;
         } catch (err) {
           if (err instanceof PathRejectedError) {
             // err.message embeds the resolved realpath — keep it for the
@@ -1027,13 +1120,107 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
         }
       }
 
+      // A successful Apply finishes the v1.0 walkthrough too (#2198): every
+      // result, and there is at least one, landed. Best-effort — the config is
+      // already written, so a failed marker write costs one more walkthrough,
+      // never the apply.
+      const walkthroughDone =
+        deps.walkthrough !== undefined &&
+        results.length > 0 &&
+        results.every((r) => r.status !== "error") &&
+        deps.walkthrough.isPending() &&
+        (await markWalkthrough(deps.walkthrough, "apply"));
+
+      // A walkthrough confirmed by this Apply releases the boot hold
+      // (supervisor `walkthroughHold`) even when no claude-code entry was in it.
+      const tandemClaude =
+        claudeCodeApplied || walkthroughDone
+          ? await decideTandemClaude(deps.onClaudeCodeApplied)
+          : undefined;
+
       // Rotate nonce on every successful apply (rejected calls don't burn the nonce).
       gate.nonce = randomBytes(32).toString("base64url");
 
-      res.status(200).json({ results, nextNonce: gate.nonce });
+      res
+        .status(200)
+        .json({ results, nextNonce: gate.nonce, ...(tandemClaude ? { tandemClaude } : {}) });
     } finally {
       gate.inFlight = false;
     }
+  };
+}
+
+/** Write the marker; `false` (logged) when the write fails. */
+async function markWalkthrough(
+  walkthrough: NonNullable<IntegrationsRoutesDeps["walkthrough"]>,
+  via: WalkthroughVia,
+): Promise<boolean> {
+  try {
+    await walkthrough.markConfirmed(via);
+    return true;
+  } catch (err) {
+    console.error("[Tandem] Could not record the v1.0 walkthrough as done:", err);
+    return false;
+  }
+}
+
+/**
+ * POST /api/integrations/walkthrough-confirm — the v1.0 walkthrough's **Keep
+ * this setup** (#2198).
+ *
+ * Writes the walkthrough marker and NOTHING else: no `integrations.json`, no
+ * Claude config, no skill, no keychain, no apply-nonce rotation, no launcher
+ * settings. It then asks the supervisor what an Apply would (`startAfterSetup`),
+ * because the boot held Tandem's Claude for the walkthrough (Bryan,
+ * 2026-10-14) and confirming is what releases it — governed by the start mode
+ * like every start, so an on-click or off user's Keep starts nothing.
+ *
+ * Gates, in order: origin allowlist, loopback (the "Mutating integration
+ * routes" rule), then a parsed JSON body naming this server's version. The body
+ * is intent binding, not a CSRF layer: CORS reflects the same origins the
+ * origin gate admits. No nonce, because the only place one could come from is
+ * the ungated first-run GET that also says the walkthrough is owed; no mutex,
+ * because the write is single and idempotent.
+ */
+function makeWalkthroughConfirmHandler(deps: IntegrationsRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_WALKTHROUGH_CONFIRM)) return;
+    if (assertLoopbackForMutation(req, res)) return;
+    const body = req.body as Partial<WalkthroughConfirmRequest> | undefined;
+    if (body === null || typeof body !== "object" || typeof body.serverVersion !== "string") {
+      res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "A JSON body naming serverVersion is required.",
+      });
+      return;
+    }
+    if (body.serverVersion !== deps.serverVersion) {
+      res.status(409).json({
+        error: "CONFLICT",
+        code: ERROR_CODE_WALKTHROUGH_VERSION_MISMATCH,
+        message: "Tandem was updated since this window opened. Reload it and try again.",
+      });
+      return;
+    }
+    if (!deps.walkthrough?.isPending()) {
+      res.status(409).json({
+        error: "CONFLICT",
+        code: ERROR_CODE_WALKTHROUGH_NOT_PENDING,
+        message: "There is no setup walkthrough to confirm.",
+      });
+      return;
+    }
+    if (!(await markWalkthrough(deps.walkthrough, "keep"))) {
+      res.status(500).json({
+        error: "INTERNAL",
+        message: "Could not save that you kept your setup. Try again.",
+      });
+      return;
+    }
+    // The release is not awaited: Keep closes the wizard at once, and nothing
+    // reads the decision (the status bar shows the start as it happens).
+    void decideTandemClaude(deps.onClaudeCodeApplied);
+    res.status(200).json({ ok: true });
   };
 }
 

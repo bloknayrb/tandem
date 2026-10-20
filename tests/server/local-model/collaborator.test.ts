@@ -41,6 +41,7 @@ import {
 import type { TandemEvent } from "../../../src/shared/events/types.js";
 import { withBrowser, withInternal } from "../../../src/shared/origins.js";
 import type { ChatMessage } from "../../../src/shared/types.js";
+import { appendedId } from "../../helpers/chat-append.js";
 
 const CONFIG: LocalModelConfig = {
   endpoint: "http://127.0.0.1:11434",
@@ -58,7 +59,6 @@ function cleanResult(finalContent: string): LoopResult {
       anchorResolutionFailures: 0,
       flatOnlyAnchors: 0,
       replyFailures: 0,
-      blockedByLicense: 0,
       wallMs: 1,
       exit: "clean",
     },
@@ -77,7 +77,6 @@ function errorResult(errorMessage: string): LoopResult {
       anchorResolutionFailures: 0,
       flatOnlyAnchors: 0,
       replyFailures: 0,
-      blockedByLicense: 0,
       wallMs: 1,
       exit: "error",
       errorMessage,
@@ -983,7 +982,7 @@ describe("chat write helpers — self-wake safety (load-bearing)", () => {
       // anyway); the finalize fold is an `update`-action re-set on the chat
       // map, dropped at BOTH the shouldSkipChannel(mcp) gate and the
       // `action !== "add"` gate (#1340 — pins the origin arithmetic).
-      const id = appendClaudeChatMessage("streamed reply", { documentId: "d1" });
+      const id = appendedId(appendClaudeChatMessage("streamed reply", { documentId: "d1" }));
       updateClaudeChatMessage(id, "streamed reply (more)");
       finalizeClaudeChatMessage(id);
 
@@ -1011,7 +1010,7 @@ describe("chat write helpers — self-wake safety (load-bearing)", () => {
 
 describe("update + finalize — shape preservation across the streamed lifecycle", () => {
   it("finalize folds the text; id/author/timestamp/read/documentId/replyTo ride through verbatim", () => {
-    const id = appendClaudeChatMessage("first", { documentId: "d2", replyTo: "u9" });
+    const id = appendedId(appendClaudeChatMessage("first", { documentId: "d2", replyTo: "u9" }));
     const before = chatMap().get(id) as ChatMessage;
     updateClaudeChatMessage(id, "second");
     // #1340 NEW INVARIANT, asserted deliberately: mid-stream the chat row is
@@ -1041,7 +1040,9 @@ describe("update + finalize — shape preservation across the streamed lifecycle
 
   it("#1123 M3: stamps agentIdentity on append and carries it through stream + fold", () => {
     const identity = { provider: "local-ollama" as const, displayName: "Qwen 2.5" };
-    const id = appendClaudeChatMessage("partial", { documentId: "d3", agentIdentity: identity });
+    const id = appendedId(
+      appendClaudeChatMessage("partial", { documentId: "d3", agentIdentity: identity }),
+    );
     expect((chatMap().get(id) as ChatMessage).agentIdentity).toEqual(identity);
     // Streaming leaves the row untouched, so the byline survives every delta
     // by construction; the fold's `{...existing}` must then carry it into the
@@ -1055,7 +1056,7 @@ describe("update + finalize — shape preservation across the streamed lifecycle
   });
 
   it("#1123 M3: omits agentIdentity when none is passed (tandem_reply / dark byte-identical)", () => {
-    const id = appendClaudeChatMessage("plain", { documentId: "d4" });
+    const id = appendedId(appendClaudeChatMessage("plain", { documentId: "d4" }));
     expect((chatMap().get(id) as ChatMessage).agentIdentity).toBeUndefined();
   });
 });
@@ -1483,5 +1484,57 @@ describe("collaborator — streamed write volume at the caller level (#1340)", (
     // because no single turn reached it.
     expect(text).toBe("x".repeat(PER_TURN));
     expect(text).not.toContain("Reply truncated");
+  });
+});
+
+describe("collaborator — licence (#1521)", () => {
+  const REFUSAL = {
+    error: "LICENSE_REQUIRED" as const,
+    kind: "unlicensed" as const,
+    message: "Tandem is unlicensed, so its AI features are turned off.",
+  };
+
+  it("runs no turn and writes no chat while unlicensed, logging once per refused state", async () => {
+    setupDoc("doc-lic", "# Title\n\nBody.");
+    const runTurn = vi.fn(async () => cleanResult("should not run"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const collab = createLocalModelCollaborator(makeDeps({ runTurn, aiRefusal: () => REFUSAL }));
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("first", { documentId: "doc-lic", messageId: "a" }));
+    collab.onEvent(chatEvent("second", { documentId: "doc-lic", messageId: "b" }));
+    await drain(collab);
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(chatMessages()).toHaveLength(0);
+    const lines = errSpy.mock.calls.map((c) => String(c[0])).filter((l) => /unlicensed/.test(l));
+    errSpy.mockRestore();
+    expect(lines).toHaveLength(1);
+  });
+
+  it("is checked per run, so activation needs no restart (positive twin)", async () => {
+    setupDoc("doc-lic2", "# Title\n\nBody.");
+    let refused = true;
+    const runTurn = vi.fn(async (opts: Parameters<CollaboratorDeps["runTurn"]>[0]) => {
+      opts.onContentDelta?.("ok");
+      opts.onTurnEnd?.({ hadToolCalls: false });
+      return cleanResult("ok");
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const collab = createLocalModelCollaborator(
+      makeDeps({ runTurn, aiRefusal: () => (refused ? REFUSAL : null) }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("while refused", { documentId: "doc-lic2", messageId: "c" }));
+    await drain(collab);
+    expect(runTurn).not.toHaveBeenCalled();
+
+    refused = false;
+    collab.onEvent(chatEvent("after activation", { documentId: "doc-lic2", messageId: "d" }));
+    await drain(collab);
+    errSpy.mockRestore();
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(chatMessages()).toHaveLength(1);
   });
 });

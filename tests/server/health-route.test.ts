@@ -14,7 +14,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DeliveryState } from "../../src/server/events/delivery-state.js";
 import { makeHealthHandler } from "../../src/server/mcp/routes/health.js";
 
 function makeMockRes() {
@@ -49,15 +50,18 @@ const DELIVERY = {
 
 const seenCounts: number[] = [];
 let shuttingDown = false;
+let sessionCount = 2;
 const DEPS = {
   version: "0.0.0-test",
   hasSession: () => true,
+  sessionCount: () => sessionCount,
   getSubscriberCount: () => 3,
   getPushLiveness: () => ({ lastEventAt: 1_700_000_000_000, eventCount: 42 }),
   getDeliveryState: (externalConsumerCount: number) => {
     seenCounts.push(externalConsumerCount);
     return DELIVERY;
   },
+  aiRefused: () => false,
   isShuttingDown: () => shuttingDown,
 };
 
@@ -88,9 +92,10 @@ describe("GET /health — loopback gate", () => {
     }
   });
 
-  it("includes hasSession, push and delivery for a loopback caller", () => {
+  it("includes hasSession, sessionCount, push and delivery for a loopback caller", () => {
     const body = callWith("127.0.0.1");
     expect(body.hasSession).toBe(true);
+    expect(body.sessionCount).toBe(2);
     expect(body.push).toEqual({
       subscribers: 3,
       lastEventAt: 1_700_000_000_000,
@@ -112,6 +117,19 @@ describe("GET /health — loopback gate", () => {
   // covers fields nobody has written yet. `delivery` is the case that motivated
   // widening it: its counters trace when a human's messages arrive and whether
   // anyone answers, so it is the most sensitive field on the route, not the least.
+  // The two are separate reads on purpose: `hasSession` includes a leftover
+  // session, `sessionCount` only live ones, so "true beside 0" must pass through.
+  it("reports a leftover-only registry as hasSession true with a zero count", () => {
+    sessionCount = 0;
+    try {
+      const body = callWith("127.0.0.1");
+      expect(body.hasSession).toBe(true);
+      expect(body.sessionCount).toBe(0);
+    } finally {
+      sessionCount = 2;
+    }
+  });
+
   it("emits ONLY the public fields to a non-loopback caller", () => {
     expect(Object.keys(callWith("192.168.1.100")).sort()).toEqual(PUBLIC_KEYS);
   });
@@ -217,5 +235,68 @@ describe("GET /health — shutdown state", () => {
       "utf8",
     );
     expect(probeSource).toContain('if (record.status !== "ok") return null;');
+  });
+});
+
+/**
+ * #1521: while Tandem refuses the AI, an outstanding forward is reported as
+ * `license-refused`, not as a stall or a detach. The refusal is read only for a
+ * loopback caller — it costs a licence-file read and a signature check, and a
+ * LAN caller is never sent `delivery`.
+ */
+describe("GET /health — delivery under a licence refusal (#1521)", () => {
+  const OUTSTANDING = {
+    pollCount: 1,
+    forwardCount: 2,
+    state: "awaiting-poll" as const,
+    latencyMs: null,
+    waitingMs: 90_000,
+    sincePollMs: 120_000,
+  };
+
+  function call(
+    remoteAddress: string,
+    aiRefused: () => boolean,
+    state = OUTSTANDING as DeliveryState,
+  ): Record<string, unknown> {
+    const res = makeMockRes();
+    makeHealthHandler({ ...DEPS, getDeliveryState: () => state, aiRefused })(
+      // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+      makeMockReq(remoteAddress) as any,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+      res as any,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+      (() => {}) as any,
+    );
+    if (!res._body) throw new Error("handler did not respond");
+    return res._body;
+  }
+
+  it("reads license-refused with no clock while refused", () => {
+    const delivery = call("127.0.0.1", () => true).delivery as Record<string, unknown>;
+    expect(delivery.state).toBe("license-refused");
+    expect(delivery.waitingMs).toBeNull();
+    expect(delivery.latencyMs).toBeNull();
+  });
+
+  it("the twin: not refused, the forward still reads awaiting-poll", () => {
+    const delivery = call("127.0.0.1", () => false).delivery as Record<string, unknown>;
+    expect(delivery.state).toBe("awaiting-poll");
+    expect(delivery.waitingMs).toBe(90_000);
+  });
+
+  it("a loopback poll with nothing outstanding never pays for the refusal read", () => {
+    const aiRefused = vi.fn(() => true);
+    const idle = { ...OUTSTANDING, state: "idle" as const, waitingMs: null };
+    const delivery = call("127.0.0.1", aiRefused, idle).delivery as Record<string, unknown>;
+    expect(delivery.state).toBe("idle");
+    expect(aiRefused).not.toHaveBeenCalled();
+  });
+
+  it("a LAN caller gets no delivery and never pays for the refusal read", () => {
+    const aiRefused = vi.fn(() => true);
+    const body = call("192.168.1.100", aiRefused);
+    expect(body).not.toHaveProperty("delivery");
+    expect(aiRefused).not.toHaveBeenCalled();
   });
 });

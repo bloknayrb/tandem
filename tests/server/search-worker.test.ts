@@ -299,14 +299,13 @@ describe("WORKER_SOURCE", () => {
   });
 
   it("carries no MCP tool-registration text", () => {
-    // tests/docs/tool-count-drift.test.ts and
-    // tests/server/license-gate-coverage.test.ts regex the concatenation of
-    // every .ts file under src/server/mcp/, so a registration-shaped string in
-    // this module's source would be counted as a real tool.
+    // tests/docs/tool-count-drift.test.ts and the tool-name derivations in
+    // tests/helpers/mcp-source.ts regex the concatenation of every .ts file
+    // under src/server/mcp/, so a registration-shaped string in this module's
+    // source would be counted as a real tool.
     for (const shape of [
       'server.tool("tandem_',
       'registerTool("tandem_',
-      'gatedTool("tandem_',
       'withErrorBoundary("tandem_',
     ]) {
       expect(WORKER_SOURCE).not.toContain(shape);

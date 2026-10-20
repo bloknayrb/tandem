@@ -7,6 +7,7 @@
 import type { Request, Response } from "express";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
 import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
+import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { replaySince, subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
 
@@ -49,6 +50,15 @@ export function sseHandler(req: Request, res: Response): void {
       error: "INVALID_FILTER",
       message: 'Unsupported `filter`. The only supported value is "wake"; omit it for full events.',
     });
+    return;
+  }
+  // Licence admission (#1521): before `writeHead`, so a refused consumer gets
+  // a status code it can read and `replaySince` never runs for it. The shared
+  // SSE consumer keys on this body's `error` and backs off instead of counting
+  // it as an outage.
+  const refusal = aiRefusal();
+  if (refusal) {
+    sendAiRefusal(res, refusal);
     return;
   }
   const wakeMode = verdict === "wake";
@@ -98,7 +108,23 @@ export function sseHandler(req: Request, res: Response): void {
   };
   // The SSE stream is the one true external consumer — a channel shim or plugin
   // monitor on the other end. See `externalSubscribers` in queue.ts.
-  subscribe(onEvent, "external");
+  //
+  // `onRevoke` (#1521): an event pushed while Tandem is unlicensed ends this
+  // stream. The consumer's reconnect then meets the 403 above.
+  subscribe(onEvent, "external", {
+    onRevoke: () => {
+      cleanup();
+      try {
+        if (!res.writableEnded) res.end();
+      } catch (err) {
+        console.error(
+          "[SSE] Ending a revoked stream failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+      console.error("[SSE] Stream ended: AI features are unlicensed");
+    },
+  });
 
   // Keepalive to detect broken connections. The write MUST be guarded: on an
   // abruptly-closed socket (client SIGKILL / network drop, before req "close"

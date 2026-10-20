@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 
 interface Props {
   annotationId: string;
@@ -13,6 +14,13 @@ interface Props {
   onUndo?: (id: string) => boolean;
   onRemove?: (id: string) => void;
   onSendToClaude?: (id: string) => void;
+  /**
+   * The licence refuses the AI (#1521). "Send to Claude" still renders (the
+   * testid set is a contract, Rule 7) but disabled, and its click is a no-op.
+   * Required, with no default, so a mount that forgets it fails to compile
+   * rather than fail open.
+   */
+  aiDisabled: boolean;
 }
 
 let {
@@ -26,6 +34,7 @@ let {
   onUndo,
   onRemove,
   onSendToClaude,
+  aiDisabled,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -107,8 +116,13 @@ onDestroy(clearUndoTimer);
       <button
         data-testid="send-to-claude-btn-{annotationId}"
         class="aca-btn aca-btn--send"
+        disabled={aiDisabled}
+        title={aiDisabled ? AI_OFF_TITLE : undefined}
         onclick={(e) => {
           e.stopPropagation();
+          // The disabled attribute alone is not a guard: a programmatic click,
+          // or a flip between render and click, gets past it (#1521).
+          if (aiDisabled) return;
           onSendToClaude!(annotationId);
         }}
       >
@@ -206,8 +220,13 @@ onDestroy(clearUndoTimer);
   }
   /* Background only — unlike --ghost, rest is already --tandem-fg, so hover
      re-stating the colour would be a no-op. */
-  .aca-btn--send:hover {
+  .aca-btn--send:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
+  }
+  /* #1521: disabled while the licence refuses the AI. */
+  .aca-btn--send:disabled {
+    cursor: default;
+    color: var(--tandem-fg-subtle);
   }
   /* Twin of .composer-dest in Toolbar.svelte — see the long comment there for
      why the shape (not the colour) is what survives forced colors, why 10px,

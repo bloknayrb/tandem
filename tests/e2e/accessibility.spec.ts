@@ -257,7 +257,9 @@ const SURFACES: Surface[] = [
     // unrelated component into the scan and make a failure here ambiguous.
     //
     // NOT covered by this surface: the unread pill. `useChatState` acknowledges every
-    // claude message while the chat tab is active, and this surface activates it, so
+    // claude message while the chat tab is active in the focused window (#2168 added the
+    // focus term; Playwright's focus emulation keeps the page focused), and this surface
+    // activates it, so
     // `unreadCount > 0` cannot hold *here*. That is a property of this surface, NOT an
     // impossibility — `chatVisible` requires the chat TAB to be active (App.svelte), and
     // these scans are deliberately unscoped (see the header), so seeding while the

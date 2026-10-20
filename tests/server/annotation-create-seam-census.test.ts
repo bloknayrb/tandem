@@ -1,13 +1,11 @@
 /**
  * Who may mint an annotation, as a census rather than as prose (ADR-035, Unit 8b).
  *
- * WHY THIS EXISTS. Both create entry points are ordinary exported functions,
- * and neither carries a license gate of its own — the two gates that protect
- * them (`gatedTool` at the MCP registration site, the `MUTATING_TOOLS` check
- * above the local-model dispatch switch) are **name-keyed and upstream**. So a
- * new caller added anywhere in `src/` reaches a `withMcp` write with no gate in
- * front of it, and `tests/server/license-gate-coverage.test.ts` cannot see it:
- * that walk is scoped to `src/server/mcp`.
+ * WHY THIS EXISTS. Both create entry points are ordinary exported functions
+ * with no admission check of their own: the AI is refused upstream of them
+ * (the `/mcp` handshake and the local-model collaborator's per-run check,
+ * #1521). So a new caller added anywhere in `src/` reaches a `withMcp` write
+ * with nothing in front of it unless it, too, sits behind one of those.
  *
  * A prose rule in the lifecycle's header cannot fail. This can. It is also the
  * tripwire for Units 8c–8j, which grow the seam: each new family should arrive

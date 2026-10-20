@@ -56,6 +56,10 @@ Inside either directory:
 | `annotations/` | The durable annotation store (one JSON per document hash) and its `store.lock` |
 | `doc-backups/` | Pre-overwrite snapshots of your documents — verbatim byte copies taken before Tandem's first write to a file each run, restorable with any file manager (see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document)) |
 | `integrations.json` | Integration config; secrets are keychain references, not plaintext |
+| `launcher-settings.json` | How Tandem's own Claude starts and how long it runs (Settings → AI Assistant → Tandem's Claude, #2195). Deleting it restores the defaults: start automatically, keep running. |
+| `v1-walkthrough.json` | Whether you have been through the setup wizard on v1.0 (#2198): written once, when you click **Keep this setup** or an Apply succeeds. Until it exists, every launch of a v1.0 release opens the wizard and holds Tandem's Claude until you confirm. Deleting it brings the walkthrough back on the next launch; an unreadable one is treated as done. |
+| `first-run-greeting.json` | Whether Tandem's own Claude still owes you its one-time hello in the chat panel (#2197): written `owed` on a first install and on the first run of v1.0, `done` once the hello arrives. Deleting it does not bring the hello back on its own; it is armed again only on a first install or the first run of v1.0. |
+| `launcher-session.json` | The conversation Tandem's own Claude resumes, and the folder it was started in. Deleting it makes the next start a fresh conversation. |
 | `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately; doing so does not re-run the one-time npm import. |
 | `npm-migration-complete` | **Desktop location only.** The record that the one-time copy from the npm directory already happened. Deleting it makes the next desktop launch re-import that directory, so leave it alone. |
 | `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory — the desktop keeps its token in the OS keychain and passes it to the sidecar. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
@@ -119,6 +123,29 @@ platform (write a secret, restart, read it back), and Tandem never calls
 takes the file fallback with no diagnostic. Treat "these entries exist" as
 expected rather than observed. Nothing here is lost if they do not: the
 consequence is that a secret has to be re-entered, not that it leaks.
+
+## If you buy a license: what the seller keeps
+
+Nothing on this page so far leaves your computer. Buying a license (from v1.0;
+nothing is on sale during the beta) puts your details in three places outside it:
+
+| Where | What | Who holds it |
+| --- | --- | --- |
+| Paddle | Your customer record, payment, receipts and invoices | Paddle, the merchant of record, under its own privacy policy |
+| The seller's issuance ledger (`LEDGER_KV`, on Cloudflare) | Your email and name, copied from Paddle when the license is made, with the Paddle transaction id, the license id, its type, dates, and whether the email was sent or the order refunded | The seller (Bryan Kolb) |
+| Resend, the email service | The license email it delivered to you, with your license inside, for as long as Resend's log retention keeps it | Resend, under its own privacy policy |
+
+The ledger, and the seller's private backups of it, are the only places the
+seller itself keeps your name and email. The update
+service your app talks to sees only the opaque license id, and the seller's
+operator alerts carry no ids at all. Your license itself, with your name and
+email inside, is on your own machine as `license.json` (above).
+
+**To have the seller's copy erased**, email the support address in your license
+email. The seller removes your name and email from the ledger record and keeps
+only its ids, so your license and its updates keep working. After that, a lost
+license can be reissued only if you send your name and email again. Paddle's own
+records are kept under Paddle's terms.
 
 ## Entries Tandem writes into other programs' config
 

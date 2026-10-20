@@ -397,6 +397,42 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     ).toMatch(/\.emit\(EVENT_SIDECAR_RESTARTED/);
   });
 
+  it("agrees with the client on the notification-activated event's name", () => {
+    // #2168, same hazard and shape as the two pins above: a desktop
+    // notification click reaches the WebView only as this payload-free event,
+    // and the client specs stub the event API with the client's own constant.
+    // A one-character disagreement leaves every suite green while clicks
+    // silently stop opening chat.
+    const rust = rustSourceDefining(/const ACTIVATED_EVENT: &str/, "ACTIVATED_EVENT");
+    const declared = rust.code.match(/const ACTIVATED_EVENT: &str = "([a-z-]+)";/);
+    expect(
+      declared,
+      "the Rust event constant is not a plain string literal any more",
+    ).not.toBeNull();
+
+    const client = stripTsComments(
+      readFileSync(join(REPO_ROOT, "src", "client", "tauri", "notifications-invoke.ts"), "utf8"),
+    );
+    const listened = client.match(/export const NOTIFICATION_ACTIVATED_EVENT = "([a-z-]+)";/);
+    expect(
+      listened,
+      "the client's NOTIFICATION_ACTIVATED_EVENT binding is not a plain literal any more",
+    ).not.toBeNull();
+
+    expect(declared?.[1], "Rust emits one event name and the client listens for another.").toBe(
+      listened?.[1],
+    );
+    expect(rust.code, "the emit site must pass ACTIVATED_EVENT, not a second literal").toMatch(
+      /\.emit\(ACTIVATED_EVENT\b/,
+    );
+    // ...and App.svelte must subscribe through that constant, not a copy.
+    const app = readFileSync(join(REPO_ROOT, "src", "client", "App.svelte"), "utf8");
+    expect(app).toMatch(
+      /import \{[^}]*\bNOTIFICATION_ACTIVATED_EVENT\b[^}]*\} from "\.\/tauri\/notifications-invoke"/,
+    );
+    expect(app).toContain("event: NOTIFICATION_ACTIVATED_EVENT");
+  });
+
   it("gives every Rust wire code an explicit case in the client's message map", () => {
     const sources = rustSources();
     // Stripped once and shared: `routedIn` below asks about the same derived

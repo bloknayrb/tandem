@@ -8,7 +8,15 @@ export interface LicenseMetadata {
   createdAt: string; // ISO string
   expiresAt: string | null; // ISO string or null for never (end of update window)
   version: string; // "1.0"
+  /**
+   * The signing key's id (`keyIdForPublicKey`). Optional on read: licenses
+   * signed before key ids existed have none and verify against the legacy key.
+   */
+  keyId?: string;
 }
+
+/** What a signer produces: every newly issued license names its key. */
+export type IssuedLicenseMetadata = LicenseMetadata & { keyId: string };
 
 export interface SignedLicense {
   metadata: LicenseMetadata;
@@ -68,9 +76,9 @@ export interface LicenseFile {
  * is told their trial ended. Only ever set on the non-licensed arms; the
  * licensed arm is by construction verified.
  *
- * Deliberately NOT a fourth `status` value: `connection-gate.ts` and
- * `license-gate.ts` both decide on `status === "restricted"`, so a new status
- * would fail OPEN at both enforcement surfaces until every gate was updated.
+ * Deliberately NOT a fourth `status` value: `ai-refusal.ts` decides on
+ * `status === "restricted"`, so a new status would fail OPEN at every AI
+ * admission point until the decision was updated.
  * Diagnosis and entitlement are orthogonal axes.
  */
 export type LicenseState =
@@ -102,7 +110,9 @@ export type LicenseState =
  * (out-of-band path). Canonical shape shared by the REST writer; the
  * update Worker (`infra/license-update-worker/`) keeps a structurally-identical
  * local copy (separate Cloudflare build) kept in lockstep by a parity test.
- * `updateWindowEnd: null` ⇒ never expires (grandfathered).
+ * `updateWindowEnd: null` ⇒ never expires — every issued key, paid or
+ * grandfathered, since every key includes all future updates (ADR-040,
+ * 2026-10-09). A date appears only on a key hand-signed with `--expires`.
  */
 export interface LicenseEntitlement {
   updateWindowEnd: string | null;

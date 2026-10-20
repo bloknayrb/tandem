@@ -35,6 +35,7 @@ export function makeActionDeps(overrides: Partial<ActionDeps> = {}): ActionDeps 
     getActiveDocumentPath: () => "/home/user/notes.md",
     notify: vi.fn(),
     afterLauncherAction: vi.fn(),
+    aiNotice: () => null,
     openSettings: vi.fn(),
     toggleSoloMode: vi.fn(),
     openFindBar: vi.fn(),

@@ -86,20 +86,20 @@ test("warning notification pops a transient toast AND lands in the tray", async 
     id: "warn-1",
     type: "annotation-error",
     severity: "warning",
-    message: "Your AI tried a deprecated tool.",
+    message: "A sample warning for the tray.",
   });
 
   // Transient pop appears.
   const toast = page.locator("[data-testid='toast-warn-1']");
   await expect(toast).toBeVisible({ timeout: 5_000 });
-  await expect(toast).toContainText("Your AI tried a deprecated tool.");
+  await expect(toast).toContainText("A sample warning for the tray.");
 
   // Pill reflects the count; tray row carries the same message.
   const pill = page.locator("[data-testid='activity-pill']");
   await expect(pill).toContainText("1");
   await pill.click();
   await expect(page.locator("[data-testid='activity-row-warn-1']")).toContainText(
-    "Your AI tried a deprecated tool.",
+    "A sample warning for the tray.",
   );
 });
 

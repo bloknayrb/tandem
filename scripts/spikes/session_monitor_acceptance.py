@@ -1884,6 +1884,12 @@ class ConptyTrialDriver:
     def _launcher_mode(status: dict[str, Any]) -> str:
         if status.get("available") is True:
             return "normal"
+        # #2180: a live launcher with no claude-code integration reports
+        # unavailable/not-configured. The harness seeds no integrations.json,
+        # so this IS its normal mode; reading it as "unknown" would make every
+        # live trial INCONCLUSIVE.
+        if status.get("reason") == "not-configured":
+            return "normal"
         return {
             "disabled-by-env": "launcher-disabled",
             "deferred-autostart": "deferred-autostart",

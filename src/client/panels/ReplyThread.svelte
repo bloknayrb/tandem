@@ -2,6 +2,7 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 import CommentThread from "./CommentThread.svelte";
 import { discloseUnfold } from "./cardMotion";
 import { TEXTAREA_STYLE } from "./panel-styles";
@@ -25,6 +26,13 @@ interface Props {
    * margin view, and any card SidePanel's `canAccept` gate declines).
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
+  /**
+   * The licence refuses the AI (#1521). A reply to a COMMENT is an AI write, so
+   * it is blocked; a reply inside the user's own note thread (#1000) is not.
+   * Required, with no default, so a mount that forgets it fails to compile
+   * rather than fail open.
+   */
+  aiDisabled: boolean;
 }
 
 let {
@@ -36,6 +44,7 @@ let {
   reduceMotion = false,
   openNonce = 0,
   onAcceptReplySuggestion,
+  aiDisabled,
 }: Props = $props();
 
 // Single client-display fan-out point. Notes show their (private) reply
@@ -84,6 +93,9 @@ let isSendingReply = $state(false);
 let replyTextareaEl: HTMLTextAreaElement | null = $state(null);
 
 const hasText = $derived(Boolean(replyText.trim()));
+// #1521. Never used to reset `isReplying` / `replyText` from an effect: a draft
+// open at the licence flip is kept until the licence returns or the user cancels.
+const replyBlocked = $derived(aiDisabled && annotation.type !== "note");
 
 $effect(() => {
   if (isReplying) replyTextareaEl?.focus();
@@ -97,7 +109,10 @@ $effect(() => {
 let lastOpenNonce = untrack(() => openNonce);
 $effect(() => {
   if (openNonce === lastOpenNonce) return;
+  // Consume the nonce BEFORE bailing on a refusal (#1521): an unconsumed bump
+  // would pop the composer open the moment the licence returns.
   lastOpenNonce = openNonce;
+  if (replyBlocked) return;
   isReplying = true;
 });
 
@@ -110,6 +125,9 @@ function handleReplyKeyDown(e: KeyboardEvent) {
 }
 
 async function handleSendReply() {
+  // A composer open at the licence flip: the server's reply route has no
+  // licence check, so this is the guard (#1521). The draft stays.
+  if (replyBlocked) return;
   const trimmed = replyText.trim();
   if (!trimmed || isSendingReply) return;
   isSendingReply = true;
@@ -179,7 +197,7 @@ async function handleSendReply() {
             <button
               data-testid="reply-send-btn-{annotationId}"
               onclick={handleSendReply}
-              disabled={!hasText || isSendingReply}
+              disabled={!hasText || isSendingReply || replyBlocked}
               style="padding: 2px 8px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-1); background: {hasText
                 ? 'var(--tandem-accent-bg)'
                 : 'var(--tandem-surface-muted)'}; color: {hasText
@@ -204,7 +222,11 @@ async function handleSendReply() {
         <!-- Count lives on the disclosure toggle above for all annotation types. -->
         <button
           data-testid="reply-btn-{annotationId}"
-          onclick={() => (isReplying = true)}
+          disabled={replyBlocked}
+          title={replyBlocked ? AI_OFF_TITLE : undefined}
+          onclick={() => {
+            if (!replyBlocked) isReplying = true;
+          }}
           style="padding: 1px 4px; font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
         >
           Reply

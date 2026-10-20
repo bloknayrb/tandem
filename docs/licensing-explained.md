@@ -41,9 +41,10 @@ You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
 (**double-clicking the file does nothing** — Tandem registers no `.license` file
 association; its only associations are `.md`/`.markdown`, `.txt` and `.html`,
-`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working forever, on
-any computer you personally use, with no internet connection required to prove
-it. For the first year you also get new versions as they're released.
+`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working
+forever, with no internet connection required to prove it. Every future update
+is included too, with no time limit, though no one can promise that future
+updates will come.
 
 **Where you paste it depends on which Tandem you're running.** On the desktop app
 the only route is Settings → License; the desktop bundle ships no `tandem`
@@ -61,15 +62,15 @@ is still the only route, and it stops offering the command accordingly.
 | | |
 |---|---|
 | **The version you have** | Yours forever. No subscription, no expiry, and no licence check over the network. |
-| **New versions** | For one year from purchase. |
-| **After that year** | Tandem keeps running exactly as it is. You're just not offered new releases until you renew. |
-| **Devices** | Any computer you personally use. |
+| **New versions** | All future updates are included, for as long as they are released. There is no update year, no renewal and no paid upgrade. No future update is guaranteed. |
+| **Devices** | Not counted, and not limited by the license. |
 | **Offline** | Activation and running work with the network unplugged — no server is ever asked whether your licence is valid. (Checking for *updates* does contact us, and sends an opaque id. See Part 2.) |
 
 ## Why the key is so long
 
 It's a **signed document**, not a password. Inside it are your name, your email,
-what kind of license it is, and when your update year ends — all sealed with a
+what kind of license it is, and an update-window field that issued keys leave
+empty — all sealed with a
 cryptographic signature that Tandem can check by itself, offline.
 
 That's the whole trick. Tandem doesn't need to ask a server "is this key real?",
@@ -80,14 +81,19 @@ The cost is length: you can't make a self-proving document short. So we made
 sure you never have to type it. The email attaches it as a file, and you can
 paste it in one go.
 
-## Before any of that: the public beta is free
+## Before any of that: the public beta is free for personal use
 
 Everything on this page describes v1.0 and later. **Every pre-1.0 release is free
-to use, with no time limit and nothing to activate** — the BUSL Additional Use
-Grant in [LICENSE](../LICENSE) says so in as many words, so this is a term you
-are granted rather than an enforcement gap you are getting away with. It is also
-not enforced: the gate ships dark, so a beta build has no trial clock running at
-all and the three states below are unreachable in it.
+for personal use and individual self-hosting, with no time limit and nothing to
+activate.** That is the first paragraph of the BUSL Additional Use Grant in
+[LICENSE](../LICENSE), so it is a term you are granted rather than an enforcement
+gap you are getting away with. The grant also reaches back: it covers every
+pre-1.0 release that shipped under an earlier wording of the licence, including
+v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. Releases
+before v0.11.0, and the v0.11.0 to v0.14.3 desktop builds whose package metadata
+said MIT, are MIT-licensed. None of it is enforced: the gate ships dark, so a
+beta build has no trial clock running at all and the three states below are
+unreachable in it.
 
 At v1.0 the gate flips and the 14-day trial starts for new installs. **Beta users
 are grandfathered with a free license and skip the trial entirely** — see the
@@ -99,12 +105,25 @@ and therefore no list of beta users to work from.
 1. **Trial** — 14 days from first launch. Everything works. A banner counts down.
 2. **Licensed** — you activated a key. Everything works, forever.
 3. **Restricted** — the trial ended and there's no license. **Your documents are
-   never held hostage:** you can still open them, read them, export them, and
-   talk to Claude about them. What stops is Tandem's own editing.
+   never held hostage:** Tandem stays a working editor. You can open, edit, save
+   and export your documents. What a key adds is the AI features, such as Claude
+   (or any other agent) over the MCP server, the chat panel and local models. The
+   [LICENSE](../LICENSE) grants exactly that: v1.0 and later may be used without
+   a key, for personal use and individual self-hosting, provided the use does
+   not include the AI features.
 
 That third one matters and is easy to get wrong, so to be blunt: **we do not
-lock you out of your own files.** They're plain files on your disk. Tandem is
-the thing that stops editing them; nothing stops you opening them anywhere else.
+lock you out of your own files.** They're plain files on your disk, and nothing
+stops you opening them anywhere else.
+
+**The server and the editor's screens both work this way (#1521).** An unlicensed
+Tandem refuses Claude, chat, push and the local model, and never refuses an edit;
+the MCP refusal and `tandem license` say so. The editor matches: there is no
+activation wall and the document stays editable. An "AI features are off" notice
+sits in the right rail and links to Settings → License, the status pill reads "AI
+off", and the AI controls (the chat composer, the comment segment, Send to Claude,
+replies to a comment, the AI context-menu items) are disabled in place. None of it
+is reachable while the gate ships dark.
 
 ## If something goes wrong
 
@@ -147,11 +166,14 @@ of the engineering below exists purely to make that state detectable.
 ## The pieces
 
 ```
-  Buyer                Polar            Cloudflare Workers          Their machine
+  Buyer                Paddle           Cloudflare Workers          Their machine
     |                    |                      |                        |
     |--- pays ---------->|                      |                        |
-    |                    |-- order.paid ------->| issuance Worker        |
-    |                    |   (svix-signed)      |  . verify signature    |
+    |                    |-- transaction. ----->| issuance Worker        |
+    |                    |   completed          |  . verify signature    |
+    |                    |   (Paddle-Signature) |                        |
+    |                    |<-- GET /customers ---|  . look up the buyer   |
+    |                    |--- email, name ----->|                        |
     |                    |                      |  . mint + Ed25519-sign |
     |                    |                      |  . write LEDGER_KV     |
     |                    |                      |  . write LICENSE_KV    |
@@ -167,8 +189,13 @@ of the engineering below exists purely to make that state detectable.
 
 Four moving parts:
 
-1. **`infra/license-issuance-worker/`** — a Cloudflare Worker. Receives Polar's
-   webhook, mints and signs the license, records it, emails it.
+1. **`infra/license-issuance-worker/`** — a Cloudflare Worker. Receives
+   Paddle's `transaction.completed` webhook (Paddle is the merchant of record),
+   looks the buyer's email and name up through the Paddle API, because the
+   webhook carries neither, then mints and signs the license, records it, and
+   emails it. Refunds and chargebacks arrive as `adjustment.*` events. None of
+   this has run against a real Paddle account yet; the open questions are U1–U12
+   in [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay).
 2. **`infra/license-update-worker/`** — a second Worker. Decides whether a given
    license id may be served the update manifest.
 3. **`src/server/license/`** — the on-device gate. Verifies, tracks the trial,
@@ -187,7 +214,7 @@ Four moving parts:
     "email": "jane@example.com",
     "type": "personal",       // personal | commercial | grandfathered
     "createdAt": "2026-07-26T…",
-    "expiresAt": "2027-07-26T…", // END OF UPDATE WINDOW — not end of the license
+    "expiresAt": null,        // END OF UPDATE WINDOW (null = none, every issued key) — never end of the license
     "version": "1.0"
   },
   "signature": "…Ed25519 over canonicalize(metadata)…"
@@ -206,7 +233,10 @@ update window and nothing else. The run gate deliberately calls
 `SignatureVerified` branded type that only the signature-only function can
 produce, so wiring in the stricter one is a **compile error**. Without that,
 someone "tidying up" the two near-identical verifiers would silently lock out
-every paid user the day their update year ended.
+every holder of a dated key the day its window ended. Since 2026-10-09 every
+issued key has `expiresAt: null` (all future updates included, ADR-040 decision
+A5), so a date appears only on a key hand-signed with `--expires`; the guard
+stays, because the field and the stricter verifier both still exist.
 
 ## On-device state resolution
 
@@ -229,219 +259,209 @@ unrepresentable — you cannot construct a restricted state carrying a license.
 `licenseUnverifiable` carries a **code**, not a boolean: "have it reissued",
 "the file is damaged" and "update Tandem" are three different user actions, and
 a boolean forced every surface to hedge across all three in one sentence. It
-deliberately is **not** a fourth `status` value, because both enforcement
-surfaces branch on `status === "restricted"` — a new status would **fail open**
-at both until every gate was updated.
+deliberately is **not** a fourth `status` value, because the AI-surface
+decision (`aiRefusal()`) branches on `status === "restricted"` — a new status
+would **fail open** at every admission point until it was updated.
 
-## Enforcement: two surfaces, both server-side
+## Enforcement: one decision, at the AI's admission points
 
-A client-side check would be theatre — browser edits flow over Hocuspocus, not
-MCP, so gating only the MCP tools would leave the front door open.
+The licence (since [#2174](https://github.com/bloknayrb/tandem/pull/2174)) and ADR-040 as amended on
+2026-10-11 say the same thing: *after the 14-day trial, Tandem remains a usable editor, but with no
+AI features.* So enforcement refuses **the AI**, never the editor, and it does so in one place:
 
-- **Surface A** — `provider.ts onAuthenticate` marks document rooms read-only
-  when restricted. Not `CTRL_ROOM`: chat, mode and awareness stay live, which is
-  what keeps the escape hatch real.
-- **Surface B** — `gatedTool()` wraps Claude's mutating MCP tools at
-  *registration* time, and `licenseGateMiddleware` is its Express twin for the
-  mutating `/api` routes.
+```
+aiRefusal()  ->  null                                     (dark build, trial, licensed)
+             ->  { error: "LICENSE_REQUIRED",
+                   kind: "unlicensed" | "unverifiable",
+                   message }                              (restricted)
+```
 
-Both re-resolve per dispatch. The MCP tool and its `/api` twin are gated as one
-set (`tests/server/license-gate-coverage.test.ts` enforces this) — because an
-MCP write bypasses Surface A entirely, so gating a route without its twin leaves
-a hole.
+`src/server/license/ai-refusal.ts` returns `null` on its first line while the gate ships dark, and
+re-reads disk on every call like `resolveLicenseState` does — no memo, because a cache is what caused
+the mid-session-expiry bugs. `kind: "unverifiable"` means a licence file is installed but fails to
+verify; its message is the fix-or-reissue copy from `unverifiableLicenseMessage()` and **never carries
+the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL.
+The wire envelope is that object everywhere: the `/api` 403 body, and the `data` of the MCP error.
+
+Until #1521 enforcement worked the other way round, and that history explains several tests: **Surface
+A** marked Hocuspocus document rooms read-only, and **Surface B** (`gatedTool()` on 14 MCP write tools,
+`licenseGateMiddleware` on 7 `/api` routes, plus two in-handler `licenseGate()` calls) refused content
+writes — while chat, push and Claude's read tools stayed open. All of that is deleted.
 
 ### The gated set
 
-> **Shape superseded 2026-08-18 (#1346, ADR-040 amendment), still current as code.** The decision
-> is that an unlicensed copy is a plain markdown editor with **no AI integration at all** — a
-> *surface* gate, not the per-tool content-write gate enumerated below. Nothing has moved: this
-> list remains an accurate description of the merged (dark) code and stays Critical Rule 9's review
-> surface until the surface gate is implemented. Read it as "what is gated today", not "what the
-> gate is for".
+There is no longer a per-operation gated set. What is enumerated instead is the set of **admission
+points**, each of which asks `aiRefusal()`:
 
-**Both halves are now CI-enforced**, so this list is a readable mirror rather than the review
-itself — which it was until 2026-09-08. `tests/server/license-gate-coverage.test.ts` covers the
-MCP tools; `tests/server/license-gate-api-coverage.test.ts` covers the `/api` routes. Each holds
-one row per surface, `gated` or `ungated`, with a written reason, and fails closed when a new
-surface appears with no row.
+| Admission point | Where | Refused how |
+|---|---|---|
+| MCP over HTTP | `POST /mcp` (top of the handler, above the `isInit` branch) and `GET /mcp` (before `dispatchToSession`) in `src/server/mcp/server.ts` | `initialize`: HTTP 200 + JSON-RPC error `-32003` with `data: { error, kind, purchaseUrl? }`, no session created. A request on a live session gets the same error and the session is closed. A bare notification: 202, dropped. `GET`: 403 with the envelope. `DELETE` is admitted, so teardown works. |
+| Stdio server mode (`TANDEM_TRANSPORT=stdio`, env-only) | `startMcpServerStdio` | Refused at start: every request is answered with the same error. Not re-checked mid-session. |
+| Claude's chat writes | `appendClaudeChatMessage()` in `src/server/mcp/awareness.ts` | Returns `{ ok: false, refusal }`; `tandem_reply` answers with the error, `POST /api/channel-reply` answers 403 before stamping anything read. |
+| The approval relay | `POST /api/channel-permission` and `POST /api/channel-permission-verdict` | 403 with the envelope. |
+| Push / wake fan-out | `pushEvent` in `src/server/events/queue.ts` | A refused event is not forwarded and **not recorded** as pushed or as an unanswered ask. External subscribers that supplied `onRevoke` are cut off. |
+| SSE `/api/events` | `sseHandler` | 403 before `writeHead`, so `Last-Event-ID` replays nothing; a live stream is ended by its revoke hook. |
+| WS `/api/wake` | `onUpgrade`, after the pure `verifyWakeUpgrade` | 403 with a JSON body; a live socket is closed `4403 LICENSE_REQUIRED`. |
+| The launcher's Claude Code | `startInternal` and `respawn` in `src/server/launcher/supervisor.ts` | Boot, the deferred start and crash-respawn refuse by **returning** (`lastError: "unlicensed"`); relaunch and start-fresh refuse by **throwing** before anything is stopped, and the routes answer 403 `LAUNCHER_UNLICENSED`. `POST /api/license/activate` resumes a refused launcher (`resumeAfterLicence`), including one whose chip shows an earlier diagnosis; no other way of becoming licensed does. |
+| Local-model collaborator | `onEvent` in `src/server/local-model/collaborator.ts` | Per run: no turn, no chat write, one stderr line per refused state. |
 
-The `/api` one was added because a prose list cannot notice an omission. `POST /api/mode/release`
-mutates annotation records across every open document and appeared in no list at all until #1821
-read the source, so nothing had ever taken a view on it. It also carries two sweeps a reader
-cannot perform reliably: one for a whole registrar file outside the five it knows, and one for a
-`licenseGate()` call in an unlisted module — the in-handler shape a `licenseGateMiddleware` grep
-does not find.
+**Open, deliberately:** every browser and editor write — the seven routes Surface B gated
+(`scratchpad`, `apply-changes`, `document/reload`, `backups/restore`, `external-conflict/resolve`,
+`annotation-reply`, `remove-annotation`), `POST /api/open` including `force: true`, save, rename,
+convert, mode release and `DELETE /api/chat` — plus licence activation itself, `/health`, launcher
+status, and the shim's diagnostics (`channel-awareness`, `channel-error`). `tandem_resolveAnnotation`
+is **kept**: ADR-040 decision 2 planned to retire it, but with the handshake refusing unlicensed
+Claude, retiring it would only take dismissal away from licensed users, so that is split out of #1521.
 
-Adding a mutating MCP tool or `/api` route still means adding it here, in both halves; the
-difference is that forgetting now turns `check` red instead of waiting for someone to re-read
-this page.
+**Both halves are CI-enforced.** `tests/server/license-gate-api-coverage.test.ts` holds one row per
+mutating `/api` route — `refused`, `refused-by-supervisor` or `open`, each with a written reason —
+fails closed on a new route with no row, sweeps for a registrar file outside the five it knows, and
+fails if `licenseGateMiddleware`, `licenseGate()` or `gatedTool()` reappear anywhere in `src/server`.
+`tests/server/license-gate-coverage.test.ts` pins the handshake (armed: refused, and a fresh-trial twin
+admitted) and that the check sits above the `isInit` branch. `tests/server/license-module-seam.test.ts`
+pins which files import each `src/server/license/` module, and that the bundles built without the
+licence `define` — the stdio bridge, the channel shim, the plugin monitor, the shared SSE consumer —
+reach none of them; those key only on the wire payload `error === "LICENSE_REQUIRED"`.
+`tests/server/license-armed-restricted.test.ts` is the armed probe of the MCP, push, chat and stdio
+admission points, each paired with a fresh-trial twin, and proves the seven browser write routes
+Surface B used to gate (scratchpad, apply-changes, document/reload, backups/restore,
+external-conflict/resolve, annotation-reply, remove-annotation) and `/api/open` with `force` still
+succeed armed. `tests/server/license-armed-editing.test.ts` proves the browser's own Hocuspocus
+writes still land armed: document edits, accept and dismiss, and the Solo/Tandem mode in `CTRL_ROOM`,
+plus the `openDocuments` broadcast reaching it. The launcher's refusal is probed in
+`tests/server/launcher/license-refusal.test.ts` and the local model's in
+`tests/server/local-model/collaborator.test.ts`.
 
-**MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_scratchpad`, `tandem_comment`,
-`tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
-`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_resolveAnnotation`,
-`tandem_applyChanges`, `tandem_restoreBackup`.
+**What the clients do with a refusal.** The stdio bridge relays the server's error verbatim. If a
+replayed handshake is refused mid-session it latches that error, answers every request with it, and
+retries every 30 seconds, so activation is picked up without a restart; a non-licence failure clears
+the latch. (A host whose *first* `initialize` was refused has already been told by its SDK that the
+server failed, and needs a reconnect (`/mcp` in Claude Code) or a restart after activation; a
+refused `initialize`, and only that, appends `AI_REFUSAL_RECONNECT_HINT` saying so, and the bridge
+logs one stderr line. The bridge's own replayed `initialize` draws the hint too, so it strips it
+before latching: that host's session never failed.) The shared SSE consumer treats a
+`LICENSE_REQUIRED` 403 as a refusal, not an outage — no retry ladder, no `channel-error` report — and
+retries every 5 minutes; the plugin monitor prints the refusal once on stdout. The channel shim sends
+the model one channel notification (`event_type: license_refused`) per refused stretch, and logs a
+refused permission relay as a licence refusal rather than a plain 403. `/health`'s `delivery.state`
+reads `license-refused` while a forward is outstanding and Tandem refuses the AI, instead of
+`consumer-detached` or a climbing `awaiting-poll`. Doctor's session reading defers to its licence row
+while AI is refused, because a refused client has no session and a surviving one is closed at its
+next request. `tandem doctor` reads
+`GET /api/license/status` once, adds a licence row (silent when dark, on a 404 from an older server
+or when nothing answers; a "License status unreadable" warning on any other non-OK, unparsable or
+unrecognised answer). The row records `gateActive`, `status` and `licenseUnverifiable` when the
+answer is readable and only the HTTP status when it is not, never the holder's name or email, and
+the push and SSE rows defer to it.
 
-**`/api`** — `apply-changes`, `annotation-reply`, `remove-annotation`, `document/reload`,
-`external-conflict/resolve`, `backups/restore`, `scratchpad`.
+**Accepted residuals** (Bryan, D5): an unlicensed Claude Code with shell access can still reach
+Tandem's local endpoints directly, which is equivalent to editing the file on disk; an open session is
+cut at its next request or event, not at the instant of expiry; stdio server mode is not re-checked
+mid-session; and events buffered while unlicensed — including the user's own chat — replay to the
+first consumer admitted after activation.
 
-`tandem_editList` has no `/api` twin, so the `/api` half of Critical Rule 9 is a no-op
-for it. Stated rather than left silent: this list IS the `/api` half's review, and an
-absence nobody wrote down reads the same as an omission.
+These are **licence-enforcement residuals, not security findings**, so none of them is owed a row in
+[security.md's register](security.md#open-findings). An AI with shell access acts with the user's own
+privileges, on the user's own files and the user's own loopback server; nothing in any of them crosses
+a trust boundary. What they bound is how completely the licence is enforced, not who can do what.
 
-Gate each pair together (`tandem_scratchpad` *and* `/api/scratchpad`). The three deprecated
-stubs are gated too, so un-stubbing one cannot silently ship a hole.
+Two more, of the same kind:
 
-**The gate has two mechanisms, and grepping `licenseGateMiddleware` finds only the first**: the
-middleware mount, *plus* direct in-handler `licenseGate()` calls. `src/server/mcp/routes/open.ts`
-gates the `force === true` sub-path of `POST /api/open`, mirroring the `tandem_open` MCP handler
-— so a route can be gated without the middleware appearing anywhere near it. **Audit the handler
-body, not the registration site.**
-
-**Deliberately ungated:** all reads, *plain* `open` (only the destructive `force: true` reload is
-gated, on both halves), save/export, `GET` routes, and chat. `tandem_resolveAnnotation` left this
-set in [#1788](https://github.com/bloknayrb/tandem/issues/1788) (decision F): accept/dismiss
-writes the document room's annotation map, which Surface A already refuses from the browser when
-restricted, so leaving the MCP twin ungated let Claude triage a document its own user could not.
-It has **no `/api` twin** — `src/shared/api-paths.ts` carries reply and remove and nothing
-resolve-shaped, the browser accepting over Hocuspocus — so the `/api` half of Critical Rule 9 is
-satisfied by construction rather than by an edit.
-
-**Three mutations sit outside the gate and are not obviously reads.** Recorded here rather
-than left silent, because an absence nobody wrote down reads the same as an omission:
-
-- `tandem_rename` / `POST /api/rename` — renames the user's file on disk. Ungated
-  (`src/server/mcp/document.ts:1420` is a plain `withErrorBoundary`).
-- `tandem_convertToMarkdown` / `POST /api/convert` — **writes a new `.md` file to disk** and
-  opens it. Ungated (`src/server/mcp/document.ts:1499`).
-- `POST /api/mode/release` — clears `heldInSolo` markers on open documents
-  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, and the reasoning is now its own
-  rather than a cross-reference to `tandem_resolveAnnotation`: **mode lives in `CTRL_ROOM`, which
-  Surface A deliberately never marks read-only**, so a restricted user can still toggle
-  Solo→Tandem. Gating only the RELEASE would let them reach Solo and never leave it, stranding
-  their annotations behind a Held pill while their reads stay open — worse than what gating
-  prevents. Decision F asked for the opposite; the later (2026-09-08) reasoning won because it is
-  the only one of the two that considered the user afterwards, and re-gating one row is one line.
-  **Open for Bryan** on [#1788](https://github.com/bloknayrb/tandem/issues/1788) (comment
-  5612504584). It has no MCP twin, and since
-  [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode key at
-  all.
-
-Whether any of the three should join the gated set is a decision, not a doc fix. Neither
-disk-writing tool is a *document content* write in the sense the gate is drawn around, but
-both put bytes on the user's filesystem, which is more than "a plain markdown editor".
+- **A licence file that exists but cannot be read is treated as unverifiable, for that moment.**
+  `resolveLicenseState` re-reads `license.json` on every call, and a read error that is not ENOENT (an
+  antivirus or sync-client lock: `EBUSY`, `EPERM`), an unparseable body, or a body with no `blob` all
+  resolve `unverifiable` — the fix-or-reissue copy, never the purchase link, and never an unlock. A
+  transient lock therefore refuses the AI only for as long as it lasts, with one side effect each: an
+  SSE consumer refused in that window backs off 5 minutes before retrying, and a launcher refused at
+  boot stays down until the restart chip (or an activation) brings it back. The same holds for any
+  licence that becomes valid without `POST /api/license/activate`: `tandem activate` from the CLI or a
+  `license.json` copied in by hand never reaches the launcher, so Restart is the way back. #2205
+  tracks making the CLI path resume it.
+- **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
+  checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
+  unreachable today; revisit if that flag flips.
 
 ## AI surfaces — the #1346 inventory
 
-> **Discovery step for the ADR-040 amendment (#1346, decision 3).** The amendment asks whether
-> every AI surface shares one enforcement point. It cannot be answered as written, because
-> nothing enumerated the *surfaces*: the gated set above is an inventory of **operations**, which
-> is a different axis, and it is why three of the six rows below appear nowhere in it. This
-> section is that missing axis. It describes **today's code**, not the target design.
-> `tests/docs/ai-surface-inventory-claims.test.ts` derives rows 4-6 from source and fails when a
-> new AI surface appears, so this list cannot silently go short the way an unpinned enumeration
-> does.
+> **The axis the surface gate is drawn on.** #1346 asked whether every AI surface could share one
+> enforcement point; it could not be answered while nothing enumerated the *surfaces* (the old gated
+> set was an inventory of **operations**, a different axis). This section is that enumeration, and
+> since #1521 every row has its admission point. `tests/docs/ai-surface-inventory-claims.test.ts`
+> derives the chat and push rows from source and checks that each choke point calls the licence
+> decision, so this list cannot silently go short.
 
 An **AI surface** is any path by which a model reads document state, writes it, or learns that it
 changed. Six exist:
 
-| # | Surface | Admission point | Enforcement today |
+| # | Surface | Admission point | Refused since #1521 |
 |---|---|---|---|
-| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **14** `gatedTool`, 1 conditional in-handler, **18** ungated (33 registered) |
-| 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
-| 3 | `/api` mutating twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler — **but see below: these are the *user's* surfaces** |
-| 4 | Chat | `appendClaudeChatMessage()` | **none** |
-| 5 | Event push / wake | `subscribe(cb, "external")` | **none** |
-| 6 | Local-model collaborator | in-process dispatch loop | its own third copy, 3 tools |
+| 1 | MCP over HTTP (`:3479`) | the `/mcp` handshake (`POST`/`GET` in `src/server/mcp/server.ts`) | yes — before any tool is reachable |
+| 2 | MCP over stdio | `src/cli/mcp-stdio.ts` (bridge) | **inherits row 1**: relays the refusal, latches it mid-session |
+| 3 | `/api` mutating twins | Express registrars | **not an AI surface** — see below |
+| 4 | Chat | `appendClaudeChatMessage()`, plus `/api/channel-*` | yes |
+| 5 | Event push / wake | `pushEvent` and `subscribe(cb, "external")` (SSE, wake socket, supervisor) | yes; the launcher's spawn too |
+| 6 | Local-model collaborator | `onEvent`, per run | yes |
 
-Three things follow that the amendment's three-surface framing does not predict.
+**Row 2 is free.** The bridge registers no handlers and forwards raw messages, so refusing at row 1
+also refuses Claude Desktop and Cowork. It only needed to stop calling a licence refusal "session
+lost", which is what its latch does.
 
-**Row 2 is free.** `mcp-stdio.ts` registers no handlers and forwards raw messages, so refusing at
-row 1 also refuses Claude Desktop and Cowork. There is no fourth transport to gate.
-
-**Row 3 is misnamed, and correcting it removes work rather than adding it.** Every one of the seven
-`licenseGateMiddleware`-gated routes is called from `src/client/` and nowhere else —
-`annotation-reply` and `remove-annotation` from `panels/annotation-actions.ts`, `apply-changes` from
+**Row 3 is the browser, and correcting that removed work rather than adding it.** Every one of the
+seven routes Surface B gated is called from `src/client/` and nowhere else — `annotation-reply` and
+`remove-annotation` from `panels/annotation-actions.ts`, `apply-changes` from
 `ApplyChangesButton.svelte`, `scratchpad` and `backups/restore` from `actions/builtin.svelte.ts`,
 `document/reload` from `editor/SourceView.svelte`, `external-conflict/resolve` from
-`ExternalConflictBanner.svelte`. They are the **browser's** write path, twins of an MCP tool only in
-that both end at the same Y.Doc. Under decision 1 the user keeps writing, so these are **ungated
-outright**: they need no admission point. Deleting their middleware is *most* of the change, not
-all of it — row 3's "+1 in-handler" is `POST /api/open` with `force: true`, which calls
-`licenseGate()` directly in `src/server/mcp/routes/open.ts` and is also client-only
-(`client/utils/server-paths.ts`). That call goes too, and it is exactly the kind of gate the
-middleware grep does not find. The genuinely AI-facing `/api` surface is the `/api/channel-*`
-family plus `/api/events` and `/api/wake` — rows 4 and 5.
+`ExternalConflictBanner.svelte`; and `POST /api/open` with `force: true` from
+`client/utils/server-paths.ts`. They are the **browser's** write path, twins of an MCP tool only in
+that both end at the same Y.Doc. Keyless editing is granted, so #1521 deleted their gates outright.
+The genuinely AI-facing `/api` surface is the `/api/channel-*` family plus `/api/events` and
+`/api/wake` — rows 4 and 5.
 
-Worth stating plainly, because the opposite reading is available and alarming: *"the reshape deletes
-seven middleware mounts and Surface A, so an unlicensed install serves `POST /api/apply-changes`
-ungated."* It does, and that is correct — but for a narrower reason than "the caller owns the
-document", which these routes do not establish. `annotation-reply` and `remove-annotation` are two of the
-**six** routes that call neither `assertLoopbackForMutation` nor `assertOriginAllowlisted` (the
-inventory in `CLAUDE.md`); what stands behind them is the **path-wide loopback invariant** and
-nothing else. `apply-changes` was a third until it gained `assertOriginAllowlisted` to close a
-simple-request CSRF, so it now holds two layers — which does not change the argument here, since
-the loopback invariant is still what the licensing claim rests on. So the accurate claim is *any loopback-local
-process*, which is the same trust boundary they have today — the licence gate was never what kept
-them safe, and removing it takes nothing away. Critical Rule 9 pairs an MCP tool with its `/api`
-twin to stop a **content write** slipping past a content-write gate; once the gate is about
-surfaces, that premise is gone, which is why the rule is rewritten rather than re-applied. Their
-authorization posture is a separate question, unchanged here and tracked in
+Worth stating plainly, because the opposite reading is available and alarming: *an unlicensed install
+serves `POST /api/apply-changes` ungated.* It does, and that is correct — but for a narrower reason
+than "the caller owns the document", which these routes do not establish. `annotation-reply` and
+`remove-annotation` are two of the **six** routes that call neither `assertLoopbackForMutation` nor
+`assertOriginAllowlisted` (the inventory in `CLAUDE.md`); what stands behind them is the **path-wide
+loopback invariant** and nothing else. `apply-changes` holds `assertOriginAllowlisted` as well, to
+close a simple-request CSRF. So the accurate claim is *any loopback-local process*, which is the same
+trust boundary they had before — the licence gate was never what kept them safe, and removing it takes
+nothing away. Their authorization posture is a separate question, tracked in
 [security.md](security.md#open-findings).
 
-**Rows 4-6 have no enforcement site at all, and rows 4-5 are not "missed" — they are
-deliberately open.** `connectionShouldBeReadOnly` exempts `CTRL_ROOM` by design so chat survives
-as the read-only escape hatch, and `shouldForwardExternally` passes `chat:message`
-unconditionally for the same reason. Under decision 1 that inverts: chat *is* the AI integration,
-so the thing kept alive on purpose becomes the thing most clearly refused. A grep for
-`licenseGate|LicenseState|resolveLiveLicenseState` across `src/server/events/`, `src/channel/`,
-`src/monitor/` and `src/server/launcher/` returns nothing.
+**Rows 4 and 5 inverted.** Before #1521 they were open on purpose: `CTRL_ROOM` was exempt from
+Surface A so chat could survive as the "read-only escape hatch", and `shouldForwardExternally` passed
+`chat:message` unconditionally for the same reason. Under the amended policy chat *is* the AI
+integration, so the thing once kept alive on purpose is now the thing most clearly refused. The
+user's own chat writes over Hocuspocus are untouched; only Claude's side is refused.
 
-**Row 6 documents its own hole.** `src/server/local-model/tools.ts` states that the loop "bypasses
-both license enforcement surfaces (no Hocuspocus connection; not an MCP tool), so the THREE
-mutating tools consult the gate here." That is accurate, and it is the pattern rather than an
-oversight: each new AI surface discovers it is outside the gate and grows a private copy. Doubly
-inert today (`BYO_MODELS_ENABLED` *and* `LICENSE_GATE_ENABLED` are both false), so it is a
-template for the next mistake, not a live one.
+**Row 6 lost its private copy.** `src/server/local-model/tools.ts` used to carry a third copy of the
+gate on its three mutating tools — the pattern of each new AI surface discovering it was outside the
+gate and growing its own check. It now has none: the collaborator refuses per run, before dispatch.
 
 ### What is *not* an AI surface
 
-**Surface A is the human's editor.** `applyConnectionGate` clamps Hocuspocus document rooms to
-read-only, which under the amendment is backwards — decision 2 puts annotation accept/reject in
-the editor UI, and a read-only clamp is exactly what would stop the user resolving their own
-annotations. Surface A is deleted by the amendment, not rewritten.
+**The human's editor.** Surface A clamped Hocuspocus document rooms to read-only, which was backwards
+under the amended policy — it stopped the user editing and resolving their own annotations. It is
+deleted, not rewritten. `CTRL_ROOM` writes (Solo/Tandem mode, dwell, `openDocuments`) are the
+browser's and stay writable.
 
-### The choke points already exist
+### The choke points
 
-The reason a surface gate is tractable where "make the three agree" is not: the surfaces share no
-call path (a WebSocket connection lifecycle, JSON-RPC dispatch, Express, and an in-process
-function call cannot be routed through one interception), but each already has a single narrow
-admission point, and three of the four are existing functions with all their callers in one place.
+The surfaces share no call path (a WebSocket upgrade, JSON-RPC dispatch, Express, and an in-process
+function call cannot be routed through one interception), but each has one narrow admission point,
+and those are where `aiRefusal()` is consulted:
 
-- `appendClaudeChatMessage()` — every AI chat write: `tandem_reply`, `POST /api/channel-reply`, the collaborator.
-- `subscribe(cb, "external")` — every push consumer: SSE `/api/events`, WS `/api/wake`, the supervisor's stdin.
 - The MCP session handshake — rows 1 and 2 together.
-- The collaborator's start path — row 6.
+- `appendClaudeChatMessage()` — every AI chat write: `tandem_reply`, `POST /api/channel-reply`, the collaborator.
+- `pushEvent` plus `subscribe(cb, "external")` — every push consumer: SSE `/api/events`, WS `/api/wake`, the supervisor's stdin. The supervisor's gap and standby watches subscribe `"internal"` and read the push's own verdict (`wasForwardedExternally`), so a refused event neither owes a wake nor starts Claude for a message (#2196).
+- The supervisor's spawn — the launcher's own Claude Code.
+- The collaborator's per-run check — row 6.
 
-That is **four admission checks**, against 20+ per-operation checks today, and it changes the
-per-tool cost of Critical Rule 9 from two edits to zero.
-
-### Two consequences, both settled 2026-08-19
-
-**The read tools stop being safely ungated — settled 2026-08-19 (ADR-040 second amendment, decision 7).** Sixteen tools are ungated on the rule "reads are
-the escape hatch", and `RESTRICTED_MESSAGE` promises it in so many words: *"Reading, opening and
-exporting still work."* Decision 1 says an unlicensed copy has no AI integration at all, so the
-escape hatch belongs to the **human's editor**, not to Claude — the user keeps opening, reading
-and exporting, and the AI reads nothing. The sixteen are not correctly ungated; they are gated at
-a layer the surface gate removes.
-
-**The refusal copy contradicts decision 5 in three places.** Decision 5 is always "unlicensed",
-never "expired". `RESTRICTED_MESSAGE` opens *"Your Tandem trial has ended"*; the collaborator's
-`LICENSE_REQUIRED` body repeats it; `license-gate.ts`'s own docblock says *"trial expired"*. This
-is copy, not mechanism — the `LicenseStatus` union (`"trial" | "licensed" | "restricted"`) is a
-state name, and the 14-day trial clock is confirmed unchanged. The replacement strings are now
-decided — see the copy table in ADR-040's second amendment (2026-08-19). This paragraph stands
-until the code carries them, and `tests/docs/ai-surface-inventory-claims.test.ts` pins it to that
-fact rather than to the intent.
+That changed the per-tool cost of a new MCP tool from two licence edits to zero: a new tool is behind
+the handshake by construction. The refusal copy says *unlicensed*, never *expired* or *trial ended*
+(ADR-040 decision 5), and the old "reading, opening and exporting still work" promise is gone with the
+per-tool gate it described — the user keeps opening, reading and exporting in the editor, and the AI
+reads nothing.
 
 ## Delivery: why the email looks the way it does
 
@@ -543,24 +563,48 @@ nothing needs re-issuing.
 
 ## The one that loses sales without a trace
 
-Polar disables a webhook endpoint after repeated consecutive failures. So:
+A failing delivery retries until Paddle gives up on it. So:
 
 ```
-unverified RESEND_FROM -> Resend 422 -> Worker returns retryable 500
-  -> Polar retries ~10x -> endpoint disabled
-    -> every subsequent sale arrives nowhere
-      -> and writes NO ledger record at all
+unverified RESEND_FROM (or a webhook secret that no longer matches,
+  or an expired Paddle API key) -> every sale gets a non-2xx
+    -> Paddle retries each one, 60 times over ~3 days
+      -> then marks the notification "failed"
+        -> and the Worker wrote NO ledger record at all
 ```
 
-This is why reconciliation **enumerates from Polar's order list, not the
-ledger**. A ledger-rooted scan for `emailSent: false` is structurally blind to
-it — those orders have no record to find. Polar's own delivery log is the only
-surface that shows the disable.
+This is why reconciliation **enumerates from Paddle's transactions and its
+notification log, not the ledger**. A ledger-rooted scan for `emailSent: false`
+is structurally blind to it — those sales have no record to find. What the
+Worker can do is leave a trace of two kinds:
+
+- **A durable record.** Every event the Worker authenticated but could not
+  fulfil (`dropped`), and every refund or API-key event that needs a human
+  (`noticed`), writes a `notice:` key to `LEDGER_KV` before the Worker answers
+  200. The alert that goes with it is best-effort; the record is what the
+  operator lists, acts on and clears.
+- **A daily check.** A bad signature never alerts, because anyone on the
+  internet can send one and an alert per request would drain the email quota
+  that delivers licenses. So a webhook secret regenerated in Paddle without the
+  matching Worker secret is silent per request; a once-a-day cron in the Worker
+  asks the Paddle API for failed or retrying notifications and inactive
+  destinations, and alerts if it finds any, if there is no destination at all,
+  or if it cannot ask.
+
+Two silences remain, deliberately. A `rejected` request (no signature, a bad
+one, a stale one) leaves nothing, for the reason above. And a free (100%-code)
+transaction is `ignored` with no record and no alert when its buyer is not on
+the grandfather list or its price is not one the Worker sells, because nobody
+paid and a leaked code must not become a way to fill the operator's inbox. (A
+sandbox Worker also ignores every buyer not on its own test list.) Whether Paddle also deactivates a destination that keeps
+failing is unverified (U5); the daily check looks for that too.
 
 ## Why alerts don't go through the thing that's broken
 
-Operator alerts fire on `dropped` results and email-stage failures. The
-email-stage alert deliberately does **not** route through Resend — Resend is
+Operator alerts fire on `dropped` and `noticed` results, on email-stage and
+Paddle-API failures, on a failed notice write, on a corrupt ledger record, on
+the config stages, and from
+the daily delivery check. The email-stage alert deliberately does **not** route through Resend — Resend is
 what just failed — and degrades to a webhook, or is dropped with an
 `alert-undeliverable` log line rather than sent down the broken path.
 
@@ -577,31 +621,41 @@ Worth stating plainly, because they look like bugs:
   The signed license is the only hard gate; the trial is a courtesy.
 - **A refund does not stop the software running.** It can't — activation is
   air-gapped by design. Consumer law obliges returning money, not technical
-  revocability.
-- **Nothing enforces the device count.** "Any device you personally use" is an
-  honour-system limit, and the terms say so rather than implying otherwise.
-- **In restricted mode Claude can still edit the file on disk** and the watcher
-  reloads it. Tandem's editing is gated; the filesystem isn't.
+  revocability. What a full refund or a chargeback stops is updates: the Worker tombstones that
+  key's update entitlement. A partial refund changes nothing automatically; the
+  buyer keeps the license and the operator gets a notice (decided 2026-10-18).
+- **Nothing counts devices or people.** `LICENSE` sets no per-key limit either,
+  and customer copy deliberately states none: how a key is used is left to
+  good faith (decided 2026-10-15).
+- **In restricted mode a Claude Code with shell access can still reach Tandem
+  out of band** — edit the file on disk (the watcher reloads it) or call
+  Tandem's local endpoints directly. Tandem refuses the AI at its own admission
+  points; it cannot refuse a process editing the user's files, and does not try
+  (accepted residual, #1521).
 
 ## What is not built yet
 
-- **Key rotation.** There is one pinned public key and no `keyId`, so rotating
-  drops every existing customer to restricted, mid-session. Making the verifier
-  accept an *array* of keys is a few lines and would make rotation routine —
-  but adding a `keyId` to the signed metadata changes the signed bytes, so that
-  variant is now-or-never, before the first sale.
+- **A rotation that has actually run.** Since 2026-10-15 every license carries
+  a `keyId` and the app trusts a list of keys, so the signing key can be
+  replaced without dropping existing customers
+  ([licensing-operations.md §0](licensing-operations.md#rotating-the-signing-key)).
+  No rotation has been done, and the Workers runtime's id derivation is checked
+  only by the sandbox order that procedure calls for.
 - **A resend-my-license endpoint.** Deferred past ~25 sales; manual re-signing
   is adequate and safer at that volume, and it doesn't help the case that
   actually prompts it (mail quarantine).
 - **A commercial SKU.** `issue()` hardcodes the type to `personal` (or
   `grandfathered`), so a commercial purchase would be **silently issued a
-  personal licence** rather than rejected. Organisational use is therefore
-  unsellable today and checkout copy must exclude it explicitly, until an
-  SKU→type map exists.
+  personal licence** rather than rejected. A personal key already covers an
+  employee doing their own work (`LICENSE` defines personal use as one natural
+  person's), so what is unsellable today is a shared or hosted deployment, and
+  checkout copy must exclude that explicitly until an SKU→type map exists.
 - **Atomicity on concurrent deliveries.** Workers KV has no compare-and-swap.
   `issue()` and `revoke()` each re-read immediately before their first commit,
-  which narrows the race to one KV round trip but does not close it. Closing it
-  needs a Durable Object per order.
+  which narrows the race to one KV round trip but does not close it. Every
+  license a transaction mints is indexed, so a later refund revokes a double
+  mint too (within the minute or so KV listing takes to catch up). Closing the
+  race needs a Durable Object per order.
 - **The legal documents.** See [licensing-terms.md](licensing-terms.md) — a
   working draft exists. No counsel is being consulted, so the licensor writes
   the real ones.

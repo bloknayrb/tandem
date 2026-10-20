@@ -61,6 +61,7 @@ matrix across OS versions, observer soak, accessibility) live in
   This is the one path in this feature the `windows-latest` CI leg only *compiles*, never *exercises* — it needs a human on real Windows.
 - [ ] **SUSPENDED (ADR-055); this is item 1 of the re-enable checklist (#2134).** **The Cowork VM reaches :3479 with only Tandem's own firewall rule (Decision E).** Do not set `TANDEM_BIND_HOST` by hand (and since ADR-056 a non-loopback value is refused at start, so a re-enable that needs it also needs that flag). With Cowork enabled (elevated, as above), open a Cowork session and ask Claude to list your documents. Pass: Tandem's tools answer, meaning the VM reached :3479 through `host.docker.internal`. If they do not, the Cowork setup instructions (out of the README while dark) are incomplete, because nothing sets `TANDEM_BIND_HOST` automatically. Record the result either way: [decision E](reviews/2026-09-02-v1-review/decisions.md) is still marked Unknown pending this run.
 - [ ] **Credentials survive a restart (#1761).** Store a token through the integration wizard's Advanced step, then quit and relaunch. **Credential Manager → Windows Credentials** must still list both the `tandem-integrations` entry and the `tandem` entry that holds the auth token. Check the store itself: a working Cowork connection proves nothing here, because the auth token also falls back to a file. #1761 added the round-trip test, and this row is its hardware half.
+- [ ] **Chat-reply notifications (#2168).** Installed app, not a dev build (which posts as PowerShell). With Tandem in the background, ask Claude something in chat: a toast appears, the taskbar button flashes until you switch back, and the chime plays. Click the toast while it is on screen: Tandem comes forward with chat open on the reply's document. With **Settings → Notifications → I keep Tandem visible beside other apps** on, close Tandem to the tray from the taskbar's right-click **Close window** without clicking into it first, then ask Claude something: a toast still appears within about 2 s of the reply. WebView2 is never told the window was hidden, so this is the native-visibility poll working.
 - [ ] **Never-signed-in Claude Code (#1780).** On an account where `claude` has never signed in, launch Tandem. Within about 10 s the empty state shows the sign-in message and **Check again**. Click it without signing in: the message returns within about 10 s. Quit Tandem without signing in and launch it again: the message returns, because the owed re-check is saved with the session rather than held in memory. Sign in with `claude`, click Check again: the chip clears and stays clear, and a new comment gets an answer. The unit layer drives the supervisor's half against a recorded envelope; this row is the only check that the MCP stream actually closes after the kill, which was read from `server.ts` and never measured.
 
 ## 2. macOS (real hardware, Apple Silicon)
@@ -85,6 +86,15 @@ exactly this residual).
 - [ ] **Credentials survive a restart (#1761).** As on Windows, but check **Keychain Access** for the `tandem-integrations` and `tandem` items. This is the OS-keychain round-trip the intro above names.
 - [ ] **A force-quit app's sidecar (#1988).** With a document open, `kill -9` the Tandem app process, not `node-sidecar`. After 30 s, record whether `node-sidecar` is still alive (`pgrep -fl node-sidecar`; `lsof -iTCP:3479 -sTCP:LISTEN`). **Survival is the expected result today**, since macOS and Linux have no parent-death reaper (#1988), so a survivor is recorded, not treated as a release stop. Then relaunch Tandem. Pass: it starts, Copy Diagnostics is healthy, and the old sidecar is gone. The new sidecar's startup `freePort` reclaims the ports, and that is the only recovery there is.
 - [ ] **The marketplace plugin arms on a fresh profile.** On a Claude Code profile with no Tandem skill installed, install the `tandem@tandem-editor` marketplace plugin. Start a session with Tandem running and type `/tandem`. Pass: the first annotation you add wakes the session. Arming has been measured on Windows only. A typed `/tandem` emits no `PreToolUse Skill` event, so judge by the wake, not by hook logs.
+- [ ] **Chat-reply notifications (#2168). Never run on a Mac.** CI compiles and unit-tests the macOS branch of `src-tauri/src/notifications.rs`; what macOS does at runtime has not been seen by anyone. Use the installed app, not `cargo tauri dev`, which posts as Terminal. Run it once with **System Settings → Notifications → Tandem** set to *Banners* and once with *Alerts*. With Tandem in the background, ask Claude something in chat:
+  - a notification appears, the dock icon bounces, and the chime plays;
+  - clicking the notification body brings Tandem forward and opens chat on the document the reply was about. This is the first notification of the absence, the one that carries the "Open chat" action;
+  - the **Open chat** button, if macOS shows one, does the same;
+  - step away again and let two replies arrive more than 30 s apart. Both notify; clicking the second may only bring Tandem forward, which is expected;
+  - coming back to Tandem clears its notifications from Notification Centre.
+
+  **Pass condition if clicks do nothing:** notifications, bounce and chime still work, and clicking the dock icon still works. That is a degraded pass, not a release stop. Record it, because the action-button design rests on reading the notify-rust 4.18 and mac-notification-sys 0.6 sources, not on a run. Also send **Settings → Notifications → Send a test notification** while Tandem is frontmost and record where it lands; it may go straight to Notification Centre.
+- [ ] **"I keep Tandem visible beside other apps" counts a minimised window as away (#2168).** Turn the setting on, minimise Tandem (⌘M) and ask Claude something: a notification appears. On macOS this still rests on WKWebView's own `visibilityState`, because minimising fires no resize event for the native read to catch, and no one has observed what WKWebView reports.
 
 ## 3. Linux (best effort, any box or VM)
 
@@ -121,12 +131,46 @@ before it meets a paying user.
       (Added 2026-06-11; once the updater authenticates against the
       license-checked endpoint — #1116 L3 — run this against the staging
       endpoint so the entitlement check is in the loop.)
-- [ ] **License gate ON** (#1116; Windows + macOS minimum): on a gate-enabled
-      build — trial banner appears → simulate trial expiry (clock or test hook)
-      → hard gate engages → activate with a **real signed license** (issued by
-      the L1 script) → app runs → updater entitlement check succeeds. This is
+- [ ] **v1.0 setup walkthrough** (#2198; Windows + macOS): `isV1Release`
+      rejects an rc, so launch the RC with `TANDEM_FORCE_V1_WALKTHROUGH=1`
+      on a profile that has a working 0.x setup. Expect: the wizard opens
+      pre-filled; Tandem's Claude is held (Start shown, no hello yet); closing
+      it and relaunching brings it back; **Keep this setup** closes it and —
+      with "Start automatically" — starts Tandem's Claude; relaunching shows
+      no wizard. (No hello on the rc: the greeting's v1.0 re-arm ignores
+      release candidates, and the force switch is the walkthrough's alone.) Check `integrations.json`
+      still holds the working directory and token ref it had before.
+      Re-check on the 1.0.0 build itself without the variable — there the
+      hello follows the release, once.
+- [ ] **License gate ON** (#1116, #1521; Windows + macOS minimum). This is
       the most user-hostile path the product ships; it must not run for the
-      first time on launch day.
+      first time on launch day. On a gate-enabled build, run each step below.
+      The full checklist, with setup notes, is
+      [#2204](https://github.com/bloknayrb/tandem/issues/2204).
+      - [ ] **Trial end.** The trial banner appears → end the trial (rewrite
+            `trial.json`'s `firstRunAt` more than 14 days back) → the **editor
+            stays editable** and only the AI is off: the AI pill reads "AI off",
+            the rail notice (open the right rail) says "AI features are off",
+            the chat composer is
+            disabled, and accept/dismiss on existing annotations still work. A
+            Claude Code session gets the licence message, not "server not
+            running".
+      - [ ] **Trial end while Tandem's Claude runs.** The running child is left
+            alone, and its next tool call returns the licence message. After a
+            stop, a restart is refused and the pill never offers Restart, even
+            inside the client's licence-poll lag.
+      - [ ] **Activation, Settings path.** Paste a **real signed license**
+            (`scripts/sign-license.ts`) into Settings → License: the AI-off
+            notice clears, chat re-enables, and Tandem restarts its Claude by
+            itself within about 5 s.
+      - [ ] **Activation, CLI path.** `tandem activate <key>`: the pill offers
+            Restart once the licence poll picks the key up, and Restart starts
+            Claude. Once #2205 lands, Claude resumes by itself instead.
+      - [ ] **Unverifiable holder.** A damaged `license.json` shows "could not
+            be verified" copy, never "unlicensed" and never a buy link. The
+            Settings form heading "Activate a license" is expected.
+      - [ ] **Updates.** With the key active, the app runs and the updater's
+            entitlement check succeeds.
 
 ## Recording the result
 

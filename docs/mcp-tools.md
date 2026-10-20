@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem registers 33 tools in source (28 active, 2 shipped dark, 3 deprecated stubs); a release exposes 31 over MCP HTTP. The deprecated stubs return MCP error responses with code `DEPRECATED`. The two dark tools, `tandem_applyChanges` and `tandem_convertToMarkdown`, are `.docx`-only and are registered only when `.docx` is enabled ([ADR-053](decisions.md#adr-053-docx-ships-dark)). 
+Tandem registers 30 tools in source (28 active, 2 shipped dark); a release exposes 28 over MCP HTTP. The two dark tools, `tandem_applyChanges` and `tandem_convertToMarkdown`, are `.docx`-only and are registered only when `.docx` is enabled ([ADR-053](decisions.md#adr-053-docx-ships-dark)). 
 
 **`.docx` ships dark.** A release refuses `.docx` files, so every `.docx` behaviour described below (Word comment import and export, `allowImageLoss`, the `.docx` sidecar backup, the error codes only the two dark tools return) is reachable only in a build with `.docx` enabled. It stays documented so the re-enable starts from an accurate reference.
 
@@ -59,13 +59,12 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied): `EACCES`, or on Windows `EPERM` from `open`, which is how a folder you can read but not write, or a file you cannot read, fails there. `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer these with it. |
-| `DEPRECATED` | A removed tool or parameter was used — the deprecated stubs (`tandem_highlight`, `tandem_suggest`, `tandem_flag`) and `tandem_comment`'s `directedAt`. |
 | `READ_ONLY` | The document is read-only, so the mutation was refused: `tandem_edit`, `tandem_editList`, `tandem_appendContent`, `tandem_applyChanges`, `tandem_restoreBackup` and `tandem_rename`. `tandem_save` instead succeeds session-only with `saved: false` and `reason: "read-only"`, and the annotation tools do not check `readOnly` at all -- annotations are not document content and never reach the file. |
 | `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
 | `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
 | `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:296`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
-| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations **and annotation status changes** do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. Never returned while the gate ships dark. |
+| `LICENSE_REQUIRED` | Tandem is unlicensed, so its AI features are off (#1521). No individual tool returns it: the `/mcp` transport refuses the session itself, as a JSON-RPC error with code `-32003` whose `data` is `{ error: "LICENSE_REQUIRED", kind, purchaseUrl? }` -- `kind` is `unlicensed` or `unverifiable`, and `purchaseUrl` appears only on `unlicensed`. A session already open is closed by its next request. `tandem_reply` can carry it too, as defence in depth. The editor itself is never refused. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
@@ -85,7 +84,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 
 `INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
 
-**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact. `tandem_suggest` is a deprecated stub that returns before any range is validated, so it is not one of the two.
+**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact.
 
 ## Coordinate System
 
@@ -283,7 +282,7 @@ Two details worth knowing, because they are asymmetries in the coordinate system
 
 ### tandem_edit
 
-Replace text at a specific range. Single-paragraph replacements only.
+Replace the text in `[from, to)` with `newText`, inserted literally and never parsed as Markdown. `from === to` is a point insertion. A range inside one block edits that block; a range whose ends are in different top-level blocks merges them (and is refused with `INVALID_RANGE` if either end is inside a list, blockquote or table). Use `tandem_appendContent` or `tandem_editList` for new block structure.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -307,7 +306,7 @@ An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rat
 | `non-integer` | `from` or `to` is not an integer. (The schema also rejects this, so you normally see a protocol error first.) |
 | `inverted` | `from > to`. |
 | `out-of-bounds` | `from < 0`, or `to` past the end of the document. `to === length` is valid. |
-| `empty` | For `tandem_edit`, `from === to` **and** an empty `newText` — the one genuine no-op. **Point insertion is supported:** `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n`, and it is the only mid-document insert path. Two things to know about it: **omit `textSnapshot`** (a zero-length range matches no text, so a snapshot always looks stale — the call is refused with `INVALID_ARGUMENT` rather than letting the `RANGE_MOVED` retry turn your insert into a replacement), and `from: 0` on a document that opens with a heading is `HEADING_OVERLAP`, since offset 0 sits inside the `# ` prefix — insert after the prefix, or at the start of the first body block. For `tandem_comment` / `tandem_suggest` / `tandem_flag`, `from === to` alone, since an annotation needs a span to anchor to. |
+| `empty` | For `tandem_edit`, `from === to` **and** an empty `newText` — the one genuine no-op. **Point insertion is supported:** `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n`, and it is the only mid-document insert path. Two things to know about it: **omit `textSnapshot`** (a zero-length range matches no text, so a snapshot always looks stale — the call is refused with `INVALID_ARGUMENT` rather than letting the `RANGE_MOVED` retry turn your insert into a replacement), and `from: 0` on a document that opens with a heading is `HEADING_OVERLAP`, since offset 0 sits inside the `# ` prefix — insert after the prefix, or at the start of the first body block. For `tandem_comment`, `from === to` alone, since an annotation needs a span to anchor to. |
 | `surrogate` | An offset falls between the two halves of a surrogate pair (inside an emoji or other astral character). Move it to either side of the character. |
 | `unresolvable` | The offsets could not be resolved against the document structure. Only `tandem_edit` can reach it, only at `(0, 0)`, and only on a document whose top-level children are not block elements — a shape no writer in Tandem produces. An actually-empty document answers `EMPTY_DOCUMENT` instead. |
 
@@ -325,7 +324,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 
 **Notes:**
 - Always use `tandem_resolveRange` first to get safe offsets.
-- Newlines in `newText` are inserted as literal characters, not new paragraphs — **in a markdown or `.docx` document. In a plaintext one (`.txt`, `.html`, `.log`, `.csv`, any unknown extension) a newline is REFUSED with `INVALID_ARGUMENT` (#1460).** Those formats spell a paragraph boundary and an intra-paragraph break identically, so a literal newline would save to bytes that reopen as two paragraphs — the document coming back a different shape than the one written. Issue one `tandem_edit` per line instead. (`tandem_appendContent` is not a substitute — it refuses any non-markdown document outright.) The refusal is deliberate rather than a silent split: this tool is a single-paragraph replacement and `RANGE_MOVED`'s retry contract assumes the range stays inside one block.
+- Newlines in `newText` are inserted as literal characters, not new paragraphs — **in a markdown or `.docx` document. In a plaintext one (`.txt`; `.html` is read-only and refused earlier) a newline is REFUSED with `INVALID_ARGUMENT` (#1460).** Those formats spell a paragraph boundary and an intra-paragraph break identically, so a literal newline would save to bytes that reopen as two paragraphs — the document coming back a different shape than the one written. Issue one `tandem_edit` per line instead. (`tandem_appendContent` is not a substitute — it refuses any non-markdown document outright.) The refusal is deliberate rather than a silent split: `newText` is inserted literally and never creates a block, and `RANGE_MOVED`'s retry contract assumes the inserted text stays inside one block.
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
 - Edits appear instantly in the editor.
 - Read-only documents (uploads, and files opened with `readOnly`) reject edits -- use annotations instead. A disk-opened `.docx` is **not** read-only (#576).
@@ -335,7 +334,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 
 ### tandem_appendContent
 
-Append **structured** markdown to the end of the document. Unlike `tandem_edit` (single-paragraph, literal newlines), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive -- existing content and annotations are untouched. Also seeds an empty document.
+Append **structured** markdown to the end of the document. Unlike `tandem_edit` (which inserts text literally into existing blocks), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive -- existing content and annotations are untouched. Also seeds an empty document.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -452,11 +451,11 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 
 ### tandem_status
 
-Check editor status (running state, open documents, active document) and optionally update the AI's status text shown in the editor (Claude's, in the default integration; any connected MCP client can set it).
+Check editor status (running state, open documents, active document) and optionally update the AI's status text, which the editor may show (Claude's, in the default integration; any connected MCP client can set it). The status bar hides it while Tandem's own launched Claude is running, because it can't tell which session set it ([#2167](https://github.com/bloknayrb/tandem/issues/2167)).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `text` | string | no | Status text to show in the editor status bar (e.g., `"Reviewing cost figures..."`). When omitted, read-only mode. |
+| `text` | string | no | Status text the editor status bar may show (e.g., `"Reviewing cost figures..."`). When omitted, read-only mode. |
 | `focusParagraph` | number | no | Index of paragraph Claude is focusing on (renders blue tint + animated gutter bar). Only used when `text` is provided. |
 | `focusOffset` | number | no | Flat text offset alternative to `focusParagraph` for paragraph targeting. Only used when `text` is provided. |
 | `documentId` | string | no | Target document ID for status display (defaults to active document). Only used when `text` is provided. |
@@ -507,7 +506,7 @@ tandem_status({ text: "Done" })
 
 ### tandem_close
 
-Close a document. Closes the active document if no `documentId` specified.
+Close a document's tab (the active document if no `documentId` is specified); if it was the active document, another open document, if any, becomes active. **Closing does not save:** edits not yet written by `tandem_save` or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -611,15 +610,9 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 
 Annotations are metadata stored in `Y.Map('annotations')` on the shared document -- they don't modify the document text itself. Each annotation has an `id`, `author` (claude/user/import), `type`, `range`, `content`, `status` (pending/accepted/dismissed), and `timestamp`. The `import` author is used for Word comments extracted from `.docx` files on open.
 
-### tandem_highlight
-
-> **Deprecated.** Highlights are user-only. Use `tandem_comment` for AI-authored text annotations (the `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; the provider-keyed refactor is #2115). Always returns a `DEPRECATED` error.
-
----
-
 ### tandem_comment
 
-Add a comment attached to a text range. Appears in the side panel. Use `suggestedText` for replacement proposals.
+Add a comment attached to a text range. Appears in the side panel. Use `suggestedText` for replacement proposals. There is no tool for creating highlights; they are the user's. (An AI-authored comment's `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; the provider-keyed refactor is #2115.)
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -629,7 +622,6 @@ Add a comment attached to a text range. Appears in the side panel. Use `suggeste
 | `suggestedText` | string | no | Proposed replacement text. When set, the comment renders as a tracked-change suggestion with accept/reject controls. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted. Same caveat as `tandem_edit`: never pass back a snapshot flagged `textSnapshotTruncated`. |
-| `directedAt` | `"claude"` | no | **Deprecated (ADR-027).** Still accepted by the schema, but passing it returns `DEPRECATED` — omit it. |
 
 **Returns:**
 ```json
@@ -652,18 +644,6 @@ tandem_comment({
 
 ---
 
-### tandem_suggest
-
-> **Deprecated.** Always returns a `DEPRECATED` error. Use `tandem_comment` with the `suggestedText` parameter instead.
-
----
-
-### tandem_flag
-
-> **Deprecated.** Always returns a `DEPRECATED` error. Use `tandem_comment` instead.
-
----
-
 ### tandem_getAnnotations
 
 Read annotations, optionally filtered by author/type/status. For checking new user actions, prefer `tandem_checkInbox`.
@@ -675,7 +655,7 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment` — `highlight` returns nothing: every highlight is stamped `audience: "private"` (ADR-027) and `tandem_highlight` is a deprecated stub, so no outbound highlight exists to return |
+| `type` | enum | no | `highlight`, `comment` — `highlight` never returns a user highlight: every user highlight is stamped `audience: "private"` (ADR-027). Claude has no highlight-creating tool, so the only highlight it can see is a Claude-authored one the server seeded, such as the tutorial highlight on `sample/welcome.md` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -748,7 +728,7 @@ record never reads back as the user's own decision.
 
 ### tandem_removeAnnotation
 
-Delete an annotation permanently.
+Delete an annotation and its whole reply thread permanently. Prefer `tandem_resolveAnnotation` unless the annotation should leave no trace. Records private to the user (notes, private comments, the user's highlights) are refused with `INVALID_ARGUMENT`. There is no undo.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -856,7 +836,7 @@ tandem_annotationReply({
 
 ### tandem_exportAnnotations
 
-Export all annotations as a formatted summary. Useful for review reports.
+Export the annotations Claude can see — the same records `tandem_getAnnotations` returns — as a formatted summary. Useful for review reports.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -910,7 +890,7 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `RELOAD_IN_PROGRESS` (a concurrent Y.Doc reload/swap mid-apply -- retry), `FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). `LICENSE_REQUIRED` is ambient to every gated tool and is never returned while the gate ships dark.
+**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `RELOAD_IN_PROGRESS` (a concurrent Y.Doc reload/swap mid-apply -- retry), `FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). A licence refusal never reaches this tool: it is refused at the `/mcp` handshake (see `LICENSE_REQUIRED` above).
 
 **Example:**
 ```
@@ -969,7 +949,7 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
 
 ### tandem_search
 
-Search for text in the document. Returns all matching positions.
+Find every occurrence of `query` in the document's flat text and return each match's `[from, to)` range and text. Matching is case-insensitive in both literal and regex mode. A result can be partial: it carries `truncated: true` at 10,000 matches or when a regex search times out.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1132,6 +1112,8 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 }
 ```
 
+**No document open:** the tool never returns `NO_DOCUMENT`. Chat lives in `CTRL_ROOM`, not on a document, so with no active document (or a `documentId` that names no open document) it still returns `chatMessages`, `mode`, `modeProvenance` and `storeReadOnly`, with `userActions` / `userResponses` / `userReplies` empty and every `activity` field `false`/`null`. The `summary` then leads with `No document is open.` (or names the unknown id, or says no document is active while tabs remain open), and carries no advice to call `tandem_open`: Tandem's Claude opens a document only when the user asks. An empty-string `documentId` is treated as omitted. Before this, the tool refused with `NO_DOCUMENT` ahead of the chat read, so a chat sent with every tab closed never reached the supervisor's Claude.
+
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
 - `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027) — and since #1619 neither does any record whose stored `audience` is not `outbound`, on either bucket, matching the channel.
@@ -1184,7 +1166,7 @@ tandem_reply({ text: "I've finished reviewing the cost section. Two figures need
 
 Read connection and boot health as a structured report: Node version, `.mcp.json` / `~/.claude.json` registration, port probes (3478 WebSocket + 3479 MCP HTTP), the `/health` endpoint, and the SSE event stream. Wraps the same `runDoctor()` collector that backs `GET /api/diagnostics`, but rides the MCP transport — so an MCP-connected agent (including a Cowork VM that **cannot** reach `localhost:3479`, see [ADR-023](decisions.md)) can self-diagnose a broken connection without a loopback HTTP round-trip it may not be able to make.
 
-Read-only, takes **no parameters**, and is **not** license-gated — diagnostics stay available even when the license gate is restricted.
+Read-only and takes **no parameters**. Like every MCP tool it is unreachable while Tandem is unlicensed, because the `/mcp` handshake is refused (#1521); `tandem doctor` and `GET /api/diagnostics` stay available regardless, and doctor reports the licence state as its own row.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1248,22 +1230,22 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |
 | `POST /api/rename` | Rename an on-disk file. | origin + loopback |
 | `POST /api/upload` | Open uploaded content (no disk path). | **one layer** |
-| `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback + license gate |
+| `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback |
 | `POST /api/convert` | Convert `.docx` to Markdown. | origin (no loopback assert — the path-wide one covers it) |
-| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin + license gate |
+| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin |
 | `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
-| `POST /api/document/reload` | Reload the document from disk. | origin + loopback + license gate |
-| `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback (restore also license-gated); list scrubs paths |
-| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback + license gate |
-| `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** + license gate |
-| `POST /api/remove-annotation` | Delete an annotation. | **one layer** + license gate |
+| `POST /api/document/reload` | Reload the document from disk. | origin + loopback |
+| `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback; list scrubs paths |
+| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback |
+| `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** |
+| `POST /api/remove-annotation` | Delete an annotation. | **one layer** |
 | `POST /api/store/reclaim-lock` | Reclaim the annotation-store lock. | origin + loopback |
 | `GET /api/sessions` · `POST /api/sessions/delete` · `POST /api/sessions/clear` | Session management. | origin + loopback; list scrubs paths |
 | `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:45`), which is positive proof a preflight passed |
 | `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
-| `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce |
-| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name |
-| `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express |
+| `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce; relaunch, start-fresh and the deferred start answer 403 `LAUNCHER_UNLICENSED` (with the licence envelope) while Tandem is unlicensed |
+| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` and the two `channel-permission` POSTs answer 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
+| `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express; refused 403 (JSON body) while unlicensed, and a live socket is closed `4403 LICENSE_REQUIRED` |
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
 
@@ -1360,7 +1342,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file |
-| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). Gated by the license gate; plain open is not. |
+| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). |
 | `readOnly` | boolean | no | Force read-only mode. Used by the View Changelog button. |
 
 **Response (200):**
@@ -1368,11 +1350,11 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 { "data": { "documentId": "report-a1b2c3", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", ... } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `403 PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `403 LICENSE_REQUIRED` (on `force: true`)
+**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `403 PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`)
 
 ### POST /api/scratchpad
 
-Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option). Gated by `licenseGateMiddleware` (#1318).
+Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option).
 
 **Request:** Body optional. When present it must be exactly `{ "content"?: string }` -- any other key is rejected.
 
@@ -1385,7 +1367,7 @@ Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable
 { "data": { "documentId": "abc123", "fileName": "Scratchpad.md", "format": "md", "readOnly": false, "source": "upload", ... } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (unknown key, or non-string `content`), `413 PAYLOAD_TOO_LARGE` (content over 1 MiB), `403 LICENSE_REQUIRED`
+**Errors:** `400 BAD_REQUEST` (unknown key, or non-string `content`), `413 PAYLOAD_TOO_LARGE` (content over 1 MiB)
 
 ### POST /api/close
 
@@ -1460,6 +1442,8 @@ data: {"id":"evt_1710936000000_a1b2c3","type":"chat:message","timestamp":1710936
 
 : keepalive
 ```
+
+**While Tandem is unlicensed** (#1521) this answers `403` with `{ error: "LICENSE_REQUIRED", kind, message }` before any frame — a `Last-Event-ID` replays nothing — and a live stream is ended by the next event pushed while refused. The shared consumer (shim and monitor) treats that 403 as a licence refusal, not an outage: it retries every 5 minutes, reports no `channel-error`, and the plugin monitor prints the refusal once on stdout. Events pushed while refused are still buffered, and replay to the first consumer admitted after activation.
 
 Events are only emitted for editor-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.
 

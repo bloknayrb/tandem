@@ -14,12 +14,17 @@
  * `IntegrationsFile` here, so the two stay in sync.
  */
 
+import type { TandemClaudeAfterSetup } from "../launcher/contract.js";
+
 // --- API paths ---------------------------------------------------------------
 
 export const API_INTEGRATIONS_EXISTING = "/api/integrations/existing";
 export const API_INTEGRATIONS = "/api/integrations";
 export const API_INTEGRATIONS_APPLY = "/api/integrations/apply";
 export const API_INTEGRATIONS_FIRST_RUN = "/api/integrations/first-run-needed";
+/** The v1.0 walkthrough's **Keep this setup** (#2198): records the walkthrough
+ * as done and writes nothing else. */
+export const API_INTEGRATIONS_WALKTHROUGH_CONFIRM = "/api/integrations/walkthrough-confirm";
 /** Server registers as `:ref`; clients fill in the ref. */
 export function apiIntegrationsSecretPath(ref: string): string {
   return `/api/integrations/secrets/${encodeURIComponent(ref)}`;
@@ -238,6 +243,11 @@ export const ERROR_CODE_INVALID_NONCE = "INVALID_NONCE";
 export const ERROR_CODE_BAD_ORIGIN = "BAD_ORIGIN";
 /** Returned by POST /api/integrations/apply when a concurrent apply is in flight. */
 export const ERROR_CODE_APPLY_IN_PROGRESS = "APPLY_IN_PROGRESS";
+/** Returned by POST /api/integrations/walkthrough-confirm when no walkthrough is owed. */
+export const ERROR_CODE_WALKTHROUGH_NOT_PENDING = "WALKTHROUGH_NOT_PENDING";
+/** Returned by POST /api/integrations/walkthrough-confirm when the body names
+ * another server version — a tab left open across an upgrade: reload it. */
+export const ERROR_CODE_WALKTHROUGH_VERSION_MISMATCH = "WALKTHROUGH_VERSION_MISMATCH";
 
 // --- Apply endpoint response types ------------------------------------------
 
@@ -281,15 +291,34 @@ export interface ApplyResponse {
   results: ApplyItemResult[];
   /** Fresh nonce for the next apply (rotates on every successful call). */
   nextNonce: string;
+  /** What the apply did about Tandem's own Claude (#2197), when a claude-code
+   * entry was written — the done screen's initial view. Absent otherwise. */
+  tandemClaude?: TandemClaudeAfterSetup;
 }
 
 export interface FirstRunNeededResponse {
-  /** True iff `integrations.json` is empty AND no existing Tandem MCP entry is detected. */
+  /** True iff the wizard should open by itself: `integrations.json` is empty
+   * AND no existing Tandem MCP entry is detected, OR the v1.0 walkthrough is
+   * owed (`walkthrough`). */
   needed: boolean;
+  /** The v1.0 walkthrough is owed (#2198): the wizard opens pre-filled with
+   * Keep this setup, and closing it does not suppress it for the version —
+   * only Keep or a successful Apply does. Absent from older servers. */
+  walkthrough?: boolean;
+  /** This server process (#2198): the wizard's "closed it this launch" is
+   * keyed on it, so the walkthrough comes back after a restart. Absent from
+   * older servers. */
+  launchId?: string;
   /** Server `package.json` version — clients key dismissals on this. */
   serverVersion: string;
   /** Required in the body of POST /api/integrations/apply (CSRF mitigation). */
   confirmationNonce: string;
+}
+
+/** Body of POST /api/integrations/walkthrough-confirm. Naming the version the
+ * walkthrough was shown for binds the confirm to that run. */
+export interface WalkthroughConfirmRequest {
+  serverVersion: string;
 }
 
 // --- Claude CLI install (one-click "Install Claude Code" from the wizard) ----

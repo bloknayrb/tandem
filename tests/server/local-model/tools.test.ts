@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
-import { dispatch, MUTATING_TOOLS, TOOLS } from "../../../src/server/local-model/tools.js";
+import { dispatch, TOOLS } from "../../../src/server/local-model/tools.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_AUTHORSHIP } from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../../src/shared/snapshot.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
+
+/**
+ * The tools that may write, derived: every registered tool except the named
+ * reads. A NEW tool therefore counts as mutating until someone lists it as a
+ * read, so the authorship tripwire below covers it by default.
+ */
+const READ_TOOLS = new Set(["get_outline", "read_section"]);
+const MUTATING_TOOLS = TOOLS.map((t) => t.name).filter((n) => !READ_TOOLS.has(n));
 
 const FIXTURE = `# Cost Summary
 
@@ -58,9 +66,9 @@ describe("local-model tool registry (ADR-027 lock)", () => {
 // body-editing tool that stamps authorship is dispatched here and breaks the
 // assertion, pointing straight back at the exclusion decision.
 describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripwire)", () => {
-  // Best-effort valid args per current mutating tool so each dispatch actually
-  // reaches its write path; an unknown future tool falls back to {} (still
-  // dispatched, so it's at least exercised — tighten its args when it lands).
+  // Valid args per mutating tool, so each dispatch actually reaches its write
+  // path. A NEW tool throws here until it gets real args: `MUTATING_TOOLS` is
+  // derived, and a `{}` fallback would let it pass without ever writing.
   function argsFor(name: string, annotationId: string): Record<string, unknown> {
     switch (name) {
       case "comment_on_quote":
@@ -70,7 +78,7 @@ describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripw
       case "reply_to_annotation":
         return { annotation_id: annotationId, text: "reply body" };
       default:
-        return {};
+        throw new Error(`argsFor: no args for mutating tool "${name}" — add a case`);
     }
   }
 
@@ -83,8 +91,11 @@ describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripw
       { ydoc: doc },
     );
     const annotationId = (seed.result as { annotation_id?: string }).annotation_id ?? "";
+    expect(MUTATING_TOOLS.length).toBeGreaterThan(0);
     for (const name of MUTATING_TOOLS) {
-      dispatch(name, argsFor(name, annotationId), { ydoc: doc });
+      const out = dispatch(name, argsFor(name, annotationId), { ydoc: doc });
+      // Each really reached its write path: an ok effect, not an error result.
+      expect(out.effect, name).toMatchObject({ ok: true });
     }
     expect(doc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
   });
@@ -338,46 +349,6 @@ describe("dispatch — replies", () => {
     );
     expect((out.result as { error?: string }).error).toBe("INVALID_ARGUMENT");
     expect(doc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
-  });
-});
-
-describe("dispatch — license gate", () => {
-  it("blocks the mutating tools when restricted, without writing", () => {
-    doc = makeMarkdownDoc(FIXTURE);
-    const restricted = () => true;
-    for (const name of ["comment_on_quote", "propose_replacement", "reply_to_annotation"]) {
-      const out = dispatch(
-        name,
-        {
-          quoted_text: "the first phase",
-          comment: "x",
-          suggested_text: "y",
-          annotation_id: "z",
-          text: "t",
-        },
-        { ydoc: doc, isLicenseRestricted: restricted },
-      );
-      expect(out.effect.kind).toBe("blocked");
-      expect((out.result as { error?: string }).error).toBe("LICENSE_REQUIRED");
-    }
-    expect(getAnnotationsMap(doc).size).toBe(0);
-  });
-
-  it("leaves reads open when restricted (escape hatch)", () => {
-    doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch("get_outline", {}, { ydoc: doc, isLicenseRestricted: () => true });
-    expect(out.effect.kind).toBe("read");
-    expect((out.result as { outline?: unknown }).outline).toBeDefined();
-  });
-
-  it("allows mutating tools when not restricted", () => {
-    doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch(
-      "comment_on_quote",
-      { quoted_text: "the first phase", comment: "x" },
-      { ydoc: doc, isLicenseRestricted: () => false },
-    );
-    expect((out.result as { ok?: boolean }).ok).toBe(true);
   });
 });
 

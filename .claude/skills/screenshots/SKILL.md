@@ -44,11 +44,10 @@ negotiable: the harness backend's boot `freePort()` **kills whatever holds
 The slot table — what each image must depict, which document embeds it, which
 ones are manual, and the privacy check slot 13 needs — lives in
 [docs/screenshots/README.md](../../../docs/screenshots/README.md). It is the
-single copy on purpose; do not restate it here, in `.agents/skills/screenshots/`,
-or in the spec.
+single copy on purpose; do not restate it here or in the spec.
 
-One slot is not automatable: `14-desktop-window.png`. Neither pipeline drives the
-Tauri WebView, so the desktop-window shot is taken by hand.
+One slot is not automatable: `14-desktop-window.png`. The capture pipeline drives
+Chromium, not the Tauri WebView, so the desktop-window shot is taken by hand.
 
 ## After running
 

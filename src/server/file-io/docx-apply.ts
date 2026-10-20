@@ -634,8 +634,8 @@ export async function applyTrackedChanges(
 ): Promise<ApplyOutput> {
   // #1310: this path re-reads the SAME on-disk file the document was opened from
   // (`mcp/docx-apply.ts` → `fs.readFile`), so it carries the identical untrusted input as import and
-  // needs the identical ceiling. The `tandem_applyChanges` license gate is a monetization control
-  // that currently ships dark; it authenticates nothing about the bytes.
+  // needs the identical ceiling. The licence refusal sits at the `/mcp` handshake, not on this
+  // tool, and authenticates nothing about the bytes.
   await assertDocxWithinSizeLimits(docxBuffer);
 
   const zip = await JSZip.loadAsync(docxBuffer);

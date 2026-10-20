@@ -63,10 +63,10 @@ Symptom: you ask Claude Code to open a document in Tandem and it says it can't, 
 such tool — **or, worse, it edits the file directly and tells you it's done.** You never see a
 connection error, because there wasn't one.
 
-**Cause: Tandem was not running when the Claude Code session started.** Claude Code resolves
-`mcpServers.tandem` once, at session start, over direct HTTP. If nothing answered then, the server
-never connected and the entire `tandem_*` toolset is simply absent from the session. There is no
-failing tool call to see, because there is no tool.
+**Cause: Tandem was not running when the Claude Code session started.** Claude Code connects to
+Tandem's MCP server once, at session start. If nothing answered then, the server never connected
+and the entire `tandem_*` toolset is simply absent from the session. There is no failing tool call
+to see, because there is no tool.
 
 This is why neither entry above fires. You are not told the connection failed, and `/mcp` is not
 somewhere you would think to look — the symptom reads as Claude not knowing what Tandem is.
@@ -110,9 +110,9 @@ native installer drops a real `claude.exe`, which both terminals and Tandem can 
 install method is deprecated.) Alternatively, set `TANDEM_CLAUDE_CMD` to the full path of a
 `.exe`.
 
-**Restart Tandem after installing.** The launcher searches the PATH Tandem started with, so a
-CLI installed while Tandem is running stays invisible to it — and the old wrapper keeps
-winning — until the restart.
+**No Tandem restart is needed.** The launcher looks in the native installer's location
+(`~/.local/bin`) as well as the PATH Tandem started with, so the next Start finds the new
+`claude.exe` even though the old wrapper is still on PATH (#2199).
 
 `tandem doctor` names this state explicitly — a warning that the CLI on PATH is a wrapper
 Tandem's launcher can't start — and the integration wizard shows the same warning. Launching
@@ -125,11 +125,13 @@ supervisor which kind of failure it was: the CLI being missing or unstartable, o
 fine and crashing for some other reason (a stale saved conversation, an expired login, a plugin
 that fails on load). Only the first routes you to the setup wizard.
 
-That check looks for a `claude` on the PATH Tandem itself started with, so it can be wrong in two
-ways. If you installed Claude Code under a different name, use **Restart Claude anyway** on the
-empty-state screen, or run **Relaunch Claude in this folder** from the command palette
-(`Ctrl+Shift+P`). If you installed it *after* opening Tandem, restart Tandem — a running process
-cannot see a PATH change made after it launched.
+That check looks for a `claude` on the PATH Tandem itself started with and in the native
+installer's `~/.local/bin`, so it can be wrong when Claude Code is installed under a different
+name or somewhere else: then use **Restart Claude anyway** on the empty-state screen, or run
+**Relaunch Claude in this folder** from the command palette (`Ctrl+Shift+P`), or set
+`TANDEM_CLAUDE_CMD` to its full path. A native install made *after* opening Tandem is found by
+the next Start; a PATH change of any other kind still needs a Tandem restart, because a running
+process cannot see it.
 
 If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead —
 except for one cause Tandem now recognises and names:
@@ -187,7 +189,14 @@ If you close that dialog, Settings → Network → **Restart server** does the s
 
 ## I sent a chat message (or left a comment) and nothing happened
 
-The status bar says **AI connected** and Claude never reacts. This is the most common new-user snag, and the status bar is genuinely not lying — it's answering a different question than the one you're asking.
+First, read the status bar's AI label — it says who is attached:
+
+- **Tandem's Claude** — the Claude session Tandem started for you is running, and Tandem wakes it when you send a message. It works in the background, so a reply can take a while; "Tandem's Claude is working…" means it is mid-turn; if you sent something during that turn, Tandem wakes it again when the turn ends. If the hover text says Tandem **hasn't seen it connect**, nothing has connected to Tandem's tools yet. A working session can briefly look like this, but if it stays that way, check that your Claude Code config still has Tandem's MCP entry. The dot is **green** only when Tandem has matched a live connection to its own Claude; otherwise it is a **hollow ring**, and the hover text says Tandem can't confirm which connection is its Claude. With the Tandem plugin installed, Tandem can make that match when the connection reports which Claude session it belongs to (not yet confirmed on every setup). With the plain config entry that `tandem setup` writes it can't, because that connection doesn't say which Claude session it belongs to, so the ring is the normal look there and doesn't mean anything is broken.
+- **· 2 sessions** after the label is how many MCP connections Tandem can see are still there: ones holding their connection open, or that used Tandem in the last minute. A session that just closed can still count for about a minute, a frozen client stays counted until its connection drops, and one Claude connected both through the plugin and through the `tandem setup` entry counts twice. Clients on the newest MCP protocol revision aren't counted at all. The hover text repeats the number. With Tandem's Claude running and a hollow ring, the count tells you whether anything live has connected: if no count is shown, nothing has.
+- **AI attached** — *something else* is connected: a Claude Code session you started, Claude Desktop, or another MCP client. Tandem can't wake it. The rest of this section is about that case. With a **hollow ring** instead of a green dot, Tandem can't see that it's still there: usually a session that closed without disconnecting, which Tandem forgets about 30–35 minutes after it was last used. When the pill is also offering to set up or restart Claude, it says **AI not connected** instead. An MCP client that never holds its connection open can also look like this between calls.
+- A separate **Tandem's Claude isn't running** button means Tandem's own session stopped (crashed, signed out, or the Claude CLI won't start) while something else is still attached. Its label says which: **isn't running** (click to restart it), **sign in** (run `claude` in a terminal to sign in, then click to check again) or **can't start** (click to open setup). It only ever acts on Tandem's own session; any Claude you started yourself is unaffected.
+
+**AI attached** with no reaction is the most common new-user snag, and the label is not lying — it's answering a different question than the one you're asking.
 
 Tandem has **two independent connections** to Claude:
 
@@ -196,7 +205,7 @@ Tandem has **two independent connections** to Claude:
 | **Pull** | The MCP server | Lets Claude read and edit your document when it decides to look |
 | **Push** | A real-time event stream | Tells Claude the moment you comment or send a message |
 
-"AI connected" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
+"AI attached" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
 
 **Diagnose it.** In the desktop app: **Settings → About → Copy Diagnostics** (the desktop app does not install the `tandem` command). From a terminal, if you installed via npm:
 
@@ -237,6 +246,15 @@ Two combinations can arise without you enabling anything twice. They may make Cl
 **One caveat `tandem doctor` cannot resolve for you.** If a consumer *is* attached, that proves events reach the shim — not that Claude sees them. A session started without the flag still runs a channel shim that receives every event and discards it, because whether the channel is honored is decided inside Claude Code and never reported back. If push looks attached and Claude still isn't reacting, start the session with the flag explicitly rather than assuming the config alone is enough.
 
 Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude plugin install` fails with "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory), [`claude plugin install` fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https), [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127), [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version).
+
+## Tandem's Claude didn't say hello
+
+On a first run (and once on the first run of v1.0) Tandem's own Claude greets you in the chat panel after setup. If nothing arrives within about a minute, the chat panel says **Tandem's Claude hasn't said hello**. The two usual causes:
+
+- **Claude Code isn't signed in.** Tandem's Claude is Claude Code running in the background, and it can't answer until you sign in. Open a terminal, run `claude` and sign in, then click the note's button (**Check Claude sign-in** or **Restart Tandem's Claude**).
+- **It isn't allowed to use Tandem's tools.** It runs without a window, so it cannot ask you to approve a tool the way an interactive session does; a tool it isn't allowed to use is refused. Open a terminal in the same folder, run `claude`, ask it to use one of Tandem's tools (for example "check the Tandem inbox"), and choose to always allow Tandem's tools. Then click **Restart Tandem's Claude**.
+
+If Claude wasn't signed in, the hello is tried again on the start after you sign in. Otherwise it is sent once and not repeated: after a tool-permission fix Claude works normally but does not say hello again, which is expected. In Solo mode it waits: Tandem's Claude only speaks when spoken to there, so the hello comes on the first start after you switch to Tandem mode.
 
 ## Channel shim fails to start
 

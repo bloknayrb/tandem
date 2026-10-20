@@ -4,25 +4,24 @@
  * Lifecycle coverage for the `licenseStore` singleton (#1116, ADR-040).
  *
  * The pure status→UI mapping lives in `license-ui.test.ts`; this file exercises
- * the polling/transition logic and the start/stop composition that was tightened
- * after the Svelte review:
+ * the polling cadence and the start/stop composition:
  *   - a dark build (gateActive:false) polls exactly once, then self-stops
- *   - `onRestricted` fires only on the trial→restricted EDGE, never per-poll
- *   - a redundant `start()` cannot null a live `onRestricted` (review #1)
+ *   - restricted polls every 8 s, so a CLI `tandem activate` is noticed fast;
+ *     trial and licensed poll every 60 s, and both `poll()` and `set()` re-arm
  *   - `stop()` then `start()` re-arms the interval (review #2)
  *
  * `fetchLicenseStatus` is the only I/O the store performs, so it's mocked; fake
- * timers drive the 60s poll interval deterministically. The store is a module
+ * timers drive the poll interval deterministically. The store is a module
  * singleton, so each test resets it via `stop()` (clears timer + `started`) plus
- * `set()` (baselines `status`/`wasRestricted` to a non-restricted value).
+ * `set()` (baselines `status` to a non-restricted value).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
 
-const fetchLicenseStatus = vi.fn<() => Promise<LicenseStatusResponse>>();
+const fetchLicenseStatus = vi.fn<(signal?: AbortSignal) => Promise<LicenseStatusResponse>>();
 vi.mock(import("../../src/client/hooks/useLicense"), () => ({
-  fetchLicenseStatus: () => fetchLicenseStatus(),
+  fetchLicenseStatus: (signal?: AbortSignal) => fetchLicenseStatus(signal),
   activateLicenseClient: vi.fn(),
 }));
 
@@ -62,8 +61,8 @@ describe("licenseStore (singleton lifecycle)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fetchLicenseStatus.mockReset();
-    // Reset the singleton: stop() clears the timer + `started`; set(DARK) zeroes
-    // `wasRestricted` (DARK is non-restricted) so transition tests start clean.
+    // Reset the singleton: stop() clears the timer + `started`; set(DARK)
+    // baselines `status` to a non-restricted value so cadence tests start clean.
     licenseStore.stop();
     licenseStore.set(DARK);
   });
@@ -73,19 +72,48 @@ describe("licenseStore (singleton lifecycle)", () => {
     vi.useRealTimers();
   });
 
-  it("dark build polls once then self-stops; UI stays permissive", async () => {
+  it("dark build polls once then self-stops; no AI notice", async () => {
     fetchLicenseStatus.mockResolvedValue(DARK);
     licenseStore.start();
     await flush();
 
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
-    expect(licenseStore.ui.editable).toBe(true);
-    expect(licenseStore.ui.showWall).toBe(false);
+    expect(licenseStore.ui.aiNotice).toBeNull();
     expect(licenseStore.ui.showTrialBanner).toBe(false);
 
     // Well past the interval — no further polls (the dark path stopped the timer).
     await vi.advanceTimersByTimeAsync(180_000);
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+  });
+
+  // Readiness holds the pill on "booting" while a licence re-read is in
+  // flight; an unanswered read must therefore end, as a failure.
+  it("bounds every read: a status request that never answers aborts and is a failure", async () => {
+    // `AbortSignal.timeout` runs on the platform's own clock, not vitest's
+    // fake timers, so the test owns the signal and fires it itself.
+    const ctrl = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(ctrl.signal);
+    try {
+      fetchLicenseStatus.mockImplementation(
+        (signal) =>
+          new Promise((_resolve, reject) =>
+            signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+          ),
+      );
+      const settled = vi.fn();
+      void licenseStore.refresh().then(settled);
+      await flush();
+      expect(timeout).toHaveBeenCalledWith(5_000);
+      expect(fetchLicenseStatus).toHaveBeenCalledWith(ctrl.signal);
+      expect(settled).not.toHaveBeenCalled();
+
+      ctrl.abort();
+      await flush();
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(licenseStore.statusUnavailable).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("trial state surfaces the banner with the day count", async () => {
@@ -95,63 +123,87 @@ describe("licenseStore (singleton lifecycle)", () => {
 
     expect(licenseStore.ui.showTrialBanner).toBe(true);
     expect(licenseStore.ui.trialDaysRemaining).toBe(5);
-    expect(licenseStore.ui.editable).toBe(true);
+    expect(licenseStore.ui.aiNotice).toBeNull();
   });
 
-  it("fires onTransition only on the trial→restricted edge", async () => {
-    const onTransition = vi.fn();
-    fetchLicenseStatus.mockResolvedValueOnce(TRIAL(1)).mockResolvedValue(RESTRICTED);
-
-    licenseStore.start({ onTransition });
-    await flush(); // poll 1: trial → no edge from the false baseline
-    expect(onTransition).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(60_000); // poll 2: restricted → fire once
-    await flush();
-    expect(onTransition).toHaveBeenCalledTimes(1);
-    expect(licenseStore.ui.showWall).toBe(true);
-    expect(licenseStore.ui.editable).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(60_000); // poll 3: still restricted → no re-fire
-    await flush();
-    expect(onTransition).toHaveBeenCalledTimes(1);
-  });
-
-  it("fires onTransition on the restricted→licensed edge via set() (activation)", async () => {
-    const onTransition = vi.fn();
+  it("restricted surfaces the AI notice and polls every 8 s", async () => {
     fetchLicenseStatus.mockResolvedValue(RESTRICTED);
-
-    licenseStore.start({ onTransition });
-    await flush(); // poll establishes restricted (edge from false baseline)
-    expect(onTransition).toHaveBeenCalledTimes(1);
-    expect(licenseStore.ui.showWall).toBe(true);
-
-    // Activation applies the licensed state immediately — the release edge must
-    // also fire so the provider rebuild lifts Surface A's read-only.
-    licenseStore.set(LICENSED);
-    expect(onTransition).toHaveBeenCalledTimes(2);
-    expect(licenseStore.ui.showWall).toBe(false);
-    expect(licenseStore.ui.editable).toBe(true);
-  });
-
-  it("a redundant start() does not null a live onTransition (review #1)", async () => {
-    const onTransition = vi.fn();
-    fetchLicenseStatus.mockResolvedValue(TRIAL(3));
-
-    licenseStore.start({ onTransition });
+    licenseStore.start();
     await flush();
+    expect(licenseStore.ui.aiNotice).toBe("unlicensed");
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
 
-    // Second start with NO deps must be guarded — no extra poll, callback intact.
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("trial and licensed poll every 60 s, not 8 s", async () => {
+    for (const state of [TRIAL(4), LICENSED]) {
+      licenseStore.stop();
+      licenseStore.set(state);
+      fetchLicenseStatus.mockReset();
+      fetchLicenseStatus.mockResolvedValue(state);
+      licenseStore.start();
+      await flush();
+      expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("a restricted→licensed poll re-arms the interval at 60 s", async () => {
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    licenseStore.start();
+    await flush();
+
+    fetchLicenseStatus.mockResolvedValue(LICENSED);
+    await vi.advanceTimersByTimeAsync(8_000); // the 8 s poll that sees licensed
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+    expect(licenseStore.ui.aiNotice).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(52_000); // past every further 8 s tick
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(8_000); // 60 s after the re-arm
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("restricted then set(licensed) — the activate-form path — re-arms at 60 s", async () => {
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
     licenseStore.start();
     await flush();
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
 
-    // Drive a restricted transition; the original callback must still fire.
-    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
-    await vi.advanceTimersByTimeAsync(60_000);
+    fetchLicenseStatus.mockResolvedValue(LICENSED);
+    licenseStore.set(LICENSED);
+    expect(licenseStore.ui.aiNotice).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1); // no 8 s fetches
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("a dark build still stops after one poll even when it was restricted before", async () => {
+    licenseStore.set(RESTRICTED);
+    fetchLicenseStatus.mockResolvedValue(DARK);
+    licenseStore.start();
     await flush();
-    expect(onTransition).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("a redundant start() does not double-poll", async () => {
+    fetchLicenseStatus.mockResolvedValue(TRIAL(3));
+    licenseStore.start();
+    await flush();
+    licenseStore.start();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
   });
 
   it("stop() then start() re-arms polling (review #2)", async () => {
@@ -174,6 +226,63 @@ describe("licenseStore (singleton lifecycle)", () => {
  * null and Settings → License asserted "Not enforced in this version" from a
  * fetch that never answered.
  */
+/**
+ * A hidden tab skips its ticks, so a backgrounded window does not poll the
+ * licence every 8 s forever, and polls once on becoming visible. `hidden` is
+ * redefined on the instance, which works whatever happy-dom's own definition
+ * is; the afterEach removes the override.
+ */
+describe("licenseStore — hidden tabs", () => {
+  let hidden = false;
+  const fire = () => document.dispatchEvent(new Event("visibilitychange"));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchLicenseStatus.mockReset();
+    licenseStore.stop();
+    licenseStore.set(DARK);
+    hidden = false;
+    Object.defineProperty(document, "hidden", { get: () => hidden, configurable: true });
+  });
+
+  afterEach(() => {
+    licenseStore.stop();
+    vi.useRealTimers();
+    delete (document as unknown as { hidden?: boolean }).hidden;
+  });
+
+  it("skips restricted ticks while hidden and polls once on becoming visible", async () => {
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    licenseStore.start();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+
+    hidden = true;
+    fire();
+    await vi.advanceTimersByTimeAsync(80_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+
+    hidden = false;
+    fire();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+
+    // Visible again: the 8 s cadence resumes.
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("a visibilitychange after stop() polls nothing", async () => {
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    licenseStore.start();
+    await flush();
+    licenseStore.stop();
+    fire();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("licenseStore — statusUnavailable (#1789)", () => {
   let warn: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
 
@@ -205,10 +314,10 @@ describe("licenseStore — statusUnavailable (#1789)", () => {
     // The `ui`-unchanged half is a real guard only because `deriveLicenseUi`
     // must NOT take `statusUnavailable` — `ui` stays a pure function of
     // `status`, so a transient loopback failure structurally cannot raise the
-    // wall or flip editability. A later widening breaks these two lines.
+    // AI-off notice. A later widening breaks these two lines.
     expect(licenseStore.status).toEqual(TRIAL(5));
     expect(licenseStore.ui.showTrialBanner).toBe(true);
-    expect(licenseStore.ui.editable).toBe(true);
+    expect(licenseStore.ui.aiNotice).toBeNull();
   });
 
   it("two consecutive failures warn exactly once", async () => {
@@ -262,37 +371,6 @@ describe("licenseStore — statusUnavailable (#1789)", () => {
     expect(licenseStore.statusUnavailable).toBe(false);
   });
 
-  /**
-   * Review round 2. The try used to span `reconcileTransition`, whose
-   * `onTransition` is `yjsSync.rebuildForLicenseChange()` — `teardownAllTabs()`
-   * + `startBootstrap()`, real Y.js/provider work. A throw there landed in this
-   * catch and Settings → License then said Tandem "couldn't reach its local
-   * server", about a status it had just fetched successfully. The console line
-   * misdiagnosed it the same way, defeating the round-1 reason for binding the
-   * error at all.
-   */
-  it("a throwing onTransition is not reported as an unreachable server", async () => {
-    const onTransition = vi.fn(() => {
-      throw new Error("provider rebuild failed");
-    });
-    fetchLicenseStatus.mockResolvedValueOnce(TRIAL(5));
-    licenseStore.start({ onTransition });
-    await flush(); // baseline: no edge from the null baseline
-    expect(licenseStore.statusUnavailable).toBe(false);
-
-    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
-    // The client-side defect stays visible as a rejection rather than being
-    // relabelled an outage.
-    await expect(licenseStore.refresh()).rejects.toThrow("provider rebuild failed");
-    expect(onTransition).toHaveBeenCalledTimes(1);
-
-    // The fetch SUCCEEDED, so the fresh status is stored and nothing on screen
-    // may claim the local server is unreachable.
-    expect(licenseStore.status).toEqual(RESTRICTED);
-    expect(licenseStore.statusUnavailable).toBe(false);
-    expect(warn.mock.calls.filter((c) => String(c[0]).includes("[license]"))).toHaveLength(0);
-  });
-
   it("stop() resets it with the rest of the baseline", async () => {
     fetchLicenseStatus.mockRejectedValue(new Error("down"));
     licenseStore.start();
@@ -303,7 +381,104 @@ describe("licenseStore — statusUnavailable (#1789)", () => {
     expect(licenseStore.statusUnavailable).toBe(false);
   });
 });
+/**
+ * A poll issued before `set()` must not land after it. With the 8 s restricted
+ * cadence a poll is often in flight when the activate form answers, and without
+ * sequencing its stale `restricted` would overwrite the licensed status.
+ */
+describe("licenseStore — a poll superseded by set()", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchLicenseStatus.mockReset();
+    licenseStore.stop();
+    licenseStore.set(DARK);
+  });
+
+  afterEach(() => {
+    licenseStore.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("an in-flight restricted poll resolving after set(licensed) leaves licensed", async () => {
+    fetchLicenseStatus.mockResolvedValueOnce(RESTRICTED);
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.ui.aiOff).toBe(true);
+
+    const slow = deferred<LicenseStatusResponse>();
+    fetchLicenseStatus.mockReturnValueOnce(slow.promise);
+    const inFlight = licenseStore.refresh();
+    licenseStore.set(LICENSED);
+    slow.resolve(RESTRICTED);
+    await inFlight;
+    await flush();
+
+    expect(licenseStore.status).toEqual(LICENSED);
+    expect(licenseStore.ui.aiOff).toBe(false);
+  });
+
+  it("an in-flight poll failing after set(licensed) raises no 'unavailable' flag", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchLicenseStatus.mockResolvedValueOnce(RESTRICTED);
+    licenseStore.start();
+    await flush();
+
+    const slow = deferred<LicenseStatusResponse>();
+    fetchLicenseStatus.mockReturnValueOnce(slow.promise);
+    const inFlight = licenseStore.refresh();
+    licenseStore.set(LICENSED);
+    slow.reject(new Error("ECONNREFUSED"));
+    await inFlight;
+    await flush();
+
+    expect(licenseStore.statusUnavailable).toBe(false);
+    expect(licenseStore.status).toEqual(LICENSED);
+  });
+
+  it("the twin: a poll with nothing newer still writes its answer", async () => {
+    fetchLicenseStatus.mockResolvedValueOnce(LICENSED);
+    licenseStore.start();
+    await flush();
+
+    const slow = deferred<LicenseStatusResponse>();
+    fetchLicenseStatus.mockReturnValueOnce(slow.promise);
+    const inFlight = licenseStore.refresh();
+    slow.resolve(RESTRICTED);
+    await inFlight;
+    await flush();
+
+    expect(licenseStore.status).toEqual(RESTRICTED);
+  });
+});
+
 // The `status === null` row is deliberately NOT here: `stop()` never clears
 // `status` and `set()` always assigns a non-null one, so within this file the
 // singleton has held a status since the first describe's `beforeEach`. That row
 // needs a fresh module instance and lives in `settings-license-tab.test.ts`.
+
+/**
+ * #1521: the Surface-A provider rebuild is retired. A keyless install refuses
+ * the AI, never the editor, so nothing re-authenticates on a licence change.
+ * App is never mounted in tests, so these pin the source.
+ */
+describe("the licence-change provider rebuild is gone (#1521)", () => {
+  it("yjsSync has no rebuildForLicenseChange and App starts the store with no argument", async () => {
+    const { readFileSync } = await import("node:fs");
+    const yjs = readFileSync("src/client/hooks/yjsSync.svelte.ts", "utf-8");
+    const app = readFileSync("src/client/App.svelte", "utf-8");
+    expect(yjs).not.toContain("rebuildForLicenseChange");
+    expect(app).toContain("licenseStore.start();");
+    expect(app).not.toMatch(/licenseStore\.start\(\s*[^)\s]/);
+  });
+});

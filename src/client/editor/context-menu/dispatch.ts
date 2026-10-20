@@ -50,6 +50,11 @@ export interface DispatchDeps {
   focusChat?: () => void;
   composeAnnotation?: (kind: "comment" | "note") => void;
   editLink?: () => void;
+  /**
+   * The licence refuses the AI (#1521). Re-read when the action fires, so a
+   * menu event in flight across the flip cannot ask the AI or write a comment.
+   */
+  isAiDisabled: () => boolean;
 }
 
 /**
@@ -99,9 +104,11 @@ export async function dispatchContextAction(
     }
 
     case "ctx:selection:askAi":
+      if (deps.isAiDisabled()) return;
       if (hasLiveSelection(editor)) deps.focusChat?.();
       return;
     case "ctx:selection:comment":
+      if (deps.isAiDisabled()) return;
       if (hasLiveSelection(editor)) deps.composeAnnotation?.("comment");
       return;
     case "ctx:selection:privateNote":

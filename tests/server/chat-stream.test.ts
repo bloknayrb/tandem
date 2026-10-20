@@ -19,6 +19,7 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
+import { appendedId } from "../helpers/chat-append.js";
 
 const FLUSH_STEP = 80; // mirrors STREAM_FLUSH_CHARS in collaborator.ts
 
@@ -46,7 +47,9 @@ function measureStreamBytes(finalLength: number, docId: string): number {
   doc.on("update", onUpdate);
   try {
     const full = "x".repeat(finalLength);
-    const id = appendClaudeChatMessage(full.slice(0, FLUSH_STEP), { documentId: docId });
+    const id = appendedId(
+      appendClaudeChatMessage(full.slice(0, FLUSH_STEP), { documentId: docId }),
+    );
     for (let n = FLUSH_STEP * 2; n < finalLength; n += FLUSH_STEP) {
       updateClaudeChatMessage(id, full.slice(0, n));
     }
@@ -89,7 +92,7 @@ describe("streamed chat write volume is linear (#1340)", () => {
 
 describe("streaming semantics — sidecar authority and fold", () => {
   it("mid-stream: the chat row is deliberately stale; the sidecar holds the full text", () => {
-    const id = appendClaudeChatMessage("first flush", { documentId: "d1" });
+    const id = appendedId(appendClaudeChatMessage("first flush", { documentId: "d1" }));
     updateClaudeChatMessage(id, "first flush and more");
     // The row is untouched between append and finalize — the sidecar is
     // authoritative while it exists (readers compose).
@@ -98,11 +101,13 @@ describe("streaming semantics — sidecar authority and fold", () => {
   });
 
   it("finalize folds the full text into the row, preserves every field verbatim, deletes the sidecar, and is idempotent", () => {
-    const id = appendClaudeChatMessage("partial", {
-      documentId: "d2",
-      replyTo: "u9",
-      agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" },
-    });
+    const id = appendedId(
+      appendClaudeChatMessage("partial", {
+        documentId: "d2",
+        replyTo: "u9",
+        agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" },
+      }),
+    );
     const before = chatMap().get(id) as ChatMessage;
     updateClaudeChatMessage(id, "partial + more");
     updateClaudeChatMessage(id, "partial + more + done");
@@ -124,7 +129,9 @@ describe("streaming semantics — sidecar authority and fold", () => {
   });
 
   it("turn-reset replace: a shorter, different text replaces the streamed preamble exactly", () => {
-    const id = appendClaudeChatMessage("Let me look at the document. ", { documentId: "d3" });
+    const id = appendedId(
+      appendClaudeChatMessage("Let me look at the document. ", { documentId: "d3" }),
+    );
     updateClaudeChatMessage(id, "Let me look at the document. It seems that");
     // onTurnEnd({hadToolCalls:true}) resets the buffer; the next turn streams a
     // different, shorter answer — common prefix 0 → delete-all + insert.
@@ -137,7 +144,7 @@ describe("streaming semantics — sidecar authority and fold", () => {
   it("truncation-marker append: extending the last flushed buffer is committed exactly", () => {
     const body = "y".repeat(200);
     const marker = "\n\n_[Reply truncated — the model exceeded the streaming limit.]_";
-    const id = appendClaudeChatMessage(body.slice(0, 80), { documentId: "d4" });
+    const id = appendedId(appendClaudeChatMessage(body.slice(0, 80), { documentId: "d4" }));
     updateClaudeChatMessage(id, body);
     updateClaudeChatMessage(id, body + marker); // pure extension, like the #1292 cap path
     finalizeClaudeChatMessage(id);
@@ -145,7 +152,7 @@ describe("streaming semantics — sidecar authority and fold", () => {
   });
 
   it("equal text is a no-op that broadcasts nothing", () => {
-    const id = appendClaudeChatMessage("stable", { documentId: "d5" });
+    const id = appendedId(appendClaudeChatMessage("stable", { documentId: "d5" }));
     updateClaudeChatMessage(id, "stable text so far");
     let updates = 0;
     const onUpdate = () => {
@@ -166,7 +173,7 @@ describe("streaming semantics — sidecar authority and fold", () => {
     // flush of "" before any sidecar exists mints an EMPTY Y.Text, which is
     // AUTHORITATIVE over the row — every reader then composes an empty bubble
     // for a message that has text.
-    const id = appendClaudeChatMessage("a real answer", { documentId: "d10" });
+    const id = appendedId(appendClaudeChatMessage("a real answer", { documentId: "d10" }));
     updateClaudeChatMessage(id, "");
     expect(streamMap().has(id)).toBe(false);
     expect((chatMap().get(id) as ChatMessage).text).toBe("a real answer");
@@ -175,7 +182,7 @@ describe("streaming semantics — sidecar authority and fold", () => {
   it("finalize drops an EMPTY sidecar Y.Text instead of blanking the row", () => {
     // Malformed state from some other build (today's update path returns
     // before minting one). Folding it would destroy the row's real text.
-    const id = appendClaudeChatMessage("a real answer", { documentId: "d11" });
+    const id = appendedId(appendClaudeChatMessage("a real answer", { documentId: "d11" }));
     withInternal(ctrl(), () => streamMap().set(id, new Y.Text()));
     finalizeClaudeChatMessage(id);
     expect((chatMap().get(id) as ChatMessage).text).toBe("a real answer");
@@ -189,7 +196,7 @@ describe("streaming semantics — sidecar authority and fold", () => {
   });
 
   it("a flush racing a chat clear deletes the orphan sidecar entry and never resurrects the row", () => {
-    const id = appendClaudeChatMessage("will be erased", { documentId: "d6" });
+    const id = appendedId(appendClaudeChatMessage("will be erased", { documentId: "d6" }));
     updateClaudeChatMessage(id, "will be erased plus streamed tail");
     // The chat row goes away mid-stream (the clear's live deletion), but a
     // sidecar entry survived — e.g. a flush recreated it between the clear's
@@ -205,7 +212,7 @@ describe("streaming semantics — sidecar authority and fold", () => {
   });
 
   it("finalize after the chat row was deleted mid-stream drops the sidecar without resurrecting the row", () => {
-    const id = appendClaudeChatMessage("erase me", { documentId: "d7" });
+    const id = appendedId(appendClaudeChatMessage("erase me", { documentId: "d7" }));
     updateClaudeChatMessage(id, "erase me and my stream");
     withInternal(ctrl(), () => chatMap().delete(id)); // row gone, sidecar still live
     expect(streamMap().has(id)).toBe(true);
@@ -223,7 +230,7 @@ describe("surrogate-pair safety (BLOCKER — Yjs substitutes U+FFFD on a mid-pai
     // BOTH sides of the split,
     // permanently, and insert a lone low surrogate. The clamp must back the
     // prefix off to the code-point boundary (p=0 here).
-    const id = appendClaudeChatMessage("🙂", { documentId: "d8" });
+    const id = appendedId(appendClaudeChatMessage("🙂", { documentId: "d8" }));
     updateClaudeChatMessage(id, "🙂x"); // seed the sidecar with the astral text
     expect(streamText(id)).toBe("🙂x");
     updateClaudeChatMessage(id, "🙃y");
@@ -241,7 +248,7 @@ describe("surrogate-pair safety (BLOCKER — Yjs substitutes U+FFFD on a mid-pai
     // exactly ONE unit is not enough: here the prefix is 2, one step lands it
     // on another lone high surrogate, and the splice yields "\uFFFD\uD83Dx".
     // The clamp must LOOP until the split point is off high surrogates.
-    const id = appendClaudeChatMessage("seed", { documentId: "d12" });
+    const id = appendedId(appendClaudeChatMessage("seed", { documentId: "d12" }));
     updateClaudeChatMessage(id, "\uD83D🙃"); // lone high surrogate, then a real pair
     expect(streamText(id)).toBe("\uD83D🙃");
     updateClaudeChatMessage(id, "\uD83D\uD83Dx"); // common prefix 2, both units high
@@ -252,7 +259,7 @@ describe("surrogate-pair safety (BLOCKER — Yjs substitutes U+FFFD on a mid-pai
   });
 
   it("the turn-reset shape from the collaborator (emoji preamble → different emoji answer) round-trips exactly", () => {
-    const id = appendClaudeChatMessage("🙂 checking", { documentId: "d9" });
+    const id = appendedId(appendClaudeChatMessage("🙂 checking", { documentId: "d9" }));
     updateClaudeChatMessage(id, "🙂 checking the doc"); // populate the sidecar
     updateClaudeChatMessage(id, "🙃 done"); // shrink+replace across a shared high surrogate
     // Asserted BEFORE any further update: a later replace whose common prefix

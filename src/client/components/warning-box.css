@@ -1,0 +1,16 @@
+/* A boxed warning callout, bordered on all four sides: the rail's AI-off notice
+ * and the Claude Code settings tab's AI-off hint (#1521). Not the
+ * `tandem-banner--warning` family, which is a full-width bar (bottom border
+ * only, centred text, a shadow and a slide-in) and would not sit in a panel.
+ *
+ * Imported from each consumer's <script> block, so the rule is global — the
+ * same arrangement as `tandem-banner.css`.
+ */
+.tandem-warning-box {
+  padding: var(--tandem-space-2) var(--tandem-space-3);
+  font-size: var(--tandem-text-sm);
+  color: var(--tandem-warning-fg-strong);
+  background: var(--tandem-warning-bg);
+  border: 1px solid var(--tandem-warning-border);
+  border-radius: var(--tandem-r-2);
+}

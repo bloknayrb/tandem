@@ -33,6 +33,15 @@ def load_subject():
 
 
 class AcceptanceMatrixTests(unittest.TestCase):
+    def test_launcher_mode_reads_not_configured_as_normal(self):
+        # #2180: the harness seeds no integrations.json, so a normal boot now
+        # reports {available: false, reason: "not-configured"}.
+        mode = load_subject().ConptyTrialDriver._launcher_mode
+        self.assertEqual(mode({"available": False, "reason": "not-configured"}), "normal")
+        self.assertEqual(mode({"available": True, "running": False}), "normal")
+        self.assertEqual(mode({"available": False, "reason": "disabled-by-env"}), "launcher-disabled")
+        self.assertEqual(mode({"available": False}), "unknown")
+
     def test_transcript_parser_requires_dispatch_marker_monitor_args_and_post_event_inbox(self):
         subject = load_subject()
         event_text = "acceptance-event-123"

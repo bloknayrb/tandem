@@ -71,11 +71,16 @@ export interface AnnotationActionHandlers {
  * across a status change). Defined ONCE so the two panels can't drift on the gate logic.
  * `remove`'s underlying handler is a fire-and-forget POST with no client gate, so the
  * `canRemove` re-check here IS the client-side gate (the server is author/status-agnostic).
+ *
+ * `aiDisabled` is the licence state READ AT ACTION TIME by the calling panel (#1521), so
+ * a menu held open across the licence flip is re-checked. Taken as a parameter so this
+ * module stays pure and never imports the licence store.
  */
 export function runAnnotationAction(
   action: AnnotationContextMenuActionId,
   ann: Annotation,
   handlers: AnnotationActionHandlers,
+  aiDisabled: boolean,
 ): void {
   switch (action) {
     case "ctx:annotation:accept":
@@ -85,7 +90,7 @@ export function runAnnotationAction(
       if (canDismiss(ann)) handlers.dismiss?.(ann.id);
       return;
     case "ctx:annotation:sendToClaude":
-      if (canSendToClaude(ann)) handlers.sendToClaude?.(ann.id);
+      if (canSendToClaude(ann, aiDisabled)) handlers.sendToClaude?.(ann.id);
       return;
     case "ctx:annotation:remove":
       if (canRemove(ann)) handlers.remove?.(ann.id);
@@ -94,7 +99,7 @@ export function runAnnotationAction(
       if (canEdit(ann)) handlers.openEdit?.(ann.id);
       return;
     case "ctx:annotation:reply":
-      if (canReply(ann)) handlers.openReply?.(ann.id);
+      if (canReply(ann, aiDisabled)) handlers.openReply?.(ann.id);
       return;
     case "ctx:annotation:copy":
       if (canCopy(ann)) {
@@ -114,11 +119,14 @@ export function runAnnotationAction(
 export async function openAnnotationContextMenu(
   ann: Annotation,
   run: (action: AnnotationContextMenuActionId) => void,
+  aiDisabled: boolean,
 ): Promise<void> {
   setAnnotationGesture({ run });
   try {
     const invoke = await loadInvoke();
-    await invoke("show_annotation_context_menu", { req: buildAnnotationMenuContext(ann) });
+    await invoke("show_annotation_context_menu", {
+      req: buildAnnotationMenuContext(ann, aiDisabled),
+    });
   } catch {
     /* Tauri unavailable or command error — native menu already suppressed. */
   }

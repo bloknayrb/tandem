@@ -168,12 +168,12 @@ describe("runAnnotationAction (shared re-validating dispatcher)", () => {
 
   it("routes each action to its handler when the predicate holds", () => {
     const h = handlers();
-    runAnnotationAction("ctx:annotation:accept", ann("comment", "claude"), h);
-    runAnnotationAction("ctx:annotation:dismiss", ann("comment", "claude"), h);
-    runAnnotationAction("ctx:annotation:sendToClaude", ann("note", "user"), h);
-    runAnnotationAction("ctx:annotation:remove", ann("highlight", "user"), h);
-    runAnnotationAction("ctx:annotation:edit", ann("note", "user"), h);
-    runAnnotationAction("ctx:annotation:reply", ann("comment", "claude"), h);
+    runAnnotationAction("ctx:annotation:accept", ann("comment", "claude"), h, false);
+    runAnnotationAction("ctx:annotation:dismiss", ann("comment", "claude"), h, false);
+    runAnnotationAction("ctx:annotation:sendToClaude", ann("note", "user"), h, false);
+    runAnnotationAction("ctx:annotation:remove", ann("highlight", "user"), h, false);
+    runAnnotationAction("ctx:annotation:edit", ann("note", "user"), h, false);
+    runAnnotationAction("ctx:annotation:reply", ann("comment", "claude"), h, false);
     expect(h.accept).toHaveBeenCalledWith("a1");
     expect(h.dismiss).toHaveBeenCalledWith("a1");
     expect(h.sendToClaude).toHaveBeenCalledWith("a1");
@@ -185,14 +185,25 @@ describe("runAnnotationAction (shared re-validating dispatcher)", () => {
   it("re-validates: drops an action the LIVE annotation no longer qualifies for", () => {
     const h = handlers();
     // Resolved → accept/dismiss gated off (stale menu held open across resolution).
-    runAnnotationAction("ctx:annotation:accept", ann("comment", "claude", "accepted"), h);
+    runAnnotationAction("ctx:annotation:accept", ann("comment", "claude", "accepted"), h, false);
     expect(h.accept).not.toHaveBeenCalled();
     // remove on a claude comment → canRemove false (the client gate for the gateless POST).
-    runAnnotationAction("ctx:annotation:remove", ann("comment", "claude"), h);
+    runAnnotationAction("ctx:annotation:remove", ann("comment", "claude"), h, false);
     expect(h.remove).not.toHaveBeenCalled();
     // edit on an import note → canEdit false.
-    runAnnotationAction("ctx:annotation:edit", ann("note", "import"), h);
+    runAnnotationAction("ctx:annotation:edit", ann("note", "import"), h, false);
     expect(h.openEdit).not.toHaveBeenCalled();
+  });
+
+  it("a stale menu event cannot make an AI write while the AI is off (#1521)", () => {
+    const h = handlers();
+    runAnnotationAction("ctx:annotation:sendToClaude", ann("note", "user"), h, true);
+    expect(h.sendToClaude).not.toHaveBeenCalled();
+    runAnnotationAction("ctx:annotation:reply", ann("comment", "claude"), h, true);
+    expect(h.openReply).not.toHaveBeenCalled();
+    // A reply inside the user's own note thread is not an AI write.
+    runAnnotationAction("ctx:annotation:reply", ann("note", "user"), h, true);
+    expect(h.openReply).toHaveBeenCalledWith("a1");
   });
 
   it("copy writes the body to the clipboard; missing handlers are a safe no-op", () => {
@@ -202,7 +213,12 @@ describe("runAnnotationAction (shared re-validating dispatcher)", () => {
     // afterwards instead of leaking into later tests in this file.
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     try {
-      runAnnotationAction("ctx:annotation:copy", ann("note", "user", "pending", "secret"), {});
+      runAnnotationAction(
+        "ctx:annotation:copy",
+        ann("note", "user", "pending", "secret"),
+        {},
+        false,
+      );
       expect(writeText).toHaveBeenCalledWith("secret");
     } finally {
       vi.unstubAllGlobals();

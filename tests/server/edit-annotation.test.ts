@@ -286,22 +286,4 @@ describe("tandem_comment via MCP", () => {
     expect(ann.suggestedText).toBe("Hi");
     expect(ann.content).toBe("more concise");
   });
-
-  it("rejects deprecated directedAt with DEPRECATED error (ADR-027)", async () => {
-    const ydoc = setupDoc("comment-da-1", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-
-    const result = await client.callTool({
-      name: "tandem_comment",
-      arguments: { from: 0, to: 5, text: "Is this right?", directedAt: "claude" },
-    });
-    const parsed = parseResult(result as any);
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("DEPRECATED");
-    expect(parsed.message).toMatch(/directedAt/i);
-    expect(map.size).toBe(0);
-  });
 });
-
-// tandem_suggest deprecation: covered by mcp-tool-integration.test.ts's
-// parametrized it.each (which also pins the pushNotification side-effect).

@@ -23,6 +23,7 @@ vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), () => ({
     existing: [],
     picked: [],
     applyResults: [],
+    tandemClaude: null,
     errorMessage: null,
     channelRegistered: null,
     keychainUnavailable: false,
@@ -32,6 +33,11 @@ vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), () => ({
     setPicked: vi.fn(),
     submitSecret: vi.fn(async () => {}),
     cleanupUnsavedSecrets: vi.fn(async () => {}),
+    hasSetupToKeep: false,
+    keepError: null,
+    keepSetup: vi.fn(async () => true),
+    pickedForInstall: vi.fn(() => null),
+    refreshDetected: vi.fn(async () => []),
   }),
   detectedToPicked: vi.fn(() => null),
 }));
@@ -152,7 +158,8 @@ describe("IntegrationWizardModal — install completes but binary still not dete
 
     await waitFor(() => {
       const banner = q(container, "integration-wizard-shim-warning");
-      expect(banner?.textContent).toContain("restart Tandem");
+      // #2199: the launcher finds a native install without a Tandem restart.
+      expect(banner?.textContent).toContain("without a restart");
     });
   });
 });

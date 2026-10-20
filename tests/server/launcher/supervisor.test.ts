@@ -34,12 +34,22 @@ import {
 import { NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
 
 let tmpDir: string;
+let savedClaudeCmd: string | undefined;
 
 beforeEach(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "supervisor-test-"));
+  // The launcher resolves an absolute, startable command before every spawn
+  // and spawns nothing without one (#2199). These tests are about everything
+  // after that point, so they must not depend on whether the host running them
+  // has a `claude` installed: node itself stands in (absolute, executable, on
+  // every CI platform). The cases that need a missing CLI inject one.
+  savedClaudeCmd = process.env.TANDEM_CLAUDE_CMD;
+  process.env.TANDEM_CLAUDE_CMD = process.execPath;
 });
 
 afterEach(async () => {
+  if (savedClaudeCmd === undefined) delete process.env.TANDEM_CLAUDE_CMD;
+  else process.env.TANDEM_CLAUDE_CMD = savedClaudeCmd;
   await fs.promises.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -86,7 +96,68 @@ describe("supervisor.start — gating", () => {
     const sup = createSupervisor({ integrationsBase: tmpDir });
     await sup.start();
     expect(sup.status().running).toBe(false);
+    // #2180: and it says so, rather than reading as a stopped Claude to restart.
+    expect(sup.status()).toEqual({ running: false, configured: false });
     await sup.stop();
+  });
+});
+
+describe("supervisor — no launchable integration (#2180)", () => {
+  function claudeCode(): IntegrationsFile["integrations"][number] {
+    return {
+      kind: "claude-code",
+      id: "cc",
+      label: "Claude Code",
+      configPath: path.join(tmpDir, "cc-config.json"),
+      transport: "http",
+      url: "http://127.0.0.1:3479/mcp",
+      apply: "create",
+    };
+  }
+
+  it("reports configured:false after a start finds nothing", async () => {
+    await writeIntegrations(emptyIntegrationsFile());
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await sup.start();
+    expect(sup.status()).toEqual({ running: false, configured: false });
+    await sup.stop();
+  });
+
+  it("guard: says nothing about configuration before any plan has run", () => {
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    expect(sup.status()).toEqual({ running: false });
+  });
+
+  it("relaunch and start-fresh report that nothing was spawned", async () => {
+    await writeIntegrations(emptyIntegrationsFile());
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await expect(sup.relaunch()).resolves.toEqual({ spawned: false, why: "no-integration" });
+    await expect(sup.startFresh()).resolves.toEqual({ spawned: false, why: "no-integration" });
+    expect(sup.status().running).toBe(false);
+    await sup.stop();
+  });
+
+  it("refreshConfigured picks up an entry written after boot, and starts nothing", async () => {
+    await writeIntegrations(emptyIntegrationsFile());
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await sup.start();
+    expect(sup.status()).toEqual({ running: false, configured: false });
+
+    await writeIntegrations({ schemaVersion: 3, integrations: [claudeCode()] });
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({ running: false });
+    await sup.stop();
+  });
+
+  it("refreshConfigured notices an entry that was removed", async () => {
+    await writeIntegrations({ schemaVersion: 3, integrations: [claudeCode()] });
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({ running: false });
+
+    await writeIntegrations(emptyIntegrationsFile());
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({ running: false, configured: false });
   });
 });
 

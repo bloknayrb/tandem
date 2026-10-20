@@ -49,6 +49,43 @@ function readJson<T>(filePath: string): T | null {
 }
 
 /**
+ * Read `license.json`, telling ABSENT apart from PRESENT-BUT-UNUSABLE (#1521).
+ * `readJson` cannot: it maps every failure to `null`, which is right for
+ * `trial.json` (a soft clock) and wrong for a licence a user paid for.
+ *
+ * - `absent`: ENOENT only.
+ * - `unreadable`: any other read error (`UNKNOWN` — it is usually a transient
+ *   lock, and the copy for it says to re-activate or write to support, never
+ *   to buy), or a body that parses to something with no string `blob`, or
+ *   does not parse at all (`MALFORMED`).
+ */
+function readLicenseFile(
+  filePath: string,
+):
+  | { kind: "absent" }
+  | { kind: "unreadable"; code: LicenseUnverifiableCode }
+  | { kind: "parsed"; value: LicenseFile } {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
+    return { kind: "unreadable", code: "UNKNOWN" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "unreadable", code: "MALFORMED" };
+  }
+  const blob = (parsed as Partial<LicenseFile> | null)?.blob;
+  if (typeof blob !== "string" || blob.length === 0) {
+    return { kind: "unreadable", code: "MALFORMED" };
+  }
+  return { kind: "parsed", value: parsed as LicenseFile };
+}
+
+/**
  * The epoch ms the trial clock starts from, given a parsed `trial.json` body
  * (#1788). `NaN` when the body is present but cannot run a clock — `NaN` makes
  * `nowMs < expiresAt` false ⇒ restricted (decision 5).
@@ -120,7 +157,8 @@ function trialBodyIsUsable(tf: unknown, nowMs: number): boolean {
  *
  * `verify` is injectable for tests; production uses signature-only verification
  * so an expired *update window* never drops a paid user to `restricted`
- * (ADR-040: run forever, updates windowed). The update window is read from
+ * (ADR-040: run forever; updates are windowed only on a key hand-signed with
+ * `--expires`, since every issued key includes all future updates). The update window is read from
  * `expiresAt` into `updateWindowCurrent`.
  */
 export function resolveLicenseState(deps: {
@@ -157,7 +195,23 @@ export function resolveLicenseState(deps: {
   // damaged" and "update Tandem" are three different user actions, and a
   // boolean forced every surface to hedge across all three in one sentence.
   let licenseUnverifiable: LicenseUnverifiableCode | undefined;
-  const lf = readJson<LicenseFile>(licenseFilePath(appDataDir));
+  const lfRead = readLicenseFile(licenseFilePath(appDataDir));
+  // A licence file that EXISTS but cannot be used — a read error that is not
+  // ENOENT (an AV or sync-client lock: EBUSY, EPERM), unparseable JSON, or a
+  // body with no `blob` — is UNVERIFIABLE, not absent (#1521). Treating it as
+  // absent told a paying user, mid-session, that Tandem was unlicensed and
+  // where to buy it. It still never unlocks anything: making the file
+  // unreadable cannot gain AI, because it falls through to the trial clock
+  // exactly like a licence that fails to verify.
+  if (lfRead.kind === "unreadable") {
+    licenseUnverifiable = lfRead.code;
+    warnOnce(
+      `read:${lfRead.code}`,
+      `[license] license.json exists but could not be used (${lfRead.code}) — treating this ` +
+        "device as unlicensed until it can be read.",
+    );
+  }
+  const lf = lfRead.kind === "parsed" ? lfRead.value : null;
   if (lf?.blob) {
     try {
       const meta = verify(lf.blob);
@@ -247,7 +301,7 @@ export function resolveLicenseState(deps: {
     };
   }
 
-  // 3. Trial expired, no license ⇒ restricted (read-only escape hatch).
+  // 3. Trial expired, no license ⇒ restricted (AI refused; the editor stays writable, #1521).
   return {
     gateActive: true,
     status: "restricted",
@@ -258,10 +312,9 @@ export function resolveLicenseState(deps: {
 
 /**
  * Production-wired `resolveLicenseState`: the single place the live deps (real
- * app-data dir, wall clock, build-time gate flag) are assembled. Shared by both
- * enforcement surfaces — Hocuspocus `onAuthenticate` (Surface A) and the MCP
- * `gatedTool` / `licenseGateMiddleware` (Surface B) — plus the status route, so
- * a future deps change lands in one spot. Still cache-free: every call re-reads disk.
+ * app-data dir, wall clock, build-time gate flag) are assembled. Shared by the
+ * AI-surface decision (`ai-refusal.ts`, #1521) and the status route, so a
+ * future deps change lands in one spot. Still cache-free: every call re-reads disk.
  */
 export function resolveLiveLicenseState(): LicenseState {
   return resolveLicenseState({
@@ -349,8 +402,10 @@ export async function ensureTrialStarted(
 /**
  * Activate a license: verify its signature + known version, persist atomically,
  * and return the freshly-resolved state. Does NOT reject an expired update
- * window — a user may activate an older license and still run forever; they
- * simply won't receive new updates until they renew.
+ * window — a user may activate an older license and still run forever. Issued
+ * keys carry no window since every key includes all future updates (ADR-040,
+ * 2026-10-09); a dated one exists only if hand-signed with `--expires`, and
+ * there is no renewal product to extend it.
  */
 export async function activateLicense(
   appDataDir: string,

@@ -59,24 +59,52 @@ export function wrapForTerminal(text: string, width = 76): string[] {
 export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean): string[] {
   const lines: string[] = ["", "Tandem license", ""];
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
-  if (state.gateActive && state.status === "trial") {
+  if (!enforcementOn && state.gateActive && state.status !== "licensed") {
+    // `tandem license` forces `gateEnabled: true`, so a dark build reaches here
+    // from any `trial.json`, stale or live. A dark build is a pre-1.0 beta, whose grant has
+    // no time limit: the user is neither on a trial nor unlicensed, and is
+    // offered nothing to buy. The trial clock is still shown, labelled, for
+    // diagnosis.
+    const which =
+      state.licenseUnverifiable !== undefined ? "license not verified" : "no license key";
+    const clock =
+      state.status === "trial"
+        ? ` (trial clock: ${state.trial.daysRemaining} of ${TRIAL_DAYS} days)`
+        : "";
+    lines.push(`  Status:        ${which} — nothing is enforced in this build${clock}`);
+  } else if (state.gateActive && state.status === "trial") {
     lines.push(
       `  Status:        trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`,
     );
   } else if (state.gateActive && state.status === "restricted") {
-    lines.push("  Status:        restricted — trial ended; activate a license to keep editing");
-    lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
+    // #1521: keyless means AI off, never read-only.
+    const unverifiable = state.licenseUnverifiable !== undefined;
+    if (unverifiable) {
+      lines.push(
+        "  Status:        license not verified — AI features off; the editor is unaffected",
+      );
+    } else {
+      lines.push("  Status:        unlicensed — AI features off; the editor is unaffected");
+    }
+    // Never a purchase link for an installed licence that fails to verify:
+    // that reader most likely already paid (ADR-040 decision 8). Their remedy
+    // is the fix-or-reissue paragraph below.
+    if (!unverifiable) lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
   } else {
     // licensed (gate-active) — or the dark arm, which `tandem license` never
     // produces (it forces gateEnabled:true), but the union requires the branch.
     lines.push("  Status:        licensed");
     if (state.gateActive && state.status === "licensed") {
       lines.push(`  Licensee:      ${state.license.name} (${state.license.type})`);
-      const window = state.updateWindowCurrent ? "current" : "expired";
-      const through = state.license.expiresAt
-        ? ` (through ${state.license.expiresAt.slice(0, 10)})`
-        : "";
-      lines.push(`  Update window: ${window}${through}`);
+      if (state.license.expiresAt === null) {
+        // Every issued key since ADR-040's 2026-10-09 amendment (decision A5):
+        // no window at all, so "current" with no date would understate it.
+        lines.push("  Updates:       all future updates included");
+      } else {
+        // Only a key hand-signed with `--expires` still carries a dated window.
+        const window = state.updateWindowCurrent ? "current" : "expired";
+        lines.push(`  Update window: ${window} (through ${state.license.expiresAt.slice(0, 10)})`);
+      }
       if (!state.updateWindowCurrent) {
         // The single most confusing state in the whole system: the app keeps
         // saying "You're up to date" because the update endpoint is returning
@@ -85,9 +113,10 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
       }
     }
   }
-  // A license file exists but doesn't verify. Without this, every surface tells
-  // the holder of a license that their *trial* ended. The message is chosen by
-  // the code, so it names the actual remedy rather than hedging across three.
+  // A license file exists but doesn't verify. Its holder most likely paid, so
+  // they must never read as unlicensed or be offered a purchase; this paragraph
+  // is their remedy. The message is chosen by the code, so it names the actual
+  // remedy rather than hedging across three.
   if (state.gateActive && state.status !== "licensed" && state.licenseUnverifiable) {
     lines.push("");
     for (const line of wrapForTerminal(unverifiableLicenseMessage(state.licenseUnverifiable))) {
@@ -163,6 +192,8 @@ export async function runActivate(args: string[]): Promise<void> {
     console.log(`\n✓ License activated for ${who}.`);
     if (lic?.expiresAt) {
       console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);
+    } else if (lic) {
+      console.log("  All future updates are included.");
     }
     console.log("");
   } catch (err) {

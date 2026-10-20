@@ -38,6 +38,17 @@ function renderChat(messages: ChatMessage[], visible: boolean | "omit" = true) {
       onClear: async () => {},
       onExport: async () => {},
       onInsert: () => false,
+      tandemClaudeControl: null,
+      onStartClaude: () => {},
+      onTurnOffClaude: () => {},
+      tandemClaudeResume: null,
+      onResumeRemedy: () => {},
+      tandemClaudeGreetingLate: null,
+      onGreetingAction: () => {},
+      claudeCodeOfferEligible: false,
+      onClaudeCodeOfferSetup: () => {},
+      onClaudeCodeOfferDismiss: () => {},
+      aiDisabled: false,
     },
   });
 }

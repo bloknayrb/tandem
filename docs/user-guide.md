@@ -118,7 +118,7 @@ The floating pill at the bottom-left shows the following — it stays faint unti
 - **Save state** — "Saving…" while a write is in flight, then "Saved HH:MM".
 - **Review Only badge** — Appears when the active document is read-only (an uploaded file, or the changelog opened via View Changelog).
 - **Held count** — In Solo mode, how many of your comments and replies are being withheld.
-- **AI connection** — Whether your AI is reachable, and what it is doing ("Working on Cost Summary…", idle, and so on).
+- **AI connection** — Who is attached. **Tandem's Claude** means the Claude session Tandem started for you is running; Tandem wakes it when you send a message, and it shows "Tandem's Claude is working…" while it is mid-turn. **AI attached** means something else is connected — a Claude Code session you started, Claude Desktop, or another MCP client — which sees your messages only when it checks in, unless it set up notifications. **AI not connected** means nothing is. Beside **Tandem's Claude**, a **green dot** means Tandem has matched a live connection to its own Claude, and a **hollow ring** means it can't confirm which connection that is (with the plain config entry `tandem setup` writes, the ring is the normal look). Beside **AI attached**, a green dot means a live session is connected, and a hollow ring usually means a session that closed without disconnecting. **· 2 sessions** after the label counts the connections Tandem can see. It's an estimate: a session that just closed still counts for about a minute, one Claude connected two ways counts twice, and clients on the newest MCP protocol revision aren't counted. [Troubleshooting](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) has the details. If Tandem's own Claude has stopped while something else is attached, a separate **Tandem's Claude** button says why (not running, needs sign-in, or can't start) and offers the fix (it leaves any Claude you started yourself alone).
 - **Working-folder pill** — Appears when the AI's working directory has drifted from the document you have open.
 
 Your display name is set in **Settings → Collaboration**. The Solo / Tandem toggle (`Ctrl+Shift+M`) lives in the title bar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
@@ -334,6 +334,31 @@ Replies are rendered as Markdown in the chat panel. Your AI can respond to chat 
 
 An unread badge appears on the Chat tab when a reply arrives while you're viewing the Annotations panel. Switch to Chat to clear it.
 
+A reply counts as read only once you've seen it in the Tandem window you're using, so a reply that arrives while you're in another app still shows as unread when you come back. If you keep Tandem open beside other apps, the **I keep Tandem visible beside other apps** setting changes this: see [Reply Notifications](#reply-notifications).
+
+### Reply Notifications
+
+When your AI replies in chat and Tandem isn't the window you're using, Tandem shows a notification, plays a sound and draws attention to itself. In the desktop app the taskbar icon flashes (Windows) or the dock icon bounces (macOS) until you switch back. In the browser, the tab title shows the number of unread replies. While you're using Tandem, each reply plays the sound and nothing else, at most once every 2 seconds. Several replies in quick succession count as one.
+
+While you're away, you get at most one notification and one sound every 30 seconds. Replies that arrive during those 30 seconds are held back and announced together when the 30 seconds end, unless you've come back to Tandem or read them in another Tandem window by then.
+
+Clicking a notification brings Tandem forward and opens chat on the document of the newest reply a notification announced. That holds when you click it in the first few seconds after switching back to Tandem, too. An old notification clicked from your notification centre long after you came back just opens chat.
+
+On macOS, clicking opens chat for the first notification each time you step away; later notifications from the same time away may only bring Tandem forward. When you come back to Tandem, it clears its notifications from Notification Centre.
+
+The "working on it" message your AI sends before starting longer work doesn't notify. The answer that follows does.
+
+Change any of this under **Settings → Notifications**:
+
+- **Show a notification** — on by default. In the browser, notifications also need your browser's permission. Tandem asks only when you click **Allow notifications** in this tab, or turn the setting on. With it off, you still hear the sound, at the same limit of once every 30 seconds while you're away.
+- **Notification content** — what the notification says: *Generic* ("Claude replied"), *Document name* (the default, "Claude replied in report.md"), or *Message preview* (adds the start of the reply). Notifications can appear on your lock screen, so the reply text is off unless you choose it.
+- **Flash the taskbar icon** (desktop) / **Show the unread count in the tab title** (browser).
+- **I keep Tandem visible beside other apps** — off by default. When it's on, replies count as read whenever Tandem is open on screen with chat showing, even behind other windows, and Tandem treats that window as the one you're using: you hear the sound but get no notification, flash or title count while it's on screen.
+- **Sound** — Chime, Bell, Pop, Ping or None, with a **Preview** button and a volume slider.
+- **Send a test notification** — check that notifications reach you. Clicking the test notification only brings Tandem forward.
+
+In the browser, a reply that arrives before your first click or keypress in the Tandem tab plays no sound, because browsers block audio until you interact with the page; the notification and the title count still appear. In the desktop app, whether notifications appear at all is up to your operating system's notification settings, such as Focus Assist or Do Not Disturb. A desktop app hidden to the tray has no taskbar icon to flash, so you get the notification and sound only. If several Tandem windows are open, the one you're using plays the sound; with **I keep Tandem visible beside other apps** on, every window that counts as in use plays it, so two visible windows both chime. A window you're not using stays quiet once the reply has been read in another window.
+
 ## Settings
 
 Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
@@ -347,6 +372,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
 | **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
+| **Notifications** | Reply notifications, what they say, the taskbar flash or tab-title count, whether a visible Tandem window counts as the one you're using (**I keep Tandem visible beside other apps**), and the reply sound and its volume — see [Reply Notifications](#reply-notifications) |
 | **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, and Replay tutorial |
 | **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
 | **License** | Activation and current license or trial status |

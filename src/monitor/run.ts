@@ -35,8 +35,8 @@
  * the `src/channel/run.ts` vs `src/channel/index.ts` split.
  *
  * **STDOUT IS RESERVED** (CLAUDE.md rule #3). The only writes to stdout are
- * the wake line inside the `onEvent` callback and the exhaustion notice
- * inside `main`. Everything else — including anything that
+ * the wake line inside the `onEvent` callback, the exhaustion notice and the
+ * licence-refusal notice (#1521) inside `buildOptions`. Everything else — including anything that
  * would otherwise call `console.log/warn/info` — is redirected to stderr by
  * the guard immediately below. When adding a new dependency, grep its source
  * for `process.stdout.write` and `console.log` before accepting; a
@@ -177,6 +177,13 @@ function buildOptions(): EventConsumerOptions {
       process.stdout.write(
         "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative\n",
       );
+    },
+    onLicenseRefused: (message) => {
+      // #1521: the server refused the stream because Tandem is unlicensed.
+      // Printed ONCE per refused stretch (the consumer latches it) so the model
+      // learns why its wakes stopped. Still payload-free: this is the server's
+      // fixed refusal copy, never document or chat content.
+      process.stdout.write(`Tandem: ${message}\n`);
     },
   };
 }
