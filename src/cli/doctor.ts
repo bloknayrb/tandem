@@ -63,6 +63,9 @@ import { nodeVersionError } from "./node-version.js";
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
 // use). This is the version the `npx` bridge entries are pinned to.
 declare const __TANDEM_VERSION__: string;
+/** This build's version, or null under tsx/vitest where nothing injects it. */
+const BUNDLED_VERSION: string | null =
+  typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : null;
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -240,10 +243,15 @@ function parseNodeVersion(version: string): ParsedNodeVersion | null {
 
 const MIN_NODE_PARSED = parseNodeVersion(MIN_NODE_VERSION) as ParsedNodeVersion;
 
+/** `a < b` on major, then minor, then patch. Nothing in it is Node-specific. */
+function isOlderTriplet(a: ParsedNodeVersion, b: ParsedNodeVersion): boolean {
+  if (a.major !== b.major) return a.major < b.major;
+  if (a.minor !== b.minor) return a.minor < b.minor;
+  return a.patch < b.patch;
+}
+
 function isBelowFloor(v: ParsedNodeVersion): boolean {
-  if (v.major !== MIN_NODE_PARSED.major) return v.major < MIN_NODE_PARSED.major;
-  if (v.minor !== MIN_NODE_PARSED.minor) return v.minor < MIN_NODE_PARSED.minor;
-  return v.patch < MIN_NODE_PARSED.patch;
+  return isOlderTriplet(v, MIN_NODE_PARSED);
 }
 
 /**
@@ -2079,6 +2087,149 @@ export interface TandemPluginInput {
   enabledPlugins: Record<string, unknown> | null;
   /** Whether `~/.claude.json` carries an `mcpServers.tandem` entry of its own. */
   wizardTandemEntry: boolean;
+  /** Whether `~/.claude.json` also carries `mcpServers["tandem-channel"]`. */
+  wizardChannelEntry: boolean;
+  /** Read Claude Code's plugin registry (`installed_plugins.json`), returning
+   *  the parsed object or `null` when it could not be read — again not evidence
+   *  either way. A thunk, not a value (PR #2225 review): `evaluateTandemPlugin`
+   *  calls it only once it has found an enabled key, so the key that names the
+   *  registry entry is derived in ONE place and a machine with no Tandem plugin
+   *  never has the file read at all. */
+  readPluginRegistry: () => unknown | null;
+  /** This build's version (`__TANDEM_VERSION__`), or `null` under tsx/vitest. */
+  bundledVersion: string | null;
+}
+
+/**
+ * The shape a registry `version` must have before doctor will compare it, let
+ * alone print it: a whole SemVer string, anchored at BOTH ends, at most 64
+ * characters (PR #2225 review). The registry is a file other programs write,
+ * and the accepted string is interpolated into the warning's message and fix
+ * and carried in `data` — the old prefix-only test let `0.20.1\n<anything>` or
+ * an ANSI escape through to the terminal and to `/api/diagnostics`.
+ */
+const PLUGIN_VERSION_SHAPE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const PLUGIN_VERSION_MAX_LENGTH = 64;
+
+/** Whether `version` is a string doctor may compare and print: {@link PLUGIN_VERSION_SHAPE}, length-capped. */
+function isWellFormedPluginVersion(version: unknown): version is string {
+  return (
+    typeof version === "string" &&
+    version.length <= PLUGIN_VERSION_MAX_LENGTH &&
+    PLUGIN_VERSION_SHAPE.test(version)
+  );
+}
+
+/**
+ * The installed version of plugin `key` in Claude Code's
+ * `~/.claude/plugins/installed_plugins.json`, or `null`.
+ *
+ * **The entry shape is read defensively because it is not recorded anywhere in
+ * this repo** (#2192). The parse accepts a list of installs (one per scope) or a
+ * single install object, each carrying a string `version`. Anything else reads
+ * as `null`, which `evaluateTandemPlugin` treats as "unknown" and stays silent
+ * on — so a format change fails toward saying nothing, never toward a false
+ * warning. With several installs the OLDEST is returned: any stale one is what
+ * loads stale code in the scope it covers.
+ *
+ * **Each version is validated BEFORE the oldest is chosen** (PR #2225 review),
+ * so a malformed entry is skipped rather than compared — it can neither reach
+ * the output nor mask a valid older install sitting beside it.
+ *
+ * **User-scope installs win when there are any** (PR #2225 review). The key
+ * this is called with was found enabled in `~/.claude/settings.json`, the USER
+ * settings, so the install it enables is the user-scope one. A project-scope
+ * install is enabled by that project's own settings, which this check never
+ * reads, and an old one in some unrelated project would otherwise raise a
+ * warning about the user-scope plugin, which is not the one that is stale. With
+ * no `scope` field on any install (a shape we have not seen, but cannot rule
+ * out) every install is considered, as before.
+ */
+export function pluginVersionFromRegistry(registry: unknown, key: string): string | null {
+  if (typeof registry !== "object" || registry === null) return null;
+  const plugins = (registry as { plugins?: unknown }).plugins;
+  if (typeof plugins !== "object" || plugins === null || !Object.hasOwn(plugins, key)) {
+    return null;
+  }
+  const entry = (plugins as Record<string, unknown>)[key];
+  const installs = (Array.isArray(entry) ? entry : [entry]).filter(
+    (install): install is { scope?: unknown; version?: unknown } =>
+      typeof install === "object" && install !== null,
+  );
+  const userScoped = installs.filter((install) => install.scope === "user");
+  let oldest: string | null = null;
+  for (const install of userScoped.length > 0 ? userScoped : installs) {
+    const version = install.version;
+    if (!isWellFormedPluginVersion(version)) continue;
+    if (oldest === null || isOlderPluginVersion(version, oldest)) oldest = version;
+  }
+  return oldest;
+}
+
+interface ParsedPluginVersion extends ParsedNodeVersion {
+  /** Prerelease identifiers (`rc.1` → `["rc", "1"]`); empty for a release. */
+  prerelease: string[];
+}
+
+function parsePluginVersion(version: string): ParsedPluginVersion | null {
+  if (!isWellFormedPluginVersion(version)) return null;
+  // Build metadata (after `+`) carries no precedence in SemVer, so it is
+  // dropped before anything is split.
+  const [core, ...pre] = version.split("+")[0].split("-");
+  const [major, minor, patch] = core.split(".").map(Number);
+  // Re-join: a prerelease may itself contain `-` (`1.0.0-alpha-2`).
+  const prerelease = pre.length > 0 ? pre.join("-").split(".") : [];
+  return { major, minor, patch, prerelease };
+}
+
+/** `a < b` for two digit strings, exactly — no `Number` rounding past 2^53. */
+function isSmallerNumeral(a: string, b: string): boolean {
+  const x = a.replace(/^0+(?=\d)/, "");
+  const y = b.replace(/^0+(?=\d)/, "");
+  return x.length !== y.length ? x.length < y.length : x < y;
+}
+
+/**
+ * SemVer §11 identifier precedence: numeric identifiers compare numerically
+ * and sit below alphanumeric ones, alphanumeric ones compare by ASCII, and a
+ * list that is a strict prefix of the other is the lower.
+ */
+function isOlderPrerelease(a: string[], b: string[]): boolean {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    const aNumeric = /^\d+$/.test(a[i]);
+    const bNumeric = /^\d+$/.test(b[i]);
+    if (aNumeric && bNumeric) {
+      if (isSmallerNumeral(a[i], b[i])) return true;
+      if (isSmallerNumeral(b[i], a[i])) return false;
+      continue; // `01` and `1`: same number, look further.
+    }
+    if (aNumeric !== bNumeric) return aNumeric;
+    return a[i] < b[i];
+  }
+  return a.length < b.length;
+}
+
+/**
+ * `a < b` under SemVer precedence, prereleases included; `false` when either
+ * fails {@link PLUGIN_VERSION_SHAPE}, so an unparseable version stays silent.
+ *
+ * The triplet alone used to decide (PR #2225 review), which read
+ * `0.29.0-rc.1` as EQUAL to `0.29.0` — a release-candidate plugin left behind
+ * after the release raised nothing. The Node floor keeps
+ * {@link isOlderTriplet} on its own: a nightly Node at the floor triplet is
+ * supported, and must not become "below the floor" by this stricter ordering.
+ */
+function isOlderPluginVersion(a: string, b: string): boolean {
+  const pa = parsePluginVersion(a);
+  const pb = parsePluginVersion(b);
+  if (pa === null || pb === null) return false;
+  if (isOlderTriplet(pa, pb)) return true;
+  if (isOlderTriplet(pb, pa)) return false;
+  // Equal triplets: a release outranks any of its prereleases.
+  if (pa.prerelease.length === 0) return false;
+  if (pb.prerelease.length === 0) return true;
+  return isOlderPrerelease(pa.prerelease, pb.prerelease);
 }
 
 /**
@@ -2109,6 +2260,15 @@ export function findEnabledTandemPluginKey(
 }
 
 /**
+ * A plugin key Tandem will print verbatim: what
+ * {@link detectEnabledTandemPluginKey} clamps to and what
+ * {@link renderPluginKey} lets through. Length-capped (PR #2225 review)
+ * because a key is arbitrary JSON-object-key text in a file other programs
+ * write.
+ */
+const PRINTABLE_PLUGIN_KEY = /^tandem@[A-Za-z0-9._-]{1,64}$/;
+
+/**
  * Read `~/.claude/settings.json` and report the enabled Tandem plugin key, for
  * the one surface that has to decide before doctor runs: `tandem setup --apply`
  * warns that writing its own MCP entry loads the `tandem_*` toolset twice
@@ -2123,7 +2283,8 @@ export function findEnabledTandemPluginKey(
  * a newline or ANSI escape in arbitrary JSON-key text would render as something
  * other than what it is. Suppressing the new notice for such a key costs
  * nothing; suppressing doctor's existing report of an installed plugin would
- * not.
+ * not — which is why doctor instead keeps the report and substitutes a phrase
+ * for the key ({@link renderPluginKey}).
  */
 export function detectEnabledTandemPluginKey(): string | null {
   const home = process.env.HOME || process.env.USERPROFILE || "";
@@ -2135,7 +2296,36 @@ export function detectEnabledTandemPluginKey(): string | null {
   const key = findEnabledTandemPluginKey(
     (read.value as { enabledPlugins?: Record<string, unknown> }).enabledPlugins ?? {},
   );
-  return key !== null && /^tandem@[A-Za-z0-9._-]+$/.test(key) ? key : null;
+  return key !== null && PRINTABLE_PLUGIN_KEY.test(key) ? key : null;
+}
+
+/**
+ * The enabled plugin key as doctor may DISPLAY it: the key itself when it is
+ * {@link PRINTABLE_PLUGIN_KEY}-shaped, otherwise a fixed phrase that still
+ * tells the user what to do (PR #2225 review). Display only — detection and the
+ * registry lookup keep the raw key, because rejecting an odd key there would
+ * silence the report of a plugin that is genuinely installed (see
+ * {@link findEnabledTandemPluginKey}). Before this, a key carrying a newline or
+ * an ANSI escape reached the terminal and `/api/diagnostics` inside a
+ * copy-paste command.
+ */
+function renderPluginKey(key: string): string {
+  return PRINTABLE_PLUGIN_KEY.test(key)
+    ? key
+    : "the Tandem plugin (remove it from Claude Code's /plugin menu)";
+}
+
+/**
+ * The uninstall remedy every outcome below ends on. A printable key gets the
+ * copy-paste command; any other key gets {@link renderPluginKey}'s phrase and
+ * NO command, because `claude plugin uninstall <phrase>` would be a command
+ * that cannot work.
+ */
+function uninstallStep(key: string): string {
+  const shown = renderPluginKey(key);
+  return shown === key
+    ? `uninstall the plugin with \`claude plugin uninstall ${shown}\``
+    : `uninstall ${shown}`;
 }
 
 export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
@@ -2166,9 +2356,39 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
         "the plugin's two MCP servers, with a different symptom: no tandem_* tools at all, and " +
         '"Failed to spawn process: No such file or directory" in the client\'s MCP log. Neither ' +
         "can be fixed from Tandem's side — the manifest is one static string for every machine. " +
-        `Start Claude from a terminal, or uninstall with \`claude plugin uninstall ${installedKey}\`.`,
+        `Start Claude from a terminal, or ${uninstallStep(installedKey)}.`,
     },
   ];
+
+  // #2192: the manifest hard-pins `tandem-editor@<version>` (#1790) and Claude
+  // Code does not update an installed plugin by itself, so an old install keeps
+  // running an old bridge and channel shim against this server indefinitely.
+  // Silent when either version is unknown: that is not evidence. The registry
+  // is read only here, once a key is known and there is a version to compare
+  // it against, and is looked up by the RAW key — the one Claude Code wrote.
+  const { bundledVersion } = input;
+  const installedPluginVersion =
+    bundledVersion === null
+      ? null
+      : pluginVersionFromRegistry(input.readPluginRegistry(), installedKey);
+  if (
+    installedPluginVersion !== null &&
+    bundledVersion !== null &&
+    isOlderPluginVersion(installedPluginVersion, bundledVersion)
+  ) {
+    out.push({
+      status: "warn",
+      message: `The Tandem plugin is pinned to tandem-editor@${installedPluginVersion}, older than this Tandem (${bundledVersion})`,
+      fix:
+        "Plugins do not update themselves, so every Claude Code session runs the plugin's " +
+        `${installedPluginVersion} bridge and channel shim against this ${bundledVersion} server. ` +
+        `Update it from Claude Code's \`/plugin\` menu, or ${uninstallStep(installedKey)}` +
+        (input.wizardTandemEntry
+          ? " — your ~/.claude.json entries already provide the same tools."
+          : "."),
+      data: { installedPluginVersion, bundledVersion },
+    });
+  }
 
   // Duplication warning only when the wizard's entry is ALSO present — a
   // plugin-only user has nothing duplicated and needs no warning.
@@ -2179,7 +2399,12 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
         "Both the Tandem plugin and a tandem MCP entry in ~/.claude.json are present — the tandem_* tools will appear twice",
       fix:
         "Plugin MCP servers load alongside your own, under a plugin_ prefix. Keep one: " +
-        `\`claude plugin uninstall ${installedKey}\` leaves the Tandem-managed config in place.`,
+        `${uninstallStep(installedKey)} — that leaves the Tandem-managed config in place.` +
+        // Both register a channel shim too, and every shim counts as a push
+        // subscriber whether or not its host listens (#2186).
+        (input.wizardChannelEntry
+          ? " Both also register a tandem-channel shim, so each Claude Code session runs two."
+          : ""),
     });
   }
   return out;
@@ -2241,11 +2466,27 @@ function checkTandemPlugin(r: Recorder): void {
   }
 
   // Anything but `ok` is already reported by `checkUserMcpConfig`.
-  const wizardTandemEntry =
-    wizardRead.kind === "ok" &&
-    (wizardRead.value as { mcpServers?: Record<string, unknown> }).mcpServers?.tandem !== undefined;
+  const wizardServers =
+    wizardRead.kind === "ok"
+      ? (wizardRead.value as { mcpServers?: Record<string, unknown> }).mcpServers
+      : undefined;
+  const wizardTandemEntry = wizardServers?.tandem !== undefined;
+  const wizardChannelEntry = wizardServers?.["tandem-channel"] !== undefined;
 
-  for (const outcome of evaluateTandemPlugin({ enabledPlugins, wizardTandemEntry })) {
+  for (const outcome of evaluateTandemPlugin({
+    enabledPlugins,
+    wizardTandemEntry,
+    wizardChannelEntry,
+    // A thunk: the evaluator calls it only once it has found an enabled key
+    // (PR #2225 review). Same home and same screened reader as the two reads
+    // above (#1417), so an unsafe path is already refused by the screens; any
+    // non-`ok` read is simply "version unknown".
+    readPluginRegistry: () => {
+      const read = readClaudeConfig(join(home, ".claude", "plugins", "installed_plugins.json"));
+      return read.kind === "ok" ? read.value : null;
+    },
+    bundledVersion: BUNDLED_VERSION,
+  })) {
     recordEvaluation(r, outcome);
   }
 }
@@ -3336,7 +3577,7 @@ export function evaluateStaleGlobal(
 }
 
 async function checkStaleGlobal(r: Recorder): Promise<void> {
-  const bundled = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : null;
+  const bundled = BUNDLED_VERSION;
   // Without a known bundled version (tsx dev / vitest) there's nothing to
   // compare against — skip silently rather than guess.
   if (!bundled) return;

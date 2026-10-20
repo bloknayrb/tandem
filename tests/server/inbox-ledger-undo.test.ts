@@ -81,6 +81,7 @@ function poll(
     modeState: "tandem",
     documentId: DOC_ID,
     wasChannelEmitted: () => false,
+    admit: () => true,
   });
 }
 

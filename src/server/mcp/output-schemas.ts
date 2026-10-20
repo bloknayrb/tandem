@@ -254,23 +254,39 @@ const alreadyPushedField = z
     "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped when the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed.",
   );
 
-const userActionSchema = z.object({
+/** Every item in the three checkInbox buckets carries the document it belongs to (#2187). */
+const inboxItemDocumentIdField = z
+  .string()
+  .describe(
+    "The document this item belongs to. A default poll covers every open document, so pass it when acting on the item (#2187)",
+  );
+
+/**
+ * The per-bucket item schemas are EXPORTED because `tandem_checkInbox` admits
+ * each item against its bucket's schema before stamping it delivered (PR #2225
+ * review): the SDK validates the WHOLE response with these same schemas, so one
+ * malformed client-written record used to fail every item in the poll — after
+ * the ledgers had already been stamped.
+ */
+export const userActionSchema = z.object({
   ...annotationBaseShape,
   author: z.literal("user"),
   type: z.literal("comment"),
   textSnippet: z.string().describe("Current document text at the annotation range (≤100 chars)"),
+  documentId: inboxItemDocumentIdField,
   edited: z.literal(true).optional().describe("Set when re-surfaced after a user edit"),
   alreadyPushed: alreadyPushedField,
 });
 
-const userResponseSchema = z.object({
+export const userResponseSchema = z.object({
   ...annotationBaseShape,
   author: z.literal("claude"),
   status: z.enum(["accepted", "dismissed"]),
   textSnippet: z.string(),
+  documentId: inboxItemDocumentIdField,
 });
 
-const inboxChatMessageSchema = z.object({
+export const inboxChatMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
   timestamp: z.number(),
@@ -285,13 +301,14 @@ const inboxChatMessageSchema = z.object({
 // WS-A2: user replies surfaced via checkInbox (the pull-release path for a
 // reply held in Solo). `author` is always "user" — Claude's own replies and
 // private/note-thread replies are filtered out (ADR-027, via channelVisibleReplies).
-const inboxUserReplySchema = z.object({
+export const inboxUserReplySchema = z.object({
   id: z.string(),
   annotationId: z.string(),
   author: z.literal("user"),
   text: z.string(),
   timestamp: z.number(),
   textSnippet: z.string().describe("Parent comment's anchored text (≤100 chars)"),
+  documentId: inboxItemDocumentIdField,
   alreadyPushed: alreadyPushedField,
 });
 
@@ -314,6 +331,12 @@ export const checkInboxOutputShape = {
     .describe("New user replies on comment threads (held in Solo, released on flip to Tandem)"),
   chatMessages: z.array(inboxChatMessageSchema),
   activity: z.object({
+    documentId: z
+      .string()
+      .nullable()
+      .describe(
+        "The document this activity describes: the named one, or on a default poll the active one. Null only when none is active (or a named document is not open); when that document could not be read it is still named and the other fields are empty. The item buckets may come from other documents",
+      ),
     isTyping: z.boolean(),
     cursor: z.number().nullable(),
     lastEdit: z.number().nullable(),

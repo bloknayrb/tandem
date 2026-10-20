@@ -50,6 +50,7 @@ import {
   isNodeVersionSupported,
   isTandemEditorRepo,
   MIN_NODE_VERSION,
+  pluginVersionFromRegistry,
   probeTandemEditorRepo,
   resolveDoctorPortsFromEnv,
   runDoctor,
@@ -1865,16 +1866,51 @@ describe("evaluatePushPath", () => {
  * The check itself is unchanged — in an armed session it still fails every
  * time — but do not re-derive "every session" from this docblock.
  */
+/** A raw ESC, built rather than typed — an escape byte in source is invisible. */
+const ESC = String.fromCharCode(27);
+
+/** The #2192 inputs at their "nothing known" values, so a case opts in to them. */
+const PLUGIN_UNKNOWN = {
+  wizardChannelEntry: false,
+  readPluginRegistry: () => null,
+  bundledVersion: null,
+} as const;
+
+/** A registry thunk holding one user-scope install of `version` (or nothing). */
+const registryWith =
+  (version: string | null, key = "tandem@tandem-editor") =>
+  (): unknown =>
+    version === null ? null : { plugins: { [key]: [{ scope: "user", version }] } };
+
+/** Whether `text` holds any C0 control character or DEL (newline and ESC included). */
+const hasControlChar = (text: string): boolean =>
+  [...text].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
+
+/**
+ * Every string an outcome carries to a terminal or `/api/diagnostics`, RAW —
+ * `data` values are joined, not `JSON.stringify`d, which would escape a
+ * newline into two printable characters and hide it from the assertion.
+ */
+const outcomeText = (
+  outcomes: { message: string; fix?: string; data?: Record<string, unknown> }[],
+): string =>
+  outcomes
+    .flatMap((o) => [o.message, o.fix ?? "", ...Object.values(o.data ?? {}).map(String)])
+    .join("|");
+
 describe("evaluateTandemPlugin", () => {
   it("says nothing when settings could not be read", () => {
     // Absence is not evidence. A missing or malformed settings file must not
     // be reported as "no plugin".
-    expect(evaluateTandemPlugin({ enabledPlugins: null, wizardTandemEntry: true })).toEqual([]);
+    expect(
+      evaluateTandemPlugin({ ...PLUGIN_UNKNOWN, enabledPlugins: null, wizardTandemEntry: true }),
+    ).toEqual([]);
   });
 
   it("says nothing when no Tandem plugin is enabled", () => {
     expect(
       evaluateTandemPlugin({
+        ...PLUGIN_UNKNOWN,
         enabledPlugins: { "other@market": true },
         wizardTandemEntry: true,
       }),
@@ -1886,6 +1922,7 @@ describe("evaluateTandemPlugin", () => {
     // on. A truthiness check here would nag a user who already opted out.
     expect(
       evaluateTandemPlugin({
+        ...PLUGIN_UNKNOWN,
         enabledPlugins: { "tandem@tandem-editor": false },
         wizardTandemEntry: true,
       }),
@@ -1894,6 +1931,7 @@ describe("evaluateTandemPlugin", () => {
 
   it("notes the npx dependency when the plugin is enabled, without warning", () => {
     const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
       enabledPlugins: { "tandem@tandem-editor": true },
       wizardTandemEntry: false,
     });
@@ -1916,6 +1954,7 @@ describe("evaluateTandemPlugin", () => {
 
   it("adds the duplication warning only when a wizard entry also exists", () => {
     const both = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
       enabledPlugins: { "tandem@tandem-editor": true },
       wizardTandemEntry: true,
     });
@@ -1924,6 +1963,7 @@ describe("evaluateTandemPlugin", () => {
 
     // A plugin-only user has nothing duplicated — one warning, not two.
     const pluginOnly = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
       enabledPlugins: { "tandem@tandem-editor": true },
       wizardTandemEntry: false,
     });
@@ -1934,6 +1974,7 @@ describe("evaluateTandemPlugin", () => {
     // The install identity is `tandem@<marketplace>`, and a locally-registered
     // marketplace would carry a different name than the published one.
     const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
       enabledPlugins: { "tandem@some-local-marketplace": true },
       wizardTandemEntry: false,
     });
@@ -1946,6 +1987,7 @@ describe("evaluateTandemPlugin", () => {
     // the no-git path `docs/spikes/plugin-delivery.md` recommends — was handed
     // a command that errors. Both outcomes carry an uninstall string.
     const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
       enabledPlugins: { "tandem@some-local-marketplace": true },
       wizardTandemEntry: true,
     });
@@ -1962,6 +2004,7 @@ describe("evaluateTandemPlugin", () => {
     // since before the review baseline. Pinned because #1811 substitutes the
     // finder line this outcome is derived from.
     const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
       enabledPlugins: { "tandem@tandem-editor": true },
       wizardTandemEntry: true,
     });
@@ -1969,10 +2012,290 @@ describe("evaluateTandemPlugin", () => {
     expect(warn?.message).toContain("twice");
     expect(warn?.fix).toContain("claude plugin uninstall tandem@tandem-editor");
   });
+
+  // #2192: a beta user ran a 0.20.1 plugin against a 0.28.0 server, and nothing
+  // in doctor said so — the manifest hard-pins the npm version (#1790).
+  it("warns when the installed plugin is older than this build (#2192)", () => {
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry: registryWith("0.20.1"),
+      bundledVersion: "0.28.0",
+    });
+    const warn = out.find((o) => o.status === "warn");
+    expect(warn?.message).toContain("tandem-editor@0.20.1");
+    expect(warn?.message).toContain("0.28.0");
+    expect(warn?.fix).toContain("claude plugin uninstall tandem@tandem-editor");
+    expect(warn?.data).toEqual({ installedPluginVersion: "0.20.1", bundledVersion: "0.28.0" });
+  });
+
+  it.each([
+    ["the same version", "0.28.0", "0.28.0"],
+    ["a newer plugin", "0.29.0", "0.28.0"],
+    // Unknown is not evidence: a registry we could not read, or tsx/vitest
+    // with no bundled version, must not produce a warning.
+    ["an unknown plugin version", null, "0.28.0"],
+    ["an unknown bundled version", "0.20.1", null],
+  ])("does not warn on version for %s", (_label, installed, bundled) => {
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry: registryWith(installed),
+      bundledVersion: bundled,
+    });
+    expect(out.filter((o) => o.status === "warn")).toEqual([]);
+  });
+
+  it("compares versions numerically, not as strings", () => {
+    // "0.9.0" > "0.10.0" as strings; numerically it is older.
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry: registryWith("0.9.0"),
+      bundledVersion: "0.10.0",
+    });
+    expect(out.some((o) => o.status === "warn")).toBe(true);
+  });
+
+  it("names the duplicated channel shim only when ~/.claude.json has one (#2192)", () => {
+    const withChannel = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: true,
+      wizardChannelEntry: true,
+    });
+    expect(withChannel.find((o) => o.status === "warn")?.fix).toContain("tandem-channel");
+
+    const without = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: true,
+    });
+    expect(without.find((o) => o.status === "warn")?.fix).not.toContain("tandem-channel");
+  });
+
+  // PR #2225 review: the registry is a file other programs write, and the old
+  // prefix-only version test let anything after a leading `x.y.z` through to
+  // the message, the fix and `data`.
+  it.each([
+    ["a newline", "0.20.1\nInjected line"],
+    ["an ANSI escape", `0.20.1${ESC}[31mred`],
+    ["an over-long (but SemVer-shaped) version", `0.20.1-${"a".repeat(64)}`],
+  ])("prints no version carrying %s, and raises no version warning", (_label, version) => {
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: true,
+      wizardChannelEntry: true,
+      readPluginRegistry: registryWith(version),
+      bundledVersion: "0.28.0",
+    });
+    expect(out.some((o) => o.data !== undefined)).toBe(false);
+    const text = outcomeText(out);
+    expect(hasControlChar(text)).toBe(false);
+    expect(text).not.toContain("Injected");
+    expect(text).not.toContain("a".repeat(64));
+  });
+
+  it("does not let an invalid install mask a valid older one (PR #2225 review)", () => {
+    // Validation runs BEFORE the oldest is chosen. Choosing first would pick
+    // the malformed `0.1.0…` and then discard it, leaving the real 0.20.1
+    // install unreported.
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry: () => ({
+        plugins: {
+          "tandem@tandem-editor": [
+            { scope: "user", version: `0.1.0${ESC}[31m` },
+            { scope: "user", version: "0.20.1" },
+          ],
+        },
+      }),
+      bundledVersion: "0.28.0",
+    });
+    expect(out.find((o) => o.status === "warn")?.data).toEqual({
+      installedPluginVersion: "0.20.1",
+      bundledVersion: "0.28.0",
+    });
+  });
+
+  it.each([
+    ["a newline", "tandem@bad\nname"],
+    ["an ANSI escape", `tandem@${ESC}[31mred`],
+    ["an over-long suffix", `tandem@${"a".repeat(65)}`],
+  ])(
+    "still reports a plugin whose key carries %s, without printing the key (PR #2225 review)",
+    (_label, key) => {
+      const out = evaluateTandemPlugin({
+        enabledPlugins: { [key]: true },
+        wizardTandemEntry: true,
+        wizardChannelEntry: true,
+        // Looked up by the RAW key, so the version warning still fires.
+        readPluginRegistry: registryWith("0.20.1", key),
+        bundledVersion: "0.28.0",
+      });
+      // Detection is unclamped: the plugin is installed, so the report stays.
+      expect(out.map((o) => o.status)).toEqual(["pass", "warn", "warn"]);
+      expect(hasControlChar(outcomeText(out))).toBe(false);
+      for (const outcome of out) {
+        expect(outcome.message).not.toContain(key);
+        expect(outcome.fix).not.toContain(key);
+        // No copy-paste command naming something that is not the key.
+        expect(outcome.fix).not.toContain("claude plugin uninstall");
+        expect(outcome.fix).toContain(
+          "the Tandem plugin (remove it from Claude Code's /plugin menu)",
+        );
+      }
+    },
+  );
+
+  it("ignores a stale project-scope install when a user-scope one exists (PR #2225 review)", () => {
+    // The enabled key came from the USER settings, so the user-scope install is
+    // the one it enables; a project's own install is that project's business.
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry: () => ({
+        plugins: {
+          "tandem@tandem-editor": [
+            { scope: "user", version: "0.28.0" },
+            { scope: "project", version: "0.20.0", projectPath: "/some/old/project" },
+          ],
+        },
+      }),
+      bundledVersion: "0.28.0",
+    });
+    expect(out.filter((o) => o.status === "warn")).toEqual([]);
+  });
+
+  // SemVer precedence, prereleases included (PR #2225 review). The triplet
+  // alone read an RC as equal to its release.
+  it.each([
+    ["an RC behind its release", "0.29.0-rc.1", "0.29.0", true],
+    ["a release ahead of its RC", "0.29.0", "0.29.0-rc.1", false],
+    ["rc.2 behind rc.10 (numeric identifiers)", "0.29.0-rc.2", "0.29.0-rc.10", true],
+    ["rc.10 ahead of rc.2", "0.29.0-rc.10", "0.29.0-rc.2", false],
+    ["a numeric identifier behind an alphanumeric one", "0.29.0-1", "0.29.0-alpha", true],
+    ["a shorter prefix behind the longer list", "0.29.0-alpha", "0.29.0-alpha.1", true],
+    ["identical prereleases", "0.29.0-rc.1", "0.29.0-rc.1", false],
+    ["build metadata alone", "0.29.0+build.5", "0.29.0", false],
+    ["an older triplet with a prerelease", "0.28.0-rc.1", "0.29.0", true],
+    ["a newer triplet with a prerelease", "0.30.0-rc.1", "0.29.0", false],
+  ])("orders %s", (_label, installed, bundled, warns) => {
+    const out = evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry: registryWith(installed),
+      bundledVersion: bundled,
+    });
+    expect(out.some((o) => o.status === "warn")).toBe(warns);
+  });
+
+  it("reads the registry only once an enabled Tandem plugin is found (PR #2225 review)", () => {
+    const readPluginRegistry = vi.fn(() => null);
+    for (const enabledPlugins of [null, {}, { "other@x": true }, { "tandem@x": false }]) {
+      evaluateTandemPlugin({
+        ...PLUGIN_UNKNOWN,
+        enabledPlugins,
+        wizardTandemEntry: true,
+        readPluginRegistry,
+        bundledVersion: "0.28.0",
+      });
+    }
+    expect(readPluginRegistry).not.toHaveBeenCalled();
+
+    // And it IS read when one is — otherwise the assertion above proves nothing.
+    evaluateTandemPlugin({
+      ...PLUGIN_UNKNOWN,
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+      readPluginRegistry,
+      bundledVersion: "0.28.0",
+    });
+    expect(readPluginRegistry).toHaveBeenCalledTimes(1);
+  });
 });
 
-/** A raw ESC, built rather than typed — an escape byte in source is invisible. */
-const ESC = String.fromCharCode(27);
+describe("pluginVersionFromRegistry (#2192)", () => {
+  const KEY = "tandem@tandem-editor";
+  it.each([
+    [
+      "a list of installs",
+      { plugins: { [KEY]: [{ scope: "user", version: "0.20.1" }] } },
+      "0.20.1",
+    ],
+    ["a single install object", { plugins: { [KEY]: { version: "0.20.1" } } }, "0.20.1"],
+    [
+      "the oldest of several installs",
+      { plugins: { [KEY]: [{ version: "0.28.0" }, { version: "0.20.1" }] } },
+      "0.20.1",
+    ],
+    // Every unrecognised shape reads as unknown, so a format change fails
+    // toward silence rather than a false warning.
+    ["a missing key", { plugins: { "other@x": [{ version: "1.0.0" }] } }, null],
+    ["no plugins map", { version: 2 }, null],
+    ["a non-object registry", "nope", null],
+    ["a non-string version", { plugins: { [KEY]: [{ version: 20 }] } }, null],
+    ["a non-semver version", { plugins: { [KEY]: [{ version: "unknown" }] } }, null],
+    // PR #2225 review: the whole string is validated, not a leading prefix.
+    ["a version with a trailing newline", { plugins: { [KEY]: [{ version: "0.20.1\nx" }] } }, null],
+    [
+      "a version over 64 characters",
+      { plugins: { [KEY]: [{ version: `1.0.0-${"a".repeat(59)}` }] } },
+      null,
+    ],
+    [
+      "a 64-character version",
+      { plugins: { [KEY]: [{ version: `1.0.0-${"a".repeat(58)}` }] } },
+      `1.0.0-${"a".repeat(58)}`,
+    ],
+    [
+      "a valid install beside a malformed one",
+      { plugins: { [KEY]: [{ version: "0.1.0\nx" }, { version: "0.20.1" }] } },
+      "0.20.1",
+    ],
+    // PR #2225 review: a user-scope install wins over a project-scope one…
+    [
+      "the user-scope install over an older project-scope one",
+      {
+        plugins: {
+          [KEY]: [
+            { scope: "project", version: "0.20.0" },
+            { scope: "user", version: "0.28.0" },
+          ],
+        },
+      },
+      "0.28.0",
+    ],
+    // …but with no user-scope install, every install still counts.
+    [
+      "the oldest when no install is user-scoped",
+      {
+        plugins: {
+          [KEY]: [
+            { scope: "project", version: "0.28.0" },
+            { scope: "local", version: "0.20.1" },
+          ],
+        },
+      },
+      "0.20.1",
+    ],
+    [
+      "the oldest prerelease by SemVer precedence",
+      { plugins: { [KEY]: [{ version: "0.29.0-rc.10" }, { version: "0.29.0-rc.2" }] } },
+      "0.29.0-rc.2",
+    ],
+  ])("reads %s", (_label, registry, expected) => {
+    expect(pluginVersionFromRegistry(registry, KEY)).toBe(expected);
+  });
+});
 
 describe("findEnabledTandemPluginKey (#1811)", () => {
   it.each([

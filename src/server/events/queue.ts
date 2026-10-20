@@ -26,6 +26,7 @@ import {
   isUnansweredAsk,
   noteExternalConsumerAttached,
   noteExternalConsumersGone,
+  type PendingDeliveryItem,
   recordWakeForward,
   resetDeliveryStateForTests,
 } from "./delivery-state.js";
@@ -63,17 +64,30 @@ const selectionBuffer = new Map<string, BufferedSelection>();
  * `trackedEvents` is what makes that hold — tracking is conditional on having a
  * subscriber, so eviction must be conditional on the same fact (see `pushEvent`).
  *
- * Ids are process-global and NOT document-scoped. That matters because imported
- * Word annotation ids are deterministic across files: `importAnnotationId`
+ * Keyed by the BARE id, process-wide. That matters because imported Word
+ * annotation ids are deterministic across files: `importAnnotationId`
  * (file-io/docx-comments.ts) hashes only commentId + range + body text, by design,
  * so re-importing dedupes. The same Word comment living in two documents therefore
  * yields the same id in both, and promoting it in each ("Send to Claude") emits two
  * `annotation:created` events sharing that id. Consequence: `wasEmittedViaChannel`
- * can be true in document A because of a push that happened in document B. That is
- * within the advisory contract — the flag is a hint in both directions — but it is
- * why the ref count must be kept honest rather than treated as a per-item truth.
+ * can be true in document A because of a push that happened in document B — which
+ * is why the ref count must be kept honest rather than treated as a per-item truth,
+ * and why the inbox no longer asks THIS map (PR #2225 review): since #2187 a
+ * default `tandem_checkInbox` returns that comment twice, once per document, and a
+ * bare-id answer stamped `alreadyPushed` on the copy nothing had pushed. It asks
+ * {@link emittedPayloadIdsByDocument} instead. This map and its lookup stay as they
+ * were for any caller that wants the process-wide answer.
  */
 const emittedPayloadIds = new Map<string, number>();
+
+/**
+ * The same ref count, keyed `${documentId}\u0000${id}` — only for events that
+ * carry a `documentId`. Kept by the SAME two functions from the SAME key builder
+ * ({@link trackingKeys}), so the buffer invariant above holds for both maps by
+ * construction: an event that incremented one incremented the other, and its
+ * eviction decrements both.
+ */
+const emittedPayloadIdsByDocument = new Map<string, number>();
 
 /**
  * Which buffered events actually incremented `emittedPayloadIds`.
@@ -166,12 +180,53 @@ function getTrackableId(event: TandemEvent): string | undefined {
   }
 }
 
+/** The document-scoped tracking key. NUL-separated, so no id can forge another document's key. */
+function documentScopedPayloadKey(documentId: string, payloadId: string): string {
+  return `${documentId}\u0000${payloadId}`;
+}
+
+/**
+ * Every (map, key) pair an event is tracked under: the bare id always, and the
+ * document-scoped key when the event names its document. The ONE key builder
+ * `trackPayloadId` and `untrackPayloadId` share — two builders could disagree
+ * and leave one map's count drifting from the buffer.
+ */
+function trackingKeys(event: TandemEvent): Array<[Map<string, number>, string]> {
+  const id = getTrackableId(event);
+  if (!id) return [];
+  const keys: Array<[Map<string, number>, string]> = [[emittedPayloadIds, id]];
+  if (event.documentId) {
+    keys.push([emittedPayloadIdsByDocument, documentScopedPayloadKey(event.documentId, id)]);
+  }
+  return keys;
+}
+
 /** Returns whether this event actually carried a trackable id and was recorded. */
 function trackPayloadId(event: TandemEvent): boolean {
-  const id = getTrackableId(event);
-  if (!id) return false;
-  emittedPayloadIds.set(id, (emittedPayloadIds.get(id) ?? 0) + 1);
-  return true;
+  const keys = trackingKeys(event);
+  for (const [map, key] of keys) map.set(key, (map.get(key) ?? 0) + 1);
+  return keys.length > 0;
+}
+
+/**
+ * The inbox item an unanswered-ask forward is waiting on, for the delivery
+ * round's item-scoped hold (PR #2225 review) — or undefined when the forward
+ * names no such item. Only `annotation:*` events that carry a `documentId` name
+ * one: a `chat:message` also carries a `documentId`, but the inbox reads chat
+ * from CTRL_ROOM whatever document it names, so an unreadable document must not
+ * hold a chat's round open; and the Solo release wake names no document.
+ */
+function pendingDeliveryItem(event: TandemEvent): PendingDeliveryItem | undefined {
+  if (!event.documentId) return undefined;
+  switch (event.type) {
+    case "annotation:created":
+    case "annotation:edited":
+      return { documentId: event.documentId, itemId: event.payload.annotationId };
+    case "annotation:reply":
+      return { documentId: event.documentId, itemId: event.payload.replyId };
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -256,11 +311,11 @@ function isUserPrivacyHeld(event: TandemEvent): boolean {
 }
 
 function untrackPayloadId(event: TandemEvent): void {
-  const id = getTrackableId(event);
-  if (!id) return;
-  const count = emittedPayloadIds.get(id) ?? 0;
-  if (count <= 1) emittedPayloadIds.delete(id);
-  else emittedPayloadIds.set(id, count - 1);
+  for (const [map, key] of trackingKeys(event)) {
+    const count = map.get(key) ?? 0;
+    if (count <= 1) map.delete(key);
+    else map.set(key, count - 1);
+  }
 }
 
 function pushEvent(event: TandemEvent): void {
@@ -380,7 +435,7 @@ function pushEvent(event: TandemEvent): void {
   // false on an unwritable stdin. `noteExternalConsumersGone` in `unsubscribe`
   // is what stops that becoming a permanent lie.
   if (forwardExternally && externalSubscribers.size > 0 && isUnansweredAsk(event)) {
-    recordWakeForward(now);
+    recordWakeForward(now, pendingDeliveryItem(event));
   }
 
   // Revoke after a refused event, BEFORE the fan-out and never inside it:
@@ -536,6 +591,17 @@ export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
 }
 
+/**
+ * {@link wasEmittedViaChannel}, scoped to one document (PR #2225 review): true
+ * only for an event that named `documentId`. The same advisory contract in both
+ * directions. A separate name rather than an optional parameter, so a bare
+ * `wasEmittedViaChannel` reference handed to a `(payloadId) => boolean` slot
+ * cannot silently answer for the wrong document.
+ */
+export function wasEmittedViaChannelInDocument(payloadId: string, documentId: string): boolean {
+  return emittedPayloadIdsByDocument.has(documentScopedPayloadKey(documentId, payloadId));
+}
+
 /** Content of the WS-A2 Solo→Tandem release wake — a nudge to pull the inbox. */
 const MODE_RELEASE_WAKE_CONTENT =
   "Solo mode ended. Call tandem_checkInbox to see the comments and replies the user made while in Solo.";
@@ -661,6 +727,9 @@ export function resetForTesting(): void {
   externalSubscribers.clear();
   revokeHooks.clear();
   emittedPayloadIds.clear();
+  // One invariant with `emittedPayloadIds`: both maps are kept by the same
+  // track/untrack pair, so clearing one alone would desync them.
+  emittedPayloadIdsByDocument.clear();
   // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
   trackedEvents = new WeakSet<TandemEvent>();
   forwardedEvents = new WeakSet<TandemEvent>();
