@@ -31,7 +31,7 @@ Stated as the code behaves, not as marketing:
 | **Right to run** | Perpetual. The run gate checks the Ed25519 signature only (`verifyLicenseSignature`, never `verifyLicense`), so a paid licence runs **forever** — including after any update window ends (only a hand-signed key has one), and including after a refund. |
 | **Updates** | All future updates included, with no guarantee that any will be released (decided 2026-10-09, A5). Paid and grandfathered keys alike are issued with `expiresAt` / `updateWindowEnd` null. There is no renewal product (B6). |
 | **Activation** | Fully offline. No server contact, no activation call, no device count, no seat check. |
-| **Devices and people per key** | Not limited by `LICENSE` and not enforced in the code. `LICENSE` sets no device count and does not tie a key to one person, and customer copy states no device or person count (decided 2026-10-15); its only exclusion, until a commercial SKU exists, is a shared or hosted deployment. See §2. |
+| **Devices and people per key** | Not limited by `LICENSE` and not enforced in the code. `LICENSE` sets no device count and does not tie a key to one person, and customer copy states no device or person count (decided 2026-10-15); checkout copy is still to state its one exclusion, until a commercial SKU exists: a shared or hosted deployment. See §2. |
 | **Transfer** | Not restricted (left out of the terms by decision, 2026-10-09). |
 | **Organisational use** | Each production use must be personal use or individual self-hosting, which `LICENSE` defines as one natural person's. An employee using Tandem for their own work is inside; a deployment one installation serves to several people is not. See §2. |
 
@@ -67,8 +67,8 @@ this pipeline cannot issue one.
 people or devices one key serves: clause (b) asks only that the user hold "a
 license key the Licensor issued". A per-key clause was drafted and declined so
 that the licence stays plain. Customer copy therefore states no device or
-person count. Its only exclusion, until a commercial SKU exists, is a shared or
-hosted deployment (below). Each use must still be one natural person's
+person count. Checkout copy is still to state its one exclusion, until a
+commercial SKU exists: a shared or hosted deployment (below). Each use must still be one natural person's
 (personal use or individual self-hosting).
 
 The failure mode for that case is worse than a loud error. `issue()` hardcodes

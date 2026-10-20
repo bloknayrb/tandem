@@ -64,7 +64,7 @@ Tandem listens on this computer only. Listening on a LAN address is not in this 
 
 Don't port-forward around this (an `ssh -L` tunnel and the like). A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access. That is more than LAN mode allowed.
 
-The auth token still exists. Tandem creates one on first run: the npm install keeps it in an `auth-token` file in its default app-data folder, and the desktop app keeps it in your OS keychain. Claude's MCP configs carry it, and `tandem rotate-token` replaces it.
+The auth token still exists. Tandem creates one on first run: the npm install keeps it in an `auth-token` file in its default app-data folder, and the desktop app keeps it in your OS keychain. Claude's MCP configs carry it. `tandem rotate-token` replaces the npm install's token file; it does not reach the desktop app's keychain token (see [data-locations.md](data-locations.md)).
 
 ### Rotating the token
 

@@ -464,7 +464,7 @@ npm uninstall -g tandem-editor
 The editor connects to the Hocuspocus WebSocket on `:3478`. When it can't, you see one of two messages:
 
 - **With no document open**, the empty editor shows **Server unavailable** ("Tandem can't reach its sync server…") with **Retry** and **Open settings** buttons. It appears after 3 seconds without a connection.
-- **With a document open**, a banner says **We've lost the connection to the Tandem server** with a **Retry now** button. It waits longer before appearing, 30 seconds by default, so a brief hiccup doesn't interrupt you. You can change the wait (5 to 120 seconds) under **Settings → Network → Advanced → Show degraded banner after**.
+- **Whether or not a document is open**, a banner says **We've lost the connection to the Tandem server** with a **Retry now** button. It waits longer before appearing, 30 seconds by default, so a brief hiccup doesn't interrupt you. You can change the wait (5 to 120 seconds) under **Settings → Network → Advanced → Show degraded banner after**.
 
 Either way, the server isn't running or isn't reachable:
 

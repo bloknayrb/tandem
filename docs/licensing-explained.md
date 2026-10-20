@@ -98,8 +98,8 @@ beta build has no trial clock running at all and the three states below are
 unreachable in it.
 
 At v1.0 the gate flips, and the 14-day trial starts on every install at its first
-launch of v1.0 or later — beta installs included — unless a key is already
-activated. **Beta users are grandfathered with a free license, and they skip the
+launch of v1.0 or later — beta installs included — and an activated key takes
+precedence over it. **Beta users are grandfathered with a free license, and they skip the
 trial by activating it** — see the claiming instructions in the README, which matter because Tandem has no telemetry
 and therefore no list of beta users to work from.
 
@@ -633,8 +633,9 @@ Worth stating plainly, because they look like bugs:
   buyer keeps the license and the operator gets a notice (decided 2026-10-18).
 - **Nothing counts devices or people.** `LICENSE` sets no per-key limit either,
   and customer copy states no device or person count: how a key is used is left
-  to good faith (decided 2026-10-15). Its only exclusion, until a commercial SKU
-  exists, is a shared or hosted deployment (see *What is not built yet*).
+  to good faith (decided 2026-10-15). Checkout copy is still to state its one
+  exclusion, until a commercial SKU exists: a shared or hosted deployment (see
+  *What is not built yet*).
 - **In restricted mode a Claude Code with shell access can still reach Tandem
   out of band** — edit the file on disk (the watcher reloads it) or call
   Tandem's local endpoints directly. Tandem refuses the AI at its own admission

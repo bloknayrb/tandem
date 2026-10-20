@@ -34,7 +34,9 @@ import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js"
  * reasoning for `sample/welcome.md`, the other shipped document with authored
  * links; it covers that file, so it is not repeated here.
  *
- * So the rule is: every link is an in-page `#fragment` or an external URL.
+ * An in-page `#fragment` is no better: the editor's link handler returns on a
+ * bare fragment without navigating, so it is a dead click too. So the rule is:
+ * every link is an external URL.
  * Converting to absolute GitHub URLs loses the link checker's coverage, which
  * only follows relative links — so this test also checks that every
  * `github.com/bloknayrb/tandem/blob/master/...` link names a file that exists
@@ -114,11 +116,11 @@ describe.each(IN_APP_DOCS)("%s links work from inside the app", (rel) => {
   });
 
   it("contains no relative link", () => {
-    const relative = links.filter((h) => !h.startsWith("#") && !isSafeExternalHref(h));
+    const relative = links.filter((h) => !isSafeExternalHref(h));
     expect(
       relative,
       `${rel} opens inside the app, where a relative link resolves next to the bundled ` +
-        `file and finds nothing. Use ${REPO_BLOB}<path>#<anchor> instead.`,
+        `file and finds nothing (and a bare #fragment does nothing). Use ${REPO_BLOB}<path>#<anchor> instead.`,
     ).toEqual([]);
   });
 

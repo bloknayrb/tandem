@@ -46,7 +46,7 @@ The main editing area is a rich text editor powered by Tiptap. You can type, sel
 
 Open documents appear as tabs along the top. Each tab shows the file name, and a dot while there are unsaved changes. A read-only document shows **Review Only** in the status bar, and its tab's tooltip ends in "(read-only)".
 
-- Switch tabs with `Ctrl+Tab` / `Ctrl+Shift+Tab`, or jump straight to one with `Ctrl+1`–`Ctrl+9`
+- Switch tabs with `Ctrl+Tab` / `Ctrl+Shift+Tab` (in the desktop app; a browser keeps those keys for its own tabs), or jump straight to one with `Ctrl+1`–`Ctrl+9`
 - Drag tabs to reorder them, or use `Alt+Left` / `Alt+Right`
 - Double-click a tab title (or press `F2`) to rename the file inline
 - Click the **+** button at the end of the tab bar to open a new file
@@ -168,7 +168,7 @@ A few messages appear as a banner across the top of the window rather than as a 
 - **Connection lost** — "We've lost the connection to the Tandem server…", with **Retry now**. See [Connection lost](#server-unavailable-or-weve-lost-the-connection-to-the-tandem-server).
 - **Server restarted — refreshing documents** — shown briefly while open tabs reconnect after the Tandem server restarts.
 - **A file changed on disk** — offers **Keep my edits** or **Reload from file**. See [When a file changes on disk](#when-a-file-changes-on-disk).
-- **Update available** (desktop app) — "Tandem v… is available." with **Restart to install**. The app checks when it starts and every eight hours after that; the tray's **Check for Updates** checks on demand. Dismiss the banner with its × to install later.
+- **Update available** (desktop app) — "Tandem v… is available." with **Restart to install**. The app checks when it starts and every eight hours after that; the tray's **Check for Updates** checks on demand. Dismiss the banner with its × (opening Settings also clears it) to install later.
 - **Update didn't finish** (desktop app) — "Tandem may not have finished updating — it restarted on the previous version." with **Check for updates**, which looks for the update again.
 
 ### System Tray (desktop app)

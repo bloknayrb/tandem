@@ -224,7 +224,7 @@ properties of Paddle discounts matter here:
 ### 1c. The cohort problem (settle this before the flip)
 
 `README.md` publicly promises beta users a free grandfathered license that skips
-the trial. **There is no list, and no way to build one** — no telemetry, no
+the trial once they activate it. **There is no list, and no way to build one** — no telemetry, no
 analytics, no signup. Both grandfather mechanisms (§1a and §1b) need the email
 *in advance*, so every beta user has to contact you first.
 

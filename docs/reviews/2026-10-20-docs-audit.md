@@ -427,6 +427,7 @@ Slot 14 (the desktop window) is still manual and still has no embedding page.
 | OPS15 | What the release skill's project-memory step means, and where that memory lives. Or delete the step. | Untouched |
 | OPS20, MERGE-METHOD, OPS22 | Re-measure branch protection and the rulesets (the API refused this session), and record the merge queue's merge method in CLAUDE.md. Then confirm whether `gh stack` stacks go through the queue. | CLAUDE.md now names the queue and says the method is unrecorded. [stacked-prs.md](../stacked-prs.md) keeps an open caveat. |
 | OPS29 | File the [`/diverge`](../../.claude/commands/diverge.md) review gate as an issue with its date in the title, and cite it in the command, as the dated-gates rule requires. | Not filed (issue search was unavailable from this session) |
+| README beta grant (from the licence review) | The README says releases v0.14.2–v0.25 are covered by the current beta grant, but that reach-back clause is in no released `LICENSE` yet. Keep the promise as written, or say it applies once the next release ships the clause. This is a public promise, and LIC20's counsel question applies to it. | Untouched |
 | OPS32 | Whether to add an environment block to the [bug template](../../.github/ISSUE_TEMPLATE/bug_report.md) (version, install type, OS, or pasted diagnostics), given that #1605 deliberately keeps the template short. | Untouched |
 
 ## 6. Code issues found (not fixed in this docs PR)
@@ -437,8 +438,7 @@ Slot 14 (the desktop window) is still manual and still has no embedding page.
 | Ctrl+K | formatting toolbar's Link button tooltip; `RESERVED_CHORDS` in the keybindings | Both advertise a link shortcut that nothing binds, because the link extension ships no keymap. Either bind it to open the link editor, or drop the tooltip and the reservation. If it gets bound, restore the user-guide row. |
 | LIC22 | `src/shared/license-copy.ts` | The bad-signature message does not suggest updating Tandem before asking for a reissue. The doc now does. |
 | Hook scope | `block-sensitive.sh`, `block-no-verify.sh` | Optional. Widen the sensitive-file pattern (the Cargo lockfile, `.env` variants) and the no-verify match (short flag, env bypass). The docs now describe what the hooks actually match. |
-| Stale comment | `src/server/log-filter.ts` | The docblock implies every boot frees the product ports. Only a boot that skips the probe does. |
-| Stale comment | `tests/docs/welcome-links.test.ts` | The docblock says an unresolvable relative link fails silently. The editor now shows a notice. |
+| Save permissions (from the security review) | atomic save (temp file + rename) | The temp file is created with the umask default and renamed over the document, so a document the user had restricted to owner-only can become readable by other local accounts after Tandem saves it. No doc claims otherwise; worth a security-reviewer look on its own. |
 
 **Fixed in this PR:**
 
@@ -449,6 +449,7 @@ Slot 14 (the desktop window) is still manual and still has no embedding page.
   - The LIC05 code comments.
   - The baseline combine-script header.
   - The hook script headers.
+  - The `log-filter.ts` and `welcome-links.test.ts` docblocks.
 
 ## 7. Follow-ups planned
 
