@@ -403,7 +403,7 @@ export function registerApiRoutes(
   app.post(API_MODE_RELEASE, mw, largeBody, handleModeRelease);
 
   // License status (#1116). GET-only; loopback callers get the full state
-  // (licensee name + licenseId), non-loopback gets a PII-scrubbed subset.
+  // (licensee email + licenseId), non-loopback gets a PII-scrubbed subset.
   app.get(API_LICENSE_STATUS, mw, handleGetLicenseStatus);
 
   // License activate (#1116). Gated on origin allowlist + loopback inside the

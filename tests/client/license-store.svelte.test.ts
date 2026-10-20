@@ -47,7 +47,7 @@ const LICENSED: LicenseStatusResponse = {
   gateActive: true,
   status: "licensed",
   updateWindowCurrent: true,
-  license: { name: "Beta Tester", type: "grandfathered" },
+  license: { email: "beta@example.com", type: "grandfathered" },
 };
 
 /** Flush the microtask queue so an in-flight poll's awaited fetch settles. */

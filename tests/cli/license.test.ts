@@ -46,12 +46,12 @@ describe("formatLicenseStatus", () => {
     updateWindowCurrent: true,
     license: {
       id: "lic-1",
-      name: "Jane Doe",
       email: "jane@example.com",
       type: "grandfathered",
       createdAt: new Date(0).toISOString(),
       expiresAt: "2027-01-01T00:00:00.000Z",
       version: "1.0",
+      keyId: "0123456789abcdef",
     },
     licenseId: "lic-1",
   };
@@ -125,7 +125,7 @@ describe("formatLicenseStatus", () => {
 
   it("shows licensee + a dated update window for a hand-signed windowed key", () => {
     const out = formatLicenseStatus(licensed, true).join("\n");
-    expect(out).toContain("Jane Doe (grandfathered)");
+    expect(out).toContain("jane@example.com (grandfathered)");
     expect(out).toContain("Update window: current (through 2027-01-01)");
   });
 

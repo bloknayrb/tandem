@@ -68,7 +68,7 @@ is still the only route, and it stops offering the command accordingly.
 
 ## Why the key is so long
 
-It's a **signed document**, not a password. Inside it are your name, your email,
+It's a **signed document**, not a password. Inside it are your email address,
 what kind of license it is, and an update-window field that issued keys leave
 empty — all sealed with a
 cryptographic signature that Tandem can check by itself, offline.
@@ -173,7 +173,7 @@ of the engineering below exists purely to make that state detectable.
     |                    |   completed          |  . verify signature    |
     |                    |   (Paddle-Signature) |                        |
     |                    |<-- GET /customers ---|  . look up the buyer   |
-    |                    |--- email, name ----->|                        |
+    |                    |--- email ----------->|                        |
     |                    |                      |  . mint + Ed25519-sign |
     |                    |                      |  . write LEDGER_KV     |
     |                    |                      |  . write LICENSE_KV    |
@@ -191,8 +191,8 @@ Four moving parts:
 
 1. **`infra/license-issuance-worker/`** — a Cloudflare Worker. Receives
    Paddle's `transaction.completed` webhook (Paddle is the merchant of record),
-   looks the buyer's email and name up through the Paddle API, because the
-   webhook carries neither, then mints and signs the license, records it, and
+   looks the buyer's email up through the Paddle API, because the
+   webhook carries none, then mints and signs the license, records it, and
    emails it. Refunds and chargebacks arrive as `adjustment.*` events. None of
    this has run against a real Paddle account yet; the open questions are U1–U12
    in [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay).
@@ -210,12 +210,12 @@ Four moving parts:
 {
   "metadata": {
     "id": "…uuid…",          // opaque; the only thing sent over the network
-    "name": "Jane Doe",
-    "email": "jane@example.com",
+    "email": "jane@example.com",  // the only identity field: no name (2026-10-20)
     "type": "personal",       // personal | commercial | grandfathered
     "createdAt": "2026-07-26T…",
     "expiresAt": null,        // END OF UPDATE WINDOW (null = none, every issued key) — never end of the license
-    "version": "1.0"
+    "version": "1.0",
+    "keyId": "…16 hex…"       // which trusted public key signed it; required
   },
   "signature": "…Ed25519 over canonicalize(metadata)…"
 }
@@ -351,7 +351,7 @@ next request. `tandem doctor` reads
 `GET /api/license/status` once, adds a licence row (silent when dark, on a 404 from an older server
 or when nothing answers; a "License status unreadable" warning on any other non-OK, unparsable or
 unrecognised answer). The row records `gateActive`, `status` and `licenseUnverifiable` when the
-answer is readable and only the HTTP status when it is not, never the holder's name or email, and
+answer is readable and only the HTTP status when it is not, never the holder's email, and
 the push and SSE rows defer to it.
 
 **Accepted residuals** (Bryan, D5): an unlicensed Claude Code with shell access can still reach
@@ -497,10 +497,10 @@ activate correctly today**.
 > licence blob can *never* contain `+` or `/`, reasoning that base64 emits them
 > only from the bytes `>`, `?`, `~` and DEL at one sextet position, and that
 > none of those appear in the JSON. The arithmetic is right; the premise isn't.
-> `cleanName` doesn't strip those characters and the email check permits them in
-> the local part — so a buyer called `Who?` produces a blob containing `/`. The
-> claim was false and the test that "proved" it only ever ran on names that
-> happened to avoid the issue. It doesn't matter in the end, because Node's
+> The Worker's `EMAIL_SHAPE` check permits them in an address's local part — so
+> a buyer at `a??~@example.com` produces a blob containing `+` or `/`. The claim
+> was false and the test that "proved" it only ever ran on inputs that happened
+> to avoid the issue. It doesn't matter in the end, because Node's
 > decoder treats the two alphabets as equivalent regardless — but the fix was to
 > assert *that*, not the unsupportable "never".
 
@@ -513,7 +513,7 @@ activate correctly today**.
 > ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
 
 The desktop updater sends only an opaque UUID (`X-Tandem-License-Id`) — never
-the key, the name, or the email. The Worker looks it up and either proxies the
+the key or the email. The Worker looks it up and either proxies the
 signed public manifest or returns `204`.
 
 Every rejection returns **byte-identical** bytes, so the endpoint is not an

@@ -25,6 +25,7 @@ import type {
 } from "../../src/server/license/license-types.js";
 import { normalizePastedLicense } from "../../src/server/license/paste.js";
 import { licenseFilePath } from "../../src/server/license/paths.js";
+import { keyIdForPublicKey } from "../../src/server/license/public-key.js";
 import {
   canonicalize,
   LicenseVerifyError,
@@ -46,12 +47,13 @@ function tempKeyPair() {
 function meta(over: Partial<LicenseMetadata> = {}): LicenseMetadata {
   return {
     id: crypto.randomUUID(),
-    name: "Jane Doe",
     email: "jane@example.com",
     type: "personal",
     createdAt: new Date().toISOString(),
     expiresAt: null,
     version: "1.0",
+    // The test verifiers here check the signature only, so any well-formed id does.
+    keyId: "0123456789abcdef",
     ...over,
   };
 }
@@ -126,29 +128,33 @@ describe("normalizePastedLicense", () => {
   describe("regressions — inputs that already worked and must NOT be 'repaired'", () => {
     // Each of these was a candidate "hardening" that would have REJECTED blobs
     // which activate fine today. base64 is far more tolerant than it looks.
-    it("a typical blob has no `+` or `/`, but a buyer's own name can produce one", () => {
+    it("a typical blob has no `+` or `/`, but a buyer's own email can produce one", () => {
       // Careful here — an earlier version of this test asserted that a real
       // blob can NEVER contain `+` or `/`, and that is false. The sextet
       // arithmetic is right (they're only reachable from source bytes
       // `>`/`?`/`~`/DEL at one position), but the premise that those bytes
-      // can't appear in the JSON is wrong: `cleanName` doesn't strip them and
-      // the email shape check permits them in the local part.
+      // can't appear in the JSON is wrong: the Worker's `EMAIL_SHAPE` check
+      // permits them in the local part, and `cleanEmail` strips only control
+      // characters and whitespace.
       for (let i = 0; i < 20; i++) {
-        expect(signBlob(tempKeyPair().privateKey, meta({ name: `Jane ${i}` }))).toMatch(
+        expect(signBlob(tempKeyPair().privateKey, meta({ email: `jane${i}@example.com` }))).toMatch(
           /^[A-Za-z0-9=]+$/,
         );
       }
-      // ...but a perfectly ordinary name defeats that "never".
-      expect(signBlob(tempKeyPair().privateKey, meta({ name: "Who?" }))).toMatch(/[+/]/);
+      // ...but a legal address defeats that "never". A run of three from
+      // {`?`, `~`} puts a `+`/`/`-producing byte at every alignment.
+      expect(signBlob(tempKeyPair().privateKey, meta({ email: "a??~@example.com" }))).toMatch(
+        /[+/]/,
+      );
     });
 
     it("base64url mangling is harmless — the decoder treats the alphabets as equal", () => {
       // This is the assertion that actually matters, and it holds regardless of
       // whether a given blob contains `+`/`/`. Exercised on a real signed blob
-      // whose name forces both characters to appear, so the substitution below
+      // whose email forces those characters to appear, so the substitution below
       // is not a no-op.
       const kp = tempKeyPair();
-      const withSymbols = signBlob(kp.privateKey, meta({ name: "Who? ~" }));
+      const withSymbols = signBlob(kp.privateKey, meta({ email: "a??~@example.com" }));
       expect(withSymbols).toMatch(/[+/]/);
 
       const urlSafe = withSymbols.replace(/\+/g, "-").replace(/\//g, "_");
@@ -184,8 +190,11 @@ describe("verifyLicenseSignature error codes", () => {
   });
 
   it("BAD_SIGNATURE for a well-formed blob signed by a different key", () => {
-    const { privateKey } = tempKeyPair();
-    expect(() => verifyLicenseSignature(signBlob(privateKey, meta()))).toThrow(
+    const { publicKey, privateKey } = tempKeyPair();
+    // Stamped with the temp key's OWN id, as a real signer would: refused as a
+    // key this build does not trust.
+    const blob = signBlob(privateKey, meta({ keyId: keyIdForPublicKey(publicKey) }));
+    expect(() => verifyLicenseSignature(blob)).toThrow(
       expect.objectContaining({ code: "BAD_SIGNATURE" }),
     );
   });
