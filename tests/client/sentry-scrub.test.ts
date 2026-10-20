@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { __test } from "../../src/client/sentry";
+import { SENTRY_DATA_COLLECTION_OFF } from "../../src/shared/scrub-text";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,5 +124,66 @@ describe("client sentry beforeSend hook", () => {
     expect(start, "Sentry.init call must exist").toBeGreaterThan(-1);
     const initCall = src.slice(start, src.indexOf("\n    });", start));
     expect(initCall).toMatch(/beforeSend:\s*scrubEvent/);
+    expect(initCall).toMatch(/beforeBreadcrumb:\s*scrubBreadcrumb/);
+  });
+});
+
+/**
+ * `@sentry/browser` 11 deleted `sendDefaultPii` and replaced it with
+ * `dataCollection`, whose every default is ON — in the browser client that
+ * includes `infer_ip: "auto"` and `Referer`/`User-Agent` headers. An unset or
+ * partial object silently re-enables collection, so pin what the WebView's
+ * `Sentry.init` call is given (source-scanned: the SDK is dynamically imported
+ * behind a Tauri IPC check this test cannot satisfy).
+ */
+describe("client sentry dataCollection (@sentry/browser 11)", () => {
+  it("passes the shared all-off dataCollection and no sendDefaultPii", async () => {
+    const src = await fs.readFile(path.join(__dirname, "../../src/client/sentry.ts"), "utf-8");
+    const start = src.indexOf("Sentry.init({");
+    const initCall = src.slice(start, src.indexOf("\n    });", start));
+    expect(initCall).toMatch(/dataCollection:\s*SENTRY_DATA_COLLECTION_OFF\b/);
+    // The property form only: the call's own comment names the removed option.
+    expect(initCall).not.toMatch(/sendDefaultPii\s*:/);
+    expect(SENTRY_DATA_COLLECTION_OFF).toEqual({
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      graphQL: { document: false, variables: false },
+      genAI: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      stackFrameVariables: false,
+      frameContextLines: 0,
+    });
+  });
+});
+
+describe("client sentry beforeBreadcrumb hook", () => {
+  const { scrubBreadcrumb } = __test;
+
+  it("drops console breadcrumb arguments and scrubs the message", () => {
+    // `data.arguments` holds the raw console args — the message alone being
+    // scrubbed would still ship them verbatim.
+    const crumb = scrubBreadcrumb({
+      category: "console",
+      message: "saved /Users/alice/minutes.md",
+      data: { arguments: ["saved", "/Users/alice/minutes.md"], logger: "console" },
+    });
+    expect(crumb.message).toBe("saved /Users/[user]/minutes.md");
+    expect(crumb.data).toBeUndefined();
+  });
+
+  it("drops fetch/xhr data payloads", () => {
+    for (const category of ["fetch", "xhr"]) {
+      const crumb = scrubBreadcrumb({ category, data: { url: "http://x/?token=abc" } });
+      expect(crumb.data).toBeUndefined();
+    }
+  });
+
+  it("leaves other categories' data alone", () => {
+    const crumb = scrubBreadcrumb({ category: "ui.click", data: { target: "button" } });
+    expect(crumb.data).toEqual({ target: "button" });
   });
 });

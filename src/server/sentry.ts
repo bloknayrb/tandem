@@ -26,7 +26,12 @@
 
 import type { ErrorEvent, NodeOptions } from "@sentry/node";
 
-import { redactPaths, redactSecrets, scrubSentryEvent } from "../shared/scrub-text.js";
+import {
+  redactPaths,
+  redactSecrets,
+  SENTRY_DATA_COLLECTION_OFF,
+  scrubSentryEvent,
+} from "../shared/scrub-text.js";
 import { APP_VERSION } from "./mcp/server.js";
 
 const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
@@ -37,22 +42,16 @@ type SentryNode = typeof import("@sentry/node");
 let sentry: SentryNode | null = null;
 
 /**
- * The most restrictive `dataCollection` the SDK accepts. Exported so a test can
- * pin it against what `Sentry.init` actually receives.
+ * The shared all-off `dataCollection` (`SENTRY_DATA_COLLECTION_OFF`, which the
+ * WebView passes too), checked against `@sentry/node`'s own options type.
+ * `Required<…>` because `satisfies` on an identifier (not a fresh literal) does
+ * no excess-property check: requiring every key is what catches a misspelled
+ * one, and what fails typecheck when an SDK bump adds a category whose default
+ * is ON. Exported so a test can pin it against what `Sentry.init` receives.
  */
-export const SIDECAR_DATA_COLLECTION = {
-  userInfo: false,
-  cookies: false,
-  httpHeaders: false,
-  httpBodies: [],
-  urlQueryParams: false,
-  graphQL: { document: false, variables: false },
-  genAI: { inputs: false, outputs: false },
-  databaseQueryData: false,
-  queues: false,
-  stackFrameVariables: false,
-  frameContextLines: 0,
-} satisfies NonNullable<NodeOptions["dataCollection"]>;
+export const SIDECAR_DATA_COLLECTION = SENTRY_DATA_COLLECTION_OFF satisfies Required<
+  NonNullable<NodeOptions["dataCollection"]>
+>;
 
 function redactHome(input: string): string {
   const home = process.env.HOME || process.env.USERPROFILE;
@@ -102,8 +101,8 @@ export function scrub(input: string): string {
  * it, and an unwired fix would otherwise pass green.
  *
  * The four scrubbed surfaces — message, exception values, `server_name` and
- * exception stack-frame paths — and why the SDK's PII switch (`dataCollection`
- * here, `sendDefaultPii` in the WebView) covers none of the last two live on
+ * exception stack-frame paths — and why the SDK's PII switch (the all-off
+ * `dataCollection`, in both hooks) covers none of the last two live on
  * [`scrubSentryEvent`], which the WebView hook
  * (`src/client/sentry.ts`) also calls so the two cannot drift apart again; the
  * Rust shell (`src-tauri/src/sentry_reporting.rs`) mirrors it by hand. The
