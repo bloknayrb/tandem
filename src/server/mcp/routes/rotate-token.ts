@@ -35,7 +35,7 @@ export function makeRotateTokenHandler(deps: {
     // Requiring a parsed body works instead because it is a POSITIVE proof that
     // a preflight was passed rather than a header check: `express.json()` is
     // mounted with no `type` option, so it parses `application/json` only.
-    // Measured against this repo's express 5.2.1 — `text/plain`,
+    // Measured against express 5.2.1 and re-measured on 5.3.0 — `text/plain`,
     // `application/x-www-form-urlencoded`, `multipart/form-data` (the three
     // CORS-safelisted types) and a missing Content-Type ALL leave `req.body`
     // undefined; only `application/json` yields an object. The CLI already

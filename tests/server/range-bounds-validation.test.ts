@@ -540,6 +540,36 @@ describe(".docx comment export resolver", () => {
   });
 
   it("counts an out-of-bounds stored range as out-of-bounds in onSkip", () => {
+    // The record carries a `textSnapshot` the stored slice contradicts, so
+    // `refreshRange`'s lazy-attach arm answers `degraded` and mints nothing:
+    // the range reaches the resolver still out of bounds. Without the snapshot
+    // the arm now clamps it into bounds (#2188) — the next spec pins that.
+    const d = docWith("Alpha beta gamma", []);
+    const map = d.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(d, () => {
+      map.set("oob", {
+        id: "oob",
+        author: "claude",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 2, to: 9999 },
+        content: "past the end",
+        textSnapshot: "text that is no longer there",
+        status: "pending",
+        timestamp: 1700000000000,
+        rev: 1,
+      });
+    });
+    const skips: ExportSkipReason[] = [];
+    prepareExportComments(d, (r) => skips.push(r));
+    expect(skips).toEqual(["out-of-bounds"]);
+  });
+
+  it("exports a snapshot-less range past the end clamped to the document's end (#2188)", () => {
+    // Before #2188 this record was dropped as out-of-bounds only when no read
+    // had refreshed it first; after two read-path refreshes it was exported
+    // over [2, 16] anyway. The lazy-attach arm now clamps on the first refresh,
+    // so the outcome no longer depends on whether a read preceded the save.
     const d = docWith("Alpha beta gamma", []);
     const map = d.getMap(Y_MAP_ANNOTATIONS);
     withInternal(d, () => {
@@ -556,8 +586,11 @@ describe(".docx comment export resolver", () => {
       });
     });
     const skips: ExportSkipReason[] = [];
-    prepareExportComments(d, (r) => skips.push(r));
-    expect(skips).toEqual(["out-of-bounds"]);
+    const out = prepareExportComments(d, (r) => skips.push(r));
+    expect(skips).toEqual([]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.from).toBe(2);
+    expect(out[0]?.to).toBe(16);
   });
 
   it("counts an INVERTED stored range as invalid-range in onSkip", () => {
