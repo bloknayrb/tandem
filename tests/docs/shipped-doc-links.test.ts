@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { headingSlugs, stripCode } from "../../scripts/markdown-anchors.mjs";
 import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js";
 
 /**
@@ -32,7 +33,10 @@ import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js"
  * round-trip it through `remark-stringify` (the hazard `CHANGELOG.md` is opened
  * read-only to avoid). `tests/docs/welcome-links.test.ts` records the same
  * reasoning for `sample/welcome.md`, the other shipped document with authored
- * links; it covers that file, so it is not repeated here.
+ * links, and covers its relative links. Its absolute repo links are checked
+ * here instead (the last block below): welcome-links skips every external href
+ * and the link checker reads relative links only, so its User Guide link —
+ * the first link every new user is offered — was checked by nothing.
  *
  * An in-page `#fragment` is no better: the editor's link handler returns on a
  * bare fragment without navigating, so it is a dead click too. So the rule is:
@@ -49,46 +53,33 @@ const REPO_BLOB = "https://github.com/bloknayrb/tandem/blob/master/";
 /** Docs opened inside the app whose links must all leave it. */
 const IN_APP_DOCS = ["docs/workflows.md", "CHANGELOG.md"];
 
-/** Strip fenced blocks and inline code: Markdown examples there are not links. */
-function stripCode(md: string): string {
-  return md.replace(/^\s*(```|~~~)[\s\S]*?^\s*\1\s*$/gm, "").replace(/`[^`\n]*`/g, "");
-}
-
 /** Inline `[text](href)` links (not images) plus reference-style definitions. */
 function hrefs(md: string): string[] {
-  const text = stripCode(md);
-  const inline = [...text.matchAll(/(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)]
-    .filter((m) => m[1] !== "!")
-    .map((m) => m[2]);
+  // Drop images before matching links, so a linked badge `[![alt](img)](url)`
+  // yields its outer `url` rather than reading the image's `img` as a link.
+  const text = stripCode(md).replace(/!\[[^\]]*\]\([^)]*\)/g, "");
+  const inline = [...text.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)].map((m) => m[1]);
   const refs = [...text.matchAll(/^\s{0,3}\[[^\]]+\]:\s*<?([^>\s]+)>?/gm)].map((m) => m[1]);
   return [...inline, ...refs];
 }
 
-/** GitHub's heading anchors, mirroring `scripts/check-doc-links.mjs#headingSlugs`. */
-function headingSlugs(md: string): Set<string> {
-  const seen = new Map<string, number>();
-  const slugs = new Set<string>();
-  let inFence = false;
-  for (const line of md.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
+/** Repo `blob/master` links whose file or heading does not exist in this checkout. */
+function brokenRepoLinks(links: string[]): string[] {
+  const broken: string[] = [];
+  for (const href of links.filter((h) => h.startsWith(REPO_BLOB))) {
+    const [target, anchor] = href.slice(REPO_BLOB.length).split("#");
+    const file = path.join(repoRoot, decodeURIComponent(target));
+    if (!existsSync(file)) {
+      broken.push(`${href} (no such file)`);
       continue;
     }
-    if (inFence) continue;
-    const m = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (!m) continue;
-    const base = m[2]
-      .replace(/`/g, "")
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .trim()
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, "")
-      .replace(/\s/g, "-");
-    const n = seen.get(base) ?? 0;
-    seen.set(base, n + 1);
-    slugs.add(n === 0 ? base : `${base}-${n}`);
+    if (anchor && file.endsWith(".md")) {
+      if (!headingSlugs(readFileSync(file, "utf-8")).has(anchor.toLowerCase())) {
+        broken.push(`${href} (no such heading)`);
+      }
+    }
   }
-  return slugs;
+  return broken;
 }
 
 function tauriResourcePaths(): string[] {
@@ -125,20 +116,18 @@ describe.each(IN_APP_DOCS)("%s links work from inside the app", (rel) => {
   });
 
   it("points every absolute repo link at a file and heading that exist", () => {
-    const broken: string[] = [];
-    for (const href of links.filter((h) => h.startsWith(REPO_BLOB))) {
-      const [target, anchor] = href.slice(REPO_BLOB.length).split("#");
-      const file = path.join(repoRoot, decodeURIComponent(target));
-      if (!existsSync(file)) {
-        broken.push(`${href} (no such file)`);
-        continue;
-      }
-      if (anchor && file.endsWith(".md")) {
-        if (!headingSlugs(readFileSync(file, "utf-8")).has(anchor.toLowerCase())) {
-          broken.push(`${href} (no such heading)`);
-        }
-      }
-    }
-    expect(broken).toEqual([]);
+    expect(brokenRepoLinks(links)).toEqual([]);
+  });
+});
+
+describe("sample/welcome.md absolute repo links", () => {
+  const links = hrefs(readFileSync(path.join(repoRoot, "sample/welcome.md"), "utf-8"));
+
+  it("has repo links to check at all", () => {
+    expect(links.filter((h) => h.startsWith(REPO_BLOB)).length).toBeGreaterThan(0);
+  });
+
+  it("points every absolute repo link at a file and heading that exist", () => {
+    expect(brokenRepoLinks(links)).toEqual([]);
   });
 });

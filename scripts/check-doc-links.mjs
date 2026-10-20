@@ -15,6 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
+import { headingSlugs, stripCode } from "./markdown-anchors.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
@@ -49,42 +50,6 @@ function walk(dir, out = []) {
     else if (entry.name.endsWith(".md")) out.push(full);
   }
   return out;
-}
-
-/** GitHub's heading-to-anchor slug, including its duplicate-suffix rule. */
-function headingSlugs(markdown) {
-  const seen = new Map();
-  const slugs = new Set();
-  let inFence = false;
-  for (const line of markdown.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const m = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (!m) continue;
-    const base = m[2]
-      .replace(/`/g, "")
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // link text only
-      .trim()
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, "")
-      .replace(/\s/g, "-");
-    const n = seen.get(base) ?? 0;
-    seen.set(base, n + 1);
-    slugs.add(n === 0 ? base : `${base}-${n}`);
-  }
-  return slugs;
-}
-
-/**
- * Strip fenced blocks AND inline code spans. Both routinely contain Markdown
- * examples (`![alt](url)`) that are illustrations, not links — treating them as
- * links produces noise that trains you to ignore the checker.
- */
-function stripCode(markdown) {
-  return markdown.replace(/^\s*(```|~~~)[\s\S]*?^\s*\1\s*$/gm, "").replace(/`[^`\n]*`/g, "");
 }
 
 /**
