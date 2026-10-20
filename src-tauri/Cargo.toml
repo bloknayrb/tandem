@@ -77,7 +77,20 @@ tauri-plugin-window-state = "2"
 # Start-at-login (#1236). Wrapped in app-defined commands (src/autostart.rs)
 # rather than exposed via its JS API, so no `autostart:default` capability
 # grant and no @tauri-apps/plugin-autostart npm dependency are needed.
-tauri-plugin-autostart = "2"
+#
+# Held below 2.7: 2.7 moves to `auto-launch` 0.6, whose Windows `enable()`
+# defaults to `WindowsEnableMode::Dynamic` — it writes the machine-wide
+# `HKLM\...\Run` value whenever the process is elevated (Run as administrator,
+# or any launch with UAC off) and falls back to HKCU only on access-denied. The
+# plugin's `Builder` exposes no way to select `CurrentUser`. Because
+# `refresh_registration` calls `enable()` on every launch, one elevated launch
+# would plant an all-users Run entry pointing at this user's per-user install;
+# a later non-elevated `disable()` ignores the HKLM access-denied, `is_enabled()`
+# keeps reading HKLM as on (the toggle sticks with `readback-mismatch`), and the
+# uninstall scrub only deletes HKCU. Lift the hold (here and in
+# .github/dependabot.yml) only once Tandem can pin the Windows mode to
+# CurrentUser — and then make `uninstall_scrub.rs` cover whatever it writes.
+tauri-plugin-autostart = ">=2, <2.7"
 # Chat-reply notifications (#2168). Driven from app-defined commands
 # (src/notifications.rs), not the plugin's JS API, so the click handler can
 # call `show_main_window_for_user`. 2.6 is the floor: it is the first release
