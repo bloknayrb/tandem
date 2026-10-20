@@ -90,6 +90,53 @@ let pendingAbandoned = false;
 let lastLatencyMs: number | null = null;
 
 /**
+ * The inbox items the outstanding round is waiting on, keyed by
+ * {@link deliveryItemKey} and mapped to their document (PR #2225 review).
+ *
+ * Only `annotation:*` forwards that name a document add an entry — each one is
+ * a specific comment or reply the inbox will hand over. A chat forward adds
+ * nothing (the inbox reads chat from CTRL_ROOM whatever document it names), and
+ * neither does the Solo release wake (no `documentId`): both are closed by any
+ * successful poll, exactly as before.
+ *
+ * It exists so a poll that could NOT hand an item over does not close the
+ * round. Since #2187 a default poll isolates a document that throws and admits
+ * items one at a time, so "the poll returned" no longer means "the poll
+ * returned everything". Item-scoped rather than document-scoped on purpose: an
+ * admit drop holds only the round that is waiting on THAT item, so one
+ * permanently malformed record does not hold every later round open.
+ *
+ * Cleared with the round — on resolve, on a fresh round after an abandoned one,
+ * and on reset — so it never outlives the `pendingSince` it describes. Each
+ * entry keeps its own forward time, so a round that a poll holds is re-timed to
+ * the oldest item still undelivered rather than to the first forward of the
+ * round: later forwards that a poll DID deliver neither extend the wait nor
+ * hide behind the held item's clock.
+ */
+const pendingItems = new Map<string, { documentId: string; forwardedAt: number }>();
+
+/** One inbox item a forward is waiting on: its document and its annotation or reply id. */
+export interface PendingDeliveryItem {
+  documentId: string;
+  itemId: string;
+}
+
+/**
+ * What a poll could NOT hand over: documents whose pass threw (every pending
+ * item of theirs matches) and individual items it refused (keyed by
+ * {@link deliveryItemKey}, matching only themselves).
+ */
+export interface UndeliveredScope {
+  documents: ReadonlySet<string>;
+  items: ReadonlySet<string>;
+}
+
+/** The pending-item key. NUL-separated, so no document id can forge another's key. */
+export function deliveryItemKey(documentId: string, itemId: string): string {
+  return `${documentId}\u0000${itemId}`;
+}
+
+/**
  * Which events mean "the user asked for something and is waiting".
  *
  * Deliberately NARROWER than `isWakeWorthy`, and the two must not be merged
@@ -146,8 +193,10 @@ export function isUnansweredAsk(event: TandemEvent): boolean {
  * delivered with no document open, `tandem_checkInbox` no longer returns
  * `noDocumentError()` there; what still bails out is a throw in the document
  * pass (refresh, replies, awareness), which the error boundary turns into an
- * error result. That is why the handler resolves the round only after that
- * pass, directly above the chat loop. Closing the join there would report
+ * error result, and — since PR #2225's review — a response that fails its own
+ * output-schema check, which commits nothing. That is why the handler resolves
+ * the round only once the response has validated and its ledgers and chat
+ * stamps are committed. Closing the join any earlier would report
  * `{state: "polled", latencyMs: 240}` — "push delivered in a quarter second" —
  * for a message the model never received, which is the comforting-and-wrong
  * shape this module exists to eliminate.
@@ -160,13 +209,42 @@ export function recordInboxPoll(now: number = Date.now()): void {
 /**
  * The inbox poll actually collected. Closes any outstanding forward.
  *
- * Call only once the poll is committed to reading the chat bucket, so the chat
- * loop's `read: true` writes are going to happen (and, when a document is open,
- * the `surfacedIds` ledger updates). See {@link recordInboxPoll} for why the
- * split exists.
+ * Call only once the poll has committed what it returned — the chat bucket's
+ * `read: true` writes and the `surfacedIds` ledger updates. See
+ * {@link recordInboxPoll} for why the split exists.
+ *
+ * `undelivered` (PR #2225 review) names what the poll could not hand over. When
+ * it covers an item this round is waiting on, the round stays OPEN — the
+ * user's comment was not delivered, so `polled` would be the comforting-and-
+ * wrong answer — and only the items this poll did deliver are forgotten, so a
+ * later poll that reaches the rest closes it. Omitted, or covering none of the
+ * pending items, the round closes as it always has.
  */
-export function resolveDeliveryRound(now: number = Date.now()): void {
+export function resolveDeliveryRound(
+  now: number = Date.now(),
+  undelivered?: UndeliveredScope,
+): void {
   if (pendingSince === null) return;
+  if (undelivered) {
+    const held = [...pendingItems].filter(
+      ([key, entry]) => undelivered.documents.has(entry.documentId) || undelivered.items.has(key),
+    );
+    if (held.length > 0) {
+      // Everything older than the oldest held item was delivered by this poll,
+      // so that much of the round is a completed forward→poll interval; record
+      // it, then restart the clock at the oldest item still undelivered.
+      const oldestHeld = Math.min(...held.map(([, entry]) => entry.forwardedAt));
+      if (oldestHeld > pendingSince) {
+        lastLatencyMs = pendingAbandoned ? null : Math.max(0, now - pendingSince);
+        pendingAbandoned = false;
+      }
+      pendingSince = Math.max(pendingSince, oldestHeld);
+      pendingItems.clear();
+      for (const [key, entry] of held) pendingItems.set(key, entry);
+      return;
+    }
+  }
+  pendingItems.clear();
   // No latency is recorded for an abandoned round. That interval spans a
   // period with nothing attached, so it measures the user's absence rather
   // than the wake path's speed — and it would be the one number a reader
@@ -190,16 +268,25 @@ export function resolveDeliveryRound(now: number = Date.now()): void {
  * Recording a forward with nothing attached would turn "nobody is listening"
  * into "Claude is ignoring you", which is a different and false story.
  */
-export function recordWakeForward(now: number = Date.now()): void {
+export function recordWakeForward(now: number = Date.now(), item?: PendingDeliveryItem): void {
   lastForwardAt = now;
   forwardCount += 1;
   if (pendingAbandoned) {
     // A fresh round: something is attached again and a new ask went out, so the
-    // abandoned clock is superseded rather than extended.
+    // abandoned clock is superseded rather than extended — and so are the items
+    // it was waiting on, which belong to the superseded round.
+    pendingItems.clear();
     pendingSince = now;
     pendingAbandoned = false;
   } else {
     pendingSince ??= now;
+  }
+  if (item) {
+    const key = deliveryItemKey(item.documentId, item.itemId);
+    // The FIRST forward of an item is when it started waiting; a re-forward of
+    // the same item (an edit, say) must not reset that.
+    if (!pendingItems.has(key))
+      pendingItems.set(key, { documentId: item.documentId, forwardedAt: now });
   }
 }
 
@@ -362,6 +449,7 @@ export function resetDeliveryStateForTests(): void {
   pendingSince = null;
   pendingAbandoned = false;
   lastLatencyMs = null;
+  pendingItems.clear();
 }
 
 /**
