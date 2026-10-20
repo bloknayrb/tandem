@@ -51,7 +51,7 @@ updates:
   # under 40 other diffs.
   #
   # REMOVE THE `ignore` BELOW once svelte-check publishes TypeScript 7 support.
-  # `svelte-check@4.7.6` is the latest published version, its peer range is
+  # `svelte-check@4.7.7` is the latest published version, its peer range is
   # `typescript@"^5.0.0 || ^6.0.0"`, and no v5 line exists, so `npm ci` fails
   # ERESOLVE. While it stands, TypeScript majors are not proposed at all -- which
   # is strictly narrower than the update-types split above, and still needed:
