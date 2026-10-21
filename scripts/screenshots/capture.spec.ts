@@ -885,8 +885,10 @@ test("07-toast-notification", async ({ page }) => {
   // Close Settings before the shot. Its backdrop is a 70% wash of the page
   // background on the above-titlebar tier (z 100000), far above the toast tier
   // (1100), so every capture of this slot until now was a pale ghost of the
-  // toast seen through it. The toast outlives the modal by design.
-  await page.keyboard.press("Escape");
+  // toast seen through it. The toast outlives the modal by design. Closed with
+  // its button, not Escape: the modal's Escape handler acts only while focus is
+  // inside it, and after Save focus is not guaranteed to be.
+  await page.getByTestId("settings-modal-close-btn").click();
   await expect(page.getByTestId("settings-modal")).toHaveCount(0);
   await expect(toast).toContainText("Working directory saved.");
   // And wait out the 200ms slide-in: `toBeVisible` passes on its first frame.
