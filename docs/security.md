@@ -399,8 +399,8 @@ note and every private reply, with **no identifier needed at all** — and
 `tandem_restoreBackup` and `tandem_applyChanges` reached the same wipe through the
 reload family. #1680 closed only the *targeted* case. Since #1813 a forced open
 flushes the durable envelope and re-merges it, and the other two never clear the
-map, so notes survive all three. A forced open can still lose them in two
-cases: its envelope flush fails (logged, and the reload continues), or the
+map, so notes survive all three. A forced open can still lose them, for
+example when its envelope flush fails (logged, and the reload continues), or the
 document's annotation store never wired this session (the user was warned when
 it opened); #2269 tracks those and the rest of the set, including a store
 another instance holds read-only. A scratchpad's source-view commit, outside the

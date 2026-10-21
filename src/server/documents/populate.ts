@@ -394,6 +394,12 @@ export async function clearAndReload(
     keepAnnotations?: { reanchor: (doc: Y.Doc) => void };
   },
 ): Promise<void> {
+  // Before any side effect (the flush below detaches the durable store). An
+  // adapter that injects its own annotations (`.docx` Word comments) would
+  // double-insert them beside the kept records.
+  if (opts?.keepAnnotations && format !== "md") {
+    throw new Error(`clearAndReload: keepAnnotations is .md-only (got ${format})`);
+  }
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
   // 0. Flush the pending durable-annotation write FIRST, then detach the
@@ -442,11 +448,6 @@ export async function clearAndReload(
     displayName: path.basename(resolved),
     dedupSource: resolved,
   };
-  // An adapter that injects its own annotations (`.docx` Word comments) would
-  // double-insert them beside the kept records.
-  if (opts?.keepAnnotations && format !== "md") {
-    throw new Error(`clearAndReload: keepAnnotations is .md-only (got ${format})`);
-  }
   const prepared = await prepareContent(format, source);
 
   // 2. Single transaction: clear state (annotations kept under keepAnnotations)
