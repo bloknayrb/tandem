@@ -37,13 +37,19 @@ const dir = workerAppDataDir();
 fs.mkdirSync(dir, { recursive: true });
 process.env.TANDEM_APP_DATA_DIR = dir;
 
-// Safety net for a test file that deletes or repoints `TANDEM_APP_DATA_DIR`
-// and does not put it back: the annotation store re-reads the variable on every
-// debounced write, so a write landing after the file's own teardown would
-// otherwise resolve to the REAL app-data directory. Registered here, before the
-// test file's own hooks, so it runs after them (vitest runs `afterAll` hooks in
-// reverse registration order). `tests/helpers/app-data-teardown.ts` is the
-// primary fix; this only narrows what a file that skips it can reach.
+// Safety net for a test file that DELETES `TANDEM_APP_DATA_DIR` and does not
+// put it back: the annotation store re-reads the variable on every debounced
+// write, so a write landing after the file's own teardown would otherwise
+// resolve to the REAL app-data directory. Registered here, before the test
+// file's own hooks, so it runs after them (vitest runs `afterAll` hooks in
+// reverse registration order).
+//
+// Only when it is unset. A file that repointed the variable at a directory it
+// keeps (html-read-only and others never remove theirs) must keep it: the
+// store caches that its `annotations/` folder exists, so moving a pending
+// write to the worker directory fails ENOENT, and that log, in flight while
+// vitest closes the worker, is the `EnvironmentTeardownError` that fails the
+// `coverage` job. `tests/helpers/app-data-teardown.ts` is the primary fix.
 afterAll(() => {
-  process.env.TANDEM_APP_DATA_DIR = dir;
+  if (!process.env.TANDEM_APP_DATA_DIR) process.env.TANDEM_APP_DATA_DIR = dir;
 });
