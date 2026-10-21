@@ -74,7 +74,7 @@ The [auth token](glossary.md#auth-token) still exists. Tandem creates one on fir
 tandem rotate-token
 ```
 
-Generates a new 32-byte token, posts it to `/api/rotate-token`, and updates Claude's MCP configs. The old token remains valid for a **60-second grace window** so connected clients can pick up the new value without a disconnect. Tokens are stored with mode `0o600`, written atomically (temp file + rename), and compared in constant time against a SHA-256 hash on each request.
+Generates a new 32-byte token for the npm install's `auth-token` file (never the desktop app's keychain token), posts it to `/api/rotate-token`, and updates Claude's MCP configs. The old token remains valid for a **60-second grace window** so connected clients can pick up the new value without a disconnect. Tokens are stored with mode `0o600`, written atomically (temp file + rename), and compared in constant time against a SHA-256 hash on each request.
 
 The CLI rolls the token file back if the server refuses the rotation, rather than leaving you on a credential the server will never accept.
 

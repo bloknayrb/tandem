@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 // GitHub's heading anchors and code stripping: the link checker's own helpers,
 // imported rather than mirrored so the two cannot disagree about what an anchor is.
-import { headingSlugs, stripCode } from "../../scripts/check-doc-links.mjs";
+import { anchorIndex, hasAnchor, stripCode } from "../../scripts/check-doc-links.mjs";
 import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js";
 
 /**
@@ -115,7 +115,7 @@ function brokenRepoLinks(links: string[]): string[] {
       continue;
     }
     if (anchor && file.endsWith(".md")) {
-      if (!headingSlugs(readFileSync(file, "utf-8")).has(anchor.toLowerCase())) {
+      if (!hasAnchor(anchorIndex(readFileSync(file, "utf-8")), anchor)) {
         broken.push(`${href} (no such heading)`);
       }
     }

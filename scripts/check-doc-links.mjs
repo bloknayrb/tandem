@@ -9,6 +9,7 @@
 //
 // Per Markdown file it checks:
 //   1. every relative link target resolves to a file or directory that exists
+//      inside the repository (a `../` that climbs out of it is reported)
 //   2. a `#anchor` on a link to a `.md` file matches a heading in that file
 //   3. a same-file `[x](#anchor)` matches a heading in the file itself
 //   4. every local image — `![alt](path)` and `<img src="path">` — exists
@@ -25,7 +26,9 @@
 // Anchor slugs follow GitHub (github-slugger): lowercase, drop everything that
 // is not a letter, mark, number, connector punctuation, space or hyphen, then
 // each space becomes a hyphen with no collapsing — so "A — B" is `a--b`.
-// Duplicate headings get the -1, -2 suffixes GitHub appends.
+// Duplicate headings get the -1, -2 suffixes GitHub appends. A code span's
+// text is kept (minus the backticks). Heading anchors match case-insensitively;
+// explicit `id=` / `name=` anchors keep their case and match exactly.
 //
 // File selection comes from git (`git ls-files` plus untracked-but-not-ignored
 // files), so gitignored trees such as `.claude/worktrees/` or `.claude/plans/`
@@ -34,7 +37,7 @@
 // filesystem walk and says so.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,11 +105,33 @@ function stripTags(text) {
   return out;
 }
 
+/** A code span: a backtick run, content, the same-length run (CommonMark). */
+const CODE_SPAN_RE = /(`+)(.+?)\1(?!`)/g;
+
+/**
+ * Markdown outside code spans reduced to its text: tags stripped, links and
+ * images to their text, stray backticks dropped.
+ */
+function inlineText(text) {
+  return stripTags(text)
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // link / image text only
+    .replace(/`/g, "");
+}
+
 /** GitHub's heading-to-anchor slug for one heading's raw Markdown text. */
 export function slugify(heading) {
-  return stripTags(heading)
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // link / image text only
-    .replace(/`/g, "")
+  // A code span's content is literal text that GitHub keeps (minus the
+  // backticks), so it is protected from tag stripping: `<license|path>` in a
+  // span must lose only `<`, `|` and `>` to the punctuation filter below, not
+  // vanish as if it were an HTML tag.
+  let text = "";
+  let last = 0;
+  for (const m of heading.matchAll(CODE_SPAN_RE)) {
+    text += inlineText(heading.slice(last, m.index)) + m[2];
+    last = m.index + m[0].length;
+  }
+  text += inlineText(heading.slice(last));
+  return text
     .trim()
     .toLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
@@ -128,32 +153,56 @@ function makeSlugger() {
   };
 }
 
+/** How far down a closing front-matter `---` may sit. */
+const FRONT_MATTER_MAX_LINES = 50;
+
 /**
- * Every anchor a file exposes: ATX and setext headings (with GitHub's
- * duplicate suffixes), plus explicit `id="…"` / `name="…"` HTML anchors.
+ * Index of the first line after YAML front matter, or 0 when there is none.
+ * An opening `---` alone is not enough — a doc may open with a horizontal
+ * rule — so it also needs a closing `---` within FRONT_MATTER_MAX_LINES and
+ * YAML-shaped content between: at least one `key:` line, and every non-blank
+ * line a `key:`, an indented continuation, a list item or a comment.
  */
-export function headingSlugs(markdown) {
+export function frontMatterEnd(lines) {
+  if (lines[0] !== "---") return 0;
+  const limit = Math.min(lines.length, FRONT_MATTER_MAX_LINES + 1);
+  for (let end = 1; end < limit; end++) {
+    if (lines[end] !== "---") continue;
+    const body = lines.slice(1, end).filter((l) => l.trim() !== "");
+    const isKey = (l) => /^[A-Za-z_][\w-]*\s*:(\s|$)/.test(l);
+    const yamlish = body.every((l) => isKey(l) || /^(\s|- |#)/.test(l));
+    return yamlish && body.some(isKey) ? end + 1 : 0;
+  }
+  return 0;
+}
+
+/**
+ * Every anchor a file exposes, in two sets because GitHub matches them
+ * differently: `headings` holds ATX and setext heading slugs (lowercase, with
+ * GitHub's duplicate suffixes); `ids` holds explicit `id="…"` / `name="…"`
+ * HTML anchors with their case kept, since GitHub keeps it and matches an
+ * explicit id case-sensitively. Code spans are stripped before the id scan,
+ * so an `id="x"` shown as an example is not an anchor.
+ */
+export function anchorIndex(markdown) {
   const slug = makeSlugger();
-  const slugs = new Set();
+  const headings = new Set();
+  const ids = new Set();
   const lines = markdown.split(/\r?\n/);
   let inFence = false;
-  let start = 0;
   // YAML front matter renders as a table, not a heading.
-  if (lines[0] === "---") {
-    const end = lines.indexOf("---", 1);
-    if (end > 0) start = end + 1;
-  }
-  for (let i = start; i < lines.length; i++) {
+  for (let i = frontMatterEnd(lines); i < lines.length; i++) {
     const line = lines[i];
     if (/^\s*(```|~~~)/.test(line)) {
       inFence = !inFence;
       continue;
     }
     if (inFence) continue;
-    for (const m of line.matchAll(/\b(?:id|name)\s*=\s*["']([^"']+)["']/g)) slugs.add(m[1]);
+    const prose = line.replace(CODE_SPAN_RE, "");
+    for (const m of prose.matchAll(/\b(?:id|name)\s*=\s*["']([^"']+)["']/g)) ids.add(m[1]);
     const atx = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(line);
     if (atx) {
-      slugs.add(slug(slugify(atx[2])));
+      headings.add(slug(slugify(atx[2])));
       continue;
     }
     const next = lines[i + 1];
@@ -163,11 +212,22 @@ export function headingSlugs(markdown) {
       line.trim() !== "" &&
       !/^\s*([-*+>|]|\d+[.)]\s|<)/.test(line)
     ) {
-      slugs.add(slug(slugify(line)));
+      headings.add(slug(slugify(line)));
       i += 1;
     }
   }
-  return slugs;
+  return { headings, ids };
+}
+
+/** Does `anchor` (a decoded link fragment) name an anchor in `index`? */
+export function hasAnchor(index, anchor) {
+  return index.ids.has(anchor) || index.headings.has(anchor.toLowerCase());
+}
+
+/** Every anchor a file exposes, headings and explicit ids together. */
+export function headingSlugs(markdown) {
+  const { headings, ids } = anchorIndex(markdown);
+  return new Set([...headings, ...ids]);
 }
 
 /**
@@ -184,8 +244,8 @@ const DEST = String.raw`\(\s*(<[^>\n]*>|[^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)
 const LINK_RE = new RegExp(String.raw`\[(?:[^\[\]]|\[[^\[\]]*\])*\]${DEST}`, "g");
 const IMAGE_RE = new RegExp(String.raw`!\[[^\[\]]*\]${DEST}`, "g");
 const IMG_TAG_RE = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
-/** Reference-style definitions: `[label]: dest`. */
-const REF_DEF_RE = /^ {0,3}\[[^\]]+\]:\s*(<[^>\n]*>|\S+)/gm;
+/** Reference-style definitions: `[label]: dest`. `[^1]: …` is a GFM footnote, not a link. */
+const REF_DEF_RE = /^ {0,3}\[(?!\^)[^\]]+\]:\s*(<[^>\n]*>|\S+)/gm;
 
 function unwrap(dest) {
   return dest.startsWith("<") && dest.endsWith(">") ? dest.slice(1, -1) : dest;
@@ -234,6 +294,15 @@ export function resolveTarget(fromRel, target) {
     ? posix.normalize(decoded.slice(1))
     : posix.normalize(posix.join(posix.dirname(fromRel), decoded));
   return { path: joined.replace(/\/$/, ""), anchor, sameFile: false };
+}
+
+/**
+ * Does a resolved repo-relative path climb out of the repository? Such a
+ * target can only resolve against whatever happens to sit beside the
+ * checkout, so it is reported rather than looked up.
+ */
+export function escapesRoot(rel) {
+  return rel === ".." || rel.startsWith("../");
 }
 
 /**
@@ -328,10 +397,10 @@ export function checkRepo(root) {
   const { source, files: allMd } = listFiles(root, ".md");
   const files = allMd.filter((f) => !isFixture(f));
   const read = (rel) => readFileSync(path.join(root, rel), "utf-8");
-  const slugCache = new Map();
-  const slugsOf = (rel) => {
-    if (!slugCache.has(rel)) slugCache.set(rel, headingSlugs(read(rel)));
-    return slugCache.get(rel);
+  const anchorCache = new Map();
+  const anchorsOf = (rel) => {
+    if (!anchorCache.has(rel)) anchorCache.set(rel, anchorIndex(read(rel)));
+    return anchorCache.get(rel);
   };
   const kindOf = (rel) => {
     try {
@@ -365,9 +434,15 @@ export function checkRepo(root) {
       if (!ref) continue;
       report.checked += 1;
       if (ref.sameFile) {
-        if (anchorsChecked && ref.anchor && !slugsOf(file).has(ref.anchor.toLowerCase())) {
+        if (anchorsChecked && ref.anchor && !hasAnchor(anchorsOf(file), ref.anchor)) {
           report.missingSameFileAnchor.push(`${file}: no such heading -> ${target}`);
         }
+        continue;
+      }
+      if (escapesRoot(ref.path)) {
+        (image ? report.missingImage : report.missingPath).push(
+          `${file}: ${image ? "image" : "target"} is outside the repository -> ${target}`,
+        );
         continue;
       }
       const kind = kindOf(ref.path);
@@ -380,7 +455,7 @@ export function checkRepo(root) {
       }
       if (kind !== "file" || !ref.path.endsWith(".md")) continue;
       out.push(ref.path);
-      if (anchorsChecked && ref.anchor && !slugsOf(ref.path).has(ref.anchor.toLowerCase())) {
+      if (anchorsChecked && ref.anchor && !hasAnchor(anchorsOf(ref.path), ref.anchor)) {
         report.missingAnchor.push(`${file}: no such heading -> ${target}`);
       }
     }
@@ -434,6 +509,20 @@ function main() {
   console.log("All resolve; every live doc is reachable and every screenshot is used.");
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main();
+/**
+ * Run `main` only when executed, not imported. Both sides go through
+ * `realpathSync`: Node resolves the entry module's symlinks into
+ * `import.meta.url` but leaves `argv[1]` as typed, so a plain comparison is
+ * false from a symlinked checkout and the gate would exit 0 having checked
+ * nothing.
+ */
+function isEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
+
+if (isEntryPoint()) main();

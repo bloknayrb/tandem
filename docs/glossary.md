@@ -216,8 +216,9 @@ Cowork switches still clean up after earlier versions. Each one's ADR is listed 
 ## .docx support
 
 Opening and saving Word documents. It ships dark: a release refuses `.docx` files with a message,
-and the `.docx`-only MCP tools are not offered. To work on a Word document, save a copy as plain
-text or HTML from Word. See [Supported formats](user-guide.md#supported-formats) and
+and the `.docx`-only MCP tools are not offered. To work on a Word document, save a copy from Word
+as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it; an HTML file opens
+read-only. See [Supported formats](user-guide.md#supported-formats) and
 [ADR-053](decisions.md#adr-053-docx-ships-dark).
 
 ## Cowork setup
@@ -316,8 +317,9 @@ npm install use separate folders, and logs live elsewhere. Your documents stay w
 
 A random secret Tandem generates so that callers from outside this computer must prove who they
 are; callers on this computer do not need it. The desktop app keeps it in the OS keychain, the npm
-install in a file, and `tandem rotate-token` replaces it. See [Auth tokens](security.md#auth-tokens)
-and [Rotating the token](configuration.md#rotating-the-token).
+install in a file. `tandem rotate-token` replaces the npm install's token file only; it does not
+reach the desktop app's keychain token (see [OS keychain](data-locations.md#os-keychain)). See
+[Auth tokens](security.md#auth-tokens) and [Rotating the token](configuration.md#rotating-the-token).
 
 ## Reserved harness ports
 
