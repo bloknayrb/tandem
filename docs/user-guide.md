@@ -36,7 +36,7 @@ A "You're ready!" card follows the three steps. The tutorial dismisses after tha
 
 ## The Editor
 
-![Four documents open in tabs, one marked with an unsaved-changes dot, above the formatting toolbar, and a selected sentence with the popup offering formatting, highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
+![Four documents open in tabs, one marked with an unsaved-changes dot, above the formatting toolbar, and a text selection with the popup offering formatting, highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
 
 ### Document Area
 
@@ -167,7 +167,7 @@ In the desktop app, a dot on the logo means an update is ready; opening Settings
 
 Press `?` (or `Ctrl+/`) at any time, or choose **Keyboard Shortcuts** from the brand menu, to open the keyboard shortcuts reference. Press `?` or `Esc` to close it.
 
-![The Keyboard Shortcuts reference, listing each shortcut beside the action it runs](screenshots/20-help-modal.png)
+![The Keyboard Shortcuts reference, with shortcuts grouped under Editor, View, Annotations, Navigation, Document and Other; the list scrolls for more](screenshots/20-help-modal.png)
 
 ### Banners
 

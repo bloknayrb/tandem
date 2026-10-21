@@ -823,16 +823,13 @@ test("06-claude-presence", async ({ page }) => {
   await pill.screenshot({ path: path.join(screenshotsDir, "06-claude-presence.png") });
 });
 
-test("07-toast-notification", async ({ page }) => {
-  // Ported from take-screenshots.mjs — with all three swallows removed.
-  //
-  // The predecessor triggered the toast by calling `tandem_comment` with a
-  // deliberately unmatchable `textSnapshot` inside a bare `try {} catch {}`,
-  // then wrapped the capture in a `try` with TWO `console.warn("SKIPPED")` arms.
-  // Nothing distinguished "wrote a fresh 07" from "left the old one in place",
-  // and if the trigger ever started *succeeding* the toast would simply never
-  // appear — silently. The trigger here is the deterministic success toast the
-  // e2e suite already pins (settings-modal.spec.ts E5), and every arm asserts.
+/**
+ * Report a configured Claude Code integration. The harness backend has none,
+ * so without this the Claude Code tab leads with the "No AI connected yet"
+ * callout while the same frame's status pill reads "AI attached" (the e2e
+ * client IS attached) — a contradiction a reader cannot resolve.
+ */
+async function stubClaudeCodeIntegration(page: Page): Promise<void> {
   await page.route("**/api/integrations", async (route) => {
     if (route.request().method() === "GET") {
       await route.fulfill({
@@ -844,6 +841,19 @@ test("07-toast-notification", async ({ page }) => {
       await route.continue();
     }
   });
+}
+
+test("07-toast-notification", async ({ page }) => {
+  // Ported from take-screenshots.mjs — with all three swallows removed.
+  //
+  // The predecessor triggered the toast by calling `tandem_comment` with a
+  // deliberately unmatchable `textSnapshot` inside a bare `try {} catch {}`,
+  // then wrapped the capture in a `try` with TWO `console.warn("SKIPPED")` arms.
+  // Nothing distinguished "wrote a fresh 07" from "left the old one in place",
+  // and if the trigger ever started *succeeding* the toast would simply never
+  // appear — silently. The trigger here is the deterministic success toast the
+  // e2e suite already pins (settings-modal.spec.ts E5), and every arm asserts.
+  await stubClaudeCodeIntegration(page);
   await page.route("**/api/launcher/working-directory", async (route) => {
     if (route.request().method() === "POST") {
       await route.fulfill({
@@ -914,6 +924,7 @@ test("08-onboarding-tutorial", async ({ page }) => {
 });
 
 test("09-settings-modal", async ({ page }) => {
+  await stubClaudeCodeIntegration(page);
   await openWelcome();
   // A full-viewport shot: the tutorial card sits bottom-left, half under the
   // modal's backdrop and half beside it, and read as part of Settings.
@@ -926,6 +937,10 @@ test("09-settings-modal", async ({ page }) => {
     "page",
   );
   await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
+  await expect(page.getByTestId("settings-modal-working-directory")).toBeVisible({
+    timeout: 5_000,
+  });
+  await expect(modal).not.toContainText("No AI connected yet");
   await page.waitForTimeout(300);
   // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
   // before the pixel capture, not just after a fixed sleep.
@@ -1348,8 +1363,11 @@ test("18-external-conflict-banner", async ({ page }) => {
   await setRailVisible(page, "right", false);
   await makeUnsavedEdit(page, id, " Draft two.");
 
-  // Another program rewrites the file while the edit is unsaved. Autosave is
-  // 60s away, so the edit is still only in the Y.Doc when the watcher fires.
+  // Another program rewrites the file while the edit is unsaved. Autosave is a
+  // single global 60s interval that also writes to disk, so a tick landing
+  // between the edit and this write would clean the document and the watcher
+  // would reload silently. That fails closed (the banner assertion times out);
+  // it cannot produce a wrong picture.
   fs.writeFileSync(filePath, BRIEF_MD.replace("six weeks", "eight weeks"));
 
   const banner = page.getByTestId("external-conflict-banner");
