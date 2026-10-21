@@ -37,7 +37,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | Variable | Default | Description |
 |---|---|---|
 | `TANDEM_BIND_HOST` | `127.0.0.1` | **Not supported in this version** beyond `127.0.0.1`, `localhost` or `::1`. Any other value stops the server at start (in stdio mode it is ignored with a note instead); see [LAN exposure](#lan-exposure). |
-| `TANDEM_AUTH_TOKEN` | auto-generated | Override the auth token. Tandem auto-generates a 32-byte base64url token on first run. The npm install stores it in an `auth-token` file in the npm app-data folder (see [the note below](#app-data-directories)); the desktop app keeps it in your OS keychain and passes it to its server through this variable. Manual use is rare. |
+| `TANDEM_AUTH_TOKEN` | auto-generated | Override the auth token. Tandem auto-generates a 32-byte base64url token on first run. The npm install stores it in an `auth-token` file in the npm app-data folder (see [the note below](#app-data-directories)); the desktop app keeps it in your OS keychain (falling back to that same `auth-token` file, see below) and passes it to its server through this variable. Manual use is rare. |
 | `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | **Has no effect in this version** — it only ever applied to a non-loopback bind. |
 | `TANDEM_LAN_IP` | unset | **Has no effect in this version** — it only ever applied to a non-loopback bind. If set, it must still be a valid IP address, or the server will not start. |
 
@@ -64,7 +64,7 @@ Tandem listens on this computer only. Listening on a LAN address is not in this 
 
 Don't port-forward around this (an `ssh -L` tunnel and the like). A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access. That is more than LAN mode allowed.
 
-The auth token still exists. Tandem creates one on first run: the npm install keeps it in an `auth-token` file in its default app-data folder, and the desktop app keeps it in your OS keychain. Claude's MCP configs carry it. `tandem rotate-token` replaces the npm install's token file; it does not reach the desktop app's keychain token (see [data-locations.md](data-locations.md)).
+The auth token still exists. Tandem creates one on first run: the npm install keeps it in an `auth-token` file in its default app-data folder, and the desktop app keeps it in your OS keychain. Claude's MCP configs carry it. `tandem rotate-token` replaces the npm install's token file. It does not change a token the desktop app holds in the keychain, but a desktop app with no keychain entry reads that same file and so picks up the new token on its next launch (see [data-locations.md](data-locations.md)).
 
 ### Rotating the token
 
@@ -97,7 +97,7 @@ The contents:
 | `sessions/` | One file per opened document, named by a 64-character hash of the file path (URL-encoded path only for `upload://` scratchpads). Holds the Y.Doc snapshot and ephemeral state. |
 | `sessions/__tandem_ctrl__.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
 | `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `<name>.json.corrupt.<timestamp>` and quarantined instead of deleted. |
-| `auth-token` | npm install only: the auto-generated auth token, mode `0o600`. It always lives in the npm folder above, even when `TANDEM_APP_DATA_DIR` points elsewhere. The desktop app keeps its token in the OS keychain instead, and writes this file only as a fallback when the keychain is unavailable. |
+| `auth-token` | npm install only: the auto-generated auth token, mode `0o600`. It always lives in the npm folder above, even when `TANDEM_APP_DATA_DIR` points elsewhere. The desktop app keeps its token in the OS keychain instead, but falls back to this file both ways: it reads it when the keychain has no entry (adopting a token an npm install already created) and writes it when the keychain is unavailable. |
 | `annotations/store.lock` | PID file for the annotation writer, used for cross-process safety. Lives inside `annotations/`, not at the app-data root. |
 | `last-seen-version` | Tracks the last Tandem version to launch — drives the CHANGELOG auto-open on upgrade. |
 | `autostart-seen` | Linux only, and only when start-at-login is on. Marks that at least one login launch has happened, so the first one always shows a window even if the tray icon turns out to be invisible. |

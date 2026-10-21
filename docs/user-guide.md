@@ -195,7 +195,7 @@ You can open a file a few ways:
 
 **Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
 
-**New scratchpad** — Click **+**, then **New scratchpad** (or press `Ctrl+N`). See [Scratchpads](#scratchpads).
+**New scratchpad** — Click **+**, then **New scratchpad** (or press `Ctrl+N` in the desktop app; a browser keeps that key for itself). See [Scratchpads](#scratchpads).
 
 ### Saved Sessions (browser)
 
