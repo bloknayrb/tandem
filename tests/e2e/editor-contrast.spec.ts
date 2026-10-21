@@ -185,6 +185,22 @@ async function probe(page: Page, theme: string): Promise<Result[]> {
         }
       }
 
+      // 4. Document link text. `editor.css` paints
+      //    `.tandem-editor a[href]:not([data-tandem-link-blocked])` with
+      //    `--tandem-accent-fg-strong`; before that rule existed the UA's
+      //    `#0000EE` painted on every theme. A highlighted link drops back to
+      //    `--tandem-fg`, which row 2 already covers.
+      {
+        const link = tok("--tandem-accent-fg-strong");
+        if (link) {
+          out.push({
+            name: "link text vs editor bg",
+            ratio: ratio(paint(link), editorBg),
+            min: 4.5,
+          });
+        }
+      }
+
       return out;
     },
     { t: theme, highlights: HIGHLIGHTS as unknown as string[] },
@@ -199,8 +215,8 @@ for (const theme of THEMES) {
     const results = await probe(page, theme);
 
     // Without this, a broken token lookup would return [] and pass vacuously.
-    // 2 authorship + 4 highlights + 4 underlines = 10.
-    expect(results.length).toBeGreaterThanOrEqual(10);
+    // 2 authorship + 4 highlights + 4 underlines + 1 link = 11.
+    expect(results.length).toBeGreaterThanOrEqual(11);
 
     // Waived rows are printed every run, so the recorded non-assertion is
     // visible in the output rather than only in a comment.

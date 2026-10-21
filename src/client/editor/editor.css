@@ -60,6 +60,46 @@
 .tandem-editor a[href] {
   cursor: pointer;
 }
+/* Link colour. Without it the browser's default `#0000EE` / visited purple
+ * painted on every theme — unreadable on dark's background and off-palette on
+ * light and warm. `--tandem-accent-fg-strong` is the accent family's TEXT
+ * weight and the token `.tandem-markdown a` (markdown-body.css) already uses
+ * for chat and annotation links, so a link reads the same in the document and
+ * the side panel. Against `--tandem-bg` at the default accent hue: light
+ * 8.65:1, warm 7.68:1, dark 10.25:1; the worst case over the whole
+ * user-settable hue range is warm at 5.73:1. The high-contrast toggle leaves
+ * the accent and bg tokens alone, so its numbers are its theme's. Setting
+ * `color` on the anchor also covers `:visited` (the UA rule is less specific).
+ *
+ * The underline is stated rather than left to the UA default: it keeps a link
+ * distinguishable without relying on colour (SC 1.4.1), including where the
+ * colour is overridden — the highlight rule below, or an authorship
+ * decoration. Both are spans INSIDE the anchor (ProseMirror nests inline
+ * decorations inside marks), so with authorship shown, authored link text
+ * takes the author tint and the underline is what still marks it as a link.
+ *
+ * `:not([data-tandem-link-blocked])` keeps this off refused links, so the
+ * blocked rule below does not depend on source order to win. */
+.tandem-editor a[href]:not([data-tandem-link-blocked]) {
+  color: var(--tandem-accent-fg-strong);
+  text-decoration: underline;
+}
+/* A highlight fill under a link. Dark's yellow highlight composites to a
+ * mid-tone that dark's light link colour reaches only 3.53:1 on; body text is
+ * what `tests/e2e/editor-contrast.spec.ts` holds to 4.5:1 on every fill, so a
+ * highlighted link drops back to it and keeps its underline. */
+.tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-highlight {
+  color: var(--tandem-fg);
+}
+/* Under forced colors `--tandem-accent-fg-strong` maps to `HighlightText` — the
+ * text colour for a selection FILL, not for text on Canvas. `LinkText` is the
+ * keyword that exists for this (mirrors `.tandem-markdown a`). */
+@media (forced-colors: active) {
+  .tandem-editor a[href]:not([data-tandem-link-blocked]),
+  .tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-highlight {
+    color: LinkText;
+  }
+}
 /* A link whose href the render-time guard REFUSED (#1537). The base
  * `@tiptap/extension-link` renderHTML emits `href=""` for a disallowed scheme,
  * and `a[href]` above matches an empty attribute too — so a refused link kept
