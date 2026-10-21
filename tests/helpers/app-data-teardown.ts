@@ -20,6 +20,8 @@
  */
 
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { resetForTesting as resetAnnotationStore } from "../../src/server/annotations/store.js";
 import { stopAutoSave } from "../../src/server/session/manager.js";
 import { workerAppDataDir } from "./worker-app-data-dir.js";
@@ -27,7 +29,14 @@ import { workerAppDataDir } from "./worker-app-data-dir.js";
 export async function teardownFileAppDataDir(): Promise<void> {
   resetAnnotationStore();
   stopAutoSave();
+  const workerDir = workerAppDataDir();
   const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  process.env.TANDEM_APP_DATA_DIR = workerAppDataDir();
+  // Remove only a per-file directory under the OS temp dir. If a test body
+  // repointed the variable and failed before restoring it, this deletes
+  // nothing it should not.
+  const tmp = path.resolve(os.tmpdir()) + path.sep;
+  if (appDataDir && appDataDir !== workerDir && path.resolve(appDataDir).startsWith(tmp)) {
+    await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
+  }
+  process.env.TANDEM_APP_DATA_DIR = workerDir;
 }

@@ -32,6 +32,7 @@ import {
   listSessionsMetadata,
   saveSession,
 } from "../../src/server/session/manager";
+import { workerAppDataDir } from "../helpers/worker-app-data-dir.js";
 
 function makeDoc(): Y.Doc {
   const doc = new Y.Doc();
@@ -73,7 +74,8 @@ describe("session metadata (#103)", () => {
   });
 
   afterAll(async () => {
-    delete process.env.TANDEM_APP_DATA_DIR;
+    // Restore, never delete: see tests/helpers/app-data-teardown.ts.
+    process.env.TANDEM_APP_DATA_DIR = workerAppDataDir();
     await fs.rm(TMP_SESSION_DIR, { recursive: true, force: true });
     await fs.rm(TMP_APP_DATA, { recursive: true, force: true });
   });

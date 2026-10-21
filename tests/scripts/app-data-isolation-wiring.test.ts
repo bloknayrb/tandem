@@ -112,30 +112,32 @@ describe("vitest app-data isolation", () => {
 describe("per-file app-data teardown", () => {
   const testsDir = path.join(ROOT, "tests");
   const files = (readdirSync(testsDir, { recursive: true }) as string[])
-    .filter((f) => f.endsWith(".ts"))
-    .map((f) => f.replaceAll("\\", "/"));
-  const overriding = files.filter((f) =>
-    readFileSync(path.join(testsDir, f), "utf-8").includes(
-      "process.env.TANDEM_APP_DATA_DIR = appDataDir",
-    ),
-  );
-
-  it("finds the files that override the app-data directory", () => {
-    // A vacuous pass is the failure mode of any sweep: if the override is ever
-    // respelled, this goes red instead of the check below checking nothing.
-    expect(overriding.length).toBeGreaterThanOrEqual(10);
+    .map((f) => f.replaceAll("\\", "/"))
+    .filter((f) => f.endsWith(".ts") && !f.includes("node_modules/"));
+  // Files that repoint the variable from a mock of `src/server/platform`, under
+  // whatever local name they give the directory.
+  const MOCKS_PLATFORM = /vi\.mock\((?:import\()?["'](?:\.\.\/)+src\/server\/platform/;
+  const repointing = files.filter((f) => {
+    if (f === "scripts/app-data-isolation-wiring.test.ts") return false;
+    const text = readFileSync(path.join(testsDir, f), "utf-8");
+    return MOCKS_PLATFORM.test(text) && text.includes("process.env.TANDEM_APP_DATA_DIR =");
   });
 
-  it("never deletes the variable, and removes the directory only through the helper", () => {
-    // A file that leaves its directory in place is safe: late writes land in
-    // it. What is not safe is deleting the variable, or removing the directory
-    // by hand while writes are still pending.
-    const offenders = overriding.filter((f) => {
-      if (f === "scripts/app-data-isolation-wiring.test.ts") return false;
+  it("finds the files that repoint the app-data directory", () => {
+    // A vacuous pass is the failure mode of any sweep: if the mock is ever
+    // respelled, this goes red instead of the check below checking nothing.
+    expect(repointing.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("never unsets the variable, and removes the directory only through the helper", () => {
+    // A conditional restore (`if (prev === undefined) delete …` / `else delete …`)
+    // is fine: the statement does not start the line. An unconditional one, or a
+    // hand-written removal of the directory while writes may be pending, is not.
+    const UNSET = /^\s*delete process\.env\.TANDEM_APP_DATA_DIR;/m;
+    const REMOVES_BY_HAND = /\brm(?:Sync)?\(\s*appData\w*\b/;
+    const offenders = repointing.filter((f) => {
       const text = readFileSync(path.join(testsDir, f), "utf-8");
-      if (text.includes("delete process.env.TANDEM_APP_DATA_DIR")) return true;
-      const removesByHand = /\brm\(appData(Dir)?\b/.test(text);
-      return removesByHand;
+      return UNSET.test(text) || REMOVES_BY_HAND.test(text);
     });
     expect(
       offenders,
