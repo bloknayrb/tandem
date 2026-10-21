@@ -86,7 +86,7 @@ describe("the bundled Node pin is checked for drift (#1747)", () => {
       // Not `/^22\.\d+\.\d+$/`: under a shape assertion, "22.0.0" — fourteen
       // months of security releases behind — passes everything in `check` and
       // reddens only an advisory job. A bump edits this line, deliberately.
-      expect(DEFAULT_NODE_VERSION).toBe("22.23.2");
+      expect(DEFAULT_NODE_VERSION).toBe("22.23.4");
     });
 
     it("carries a committed hash for every triple the downloader can build", () => {
