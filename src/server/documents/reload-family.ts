@@ -77,9 +77,11 @@ import {
  *
  * Mirrors the force-reload lifecycle (`clearAndReload`) but sources content from
  * the passed string instead of disk, and leaves the doc DIRTY so the new content
- * is persisted to disk. The in-memory annotation map is cleared and then rebuilt
- * from the surviving durable envelope and re-anchored against the committed text
- * (#1813) — same contract as `tandem_open force:true`.
+ * is persisted to disk. For a file-backed document the in-memory annotation map
+ * is cleared and then rebuilt from the surviving durable envelope and re-anchored
+ * against the committed text (#1813) — same contract as `tandem_open force:true`.
+ * A scratchpad has no envelope, so its annotation map is kept rather than cleared
+ * and re-anchored in place (#2219).
  *
  * Throws coded errors the routes map to HTTP status:
  *  - NO_DOCUMENT        — not currently open
@@ -154,14 +156,28 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
     // dirty version past savedVersion, so any concurrent autosave's
     // markCleanIfUnchanged(snapshot) sees a newer version and won't clear-to-
     // clean against stale content (#851 mechanism).
-    await clearAndReload(id, doc, existing.filePath, "md", existing, committed, {
+    //
+    // A scratchpad (source: "upload") has no durable envelope for `loadAndMerge`
+    // to restore from, so its annotations are kept in the map instead of cleared
+    // (#2219) — clearing them deleted every note on the scratchpad for good.
+    // The kept records still carry pre-commit ranges and relRanges into the
+    // fragment `clearAndReload` destroys — the state `loadAndMerge` leaves on the
+    // file route — so they get the same re-anchor pass. Records without a
+    // `textSnapshot` (browser-created) are not relocated by it; that gap is
+    // shared with the file route and tracked in #2269.
+    const filePath = existing.filePath;
+    await clearAndReload(id, doc, filePath, "md", existing, committed, {
       markCleanAfter: false,
       conflictGuard: { raw: rawConflictBeforeCommit },
+      ...(existing.source === "file"
+        ? {}
+        : { keepAnnotations: { reanchor: (d) => reanchorAnnotations(d, filePath) } }),
     });
     // File-source docs re-wire the durable annotation store and persist the new
     // markdown to disk immediately. The re-wire's `loadAndMerge` is what brings
     // the surviving envelope back into the repopulated Y.Doc (#1813). Scratchpads
-    // (source: "upload") have no durable store and no disk file — skip both.
+    // have no durable store and no disk file, so they skip both; their kept
+    // records were already re-anchored inside `clearAndReload`.
     if (existing.source === "file") {
       await wireAnnotationStore(id, doc, existing.filePath);
       // `loadAndMerge` re-inserts each record VERBATIM — pre-commit flat range,

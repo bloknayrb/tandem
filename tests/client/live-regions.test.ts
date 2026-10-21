@@ -363,7 +363,7 @@ describe("SourceView live region", () => {
     onExit: vi.fn(),
   });
 
-  it("mounts the announcer before the clear-on-commit warning, then fills that same node", async () => {
+  it("mounts the announcer before the annotations-on-commit warning, then fills that same node", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse({ markdown: "# Source\n" })),

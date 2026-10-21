@@ -3,7 +3,7 @@
  * source view/edit feature (#1021).
  *
  * Verifies the round-trip (markdown string → Y.Doc body → disk), annotation
- * clearing, the per-document guards (NO_DOCUMENT / UNSUPPORTED_FORMAT /
+ * survival (envelope re-merge for files, kept map for scratchpads), the per-document guards (NO_DOCUMENT / UNSUPPORTED_FORMAT /
  * READ_ONLY), and that the doc is left dirty-then-persisted (not silently
  * marked clean against the new content).
  */
@@ -70,16 +70,24 @@ import {
   isReloadInProgress,
   releaseReloadGuard,
 } from "../../src/server/documents/watcher.js";
+import { subscribe, unsubscribe } from "../../src/server/events/queue.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { handleGetDocumentRaw } from "../../src/server/mcp/routes/document-raw.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { isAutoSaveRunning, stopAutoSave } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_MODE,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
+import type { TandemEvent } from "../../src/shared/events/types.js";
+import { MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
-import type { Annotation } from "../../src/shared/types.js";
+import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 
 let tmpDir: string;
 
@@ -108,7 +116,11 @@ async function openMdFile(initial: string): Promise<{ filePath: string; id: stri
   return { filePath, id, doc: getOrCreateDocument(id) };
 }
 
-function seedAnnotation(doc: Y.Doc, snapshot: string): string {
+function seedAnnotation(
+  doc: Y.Doc,
+  snapshot: string,
+  extra: { type?: "comment" | "note"; audience?: Annotation["audience"] } = {},
+): string {
   const text = extractText(doc);
   const idx = text.indexOf(snapshot);
   if (idx < 0) throw new Error(`snapshot "${snapshot}" not found`);
@@ -131,6 +143,7 @@ function seedAnnotation(doc: Y.Doc, snapshot: string): string {
     timestamp: Date.now(),
     textSnapshot: snapshot,
     rev: 1,
+    ...extra,
   };
   doc.transact(() => doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, ann), MCP_ORIGIN);
   return id;
@@ -308,6 +321,140 @@ describe("reloadDocumentFromMarkdown — scratchpad (editable upload source)", (
 
     expect(extractText(doc)).toContain("second");
     expect(extractText(doc)).not.toContain("first");
+  });
+
+  // #2219: a scratchpad has no durable envelope, so the #1813 re-merge that
+  // brings a file doc's annotations back never runs for it. Before the fix the
+  // commit emptied the maps and every annotation on the scratchpad — personal
+  // notes included — was gone for the rest of its life.
+  async function openScratchDoc(initial: string): Promise<{ id: string; doc: Y.Doc }> {
+    const opened = await openScratchpad(initial);
+    return { id: opened.documentId, doc: getOrCreateDocument(opened.documentId) };
+  }
+
+  function onlyAnnotation(doc: Y.Doc): Annotation {
+    const map = doc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+    expect(map.size).toBe(1);
+    return map.values().next().value as Annotation;
+  }
+
+  it("a personal note survives the commit, over the text it annotated (#2219)", async () => {
+    const { id, doc } = await openScratchDoc("# Scratch\n\nKeep this note.\n\nTail.\n");
+    seedAnnotation(doc, "this note", { type: "note", audience: "private" });
+
+    await reloadDocumentFromMarkdown(id, "# Scratch\n\nKeep this note.\n\nTail, edited.\n");
+
+    const after = onlyAnnotation(doc);
+    expect(after.type).toBe("note");
+    expect(extractText(doc).slice(after.range.from, after.range.to)).toBe("this note");
+  });
+
+  it("a record whose text MOVED is re-anchored, not left on its old offsets (#2219)", async () => {
+    // The `size`-only form of this spec passes with no re-anchor at all; the
+    // resolved TEXT is the property (#1813 review round 1, same shape).
+    const { id, doc } = await openScratchDoc("# Scratch\n\nAlpha beta gamma.\n\nDelta epsilon.\n");
+    seedAnnotation(doc, "Delta epsilon");
+    const before = onlyAnnotation(doc);
+
+    await reloadDocumentFromMarkdown(id, "# Scratch\n\nDelta epsilon.\n");
+
+    const after = onlyAnnotation(doc);
+    expect(after.range.from).not.toBe(before.range.from);
+    expect(extractText(doc).slice(after.range.from, after.range.to)).toBe("Delta epsilon");
+  });
+
+  it("the note's reply thread survives (#2219)", async () => {
+    const { id, doc } = await openScratchDoc("# Scratch\n\nKeep this note.\n");
+    const annId = seedAnnotation(doc, "this note", { type: "note", audience: "private" });
+    const reply: AnnotationReply = {
+      id: "rep_1",
+      annotationId: annId,
+      author: "user",
+      text: "a reply to myself",
+      timestamp: Date.now(),
+      private: true,
+    };
+    doc.transact(
+      () => doc.getMap<AnnotationReply>(Y_MAP_ANNOTATION_REPLIES).set(reply.id, reply),
+      MCP_ORIGIN,
+    );
+
+    await reloadDocumentFromMarkdown(id, "# Scratch\n\nKeep this note, edited.\n");
+
+    expect(doc.getMap<AnnotationReply>(Y_MAP_ANNOTATION_REPLIES).get("rep_1")).toEqual(reply);
+  });
+
+  it("the record is never deleted mid-commit, and comes back otherwise unchanged (#2219)", async () => {
+    const { id, doc } = await openScratchDoc("# Scratch\n\nKeep this note.\n");
+    const annId = seedAnnotation(doc, "this note", { type: "note", audience: "private" });
+    const before = onlyAnnotation(doc);
+    const actions: string[] = [];
+    const map = doc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+    const observer = (e: Y.YMapEvent<Annotation>): void => {
+      const change = e.changes.keys.get(annId);
+      if (change) actions.push(change.action);
+    };
+    map.observe(observer);
+
+    try {
+      await reloadDocumentFromMarkdown(id, "# Scratch\n\nKeep this note, edited.\n");
+    } finally {
+      map.unobserve(observer);
+    }
+
+    expect(actions).not.toContain("delete");
+    // Positive anchor: the observer did see the commit — the re-anchor pass
+    // writes the record back — so the line above is not zero-of-zero.
+    expect(actions).toContain("update");
+    const after = onlyAnnotation(doc);
+    const { range: _r1, relRange: _rr1, ...restBefore } = before;
+    const { range: _r2, relRange: _rr2, ...restAfter } = after;
+    expect(restAfter).toEqual(restBefore);
+  });
+
+  // `clearAndReload` used to call `attachObservers(id, doc)` with no options,
+  // attaching the annotation/reply channel observers that an upload never
+  // carries. With the records now kept, that would have started pushing a
+  // scratchpad's comment events after its first commit (#2219 plan review).
+  async function annotationEventsAfterBrowserComment(doc: Y.Doc): Promise<string[]> {
+    const seen: string[] = [];
+    const cb = (e: TandemEvent): void => {
+      if (e.type.startsWith("annotation:")) seen.push(e.type);
+    };
+    // `pushEvent` drops the user's own annotation events unless mode reads
+    // Tandem (WS-A2), which would make both specs below pass vacuously.
+    const ctrlAwareness = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS);
+    ctrlAwareness.set(Y_MAP_MODE, "tandem");
+    subscribe(cb, "internal");
+    try {
+      const ann: Annotation = {
+        id: `ann_browser_${Math.random().toString(36).slice(2, 8)}`,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: toFlatOffset(0), to: toFlatOffset(3) },
+        content: "for Claude",
+        status: "pending",
+        timestamp: Date.now(),
+      };
+      withBrowser(doc, () => doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(ann.id, ann));
+    } finally {
+      unsubscribe(cb);
+      ctrlAwareness.delete(Y_MAP_MODE);
+    }
+    return seen;
+  }
+
+  it("a scratchpad pushes no annotation events after a commit", async () => {
+    const { id, doc } = await openScratchDoc("# Scratch\n\nbody\n");
+    await reloadDocumentFromMarkdown(id, "# Scratch\n\nbody, edited\n");
+    expect(await annotationEventsAfterBrowserComment(doc)).toEqual([]);
+  });
+
+  it("control: a file doc does push them after a commit, so the probe can see one", async () => {
+    const { id, doc } = await openMdFile("# Doc\n\nbody\n");
+    await reloadDocumentFromMarkdown(id, "# Doc\n\nbody, edited\n");
+    expect(await annotationEventsAfterBrowserComment(doc)).not.toEqual([]);
   });
 });
 
