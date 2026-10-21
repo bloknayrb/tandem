@@ -1,4 +1,14 @@
+---
+tags: [audience/contributor, topic/design-system, historical]
+aliases: [Design-system changelog strategy]
+status: historical
+---
+
 # CHANGELOG Strategy — Design System Impl Umbrella
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
+
+> **Status: historical.** The process for the design-system-impl umbrella, which merged and shipped in v0.13.5. Current changelog practice is the `changelog` and `release` skills under `.claude/skills/`.
 
 How sub-PRs into `feat/design-system-impl` interact with `CHANGELOG.md` while the umbrella is open, and how the final umbrella → master merge promotes the work into a release entry.
 
@@ -61,3 +71,9 @@ The motion-language work is explicitly out of scope for this umbrella (Conflict 
 ## Tooling
 
 No script automation for the rollup — it's hand-maintained. Every sub-PR PR description should include a "CHANGELOG entry added under `[Unreleased] → ### Changed → Design system re-skin`" line under verification so reviewers can confirm at a glance.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the live design references.
+- [The changelog skill](../../.claude/skills/changelog/SKILL.md): how CHANGELOG entries are drafted now.
+- [The release skill](../../.claude/skills/release/SKILL.md): where the entry is finalized at release.

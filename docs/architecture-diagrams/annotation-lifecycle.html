@@ -5038,10 +5038,11 @@
         <path data-edge-from="tagged" data-edge-to="pending" data-edge-label="lands in Y.Map" data-edge-key="1" data-edge-id="tagged-to-pending" data-composition-points="307,157;343,157" d="M 307 157 L 343 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="pending" data-edge-to="gated" data-edge-label="edit/resolve/remove" data-edge-key="2" data-edge-id="pending-to-gated" data-composition-points="461,157;497,157" d="M 461 157 L 497 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="gated" data-edge-to="pending" data-edge-label="note or private → blocked" data-edge-key="3" data-edge-id="gated-blocked" data-composition-points="556,126;556,98;402,98;402,126" d="M 556 126 L 556 108 Q 556 98 546 98 L 412 98 Q 402 98 402 108 L 402 126" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="gated" data-edge-to="accepted" data-edge-label="Accept (rewrites span)" data-edge-key="4" data-edge-id="gated-accept" data-composition-points="615,157;651,157" d="M 615 157 L 651 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="gated" data-edge-to="accepted" data-edge-label="Accept (suggestion rewrites)" data-edge-key="4" data-edge-id="gated-accept" data-composition-points="615,157;651,157" d="M 615 157 L 651 157" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="gated" data-edge-to="dismissed" data-edge-label="Dismiss" data-edge-key="5" data-edge-id="gated-dismiss" data-composition-points="556,188;556,233;556,233;556,278" d="M 556 188 L 556 233 L 556 233 L 556 278" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="pending" data-edge-to="degraded" data-edge-label="RelativePosition unresolvable" data-edge-key="6" data-edge-id="pending-degrade" data-composition-points="343,157;320,157;320,385;339,385" d="M 343 157 L 330 157 Q 320 157 320 167 L 320 375.5 Q 320 385 329.5 385 L 339 385" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="degraded" data-edge-to="pending" data-edge-label="re-anchors on reload" data-edge-key="7" data-edge-id="degrade-heal" data-composition-points="339,385;20,385;20,80;402,80;402,126" d="M 339 385 L 30 385 Q 20 385 20 375 L 20 90 Q 20 80 30 80 L 392 80 Q 402 80 402 90 L 402 126" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="gated" data-edge-to="removed" data-edge-label="remove pending" data-edge-key="9" data-edge-id="gated-remove" data-composition-points="615,170;633,170;633,307;647,307" d="M 615 170 L 623 170 Q 633 170 633 180 L 633 297 Q 633 307 643 307 L 647 307" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
         <path data-edge-from="accepted" data-edge-to="removed" data-edge-label="remove" data-edge-key="8" data-edge-id="accepted-remove" data-composition-points="710,188;710,278" d="M 710 188 L 710 278" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
 
         <!-- States -->
@@ -5097,8 +5098,8 @@
         <text data-detail="fine" x="556" y="177" class="t-security" font-size="7" text-anchor="middle">ADR-027</text>
         </g>
 
-        <g id="node-accepted" data-node-id="accepted" data-node-label="Accepted" tabindex="0" role="button" aria-label="Focus Accepted, rewrites target span, Annotation state" aria-pressed="false" data-node-kind="success" data-node-sublabel="rewrites target span" data-node-context="Annotation state">
-          <title>Accepted · rewrites target span · Annotation state</title>
+        <g id="node-accepted" data-node-id="accepted" data-node-label="Accepted" tabindex="0" role="button" aria-label="Focus Accepted, suggestion: rewrites span, Annotation state" aria-pressed="false" data-node-kind="success" data-node-sublabel="suggestion: rewrites span" data-node-context="Annotation state">
+          <title>Accepted · suggestion: rewrites span · Annotation state</title>
           <rect x="651" y="126" width="118" height="62" rx="7" class="c-mask"/>
           <rect x="651" y="126" width="118" height="62" rx="7" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-database" transform="translate(752 132) scale(0.6875)">
@@ -5107,7 +5108,7 @@
           </g>
         <text data-detail="fine" x="661" y="140" class="t-database" font-size="7" font-weight="700">05</text>
           <text data-node-label="" data-detail-anchor="" x="710" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Accepted</text>
-          <text data-detail="context" x="710" y="163" class="t-muted" font-size="7" text-anchor="middle">rewrites target span</text>
+          <text data-detail="context" x="710" y="163" class="t-muted" font-size="7" text-anchor="middle">suggestion: rewrites span</text>
         </g>
 
         <g id="node-dismissed" data-node-id="dismissed" data-node-label="Dismissed" tabindex="0" role="button" aria-label="Focus Dismissed, transitionPending, Guard + recovery" aria-pressed="false" data-node-kind="neutral" data-node-sublabel="transitionPending" data-node-context="Guard + recovery">
@@ -5122,16 +5123,16 @@
           <text data-detail="context" x="556" y="315" class="t-muted" font-size="7" text-anchor="middle">transitionPending</text>
         </g>
 
-        <g id="node-degraded" data-node-id="degraded" data-node-label="Anchor degraded" tabindex="0" role="button" aria-label="Focus Anchor degraded, RelativePosition unresolved, Guard + recovery" aria-pressed="false" data-node-kind="failure" data-node-sublabel="RelativePosition unresolved" data-node-context="Guard + recovery">
-          <title>Anchor degraded · RelativePosition unresolved · Guard + recovery</title>
+        <g id="node-degraded" data-node-id="degraded" data-node-label="Degraded / failed" tabindex="0" role="button" aria-label="Focus Degraded / failed, unresolved or inverted range, Guard + recovery" aria-pressed="false" data-node-kind="failure" data-node-sublabel="unresolved or inverted range" data-node-context="Guard + recovery">
+          <title>Degraded / failed · unresolved or inverted range · Guard + recovery</title>
           <rect x="339" y="356" width="126" height="58" rx="7" class="c-mask"/>
           <rect x="339" y="356" width="126" height="58" rx="7" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(448 362) scale(0.6875)">
             <circle cx="8" cy="8" r="5.3"/>
             <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="402" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Anchor degraded</text>
-          <text data-detail="context" x="402" y="393" class="t-muted" font-size="7" text-anchor="middle">RelativePosition unresolved</text>
+          <text data-node-label="" data-detail-anchor="" x="402" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Degraded / failed</text>
+          <text data-detail="context" x="402" y="393" class="t-muted" font-size="7" text-anchor="middle">unresolved or inverted range</text>
         </g>
 
         <g id="node-removed" data-node-id="removed" data-node-label="Removed" tabindex="0" role="button" aria-label="Focus Removed, AnnotationLifecycle.remove, Guard + recovery" aria-pressed="false" data-node-kind="external" data-node-sublabel="AnnotationLifecycle.remove" data-node-context="Guard + recovery">
@@ -5163,9 +5164,9 @@
           <rect x="411.75" y="77" width="134.5" height="16" rx="4" class="c-mask"/>
           <text x="479" y="88" class="t-security" font-size="8" text-anchor="middle">note or private → blocked</text>
         </g>
-        <g data-detail="context" data-edge-from="gated" data-edge-to="accepted" data-edge-label="Accept (rewrites span)" data-edge-key="4" data-edge-id="gated-accept">
-          <rect x="573.1" y="112" width="119.80000000000001" height="16" rx="4" class="c-mask"/>
-          <text x="633" y="123" class="t-muted" font-size="8" text-anchor="middle">Accept (rewrites span)</text>
+        <g data-detail="context" data-edge-from="gated" data-edge-to="accepted" data-edge-label="Accept (suggestion rewrites)" data-edge-key="4" data-edge-id="gated-accept">
+          <rect x="556.7" y="112" width="152.6" height="16" rx="4" class="c-mask"/>
+          <text x="633" y="123" class="t-muted" font-size="8" text-anchor="middle">Accept (suggestion rewrites)</text>
         </g>
         <g data-detail="context" data-edge-from="gated" data-edge-to="dismissed" data-edge-label="Dismiss" data-edge-key="5" data-edge-id="gated-dismiss">
           <rect x="532.85" y="212" width="46.300000000000004" height="16" rx="4" class="c-mask"/>
@@ -5178,6 +5179,10 @@
         <g data-detail="context" data-edge-from="degraded" data-edge-to="pending" data-edge-label="re-anchors on reload" data-edge-key="7" data-edge-id="degrade-heal">
           <rect x="-35" y="211.5" width="110" height="16" rx="4" class="c-mask"/>
           <text x="20" y="222.5" class="t-backend" font-size="8" text-anchor="middle">re-anchors on reload</text>
+        </g>
+        <g data-detail="context" data-edge-from="gated" data-edge-to="removed" data-edge-label="remove pending" data-edge-key="9" data-edge-id="gated-remove">
+          <rect x="595" y="229" width="76" height="16" rx="4" class="c-mask"/>
+          <text x="633" y="240" class="t-muted" font-size="8" text-anchor="middle">remove pending</text>
         </g>
         <g data-detail="context" data-edge-from="accepted" data-edge-to="removed" data-edge-label="remove" data-edge-key="8" data-edge-id="accepted-remove">
           <rect x="689.3" y="191" width="41.400000000000006" height="16" rx="4" class="c-mask"/>
@@ -5413,7 +5418,7 @@
         </div>
         <ul>
           <li>&bull; Every Y.Doc write goes through one of six origins.ts wrappers before landing in Y.Map(&#39;annotations&#39;)</li>
-          <li>&bull; Only withBrowser-origin writes emit channel events</li>
+          <li>&bull; Of the six helpers only withBrowser emits channel events; untagged writes (a Hocuspocus Connection, null) emit too</li>
         </ul>
       </div>
 
@@ -5434,7 +5439,7 @@
           <h3>Anchoring &amp; Recovery</h3>
         </div>
         <ul>
-          <li>&bull; A stale RelativePosition marks the annotation anchor: degraded, not deleted</li>
+          <li>&bull; A stale RelativePosition marks the annotation anchor: degraded, not deleted; an inverted CRDT range answers failed</li>
           <li>&bull; Accepting a comment with suggestedText rewrites the stored flat span verbatim</li>
         </ul>
       </div>

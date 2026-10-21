@@ -1,0 +1,17 @@
+{
+  "useMarkdownLinks": true,
+  "newLinkFormat": "relative",
+  "alwaysUpdateLinks": true,
+  "userIgnoreFilters": [
+    "node_modules/",
+    "dist/",
+    "src/",
+    "src-tauri/",
+    "tests/",
+    "scripts/",
+    "infra/",
+    "public/",
+    "probe/",
+    "reaper/"
+  ]
+}

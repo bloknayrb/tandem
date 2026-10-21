@@ -352,6 +352,15 @@ jobs:
       - name: Biome format check
         run: npx biome check .
 
+      # Relative links, anchors and images across every Markdown file git knows
+      # about, plus the docs vault's invariants: every live docs/**/*.md is
+      # reachable from docs/README.md and every docs/screenshots/*.png is used.
+      # It lists files with `git ls-files`, which the checkout's `.git` serves.
+      # Unconditional and blocking -- pinned by
+      # tests/scripts/check-links-wiring.test.ts (ADR-051).
+      - name: Doc links
+        run: npm run check:links
+
       - name: Typecheck (client)
         run: npx tsc --noEmit -p tsconfig.client.json
 

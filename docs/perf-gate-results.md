@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, audience/contributor, topic/performance, topic/v1-gates]
+aliases: [Performance gate results, Perf gate, Performance gate runs]
+---
+
 # Performance gate — recorded runs
+
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
 
 The v1.0 performance gate (see [roadmap.md](roadmap.md) §"Performance gate") is
 a measurement, not a boolean, so its output is recorded here rather than inline
@@ -6,9 +13,13 @@ in the roadmap the way the security gate's one-line verdict is. Numbers only
 mean something compared against other numbers, and that needs a table.
 
 Run it with `npm run perf:gate` (builds first, then measures a production
-build). Close any running Tandem before starting: the server calls `freePort()`
-on every start, so the harness will take ports 3478/3479 from whatever holds
-them.
+build). A running Tandem can stay open: since #1492 the perf backend runs on
+its own [reserved pair](glossary.md#reserved-harness-ports), `PERF_WS_PORT` 4378 and `PERF_MCP_PORT` 4379
+(`scripts/test-ports.ts`), with the preview client on 4318
+(`tests/perf/playwright.config.ts`), never the product's 3478/3479. That pair
+is reserved, not guarded: the perf server still calls `freePort()` on start,
+so whatever else holds 4378/4379 is killed (a Tandem answering there makes it
+refuse to start instead).
 
 ---
 
@@ -50,7 +61,7 @@ that is present and correct.
 
 Condition 1 (open-to-interactive) is still measured with the margin column
 **not** mounted, and cannot be otherwise: margin sides presence-collapse, so
-with zero annotations in the freshly-opened document the column is absent from
+with zero [annotations](glossary.md#annotation) in the freshly-opened document the column is absent from
 the DOM regardless of the setting. The spec asserts that rather than assuming
 it.
 
@@ -425,3 +436,11 @@ measured, not restated. `docs/roadmap.md` §"Performance gate" does not define
 the editor < 500ms) is definition-agnostic — so there is no old definition
 there to leave as a record; it is corrected separately to point here now that
 runs 1–3 exist.
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md) — the other v1.0 gates and the release process.
+- [Roadmap: v1.0 exit criteria](roadmap.md#v100-exit-criteria) — where the performance gate's pass conditions are set.
+- [Accessibility gate results](a11y-gate-results.md) — the sibling gate's recorded runs.
+- [Architecture](architecture.md) — the data flows an annotation round-trip measures.
+- [Glossary: reserved harness ports](glossary.md#reserved-harness-ports) — why the perf run coexists with a running Tandem.

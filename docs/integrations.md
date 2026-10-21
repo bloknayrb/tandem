@@ -1,17 +1,21 @@
 # Integrations
 
+[Home](README.md) › [Connecting an AI](maps/connecting-ai.md)
+
 Which AI clients connect to Tandem, how, and what the MCP surface exposes. For setting one up, see
 [Install](../README.md#install) in the README — the in-app wizard does the configuration.
 
 ## The MCP integration policy
 
-The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open standard for AI clients to talk to tools and data sources. Tandem exposes its document and annotation surface over MCP, which is how AI clients like Claude read and modify the file you are editing.
+The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open standard for AI clients to talk to tools and data sources ([glossary](glossary.md#mcp)). Tandem exposes its document and annotation surface over MCP, which is how AI clients like Claude read and modify the file you are editing.
 
 The integration policy is set by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration):
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). The earlier transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — was **removed in #477 PR 3c-ii-c**. Every integration (Claude included) is now configured via the wizard, never silently; `tandem setup --apply` is the scriptable non-interactive equivalent.
+
+In plain terms: Claude is the AI Tandem is built and tested with, and other MCP clients can connect but nobody has verified them. Tandem never changes an AI client's settings behind your back. You connect a client from the in-app setup wizard, or with `tandem setup --apply` from a terminal.
 
 Client compatibility:
 
@@ -20,7 +24,7 @@ Client compatibility:
 | **Claude Code** (local CLI) | Default. Validated. Channel push supported. |
 | **Claude Desktop** (local app) | Supported on all three platforms — the wizard and `tandem setup --apply` write `claude_desktop_config.json` wherever Claude Desktop puts it (`%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/claude/`, plus the Microsoft Store's MSIX location). Request/response only — none of the push transports apply. **Cowork** (Claude Desktop's local agent mode) is not a supported surface in this version: Tandem's Cowork setup ships dark ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
-| **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |
+| **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio as an MCP host, …) | Best-effort, MCP-contract-compatible, not validated. |
 | **Non-MCP AIs** | Not supported today. **Local models** (Ollama / LM Studio via OpenAI-compatible endpoints) are committed for v1.0 ([ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), tracked in #1123); cloud providers (ChatGPT direct, Gemini direct) follow in v1.1. |
 
 ## MCP tools at a glance
@@ -29,14 +33,24 @@ Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md
 
 - **Document.** Open, switch, list, close and rename documents; read text content and outlines; edit text ranges; append content; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations and replies; query the annotation list; export a review report.
-- **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes ships dark with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
+- **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes [ships dark](glossary.md#docx-support) with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
 - **Navigation.** Search the document, resolve a match to a range, and pull surrounding context.
-- **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for selection events, chat messages, and annotation actions; reply in the chat sidebar.
+- **Awareness.** Read user presence and [Solo](glossary.md#solo-mode)/[Tandem](glossary.md#tandem-mode) mode; check the [inbox](glossary.md#inbox) for chat messages, annotation actions and the user's current selection; reply in the chat sidebar.
 - **Diagnostics.** Report connection and boot health over MCP itself, so a client that can't reach loopback can still self-diagnose.
 
 ## Real-time push
 
-The Claude-specific push transports — the self-armed watch, the plugin monitor, and the channel
-shim — are described in [Real-time updates](../README.md#real-time-updates) in the README. Other MCP
+The Claude-specific push transports — the [self-armed watch](glossary.md#wake-watch), the [plugin monitor](glossary.md#plugin-monitor), and the [channel
+shim](glossary.md#channel-shim) — are described in [Real-time updates](../README.md#real-time-updates) in the README. Other MCP
 clients pull with `tandem_checkInbox`, which is authoritative for every client regardless of which
 push route is active.
+
+## Related
+
+- [Connecting an AI map](maps/connecting-ai.md): every setup route, how Claude hears about your comments, and what to do when it doesn't connect.
+- [MCP tool reference](mcp-tools.md): each tool's parameters and responses.
+- [User guide → Working with Claude Code](user-guide.md#working-with-claude-code): the connection from the editor's side.
+- [CLI → `tandem setup`](cli.md#tandem-setup): the scriptable alternative to the setup wizard.
+- [Troubleshooting](troubleshooting.md): when a client connects but the tools fail.
+- [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration): the decision that made MCP the integration contract.
+- [Glossary](glossary.md#push-and-pull): push and pull, and why the inbox is the authority.

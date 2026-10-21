@@ -51,13 +51,12 @@ import { openFromUpload, openScratchpad } from "../../src/server/documents/open.
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { isSourceFile } from "../helpers/source-extensions.js";
 import { timeoutMs } from "../helpers/timing.js";
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 describe("named entry points (ADR-034 seam)", () => {

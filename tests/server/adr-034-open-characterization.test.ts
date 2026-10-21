@@ -105,6 +105,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../src/shared/constants.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
 let tmpDir: string;
 
@@ -129,23 +130,11 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  // RESTORE, never `delete`. `tests/setup/app-data-isolation.ts` runs once per
-  // worker PROCESS, not per file, so under `isolate: false` every test file
-  // scheduled after this one in the same worker would find the variable unset
-  // and `resolveAppDataDir()` would fall back to the developer's REAL app-data
-  // directory for every lazily-resolved consumer — annotations, doc-backups,
-  // license. That is the bug this branch exists to fix, reintroduced from the
-  // teardown side.
-  //
-  // Recomputed rather than captured: the value is overwritten inside a HOISTED
-  // `vi.mock` factory that runs before any module-scope initializer here, so
-  // there is no point at which this file could have saved the original. The
-  // derivation below is the setup file's own, which makes the restore exact.
-  const root = process.env.TANDEM_TEST_APP_DATA_ROOT;
-  if (root) process.env.TANDEM_APP_DATA_DIR = path.join(root, `worker-${process.pid}`);
-  else delete process.env.TANDEM_APP_DATA_DIR;
+  // RESTORE, never `delete`, and cancel pending writes first — see the helper.
+  // Under `isolate: false` every file scheduled after this one in the same
+  // worker would otherwise find the variable unset and fall back to the
+  // developer's REAL app-data directory.
+  await teardownFileAppDataDir();
 });
 
 /** Count transactions on a room, so "exactly one broadcast" is measurable. */

@@ -85,6 +85,7 @@ import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN } from "../../src/shared/origins.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 
 let tmpDir: string;
@@ -107,9 +108,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 interface UpdateRecord {

@@ -1,7 +1,9 @@
 # Where Tandem Keeps Its Data (and How to Remove All of It)
 
-Tandem stores state in three kinds of places: its own app-data directory,
-the OS keychain, and — because it registers itself as an MCP server — a few
+[Home](README.md) › [Troubleshooting and your data](maps/troubleshooting-and-data.md)
+
+Tandem stores state in three kinds of places: its own [app-data directory](glossary.md#app-data-directory),
+the OS keychain, and — because it registers itself as an [MCP server](glossary.md#mcp-server) — a few
 entries inside *other programs'* config files. This page enumerates all of
 them, what the uninstall scrub removes, and how to clean up manually.
 
@@ -43,7 +45,7 @@ the npm path directly — see the note under its row).
 
 Two consequences worth knowing. The annotation-store lock is **per-flavor** now, so
 running both flavors against the same document on different ports lets each write its
-own durable envelope and neither sees the other's. And unsaved **scratchpad recovery
+own durable envelope and neither sees the other's. And unsaved **[scratchpad](glossary.md#scratchpad) recovery
 drafts** live in browser localStorage keyed by an install id derived from the app-data
 root, so they do not survive the move — a one-time loss, bounded to drafts that were
 never saved to disk.
@@ -62,18 +64,26 @@ Inside either directory:
 | `launcher-session.json` | The conversation Tandem's own Claude resumes, and the folder it was started in. Deleting it makes the next start a fresh conversation. |
 | `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately; doing so does not re-run the one-time npm import. |
 | `npm-migration-complete` | **Desktop location only.** The record that the one-time copy from the npm directory already happened. Deleting it makes the next desktop launch re-import that directory, so leave it alone. |
-| `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory — the desktop keeps its token in the OS keychain and passes it to the sidecar. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
+| `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory. The desktop keeps its token in the OS keychain and passes it to the sidecar, but it also uses this npm-location file as its fallback: it reads the file when the keychain has no entry (adopting a token an npm install already minted), and writes it when the keychain is unavailable (for example Linux without Secret Service). So the file can exist on a machine with no npm install at all. The auto-generated Bearer token (mode `0o600` on POSIX; the desktop fallback writer narrows it to that just after writing) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
-| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
+| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
 | `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized. Named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`; the three most recent are kept |
-| `.broken-backups/` | Quarantined copies of malformed config files (user-only permissions) |
+| `.broken-backups/` | Quarantined copies of Tandem's own malformed config files (user-only permissions): `integrations.json` (named `integrations-…`) and the bring-your-own-model store (named `models-…`). Claude's config files are never copied here — a malformed Claude config is refused and left untouched |
 | `last-seen-version` | Drives the "what's new" changelog on upgrade |
 | `autostart-seen` | Linux only, and only with start-at-login enabled — marks that a login launch has happened |
+| `update-pending.json` | **Desktop location only.** Marks an in-app update that was in flight, so the next launch can tell whether it landed. Removed once that is settled |
+| `sample/` | **Desktop location only.** The sample documents, including the welcome tutorial, copied in on first run |
+| `models.json` | The bring-your-own-model registry. Normally absent: that feature ships dark and no shipped UI writes it |
 
 You may also see `.tandem-tmp-*` files inside `sessions/` and `annotations/`. These are
 half-finished atomic writes orphaned when the process was killed between writing and renaming
-(a force-quit, a dev restart). Tandem sweeps ones older than an hour at boot; they are safe to
-delete, and never appear in your own document folders.
+(a force-quit, a dev restart). Tandem sweeps ones older than an hour at boot, and they are safe to
+delete.
+
+Saving a document writes the same kind of temporary file **next to the document**, in its own
+folder, then renames it into place. A failed save removes it, but a force-quit at exactly the
+wrong moment can leave one behind. Tandem never sweeps your document folders, so it will not
+remove that file for you; it is safe to delete.
 
 ## Logs
 
@@ -102,9 +112,11 @@ macOS Keychain, Linux Secret Service):
 
 - `tandem` — the desktop app's Bearer auth token, under the entry `auth-token`.
   Desktop app only; the npm install keeps its token in the `auth-token` file
-  listed above instead.
+  listed above instead. When the keychain is unavailable, the desktop app falls
+  back to that same file at the npm location (and reads it first if the keychain
+  holds no token), so it can create or adopt that file too.
 - `tandem-integrations` — Tandem's own integration auth tokens.
-- `tandem-models` — API keys for the bring-your-own-model integration, when that
+- `tandem-models` — API keys for the [bring-your-own-model integration](glossary.md#local-model-collaborator), when that
   feature is enabled. Present only if you have added a key.
 
 Whether these entries actually reach your OS keychain on the desktop app is
@@ -117,11 +129,16 @@ store on first use — and which has **no mock to fall through to**: on a platfo
 it cannot serve, `Entry::new` returns an error rather than silently succeeding.
 So the in-memory stand-in is gone by construction.
 
-What is still unconfirmed is narrower: nobody has run the round-trip on any
-platform (write a secret, restart, read it back), and Tandem never calls
-`Entry::store_status()`, so a machine whose credential store fails to initialise
-takes the file fallback with no diagnostic. Treat "these entries exist" as
-expected rather than observed. Nothing here is lost if they do not: the
+A machine whose credential store fails to initialise is no longer silent about it:
+the token store logs the store's own init error before it takes the file fallback,
+and a keychain error names why the store is unavailable (both via
+`Entry::store_status()`). CI also checks a round-trip across two separate `Entry`
+instances on Windows and macOS (it skips on Linux runners without Secret Service, and
+on macOS when platform storage is not accessible).
+
+What is still unconfirmed is narrower: nobody has run the full round-trip on real
+user machines (write a secret, restart the app, read it back). Treat "these entries
+exist" as expected rather than observed. Nothing here is lost if they do not: the
 consequence is that a secret has to be re-entered, not that it leaks.
 
 ## If you buy a license: what the seller keeps
@@ -178,12 +195,12 @@ These are what go stale if you delete Tandem without cleaning up:
 
 ## If you enabled Cowork in an earlier version
 
-Tandem's Cowork setup is not in this version ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). If you turned it on in
+Tandem's [Cowork setup](glossary.md#cowork-setup) is not in this version ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). If you turned it on in
 v0.28.0 or earlier, updating leaves what it wrote in place and stops maintaining it:
 
 - A Tandem entry in three files in each Cowork workspace: `installed_plugins.json`,
   `known_marketplaces.json` and `cowork_settings.json`. The first of those carries
-  Tandem's auth token.
+  Tandem's [auth token](glossary.md#auth-token).
 - `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`, recording that it was enabled. The
   desktop app wrote it, at the npm location in the tables above. (A copy may also sit
   under `%APPDATA%\com.tandem.editor\` from the one-time import; nothing reads that one.)
@@ -242,6 +259,10 @@ favor), so your settings survive updates.
 tandem --uninstall-scrub        # or: npx tandem-editor --uninstall-scrub
 ```
 
+The desktop app does not install the `tandem` command, so a desktop-only user runs the `npx`
+form: it fetches the npm package and runs the same CLI without installing it, and needs
+Node.js 22.12.0 or newer.
+
 Then delete the app / `npm uninstall -g tandem-editor`.
 
 The scrub removes the cross-program entries listed above (MCP config keys,
@@ -275,3 +296,13 @@ If the binary is already gone, or you want zero traces:
 5. Remove the three keychain services (`tandem`, `tandem-integrations`,
    `tandem-models`) with your OS's credential manager. Any of them may simply
    not be there — see the note above.
+
+## Related
+
+- [Troubleshooting and your data map](maps/troubleshooting-and-data.md): fixing problems, removing Tandem's files, and privacy.
+- [Configuration → App-data directories](configuration.md#app-data-directories): moving the app-data root with `TANDEM_APP_DATA_DIR`.
+- [Troubleshooting → Reset session state](troubleshooting.md#reset-session-state): clearing sessions without removing everything.
+- [CLI → `tandem --uninstall-scrub`](cli.md#tandem---uninstall-scrub): the command behind a clean uninstall.
+- [Security → Privacy](security.md#privacy): what Tandem sends anywhere, and what it never does.
+- [ADR-055](decisions.md#adr-055-cowork-setup-ships-dark): why Cowork setup was taken out, and what that left behind.
+- [Glossary](glossary.md#app-data-directory): the app-data directory and auth token in plain language.

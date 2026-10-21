@@ -1,4 +1,13 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Visual baseline procedure, Design baselines]
+---
+
 # Visual Baseline Procedure
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
+
+> **Status: live.** Describes `scripts/design-baselines/` as it ships today (re-checked 2026-10-20).
 
 The capture script lives at `scripts/design-baselines/capture.spec.ts`. Running it writes a single self-contained HTML gallery to `docs/design-system-impl/preview/baselines/baselines.html`.
 
@@ -18,9 +27,9 @@ From the repo root:
 npm run capture:design-baselines
 ```
 
-It spawns the dev server + Hocuspocus, drives Playwright through each surface in both themes, and writes `baselines.html` — several megabytes, a couple of minutes. Then open the file directly, or point OpenDesign at the directory.
+It spawns the dev server + Hocuspocus, drives Playwright through each surface in light and dark (only those two; the warm theme is not captured), and writes `baselines.html` — several megabytes, a couple of minutes. Then open the file directly, or point OpenDesign at the directory.
 
-The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes.
+The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes ("Both" means light and dark — there is no warm scene to show).
 
 ## Scope (9 surfaces × 2 themes = 18 scenes)
 
@@ -89,3 +98,8 @@ What it does NOT contain:
 ## Related
 
 The Phase 0 procedure docs (this file, `derived-spec.md`, `conflicts-resolved.md`) stay in `docs/design-system-impl/` as the historical record of the umbrella's design decisions.
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Derived-surface spec](derived-spec.md) and [Conflicts resolved](conflicts-resolved.md): the two Phase 0 records named above.
+- [Semantic tokens](../semantic-tokens.md): the token families the captured surfaces use.
+- [Screenshots](../screenshots/README.md): the docs' screenshot spec, which is a separate capture.

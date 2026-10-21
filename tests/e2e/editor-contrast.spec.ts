@@ -185,6 +185,29 @@ async function probe(page: Page, theme: string): Promise<Result[]> {
         }
       }
 
+      // 4. Document link text, read off a real `<a href>` inside the editor so
+      //    the row measures the `editor.css` rule, not just the token: before
+      //    that rule existed the UA's `#0000EE` painted on every theme, and
+      //    deleting the rule turns this red. The probe anchor is removed before
+      //    ProseMirror's DOM observer flushes. A highlighted or find-matched
+      //    link drops back to `--tandem-fg`, which row 2 already covers.
+      {
+        const editor = document.querySelector(".tandem-editor");
+        if (editor) {
+          const a = document.createElement("a");
+          a.href = "https://example.com/";
+          a.textContent = "link";
+          editor.appendChild(a);
+          const color = getComputedStyle(a).color;
+          a.remove();
+          out.push({
+            name: "link text vs editor bg",
+            ratio: ratio(paint(color), editorBg),
+            min: 4.5,
+          });
+        }
+      }
+
       return out;
     },
     { t: theme, highlights: HIGHLIGHTS as unknown as string[] },
@@ -199,8 +222,8 @@ for (const theme of THEMES) {
     const results = await probe(page, theme);
 
     // Without this, a broken token lookup would return [] and pass vacuously.
-    // 2 authorship + 4 highlights + 4 underlines = 10.
-    expect(results.length).toBeGreaterThanOrEqual(10);
+    // 2 authorship + 4 highlights + 4 underlines + 1 link = 11.
+    expect(results.length).toBeGreaterThanOrEqual(11);
 
     // Waived rows are printed every run, so the recorded non-assertion is
     // visible in the output rather than only in a comment.
