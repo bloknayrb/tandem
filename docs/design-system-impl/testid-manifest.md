@@ -1,17 +1,21 @@
 # Test-Selector Manifest
 
-> **Captured 2026-05-21** on `feat/design-system-impl` umbrella branch. Frozen
-> reference for every `data-testid` declared in `src/client/`. Sub-PRs into
-> the umbrella branch must not remove any selector listed here. Adding new
-> selectors is fine — the snapshot file will diff cleanly and reviewers can
-> see the addition.
+> **Status: live orientation copy, not the contract.** The contract is
+> `tests/design-system-impl/__snapshots__/testid-set.snap.txt`, which
+> `tests/design-system-impl/testid-coverage.test.ts` regenerates from
+> `src/client/` (CLAUDE.md Critical Rule 7). This file is a hand-kept convenience
+> copy that no test reads, so it can drift: when the two disagree, the snapshot
+> wins. First captured 2026-05-21 on the `feat/design-system-impl` umbrella
+> branch; **last reconciled against the snapshot on 2026-10-20.**
 
 ## Contract
 
 1. **No removals.** Tests across `tests/client/`, `tests/e2e/`, and downstream
    Playwright suites depend on these selectors. If a sub-PR renames a testid,
    every test referencing the old name fails — fix at the test side first,
-   then update the selector + snapshot in one commit.
+   then update the selector + snapshot in one commit. A removal is a change
+   to the snapshot, reviewed in its diff; the deliberate ones are recorded
+   in the families below so the history survives.
 2. **Additions are fine** but the snapshot must be regenerated (`npx vitest
    run tests/design-system-impl/testid-coverage.test.ts -u`) and committed in
    the same PR so the diff is reviewable.
@@ -19,10 +23,12 @@
    `CollapsibleSection`, `App.svelte#resizeHandle`) accept a testid prop and
    the literal value lives at the call site. The snapshot captures both the
    wrapper's templated form and the call sites' literal strings. `ChipGroup`
-   (#798 A15) is fully templated — both its root (`{groupTestId}`) and per-chip
-   (`{groupTestId}-{value}`) testids normalize to `{*}`/`{*}-{*}`, so the
-   concrete filter chip testids are documented in the Filters bullet below
-   rather than captured literally by the scan.
+   (#798 A15) is fully templated. Its root (`{groupTestId}`) is a
+   bare-identifier passthrough, which the scan filters out, so only the
+   per-chip form (`{groupTestId}-{value}`) reaches the snapshot, as the
+   wildcard-pair line `{*}-{*}`. The concrete filter chip testids are
+   documented in the Filters bullet below rather than captured literally by
+   the scan.
 
 ## Enforcement
 
@@ -54,6 +60,17 @@ selectors were added or removed and reviewers gate on the change.
   If you add a new testid constant module, also add it to
   `CONSTANT_RESOLUTIONS` so the snapshot shows the literal selector instead
   of the identifier.
+- **Conditional expressions land verbatim.** `App.svelte`'s two rail shells
+  set their testid with a ternary (`rail-float-left` / `rail-float-right`, or
+  `undefined` when not floating), and the scan records each as a raw
+  expression line rather than a selector. Renaming either string still diffs
+  the snapshot, but the snapshot line is not a selector you can copy.
+- **`LinkEditor`'s `testIdPrefix`.** `editor/toolbar/LinkEditor.svelte` builds
+  its three ids from a prefix prop, so the snapshot only holds the wildcard
+  lines `{*}-input`, `{*}-submit` and `{*}-cancel`. Those cover both call
+  sites: the formatting bar's default `toolbar-link` and the editor's own
+  `context-link` (`Editor.svelte`). Renaming a call site's prefix slips past
+  the snapshot.
 
 ## Selector families (orientation guide)
 
@@ -63,6 +80,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Editor chrome
 - `editor-root` — top-level editor mount point
+- `editor-scroll-container` — the editor's scroller (`.editor-scroll` in
+  `App.svelte`)
 - `editor-stage` — Phase 3.5 grid-stage container (content track + per-side
   margin tracks); the margin-annotation positioning layer (`marginLayerEl`)
 - `editor-scroll-pill`, `editor-scroll-pill-thumb` — the proximity-faded scroll
@@ -74,10 +93,13 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
-- `formatting-bar`, `formatting-bar-track` (#1302 — the control track that
+- `formatting-bar-wrap` (the fixed, centred outer wrapper in
+  `shell/FormattingBar.svelte`), `formatting-bar`, `formatting-bar-track` (#1302 — the control track that
   carries the `overflow-x: clip / overflow-y: visible` axis split; the
   truncation test targets it by testid rather than by DOM position),
-  `toolbar-link-{input,submit,cancel}`,
+  `toolbar-link-{input,submit,cancel}` and the editor's own link editor
+  `context-link-{input,submit,cancel}` (both from `LinkEditor`'s prefix prop —
+  see Known gaps),
   `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`,
   `formatbar-hide-btn` (1.11 — hides the optional bar; the popup mirrors its controls)
 - Decorations split button (1.13) — lives in the formatting bar (subsumes the
@@ -98,46 +120,87 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Selection popup (audience-first, ADR-027)
 - `popup-{annotate-btn,annotation-input,note-submit,comment-submit,highlight-{*},show-formatbar-btn}`
+- `popup-annotation-submit` — the composer's primary submit (note or comment,
+  following the primary intent)
+- `popup-highlight-none` — the leading "No highlight" swatch that clears a
+  highlight in one click (A8)
 - `popup-{format-row,annotate-row}` (A8 two-pill — the two `.pill-row` capsule containers)
 
 ### Find/Replace
-- `find-replace-bar`, `find-{input,prev-btn,next-btn,close-btn,match-count}`
+- `find-replace-bar`, `find-{input,prev-btn,next-btn,close-btn,match-count}`,
+  `find-replace-expand-btn` (opens the replace row)
 - `find-scope-{pills,doc,tabs}`, `find-cross-doc-results`
 - `find-{case,word,regex}-toggle`
 - `replace-{input,btn,all-btn}`
 
+### Source view
+- `formatbar-source-toggle` — the formatting bar's switch into source view
+- `source-view-container`, `source-view-textarea`,
+  `source-view-{copy-btn,exit-btn}`, `source-view-error`,
+  `source-view-annotation-warning` (its announcer, `source-view-live`, is
+  under Live regions)
+
 ### Tabs strip & file open
 - `tab-scroll-container`, `tab-{*}`, `tab-name-{*}`, `unsaved-indicator-{*}`
-- `open-file-btn`, `file-open-{dialog,submit,error}`, `file-path-input`,
-  `file-upload-zone`, `recent-files-list`, `recent-file-{*}`,
-  `clear-recent-files`
+- `open-file-btn`, `file-open-{dialog,browse,error}`, `recent-files-list`,
+  `recent-file-{*}`, `clear-recent-files`. The dialog's path field, submit
+  button and upload drop zone are gone, and with them `file-path-input`,
+  `file-open-submit` and `file-upload-zone`; the dialog now opens files
+  through `file-open-browse`.
 - New-tab launcher (a7, sub-PR 1.9b): `new-tab-search`, `new-tab-recent-{*}`,
   `new-tab-browse`, `new-tab-reopen-closed`, `new-tab-empty`, `new-tab-no-match`
   (the primary action keeps `palette-item-new-scratchpad`)
+
+### Saved sessions (file-open dialog)
+- `sessions-section`, `sessions-toggle` (the disclosure),
+  `sessions-{loading,empty,error}`, `session-row`, `session-reopen`
 - Saved-session delete confirms (#1773): `session-delete-{confirm,cancel}` and
   `sessions-clear-all-{confirm,cancel}` — each swaps its row's contents whole,
   so the arm (`session-delete` / `sessions-clear-all`) is absent while armed
 
 ### Status bar
-- `status-word-count`, `save-indicator`, `sb-held`
+- `status-word-count`, `save-indicator` ("Saving..."), `saved-indicator` (the
+  saved label that replaces it)
+- `status-held-count` — the amber "N held" pill shown while items are held in
+  Solo mode (the manifest used to call it `sb-held`; no such id ships)
+- `status-ai-indicator` (the AI pill; actionable when it carries a call to
+  action), `status-ai-session-count` (its session-count suffix)
+- `status-tandem-claude-down`, `status-tandem-claude-down-dismiss` — Tandem's
+  own Claude has tripped while another session keeps the AI pill alive
+- `claude-working-indicator` — the "Claude is {verb}…" pill (#651), only during
+  a live session
 - `user-name-input` removed — the display-name editor was pulled out of the status pill (its default value "You" rendered as a duplicated "You: You"); name editing lives in Settings → Collaboration (`settings-modal-display-name`).
+
+### Working-folder drift (status bar, #1282)
+- `cwd-drift` (wrapper), `cwd-drift-pill` (the menu trigger), and its three
+  menu rows `cwd-drift-{relaunch,dismiss,opt-out}`. `relaunch` opens the
+  relaunch-in-this-folder flow, which confirms before acting.
 
 ### Annotations (5-card audience-first split, ADR-027 / Conflict #8)
 - Dispatch + chrome: `annotation-card-{*}`,
   `annotation-snippet-{*}`, `annotation-list-scroll-container`,
-  `annotation-private-pill`
+  `annotation-private-pill`, `annotation-author-dot-{*}` (the author dot in
+  the shared card header; absent on imported records),
+  `annotation-held-pill-{*}` (per-card "Held" pill while held in Solo mode),
+  `claude-typing-indicator-{*}` (#651 — three-dot presence while Claude's tool
+  targets this card)
 - Actions: `accept-btn-{*}`, `dismiss-btn-{*}`, `archive-btn-{*}`,
   `remove-btn-{*}`, `send-to-claude-btn-{*}`, `undo-btn`
 - Edit form: `edit-btn-{*}`, `edit-{newtext,reason,text}-{*}`,
   `edit-{save,cancel}-btn-{*}`
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
   `reply-toggle-{*}` (A13 disclosure), `comment-thread`, `reply-{*}`,
-  `reply-import-byline-{*}` (Word reviewer byline on imported note replies, #1000).
+  `reply-import-byline-{*}` (Word reviewer byline on imported note replies, #1000),
+  `reply-suggestion-{*}` and `accept-reply-btn-{*}` (a reply's suggested text
+  on a comment thread, and its Accept button while the parent is pending).
   (`reply-thread-expand-{*}` + `reply-thread-overlay*` retired with the
   portaled overlay — A13 #798, Bryan decision 2026-06-01.)
 - Suggestion + import variants: `suggestion-diff-{*}`,
+  `suggestion-original-truncated-{*}` (the original was stored cut at 200
+  characters, so the comparison is partial),
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
-- Margin column: `margin-column-{*}`, `margin-bubble-{*}`,
+- Margin column: `margin-column-{*}`, `margin-bubble-{*}`, `margin-anchor-dot`
+  (the leader line's anchor dot),
   `margin-leaders-{*}`, `margin-pin-btn-{*}` (pin a crowd-minimized card open;
   lives on the bubble wrapper, not in the card header, so it never appears in
   the side rail)
@@ -157,20 +220,36 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Side panels & rails
 - `left-outline-rail`, `annotations-tab`, `chat-tab`
+- `rail-float-left`, `rail-float-right` — the rail shells while floating (the
+  right one also while the chat reveal is open); set by a ternary, so the
+  snapshot holds the raw expression (see Known gaps)
+- `store-readonly-banner` (SidePanel's annotation-store lock banner),
+  `store-readonly-reclaim`, `store-readonly-reclaim-error`,
+  `store-readonly-dismiss`. The `held-banner` this list used to name does not
+  ship; held items surface as `status-held-count` and the per-card
+  `annotation-held-pill-{*}`.
+- `peek-strip-{*}`, `peek-dot-{*}` (one dot per annotation in the collapsed
+  rail's peek strip), `panel-edge-collapse-{*}` (resize-handle selectors
+  synthesized — see Known gaps)
+
+### Chat panel
+- `chat-panel`, `chat-composer-input`, `chat-send-btn`, `clear-chat-btn`
+- Per message: `chat-author-{*}`, `chat-anchor-quote-{*}` (the quoted anchor;
+  clicking scrolls the editor to it)
+- `chat-pickup-status` (the visible "waiting / picked up" row, `data-pickup`
+  carries the kind) and `chat-pickup-live` (the persistent live region that
+  announces it and the rows below)
 - `chat-tandem-claude-toggle` — Start / Turn off for Tandem's Claude in the chat panel header (#2195; `data-action` is `start` or `turn-off`)
 - `chat-tandem-claude-resuming` — "Claude is resuming…" / "Starting Tandem's Claude…" row for a chat that is starting a stopped Tandem's Claude (#2196; `data-verb` is `resuming` or `starting`); replaces the pickup row
 - `chat-tandem-claude-resume-failed` — the same row once the start failed or never began (#2196; `data-remedy` is the `AiChip` it offers)
 - `chat-tandem-claude-resume-remedy` — that row's remedy button
 - `chat-greeting-late` — "Tandem's Claude hasn't said hello" note, when the one-time greeting did not reach the chat (#2197; `data-action` is `relaunch` or the stopped launcher's `AiChip`); below the resume row, replaces the pickup row
 - `chat-greeting-late-action` — that note's button
-- `chat-claude-code-offer` — offer to set up Tandem's own Claude (#2199), with `-setup` (opens the
-  wizard at its offer) and `-dismiss` ("Not now", until the next server launch); only when the
+- `chat-claude-code-offer` — offer to set up Tandem's own Claude (#2199), with
+  `chat-claude-code-offer-setup` (opens the wizard at its offer) and
+  `chat-claude-code-offer-dismiss` ("Not now", until the next server launch); only when the
   launcher has no Claude Code setup and nothing is pushed to, on an empty chat or a message waiting
   past the stall threshold
-- `clear-chat-btn`, `held-banner`, `store-readonly-banner`,
-  `store-readonly-dismiss`, `peek-strip-{*}`,
-  `panel-edge-collapse-{*}` (resize-handle selectors synthesized — see Known
-  gaps)
 
 ### Banners
 - `banner-stack` — the measured wrapper around the five top-of-shell banners
@@ -189,7 +268,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `convert-to-markdown-btn`
 - `fidelity-report-banner`, `fidelity-report-details-toggle`,
   `fidelity-report-details`, `fidelity-report-import-losses`,
-  `fidelity-report-export-downgrades` (#1145 — `.docx` honesty notice)
+  `fidelity-report-export-downgrades`, `fidelity-report-integrity-warnings`,
+  `fidelity-report-save-anyway` (save a document whose pictures could not be
+  imported, after the loss is stated) (#1145 — `.docx` honesty notice; `.docx`
+  ships dark, ADR-053)
 - `external-conflict-banner`, `external-conflict-keep-btn`,
   `external-conflict-reload-btn` (#1069 — keep-vs-reload after an external
   write; every format since #1238)
@@ -199,7 +281,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   when `/health` reports a poll and has nothing to acknowledge.
 
 ### Modals & dialogs
-- `help-modal`, `help-modal-close`
+- `help-modal`, `help-modal-close`, `help-modal-content` (its focusable
+  scroll region)
 - `error-boundary-{recover,reload}-btn` (resolved from constants)
 - `command-palette`, `palette-{input,empty}`, `palette-item-{*}`,
   `palette-item-new-scratchpad`
@@ -217,9 +300,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Settings — modal (Wave 9 + responsive)
 - `settings-modal{,-scrim,-content,-close-btn,-narrow-hamburger}`
 - `settings-readonly-banner` — forward-compat read-only notice
-  (`SettingsReadonlyBanner.svelte`), rendered on BOTH settings surfaces
-  (modal: between header and scroll body; popover: above the scroll body)
-  when `settings._readOnly` is set. Distinct from `store-readonly-banner`
+  (`SettingsReadonlyBanner.svelte`), rendered between the modal's header and
+  its scroll body when `settings._readOnly` is set (the modal is its only
+  host since the popover was removed). Distinct from `store-readonly-banner`
   (SidePanel's annotation-store lock banner).
 - `settings-modal-sidebar-{version,footer}`,
   `settings-modal-mcp-status`, `settings-modal-tab-{*}`,
@@ -241,6 +324,13 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-view-license-btn`, `settings-modal-license-error` (the
   sidebar "View license" link; rendered only when `/api/info`'s `licensePath` has
   an openable extension, i.e. the desktop bundle's `LICENSE.txt`)
+- About tab: `settings-modal-copy-diagnostics-btn`,
+  `settings-modal-open-log-folder-btn`, `settings-modal-replay-tutorial-btn`,
+  `settings-modal-replay-error`
+- AI Assistant tab: `settings-modal-connect-ai-callout`,
+  `settings-modal-connect-ai-btn`, `settings-modal-margin-view-hint`, and the
+  working-directory block
+  `settings-modal-working-directory{,-input,-pick,-reset,-save,-load-error}`
 - `claude-code-ai-off-hint` — Settings → AI Assistant's one-line "AI features are
   off" notice (#1521); rendered only while the licence refuses the AI
 
@@ -260,7 +350,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`,
   `density-{*}-btn`, `reduce-motion-toggle`, `appearance-formatting-bar` (1.11),
-  `appearance-uniform-tab-width`, `appearance-scroll-pill`
+  `appearance-uniform-tab-width`, `appearance-scroll-pill`,
+  `appearance-rail-hover-reveal` (floating-rail hover reveal),
+  `appearance-system-light-warm` (#993 — use Warm when System resolves to a
+  light OS appearance; only while the theme is System)
 - Decorations mirror group (1.13): `appearance-show-{authorship,comments,highlights,notes}`
   (interpolated via `{testid}`, so not in the testid-set snapshot; tracked here).
   Replaces the single `annotation-decorations-toggle` (#596 per-type split).
@@ -277,14 +370,29 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   historical `appearance-` prefix; Critical Rule 7 forbids renaming it)
 - `editor-source-line-wrap` (#1738 — source-view line wrap; the label wrapper,
   descend to its `<input>`)
+- `editor-spellcheck-toggle`, `editor-smart-typography`
+- `settings-default-save-folder{,-input,-pick,-reset}` (the Editor tab's
+  default save folder block)
 - `high-contrast-toggle`, `annotation-patterns-toggle`
 - `network-{restart-sidecar,degraded-delay-slider,retry-strategy}`
+- `network-autostart-{toggle,error}` (#1236 — start at login; desktop only)
+
+### Settings — Shortcuts tab
+- `shortcuts-reset-all`; per shortcut (`ShortcutEditorList.svelte`)
+  `shortcut-row-{*}`, `shortcut-edit-{*}`, `shortcut-recording-{*}`,
+  `shortcut-reset-{*}`, `shortcut-conflict-{*}`
+- `settings-modal-shortcuts-list` (listed under the modal above)
 
 ### Settings — Models tab
-- `models-{empty-state,save-error,legacy-migration-banner,legacy-migrate-btn,legacy-migration-status}`
+The local-model collaborator ships dark (`BYO_MODELS_ENABLED`, ADR-039): while
+that flag is false the Models tab is filtered out of Settings entirely, so none
+of these selectors renders in a release build.
+- `models-{empty-state,loading,load-error,reload-btn,save-error}`. The three
+  `models-legacy-migration-*` / `models-legacy-migrate-btn` ids this list used
+  to name no longer ship.
 - `model-{row,default,toggle,edit-btn,delete-confirm,delete-btn}-{*}`,
   `model-add-btn`
-- Edit modal: `model-edit-{modal,cancel,provider,displayname,modelid,apikey,apikey-replace-btn,endpoint,save}`
+- Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save}`
 - First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,apikey,endpoint,error,save,skip,skip-secondary}`
 
 ### Integration wizard (unified onboarding wizard)
@@ -293,6 +401,11 @@ opt-in sub-view, NOT the 6-step `pick→secrets→review→saving` flow the orig
 manifest anticipated. The phantom step/continue/save testids below never
 shipped and were removed:
 - `integration-wizard{,-close,-keychain-fallback,-advanced}`
+- Nothing detected: `integration-wizard-empty`, with the install path
+  `integration-wizard-install-{claude,error,success}` (`success` is the
+  "installed, open a new terminal" note)
+- `integration-wizard-reopen-hint` — where the way back to the wizard is,
+  shown before the user closes it (#1022)
 - MCP connect machine: `integration-wizard-step-{detect,applying,done,error,verifying}`,
   `integration-wizard-{connect-btn,check-again,done-close,done-retry,error-retry}`
 - Detected installs: `integration-wizard-card-{*}`, `integration-wizard-pick-{*}`,
@@ -309,7 +422,8 @@ shipped and were removed:
   walkthrough is owed
 - The Claude Code offer for a Claude Desktop setup (#2199):
   `integration-wizard-claude-code-offer` (carries `data-offer-phase` `offer` / `missing` /
-  `installed` / `not-detected`) with `-install`, `-error`, `-installed` and `-recheck` — `offer`
+  `installed` / `not-detected`) with
+  `integration-wizard-claude-code-offer-{install,error,installed,recheck}` — `offer`
   beside a detected Claude Desktop with no Claude Code, `missing` beside a Claude Code card whose
   program is not installed, `not-detected` only when opened from the chat panel's offer (or after
   an install that left no card); `integration-wizard-check-sign-in` on the done screen, only while
@@ -329,8 +443,12 @@ shipped and were removed:
   This sub-view has no confirm step — its footer button fires the real enable —
   so the probe runs on entry to the view, and the retry button *replaces*
   `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
+- `integration-wizard-models-setup` — the "More integrations" row for a local
+  model; rendered only when `BYO_MODELS_ENABLED` is true, so a release build
+  shows a disabled "coming soon" row with no testid instead
 - Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy,-copy-status}`
-  in the push-mode block. **These four now live in `PushRoutesInfo.svelte`, not
+  in the push-mode block (`integration-wizard-push-mode`, which carries
+  `data-push-mode` `shim` / `no-shim`). **These four now live in `PushRoutesInfo.svelte`, not
   the wizard** (#1432) — the block was extracted so Settings → AI Assistant can
   render the same copy, and the ids kept their wizard-era names because Critical
   Rule 7 forbids removing a selector. The two hosts never show it at once: the
@@ -415,7 +533,8 @@ site.
 - `outline-panel`, `outline-search-input`, `outline-heading-{*}-{*}`
 
 ### Toasts & notifications
-- `toast-container`, `toast-{*}`, `toast-count-{*}`, `toast-dismiss-{*}`
+- `toast-container`, `toast-{*}`, `toast-count-{*}`, `toast-dismiss-{*}`,
+  `toast-action-{*}` (a toast's action button; clicking it also dismisses)
 
 ### Activity center (1.10)
 - `activity-pill`, `activity-tray`, `activity-empty`, `activity-clear-all`
@@ -427,17 +546,25 @@ site.
 
 ### Empty states (3.11 D5)
 - `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
-- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — keyed off `lastError === "cli-unusable"`, a filesystem probe the supervisor takes when the circuit breaker trips), `empty-state-setup-restart-anyway` (`aiChip: "setup"` secondary — the escape for a false-negative probe, so the branch is not a dead end), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler), `empty-state-open-license-settings` (`aiChip: "ai-off"` — the licence refuses the AI, #1521; opens Settings → License), `empty-state-start-claude` (`aiChip: "start"` — Tandem's Claude in standby, #2195)
+- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — keyed off `lastError === "cli-unusable"`, a filesystem probe the supervisor takes when the circuit breaker trips), `empty-state-setup-restart-anyway` (`aiChip: "setup"` secondary — the escape for a false-negative probe, so the branch is not a dead end), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler), `empty-state-open-license-settings` (`aiChip: "ai-off"` — the licence refuses the AI, #1521; opens Settings → License), `empty-state-start-claude` (`aiChip: "start"` — Tandem's Claude in standby, #2195), `empty-state-sign-in-recheck` (`data-ai-chip="sign-in"` — Claude Code needs signing in; the button re-checks)
 
 ### Licensing gate (#1116, ships dark)
-- `license-trial-banner`, `license-trial-days` (trial countdown banner)
+None of these renders as an active gate while the licence gate ships dark; the
+two `-dark-` hints are what the License tab shows in that state.
+- `license-trial-banner`, `license-trial-days`, `license-trial-buy` (trial countdown banner)
 - `license-wall`, `license-wall-buy`, `license-wall-dismiss`, `license-wall-unverifiable` removed (#1521, D6): a keyless install refuses the AI, never the editor, so the restricted-mode overlay was retired. A deliberate Rule 7 contract change.
 - `ai-off-notice` (the rail's "AI features are off" notice, #1521), `ai-off-notice-collapse` (its collapse toggle, persisted per browser), `ai-off-notice-settings-link` (opens Settings → License; the notice carries no purchase link)
 - `license-activate-input`, `license-activate-error`, `license-activate-submit` (shared activation form)
-- `license-settings-section`, `license-status-pill` (Settings → License tab)
+- `license-settings-section`, `license-status-pill` (Settings → License tab),
+  `license-status-live-region` (its `role="status"` host) with
+  `license-status-unavailable` inside it, `license-unverifiable-warning`,
+  `license-buy-link`, and the dark-gate hints `license-gate-dark-hint` /
+  `license-dark-installed-hint`
 - `license-update-window-ended` (Settings → License warning for a lapsed update window) and `license-window-support-link` (its support mailto link)
 - `license-renew-link` removed 2026-10-09, deliberately: every key now includes all future updates and there is no renewal product (ADR-040 decisions A5 and B6), so the lapsed-window warning links to support instead (`license-window-support-link`).
 
 ### Test harnesses (not user-facing, kept for vitest)
 - `notifications-harness`, `throw-on-render-ok`,
-  `harness-{acknowledge,version,banner-dismiss,banner-version}`
+  `harness-{acknowledge,version,banner-dismiss,banner-version}`,
+  `ai-readiness-harness`, `reachability-harness`, `cwd-drift-harness`
+  (`src/client/svelte-harness/`)

@@ -1,5 +1,7 @@
 # Toolbar UX Research — Tandem Formatting Tools Placement
 
+> **Status: historical, superseded.** This research recommended a minimal selection popup. The decision went the other way: Conflict #5 in [`conflicts-resolved.md`](../design-system-impl/conflicts-resolved.md) (sub-PR 1.11) has the selection popup mirror the full formatting-bar control set (minus the horizontal rule), including the display menu. The quoted sources were captured by a search tool whose source list was not kept, so they appear below as unattributed quotes.
+
 **Date:** May 7, 2026  
 **Scope:** Which formatting tools belong in the persistent toolbar vs. the selection popup (bubble menu)?
 
@@ -54,19 +56,19 @@ The mockup **dropped** all formatting tools from the popup. The design brief exp
 
 ### The key insight from the research
 
-<cite index="3-1,3-2">One of the newer patterns is a floating menu that shows up whenever you select text. It keeps your attention on the text you are editing — instead of letting it wander to a menu bar at the very top of the page.</cite>
+"One of the newer patterns is a floating menu that shows up whenever you select text. It keeps your attention on the text you are editing — instead of letting it wander to a menu bar at the very top of the page." *(web source; not recorded)*
 
-<cite index="8-23,8-24">When considering the placement of the toolbar, think about the size of the editing experience. For long-form writing, anchor the toolbar to the top of the editor.</cite> Tandem is a **long-form** markdown editor — this argues for a persistent toolbar.
+"When considering the placement of the toolbar, think about the size of the editing experience. For long-form writing, anchor the toolbar to the top of the editor." *(web source; not recorded)* Tandem is a **long-form** markdown editor — this argues for a persistent toolbar.
 
-<cite index="5-4,5-5">A floating toolbar that appears when text is selected should show a limited number of options due to space constraints. Those options should be ones expected to be used most frequently by users.</cite>
+"A floating toolbar that appears when text is selected should show a limited number of options due to space constraints. Those options should be ones expected to be used most frequently by users." *(web source; not recorded)*
 
-<cite index="8-7,8-8">Toolbar sections have semantic meaning, so it's important they're categorized by function. Toolbars can have up to 4 categories that are visually separated.</cite>
+"Toolbar sections have semantic meaning, so it's important they're categorized by function. Toolbars can have up to 4 categories that are visually separated." *(web source; not recorded)*
 
 ### Cognitive load principles
 
-<cite index="21-27">Designers should strive to eliminate extraneous cognitive load: processing that takes up mental resources but doesn't actually help users understand the content.</cite>
+"Designers should strive to eliminate extraneous cognitive load: processing that takes up mental resources but doesn't actually help users understand the content." *(web source; not recorded)*
 
-<cite index="29-6,29-7">When confronted with too many choices, cognitive load will increase due to decision paralysis. It is important to minimize the choices the user must make at any given moment.</cite>
+"When confronted with too many choices, cognitive load will increase due to decision paralysis. It is important to minimize the choices the user must make at any given moment." *(web source; not recorded)*
 
 The bubble menu is already cognitively loaded in Tandem's case: it contains the **audience-choice decision** (Note vs. Comment), which is the design's primary UX moment. Piling formatting tools on top competes with that.
 
@@ -123,7 +125,7 @@ These are cognitively different. Mixing them in one popup creates the wrong ment
 - Strikethrough, code, link — too infrequent to justify space in the reaction surface
 - Undo/Redo — irrelevant to a selection context
 
-**Why minimal?** The audience-choice (Note vs. Comment) is Tandem's core design moment. <cite index="29-30,29-31">When confronted with too many choices, cognitive load increases due to decision paralysis. Minimize the choices users must make at any given moment.</cite> Adding 8 formatting buttons before the note/comment choice buries the lede.
+**Why minimal?** The audience-choice (Note vs. Comment) is Tandem's core design moment. "When confronted with too many choices, cognitive load increases due to decision paralysis. Minimize the choices users must make at any given moment." *(web source; not recorded)* Adding 8 formatting buttons before the note/comment choice buries the lede.
 
 **Why Bold+Italic specifically?** These are the only inline marks users routinely apply *after* reading a passage — "this phrase should be emphasized." All other marks (heading, list, code) are applied while *writing*. The popup is a reading-mode surface.
 

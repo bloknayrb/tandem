@@ -1,5 +1,5 @@
 /**
- * Cloudflare KV entitlement writer (#1116, ADR-040 §7) — the bridge to the L3
+ * Cloudflare KV entitlement writer (#1116, licensing design spec §7) — the bridge to the L3
  * update Worker. `KV[licenseId] = { updateWindowEnd, status, version }`; the
  * Worker reads that key to decide whether to serve an update manifest.
  *

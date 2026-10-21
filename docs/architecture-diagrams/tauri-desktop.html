@@ -5036,7 +5036,7 @@
         <path data-edge-from="webview" data-edge-to="sidecar" data-edge-label="HTTP/WS to 127.0.0.1" data-edge-key="7" data-composition-points="455,141;695,141" d="M 455 141 L 695 141" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="webview" data-edge-to="origin_check" data-edge-label="tauri.localhost origin" data-edge-key="8" data-composition-points="455,141;475,141;475,251;495,251" d="M 455 141 L 467 141 Q 475 141 475 149 L 475 243 Q 475 251 483 251 L 495 251" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="origin_check" data-edge-to="sidecar" data-edge-label="must match TAURI_HOSTNAME" data-edge-key="9" data-composition-points="665,251;680,251;680,142;695,142" d="M 665 251 L 672.5 251 Q 680 251 680 243.5 L 680 149.5 Q 680 142 687.5 142 L 695 142" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="sidecar" data-edge-to="updater" data-edge-label="checks entitlement" data-edge-key="10" data-composition-points="780,174;780,220" d="M 780 174 L 780 220" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="updater" data-edge-to="sidecar" data-edge-label="probes licence status" data-edge-key="10" data-composition-points="780,220;780,174" d="M 780 220 L 780 174" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="updater" data-edge-to="public_manifest" data-edge-label="Public route" data-edge-key="11" data-composition-points="700,251;727.5,251;727.5,358;755,358" d="M 700 251 L 719.5 251 Q 727.5 251 727.5 259 L 727.5 350 Q 727.5 358 735.5 358 L 755 358" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="updater" data-edge-to="licensed_route" data-edge-label="licensed route (dark)" data-edge-key="12" data-composition-points="860,251;832.5,251;832.5,358;805,358" d="M 860 251 L 840.5 251 Q 832.5 251 832.5 259 L 832.5 350 Q 832.5 358 824.5 358 L 805 358" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
@@ -5135,19 +5135,19 @@
         <text data-detail="context" x="580" y="265" class="t-muted" font-size="8.7" text-anchor="middle">CORS, apiMiddleware, Hocuspocus</text>
         </g>
 
-        <g id="node-updater" data-node-id="updater" data-node-label="resolve_update_route" tabindex="0" role="button" aria-label="Focus resolve_update_route, entitlement branch, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="entitlement branch" data-node-context="Architecture component">
-          <title>resolve_update_route · entitlement branch · Architecture component</title>
+        <g id="node-updater" data-node-id="updater" data-node-label="resolve_update_route" tabindex="0" role="button" aria-label="Focus resolve_update_route, Rust host; Public if no endpoint, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Rust host; Public if no endpoint" data-node-context="Architecture component">
+          <title>resolve_update_route · Rust host; Public if no endpoint · Architecture component</title>
           <rect x="700" y="220" width="160" height="62" rx="6" class="c-mask"/>
           <rect x="700" y="220" width="160" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(706 226) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="780" y="249" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">resolve_update_route</text>
-        <text data-detail="context" x="780" y="265" class="t-muted" font-size="9" text-anchor="middle">entitlement branch</text>
+        <text data-detail="context" x="780" y="265" class="t-muted" font-size="8.5" text-anchor="middle">Rust host; Public if no endpoint</text>
         </g>
 
-        <g id="node-show_window" data-node-id="show_window" data-node-label="show_main_window" tabindex="0" role="button" aria-label="Focus show_main_window, single release point, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="single release point" data-node-context="Architecture component">
-          <title>show_main_window · single release point · Architecture component</title>
+        <g id="node-show_window" data-node-id="show_window" data-node-label="note_user_presence" tabindex="0" role="button" aria-label="Focus note_user_presence, single release point, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="single release point" data-node-context="Architecture component">
+          <title>note_user_presence · single release point · Architecture component</title>
           <rect x="1005" y="220" width="150" height="62" rx="6" class="c-mask"/>
           <rect x="1005" y="220" width="150" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(1011 226) scale(0.6875)">
@@ -5156,7 +5156,7 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1080" y="249" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">show_main_window</text>
+          <text data-node-label="" data-detail-anchor="" x="1080" y="249" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">note_user_presence</text>
         <text data-detail="context" x="1080" y="265" class="t-muted" font-size="9" text-anchor="middle">single release point</text>
         </g>
 
@@ -5225,9 +5225,9 @@
           <rect x="615" y="176.5" width="130" height="14" rx="3" class="c-mask"/>
           <text x="680" y="186.5" class="t-security" font-size="8" text-anchor="middle">must match TAURI_HOSTNAME</text>
         </g>
-        <g data-detail="context" data-edge-from="sidecar" data-edge-to="updater" data-edge-label="checks entitlement" data-edge-key="10">
-          <rect x="731.8" y="178" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="780" y="188" class="t-messagebus" font-size="8" text-anchor="middle">checks entitlement</text>
+        <g data-detail="context" data-edge-from="updater" data-edge-to="sidecar" data-edge-label="probes licence status" data-edge-key="10">
+          <rect x="726" y="178" width="108" height="14" rx="3" class="c-mask"/>
+          <text x="780" y="188" class="t-messagebus" font-size="8" text-anchor="middle">probes licence status</text>
         </g>
         <g data-detail="context" data-edge-from="updater" data-edge-to="public_manifest" data-edge-label="Public route" data-edge-key="11">
           <rect x="693.7" y="284.5" width="67.6" height="14" rx="3" class="c-mask"/>
@@ -5483,7 +5483,8 @@
         <ul>
           <li>&bull; TAURI_HOSTNAME must match CORS, apiMiddleware, and Hocuspocus</li>
           <li>&bull; LAUNCHER_DEFERRED is re-read on every spawn, never captured once</li>
-          <li>&bull; show_main_window is the single release point</li>
+          <li>&bull; note_user_presence, reached via show_main_window_for_user, is the single release point</li>
+          <li>&bull; show_main_window is the mechanical boot path and releases nothing</li>
         </ul>
       </div>
     </div>
