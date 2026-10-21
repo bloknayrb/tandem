@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StatusBar from "../../src/client/status/StatusBar.svelte";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
@@ -512,10 +512,10 @@ describe("StatusBar — Reconnected flash (#2258)", () => {
   const down = { ...baseProps, connected: false, connectionStatus: "connecting" as const };
   const up = { ...baseProps, connected: true, connectionStatus: "connected" as const };
 
+  beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
   it("the page's first connect is not a reconnect", async () => {
-    vi.useFakeTimers();
     const { container, rerender } = render(StatusBar, { props: down });
     await rerender(up);
     expect(container.textContent).toContain("Synced");
@@ -523,7 +523,6 @@ describe("StatusBar — Reconnected flash (#2258)", () => {
   });
 
   it("a connect after a drop flashes, then settles to Synced", async () => {
-    vi.useFakeTimers();
     const { container, rerender } = render(StatusBar, { props: down });
     await rerender(up);
     await rerender(down);
@@ -535,7 +534,6 @@ describe("StatusBar — Reconnected flash (#2258)", () => {
   });
 
   it("a drop inside the flash window shows the drop, not a stuck Reconnected", async () => {
-    vi.useFakeTimers();
     const { container, rerender } = render(StatusBar, { props: up });
     await rerender(down);
     await rerender(up);

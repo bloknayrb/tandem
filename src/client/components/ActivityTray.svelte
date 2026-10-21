@@ -380,7 +380,7 @@ onDestroy(() => {
     position: fixed;
     bottom: var(--tandem-space-3);
     right: var(--tandem-space-4);
-    z-index: var(--tandem-z-toast);
+    z-index: var(--tandem-z-popover);
     pointer-events: none;
   }
 

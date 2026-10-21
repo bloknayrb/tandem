@@ -313,7 +313,10 @@
         --tandem-z-sticky: 100;
         --tandem-z-overlay: 900;
         --tandem-z-modal: 1000;
-        --tandem-z-toast: 1100;
+        /* Floating chrome that must clear the selection popup (--tandem-z-modal)
+           but stay under modal backdrops: the formatting bar while one of its
+           popovers is open, the activity tray, the slash menu. */
+        --tandem-z-popover: 1100;
         --tandem-z-tooltip: 10000;
         /* The title bar lifts its controls above tauri-plugin-decorum's drag
            overlay; --tandem-z-above-titlebar is for full-screen modal overlays
@@ -323,10 +326,9 @@
         --tandem-z-above-titlebar: 100000;
         /* Toasts only (#2257): above every modal tier (the highest today is
            above-titlebar + 5), so a toast raised while Settings is open is not
-           washed out under its scrim. Not --tandem-z-toast: the formatting
-           bar's popover lift and the activity tray share that one, and lifting
-           them would float them over modal backdrops. */
-        --tandem-z-toast-layer: calc(var(--tandem-z-above-titlebar) + 10);
+           washed out under its scrim. Anything else at this tier would float
+           over modal backdrops; floating chrome belongs at --tandem-z-popover. */
+        --tandem-z-toast: calc(var(--tandem-z-above-titlebar) + 10);
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
            rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
            into the floating TitleBar (no in-flow tabs row), so these drop to
@@ -510,7 +512,7 @@
         border-radius: var(--tandem-r-5);
         min-width: 256px;
         padding: var(--tandem-space-1);
-        z-index: var(--tandem-z-popover, 1100);
+        z-index: var(--tandem-z-popover);
         /* A20a (#798) — the menu lifts in from the cursor anchor. The container
            is created once and display-gated (none↔block in extension.ts), so a
            CSS `animation` fires once on open (none→block) and does NOT replay on

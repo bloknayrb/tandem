@@ -467,3 +467,16 @@ export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void>
     console.warn("cleanupAllOpenDocuments failed:", err);
   }
 }
+
+/**
+ * Does this element actually receive clicks at its own centre? `toBeVisible()`
+ * passes on an element that is clipped (#1302) or painted under another layer
+ * such as a modal scrim (#2257), so a user can neither see nor click it.
+ */
+export async function ownsItsPixels(locator: Locator): Promise<boolean> {
+  return locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && el.contains(hit);
+  });
+}

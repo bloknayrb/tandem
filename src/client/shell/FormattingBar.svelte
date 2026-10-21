@@ -303,7 +303,7 @@ function handleHighlight(color: HighlightColor) {
      `:has()` degrades to the un-lifted z-index (dropdown paints behind the
      selection pill) rather than to a broken bar. */
   .tandem-fmtbar-wrap:has(:global([aria-expanded="true"])) {
-    z-index: var(--tandem-z-toast);
+    z-index: var(--tandem-z-popover);
   }
   /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css). */
   .fmtbar-hide {
