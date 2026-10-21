@@ -1240,6 +1240,21 @@ describe("default fetch wiring (env → deps)", () => {
     expect(env.LEDGER_KV.map.size).toBe(0);
   });
 
+  it("an unset signing key on a cold isolate → 503 at stage config, not a silent 500", async () => {
+    // beforeEach leaves the signer cache empty, which is a cold isolate: the
+    // first request after a deploy that forgot `secret put TANDEM_PRIVATE_KEY`.
+    const env = makeEnv({ TANDEM_PRIVATE_KEY: undefined });
+    const stages = await captureLogs(async () => {
+      const res = await issuanceWorker.fetch(
+        makeRequest(paidBody(), { ts: nowTs() }),
+        env as never,
+      );
+      expect(res.status).toBe(503);
+    });
+    expect(stages).toEqual(["config"]);
+    expect(env.LEDGER_KV.map.size).toBe(0);
+  });
+
   it("production: looks up the buyer at api.paddle.com, mints, emails via Resend", async () => {
     const fetchMock = routedFetch();
     vi.stubGlobal("fetch", fetchMock);
