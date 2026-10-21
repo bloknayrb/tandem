@@ -402,8 +402,9 @@ flushes the durable envelope and re-merges it, and the other two never clear the
 map, so notes survive all three. A forced open can still lose them in two
 cases: its envelope flush fails (logged, and the reload continues), or the
 document's annotation store never wired this session (the user was warned when
-it opened). Outside the AI's tools, a scratchpad's source-view commit drops its
-notes (#2219). Even so, nobody should read this section as "the AI cannot
+it opened); #2269 tracks those and the rest of the set, including a store
+another instance holds read-only. A scratchpad's source-view commit, outside the
+AI's tools, keeps its notes since #2219. Even so, nobody should read this section as "the AI cannot
 destroy notes". Separately,
 `refreshRange` writes to note records on every Claude *read* — the sanctioned
 coordinate-repair exception, but it means "the AI never writes to a note" was

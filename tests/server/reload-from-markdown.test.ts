@@ -56,6 +56,14 @@ vi.mock(import("../../src/server/documents/registry.js"), async (importOriginal)
   return { ...actual, broadcastOpenDocs: vi.fn(actual.broadcastOpenDocs) };
 });
 
+// Observation point for the #2219 ordering spec: `clearAndReload` must
+// re-anchor kept records before it awaits the session delete. Spread like the
+// registry mock above, so every other spec runs the real function.
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/session/manager.js")>();
+  return { ...actual, deleteSession: vi.fn(actual.deleteSession) };
+});
+
 vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
@@ -70,24 +78,22 @@ import {
   isReloadInProgress,
   releaseReloadGuard,
 } from "../../src/server/documents/watcher.js";
-import { subscribe, unsubscribe } from "../../src/server/events/queue.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { handleGetDocumentRaw } from "../../src/server/mcp/routes/document-raw.js";
 import { anchoredRange } from "../../src/server/positions.js";
-import { isAutoSaveRunning, stopAutoSave } from "../../src/server/session/manager.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
-  CTRL_ROOM,
-  Y_MAP_ANNOTATION_REPLIES,
-  Y_MAP_ANNOTATIONS,
-  Y_MAP_MODE,
-  Y_MAP_USER_AWARENESS,
-} from "../../src/shared/constants.js";
-import type { TandemEvent } from "../../src/shared/events/types.js";
+  deleteSession,
+  isAutoSaveRunning,
+  stopAutoSave,
+} from "../../src/server/session/manager.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import { collectEvents } from "../helpers/event-collector.js";
 
 let tmpDir: string;
 
@@ -412,20 +418,29 @@ describe("reloadDocumentFromMarkdown — scratchpad (editable upload source)", (
     expect(restAfter).toEqual(restBefore);
   });
 
-  // `clearAndReload` used to call `attachObservers(id, doc)` with no options,
-  // attaching the annotation/reply channel observers that an upload never
-  // carries. With the records now kept, that would have started pushing a
-  // scratchpad's comment events after its first commit (#2219 plan review).
-  async function annotationEventsAfterBrowserComment(doc: Y.Doc): Promise<string[]> {
-    const seen: string[] = [];
-    const cb = (e: TandemEvent): void => {
-      if (e.type.startsWith("annotation:")) seen.push(e.type);
-    };
-    // `pushEvent` drops the user's own annotation events unless mode reads
-    // Tandem (WS-A2), which would make both specs below pass vacuously.
-    const ctrlAwareness = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS);
-    ctrlAwareness.set(Y_MAP_MODE, "tandem");
-    subscribe(cb, "internal");
+  it("kept records are re-anchored BEFORE the session-delete await (#2219 review)", async () => {
+    // Inside that I/O window any MCP read sees the map; a record still holding
+    // its pre-commit offsets there would be served (or re-minted) at stale text.
+    const { id, doc } = await openScratchDoc("# Scratch\n\nAlpha beta gamma.\n\nDelta epsilon.\n");
+    seedAnnotation(doc, "Delta epsilon");
+    let textAtDelete: string | undefined;
+    vi.mocked(deleteSession).mockImplementationOnce(async () => {
+      const ann = onlyAnnotation(doc);
+      textAtDelete = extractText(doc).slice(ann.range.from, ann.range.to);
+    });
+
+    await reloadDocumentFromMarkdown(id, "# Scratch\n\nDelta epsilon.\n");
+
+    expect(vi.mocked(deleteSession)).toHaveBeenCalled();
+    expect(textAtDelete).toBe("Delta epsilon");
+  });
+
+  // `clearAndReload` re-attaches the event observers; it must not give a
+  // scratchpad the annotation/reply channel observers an upload never carries.
+  function annotationEventsAfterBrowserComment(doc: Y.Doc): string[] {
+    // Without Tandem mode `pushEvent` drops user events and both specs pass vacuously.
+    setCtrlMode("tandem");
+    const { events, cleanup } = collectEvents("internal");
     try {
       const ann: Annotation = {
         id: `ann_browser_${Math.random().toString(36).slice(2, 8)}`,
@@ -439,22 +454,22 @@ describe("reloadDocumentFromMarkdown — scratchpad (editable upload source)", (
       };
       withBrowser(doc, () => doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(ann.id, ann));
     } finally {
-      unsubscribe(cb);
-      ctrlAwareness.delete(Y_MAP_MODE);
+      cleanup();
+      setCtrlMode(null);
     }
-    return seen;
+    return events.filter((e) => e.type.startsWith("annotation:")).map((e) => e.type);
   }
 
   it("a scratchpad pushes no annotation events after a commit", async () => {
     const { id, doc } = await openScratchDoc("# Scratch\n\nbody\n");
     await reloadDocumentFromMarkdown(id, "# Scratch\n\nbody, edited\n");
-    expect(await annotationEventsAfterBrowserComment(doc)).toEqual([]);
+    expect(annotationEventsAfterBrowserComment(doc)).toEqual([]);
   });
 
   it("control: a file doc does push them after a commit, so the probe can see one", async () => {
     const { id, doc } = await openMdFile("# Doc\n\nbody\n");
     await reloadDocumentFromMarkdown(id, "# Doc\n\nbody, edited\n");
-    expect(await annotationEventsAfterBrowserComment(doc)).not.toEqual([]);
+    expect(annotationEventsAfterBrowserComment(doc)).not.toEqual([]);
   });
 });
 

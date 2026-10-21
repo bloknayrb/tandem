@@ -293,7 +293,7 @@ export function evictPartialDocState(doc: Y.Doc, docId: string | undefined): voi
   // on-disk annotation file — destroying durable annotations for the docId we
   // intended to evict-and-reopen.
   withFileSync(doc, () => {
-    clearDocMaps(doc, false);
+    clearDocMaps(doc);
     const fragment = doc.getXmlFragment("default");
     fragment.delete(0, fragment.length);
   });
@@ -314,14 +314,11 @@ export function evictPartialDocState(doc: Y.Doc, docId: string | undefined): voi
  * yields a new document/tab). Don't add them here assuming this is the canonical
  * reset — the adapter owns their lifecycle.
  */
-function clearDocMaps(doc: Y.Doc, keepAnnotations: boolean): void {
-  const maps = [
-    ...(keepAnnotations
-      ? []
-      : [doc.getMap(Y_MAP_ANNOTATIONS), doc.getMap(Y_MAP_ANNOTATION_REPLIES)]),
-    doc.getMap(Y_MAP_AWARENESS),
-    doc.getMap(Y_MAP_USER_AWARENESS),
-  ];
+function clearDocMaps(doc: Y.Doc, keepAnnotations = false): void {
+  const maps = [doc.getMap(Y_MAP_AWARENESS), doc.getMap(Y_MAP_USER_AWARENESS)];
+  if (!keepAnnotations) {
+    maps.push(doc.getMap(Y_MAP_ANNOTATIONS), doc.getMap(Y_MAP_ANNOTATION_REPLIES));
+  }
   for (const m of maps) m.forEach((_, k) => m.delete(k));
 }
 
@@ -379,13 +376,9 @@ export { evictPartialDocState as __testEvictPartialDocState, notifyIssue as __te
  * with no durable envelope (a scratchpad), the #1813 re-merge has nothing to
  * bring back, so clearing would delete every record for good. The kept records
  * still hold pre-reload ranges and relRanges into the destroyed fragment, so the
- * option carries the re-anchor it requires (`reanchorAnnotations`, which lives in
- * `watcher.ts` and is passed in rather than imported, to stay out of the
- * `documents/` import cycle); it runs before this function's first post-
- * transaction await. Only safe for a format whose adapter injects no
- * annotations of its own — `.docx` re-imports Word comments and would
- * double-insert them; `reloadDocumentFromMarkdown`'s `.md`-only guard is what
- * keeps it there today.
+ * option carries the re-anchor it requires, run before this function's first
+ * post-transaction await. `.md` only (refused otherwise): `.docx` re-imports
+ * Word comments and would double-insert them.
  */
 export async function clearAndReload(
   id: string,
@@ -449,6 +442,11 @@ export async function clearAndReload(
     displayName: path.basename(resolved),
     dedupSource: resolved,
   };
+  // An adapter that injects its own annotations (`.docx` Word comments) would
+  // double-insert them beside the kept records.
+  if (opts?.keepAnnotations && format !== "md") {
+    throw new Error(`clearAndReload: keepAnnotations is .md-only (got ${format})`);
+  }
   const prepared = await prepareContent(format, source);
 
   // 2. Single transaction: clear state (annotations kept under keepAnnotations)
@@ -488,16 +486,23 @@ export async function clearAndReload(
     });
 
     // 3. Reattach event queue observers (idempotent — detaches existing first).
-    //    An upload/scratchpad never carries the annotation + reply channel
-    //    observers (`attachObservers`' `uploadDoc`); attaching them here would
-    //    start pushing a scratchpad's comment and reply events after its first
-    //    source-view commit (#2219).
+    //    A scratchpad never carries the annotation/reply channel observers (#2219).
     attachObservers(id, doc, { uploadDoc: existing.source !== "file" });
 
-    // Re-anchor kept records BEFORE the session-delete await below, so no read
-    // in that I/O window sees records holding relRanges into the destroyed
-    // fragment (#2219 review).
-    opts?.keepAnnotations?.reanchor(doc);
+    // Before the session-delete await, so no read in that window sees dead
+    // relRanges. Its own catch: the content has already landed, so a failure
+    // here must not report the reload as failed or skip the session delete.
+    if (opts?.keepAnnotations) {
+      try {
+        opts.keepAnnotations.reanchor(doc);
+      } catch (err) {
+        console.error(
+          "[Tandem] clearAndReload: re-anchoring kept annotations failed for %s:",
+          id,
+          err,
+        );
+      }
+    }
 
     // The body now mirrors disk content — clear the autosave dirty flag so the
     // reload itself doesn't trigger a redundant write-back (#851). Done after
