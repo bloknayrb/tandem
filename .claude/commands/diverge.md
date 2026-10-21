@@ -263,9 +263,15 @@ of work, say so in the commit or PR body of that work — the phrase `via /diver
 enough. At review time the question is answered by:
 
 ```sh
-git log --since=<gate-set-date> --grep='via /diverge' --oneline
+git log --since=<gate-set-date> -P --grep='via /diverge(?! \(reframed\))' --oneline
 git log --since=<gate-set-date> --grep='via /diverge (reframed)' --fixed-strings --oneline
 ```
+
+The first command's negative lookahead is what keeps a `via /diverge (reframed)` trace out
+of the use count; a plain `--grep='via /diverge'` matches those too, so a run of reframes
+alone would read as use and mask the retirement test. A commit carrying both phrases still
+counts once as a use. `-P` needs a git built with PCRE; one without it refuses the command
+loudly rather than returning nothing.
 
 Retire it if the first returns nothing across a full review period, or if "none of these —
 reframe" is chosen more than once (the second command, plus any issue comments carrying the

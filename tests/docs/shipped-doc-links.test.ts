@@ -53,15 +53,54 @@ const REPO_BLOB = "https://github.com/bloknayrb/tandem/blob/master/";
 /** Docs opened inside the app whose links must all leave it. */
 const IN_APP_DOCS = ["docs/workflows.md", "CHANGELOG.md"];
 
-/** Inline `[text](href)` links (not images) plus reference-style definitions. */
+/**
+ * Inline `[text](href)` links (not images), reference-style definitions, and
+ * raw HTML `<a href>` tags.
+ *
+ * Every CommonMark spelling the editor renders as a link has to be extracted,
+ * or a relative link written in a spelling this regex missed passes the
+ * "no relative link" spec vacuously: an `<angle>` destination, a title in
+ * double quotes, single quotes or parentheses, and a raw `<a href="…">` (with
+ * either quote style). The spellings are pinned by the unit block below.
+ */
 function hrefs(md: string): string[] {
   // Drop images before matching links, so a linked badge `[![alt](img)](url)`
   // yields its outer `url` rather than reading the image's `img` as a link.
   const text = stripCode(md).replace(/!\[[^\]]*\]\([^)]*\)/g, "");
-  const inline = [...text.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)].map((m) => m[1]);
-  const refs = [...text.matchAll(/^\s{0,3}\[[^\]]+\]:\s*<?([^>\s]+)>?/gm)].map((m) => m[1]);
-  return [...inline, ...refs];
+  const title = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
+  const inline = [
+    ...text.matchAll(
+      new RegExp(String.raw`\[[^\]]*\]\(\s*(?:<([^>\n]*)>|([^)\s]+))${title}\s*\)`, "g"),
+    ),
+  ].map((m) => m[1] ?? m[2]);
+  const refs = [...text.matchAll(/^\s{0,3}\[[^\]]+\]:\s*(?:<([^>\n]*)>|(\S+))/gm)].map(
+    (m) => m[1] ?? m[2],
+  );
+  const html = [...text.matchAll(/<a\s[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(
+    (m) => m[1] ?? m[2],
+  );
+  return [...inline, ...refs, ...html];
 }
+
+describe("hrefs() extracts every link spelling the editor renders", () => {
+  it.each([
+    ["a bare destination", "[a](docs/x.md)", ["docs/x.md"]],
+    ["a double-quoted title", '[a](docs/x.md "T")', ["docs/x.md"]],
+    ["a single-quoted title", "[a](docs/x.md 'T')", ["docs/x.md"]],
+    ["a parenthesised title", "[a](docs/x.md (T))", ["docs/x.md"]],
+    ["an <angle> destination", "[a](<docs/my file.md>)", ["docs/my file.md"]],
+    ["an <angle> destination with a title", "[a](<docs/x.md> 'T')", ["docs/x.md"]],
+    ["a reference definition", "[r]: docs/x.md", ["docs/x.md"]],
+    ["an <angle> reference definition", "[r]: <docs/my file.md>", ["docs/my file.md"]],
+    ["a raw <a> with double quotes", '<a href="docs/x.md">a</a>', ["docs/x.md"]],
+    ["a raw <a> with single quotes", "<a class='c' href='docs/x.md'>a</a>", ["docs/x.md"]],
+    ["a linked badge (outer URL only)", "[![b](img.svg)](docs/x.md)", ["docs/x.md"]],
+    ["a bare image (no link)", "![b](img.svg)", []],
+    ["link syntax inside a code span (no link)", "`[a](docs/x.md)`", []],
+  ])("%s", (_name, md, expected) => {
+    expect(hrefs(md)).toEqual(expected);
+  });
+});
 
 /** Repo `blob/master` links whose file or heading does not exist in this checkout. */
 function brokenRepoLinks(links: string[]): string[] {

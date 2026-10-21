@@ -438,7 +438,7 @@ Slot 14 (the desktop window) is still manual and still has no embedding page.
 | Ctrl+K | formatting toolbar's Link button tooltip; `RESERVED_CHORDS` in the keybindings | Both advertise a link shortcut that nothing binds, because the link extension ships no keymap. Either bind it to open the link editor, or drop the tooltip and the reservation. If it gets bound, restore the user-guide row. |
 | LIC22 | `src/shared/license-copy.ts` | The bad-signature message does not suggest updating Tandem before asking for a reissue. The doc now does. |
 | Hook scope | `block-sensitive.sh`, `block-no-verify.sh` | Optional. Widen the sensitive-file pattern (the Cargo lockfile, `.env` variants) and the no-verify match (short flag, env bypass). The docs now describe what the hooks actually match. |
-| Save permissions (from the security review) | atomic save (temp file + rename) | The temp file is created with the umask default and renamed over the document, so a document the user had restricted to owner-only can become readable by other local accounts after Tandem saves it. No doc claims otherwise; worth a security-reviewer look on its own. |
+| Save permissions (from the security review) | atomic save (temp file + rename) | The temp file is created with the umask default and renamed over the document, so a document the user had restricted to owner-only can become readable by other local accounts after Tandem saves it. No doc claims otherwise. Tracked as [#2266](https://github.com/bloknayrb/tandem/issues/2266) and fixed on master by #2267, so it needs no register entry (#2268, filed from this audit, is its duplicate). |
 
 **Fixed in this PR:**
 

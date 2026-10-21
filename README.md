@@ -176,7 +176,7 @@ claude plugin marketplace add bloknayrb/tandem
 claude plugin install tandem@tandem-editor
 ```
 
-This activates the MCP tools, the bundled skill, and, on Claude Code 2.1.212 or newer, a monitor that delivers real-time events with no extra flag. The monitor starts once Claude uses Tandem's skill in a session, and only where Claude Code offers a Monitor tool, which it enables per account; where it doesn't, the channel shim is the fallback. The plugin also adds a `tandem-channel` entry for that shim, which stays inert unless you start the session with the channel flag. [Real-time updates](#real-time-updates) covers how the routes compare.
+This activates the MCP tools, the bundled skill, and, on Claude Code 2.1.212 or newer, a monitor that delivers real-time events with no extra flag. The monitor starts once Claude uses Tandem's skill in a session, and only where Claude Code offers a Monitor tool, which it enables per account; where it doesn't, the channel shim is the fallback. The plugin also adds a `tandem-channel` entry for that shim, which stays inert unless you start the session with the channel flag. Inert or not, it still subscribes to Tandem's event stream, so Tandem's diagnostics count it as a listener. [Real-time updates](#real-time-updates) covers how the routes compare.
 
 ## Real-time updates
 

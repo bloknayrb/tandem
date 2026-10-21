@@ -38,7 +38,7 @@ You choose how closely your AI participates:
 Tandem is built for keyboard-first work:
 
 - **Command palette** (Ctrl+Shift+P) — jump to any action or open document.
-- **New tab / scratchpad** (Ctrl+N in the desktop app; in a browser, click **+** in the tab bar, because the browser keeps Ctrl+N for itself) — open a fresh scratchpad; Tandem keeps every open file in its own tab.
+- **New tab / scratchpad** (Ctrl+N in the desktop app; in a browser, click **+** in the tab bar, then **New scratchpad**, because the browser keeps Ctrl+N for itself) — open a fresh scratchpad; Tandem keeps every open file in its own tab.
 - **Find & replace** (Ctrl+F) — search the current document or across every open tab, with regex, case, and whole-word options.
 - **Outline panel** — navigate by heading. To focus, collapse a whole section with the arrow beside its heading in the document.
 - **Keyboard shortcuts** — press ? to see them all, or open Settings (Ctrl+,) and use the Shortcuts tab to remap most of them (text formatting, undo/redo and tab jumps are fixed).
