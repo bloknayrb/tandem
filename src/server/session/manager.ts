@@ -161,6 +161,13 @@ export async function saveSession(
     }
   }
 
+  if (!sessionDirReady) {
+    await fs.mkdir(SESSION_DIR, { recursive: true });
+    sessionDirReady = true;
+  }
+
+  // No await between the snapshot and `atomicWrite`: its per-path queue orders
+  // renames by call, so call order must be snapshot order.
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
 
@@ -180,10 +187,6 @@ export async function saveSession(
     ...(readOnly ? { readOnly: true } : {}),
   };
 
-  if (!sessionDirReady) {
-    await fs.mkdir(SESSION_DIR, { recursive: true });
-    sessionDirReady = true;
-  }
   await atomicWrite(sessionPathFor(filePath), JSON.stringify(data));
 
   // One-shot #1750 migration, ORDERED AFTER the successful write: a failed

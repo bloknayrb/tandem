@@ -33,6 +33,7 @@ import {
   structuralLossLines,
 } from "./docx-lost-features.js";
 import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
+import { isFlushUnsupported } from "./flush-unsupported.js";
 import {
   normalizeAndRecordLineEnding,
   restoreBom,
@@ -459,6 +460,9 @@ async function existingMode(filePath: string): Promise<number | undefined> {
   }
 }
 
+/** Directories whose filesystem refused fsync once; later saves skip the flush. */
+const flushRefusedDirs = new Set<string>();
+
 /**
  * Shared body of `atomicWrite` / `atomicWriteBuffer`: write a temp sibling,
  * then rename it over the target.
@@ -473,6 +477,34 @@ async function existingMode(filePath: string): Promise<number | undefined> {
  * Tandem's group rather than the original's. `wx` refuses a pre-existing
  * entry at the temp name rather than writing through it.
  *
+ * The temp is fsynced before the rename publishes it (`flush: true`), so a
+ * power loss or OS crash cannot leave the document renamed into place but
+ * empty or zero-filled — the failure an unflushed tmp+rename has on XFS and
+ * possibly NTFS. macOS `fsync` does not flush the drive's own cache (Node has
+ * no `F_FULLFSYNC`), so APFS gets only part of this. The directory is NOT
+ * fsynced: a lost rename leaves the complete previous file (or, for a file
+ * being created, no file), never a torn one.
+ */
+async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
+  const mode = await existingMode(filePath);
+  const dir = path.dirname(filePath);
+  let tempPath = tempSiblingPath(filePath);
+  try {
+    await writeTemp(tempPath, content, mode, !flushRefusedDirs.has(dir));
+  } catch (err) {
+    // A filesystem that refuses fsync keeps the pre-flush behaviour rather
+    // than failing every save. A fresh temp name: the first is already gone.
+    if (flushRefusedDirs.has(dir) || !isFlushUnsupported(err)) throw err;
+    flushRefusedDirs.add(dir);
+    tempPath = tempSiblingPath(filePath);
+    await writeTemp(tempPath, content, mode, false);
+  }
+  await renameWithRetry(tempPath, filePath);
+}
+
+/**
+ * Create `tempPath` exclusively and write `content` to it.
+ *
  * On a failed write, unlink the partial temp before rethrowing — mirroring
  * `renameWithRetry`'s own failure arm. A partial sibling in the USER's document
  * directory is never reaped (the boot reaper sweeps the annotations + sessions
@@ -481,9 +513,13 @@ async function existingMode(filePath: string): Promise<number | undefined> {
  * the temp may legitimately not exist (an ENOSPC that failed before `open`).
  * An EEXIST is not ours to unlink. (#1850)
  */
-async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
-  const tempPath = tempSiblingPath(filePath);
-  const opts = { flag: "wx", mode: await existingMode(filePath) } as const;
+async function writeTemp(
+  tempPath: string,
+  content: string | Buffer,
+  mode: number | undefined,
+  flush: boolean,
+): Promise<void> {
+  const opts = { flag: "wx", mode, flush } as const;
   try {
     if (typeof content === "string")
       await fs.writeFile(tempPath, content, { ...opts, encoding: "utf-8" });
@@ -492,7 +528,43 @@ async function writeTempThenRename(filePath: string, content: string | Buffer): 
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") await fs.unlink(tempPath).catch(() => {});
     throw err;
   }
-  await renameWithRetry(tempPath, filePath);
+}
+
+/**
+ * Tail of the in-flight write chain per resolved target path. Two writes to
+ * one path each have their own temp, so without this the rename that lands
+ * LAST wins — and the fsync above makes "last" a race between threadpool
+ * jobs, letting an older snapshot (an annotation envelope, a session) be
+ * renamed over a newer one. Chaining makes renames land in call order, and
+ * callers pass content already snapshotted, so call order is snapshot order.
+ */
+const writeChains = new Map<string, Promise<void>>();
+
+function serializedWrite(filePath: string, content: string | Buffer): Promise<void> {
+  return runSerialized(writeChains, path.resolve(filePath), () =>
+    writeTempThenRename(filePath, content),
+  );
+}
+
+/**
+ * Run `task` after every task previously queued under `key` in `chains` has
+ * settled, so tasks on one key run strictly in call order. A failed task does
+ * not stall the queue; its rejection reaches only its own caller. The entry is
+ * dropped once the queue drains, so `chains` does not grow with every key seen.
+ * `await chains.get(key)` waits for the queue to drain and never rejects.
+ */
+export function runSerialized(
+  chains: Map<string, Promise<void>>,
+  key: string,
+  task: () => Promise<void>,
+): Promise<void> {
+  const next = (chains.get(key) ?? Promise.resolve()).then(task);
+  const tail = next.catch(() => {});
+  chains.set(key, tail);
+  void tail.then(() => {
+    if (chains.get(key) === tail) chains.delete(key);
+  });
+  return next;
 }
 
 /**
@@ -502,7 +574,7 @@ async function writeTempThenRename(filePath: string, content: string | Buffer): 
  * cleans up the temp sibling on a failed write (#1850).
  */
 export function atomicWrite(filePath: string, content: string): Promise<void> {
-  return writeTempThenRename(filePath, content);
+  return serializedWrite(filePath, content);
 }
 
 /**
@@ -511,5 +583,5 @@ export function atomicWrite(filePath: string, content: string): Promise<void> {
  * Shares the same retry and temp-cleanup behaviour as `atomicWrite`.
  */
 export function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  return writeTempThenRename(filePath, content);
+  return serializedWrite(filePath, content);
 }

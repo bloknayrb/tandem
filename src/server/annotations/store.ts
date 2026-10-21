@@ -22,7 +22,7 @@
 import * as crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { atomicWrite } from "../file-io/index.js";
+import { atomicWrite, runSerialized } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
@@ -558,6 +558,18 @@ async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void
   if (state) state.count = 0;
 }
 
+/**
+ * In-flight disk writes per docHash, queued at snapshot time. `atomicWrite`
+ * already orders renames per path; this queue also covers `ensureDirReady`
+ * (awaited before `atomicWrite`) and gives `flushOne` something to wait on
+ * when the only write is a timer-fired one still in flight.
+ */
+const diskWrites = new Map<string, Promise<void>>();
+
+function queueDiskWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {
+  return runSerialized(diskWrites, docHash, () => performWrite(docHash, doc));
+}
+
 function scheduleWrite(docHash: string, filePath: string, snapshotFn: () => AnnotationDocV1): void {
   if (isFeatureDisabled()) return;
   if (readOnly) {
@@ -585,7 +597,7 @@ function scheduleWrite(docHash: string, filePath: string, snapshotFn: () => Anno
       recordFailure(docHash, filePath, err);
       return;
     }
-    performWrite(docHash, doc).catch((err) => {
+    queueDiskWrite(docHash, doc).catch((err) => {
       recordFailure(docHash, filePath, err);
     });
   }, DEBOUNCE_MS);
@@ -599,7 +611,9 @@ function scheduleWrite(docHash: string, filePath: string, snapshotFn: () => Anno
 
 async function flushOne(docHash: string): Promise<void> {
   const entry = pending.get(docHash);
-  if (!entry) return;
+  // Nothing debounced, but a timer-fired write may still be in flight: a
+  // flush means "on disk", so wait for it (its failure is already recorded).
+  if (!entry) return diskWrites.get(docHash);
   clearTimeout(entry.timer);
   pending.delete(docHash);
   // Invoke the thunk at flush time (mirrors the debounce-fire path). Same
@@ -616,7 +630,7 @@ async function flushOne(docHash: string): Promise<void> {
     throw err;
   }
   try {
-    await performWrite(docHash, doc);
+    await queueDiskWrite(docHash, doc);
   } catch (err) {
     recordFailure(docHash, doc.meta.filePath, err);
     throw err;
@@ -855,6 +869,7 @@ export async function closeStore(docHash: string): Promise<void> {
 export function resetForTesting(): void {
   for (const entry of pending.values()) clearTimeout(entry.timer);
   pending.clear();
+  diskWrites.clear();
   failureState.clear();
   annotationsDirReady = false;
   readOnly = false;
