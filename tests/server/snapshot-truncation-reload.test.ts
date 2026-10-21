@@ -63,6 +63,7 @@ import { withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
 /**
  * A paragraph comfortably longer than the cap, with no repeated 200-character
@@ -88,9 +89,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 async function setupOpenedFile(initialText: string): Promise<{

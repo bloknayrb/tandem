@@ -73,6 +73,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, RELOAD_ORIGIN, shouldSkipDurableSync } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { asChangedKey, listenForTransactions } from "../helpers/yjs-transactions.js";
 
 let tmpDir: string;
@@ -89,9 +90,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 async function setupOpenedFile(initialText: string): Promise<{
