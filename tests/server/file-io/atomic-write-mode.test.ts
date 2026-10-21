@@ -97,7 +97,7 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("follows a symlinked target to the real file's mode (stat, not lstat)", async () => {
-      // lstat would report the link's own 0777 and mint a 0755 document.
+      // lstat would see the link rather than the file, and fall back to 0644.
       const real = path.join(dir, "real.md");
       await fs.writeFile(real, "x");
       await fs.chmod(real, 0o600);
@@ -121,15 +121,33 @@ describe.skipIf(process.platform === "win32")(
       expect(modeOf(target)).toBe(0o644);
     });
 
-    it("creates the temp exclusively, and leaves no temp sibling behind", async () => {
+    it("creates the temp exclusively at the final mode, with no chmod by path", async () => {
+      // The mode must be applied at create. A path-based chmod of the temp
+      // afterwards follows a symlink swapped in after the create (#2266 plan
+      // review), so it must never come back — even one that yields the same mode.
       const target = path.join(dir, "doc.md");
       await fs.writeFile(target, "x");
-      const spy = vi.spyOn(fs, "writeFile");
+      await fs.chmod(target, 0o600);
+      const write = vi.spyOn(fs, "writeFile");
+      const chmod = vi.spyOn(fs, "chmod");
+      const lchmod = vi.spyOn(fs, "lchmod");
 
       await atomicWrite(target, "y");
 
-      expect(spy.mock.calls[0]?.[2]).toMatchObject({ flag: "wx" });
+      expect(write.mock.calls[0]?.[2]).toMatchObject({ flag: "wx", mode: 0o600 });
+      expect(chmod).not.toHaveBeenCalled();
+      expect(lchmod).not.toHaveBeenCalled();
       expect((await fs.readdir(dir)).filter((n) => ATOMIC_TEMP_RE.test(n))).toEqual([]);
+    });
+
+    it("drops execute bits — a 0755 document comes back 0644, as before the fix", async () => {
+      const target = path.join(dir, "exec.md");
+      await fs.writeFile(target, "x");
+      await fs.chmod(target, 0o755);
+
+      await atomicWrite(target, "y");
+
+      expect(modeOf(target)).toBe(0o644);
     });
 
     it("an EEXIST on the temp is rethrown without unlinking an entry that is not ours", async () => {

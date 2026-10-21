@@ -441,17 +441,19 @@ export function tempSiblingPath(filePath: string): string {
  * new file, on Windows (mode bits do not carry its access control), for
  * anything but a regular file, or for any stat failure. The catch also covers
  * a partial stat double such as `{ mtimeMs }` (its `isFile` call throws),
- * which would otherwise yield `undefined & 0o777 === 0`: a mode-0000 file.
+ * which would otherwise yield `undefined & 0o666 === 0`: a mode-0000 file.
  *
  * `stat`, never `lstat`: the rename replaces a symlink with a regular file
- * either way, and `lstat` reports a symlink's own 0777. Never throws, so the
+ * either way, so the mode that matters is the file it points at. Execute bits
+ * are dropped (`& 0o666`): a document is never executable, and keeping them
+ * would make a save wider than the old default. Never throws, so the
  * cleanup contract in `writeTempThenRename` is unchanged.
  */
 async function existingMode(filePath: string): Promise<number | undefined> {
   if (process.platform === "win32") return undefined;
   try {
     const st = await fs.stat(filePath);
-    return st.isFile() ? st.mode & 0o777 : undefined;
+    return st.isFile() ? st.mode & 0o666 : undefined;
   } catch {
     return undefined;
   }
@@ -463,7 +465,7 @@ async function existingMode(filePath: string): Promise<number | undefined> {
  *
  * The temp is created at the replaced file's mode (#2266), so saving a
  * `chmod 600` document no longer widens it to the umask default. The umask
- * still applies at create, so the result is `original & ~umask` — never wider
+ * still applies at create, so the result is `original & 0o666 & ~umask` — never wider
  * than the original, and never wider than before this fix. Bits the umask
  * strips are deliberately NOT restored: no chmod runs at all, because a
  * path-based chmod follows a symlink swapped in after the create, and
