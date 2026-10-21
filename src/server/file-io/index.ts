@@ -436,8 +436,40 @@ export function tempSiblingPath(filePath: string): string {
 }
 
 /**
+ * Permission bits of the file a save is about to replace, or `undefined` to
+ * create the replacement at the process default (today's behaviour) — for a
+ * new file, on Windows (mode bits do not carry its access control), for
+ * anything but a regular file, or for any stat failure. The catch also covers
+ * a partial stat double such as `{ mtimeMs }` (its `isFile` call throws),
+ * which would otherwise yield `undefined & 0o777 === 0`: a mode-0000 file.
+ *
+ * `stat`, never `lstat`: the rename replaces a symlink with a regular file
+ * either way, and `lstat` reports a symlink's own 0777. Never throws, so the
+ * cleanup contract in `writeTempThenRename` is unchanged.
+ */
+async function existingMode(filePath: string): Promise<number | undefined> {
+  if (process.platform === "win32") return undefined;
+  try {
+    const st = await fs.stat(filePath);
+    return st.isFile() ? st.mode & 0o777 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Shared body of `atomicWrite` / `atomicWriteBuffer`: write a temp sibling,
  * then rename it over the target.
+ *
+ * The temp is created at the replaced file's mode (#2266), so saving a
+ * `chmod 600` document no longer widens it to the umask default. The umask
+ * still applies at create, so the result is `original & ~umask` — never wider
+ * than the original, and never wider than before this fix. Bits the umask
+ * strips are deliberately NOT restored: no chmod runs at all, because a
+ * path-based chmod follows a symlink swapped in after the create, and
+ * re-granting group bits can widen access when the rename hands the file
+ * Tandem's group rather than the original's. `wx` refuses a pre-existing
+ * entry at the temp name rather than writing through it.
  *
  * On a failed write, unlink the partial temp before rethrowing — mirroring
  * `renameWithRetry`'s own failure arm. A partial sibling in the USER's document
@@ -445,15 +477,17 @@ export function tempSiblingPath(filePath: string): string {
  * dirs only), and on the buffer path it is the largest file Tandem writes.
  * The unlink is swallowed: the write error is the one the caller must see, and
  * the temp may legitimately not exist (an ENOSPC that failed before `open`).
- * (#1850)
+ * An EEXIST is not ours to unlink. (#1850)
  */
 async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
   const tempPath = tempSiblingPath(filePath);
+  const opts = { flag: "wx", mode: await existingMode(filePath) } as const;
   try {
-    if (typeof content === "string") await fs.writeFile(tempPath, content, "utf-8");
-    else await fs.writeFile(tempPath, content);
+    if (typeof content === "string")
+      await fs.writeFile(tempPath, content, { ...opts, encoding: "utf-8" });
+    else await fs.writeFile(tempPath, content, opts);
   } catch (err) {
-    await fs.unlink(tempPath).catch(() => {});
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") await fs.unlink(tempPath).catch(() => {});
     throw err;
   }
   await renameWithRetry(tempPath, filePath);
