@@ -1,4 +1,12 @@
+---
+tags: [audience/contributor, topic/design-system, historical]
+aliases: [Performance baseline procedure]
+status: historical
+---
+
 # Performance Baseline Procedure
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: historical.** The manual Phase 0j procedure; its Phase 5 results section was never added. The automated perf gate superseded it: `npm run perf:gate` (`tests/perf/`), with results in [`docs/perf-gate-results.md`](../perf-gate-results.md).
 
@@ -65,3 +73,9 @@ Numbers stay in the repo as historical record. Future umbrella efforts can compa
 - **Bundle size** is covered by existing CI (build output is reported in `npm run build`). The umbrella's typography/font changes WILL increase bundle size; Phase 0c's token-audit doc tracks token additions. If bundle size grows by more than 10% over the umbrella, address in a per-phase gate, not at Phase 5.
 - **Memory** is not gated. Document any obvious memory regressions Phase 5 surfaces in the same results table but don't block merge on it.
 - **Network** is not gated — Tandem is local-first; no remote dependencies that would surface in network metrics.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the live design references.
+- [Performance gate results](../perf-gate-results.md): the automated gate that replaced this procedure.
+- [Releases and operations map](../maps/releases-and-ops.md): the other v1.0 gates.

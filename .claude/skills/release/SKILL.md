@@ -264,7 +264,7 @@ other six.
    `tandem doctor` also asserts it (`Global tandem-editor@<v> matches this
    build`).
 
-8. Walk `docs/release-smoke-checklist.md`: CI signal first (matrix + macOS
+8. Walk [`docs/release-smoke-checklist.md`](../../../docs/release-smoke-checklist.md): CI signal first (matrix + macOS
    launch smoke — **not** `tauri-webdriver.yml`, whose tag trigger was removed
    on 2026-08-08 per #1197, so a release tag no longer produces a run to check;
    review scheduled 2026-11-01 in #1345), then real installers on real

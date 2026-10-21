@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Derived-surface spec, Derived spec]
+---
+
 # Derived-Surface Design Spec
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: mixed (re-checked 2026-10-20).** The Phase 3 cluster recipes
 > (3.1–3.10) are a historical record of what the design-system-impl umbrella
@@ -433,7 +440,7 @@ README L122–123 "edge color" line is stale text from an earlier design
 and must not be the source.
 
 The taxonomy below is **audience-first** per ADR-027 + Conflict #9 — who
-the annotation is for picks the variant first, with author and
+the [annotation](../glossary.md#annotation) is for picks the variant first, with author and
 `suggestedText` as the refinement signals. The bundle's `cardType` values
 (`note`, `comment-user`, `suggest`, `highlight` in `samples.ts:32–51`)
 map to production's five-component split.
@@ -580,3 +587,12 @@ chrome: see `docs/design-system-impl/preview/annotation-edge-colors.html`
 - It does not enumerate per-state pixel measurements where the bundle's
   CSS already encodes them — the sub-PR reads the cited `app.css` line
   ranges directly.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Conflicts resolved](conflicts-resolved.md): the decisions this spec builds on.
+- [Token audit](token-audit.md): the production token values the recipes use.
+- [Semantic tokens](../semantic-tokens.md): the token family reference.
+- [Motion](motion.md): entrance and state-change timing for these surfaces.
+- [ADR-027](../decisions.md#adr-027-annotation-system-redesign--audience-based-model): the audience-first taxonomy behind the card variants.

@@ -1,16 +1,20 @@
 # User Guide
 
+[Home](README.md) › [Using Tandem](maps/using-tandem.md)
+
 A complete guide to using Tandem — from first launch to advanced workflows.
 
 > **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same MCP tools. The Claude-specific transports (channel push, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [Integrations → The MCP integration policy](integrations.md#the-mcp-integration-policy) for the generic MCP path.
 
+**Contents:** [Overview](#overview) · [First launch](#first-launch) · [The editor](#the-editor) · [Working with documents](#working-with-documents) · [Annotations](#annotations) · [Reviewing annotations](#reviewing-annotations) · [Chat](#chat) · [Settings](#settings) · [Keyboard shortcuts](#keyboard-shortcuts) · [Working with Claude Code](#working-with-claude-code) · [Troubleshooting](#troubleshooting)
+
 ## Overview
 
-Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. Edits to a Markdown or plain-text file — yours or the AI's — are written back to that file when you save, and automatically about once a minute while it has unsaved changes (see [Saving](#saving)). Opening a file just to read or annotate it never rewrites it.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through [MCP](glossary.md#mcp), it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each [annotation](glossary.md#annotation) is a first-class object you can accept, dismiss, edit, or discuss. Edits to a Markdown or plain-text file — yours or the AI's — are written back to that file when you save, and automatically about once a minute while it has unsaved changes (see [Saving](#saving)). Opening a file just to read or annotate it never rewrites it.
 
-Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
+Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through [Yjs CRDT](glossary.md#ydoc-and-crdt) collaboration.
 
 Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`), which opens the same editor in your browser. The desktop app manages the server automatically; the npm install requires starting it from the terminal. Editing, annotations, chat and the integration wizard work the same in both. The desktop app adds what only a native shell can do: a system tray, native right-click menus and file dialogs, start-at-login, in-app log access, and automatic updates. Instructions below that apply to only one of the two say so.
 
@@ -129,7 +133,7 @@ The floating pill at the bottom-left shows the following — it stays faint unti
 - **Connection state** — Green when connected, with reconnect attempt count and elapsed time during disconnects. A prominent banner appears once the connection has been down for 30 seconds (adjustable; see [Connection lost](#server-unavailable-or-weve-lost-the-connection-to-the-tandem-server)).
 - **Word count** — Click to cycle through words, characters, sentences, and paragraphs.
 - **Save state** — "Saving…" while a write is in flight, then "Saved HH:MM".
-- **Review Only badge** — Appears when the active document is read-only (an uploaded file, or the changelog opened via View Changelog).
+- **Review Only badge** — Appears when the active document is read-only (an uploaded file, any HTML file, or the changelog opened via View Changelog).
 - **Held count** — In Solo mode, how many of your comments and replies are being withheld.
 - **AI connection** — Who is attached. **Tandem's Claude** means the Claude session Tandem started for you is running; Tandem wakes it when you send a message, and it shows "Tandem's Claude is working…" while it is mid-turn. **AI attached** means something else is connected — a Claude Code session you started, Claude Desktop, or another MCP client — which sees your messages only when it checks in, unless it set up notifications. **AI not connected** means nothing is. Beside **Tandem's Claude**, a **green dot** means Tandem has matched a live connection to its own Claude, and a **hollow ring** means it can't confirm which connection that is (with the plain config entry `tandem setup` writes, the ring is the normal look). Beside **AI attached**, a green dot means a live session is connected, and a hollow ring usually means a session that closed without disconnecting. **· 2 sessions** after the label counts the connections Tandem can see. It's an estimate: a session that just closed still counts for about a minute, one Claude connected two ways counts twice, and clients on the newest MCP protocol revision aren't counted. [Troubleshooting](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) has the details. If Tandem's own Claude has stopped while something else is attached, a separate **Tandem's Claude** button says why (not running, needs sign-in, or can't start) and offers the fix (it leaves any Claude you started yourself alone).
 - **Tandem's Claude standby** — When Tandem's Claude isn't running by your choice, the pill says so instead of reporting a fault: **Tandem's Claude is off** (you turned it off, or chose **Off** in Settings), **Tandem's Claude hasn't started** (it is set to wait until you click Start), or **Tandem's Claude stopped (idle)** (it stopped after the idle time you chose; its conversation resumes when it starts again). In these states — unless you are in Solo or another AI is connected — the pill is a **Start Tandem's Claude** button: click it and the pill shows **Starting Claude…** until it is running. Sending a chat message also starts it — see [Tandem's Claude in chat](#tandems-claude-in-chat).
@@ -201,7 +205,7 @@ You can open a file a few ways:
 
 **Recent files** — Click **+** in the tab bar to see recently opened files; type to filter, then click one to open it.
 
-**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
+**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: [uploaded files](glossary.md#upload) get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
 
 **New scratchpad** — Click **+**, then **New scratchpad** (or press `Ctrl+N` in the desktop app; a browser keeps that key for itself). See [Scratchpads](#scratchpads).
 
@@ -211,7 +215,7 @@ Tandem keeps a saved session for each file you have had open: its editing state 
 
 ### Scratchpads
 
-A scratchpad is a Markdown document that isn't tied to a file — somewhere to draft, paste or think before you decide where the text belongs. To keep one, use **Save As** (`Ctrl+Shift+S`): it becomes an ordinary file, in the same tab.
+A [scratchpad](glossary.md#scratchpad) is a Markdown document that isn't tied to a file — somewhere to draft, paste or think before you decide where the text belongs. To keep one, use **Save As** (`Ctrl+Shift+S`): it becomes an ordinary file, in the same tab.
 
 Until then, a scratchpad lives only in this window, so Tandem guards it in two ways:
 
@@ -225,7 +229,7 @@ Until then, a scratchpad lives only in this window, so Tandem guards it in two w
   see [Line breaks in plain text](#line-breaks-in-plain-text) below.
 - **HTML** (`.html`, `.htm`) — Read-only. It opens for reading and annotating, and the file is never written back: HTML is the one supported format with no save path at all, so it opens read-only rather than accepting edits it would silently drop on tab close.
 
-**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been taken out of the app for now, and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
+**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been [taken out of the app for now](glossary.md#docx-support), and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
 
 ### Line breaks in plain text
 
@@ -605,19 +609,19 @@ Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets
 
 Start the Tandem server first (`tandem` for global install, or `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available via the MCP configuration written by the integration wizard (or `tandem setup --apply` for a scripted setup), or `.mcp.json` (development).
 
-**Desktop app:** The server is already running. On first run the integration wizard configures Claude Code; once connected, your `tandem_*` tools are available immediately. You can re-open the wizard any time from the tray "Setup AI Assistant" item or Settings. Skip to [Real-Time Push](#real-time-push-recommended) if you want channel notifications.
+**Desktop app:** The server is already running. On first run the integration wizard configures Claude Code; once connected, your `tandem_*` tools are available immediately. You can re-open the wizard any time from the tray "Setup AI Assistant" item or Settings. Skip to [Real-Time Push](#real-time-push-recommended) if you want Claude to react to your comments and chat messages on its own, without waiting to be asked.
 
 Claude can check the connection with `tandem_status`, which reports open documents, connection state, and your current mode (Solo or Tandem).
 
 ### Real-Time Push (Recommended)
 
-Your chat messages, the comments and replies you write, and your accepts, dismisses and edits of annotations can push to Claude in real time rather than waiting for it to poll (in Solo, only chat messages are pushed — see [Solo / Tandem Mode](#solo--tandem-mode)). A text selection isn't pushed on its own; it travels with your next chat message. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; on the first Tandem response that returns a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — the skill automatically arms one built-in Monitor watch using it. Claude Code ends each watch after at most 30 minutes, and the skill re-arms it when that happens, which costs one short turn every 30 minutes while the session is idle.
+Your chat messages, the comments and replies you write, and your accepts, dismisses and edits of annotations can push to Claude in real time rather than waiting for it to poll (in Solo, only chat messages are pushed — see [Solo / Tandem Mode](#solo--tandem-mode)). A text selection isn't pushed on its own; it travels with your next chat message. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; on the first Tandem response that returns a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — the skill automatically arms one [built-in Monitor watch](glossary.md#wake-watch) using it. Claude Code ends each watch after at most 30 minutes, and the skill re-arms it when that happens, which costs one short turn every 30 minutes while the session is idle.
 
 The **built-in Monitor watch** needs no installation or flag and lasts only for that session. It requires a Claude Code account where Monitor is enabled and, on Windows, Git Bash. Asking Claude to watch is recovery if the automatic attempt was skipped or the watch ended (for example after Tandem restarted), not a required setup step.
 
-The **Tandem plugin** also needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
+The **Tandem plugin** also needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its [plugin monitor](glossary.md#plugin-monitor) uses that session's program path to find Node.
 
-The **channel flag** is the third route and must be present on every session:
+The **channel flag** is the third route. It drives the [channel shim](glossary.md#channel-shim), which is not registered by default: register it once with `tandem setup --apply --with-channel-shim` (the desktop app does not install the `tandem` command, so a desktop-only user needs the npm install for this; see [Troubleshooting](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened)). The flag itself must be present on every session:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
@@ -627,7 +631,7 @@ Choose one setup route where possible. A session with the plugin and built-in Mo
 
 ### Polling Remains Authoritative
 
-Push wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
+[Push](glossary.md#push-and-pull) wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
 
 ```
 /loop 30s check tandem inbox and respond to any new messages
@@ -700,6 +704,8 @@ Verify the file path exists and is readable. The server logs (terminal where you
 
 ### Claude isn't responding
 
+If you sent a chat message or left a comment and Claude did nothing, start with [I sent a chat message (or left a comment) and nothing happened](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened): it explains what the status bar's AI label means and walks through the real-time routes.
+
 Make sure Claude Code is running and connected. Check `tandem_status` from Claude Code — if it returns an error, Claude can't reach the server. Run `/mcp` in Claude Code to reconnect.
 
 If using channels, the server must be running before Claude Code starts. If you restarted the server, restart Claude Code or run `/mcp`. Channel timeout messages such as `/api/events timed out after 10000ms`, `SSE inactivity timeout`, or `/api/channel-reply timed out after 5000ms` mean the server accepted a connection but stopped responding; restart Tandem and reconnect Claude.
@@ -709,3 +715,14 @@ For server-side and MCP troubleshooting, see [troubleshooting.md](troubleshootin
 ### Desktop app: server won't start
 
 The desktop app runs the server as a background sidecar process. Check the system tray — if Tandem's icon is there, the server is running. If the icon is missing or the app shows an error dialog, the sidecar failed to start (port conflict, missing resources, or crash). The error dialog offers **Retry Server Start**; Settings → Network → **Restart server** does the same thing later. For persistent issues, open **Settings → About → Open Log Folder** and read `tandem.log` — see [troubleshooting → Reading server logs](troubleshooting.md#reading-server-logs).
+
+## Related
+
+- [Using Tandem map](maps/using-tandem.md): everything else about writing and reviewing in Tandem.
+- [Workflows](workflows.md): worked examples of a review, a multi-document check and a draft, with the MCP calls Claude makes.
+- [Troubleshooting](troubleshooting.md): the full list of problems and fixes, beyond the short one above.
+- [Configuration](configuration.md): environment variables, the app-data folders and start at login.
+- [Integrations](integrations.md): connecting an AI client other than Claude Code.
+- [MCP tool reference](mcp-tools.md): every tool Claude can call on your documents.
+- [Glossary](glossary.md): Solo mode, notes, suggestions and the other terms this guide uses.
+- [ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model): why notes stay private from the AI.

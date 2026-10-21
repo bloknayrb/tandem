@@ -42,6 +42,11 @@ const CARRIERS = [
   "docs/troubleshooting.md",
   "docs/user-guide.md",
   "docs/cli.md",
+  // The docs vault's navigation surfaces summarise the push paths, so a bare
+  // "every session" line about the plugin could land in one too.
+  "docs/README.md",
+  "docs/glossary.md",
+  "docs/maps/connecting-ai.md",
   "src/cli/setup.ts",
   "src/cli/doctor.ts",
   "src/cli/index.ts",

@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, audience/contributor, topic/accessibility, topic/v1-gates]
+aliases: [Accessibility gate results, A11y gate, Accessibility gate]
+---
+
 # Accessibility gate — results
+
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
 
 v1.0 exit criterion, `docs/roadmap.md` § "v1.0.0 Exit Criteria → Accessibility".
 Run date: 2026-08-05. Branch: `feat/v10-accessibility-gate`.
@@ -171,14 +178,14 @@ Four real defects, all found by the suite failing first:
 
 Two suites, because axe alone cannot answer the criterion as written. axe
 evaluates only elements *painted at scan time*: an error banner, a success
-toast, a suggestion annotation are not on screen during a normal run, so an
+toast, a [suggestion](glossary.md#suggestion) annotation are not on screen during a normal run, so an
 axe-only pass says nothing about them. It would report green on a palette where
 every error colour was unreadable, purely because nothing had errored.
 
 `token-contrast.spec.ts` resolves the declared token pairs per theme and runs
 the contrast formula over them directly. `editor-contrast.spec.ts` covers the
 three classes axe structurally cannot reach inside the excluded editor:
-authorship colours, highlight fills (alpha-composited over the editor
+authorship colours, [highlight](glossary.md#highlight) fills (alpha-composited over the editor
 background, since what the eye receives is the composite, not the token), and
 annotation underlines.
 
@@ -376,3 +383,11 @@ caught by noticing a causally impossible reading, not by review.
    4.09 failures. `editor.css` paints `color-mix(author 58–64%, fg)`, not the raw
    token. Measuring the token would have sent someone to retune brand colours
    that render fine.
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md) — the other v1.0 gates and the release process.
+- [Roadmap: v1.0 exit criteria](roadmap.md#v100-exit-criteria) — where the accessibility criteria are defined.
+- [Semantic tokens](semantic-tokens.md) — the colour tokens whose contrast A6 measures.
+- [Performance gate results](perf-gate-results.md) — the sibling gate's recorded runs.
+- [Glossary: annotation](glossary.md#annotation) — the cards and underlines several criteria scan.

@@ -1,7 +1,9 @@
 # Where Tandem Keeps Its Data (and How to Remove All of It)
 
-Tandem stores state in three kinds of places: its own app-data directory,
-the OS keychain, and — because it registers itself as an MCP server — a few
+[Home](README.md) › [Troubleshooting and your data](maps/troubleshooting-and-data.md)
+
+Tandem stores state in three kinds of places: its own [app-data directory](glossary.md#app-data-directory),
+the OS keychain, and — because it registers itself as an [MCP server](glossary.md#mcp-server) — a few
 entries inside *other programs'* config files. This page enumerates all of
 them, what the uninstall scrub removes, and how to clean up manually.
 
@@ -43,7 +45,7 @@ the npm path directly — see the note under its row).
 
 Two consequences worth knowing. The annotation-store lock is **per-flavor** now, so
 running both flavors against the same document on different ports lets each write its
-own durable envelope and neither sees the other's. And unsaved **scratchpad recovery
+own durable envelope and neither sees the other's. And unsaved **[scratchpad](glossary.md#scratchpad) recovery
 drafts** live in browser localStorage keyed by an install id derived from the app-data
 root, so they do not survive the move — a one-time loss, bounded to drafts that were
 never saved to disk.
@@ -114,7 +116,7 @@ macOS Keychain, Linux Secret Service):
   back to that same file at the npm location (and reads it first if the keychain
   holds no token), so it can create or adopt that file too.
 - `tandem-integrations` — Tandem's own integration auth tokens.
-- `tandem-models` — API keys for the bring-your-own-model integration, when that
+- `tandem-models` — API keys for the [bring-your-own-model integration](glossary.md#local-model-collaborator), when that
   feature is enabled. Present only if you have added a key.
 
 Whether these entries actually reach your OS keychain on the desktop app is
@@ -193,12 +195,12 @@ These are what go stale if you delete Tandem without cleaning up:
 
 ## If you enabled Cowork in an earlier version
 
-Tandem's Cowork setup is not in this version ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). If you turned it on in
+Tandem's [Cowork setup](glossary.md#cowork-setup) is not in this version ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). If you turned it on in
 v0.28.0 or earlier, updating leaves what it wrote in place and stops maintaining it:
 
 - A Tandem entry in three files in each Cowork workspace: `installed_plugins.json`,
   `known_marketplaces.json` and `cowork_settings.json`. The first of those carries
-  Tandem's auth token.
+  Tandem's [auth token](glossary.md#auth-token).
 - `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`, recording that it was enabled. The
   desktop app wrote it, at the npm location in the tables above. (A copy may also sit
   under `%APPDATA%\com.tandem.editor\` from the one-time import; nothing reads that one.)
@@ -257,6 +259,10 @@ favor), so your settings survive updates.
 tandem --uninstall-scrub        # or: npx tandem-editor --uninstall-scrub
 ```
 
+The desktop app does not install the `tandem` command, so a desktop-only user runs the `npx`
+form: it fetches the npm package and runs the same CLI without installing it, and needs
+Node.js 22.12.0 or newer.
+
 Then delete the app / `npm uninstall -g tandem-editor`.
 
 The scrub removes the cross-program entries listed above (MCP config keys,
@@ -290,3 +296,13 @@ If the binary is already gone, or you want zero traces:
 5. Remove the three keychain services (`tandem`, `tandem-integrations`,
    `tandem-models`) with your OS's credential manager. Any of them may simply
    not be there — see the note above.
+
+## Related
+
+- [Troubleshooting and your data map](maps/troubleshooting-and-data.md): fixing problems, removing Tandem's files, and privacy.
+- [Configuration → App-data directories](configuration.md#app-data-directories): moving the app-data root with `TANDEM_APP_DATA_DIR`.
+- [Troubleshooting → Reset session state](troubleshooting.md#reset-session-state): clearing sessions without removing everything.
+- [CLI → `tandem --uninstall-scrub`](cli.md#tandem---uninstall-scrub): the command behind a clean uninstall.
+- [Security → Privacy](security.md#privacy): what Tandem sends anywhere, and what it never does.
+- [ADR-055](decisions.md#adr-055-cowork-setup-ships-dark): why Cowork setup was taken out, and what that left behind.
+- [Glossary](glossary.md#app-data-directory): the app-data directory and auth token in plain language.

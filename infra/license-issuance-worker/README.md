@@ -242,3 +242,11 @@ also retire the `txnlic:` listing residual above.
   (`docs/licensing-operations.md` §8). U1 is a hard gate before a live deploy.
 - Recording which discount code a transaction used, if Paddle's transaction
   turns out to carry `discount_id` (U10).
+
+## Related
+
+- [Security and licensing map](../../docs/maps/security-and-licensing.md) — where this Worker sits among the licence and security docs.
+- [Licensing operations](../../docs/licensing-operations.md) — the owner's runbook for provisioning, deploying and monitoring it ([§3.5](../../docs/licensing-operations.md#35-the-issuance-endpoint-cloudflare--owner-deployed)), including the [pre-launch gate](../../docs/licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay).
+- [How Tandem licensing works](../../docs/licensing-explained.md#delivery-why-the-email-looks-the-way-it-does) — why the licence email looks the way it does.
+- [The update Worker](../license-update-worker/README.md) — the sibling Worker that reads the entitlements this one writes.
+- [Security: licensing activation](../../docs/security.md#licensing-activation-v10) — the Paddle API key this Worker holds, read as a risk.

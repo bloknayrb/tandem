@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, audience/user, topic/licensing]
+aliases: [How Tandem licensing works, Licensing explained, Licence system, AI admission points]
+---
+
 # How Tandem licensing works
+
+[Home](README.md) › [Security and licensing](maps/security-and-licensing.md)
 
 > One document, two readings. **Part 1** is for anyone — no code, no jargon.
 > **Part 2** is the engineering detail. **Part 3** is the failure modes, which
@@ -9,11 +16,11 @@
 > [licensing-terms.md](licensing-terms.md) (what a purchase grants),
 > [security.md](security.md), [data-locations.md](data-locations.md).
 >
-> **Status: the whole system ships dark.** Everything below is built and tested, and none
+> **Status: the whole system [ships dark](glossary.md#ships-dark).** Everything below is built and tested, and none
 > of it does anything to a user today.
 >
 > **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
-> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the run gate on, and
+> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the [run gate](glossary.md#licensing-gate) on, and
 > `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs` must be pointed at
 > the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits on
 > its first line and `build_updater()` takes its `Public` arm, `app.updater()` — so **every
@@ -54,7 +61,7 @@ directory** — so running a separately installed CLI to license a desktop app
 succeeds and changes nothing the desktop can see. Nothing reports that, which is
 why it is worth stating here. That holds even if you reach the desktop's own
 editor through a browser (it serves the same UI on `http://127.0.0.1:3479`): the
-server there still reads the desktop's app-data directory, so Settings → License
+server there still reads the desktop's [app-data directory](glossary.md#app-data-directory), so Settings → License
 is still the only route, and it stops offering the command accordingly.
 
 ## What you get, precisely
@@ -110,7 +117,7 @@ and therefore no list of beta users to work from.
 3. **Restricted** — the trial ended and there's no license. **Your documents are
    never held hostage:** Tandem stays a working editor. You can open, edit, save
    and export your documents. What a key adds is the AI features, such as Claude
-   (or any other agent) over the MCP server, the chat panel and local models. The
+   (or any other agent) over the [MCP server](glossary.md#mcp-server), the [chat](glossary.md#chat) panel and [local models](glossary.md#local-model-collaborator). The
    [LICENSE](../LICENSE) grants exactly that: v1.0 and later may be used without
    a key, for personal use and individual self-hosting, provided the use does
    not include the AI features.
@@ -290,7 +297,7 @@ in its message. On the wire, the `/api` 403 body is that object, `{ error, kind,
 with `purchaseUrl` present only for `unlicensed` (`licenseRefusalRpcError` in `src/server/mcp/server.ts`).
 
 Until #1521 enforcement worked the other way round, and that history explains several tests: **Surface
-A** marked Hocuspocus document rooms read-only, and **Surface B** (`gatedTool()` on 14 MCP write tools,
+A** marked [Hocuspocus](glossary.md#hocuspocus) document rooms read-only, and **Surface B** (`gatedTool()` on 14 MCP write tools,
 `licenseGateMiddleware` on 7 `/api` routes, plus two in-handler `licenseGate()` calls) refused content
 writes — while chat, push and Claude's read tools stayed open. All of that is deleted.
 
@@ -667,3 +674,13 @@ Worth stating plainly, because they look like bugs:
 - **The legal documents.** See [licensing-terms.md](licensing-terms.md) — a
   working draft exists. No counsel is being consulted, so the licensor writes
   the real ones.
+
+## Related
+
+- [Security and licensing map](maps/security-and-licensing.md) — the rest of the licence material, and the security model it sits inside.
+- [Licensing operations](licensing-operations.md) — the owner's runbook: keys, grandfathering, the Workers and the [v1.0 flag flip](licensing-operations.md#4-the-v10-flag-flip-enabling-enforcement).
+- [Licence terms](licensing-terms.md) — the working draft of what a purchase grants; not legal advice.
+- [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) — the decision this page implements, as amended.
+- [Security: licensing activation](security.md#licensing-activation-v10) — the same system read as a threat surface.
+- [The issuance Worker](../infra/license-issuance-worker/README.md) and [the update Worker](../infra/license-update-worker/README.md) — the two Cloudflare Workers in Part 2.
+- [Glossary: licensing gate](glossary.md#licensing-gate) and [ships dark](glossary.md#ships-dark) — the short definitions.

@@ -78,6 +78,11 @@ describe("MCP tool count stated in docs", () => {
  */
 const DE_NUMBERED = [
   "README.md",
+  // The docs vault's hub, glossary and AI-connection map: navigation surfaces that
+  // would otherwise be the easiest place for a stale count to reappear.
+  "docs/README.md",
+  "docs/glossary.md",
+  "docs/maps/connecting-ai.md",
   "docs/architecture.md",
   "docs/positioning.md",
   "docs/roadmap.md",
@@ -130,6 +135,9 @@ describe("de-numbered docs do not reacquire a tool count", () => {
 const NAMES_ONLY_REAL_TOOLS = [
   "AGENTS.md",
   "README.md",
+  "docs/README.md",
+  "docs/glossary.md",
+  "docs/maps/connecting-ai.md",
   "docs/mcp-tools.md",
   "docs/workflows.md",
   "skills/tandem/SKILL.md",
