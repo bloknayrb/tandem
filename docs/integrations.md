@@ -13,6 +13,8 @@ The integration policy is set by [ADR-038](decisions.md#adr-038-mcp-first-integr
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). The earlier transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — was **removed in #477 PR 3c-ii-c**. Every integration (Claude included) is now configured via the wizard, never silently; `tandem setup --apply` is the scriptable non-interactive equivalent.
 
+In plain terms: Claude is the AI Tandem is built and tested with, and other MCP clients can connect but nobody has verified them. Tandem never changes an AI client's settings behind your back. You connect a client from the in-app setup wizard, or with `tandem setup --apply` from a terminal.
+
 Client compatibility:
 
 | AI surface | Status |
@@ -20,7 +22,7 @@ Client compatibility:
 | **Claude Code** (local CLI) | Default. Validated. Channel push supported. |
 | **Claude Desktop** (local app) | Supported on all three platforms — the wizard and `tandem setup --apply` write `claude_desktop_config.json` wherever Claude Desktop puts it (`%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/claude/`, plus the Microsoft Store's MSIX location). Request/response only — none of the push transports apply. **Cowork** (Claude Desktop's local agent mode) is not a supported surface in this version: Tandem's Cowork setup ships dark ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
-| **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |
+| **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio as an MCP host, …) | Best-effort, MCP-contract-compatible, not validated. |
 | **Non-MCP AIs** | Not supported today. **Local models** (Ollama / LM Studio via OpenAI-compatible endpoints) are committed for v1.0 ([ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), tracked in #1123); cloud providers (ChatGPT direct, Gemini direct) follow in v1.1. |
 
 ## MCP tools at a glance
@@ -31,7 +33,7 @@ Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md
 - **Annotation.** Create, resolve, remove, and edit annotations and replies; query the annotation list; export a review report.
 - **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes ships dark with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
 - **Navigation.** Search the document, resolve a match to a range, and pull surrounding context.
-- **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for selection events, chat messages, and annotation actions; reply in the chat sidebar.
+- **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for chat messages, annotation actions and the user's current selection; reply in the chat sidebar.
 - **Diagnostics.** Report connection and boot health over MCP itself, so a client that can't reach loopback can still self-diagnose.
 
 ## Real-time push

@@ -126,9 +126,11 @@ other six.
    `@hono/node-server` past GHSA-frvp-7c67-39w9 in code that ships. A reviewer
    pointed at the entries can only grade the entries that exist; nothing asks
    which category is *absent*. Concretely, before calling the section done:
-   - Walk the merged-PR list (`git log v<prev>..HEAD --merges`), not only the
-     commit subjects — a fix can land with no issue number anywhere in its
-     subject and be invisible to a `#\d+` scan.
+   - Walk the merged-PR list (`git log --first-parent --oneline v<prev>..HEAD`
+     — one line per change that landed on master, whether the PR arrived as a
+     squash commit or a merge commit; `--merges` alone misses every squash),
+     not only a `#\d+` scan of the subjects — a fix can land with no issue
+     number anywhere in its subject and be invisible to that scan.
    - Check every dependency bump against the repo's real Dependabot alert list
      (`gh api repos/<owner>/<repo>/dependabot/alerts`). A bump next to a
      security bump is not itself a security fix, and an automated update can
@@ -153,16 +155,20 @@ other six.
    `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
    `plugin.json` diverge — treat either failure as "you bumped some, not all":
    ```bash
-   npm run typecheck && npm test -- --run
+   npm run typecheck && npm run typecheck:tests && npm test -- --run
    ```
+   `typecheck:tests` is separate because `npm run typecheck` does not chain it;
+   `.husky/pre-push` and CI's `check` both run it.
    Pass `--run`. The `test` script is bare `vitest`, whose watch default is
    `!isCI && process.stdin.isTTY && !isAgent` — so it exits on its own in CI,
    when piped, and for an agent, but sits in watch mode in Bryan's interactive
    terminal. `--run` makes that unconditional; `ci.yml` and `.husky/pre-push`
    both pass it.
 
-5. Ship the bump through the normal flow: branch → PR → CI green → merge →
-   verify master CI green on the **merge commit**.
+5. Ship the bump through the normal flow: branch → PR → CI green → merge
+   (through the merge queue) → verify CI green on **the commit the merge queue
+   landed on master**. `ci.yml` runs twice for it — the `merge_group` run that
+   gated the merge and the `push` run on master — so check both.
 
 6. Tag the release on the master tip and push the tag:
    ```bash
@@ -172,15 +178,17 @@ other six.
    — `git cat-file -t` reports `commit`, not `tag` — which would break the
    pattern: every release tag since v0.11.1 is annotated. (Older tags are
    mostly lightweight; that is history, not the standard to copy.)
-   The `v*` tag push triggers `.github/workflows/tauri-release.yml`: the signed
-   desktop build matrix plus a `release-check` summary job, creating a **DRAFT**
-   GitHub Release (`releaseDraft: true`) with artifacts + `latest.json`. The
-   tag alone does NOT publish to npm. (`HUSKY=0` on the tag push is fine — the
+   The `v*` tag push triggers `.github/workflows/tauri-release.yml`. Its
+   `create-release` job creates the **DRAFT** GitHub Release once (prerelease
+   flag set when the tag carries a hyphen), and the signed desktop build matrix
+   uploads artifacts + `latest.json` into it by `releaseId`; a `release-check`
+   summary job and `verify-release-manifest` follow. The tag alone does NOT
+   publish to npm. (`HUSKY=0` on the tag push is fine — the
    commit is already CI-green.)
 
 6b. Populate the GitHub release body from the `## [<version>]` changelog
-   section — `tauri-action` writes only "See the assets to download and install
-   Tandem." Extract the section between its heading and the previous version's
+   section — the `create-release` job's `github-script` writes only "See the
+   assets to download and install Tandem." Extract the section between its heading and the previous version's
    and pass it via `gh release edit v<version> --notes-file <file>`. Do this
    before publishing where possible. Inconsistent historically (v0.18.0 had
    full notes; v0.17.0 and v0.19.0 shipped with the boilerplate), so it needs
@@ -221,9 +229,10 @@ other six.
      '[.[]|select(.tag_name=="v<version>")]|length'   # must be 1, never 2
    gh release view v<version> --json assets --jq '.assets|length'  # 17
    ```
-   17 assets and 11 platform keys is the healthy shape (`latest.json`, 4
-   installers + 4 `.sig`, 2 `.app.tar.gz` + 2 `.sig`, 2 dmg, deb/rpm/AppImage
-   + sigs).
+   17 assets and 11 platform keys is the healthy shape: `latest.json` (1) +
+   Windows `.exe`, `.msi` and their 2 `.sig` (4) + macOS 2 `.app.tar.gz`, their
+   2 `.sig` and 2 `.dmg` (6) + Linux AppImage, `.deb`, `.rpm` and their 3 `.sig`
+   (6) = 17. The 11 keys are the list `verify-release-manifest` checks.
    Publishing is the npm trigger: `.github/workflows/publish.yml` fires on
    `release: [published]` and runs `npm publish --provenance`. It authenticates
    with **npm Trusted Publishing (OIDC), not a secret** — there is no

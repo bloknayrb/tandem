@@ -25,7 +25,7 @@ Then `Ctrl+Shift+C` (or `ui-inspector pick`) selects an element. `ui-inspector`
 is a per-machine tool, not a repo dependency — `cargo install tauri-ui-inspector`
 if the command is missing.
 
-Three failure modes look identical from the CLI (a timeout, or exit 3):
+Four failure modes look identical from the CLI (a timeout, or exit 3):
 
 | Symptom | Cause |
 |---|---|

@@ -59,6 +59,7 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 import {
   asChangedKey,
@@ -86,9 +87,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 // Build a stress-shape markdown: many headings, nested lists, inline code,

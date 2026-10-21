@@ -1,5 +1,7 @@
 # Visual Baseline Procedure
 
+> **Status: live.** Describes `scripts/design-baselines/` as it ships today (re-checked 2026-10-20).
+
 The capture script lives at `scripts/design-baselines/capture.spec.ts`. Running it writes a single self-contained HTML gallery to `docs/design-system-impl/preview/baselines/baselines.html`.
 
 **That gallery is generated on demand and is not committed** (it's gitignored). Capture it when you want to look at something; let it go stale when you don't. See "Why it isn't committed" below — that changed in #1190, and the reasoning is recorded here so it doesn't get re-litigated.
@@ -18,9 +20,9 @@ From the repo root:
 npm run capture:design-baselines
 ```
 
-It spawns the dev server + Hocuspocus, drives Playwright through each surface in both themes, and writes `baselines.html` — several megabytes, a couple of minutes. Then open the file directly, or point OpenDesign at the directory.
+It spawns the dev server + Hocuspocus, drives Playwright through each surface in light and dark (only those two; the warm theme is not captured), and writes `baselines.html` — several megabytes, a couple of minutes. Then open the file directly, or point OpenDesign at the directory.
 
-The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes.
+The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes ("Both" means light and dark — there is no warm scene to show).
 
 ## Scope (9 surfaces × 2 themes = 18 scenes)
 

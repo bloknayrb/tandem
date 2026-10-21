@@ -1,5 +1,7 @@
 # Sub-PR R — Rail collapse rebuild (always-mounted dual-layer)
 
+> **Status: historical.** This plan shipped in v0.13.5 (the always-mounted rail shell; see `motion.md` A12). The bundle paths it cites are external to this repo.
+
 > Status: PLAN (for adversarial review). Target branch: `design-impl/r-rail-rebuild` → `feat/design-system-impl`.
 > Conflict-resolved ref: this is the one genuine structural delta in the refreshed bundle (per the
 > 2026-05-27 replan). Supersedes the merged 1.4 `PeekStrip` *swap*; subsumes manifest surface C13.

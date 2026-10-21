@@ -8,8 +8,8 @@ Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, an
 
 - `npm run dev:standalone`: starts Vite and the server watcher for local development. It deliberately does NOT start the monitor — an always-on push consumer with no Claude behind it masks `subscribers === 0`, the only sound negative the server has. Run `npx tsx src/monitor/index.ts` by hand when testing push delivery.
 - `npm run dev`: starts only the Vite client.
-- `npm run build`: typechecks, builds the client with Vite, then bundles server/CLI code with tsup.
-- `npm run typecheck`: runs both server and client TypeScript checks.
+- `npm run build`: typechecks, builds the client through `scripts/build-client.mjs` (not a bare `vite build`: it strips any ambient `VITE_TANDEM_*` so a harness port exported in your shell cannot bake into the shipped client), runs the font-asset check, bundles server/CLI code with tsup, then generates the third-party notices.
+- `npm run typecheck`: runs the server `tsc`, the root `tsc` and `svelte-check --fail-on-warnings` against the client config, so a Svelte warning fails it.
 - `npm test`: runs Vitest unit and integration tests.
 - `npm run test:e2e`: runs Playwright end-to-end tests.
 - `npm run lint` / `npm run format`: run ESLint and Biome formatting.
@@ -20,7 +20,7 @@ Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, an
 
 These are not style preferences. Violating one produces code that type-checks, passes tests, and is wrong at runtime — read [`CLAUDE.md` → Critical Rules](CLAUDE.md) before touching the areas they cover.
 
-- **Origin-tag every Y.Doc write.** Raw `doc.transact(...)` is forbidden in `src/`. Use one of the six helpers in `src/shared/origins.ts`; the helper you pick is a semantic contract that decides which observers and event consumers react. There is no blocking gate on this — only a warn-only hook and `npm run audit:origins`. See [ADR-031](docs/decisions.md).
+- **Origin-tag every Y.Doc write.** Raw `doc.transact(...)` is forbidden in `src/`. Use one of the six helpers in `src/shared/origins.ts`; the helper you pick is a semantic contract that decides which observers and event consumers react. The editing-time hook and `npm run audit:origins` are warn-only; the gate is `tests/scripts/audit-origins.test.ts`, which fails CI's required `check` job on any untagged or unverified transaction in `src/` (a bare `map.set(...)` outside any transaction is invisible to all three). See [ADR-031](docs/decisions.md).
 - **Y.Map key strings come from `src/shared/constants.ts`**, never string literals.
 - **stdout is reserved** for the MCP wire in stdio mode. `console.log/warn/info` are redirected to stderr; a dependency that writes to stdout corrupts the protocol.
 - **Three coordinate systems** — flat text offsets, ProseMirror positions, and Yjs RelativePositions — are not interchangeable. Use `validateRange()` / `anchoredRange()` rather than raw offsets.

@@ -4,7 +4,7 @@ This is a live recording. The document you're reading is the actual script for t
 
 ## Highlight This
 
-This sentence will be highlighted by Claude to show how Tandem marks up passages worth noting. A green highlight appears in the sidebar, and you can click it to jump to the relevant text.
+Select this sentence and pick green from the color swatches in the popup to show how Tandem marks up passages worth noting. Highlights are yours: Claude leaves comments and suggestions rather than highlights. The highlight appears in the side panel, and you can click it to jump to the relevant text.
 
 ## Comment on This
 

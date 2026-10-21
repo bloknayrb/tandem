@@ -8,6 +8,8 @@ labels: enhancement
 **What does correctness here depend on that is not in the repo?** e.g. what users put in their
 documents, how a real upgrade behaves, what a specific OS or Claude Code build does. Write
 "nothing — it's all derivable from the code" if that is the answer.
+If the answer is anything else, the issue gets the `needs-human-evidence` label (a maintainer
+adds it if you can't).
 
 **What's the problem, and what's the proposed fix?**
 

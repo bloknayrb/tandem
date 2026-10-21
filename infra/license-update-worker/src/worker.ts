@@ -1,9 +1,11 @@
 /**
  * Tandem license-checked update endpoint (Cloudflare Worker) — L3 of the
- * licensing system (#1116, ADR-040 §7).
+ * licensing system (#1116; licensing design spec §7,
+ * docs/superpowers/specs/2026-06-18-licensing-system-design.md).
  *
  * GET /latest.json with an `X-Tandem-License-Id` header. The Worker looks the id
- * up in KV (written by the issuance webhook) and, if the caller is entitled and
+ * up in KV (written by the issuance Worker, or out of band by
+ * `scripts/sign-license.ts`) and, if the caller is entitled and
  * inside their update window, proxies the signed public `latest.json` (the
  * minisign signature is unchanged and still verified client-side by Tauri's
  * pubkey — the Worker only gates access). Otherwise it returns a no-update.

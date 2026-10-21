@@ -92,8 +92,13 @@ notification read (`docs/security.md`).
 npx wrangler@4.130.0 kv namespace create LICENSE_KV   # or reuse the update Worker's id
 npx wrangler@4.130.0 kv namespace create LEDGER_KV
 # edit wrangler.toml: paste both ids, set RESEND_FROM, SUPPORT_EMAIL,
-#   PADDLE_PRICE_IDS and TANDEM_ISSUANCE_ENV. All four guarded vars are ENFORCED:
-#   the Worker 503s every webhook while one is unset, a placeholder or malformed.
+#   PADDLE_PRICE_IDS and TANDEM_ISSUANCE_ENV. SUPPORT_EMAIL, RESEND_FROM and
+#   PADDLE_PRICE_IDS (and the PADDLE_API_KEY secret) are ENFORCED: the Worker
+#   503s every webhook while one is unset, a placeholder or malformed.
+#   TANDEM_ISSUANCE_ENV defaults to production when unset; a pdl_live_ key with
+#   any other value is the config-env-mismatch 503. A pdl_sdbx_ key also 503s
+#   without a valid SANDBOX_SIGNING_UNTIL and an address-shaped
+#   SANDBOX_BUYER_EMAILS.
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY     # Ed25519 PEM PKCS#8
 npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET  # pdl_ntfset_... from the notification destination
 npx wrangler@4.130.0 secret put PADDLE_API_KEY         # pdl_live_apikey_..., customer.read + notification read ONLY
@@ -223,7 +228,7 @@ assert the same two shapes.
 **Proper fix (follow-up, not built here):** a Cloudflare Durable Object keyed
 on the transaction id, using `blockConcurrencyWhile` (or a single serialized
 queue) to make the read-then-write in `issue()`/`revoke()` atomic per
-transaction. Out of scope for this PR — it's a new binding + wrangler config +
+transaction. Outside the current design — it's a new binding + wrangler config +
 migration, not a same-shape change to the existing pure-handler design. It would
 also retire the `txnlic:` listing residual above.
 

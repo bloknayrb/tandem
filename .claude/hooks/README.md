@@ -21,17 +21,17 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 ### PreToolUse — `Edit|Write` matcher
 
-- **`block-sensitive.sh`** — Blocks edits to `.env`, lock files, and other sensitive paths. Exits 2 on match.
+- **`block-sensitive.sh`** — Blocks an edit whose path ends in `.env` or `package-lock.json`, and nothing else. Exits 2 on match. It does **not** cover `src-tauri/Cargo.lock`, `.env.local` or `.env.example` — those edits pass, so of the release skill's two never-hand-edit lockfiles only `package-lock.json` is enforced here.
 - **`nudge-plan-review.sh`** — Warns when a `.claude/plans/*.md` was written this session but no `Agent` tool has run before a source edit. One-shot per plan.
 
 ### PreToolUse — `Bash` matcher
 
-- **`block-no-verify.sh`** — Blocks `--no-verify` flag (Husky bypass). Fail-closed on parse error.
+- **`block-no-verify.sh`** — Blocks a command containing the long `--no-verify` flag anywhere in its text (including inside a heredoc). Only that one flag: the short `-n` and `HUSKY=0` are not matched. Fail-closed on parse error.
 - **`nudge-simplify-before-commit.sh`** — Warns on `git commit` when source edits have happened since last `/simplify`. One-shot per edit batch.
 
 ### PreToolUse — `ExitPlanMode` matcher
 
-- **`block-plan-without-agent-review.sh`** (+ `block-plan-without-agent-review.mjs`) — Blocks plan approval unless the session transcript shows an `Agent`/`Task` call *after* the most recent write to a plan file under `~/.claude/plans/`. Project-level `<repo>/.claude/plans/` is deliberately excluded. Bypass by prepending `Agent feedback incorporated` to the plan body. Fail-closed on a missing or oversized (>50 MB) transcript, and on plan paths that don't `realpath` under `~/.claude/plans/`.
+- **`block-plan-without-agent-review.sh`** (+ `block-plan-without-agent-review.mjs`) — Blocks plan approval unless the session transcript shows an `Agent`/`Task` call *after* the most recent write to a plan file under `~/.claude/plans/`. Project-level `<repo>/.claude/plans/` is deliberately excluded. Also blocks when the transcript has no Write/Edit to a plan file under `~/.claude/plans/` at all. Bypass by prepending `Agent feedback incorporated` to the plan body. Fail-closed on a missing or oversized (>50 MB) transcript, and on plan paths that don't `realpath` under `~/.claude/plans/`.
 
 ### PostToolUse — unmatched (every tool)
 
@@ -45,8 +45,8 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 - **`format-on-edit.sh`** — Runs Biome format on edited files.
 - **`related-test.sh`** — Runs matching vitest after source edits. Maps `src/{area}/` to `tests/{area}/` via basename matching. Opt-out: `TANDEM_SKIP_RELATED_TEST=1`. **A zero-match still exits 0 silently** — unlike the ambiguous-match branch, which at least warns — so the *absence* of a "Running related test:" line means no test ran, not that tests passed. **Both `.svelte.ts` naming conventions now resolve (#1408).** `basename X.svelte.ts .ts` leaves `X.svelte`, which matched only a suite literally named `X.svelte.test.ts`; a fallback now retries as `X.test.ts` **when the first lookup found nothing**, so no previously-matching file changes behaviour. Measured at the time of the fix: of 56 `src/client/**/*.svelte.ts` modules, 5 already matched, **19 newly arm a per-edit vitest run** (`useMarginPositions`, `useTandemSettings`, `useTheme`, `useTabOrder` among them), and 32 have no suite either way and stay silent. That is the point of the fix, but it does make edits in those 19 slower. To offset that, it now invokes vitest's entry directly instead of through `npx`, which roughly halves a one-file run — **but a bare relative `node_modules/…` is not equivalent to `npx`**, which also searches ancestor `node_modules/.bin`. A git worktree has `tests/` (tracked) and no `node_modules` (not), so the direct path would have died with `ERR_MODULE_NOT_FOUND` into the trailing `|| true` and printed "Running related test:" for a run that never happened — re-creating #1408's silent zero one layer down. It therefore walks up for the entry and keeps `npx` as the fallback, and a non-zero exit now prints an explicit `✗ Related test FAILED` line. `tests/scripts/e2e-guard-wiring.test.ts` pins both transports and `tests/docs/related-test-hook-claims.test.ts` pins the fallback plus the no-collision precondition it depends on.
 - **`check-console-log.sh`** — Warns on `console.log()` in `src/server/` (Critical Rule #3 — stdout is reserved for the MCP wire).
-- **`check-extract-markdown.sh`** — Warns on `extractMarkdown()` usage in MCP tool files (Critical Rule #5 — shifts offsets relative to annotation coordinate system).
-- **`check-ymap-keys.sh`** — Warns on raw Y.Map key strings (Critical Rule #1 — must come from `shared/constants.ts`).
+- **`check-extract-markdown.sh`** — Warns on `extractMarkdown()` usage in `src/server/` files other than `convert.ts` (Critical Rule #5 — shifts offsets relative to annotation coordinate system).
+- **`check-ymap-keys.sh`** — Warns on raw Y.Map key strings (Critical Rule #1 — must come from `src/shared/constants.ts`).
 - **`check-raw-transact.sh`** — Warns when raw `*.transact(` appears outside the ADR-031 helpers' file (`src/shared/origins.ts`) and existing test fixtures.
 - **`check-token-violation.sh`** — Delegates to `scripts/check-semantic-tokens.ts` for raw hex/rgba in `src/client/`.
 
@@ -56,7 +56,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 ### Stop
 
-- **`stop-cycle-check.sh`** — Fires every agent turn end. If the session has uncommitted source edits, emits an informational nudge. One-shot per session.
+- **`stop-cycle-check.sh`** — Fires every agent turn end. If the session has uncommitted source edits, emits an informational nudge. Once per edit cycle: a successful commit clears its marker (in `track-workflow-events.sh`), so it fires again after the next round of edits.
 
 ## How to add a new hook
 

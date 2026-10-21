@@ -1,24 +1,34 @@
 # Semantic Tokens
 
-Full reference for Tandem's CSS custom property families. The summary lives in `CLAUDE.md > Semantic Tokens`; this document is the full enumeration.
+Reference for Tandem's CSS custom property families. The summary lives in `CLAUDE.md > Semantic Tokens`. This document covers every family by name; `index.html` (`:root`, about 139 distinct `--tandem-*` tokens) stays the authority on individual tokens and their values.
 
-Token families are defined in `index.html` `:root` (light theme) and `[data-theme="dark"]` (dark theme) blocks. Lint: `npm run check:tokens` (also runs on pre-commit via lint-staged) scans `src/client/` for raw hex/rgba violations.
+Token families are defined in `index.html`: `:root` (light theme, and every token's default), then override blocks for `[data-theme="dark"]`, `[data-theme="warm"]` (neutrals, page and scrollbar tokens only; everything else inherits light), `[data-density="compact"]` / `[data-density="spacious"]` (the spacing scale), `[data-high-contrast="true"]` (borders and muted text), and a `forced-colors` media block that hands colours to the OS. Lint: `npm run check:tokens` (also runs on pre-commit via lint-staged) scans `src/client/` for raw hex/rgba violations.
 
 ## Status families
 
-Each family exposes `--tandem-{name}`, `-fg`, `-fg-strong`, `-bg`, `-border` variants.
+Each family exposes `--tandem-{name}`, `-fg-strong`, `-bg` and `-border`; every family except `suggestion` also exposes `-fg`.
 
 - **`--tandem-success-*`** — green. Success toasts, completion states.
-- **`--tandem-warning-*`** — amber. Warnings, held-annotation banners, unsaved indicators.
-- **`--tandem-error-*`** — red. Error banners, destructive actions, flag annotations.
+- **`--tandem-warning-*`** — amber. Warnings, the read-only store and settings banners, unsaved indicators.
+- **`--tandem-error-*`** — red. Error banners, destructive actions, the find bar's no-match state, source-view parse errors.
 - **`--tandem-info-*`** — blue. Informational banners, review-only mode.
 - **`--tandem-suggestion-*`** — violet. Replacement/suggestion annotations. Visually distinct from indigo accent. Exposes `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`.
 
+## Neutrals and surfaces
+
+- **Neutral ladder:** `--tandem-bg`, `--tandem-surface`, `--tandem-surface-muted`, `--tandem-surface-sunk`, `--tandem-fg`, `--tandem-fg-muted`, `--tandem-fg-subtle`, `--tandem-fg-faint`, `--tandem-border`, `--tandem-border-strong`. These are what the warm theme re-tints.
+- **Page:** `--tandem-page-bg`, `--tandem-page-paper`, `--tandem-page-shadow` (the editor sheet).
+- **Scrollbar:** `--tandem-scrollbar-track`, `--tandem-scrollbar-thumb`.
+- **Selection:** `--tandem-selection-blurred-bg` (the editor selection while focus is elsewhere).
+- **Theme-picker swatches:** `--tandem-swatch-light|dark|warm` — `:root` only, never overridden per theme, because they preview each scheme.
+- **File-type badges:** `--tandem-filetype-html`, `--tandem-filetype-txt`.
+
 ## Accent / authorship
 
+- **Accent:** `--tandem-accent`, `-hover`, `-fg`, `-fg-strong`, `-bg`, plus `--tandem-accent-h`, the hue the user picks, from which the others derive.
 - **`--tandem-accent-border`** — single token for accent-family bordered elements.
-- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark. Authorship decorations use `data-tandem-author` attributes (not CSS classes) per ADR-026.
-- **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). Used in `awareness.ts` for the paragraph gutter decoration.
+- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors, with `--tandem-author-user-bg`, `--tandem-author-claude-bg|-fg|-fg-strong|-border` variants and `--tandem-author-import-bg`. Model-specific agent colors: `--tandem-agent-openai|gemini|local-ollama|local-llamacpp` (the local ones serve the dark-shipped local-model feature). Blue/orange in light, adjusted in dark. Authorship decorations use `data-tandem-author` attributes (not CSS classes) per ADR-026.
+- **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). `awareness.ts` only sets the `.tandem-claude-focus` class; the tokens are read in `src/client/editor/editor.css` for the paragraph gutter decoration (and reused by a few chips such as `AnnotationCard.svelte` and `StatusBar.svelte`).
 
 ## Scales
 
@@ -26,11 +36,15 @@ Use these instead of raw px literals in client surfaces:
 
 - **Spacing:** `--tandem-space-1..7`
 - **Radius:** `--tandem-r-1..5`, `--tandem-r-pill`, `--tandem-r-circle`
-- **Type:** `--tandem-text-2xs..3xl`
+- **Type:** `--tandem-text-2xs..3xl`; font stacks `--tandem-font-sans|serif|mono`; type roles `--tandem-h1-*`, `--tandem-h2-*`, `--tandem-body-*` and `--tandem-ui-*` (each with `-font`, `-size`, `-leading`, and for headings `-weight`, `-tracking`); and the user's editor font, `--tandem-editor-font-family` / `--tandem-editor-font-size`
 - **Elevation:** `--tandem-shadow-1..4`, plus `--tandem-shadow-inset` (the toggle
-  PRESSED state — see *Light vs dark derivation*; it is the only shadow token with
-  a per-theme override)
-- **Stacking:** `--tandem-z-base..tooltip`
+  PRESSED state — see *Light vs dark derivation*; it is the only token in the
+  elevation scale with a per-theme override. Outside the scale, dark also overrides
+  `--tandem-page-shadow` and `--tandem-rail-shadow-left|right`, and warm overrides
+  `--tandem-page-shadow`)
+- **Stacking:** `--tandem-z-base..tooltip`, including `--tandem-z-titlebar`, `--tandem-z-above-titlebar` and `--tandem-z-rail-float`
+- **Motion:** `--tandem-ease-standard`, `--tandem-ease-out`
+- **Layout metrics:** `--tandem-h-fmtbar`, `--tandem-fmtbar-top`, `--tandem-rail-top-clearance`, `--tandem-status-clearance`, `--tandem-status-clearance-total`, `--tandem-banner-stack-bottom`
 
 ## Highlights
 
@@ -40,11 +54,11 @@ CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep
 
 - **Light mode:** every *status* `*-bg` — `success`, `warning`, `error`, `info`, `suggestion` — is derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` is the exception in both themes: it is `oklch(0.95 0.03 var(--tandem-accent-h))`, because the accent hue is a user setting and the token has to follow it.
 - **Dark mode:** the status `*-bg` tokens use hand-coded saturated hex (`#052e16`, `#451a03`, `#450a0a`, `#0c4a6e`, `#2e1065`). `color-mix` produces washed-out surfaces against the dark neutral; hand-picked values read as intentionally colored. `--tandem-accent-bg` stays `oklch`, at `oklch(0.30 0.05 var(--tandem-accent-h))`.
-- **`--tandem-shadow-inset`** is the one shadow token that varies by theme, and the reason is not the one people guess. **Measure it on gamma-encoded sRGB, not linear light** — CSS composites `box-shadow` alpha in the encoded space, and compositing in linear space under-reports the band by ~16%. Measured ΔL\* over each theme's `--tandem-surface-sunk`: light `0.16` → **13.69**, warm → **13.07**, dark `0.45` → **3.85**. Warm **inherits the light value deliberately** — a fixed alpha is near-constant in contrast across light bases, so warm lands within 0.6 ΔL\* of light despite a much darker sunk surface. That near-constancy holds only while luminance sits well above the `0.05` in the contrast formula, which is why **dark** is the case that breaks: a black inset saturates on a near-black base (still only 5.68 at `0.75` alpha), so its override is a floor, not a fix. The band is the sole separator between pressed and hover on `.toolbar-btn` and `.fr-scope-pill`, so its strength is load-bearing.
+- **`--tandem-shadow-inset`** is the one elevation-scale token that varies by theme, and the reason is not the one people guess. **Measure it on gamma-encoded sRGB, not linear light** — CSS composites `box-shadow` alpha in the encoded space, and compositing in linear space under-reports the band by ~16%. Measured ΔL\* over each theme's `--tandem-surface-sunk`: light `0.16` → **13.69**, warm → **13.07**, dark `0.45` → **3.85**. Warm **inherits the light value deliberately** — a fixed alpha is near-constant in contrast across light bases, so warm lands within 0.6 ΔL\* of light despite a much darker sunk surface. That near-constancy holds only while luminance sits well above the `0.05` in the contrast formula, which is why **dark** is the case that breaks: a black inset saturates on a near-black base (still only 5.68 at `0.75` alpha), so its override is a floor, not a fix. The band is the sole separator between pressed and hover on `.toolbar-btn` and `.fr-scope-pill`, so its strength is load-bearing.
 
 ## Color utilities
 
-`src/client/utils/colors.ts` exports `warningStateColors` — import it instead of inlining all three CSS vars when you need the full set (e.g. `SidePanel.svelte` held-banner). Error/success/suggestion variants were removed in audit v2 (zero consumers); re-add the same shape if a future surface needs them.
+`src/client/utils/colors.ts` exports `warningStateColors` — import it instead of inlining all three CSS vars when you need the full set (e.g. the read-only store banner in `SidePanel.svelte` and `SettingsReadonlyBanner.svelte`). Error/success/suggestion variants were removed in audit v2 (zero consumers); re-add the same shape if a future surface needs them.
 
 ## Lint enforcement
 

@@ -16,7 +16,10 @@ inferred from the automated rows.
 | A5 | Keyboard-only navigation | **Pass**, with fixes | `tests/e2e/keyboard-a11y.spec.ts` — 7 tests. Four defects found and fixed. |
 | A6 | WCAG AA contrast across all status colours and themes | **Pass**, with fixes | `tests/e2e/token-contrast.spec.ts` (3) + `tests/e2e/editor-contrast.spec.ts` (3). Fifteen defects found and fixed, one recorded as a non-assertion. |
 
-Total: 64 automated tests across four files.
+Total: 64 automated tests across four files. The per-file counts in this table
+are as of the 2026-08-05 run; the spec files have gained tests since (for
+example the #1778 focus-trap tests in the keyboard spec), so read the
+files for today's numbers.
 
 > **Revised 2026-08-06 (post-review).** The first version of this table said "44
 > automated tests … all passing", and both halves were wrong. The arithmetic did
@@ -254,7 +257,8 @@ read firmer than the soft sketch it was designed as.
 ### `--tandem-warning-fg` — accepted 2026-08-05
 
 Flipping it white → `#0f172a` takes the one surface that uses it (the `Private`
-pill in `NoteCard.svelte:33` — the token's **only** consumer) from 3.76:1 to
+pill, `data-testid="annotation-private-pill"` in `NoteCard.svelte` — as of
+2026-08-05 the token's **only** consumer) from 3.76:1 to
 4.75:1. Visual review's verdict: legible but muddier than the white it replaced,
 because dark theme pairs that same near-black with a genuinely light amber
 (`#fbbf24`) while light theme pairs it with a mid-dark ochre

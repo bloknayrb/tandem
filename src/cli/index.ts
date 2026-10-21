@@ -49,7 +49,7 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log(`tandem v${version}
 
 Usage:
-  tandem                            Start Tandem server and open the editor
+  tandem                            Start the Tandem server (prints the editor URL)
   tandem start                      Explicit alias for bare \`tandem\`
   tandem setup                      Print first-run setup guidance (setup is wizard-driven)
   tandem setup --apply              Write MCP config to detected AI clients non-interactively

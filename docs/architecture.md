@@ -12,6 +12,8 @@ Sections below labeled "Claude-default" describe features in the **Claude-specif
 
 ## System Context
 
+Four rendered diagrams sit beside this file in `architecture-diagrams/`, each a JSON spec plus a pre-rendered page: [system architecture](architecture-diagrams/system-architecture.html), [Tauri desktop layer](architecture-diagrams/tauri-desktop.html), [annotation lifecycle](architecture-diagrams/annotation-lifecycle.html) and [coordinate systems](architecture-diagrams/coordinate-systems.html). No generator for them lives in this repo, so they are edited by hand and can lag the code; where one disagrees with this document, this document wins.
+
 ```mermaid
 graph TB
     User["Bryan (Tandem Desktop / Browser)"]
@@ -187,6 +189,8 @@ User clicks "+" in DocumentTabs or drops a file on the editor
 
 ### Opening a .docx with Word Comments
 
+Ships dark ([ADR-053](decisions.md#adr-053-docx-ships-dark)): a release refuses `.docx`, so this flow runs only where `docxEnabled()` is on (tsx/vitest with `TANDEM_DOCX=1`, or after the re-enable).
+
 ```
 tandem_open("report.docx")
     → documents/open.ts detects .docx format
@@ -194,8 +198,8 @@ tandem_open("report.docx")
     → docx-comments.ts extracts <w:comment> elements via JSZip
     → For each comment: resolves w:commentRangeStart/End to flat text offsets
     → anchoredRange() creates CRDT-anchored positions
-    → Annotations created with author: "import", type based on comment content
-    → Browser renders imported comments in SidePanel with "Imported" filter
+    → Annotations created as private notes (type "note", author "import", audience "private")
+    → User batch-promotes them (BatchPromoteBar) into user comments the AI can then see
 ```
 
 ### Annotation Writes: Three Surfaces, One Guarded Seam
@@ -286,7 +290,7 @@ On server startup, `listSessionFilePaths()` scans the session directory and `res
 
 ### OS File-Association Open
 
-When the Tauri desktop app is launched via the OS file-association handler (double-clicking a `.md` / `.markdown` / `.txt` / `.html` / `.docx` file in Finder, Explorer, or a Linux file manager), the file path reaches the editor via three platform-specific routes:
+When the Tauri desktop app is launched via the OS file-association handler (double-clicking a `.md` / `.markdown` / `.txt` / `.html` file in Finder, Explorer, or a Linux file manager; `.docx` is registered only when ADR-053's re-enable flips `DOCX_ENABLED`), the file path reaches the editor via three platform-specific routes:
 
 ```
 Cold start, Windows / Linux:
@@ -341,7 +345,7 @@ Both OS entry points share one path validator, `validate_open_candidate` (extens
 
 `validate_open_candidate` owns **every** path-shaped check — the Windows NTFS alternate-data-stream colon scan, UNC rejection, the extension allowlist, and `is_file()` — and the first two run *before* `is_file()` deliberately: `is_file()` on `\\host\share\…` performs the SMB handshake, so a gate placed after it would leak an NTLM hash from the shell process on a path the server was always going to refuse. The ADS scan lives in the validator rather than in `extract_file_arg` for the same reason the extension check does: `classify_opened_url` is unconditionally compiled, so a future Windows or Linux Opened / deep-link handler would otherwise inherit the extension and `is_file()` checks with no ADS scan.
 
-Sharing the validator also made the extension list a **shared contract**, so it must match the server's `SUPPORTED_EXTENSIONS` exactly — pinned by `tests/build/file-association-alignment.test.ts`, which asserts set equality rather than a subset. The first version of the shared validator omitted `.htm`, which the server accepts, and that silently made a `.htm` refusable via "Open With" or a Dock drop while the same file dropped on the *window* still opened (`useTauriFileDrop.svelte.ts` validates against the server list). A per-surface difference in what counts as an openable file is not a policy anyone chose; it is what an inline check drifting from a constant looks like. Note this is separate from what the OS *advertises*: `tauri.conf.json#bundle.fileAssociations` stays deliberately narrower (no `.htm`), and that asymmetry is a product choice.
+Sharing the validator also made the extension list a **shared contract**, so it must match the server's `BASE_EXTENSIONS` (plus `.docx` only when `DOCX_ENABLED` is on) exactly — pinned by `tests/build/file-association-alignment.test.ts`, which asserts set equality rather than a subset. The first version of the shared validator omitted `.htm`, which the server accepts, and that silently made a `.htm` refusable via "Open With" or a Dock drop while the same file dropped on the *window* still opened (`useTauriFileDrop.svelte.ts` validates against the server list). A per-surface difference in what counts as an openable file is not a policy anyone chose; it is what an inline check drifting from a constant looks like. Note this is separate from what the OS *advertises*: `tauri.conf.json#bundle.fileAssociations` stays deliberately narrower (no `.htm`), and that asymmetry is a product choice.
 
 **Rejections have exactly one delivery surface: the `STARTUP_REJECTION` buffer.** Every entry point that refuses a candidate — or, since #1416, accepts one and then fails to open it **over `/api/open`** — calls `surface_startup_rejection`, which buffers the stable, path-free reason code and *then* emits a **payload-free** `startup-file-rejected` event. The failure half adds one code, `open-failed`, covering a non-2xx from `/api/open`, a transport failure, and an open that arrived after the app stopped trying to start the server; the give-up is a latch (`SIDECAR_GAVE_UP`, set under the `PendingOpens` mutex and cleared by any new start attempt), never a deletion of the pending-open queue, because the retry path exists to deliver that queue. **The `/api/open` qualifier is load-bearing, not hedging: it covers the warm-start, drain and Apple-Event routes only.** The argv cold start never posts — it hands the path to the sidecar as `TANDEM_OPEN_FILE`, and `startup-file.ts#maybeOpenStartupFile` catches an `openFromDisk` throw, `console.error`s and returns false, so a 60 MB `.md` double-clicked on Windows or Linux still lands the user on `welcome.md` with the reason in the sidecar log alone. That door is a known gap, not a covered one. The client (`utils/startup-rejection.ts`, wired from `App.svelte`) treats that event purely as a nudge — "something is buffered, don't wait for the next init" — and both it and the init-time drain read through `get_startup_rejection`, which **takes**. So a nudge nobody hears costs one dropped event, not a lost toast, and a doubled nudge cannot double-toast.
 
@@ -465,7 +469,7 @@ The channel shim is registered **only on explicit request** — `tandem setup --
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Auto-launched sessions do not use this path at all** and never did — the launcher spawns with `-p`, where the flag is not parsed, and #1266 measured that no turn results even when the shim receives the frame. They are woken by the supervisor writing a turn onto the child's stdin (see [Auto-Launcher](#auto-launcher) above). The launcher stopped emitting the flag in 2026-08; `src/shared/launcher/contract.ts` records why.
+**Auto-launched sessions do not use this path at all** and never did — the launcher spawns with `-p`, where the flag is not parsed, and #1266 measured that no turn results even when the shim receives the frame. They are woken by the supervisor writing a turn onto the child's stdin (see [Auto-launched sessions do not use the channel](#auto-launched-sessions-do-not-use-the-channel-1266) above). The launcher stopped emitting the flag in 2026-08; `src/shared/launcher/contract.ts` records why.
 
 **Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The dev-channels flag both activates and loads the channel — no separate `--channels` flag is needed, and passing one would not help: a `server:` entry is rejected at the gate regardless of any allowlist (see below). Without activation, Claude learns about user actions only when it polls `tandem_checkInbox` — later, but never lost.
 
@@ -1151,6 +1155,13 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `file-io/docx-apply.ts` -- Core logic for applying suggestions as tracked changes via JSZip XML manipulation
 - `platform.ts` -- Cross-platform helpers: `SESSION_DIR`, `LAST_SEEN_VERSION_FILE`, `freePort()`, `waitForPort()` (TCP port availability polling)
 - `version-check.ts` -- `checkVersionChange()`: compares running version to stored last-seen version, returns `"first-install" | "upgraded" | "current"`
+- `app-data-owner.ts` -- The `owner.json` ownership stamp on the app-data root (#1787): desktop and npm installs use separate roots, and the stamp makes any leftover sharing loud instead of silent; the one-time legacy migration records itself separately in `npm-migration-complete`
+- `shutdown-state.ts` -- `isShuttingDown()` / `markShuttingDown()`, a leaf flag `/health` reads so a server that is shutting down says so in its `status` field (not its HTTP code), and a replacement process is not refused as a duplicate (#1758)
+- `startup-notices.ts` -- Notices raised before any client can connect (for example ADR-053's `.docx` session drop); `routes/notify-stream.ts` replays them to every notify stream that connects for the rest of the process, deduplicated by `dedupKey`
+- `log-filter.ts` -- The desktop sidecar's console filter (`SUPPRESSED_PATTERNS`, `formatLogLine`) as a pure module, kept out of `index.ts` because importing that file runs the server
+- `log-sanitize.ts` -- `sanitizeForLog()`: strips control characters and bidi overrides from an untrusted string and clamps it to `LOG_FIELD_MAX` before it reaches an operator log line
+- `error-filter.ts` -- `isKnownHocuspocusError()`: the narrow set of ws/Hocuspocus errors that are safe to swallow; anything else still exits the process
+- `sentry.ts` -- Opt-in sidecar crash reporting, off unless `TANDEM_SENTRY_DSN` is set; events are PII-scrubbed and `@sentry/node` is loaded only when a DSN is present
 - `session/` -- Session persistence to `<app-data>/sessions` (`SESSION_DIR`; see Session Persistence above for how `<app-data>` resolves per OS); `listSessionFilePaths()` for startup auto-restore. A corrupt session is quarantined to `<name>.json.corrupt.<ts>` (never unlinked) with a `session-corrupt` toast, and the pre-#1750 migration-loser record is tried once before falling back to disk (#1800).
 - `models/` -- Server-authoritative Models registry (`models.json`, #1123 M1a/M2). `store.ts` (atomic read/write, backup-on-malformed, canonical `serializeModelsFile`, referential-integrity on read AND write), `registry.ts` (process-singleton cache + content-hash ETag via `getModelsEtag`/`hashModelsFile` + optimistic-concurrency single-flight `persistModelsFileIfMatch`), `api-routes.ts` (`GET /api/models` loopback-full / LAN-allowlist-scrubbed with a scrubbed-file ETag; `POST /api/models` origin+loopback-gated `.strict()` If-Match write), `schema.ts` (Zod `.strict()` versioned wrapper). Read by the local-model resolver (`local-model/config-source.ts`).
 
@@ -1182,7 +1193,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 ### Channel Shim (`src/channel/`)
 
 - `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
-- `event-bridge.ts` -- 33-line adapter over `src/shared/sse-consumer.ts`: connects to `GET /api/events`, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back. The reconnection policy lives in the shared consumer (exponential 2/4/8/16s, capped at 30s), not here.
+- `event-bridge.ts` -- Thin adapter over `src/shared/sse-consumer.ts`: connects to `GET /api/events`, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back. The reconnection policy lives in the shared consumer (exponential 2/4/8/16s, capped at 30s), not here.
 - `run.ts` -- The runtime the CLI's `channel` branch imports; owns the `tandem_reply` HTTP calls and the outbound `fetchWithTimeout` usage.
 
 ### Client (`src/client/`)
@@ -1207,31 +1218,35 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `hooks/useConnectionBanner.svelte.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
 - `ToastContainer` (`src/client/components/`) -- Renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
 - `OnboardingTutorial` (`src/client/components/`) -- Floating card at bottom-left, 3-step progression (review → ask → edit). `useTutorial` hook detects step completion via annotation status, user annotation creation, and editor focus. localStorage persistence, suppressed after completion.
-- `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files
+- `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files (ships dark with `.docx`)
 - `FileOpenDialog` (`src/client/components/`) -- Browser-distribution modal for opening files without Claude (HTML file-upload + recent list). In the desktop app the native picker is used directly instead (see `DocumentTabs` above)
 - `HelpModal` (`src/client/components/`) -- Keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)
 - `components/EmptyState.svelte` -- "No document open" placeholder rendered when no tab is active
 - `components/ConnectionBanner.svelte` -- Prolonged-disconnect banner (>30s); auto-clears on reconnect
 - `components/PanelSlot.svelte` -- `ChatSlot`, `AnnotationSlot`, and `SlotWrapper` — deduplicated panel render sites used in App.svelte's three-column layout
 - `components/AppearanceSettings.svelte` -- Theme, text size, and panel order controls (shared Settings-modal tab body)
-- `components/EditorSettings.svelte` -- User name and dwell-time controls (shared Settings-modal tab body)
+- `components/EditorSettings.svelte` -- The Settings Editor tab: reading measure, editor font and per-format font overrides, default save folder, smart typography, spellcheck, show raw markdown, and source-view line wrap. The display name lives in the Collaboration tab and selection dwell time in the AI Assistant tab
 - `components/AccessibilitySettings.svelte` -- Accessibility preference controls (shared Settings-modal tab body)
+- `components/settings-tabs/` -- The remaining Settings tab bodies, one file each: `SettingsCollaborationTab` (display name), `SettingsNotificationsTab` (chat-reply notifications and sound), `SettingsClaudeCodeTab` (the AI Assistant tab: setup, Claude working directory, selection dwell), `SettingsTandemClaudeSection` (inside that tab: how Tandem's own Claude starts and how long it runs, #2195), `SettingsShortcutsTab` (wraps the shortcut editor), `SettingsLicenseTab` (status and activation form; licensing ships dark), `SettingsAboutTab` (app info, View documentation, Copy Diagnostics, open log folder) and `SettingsModelsTab` (filtered out of the modal while `BYO_MODELS_ENABLED` is false)
+- `components/ExternalConflictBanner.svelte` -- The keep-or-reload prompt shown while the document's `Y_MAP_EXTERNAL_CONFLICT` entry is set (an open file changed on disk with unsaved edits, #1069/#1238); it is server-authoritative, sticky inside the editor scroll area, and disappears when the server clears the conflict
 - `AnnotationExtension` -- Renders highlights, comments, and notes as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
-- `editor/toolbar/Toolbar.svelte` -- Main toolbar (branding, Comment/Note buttons, Settings, ModeToggle) + unified selection popup (AR3): appears on text selection, textarea + "Note to self" / "Comment" submit buttons + B/I formatting + highlight swatches; no mode switching
+- `editor/toolbar/Toolbar.svelte` -- The floating selection popup only (AR3, A8 two-pill): on a text selection it shows a format capsule (`FormattingToolbar` in its `popup` variant plus the mirrored Decorations and Display menus) over an annotate capsule (highlight swatches + Annotate), which morphs into the note/comment composer. The persistent formatting bar is `shell/FormattingBar.svelte`; the Solo/Tandem `ModeToggle` and the brand/theme menu live in `shell/TitleBar.svelte`
 - `editor/toolbar/HighlightColorPicker.svelte` -- Color swatch picker for highlight annotations in FormattingBar (extracted from Toolbar)
 - `editor/toolbar/ModeToggle.svelte` -- Solo/Tandem mode toggle button (extracted from Toolbar)
-- `editor/toolbar/ToolbarButton.svelte` -- Shared button primitive used in main toolbar
+- `editor/toolbar/FormattingToolbar.svelte` -- The mark/block control set, shared by the formatting bar (`bar` variant, with Undo/Redo) and the selection popup (`popup` variant, without)
+- `editor/toolbar/ToolbarButton.svelte` -- Shared button primitive used by the formatting controls, the highlight picker and the find bar
 - `editor/toolbar/selection-toolbar.ts` -- Positioning logic for the floating selection popup (`computeSelectionToolbarPosition`, `attachSelectionToolbarListener`)
 - `editor/toolbar/highlight-toggle.ts` -- Toggle-highlight logic: creates a new highlight or removes an existing one if the range already has that color
 - `actions/clickOutside.svelte.ts` -- Svelte action: fires a handler when a mousedown occurs outside the attached element; used by FormattingToolbar heading dropdown and link input popover
-- `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 3-second undo window on accept/dismiss (`scheduleRemoval`'s 3000 ms timer, `src/client/panels/useAnnotationReview.svelte.ts:557`), inline annotation editing (pencil button on pending annotations)
+- `SidePanel` -- Annotation filtering (type/author/status; the "Imported" author chip matches only `.docx` comment imports, which ship dark), bulk accept/dismiss (with confirmation, respects active filters), 3-second undo window on accept/dismiss (`scheduleRemoval`'s 3000 ms timer in `src/client/panels/useAnnotationReview.svelte.ts`), inline annotation editing (pencil button on pending annotations). Moving between annotations from the keyboard is the Alt+] / Alt+[ command pair; there is no separate review mode
 - `panels/FilterBar.svelte` -- Filter controls row: type/author/status chip groups (ChipGroup.svelte, A15) + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
-- `panels/useAnnotationReview.svelte.ts` -- Review-mode state (the `.svelte.ts` suffix is load-bearing; it is a rune-based hook): reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
-- `panels/AnnotationCardActions.svelte` -- Action buttons for an annotation card: accept, dismiss, edit (extracted from AnnotationCard)
+- `panels/useAnnotationReview.svelte.ts` -- Annotation review state (the `.svelte.ts` suffix is load-bearing; it is a rune-based hook): the auto-advance of the active annotation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
+- `panels/AnnotationCardActions.svelte` -- An annotation card's action row: Accept/Dismiss on pending review items, Archive and Send to the AI on pending notes, Remove on other pending items, Undo once resolved (extracted from AnnotationCard; Edit sits outside this row)
 - `panels/AnnotationEditForm.svelte` -- Inline edit form for pending annotations (extracted from AnnotationCard)
 - `panels/ReplyThread.svelte` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
+- `panels/MarginColumn.svelte` -- One margin column of annotation cards beside the editor (left or right), with collision resolution, crowding by track width (`full` / `narrow` / `stub`) and Bézier leader lines to each anchor; mounted only when its side is visible
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - `ChatPanel` -- Shows a pickup row under the user's latest message (`panels/chat-pickup.ts`): "waiting" until `tandem_checkInbox` stamps it `read`, "has your message" after, animated "working on it" after a `tandem_reply` with `inProgress: true`, gone once answered or after 10 min. Derived from the chat map only; it deliberately does not read `claudeActive` (set by `tandem_status`, true for up to 5 min after Claude's last presence-wrapped tool call) or `claudeWorking` (set only around a few wrapped tool calls, 30 s cap)
 - `notifications/` -- Chat-reply attention (#2168). `reply-detector.ts` picks out the Claude replies that arrived live: nothing before the ctrl doc's `synced`, a known-id set seeded from `yjsSync`'s synchronously captured `ctrlInitialClaudeMessageIds` and re-seeded per ctrl `Y.Doc` (a server restart re-syncs full history on a new doc), `inProgress` acks skipped, a row first seen with its `Y_MAP_CHAT_STREAM` sidecar already present held until the stream finishes (a live streamed reply is announced at its first flush, before any sidecar exists — dark with local models), a 60 s staleness backstop applied only on the pass that seeds a new ctrl doc, so a live reply reaching an already-seeded doc late (after a long reconnect) still announces. `useChatState`'s `onClaudeReplies` feeds `chat-attention.ts`, which coalesces bursts (750 ms) and decides. An active window plays the chime once per batch, at most once every 2 s (`MIN_ACTIVE_CHIME_GAP_MS`; `chimes.ts`, synthesized Web Audio, no files; a suspended audio context gets one pending chime, dropped unless it resumes within 2 s), and nothing else. The away announcement always chimes and restarts that 2 s clock, so a reply is never both silent and un-notified. An away window drops ids already in the shared `chatSeen` map, counts the rest into the flash / title count and holds them; at most once per 30 s it announces everything held (one chime, one notification), and a trailing timer announces what landed inside the interval when it ends, re-checking `chatSeen` and skipping it if the window became active meanwhile. A click opens chat on the document of the newest reply a notification posted: a post arms that target, the first `windowActivated()` after the post starts a 5 s grace that later returns never extend, and a click consumes it (see gotchas). `backend.ts` owns platform selection: `createNotifierBackend()` picks `tauri-notifier.ts` (app commands in `src-tauri/src/notifications.rs`, including `clear_attention` to withdraw the flash) by `isTauriRuntime()` first, else `web-notifier.ts` (Web Notifications API with `renotify`, `(N)` tab-title count, last notification closed on `clearAttention`); `notification-text.ts` cleans and caps the title and body for both backends (mirroring Rust `clean()`, pinned by a parity test) and holds the test notification's text; `sendTestNotification()` posts the Settings test toast (desktop `notify_test`, browser tag `tandem-chat-test`) whose click only focuses. "Active" comes from `hooks/useWindowAttention.svelte.ts`: visible AND focused, or merely visible when `chatSeenWhenVisible` is on (then several windows can be active and each chimes). Focus is tracked from events, a false seed corrected by trusted capture-phase `pointerdown`/`keydown`, and on desktop the native `isFocused()` seed applies only if no focus event arrived meanwhile. On desktop, visible also requires the native `isVisible()` and not `isMinimized()` (WebView2 never reports a minimised or tray-hidden window as hidden), read on focus, resize, `visibilitychange` and a 2 s poll while hidden or, with `chatSeenWhenVisible` on, while unfocused. The same signal gates chat acknowledgement: a reply counts as seen only when chat is visible in an active window. Settings: `chatNotifications`, `chatNotificationContent`, `chatAttentionFlash`, `chatSound`, `chatSoundVolume`, `chatSeenWhenVisible` (schema v21), on the Notifications settings tab
@@ -1272,7 +1287,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 ### Shared (`src/shared/`)
 
 - `types.ts` -- TypeScript interfaces shared between server and client (includes `editedAt` on Annotation, `ConnectionStatus` enum, `NotificationPayload`)
-- `constants.ts` -- Colors, annotation types, defaults, ports, `SUPPORTED_EXTENSIONS`
+- `constants.ts` -- Colors, annotation types, defaults, ports, the openable-extension sets (`BASE_EXTENSIONS`, `extensionsFor()`, `CLIENT_EXTENSIONS`) and the ship-dark literals (`DOCX_ENABLED`, `COWORK_ENABLED`, `BYO_MODELS_ENABLED`, `LAN_BIND_ENABLED`)
 - `offsets.ts` -- Flat-text format contract: `headingPrefixLength`, `FLAT_SEPARATOR`
 - `positions/` -- Shared position types: `RangeValidation`, `AnchoredRangeResult`, `PmRangeResult`, `ElementPosition`
 

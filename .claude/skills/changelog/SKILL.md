@@ -19,8 +19,12 @@ git describe --tags --abbrev=0
 2. List commits since that tag:
 
 ```bash
-git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
+git log $(git describe --tags --abbrev=0)..HEAD --oneline --first-parent
 ```
+
+`--first-parent` gives one line per change that landed on master, whether the PR arrived as a
+squash commit or a merge commit — the same walk the release skill uses. For a merge-commit line,
+read its diff against the first parent (`git show --first-parent <sha>`).
 
 3. **Read the diff of each change, not its subject line.** `git show <sha> -- <path>` for
    anything you are about to describe. The commit prefix tells you where an entry goes; only
