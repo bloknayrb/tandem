@@ -168,7 +168,7 @@ const LOOPBACK_ORIGIN: &str = "http://127.0.0.1:3479";
 const PRESENCE_HEALTH_DEADLINE: Duration = Duration::from_secs(90);
 /// License status endpoint (loopback). The updater reads `licenseId` +
 /// `updateWindowCurrent` to decide whether to route update checks through the
-/// license-gated Worker (#1116, ADR-040 §7). Keep in sync with
+/// license-gated Worker (#1116, licensing design spec §7). Keep in sync with
 /// API_LICENSE_STATUS in src/shared/api-paths.ts.
 const LICENSE_STATUS_URL: &str = "http://127.0.0.1:3479/api/license/status";
 /// Deployed license-update Worker endpoint (owner-configured; see
@@ -2708,7 +2708,7 @@ enum UpdateOutcome {
 
 /// Build the updater for this device's `UpdateRoute`. Both `check_for_update`
 /// and `install_update` go through this so check + install agree on the source
-/// (#1116, ADR-040 s7).
+/// (#1116, licensing design spec §7).
 ///
 /// `Withheld` means "serve NO manifest" -- never the public one (#1785). The
 /// `app.updater()` call below belongs to the `Public` arm ALONE; a lazy

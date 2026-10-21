@@ -21,8 +21,8 @@
     { "id": "relPosNode", "type": "database", "label": "RelativePosition", "sublabel": "CRDT-anchored", "tag": "shared/positions/", "stage": 2, "row": 1 },
     { "id": "hocuspocusSync", "type": "messagebus", "label": "Hocuspocus Sync", "sublabel": "Y.Doc broadcast", "stage": 3, "row": 0 },
     { "id": "reanchor", "type": "backend", "label": "reanchorAnnotations()", "sublabel": "on load/reload", "width": 170, "stage": 3, "row": 1 },
-    { "id": "getAnnotations", "type": "external", "label": "tandem_getAnnotations", "sublabel": "resolved | degraded", "width": 150, "stage": 4, "row": 0 },
-    { "id": "flatToPm", "type": "frontend", "label": "flatOffsetToPmPos()", "sublabel": "render decoration", "width": 160, "stage": 4, "row": 1 },
+    { "id": "getAnnotations", "type": "external", "label": "tandem_getAnnotations", "sublabel": "resolved | degraded | failed", "width": 150, "stage": 4, "row": 0 },
+    { "id": "flatToPm", "type": "frontend", "label": "flatOffsetToPmPos()", "sublabel": "client decoration (Y.Map)", "width": 160, "stage": 4, "row": 1 },
     { "id": "degradedNode", "type": "backend", "label": "Anchor: degraded", "sublabel": "stale, unresolvable", "width": 150, "stage": 4, "row": 2 }
   ],
   "flows": [
@@ -34,12 +34,12 @@
     { "from": "relPosNode", "to": "reanchor", "label": "resolves anchor", "labelDy": -23 },
     { "from": "hocuspocusSync", "to": "reanchor", "label": "on reload", "variant": "emphasis" },
     { "from": "reanchor", "to": "getAnnotations", "label": "offset refreshed", "variant": "emphasis" },
-    { "from": "getAnnotations", "to": "flatToPm", "label": "resolved position" },
+    { "from": "hocuspocusSync", "to": "flatToPm", "label": "Y.Map sync", "fromSide": "top", "toSide": "right", "via": [[745, 100], [1054, 100], [1054, 271]] },
     { "from": "reanchor", "to": "degradedNode", "label": "unresolvable", "variant": "dashed" }
   ],
   "cards": [
     { "dot": "cyan", "title": "Three Coordinate Systems", "items": ["Flat text offsets — extractText(), server/positions.ts", "ProseMirror positions — structural, client/positions.ts", "Yjs RelativePositions — CRDT-anchored, shared/positions/"] },
     { "dot": "amber", "title": "One Call, Two Anchors", "items": ["anchoredRange() mints the flat offset and the Yjs RelativePosition together", "validateRange() gates the mint before anchoredRange runs", "tandem_getTextContent uses extractText() only — extractMarkdown() shifts offsets out of the annotation coordinate system"] },
-    { "dot": "rose", "title": "Re-anchoring On Reload", "items": ["reanchorAnnotations() resolves each RelativePosition after Y.Doc load/reload", "A stale or unresolvable RelativePosition cannot be resolved back to an offset", "tandem_getAnnotations surfaces that outcome as anchor: \"degraded\""] }
+    { "dot": "rose", "title": "Re-anchoring On Reload", "items": ["reanchorAnnotations() resolves each RelativePosition after Y.Doc load/reload", "The editor reads annotations straight from the synced Y.Map; tandem_getAnnotations is the AI's read path, not the client's", "A stale or unresolvable RelativePosition cannot be resolved back to an offset", "tandem_getAnnotations surfaces that outcome as anchor: \"degraded\" (or \"failed\" for an inverted CRDT range)"] }
   ]
 }

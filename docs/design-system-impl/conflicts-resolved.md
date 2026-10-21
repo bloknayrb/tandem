@@ -1,5 +1,7 @@
 # Conflicts Resolved — Tandem Design System Impl Umbrella
 
+> **Status: live decision record.** These resolutions are still cited from code (e.g. `Toolbar.svelte`) and from the other files here; later entries amend earlier ones in place. Line-number citations inside entries are as of the date each entry was written.
+
 Locked Phase 0g of the design-system-impl plan (`feat/design-system-impl`). Every sub-PR references this document instead of re-litigating the tradeoffs.
 
 All nine conflicts default to **Option A** from the plan. If a sub-PR believes a different resolution is needed for its specific surface, it must raise the divergence in the PR body and get explicit confirmation before changing the resolution.
@@ -51,8 +53,8 @@ Conventions used below:
 - **Why:** Production tokens passed the WCAG AA audit (#556) and the v7 dark-mode pass (#776). Wholesale adoption of the bundle's tokens risks regressing the audit on every surface. The protected-token list in `token-audit.md` is non-negotiable (`--tandem-author-{user,claude}`, `--tandem-claude-focus-{bg,border}`, `--tandem-suggestion*`).
 - **Sub-PR constraint:** A bundle color may only appear in production CSS if (a) it has no production equivalent, OR (b) a per-token WCAG re-audit is committed alongside the change.
 - **Enforcement status (corrected 2026-09-01 — #799 shipped, but NOT as the CI gate this line promised).** The original Phase 0 plan called for `scripts/check-semantic-tokens.ts` to ship a bundle-token blocklist as a **CI-blocking** mechanical gate. [#799](https://github.com/bloknayrb/tandem/issues/799) genuinely landed the blocklist — `BUNDLE_BLOCKLIST_HEX` is exported at `scripts/check-semantic-tokens.ts:950`, documented at `:930` as "issue #799 / Conflict #6", with the enforcement loop at `:1240`. **What did not land is the CI half.** The script appears in **no** file under `.github/workflows/`. It runs from exactly three places:
-  1. **`.husky/pre-commit`** via lint-staged (`package.json:97-99`, on `src/client/**`) — this is the real gate, and it is bypassable by anything that skips hooks.
-  2. **`npm run check:tokens`** (`package.json:71`), by hand.
+  1. **`.husky/pre-commit`** via lint-staged (the `lint-staged` block in `package.json`, on `src/client/**`) — this is the real gate, and it is bypassable by anything that skips hooks.
+  2. **`npm run check:tokens`** (the `check:tokens` script in `package.json`), by hand.
   3. **`.claude/hooks/check-token-violation.sh:36`**, a PostToolUse hook that is **warn-only**.
 
   `.husky/pre-push` does **not** run it.
@@ -151,7 +153,7 @@ This is intentionally heavyweight — the default is "follow the locked resoluti
 - **What changed:** Conflict #5 (as updated 2026-05-25) located the Decorations split button in the **title bar**, reasoning that authorship needed a non-hideable home once the formatting bar became optional. On 2026-05-26 Bryan directed it into the **formatting bar** instead, and confirmed the standalone authorship toggle (`formatbar-authorship-toggle`, added in 1.2) is **subsumed** into the Decorations dropdown's authorship row.
 - **Why this is consistent, not a regression of the hideable-bar feature:** the same Conflict #5 update already specifies that the selection popup mirrors the **full** formatting-bar control set even when the bar is visible (sub-PR 1.11's D1). So when the bar is hidden, the Decorations control is still reachable via the popup — the popup is the mirror, which removes the original reason for a title-bar home. The hideable-bar feature (1.11's D3) survives unchanged.
 - **Scope guardrails still hold:** display-only; ADR-027 untouched (notes never read by Claude); no `src/server/` changes; all `decorations-*` testids preserved (only the now-redundant `formatbar-authorship-toggle` is removed, its E2E coverage relocated to assert the Decorations control). The control is mounted outside the bar's `overflow:hidden` track so its dropdown is never clipped.
-- **Downstream:** sub-PR 1.11's plan (`docs/plans/2026-05-25-1.11-selection-surface.md`) D1 now includes Decorations in the popup mirror, and D4 changes from "remove authorship from the bar" to "authorship is already subsumed into the bar's Decorations control" (no separate removal step).
+- **Downstream:** sub-PR 1.11's plan (a working plan that was never committed to this repo) D1 now includes Decorations in the popup mirror, and D4 changes from "remove authorship from the bar" to "authorship is already subsumed into the bar's Decorations control" (no separate removal step).
 
 ### Sub-PR 1.11 (annotate popover keybindings) — Enter is a newline; both submits are modifier-gated
 
@@ -164,7 +166,7 @@ This is intentionally heavyweight — the default is "follow the locked resoluti
 - **What changed:** Conflict #5's resolution specifies the popup mirrors the **full** formatting-bar control set. On 2026-06-03 Bryan directed that the **horizontal-rule control be dropped from the selection popup** ("we can drop hr from the selected text popup, since it makes little sense that a user would want to use it in that context"). The `—` button is now gated to `variant === "bar"` in `FormattingToolbar.svelte`, so it stays on the persistent formatting bar but no longer appears in the popup.
 - **Why this is consistent, not a regression of reachability:** the full-mirror's purpose is that every control stays *reachable when the bar is hidden*. Inserting a horizontal rule requires a **caret position**, not a **text selection** — and the popup only ever appears over a non-empty selection, where "replace the selection with an `<hr>`" is a semantically incoherent action. So hr was never a meaningful popup affordance; dropping it removes noise, not capability. hr remains on the bar and via any caret-context entry. This is a *narrow, control-specific* lift of the full-mirror clause, not a reversal of it — every other bar control (marks, blocks, Decorations, swap) still mirrors into the popup.
 - **Scope guardrails still hold:** client-only, no `src/server/` change; the hr button carries no `data-testid` (no test contract broken) and has zero annotation-model coupling (`setHorizontalRule()` is a pure ProseMirror node command); all `popup-*` testids preserved; ADR-027 and the suggestion-authoring guard untouched. Verified by the svelte / crdt / annotation-model plan reviewers (annotation-model: CLEAN).
-- **Downstream:** sub-PR 1.11's plan (`docs/plans/2026-05-25-1.11-selection-surface.md`) D2 + concrete-edit #2 + the test section are updated to this scheme; the old D2 "missed-send risk (MED)" mitigation is now moot (Enter doesn't submit) and is recorded as resolved rather than carried.
+- **Downstream:** sub-PR 1.11's plan (a working plan that was never committed to this repo) D2 + concrete-edit #2 + the test section are updated to this scheme; the old D2 "missed-send risk (MED)" mitigation is now moot (Enter doesn't submit) and is recorded as resolved rather than carried.
 
 ### Sub-PR 1.9 (NewTabMenu) — elevated "clean port" → full feature rebuild
 

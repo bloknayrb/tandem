@@ -195,6 +195,29 @@ describe("#1492 — the E2E harness runs on its own reserved ports", () => {
     }
   });
 
+  it("CONTRIBUTING.md's harness-port sentence matches scripts/test-ports.ts", () => {
+    // CONTRIBUTING.md names the reserved ports as literals so a contributor can
+    // see them without opening the source; nothing else ties those literals to
+    // the constants, so a renumbering would leave the contributor guide pointing
+    // at ports the harness no longer uses (or, worse, at ports it now kills).
+    const doc = readFileSync(path.join(ROOT, "CONTRIBUTING.md"), "utf8").replace(/\s+/g, " ");
+    const m =
+      /currently Vite (\d+) with a backend on (\d+)\/(\d+) for E2E, and (\d+)\/(\d+) for the perf gate/.exec(
+        doc,
+      );
+    expect(m, "CONTRIBUTING.md no longer states the harness ports in the pinned shape").not.toBe(
+      null,
+    );
+    expect(m?.slice(1).map(Number)).toEqual([
+      E2E_VITE_PORT,
+      E2E_WS_PORT,
+      E2E_MCP_PORT,
+      PERF_WS_PORT,
+      PERF_MCP_PORT,
+    ]);
+    expect(doc).toContain(`(:${DEFAULT_WS_PORT}/:${DEFAULT_MCP_PORT})`);
+  });
+
   it("keeps product-port literals out of tests/e2e entirely", () => {
     // FINDING 2: the one raw `http://127.0.0.1:3479` fetch in scroll-pill
     // escaped the constant-import inventory and would have driven the

@@ -5047,7 +5047,7 @@
         <path data-edge-from="relPosNode" data-edge-to="reanchor" data-edge-label="resolves anchor" data-edge-key="5" data-composition-points="586,271;660,271" d="M 586 271 L 660 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="hocuspocusSync" data-edge-to="reanchor" data-edge-label="on reload" data-edge-key="6" data-composition-points="745,186;745,186;745,242;745,242" d="M 745 186 L 745 186 L 745 242 L 745 242" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="reanchor" data-edge-to="getAnnotations" data-edge-label="offset refreshed" data-edge-key="7" data-composition-points="830,264;857.5,264;857.5,157;885,157" d="M 830 264 L 857.5 264 L 857.5 157 L 885 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="getAnnotations" data-edge-to="flatToPm" data-edge-label="resolved position" data-edge-key="8" data-composition-points="960,186;960,186;960,242;960,242" d="M 960 186 L 960 186 L 960 242 L 960 242" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="hocuspocusSync" data-edge-to="flatToPm" data-edge-label="Y.Map sync" data-edge-key="8" data-composition-points="745,128;745,100;1054,100;1054,271;1040,271" d="M 745 128 L 745 100 L 1054 100 L 1054 271 L 1040 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="reanchor" data-edge-to="degradedNode" data-edge-label="unresolvable" data-edge-key="9" data-composition-points="830,278;857.5,278;857.5,385;885,385" d="M 830 278 L 857.5 278 L 857.5 385 L 885 385" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Nodes -->
@@ -5138,8 +5138,8 @@
           <text data-detail="context" x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">on load/reload</text>
         </g>
 
-        <g id="node-getAnnotations" data-node-id="getAnnotations" data-node-label="tandem_getAnnotations" tabindex="0" role="button" aria-label="Focus tandem_getAnnotations, resolved | degraded, 05 / Read-back" aria-pressed="false" data-node-kind="external" data-node-sublabel="resolved | degraded" data-node-context="05 / Read-back">
-          <title>tandem_getAnnotations · resolved | degraded · 05 / Read-back</title>
+        <g id="node-getAnnotations" data-node-id="getAnnotations" data-node-label="tandem_getAnnotations" tabindex="0" role="button" aria-label="Focus tandem_getAnnotations, resolved | degraded | failed, 05 / Read-back" aria-pressed="false" data-node-kind="external" data-node-sublabel="resolved | degraded | failed" data-node-context="05 / Read-back">
+          <title>tandem_getAnnotations · resolved | degraded | failed · 05 / Read-back</title>
           <rect x="885" y="128" width="150" height="58" rx="6" class="c-mask"/>
           <rect x="885" y="128" width="150" height="58" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(891 134) scale(0.6875)">
@@ -5147,11 +5147,11 @@
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="960" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">tandem_getAnnotations</text>
-          <text data-detail="context" x="960" y="165" class="t-muted" font-size="7" text-anchor="middle">resolved | degraded</text>
+          <text data-detail="context" x="960" y="165" class="t-muted" font-size="7" text-anchor="middle">resolved | degraded | failed</text>
         </g>
 
-        <g id="node-flatToPm" data-node-id="flatToPm" data-node-label="flatOffsetToPmPos()" tabindex="0" role="button" aria-label="Focus flatOffsetToPmPos(), render decoration, 05 / Read-back" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="render decoration" data-node-context="05 / Read-back">
-          <title>flatOffsetToPmPos() · render decoration · 05 / Read-back</title>
+        <g id="node-flatToPm" data-node-id="flatToPm" data-node-label="flatOffsetToPmPos()" tabindex="0" role="button" aria-label="Focus flatOffsetToPmPos(), client decoration (Y.Map), 05 / Read-back" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="client decoration (Y.Map)" data-node-context="05 / Read-back">
+          <title>flatOffsetToPmPos() · client decoration (Y.Map) · 05 / Read-back</title>
           <rect x="880" y="242" width="160" height="58" rx="6" class="c-mask"/>
           <rect x="880" y="242" width="160" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(886 248) scale(0.6875)">
@@ -5161,7 +5161,7 @@
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">flatOffsetToPmPos()</text>
-          <text data-detail="context" x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">render decoration</text>
+          <text data-detail="context" x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">client decoration (Y.Map)</text>
         </g>
 
         <g id="node-degradedNode" data-node-id="degradedNode" data-node-label="Anchor: degraded" tabindex="0" role="button" aria-label="Focus Anchor: degraded, stale, unresolvable, 05 / Read-back" aria-pressed="false" data-node-kind="backend" data-node-sublabel="stale, unresolvable" data-node-context="05 / Read-back">
@@ -5208,9 +5208,9 @@
           <rect x="812.3" y="189.5" width="90.4" height="16" rx="4" class="c-mask"/>
           <text x="857.5" y="200.5" class="t-backend" font-size="8" text-anchor="middle">offset refreshed</text>
         </g>
-        <g data-detail="context" data-edge-from="getAnnotations" data-edge-to="flatToPm" data-edge-label="resolved position" data-edge-key="8">
-          <rect x="912.35" y="193" width="95.3" height="16" rx="4" class="c-mask"/>
-          <text x="960" y="204" class="t-muted" font-size="8" text-anchor="middle">resolved position</text>
+        <g data-detail="context" data-edge-from="hocuspocusSync" data-edge-to="flatToPm" data-edge-label="Y.Map sync" data-edge-key="8">
+          <rect x="932" y="92" width="56" height="16" rx="4" class="c-mask"/>
+          <text x="960" y="103" class="t-muted" font-size="8" text-anchor="middle">Y.Map sync</text>
         </g>
         <g data-detail="context" data-edge-from="reanchor" data-edge-to="degradedNode" data-edge-label="unresolvable" data-edge-key="9">
           <rect x="822.1" y="310.5" width="70.8" height="16" rx="4" class="c-mask"/>
@@ -5454,8 +5454,9 @@
         </div>
         <ul>
           <li>&bull; reanchorAnnotations() resolves each RelativePosition after Y.Doc load/reload</li>
+          <li>&bull; The editor reads annotations straight from the synced Y.Map; tandem_getAnnotations is the AI&#39;s read path, not the client&#39;s</li>
           <li>&bull; A stale or unresolvable RelativePosition cannot be resolved back to an offset</li>
-          <li>&bull; tandem_getAnnotations surfaces that outcome as anchor: &quot;degraded&quot;</li>
+          <li>&bull; tandem_getAnnotations surfaces that outcome as anchor: &quot;degraded&quot; (or &quot;failed&quot; for an inverted CRDT range)</li>
         </ul>
       </div>
     </div>

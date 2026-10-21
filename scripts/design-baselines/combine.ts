@@ -3,7 +3,7 @@
  * gallery — the durable output of `npm run capture:design-baselines`.
  *
  * Why a single file: OpenDesign flattens every file under
- * docs/design-system-impl into one list, so 16 per-surface baselines clutter
+ * docs/design-system-impl into one list, so 18 per-surface baselines clutter
  * the project view. This collapses them to a single OD artifact: a sticky
  * surface picker on the left, each captured baseline embedded in an
  * `<iframe srcdoc>` so its inlined `<html data-theme>` + full stylesheet stay

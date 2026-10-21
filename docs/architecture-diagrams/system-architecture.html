@@ -5044,8 +5044,8 @@
         <path data-edge-from="supervisor" data-edge-to="claude" data-edge-label="writes child stdin" data-edge-key="15" data-edge-id="supervisor-to-claude" data-composition-points="1245,314;1245,395;1075,395" d="M 1245 314 L 1245 387 Q 1245 395 1237 395 L 1075 395" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
-        <g id="node-desktop" data-node-id="desktop" data-node-label="Desktop App" tabindex="0" role="button" aria-label="Focus Desktop App, Rust sidecar + WebView, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Rust sidecar + WebView" data-node-context="Architecture component">
-          <title>Desktop App · Rust sidecar + WebView · Architecture component</title>
+        <g id="node-desktop" data-node-id="desktop" data-node-label="Desktop App" tabindex="0" role="button" aria-label="Focus Desktop App, Rust host + Node sidecar + WebView, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Rust host + Node sidecar + WebView" data-node-context="Architecture component">
+          <title>Desktop App · Rust host + Node sidecar + WebView · Architecture component</title>
           <rect x="40" y="40" width="220" height="64" rx="6" class="c-mask"/>
           <rect x="40" y="40" width="220" height="64" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(46 46) scale(0.6875)">
@@ -5055,7 +5055,7 @@
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="150" y="70" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Desktop App</text>
-        <text data-detail="context" x="150" y="86" class="t-muted" font-size="9" text-anchor="middle">Rust sidecar + WebView</text>
+        <text data-detail="context" x="150" y="86" class="t-muted" font-size="9" text-anchor="middle">Rust host + Node sidecar + WebView</text>
         </g>
 
         <g id="node-browser" data-node-id="browser" data-node-label="Browser Client" tabindex="0" role="button" aria-label="Focus Browser Client, npm global install, static server, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="npm global install, static server" data-node-context="Architecture component">
@@ -5105,8 +5105,8 @@
         <text data-detail="context" x="420" y="296" class="t-muted" font-size="9" text-anchor="middle">watches disk, reloads Y.Doc</text>
         </g>
 
-        <g id="node-localfiles" data-node-id="localfiles" data-node-label="Local Files" tabindex="0" role="button" aria-label="Focus Local Files, .md .txt .html .docx, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel=".md .txt .html .docx" data-node-context="Architecture component">
-          <title>Local Files · .md .txt .html .docx · Architecture component</title>
+        <g id="node-localfiles" data-node-id="localfiles" data-node-label="Local Files" tabindex="0" role="button" aria-label="Focus Local Files, .md .txt .html (.docx dark), Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel=".md .txt .html (.docx dark)" data-node-context="Architecture component">
+          <title>Local Files · .md .txt .html (.docx dark) · Architecture component</title>
           <rect x="320" y="350" width="200" height="64" rx="6" class="c-mask"/>
           <rect x="320" y="350" width="200" height="64" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(326 356) scale(0.6875)">
@@ -5114,7 +5114,7 @@
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="420" y="380" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Local Files</text>
-        <text data-detail="context" x="420" y="396" class="t-muted" font-size="9" text-anchor="middle">.md .txt .html .docx</text>
+        <text data-detail="context" x="420" y="396" class="t-muted" font-size="9" text-anchor="middle">.md .txt .html (.docx dark)</text>
         </g>
 
         <g id="node-eventqueue" data-node-id="eventqueue" data-node-label="Event Queue + SSE" tabindex="0" role="button" aria-label="Focus Event Queue + SSE, Y.Map observers, fan-out, Architecture component" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="Y.Map observers, fan-out" data-node-context="Architecture component">
@@ -5473,7 +5473,7 @@
           <h3>Editor</h3>
         </div>
         <ul>
-          <li>&bull; Tauri desktop: Rust sidecar + WebView</li>
+          <li>&bull; Tauri desktop: Rust host + Node sidecar + WebView</li>
           <li>&bull; Browser: npm global install serves the same Tiptap editor</li>
         </ul>
       </div>

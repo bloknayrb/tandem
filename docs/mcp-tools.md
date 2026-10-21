@@ -127,7 +127,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 ```json
 {
   "documentId": "report-a1b2c3",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "filePath": "C:\\Users\\you\\docs\\report.md",
   "fileName": "report.md",
   "format": "md",
   "readOnly": false,
@@ -148,7 +148,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 
 **Example:**
 ```
-tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
+tandem_open({ filePath: "C:\\Users\\you\\Documents\\progress-report-feb.md" })
 ```
 
 **Notes:**
@@ -209,7 +209,7 @@ Read document as plain text whose offsets match the annotation coordinate system
 ```json
 {
   "text": "# Title\nFirst paragraph...\n## Section\nMore text...",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "filePath": "C:\\Users\\you\\docs\\report.md",
   "documentId": "report-a1b2c3"
 }
 ```
@@ -218,7 +218,7 @@ Read document as plain text whose offsets match the annotation coordinate system
 ```json
 {
   "text": "## Section\nMore text...",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "filePath": "C:\\Users\\you\\docs\\report.md",
   "section": "Section"
 }
 ```
@@ -386,7 +386,7 @@ Target an item by a flat offset anywhere inside it. Flat text is structurally bl
 
 **Errors:** `READ_ONLY` (read-only document), `FORMAT_ERROR` (a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
 
-**Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.csv`, `.html`, unknown extensions) have no list model at all.
+**Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.html`) have no list model at all.
 
 **No `move` or list-type conversion, deliberately -- and reordering by hand is lossy.** Yjs has no move primitive and `nodeName` is immutable, so relocating an item or switching a list between bulleted and numbered means delete-and-rebuild, which destroys the annotations, authorship and CRDT anchors on everything it touches -- the same loss the range-replace design was rejected for. Composing `remove` + `insertAfter` to reorder has exactly that cost: **the moved item's annotations and authorship do not survive**, and nothing warns you. Prefer leaving the item where it is, or accept the loss knowingly.
 
@@ -415,14 +415,14 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 
 **Returns:**
 ```json
-{ "saved": true, "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
+{ "saved": true, "filePath": "C:\\Users\\you\\docs\\report.md" }
 ```
 
 A save that did not reach disk answers `saved: false` with `sessionOnly: true` and a machine-readable `reason` (#1798 — it used to answer `saved: true`, which is why `.html` edits looked accepted and were then lost on tab close):
 
 ```json
 { "saved": false, "sessionOnly": true, "reason": "UNSUPPORTED_FORMAT",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.html",
+  "filePath": "C:\\Users\\you\\docs\\report.html",
   "message": "Session saved (annotations preserved). Source file unchanged — this format (html) cannot be written back to disk." }
 ```
 
@@ -514,7 +514,7 @@ Close a document's tab (the active document if no `documentId` is specified); if
 
 **Returns:**
 ```json
-{ "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" }
+{ "closed": true, "was": "C:\\Users\\you\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" }
 ```
 
 ---
@@ -530,7 +530,7 @@ Rename an open on-disk document's file, keeping the same directory and extension
 
 **Returns:**
 ```json
-{ "renamed": true, "from": "C:\\Users\\bkolb\\docs\\draft.md", "to": "C:\\Users\\bkolb\\docs\\final.md", "fileName": "final.md" }
+{ "renamed": true, "from": "C:\\Users\\you\\docs\\draft.md", "to": "C:\\Users\\you\\docs\\final.md", "fileName": "final.md" }
 ```
 
 **Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (uploads, `readOnly` opens) are rejected. A disk-opened `.docx` is renamable (#576). The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
@@ -593,7 +593,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 ```json
 {
   "converted": true,
-  "outputPath": "C:\\Users\\bkolb\\docs\\report.md",
+  "outputPath": "C:\\Users\\you\\docs\\report.md",
   "documentId": "report-a1b2c3",
   "fileName": "report.md",
   "message": "Converted to Markdown: report.md"
@@ -883,8 +883,8 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
   "applied": 5,
   "rejected": 1,
   "rejectedDetails": [{"id": "ann-xyz", "reason": "..."}],
-  "backupPath": "C:\\Users\\bkolb\\docs\\report.backup.docx",
-  "outputPath": "C:\\Users\\bkolb\\docs\\report.docx",
+  "backupPath": "C:\\Users\\you\\docs\\report.backup.docx",
+  "outputPath": "C:\\Users\\you\\docs\\report.docx",
   "pendingWarning": "3 annotations are still pending review",
   "commentsResolved": 2
 }
@@ -1344,7 +1344,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 
 **Request:**
 ```json
-{ "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
+{ "filePath": "C:\\Users\\you\\docs\\report.md" }
 ```
 
 | Field | Type | Required | Description |
@@ -1392,7 +1392,7 @@ Close an open document by its document ID. Equivalent to `tandem_close` but call
 
 **Response (200):**
 ```json
-{ "data": { "closedPath": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
+{ "data": { "closedPath": "C:\\Users\\you\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
 ```
 
 `closedPath` is scrubbed to a basename for non-loopback callers (#1294).

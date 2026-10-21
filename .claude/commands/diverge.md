@@ -6,7 +6,7 @@ description: Run parallel divergent ideation on an open-ended design problem bef
 
 The user's problem statement: **$ARGUMENTS**
 
-You are running the `/diverge` workflow. This is a heavy, opt-in step that runs **before** `/plan` for genuinely open-ended design problems. Reference: `.claude/plans/diverge-workflow.md`.
+You are running the `/diverge` workflow. This is a heavy, opt-in step that runs **before** `/plan` for genuinely open-ended design problems. This file is the complete, tracked definition of the workflow and its review gate. (An earlier reference doc, `.claude/plans/diverge-workflow.md`, lived in a gitignored directory and is absent from any fresh clone; nothing here depends on it.)
 
 Follow the six steps below exactly. Do not skip the sanity check.
 
@@ -220,7 +220,7 @@ Use the `preview` field on each survivor option to show the deepened content (fi
 After the user picks:
 
 - If a survivor: update the persisted `.md` file's **Outcome** section with the choice. Suggest the user run `/plan` next, citing the file path.
-- If "None of these — reframe": update **Outcome** to `"none — reframe"`. Tell the user this counts toward the review gate below — a second "reframe" within a review period is a retirement criterion. Ask if they want to retry diverge with a reframed problem statement or abandon.
+- If "None of these — reframe": update **Outcome** to `"none — reframe"`. Tell the user this counts toward the review gate below — a second "reframe" within a review period is a retirement criterion. Because the persisted `.md` file is gitignored, the reframe must also leave a tracked trace: ask the user to put `via /diverge (reframed)` in the commit or PR body of whatever work follows (or, if the problem is abandoned, in a comment on its issue). Ask if they want to retry diverge with a reframed problem statement or abandon.
 
 ---
 
@@ -246,9 +246,10 @@ The original gate ("delete if not invoked within 30 days", set 2026-05-28) was
 fact been invoked on day two — `9657de1` is first-use validation from two runs, and
 the limitations section above is its output — plus at least once more on 2026-07-20.
 The sweep that judged it searched tracked files for *references to* the command, which
-cannot answer "was it used": invocation writes to `.claude/plans/`, which `.gitignore:28`
-excludes. The criterion's own definition lives at `.claude/plans/diverge-workflow.md`,
-inside that same ignored directory, so the rule was as invisible as the evidence.
+cannot answer "was it used": invocation writes to `.claude/plans/`, which `.gitignore`
+excludes. The criterion's own definition lived at `.claude/plans/diverge-workflow.md`,
+inside that same ignored directory, so the rule was as invisible as the evidence. It is
+now stated here, in this tracked file.
 
 The generalisable failure: **a kill criterion whose evidence lives in an ignored path
 cannot be checked by the sweep that will judge it**, and the elapsed date is what makes
@@ -262,10 +263,18 @@ of work, say so in the commit or PR body of that work — the phrase `via /diver
 enough. At review time the question is answered by:
 
 ```sh
-git log --since=<gate-set-date> --grep='via /diverge' --oneline
+git log --since=<gate-set-date> -P --grep='via /diverge(?! \(reframed\))' --oneline
+git log --since=<gate-set-date> --grep='via /diverge (reframed)' --fixed-strings --oneline
 ```
 
-Retire it if that returns nothing across a full review period, or if "none of these —
-reframe" is chosen more than once. Do **not** retire it on the strength of an elapsed
+The first command's negative lookahead is what keeps a `via /diverge (reframed)` trace out
+of the use count; a plain `--grep='via /diverge'` matches those too, so a run of reframes
+alone would read as use and mask the retirement test. A commit carrying both phrases still
+counts once as a use. `-P` needs a git built with PCRE; one without it refuses the command
+loudly rather than returning nothing.
+
+Retire it if the first returns nothing across a full review period, or if "none of these —
+reframe" is chosen more than once (the second command, plus any issue comments carrying the
+same phrase). Do **not** retire it on the strength of an elapsed
 date alone, and do not conclude "unused" from a search that could only ever have found
 references rather than uses.

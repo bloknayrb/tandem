@@ -1,5 +1,7 @@
 # CHANGELOG Strategy — Design System Impl Umbrella
 
+> **Status: historical.** The process for the design-system-impl umbrella, which merged and shipped in v0.13.5. Current changelog practice is the `changelog` and `release` skills under `.claude/skills/`.
+
 How sub-PRs into `feat/design-system-impl` interact with `CHANGELOG.md` while the umbrella is open, and how the final umbrella → master merge promotes the work into a release entry.
 
 ## Default: rollup section
