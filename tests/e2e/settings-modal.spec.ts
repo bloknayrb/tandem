@@ -234,6 +234,24 @@ test("E5: saving the working directory surfaces the success toast", async ({ pag
   const toast = page.locator("[data-testid='toast-container']");
   await expect(toast).toBeVisible({ timeout: 5_000 });
   await expect(toast).toContainText("Working directory saved.");
+
+  // #2257: the toast must paint ABOVE the still-open modal's scrim, not as a
+  // washed-out ghost beneath it. toBeVisible ignores what covers an element, so
+  // hit-test the card's centre. Probe the card (pointer-events: auto), not the
+  // stack (pointer-events: none, which elementFromPoint skips), and measure and
+  // probe in one evaluate under poll because the card slides in.
+  await expect(page.locator(MODAL)).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const card = document.querySelector("[data-testid='toast-container'] .toast-card");
+        if (!card) return "no card";
+        const r = card.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit?.closest("[data-testid='toast-container']") ? "toast" : "covered";
+      }),
+    )
+    .toBe("toast");
 });
 
 // PR 6 — Network two-tier refactor.

@@ -321,6 +321,12 @@
            Solo/Tandem toggle poke through the dimming backdrop). */
         --tandem-z-titlebar: 99999;
         --tandem-z-above-titlebar: 100000;
+        /* Toasts only (#2257): above every modal tier (the highest today is
+           above-titlebar + 5), so a toast raised while Settings is open is not
+           washed out under its scrim. Not --tandem-z-toast: the formatting
+           bar's popover lift and the activity tray share that one, and lifting
+           them would float them over modal backdrops. */
+        --tandem-z-toast-layer: calc(var(--tandem-z-above-titlebar) + 10);
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
            rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
            into the floating TitleBar (no in-flow tabs row), so these drop to

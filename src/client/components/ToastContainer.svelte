@@ -100,7 +100,7 @@ let { toasts, onDismiss }: Props = $props();
     /* Sits above the activity pill (bottom: space-3, ~26px tall) + a gap. */
     bottom: calc(var(--tandem-space-3) + 26px + var(--tandem-space-2));
     right: var(--tandem-space-4);
-    z-index: var(--tandem-z-toast);
+    z-index: var(--tandem-z-toast-layer);
     display: flex;
     flex-direction: column;
     gap: var(--tandem-space-2);

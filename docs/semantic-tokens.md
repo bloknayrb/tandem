@@ -30,7 +30,7 @@ Use these instead of raw px literals in client surfaces:
 - **Elevation:** `--tandem-shadow-1..4`, plus `--tandem-shadow-inset` (the toggle
   PRESSED state — see *Light vs dark derivation*; it is the only shadow token with
   a per-theme override)
-- **Stacking:** `--tandem-z-base..tooltip`
+- **Stacking:** `--tandem-z-base..tooltip`, `--tandem-z-titlebar`, `--tandem-z-above-titlebar` (full-screen modal overlays), and `--tandem-z-toast-layer` (the toast stack only, above every modal; `--tandem-z-toast` is the lower tier the formatting bar and activity tray share)
 
 ## Highlights
 

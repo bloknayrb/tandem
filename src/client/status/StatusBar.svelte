@@ -215,16 +215,27 @@ let showReconnectedFlash = $state(false);
 let elapsedSeconds = $state(0);
 // intentional snapshot — updated inside $effect to detect rising-edge reconnect
 let prevConnected = untrack(() => connected);
+// #2258: the page's first connect is a rising edge too, but nothing was lost —
+// only a rising edge after some earlier connect is a REconnect. Read before it
+// is set below, so the first connect itself never flashes.
+let hasEverConnected = untrack(() => connected);
 
 $effect(() => {
   const was = prevConnected;
   prevConnected = connected;
-  if (connected && !was) {
+  const isReconnect = connected && !was && hasEverConnected;
+  if (connected) hasEverConnected = true;
+  if (isReconnect) {
     showReconnectedFlash = true;
     const timer = setTimeout(() => {
       showReconnectedFlash = false;
     }, RECONNECTED_FLASH_MS);
-    return () => clearTimeout(timer);
+    // Clear the flash too: a drop inside the window would otherwise cancel the
+    // timer and leave "Reconnected" (which outranks the status) stuck on.
+    return () => {
+      clearTimeout(timer);
+      showReconnectedFlash = false;
+    };
   }
 });
 

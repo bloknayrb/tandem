@@ -507,3 +507,46 @@ describe("StatusBar — Tandem's Claude in standby (#2195)", () => {
     expect(getByTestId("status-ai-indicator").textContent).toContain("Starting Claude…");
   });
 });
+
+describe("StatusBar — Reconnected flash (#2258)", () => {
+  const down = { ...baseProps, connected: false, connectionStatus: "connecting" as const };
+  const up = { ...baseProps, connected: true, connectionStatus: "connected" as const };
+
+  afterEach(() => vi.useRealTimers());
+
+  it("the page's first connect is not a reconnect", async () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(StatusBar, { props: down });
+    await rerender(up);
+    expect(container.textContent).toContain("Synced");
+    expect(container.textContent).not.toContain("Reconnected");
+  });
+
+  it("a connect after a drop flashes, then settles to Synced", async () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(StatusBar, { props: down });
+    await rerender(up);
+    await rerender(down);
+    await rerender(up);
+    expect(container.textContent).toContain("Reconnected");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(container.textContent).not.toContain("Reconnected");
+    expect(container.textContent).toContain("Synced");
+  });
+
+  it("a drop inside the flash window shows the drop, not a stuck Reconnected", async () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(StatusBar, { props: up });
+    await rerender(down);
+    await rerender(up);
+    expect(container.textContent).toContain("Reconnected");
+    await rerender(down);
+    expect(container.textContent).toContain("Reconnecting…");
+    expect(container.textContent).not.toContain("Reconnected");
+  });
+
+  it("mounting already connected does not flash", () => {
+    const { container } = render(StatusBar, { props: up });
+    expect(container.textContent).not.toContain("Reconnected");
+  });
+});
