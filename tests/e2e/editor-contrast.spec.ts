@@ -185,17 +185,24 @@ async function probe(page: Page, theme: string): Promise<Result[]> {
         }
       }
 
-      // 4. Document link text. `editor.css` paints
-      //    `.tandem-editor a[href]:not([data-tandem-link-blocked])` with
-      //    `--tandem-accent-fg-strong`; before that rule existed the UA's
-      //    `#0000EE` painted on every theme. A highlighted link drops back to
-      //    `--tandem-fg`, which row 2 already covers.
+      // 4. Document link text, read off a real `<a href>` inside the editor so
+      //    the row measures the `editor.css` rule, not just the token: before
+      //    that rule existed the UA's `#0000EE` painted on every theme, and
+      //    deleting the rule turns this red. The probe anchor is removed before
+      //    ProseMirror's DOM observer flushes. A highlighted or find-matched
+      //    link drops back to `--tandem-fg`, which row 2 already covers.
       {
-        const link = tok("--tandem-accent-fg-strong");
-        if (link) {
+        const editor = document.querySelector(".tandem-editor");
+        if (editor) {
+          const a = document.createElement("a");
+          a.href = "https://example.com/";
+          a.textContent = "link";
+          editor.appendChild(a);
+          const color = getComputedStyle(a).color;
+          a.remove();
           out.push({
             name: "link text vs editor bg",
-            ratio: ratio(paint(link), editorBg),
+            ratio: ratio(paint(color), editorBg),
             min: 4.5,
           });
         }

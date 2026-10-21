@@ -69,7 +69,8 @@
  * 8.65:1, warm 7.68:1, dark 10.25:1; the worst case over the whole
  * user-settable hue range is warm at 5.73:1. The high-contrast toggle leaves
  * the accent and bg tokens alone, so its numbers are its theme's. Setting
- * `color` on the anchor also covers `:visited` (the UA rule is less specific).
+ * `color` on the anchor also covers `:visited` (an author rule beats the UA's
+ * `:visited` colour whatever the specificity).
  *
  * The underline is stated rather than left to the UA default: it keeps a link
  * distinguishable without relying on colour (SC 1.4.1), including where the
@@ -84,11 +85,14 @@
   color: var(--tandem-accent-fg-strong);
   text-decoration: underline;
 }
-/* A highlight fill under a link. Dark's yellow highlight composites to a
- * mid-tone that dark's light link colour reaches only 3.53:1 on; body text is
- * what `tests/e2e/editor-contrast.spec.ts` holds to 4.5:1 on every fill, so a
- * highlighted link drops back to it and keeps its underline. */
-.tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-highlight {
+/* A highlight or find-match fill under a link (the active match too). Dark's
+ * yellow, which highlights and find matches share, composites to a mid-tone
+ * that dark's light link colour reaches only 3.53:1 on; body text is what
+ * `tests/e2e/editor-contrast.spec.ts` holds to 4.5:1 on every fill, so a link
+ * under any of them drops back to it and keeps its underline. */
+.tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-highlight,
+.tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-find-match,
+.tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-find-active {
   color: var(--tandem-fg);
 }
 /* Under forced colors `--tandem-accent-fg-strong` maps to `HighlightText` — the
@@ -96,7 +100,9 @@
  * keyword that exists for this (mirrors `.tandem-markdown a`). */
 @media (forced-colors: active) {
   .tandem-editor a[href]:not([data-tandem-link-blocked]),
-  .tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-highlight {
+  .tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-highlight,
+  .tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-find-match,
+  .tandem-editor a[href]:not([data-tandem-link-blocked]) .tandem-find-active {
     color: LinkText;
   }
 }
