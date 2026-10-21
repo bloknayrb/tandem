@@ -67,8 +67,8 @@ get one, ask in a comment. See [Comment](user-guide.md#comment).
 
 ## Note
 
-A private annotation for yourself. The AI cannot read, edit, resolve or reply to a note through any
-tool or event, in either mode. You can promote a note to a comment if you later want the AI to see
+A private annotation for yourself. The AI cannot read, edit, resolve, remove or reply to a note through
+any tool or event, in either mode. You can promote a note to a comment if you later want the AI to see
 it. See [Note](user-guide.md#note) and
 [ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model).
 
@@ -120,8 +120,10 @@ to disk. See [Opening files](user-guide.md#opening-files).
 
 ## documentId
 
-The stable ID of an open document, derived from its file path. Every MCP tool takes an optional
-`documentId` and defaults to the active document. See
+The stable ID of an open document, derived from its file path. Most MCP tools take an optional
+`documentId` and default to the active document. Two kinds differ: `tandem_checkInbox` polls
+every open document by default, and the four tools that take an annotation ID (resolve, remove,
+edit and reply) default to whichever open document holds that annotation. See
 [Multi-document support](mcp-tools.md#multi-document-support) and
 [ADR-010](decisions.md#adr-010-docidfrompath-for-multi-document-room-names).
 
@@ -317,8 +319,9 @@ npm install use separate folders, and logs live elsewhere. Your documents stay w
 
 A random secret Tandem generates so that callers from outside this computer must prove who they
 are; callers on this computer do not need it. The desktop app keeps it in the OS keychain, the npm
-install in a file. `tandem rotate-token` replaces the npm install's token file only; it does not
-reach the desktop app's keychain token (see [OS keychain](data-locations.md#os-keychain)). See
+install in a file; a desktop app with no keychain entry (or no keychain) uses that same file.
+`tandem rotate-token` replaces the npm install's token file only; it does not reach a token held
+in the desktop app's keychain (see [OS keychain](data-locations.md#os-keychain)). See
 [Auth tokens](security.md#auth-tokens) and [Rotating the token](configuration.md#rotating-the-token).
 
 ## Reserved harness ports

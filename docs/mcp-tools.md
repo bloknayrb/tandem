@@ -127,7 +127,7 @@ Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The edit
 
 ## Multi-Document Support
 
-All tools that operate on a document accept an optional `documentId` parameter. If omitted, the tool targets the **active document** (the most recently opened or switched-to document). Use `tandem_listDocuments` to see all open documents and their IDs, and `tandem_switchDocument` to change the default target.
+All tools that operate on a document accept an optional `documentId` parameter. If omitted, most target the **active document** (the most recently opened or switched-to document). Two kinds differ: `tandem_checkInbox` polls every open document and tags each item with its `documentId`, and the four tools keyed by annotation ID (`tandem_resolveAnnotation`, `tandem_removeAnnotation`, `tandem_editAnnotation`, `tandem_annotationReply`) default to the open document that holds that annotation, refusing as `ambiguous-document` when more than one does. Use `tandem_listDocuments` to see all open documents and their IDs, and `tandem_switchDocument` to change the default target.
 
 Document IDs are stable -- the same file path always produces the same ID across sessions.
 

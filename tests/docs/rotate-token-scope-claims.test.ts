@@ -46,13 +46,14 @@ const REPLACES =
   /\b(replac\w*|retir\w*|revok\w*|regenerat\w*|(?:generat|mint)\w*\s+a\s+(?:new|fresh))\b/i;
 
 /**
- * Scoping that makes the claim true: npm-file-only, an explicit keychain
+ * Scoping that makes the claim true: the npm install's file ("npm" alone is
+ * not enough: "replaces the token (npm users too)" names no scope), an explicit keychain
  * negative, or "does not reach". Tested only on the text AFTER the command,
  * so "the keychain, the npm install in a file, and rotate-token replaces it"
  * cannot borrow scope from a clause about something else.
  */
 const SCOPED =
-  /\bnpm\b|(?:not|never|n't)\b[^.]*\bkeychain\b|\bkeychain\b[^.]*\b(?:not|never|n't)\b|\b(?:not|never|n't)\s+reach/i;
+  /\bnpm\b[^.]*\bfile\b|(?:not|never|n't)\b[^.]*\bkeychain\b|\bkeychain\b[^.]*\b(?:not|never|n't)\b|\b(?:not|never|n't)\s+reach/i;
 
 /** Paragraph text with fenced blocks removed and line wraps joined. */
 function sentences(markdown: string): string[] {
@@ -96,6 +97,10 @@ describe("rotate-token scope claims", () => {
     expect(unscopedClaims("Run `tandem rotate-token` to retire the token.")).toHaveLength(1);
     expect(
       unscopedClaims("`tandem rotate-token` generates a new token and updates configs."),
+    ).toHaveLength(1);
+    // A bare mention of npm is not a scope.
+    expect(
+      unscopedClaims("`tandem rotate-token` replaces the token (npm users too)."),
     ).toHaveLength(1);
   });
 

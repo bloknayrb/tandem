@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -240,30 +248,104 @@ describe("reachability", () => {
   });
 });
 
+/**
+ * End-to-end runs of the real script against a throwaway git repository, never
+ * the working tree: a broken link in an unrelated draft must not fail
+ * `npm test` (the gate runs in CI's `check` job, not in the hooks — see
+ * CONTRIBUTING). The script derives its root from its own location, so a copy
+ * under `<fixture>/scripts/` checks the fixture.
+ */
 describe("entry point", () => {
-  // The script runs `main` only when executed directly. A guard that silently
-  // fails to match exits 0 having checked nothing, so assert it actually ran.
-  const run = (script: string) =>
-    spawnSync(process.execPath, [script], { cwd: ROOT, encoding: "utf-8", timeout: 30_000 });
+  const run = (script: string, cwd: string) =>
+    spawnSync(process.execPath, [script], { cwd, encoding: "utf-8", timeout: 30_000 });
 
-  it("runs the check when invoked as `node scripts/check-doc-links.mjs`", () => {
-    const res = run("scripts/check-doc-links.mjs");
-    expect(res.stdout).toContain("Checked");
-    expect(res.status).toBe(0);
+  /** A git repo holding `files` plus a copy of the checker; returns its root. */
+  function fixtureRepo(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(tmpdir(), "check-links-repo-"));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), body);
+    }
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    copyFileSync(SCRIPT, path.join(root, "scripts/check-doc-links.mjs"));
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    return root;
+  }
+
+  const CLEAN = {
+    "docs/README.md": "# Home\n\nSee [Guide](guide.md#usage) and [below](#home).\n",
+    "docs/guide.md": "# Guide\n\n## Usage\n\n![Shot](screenshots/a.png)\n",
+    "docs/screenshots/a.png": "png",
+  };
+
+  it("exits 0 on a clean repository, having actually checked links", () => {
+    const root = fixtureRepo(CLEAN);
+    try {
+      const res = run("scripts/check-doc-links.mjs", root);
+      expect(res.stdout).toContain("Checked 3 relative links across 2 markdown files.");
+      expect(res.stdout).toContain("All resolve");
+      expect(res.status).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("runs the check when invoked through a symlink", () => {
     // Node puts the resolved path in import.meta.url but leaves argv[1] as the
     // symlink, which is what a symlinked checkout looks like.
+    const root = fixtureRepo(CLEAN);
     const dir = mkdtempSync(path.join(tmpdir(), "check-links-"));
     try {
       const link = path.join(dir, "check-doc-links.mjs");
-      symlinkSync(SCRIPT, link);
-      const res = run(link);
-      expect(res.stdout).toContain("Checked");
+      symlinkSync(path.join(root, "scripts/check-doc-links.mjs"), link);
+      const res = run(link, dir);
+      expect(res.stdout).toContain("Checked 3 relative links");
       expect(res.status).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 1 and names every failure category", () => {
+    // One failure per category, so a category dropped from the report, or a
+    // misplaced `continue` in the glue, turns this red.
+    const root = fixtureRepo({
+      ...CLEAN,
+      "docs/README.md":
+        "# Home\n\n[Guide](guide.md) [gone](missing.md) [bad anchor](guide.md#nope) " +
+        "[bad here](#nope) ![gone](screenshots/missing.png)\n",
+      "docs/orphan.md": "# Orphan\n",
+      "docs/screenshots/unused.png": "png",
+    });
+    try {
+      const res = run("scripts/check-doc-links.mjs", root);
+      expect(res.status).toBe(1);
+      for (const label of [
+        "1 broken link targets",
+        "1 missing images",
+        "1 broken anchors (cross-file)",
+        "1 broken anchors (same file)",
+        "1 live docs unreachable from docs/README.md",
+        "1 screenshots referenced by no Markdown image",
+      ]) {
+        expect(res.stderr).toContain(label);
+      }
+      expect(res.stderr).toContain("docs/orphan.md");
+      expect(res.stderr).toContain("docs/screenshots/unused.png");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 1 when the hub is missing", () => {
+    const root = fixtureRepo({ "docs/guide.md": "# Guide\n" });
+    try {
+      const res = run("scripts/check-doc-links.mjs", root);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("hub missing: docs/README.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
