@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,5 +94,52 @@ describe("vitest app-data isolation", () => {
     expect(dir).not.toBe(root);
     expect(path.dirname(dir)).toBe(root);
     expect(path.basename(dir)).toMatch(/^worker-\d+$/);
+  });
+});
+
+/**
+ * A test file that points `TANDEM_APP_DATA_DIR` at a directory of its own must
+ * tear it down through `teardownFileAppDataDir()`. The hand-written teardown it
+ * replaced removed the directory and then deleted the variable while annotation
+ * writes were still debounced, so the late write resolved to the REAL app-data
+ * directory (reproduced: running those files left an annotation envelope in
+ * the real `annotations/` folder). Where the directory itself was gone the
+ * same write logged `ENOENT` during worker shutdown, an unhandled
+ * `EnvironmentTeardownError` that failed the `coverage` job with every test
+ * green. The helper cancels pending writes first and restores the variable
+ * instead of deleting it; this keeps a new file from copying the old block.
+ */
+describe("per-file app-data teardown", () => {
+  const testsDir = path.join(ROOT, "tests");
+  const files = (readdirSync(testsDir, { recursive: true }) as string[])
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => f.replaceAll("\\", "/"));
+  const overriding = files.filter((f) =>
+    readFileSync(path.join(testsDir, f), "utf-8").includes(
+      "process.env.TANDEM_APP_DATA_DIR = appDataDir",
+    ),
+  );
+
+  it("finds the files that override the app-data directory", () => {
+    // A vacuous pass is the failure mode of any sweep: if the override is ever
+    // respelled, this goes red instead of the check below checking nothing.
+    expect(overriding.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("never deletes the variable, and removes the directory only through the helper", () => {
+    // A file that leaves its directory in place is safe: late writes land in
+    // it. What is not safe is deleting the variable, or removing the directory
+    // by hand while writes are still pending.
+    const offenders = overriding.filter((f) => {
+      if (f === "scripts/app-data-isolation-wiring.test.ts") return false;
+      const text = readFileSync(path.join(testsDir, f), "utf-8");
+      if (text.includes("delete process.env.TANDEM_APP_DATA_DIR")) return true;
+      const removesByHand = /\brm\(appData(Dir)?\b/.test(text);
+      return removesByHand;
+    });
+    expect(
+      offenders,
+      "use teardownFileAppDataDir() from tests/helpers/app-data-teardown.ts",
+    ).toEqual([]);
   });
 });
