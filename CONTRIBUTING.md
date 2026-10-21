@@ -7,6 +7,10 @@ Start with [README.md](README.md) for what Tandem is. Read [AGENTS.md](AGENTS.md
 code: it lists the invariants that fail *silently* — code that type-checks, passes tests, and is
 wrong at runtime. If you are working with Claude Code, [CLAUDE.md](CLAUDE.md) is the long form.
 
+The rest of the documentation is indexed from the [docs hub](docs/README.md). The
+[Contributing map](docs/maps/contributing.md) lists the pages that matter for code work: the rules
+that fail silently and the reasons behind them, the design system and the review tooling.
+
 ## Prerequisites
 
 - **Node.js 22.12.0 or newer**, and npm. This is the floor `package.json`'s `engines` field
@@ -126,15 +130,40 @@ Three things about it that are easy to get wrong:
 |---|---|
 | `npm run typecheck` | tsc server + client + `svelte-check --fail-on-warnings` |
 | `npm test` | Vitest — unit and integration |
-| `npm run test:e2e` | Playwright — **refuses to run while Tandem or `dev:server` holds :3479**, and frees :3478/:3479 when it starts its own |
+| `npm run typecheck:tests` | tsc over `tests/` (three configs). `npm run typecheck` does not chain it |
+| `npm run test:e2e` | Playwright — starts its own servers on reserved harness ports, so it runs alongside a live Tandem (see [Running E2E tests](#running-e2e-tests)) |
 | `npm run check:tokens` | Raw hex/rgba scan over `src/client/` |
-| `npm run check:links` | Relative markdown links across the repo. Runs in neither CI nor the hooks |
+| `npm run check:links` | Relative Markdown links, anchors and images across the repo, plus docs-vault reachability. Runs in CI's `check` job, not in the hooks |
 | `npm run audit:origins` / `npm run audit:ymap-keys` | Static walks for the Y.Doc origin-tagging and Y.Map-key invariants |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | The Rust/Tauri layer |
 
-`npm run test:e2e` starts its own servers and frees the two ports first, so do not run it while
-`dev:server` is up — and two people (or two agent sessions) cannot run it concurrently on one
-machine: the ports and the app-data dir are fixed.
+`npm run check:links` is the one to run after moving or renaming any Markdown file, since nothing
+else will catch the dangling links before CI does. It reads relative links only; `docs/workflows.md`
+opens inside the app and uses absolute GitHub URLs instead, which
+`tests/docs/shipped-doc-links.test.ts` checks.
+
+**`docs/` is a linked vault.** [docs/README.md](docs/README.md) is its hub, and every live doc must
+be reachable from it by relative links — `check:links` reports an unlinked doc as an orphan, so a
+new doc needs an inbound link from the hub, a map or a neighbouring doc. Dated records (plans,
+spikes, reviews, archive; the `HISTORICAL` list in `scripts/check-doc-links.mjs`) are exempt from
+reachability and anchor checks but not from path checks. The repo root opens as an Obsidian vault:
+the tracked `.obsidian/app.json` makes Obsidian write relative Markdown links (never `[[wikilinks]]`,
+which GitHub and the checker cannot follow) and rewrite them when a file moves. The checker reads
+files from `git ls-files`, plus untracked files that are not ignored, so it needs a git checkout.
+
+### What CI requires
+
+`.github/workflows/ci.yml` runs on every pull request, on pushes to `master` and on the merge
+queue. The checks a PR needs before it can merge are `check`, the three `rust-test` legs (Ubuntu,
+macOS and Windows, each running `cargo test`) and `windows-acl-proof`; `coverage` and CodeQL report
+but do not block. `check` is the broad one. On Ubuntu it runs ESLint (`npm run lint`), the Biome
+check, the doc-link check, the client, server, root and test typechecks, the build, the full vitest
+suite, the acceptance harness and the Playwright E2E suite, plus a few smaller verification steps.
+`master` merges through a GitHub merge queue: CI runs again on a temporary branch holding `master`,
+your PR and everything queued ahead of it, and the PR merges only if the required checks pass
+there. The queue's merge method is not recorded in any tracked file, and the required-check list
+was last measured on 2026-08-28, so re-measure branch protection before relying on either (the
+"Required checks" note in [CLAUDE.md](CLAUDE.md#status) says how).
 
 ## What the git hooks actually run
 
@@ -145,10 +174,11 @@ This trips up every new clone, so it is stated exactly:
   markdown/YAML. **It does not typecheck and does not run tests.**
 - **`pre-push`** runs, in order:
   1. `npx biome check .`
-  2. `npm test -- --run --reporter=dot` — the **full** Vitest suite, not a subset
-  3. `cargo test --manifest-path src-tauri/Cargo.toml`
+  2. `npm run typecheck:tests` — the test-tree typecheck, which `npm run typecheck` does not run
+  3. `npm test -- --run --reporter=dot` — the **full** Vitest suite, not a subset
+  4. `cargo test --manifest-path src-tauri/Cargo.toml`
 
-  A delete-only push (branch pruning) skips all three.
+  A delete-only push (branch pruning) skips all four.
 
 Two consequences worth internalising. The suite that runs at push time is the *whole* suite, so
 budget minutes, not seconds. And whatever is in your working tree while the hook runs is what gets
@@ -232,6 +262,32 @@ Vitest covers unit and integration; Playwright covers browser workflows. Put a t
 E2E specs select on `data-testid`. Those values are a contract — you may add, but never remove or
 rename without regenerating `tests/design-system-impl/__snapshots__/testid-set.snap.txt`.
 
+### Running E2E tests
+
+Playwright drives the real editor against a real server, so an E2E spec covers the whole annotation
+path: MCP call → Y.Doc → Hocuspocus → browser → ProseMirror.
+
+```bash
+npm run test:e2e      # run every spec; starts its own servers
+npm run test:e2e:ui   # Playwright UI mode, for debugging
+```
+
+The harness never touches the product's ports (:3478/:3479) or the dev Vite port (:5173). It runs on
+reserved ports defined in `scripts/test-ports.ts` — currently Vite 4573 with a backend on 4728/4729
+for E2E, and 4378/4379 for the perf gate — and starts its backend with `reuseExistingServer: false`.
+So a running Tandem or `npm run dev:server` keeps running through a test run. Two consequences:
+
+- **Anything else holding the reserved pair is refused or killed.** Before the suite starts,
+  `scripts/e2e-guard.ts` refuses a server on the reserved MCP port that is not a live E2E server, and
+  the harness backend's boot kills whatever still holds the pair. Don't park anything there.
+- **One run per machine.** The ports and the app-data dir are fixed, so two people (or two agent
+  sessions) cannot run the suite at the same time on one machine.
+
+Each spec follows the same shape: `beforeEach` connects an `McpTestClient` (`tests/e2e/helpers.ts`)
+and copies fixture files to a temp dir; the test body drives MCP calls and asserts browser state with
+Playwright; `afterEach` closes every open document and removes the temp dir. Annotation assertions
+typically wait up to 10 s, because a change crosses several hops before it renders.
+
 ## Commits and pull requests
 
 - Conventional Commits: `type(scope): description`, imperative, ≤72 chars. Explain *why*; the diff
@@ -239,6 +295,13 @@ rename without regenerating `tests/design-system-impl/__snapshots__/testid-set.s
 - Branch as `type/short-description`. Never commit to `master`.
 - One PR per concern. Include a problem/solution summary, the commands you ran, screenshots for
   visible UI changes, and `Closes #N` where it applies.
+- Before opening the PR, verify. The hooks cover only part of this, so run it yourself:
+  - [ ] `npm run typecheck` and `npm run typecheck:tests`
+  - [ ] `npm test`
+  - [ ] `npm run test:e2e` if you changed the client or anything a browser reaches
+  - [ ] `npm run check:links` if you moved, renamed or relinked Markdown
+  - [ ] Whatever manual testing is possible: the app itself, or MCP calls against a running server
+  - [ ] If you work with Claude Code, `/simplify` on the change before the final run
 - Call out configuration, security, or migration impact explicitly.
 - Work that layers — a harness under the fixes it enables, a refactor under the feature needing
   it — belongs in a **stack**, not a hand-chain of `--base` flags. See
@@ -276,3 +339,13 @@ rather than by CI, and the enumerated route lists in [CLAUDE.md](CLAUDE.md) *are
 not condense them.
 
 Report a suspected vulnerability privately to the maintainers rather than opening a public issue.
+
+## Related
+
+- [Contributing map](docs/maps/contributing.md): every contributor doc, grouped by task.
+- [AGENTS.md](AGENTS.md): the invariants that fail silently, for any coding agent.
+- [CLAUDE.md](CLAUDE.md): Claude Code's project memory, whose rules apply to anyone.
+- [Gotchas](docs/gotchas.md): the mechanism and evidence behind each silent-failure rule.
+- [Architecture](docs/architecture.md): how the editor, server and AI fit together.
+- [Stacked PRs](docs/stacked-prs.md): chaining dependent pull requests safely.
+- [Glossary → Claim tests](docs/glossary.md#claim-tests): why some doc edits fail CI.

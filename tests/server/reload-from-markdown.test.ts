@@ -92,6 +92,7 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/co
 import { MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { collectEvents } from "../helpers/event-collector.js";
 
@@ -109,9 +110,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 async function openMdFile(initial: string): Promise<{ filePath: string; id: string; doc: Y.Doc }> {

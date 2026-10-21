@@ -3,7 +3,10 @@
  *
  * Lives here rather than in `src/server/index.ts` because importing that file
  * *runs the server*: `main()` is invoked at the bottom of it and calls
- * `freePort()`, which kills whatever holds :3478/:3479. `launcher/initial-reason.ts`
+ * `freePort()`, which kills whatever holds the server's ports (:3478/:3479 by
+ * default). A non-sidecar HTTP boot probes `/health` first and exits rather
+ * than kill a live Tandem; the desktop sidecar runs the same probe but
+ * `decideStartupAction` proceeds whatever it finds. `launcher/initial-reason.ts`
  * is the same extraction for the same reason. Pure function, pure module, no
  * side effects on import.
  *

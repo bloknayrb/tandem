@@ -18,9 +18,11 @@ import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js"
  *     `POST /api/open`. This only works when the target is actually next to
  *     `welcome.md` in the shipped tree.
  *
- * The second branch fails SILENTLY: `openHref` logs a `console.warn` and
- * returns. The click already had `preventDefault()` called on it, so the user
- * gets no navigation, no toast, no error — a link that does nothing at all.
+ * When the target is missing, the second branch goes nowhere: the click
+ * already had `preventDefault()` called on it, so there is no navigation, and
+ * `openHref` shows only a "Couldn't open" notice (`notifyLinkProblem`) instead
+ * of the page the link promised. It used to fail silently, with a bare
+ * `console.warn`; the notice makes the failure visible, not the link useful.
  *
  * And the shipped tree is much smaller than the checkout. The desktop bundle
  * carries `sample/` plus exactly one docs file (`docs/workflows.md`); the npm

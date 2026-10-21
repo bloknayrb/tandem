@@ -1,11 +1,19 @@
+---
+tags: [audience/contributor, audience/maintainer, topic/git]
+aliases: [Stacked PRs, Stacked pull requests, gh stack]
+---
+
 # Stacked pull requests
+
+[Home](README.md) › [Contributing](maps/contributing.md)
 
 GitHub shipped native stacked PRs to **public preview on 2026-07-30**. This is the working
 guide for using them here instead of hand-chaining `--base` flags.
 
-> **Verification status.** Every command below is transcribed from GitHub's docs. The
-> `gh stack` extension was **not installed on this machine** when this was written, so nothing
-> here has been run. Treat the command surface as accurate-as-documented and the *semantics*
+> **Verification status (re-checked 2026-10-20).** Every command below is transcribed from
+> GitHub's docs. The `gh stack` extension was **not installed on this machine** when this was
+> written (in or after mid-August 2026, since it cites the 2026-08-14 incident), and as of
+> 2026-10-20 no tracked file records a stack being run here, so nothing in it has been run. Treat the command surface as accurate-as-documented and the *semantics*
 > section as the part worth re-checking against `gh stack --help` on first use. The section on
 > the manual workflow's failure mode **is** first-hand — it happened on 2026-08-14.
 
@@ -97,8 +105,12 @@ Two entry points, and the difference matters:
 - A PR merges only when **it and every PR below it** meet all merge requirements *and* the stack
   has a **fully linear history**. A non-linear stack blocks the merge — fix with
   `gh stack rebase` then `gh stack push`.
-- Branch protections and required checks still apply, per PR. Merge-queue support was rolling
-  out progressively as of the preview announcement, so confirm it before relying on it here.
+- Branch protections and required checks still apply, per PR. `master` merges through a GitHub
+  merge queue (the `merge_group` trigger in `.github/workflows/ci.yml`), and the queue's own
+  merge method is not recorded in any tracked file. Whether `gh stack merge` goes through that
+  queue, and whether its method flag below is honoured there, is unverified: GitHub described
+  stack support for merge queues as still rolling out at the preview announcement. Check both
+  before relying on a stack merge here.
 - `gh stack merge` takes `--merge` / `--squash` / `--rebase` (or `--merge-method`) and `-y`.
   **Use `--merge`.** Granular history is the house preference, and squashing a stack collapses
   the layering the stack existed to express.
@@ -152,3 +164,11 @@ Two local cautions carry over regardless:
   [Managing](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests) ·
   [Merging](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests) ·
   [Troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)
+
+## Related
+
+- [Contributing map](maps/contributing.md): the rest of the contributor docs.
+- [CONTRIBUTING → Commits and pull requests](../CONTRIBUTING.md#commits-and-pull-requests): what a single pull request needs.
+- [CLAUDE.md → Development workflow](../CLAUDE.md#development-workflow): the plan, review and verify loop each PR in a stack goes through.
+- [Hooks](../.claude/hooks/README.md): what runs on every push, including each branch of a stack.
+- [Releases and operations map](maps/releases-and-ops.md): where stacking fits before a release.

@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, topic/release, topic/testing]
+aliases: [Release smoke checklist, Smoke checklist, Per-release smoke]
+---
+
 # Per-Release Manual Smoke Checklist
+
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
 
 Run this after every tagged release, once `tauri-release.yml` has published
 artifacts. It covers the things CI structurally cannot: real installers on
@@ -17,6 +24,7 @@ matrix across OS versions, observer soak, accessibility) live in
 - [x] `tauri-webdriver.yml` — **not applicable: disabled 2026-08-08.** Its tag trigger was removed because the job fails on every run for a cause that has resisted diagnosis (`DevToolsActivePort file doesn't exist`, with driver and runtime at an exact version match and the app provably alive in the same run — so the version-mismatch hypothesis is refuted, and there is no knob left to turn). See [#1197](https://github.com/bloknayrb/tandem/issues/1197). **This leaves packaged-desktop key interception unverified by CI** — the Playwright suite drives a real browser, not the Tauri WebView, so nothing else covers it. That gap is deliberate and is scheduled for review on 2026-11-01 in [#1345](https://github.com/bloknayrb/tandem/issues/1345). Ticking this box means "confirmed still disabled", not "confirmed passing" — if the workflow has been re-enabled, restore the original wording and check its run.
 - [ ] macOS arm64 **launch smoke** (the "Smoke-test bundled sidecar" step inside `tauri-release.yml`) green — confirms the bundled `node-sidecar` actually boots and serves `/health` on Apple Silicon. A red here means the app is dead-on-arrival even though signing/notarization passed (e.g. the #983 V8-init SIGTRAP), so it no longer falls to the manual macOS pass below.
 - [ ] macOS signing and notarization steps green. **A red here is the gate working** — since #1746 these fail closed rather than reporting success with the secrets absent, so check whether a certificate has rotated before assuming the workflow is broken. (The one-off "first run after #1746" box that used to sit here is gone: v0.25.0 was that run, both legs executed the gates with a real certificate and an `Accepted` notarization, and the outcome is recorded on [#1829](https://github.com/bloknayrb/tandem/issues/1829), now closed.)
+- [ ] `publish.yml` green (it runs when the release is published, so this row comes after the draft is published), and `npm view tandem-editor@<new version> version --prefer-online` prints that version — section 4 below installs it with `npm install -g`, so a failed or still-propagating publish makes those rows test the previous release.
 - [ ] CHANGELOG section for the version is final (the in-app View Changelog button serves this file).
 
 ## 1. Windows (10 22H2 or 11)
@@ -34,9 +42,9 @@ matrix across OS versions, observer soak, accessibility) live in
 
   **While you are here, check #1762 in the same restart.** Have a document open, and grep the post-update log for `reporting still-locked (packaging bug)`. That line means the Windows exe-unlock wait could not find `node-sidecar.exe` beside the app binary — a packaging regression, and the wait now reports still-locked rather than passing the miss off as "unlocked", so it also lands in the failure dialog's pre-install warnings. Finding **nothing** is the pass. Before #1762 the wait rebuilt the triple-suffixed name, never matched a real file, and returned `true` with a `skipping unlock wait (packaging bug?)` warning — observed on the v0.24.1 → v0.25.0 run — leaving the NSIS `PREINSTALL` kill hook as the only thing stopping a running sidecar from being overwritten.
 
-  **Before that update, turn start-at-login on, so the update can be seen not to scrub it. A machine that enabled Cowork on v0.28.0 or earlier is the second witness; a dark build (ADR-055) cannot enable it fresh.** Tauri's NSIS template runs the old uninstaller with `/UPDATE` from `PageLeaveReinstall`, and the `$UpdateMode <> 1` guard in `src-tauri/windows/installer-hook.nsi` is the only thing keeping the uninstall scrub off a routine upgrade. Whether the updater's own install passes through that page has never been confirmed. If it does not, every auto-update scrubs silently. After the restart, what the scrub removes must still be there: the `Tandem` value under `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` (`reg query HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v Tandem`); and on a past-enabler machine, the `Tandem Cowork*` rule in `wf.msc` if one existed, the Tandem entry in each Cowork workspace's `installed_plugins.json`, and `cowork-meta.json`. **Any one missing is a High finding: stop the release.** That same machine must show no Cowork control in Settings → AI Assistant and no Cowork row in the wizard.
+  **Before that update, turn start-at-login on, so the update can be seen not to scrub it. A machine that enabled [Cowork](glossary.md#cowork-setup) on v0.28.0 or earlier is the second witness; a dark build (ADR-055) cannot enable it fresh.** Tauri's NSIS template runs the old uninstaller with `/UPDATE` from `PageLeaveReinstall`, and the `$UpdateMode <> 1` guard in `src-tauri/windows/installer-hook.nsi` is the only thing keeping the uninstall scrub off a routine upgrade. Whether the updater's own install passes through that page has never been confirmed. If it does not, every auto-update scrubs silently. After the restart, what the scrub removes must still be there: the `Tandem` value under `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` (`reg query HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v Tandem`); and on a past-enabler machine, the `Tandem Cowork*` rule in `wf.msc` if one existed, the Tandem entry in each Cowork workspace's `installed_plugins.json`, and `cowork-meta.json`. **Any one missing is a High finding: stop the release.** That same machine must show no Cowork control in Settings → AI Assistant and no Cowork row in the wizard.
 
-  **Same restart: have a `.md` open with an edit typed just before you click *Restart to install*.** (This row used a `.docx`, the one explicit-save format, until `.docx` shipped dark under ADR-053.) On relaunch the document is restored with that edit. `tandem.log` must contain `Pre-install: graceful sidecar shutdown complete`. It must contain none of `the graceful sidecar stop ended`, `Sidecar still responding after` or `Sidecar exe lock not confirmed released`. **Grep that literal, not the phrase.** Every other line on this path is `info!` under the `Warn` floor. On Windows there is also no `Exit: sidecar shutdown complete` verdict line to fall back on, because the install ends in `std::process::exit(0)` and `RunEvent::Exit` never fires. `respawn_guard_lines_are_warns_and_match_the_smoke_checklist` in `src-tauri/src/sidecar.rs` pins this literal to this row and to its `warn!` in `lib.rs`.
+  **Same restart: have a `.md` open with an edit typed just before you click *Restart to install*.** (This row used a `.docx`, the one explicit-save format, until `.docx` [shipped dark](glossary.md#ships-dark) under ADR-053.) On relaunch the document is restored with that edit. `tandem.log` must contain `Pre-install: graceful sidecar shutdown complete`. It must contain none of `the graceful sidecar stop ended`, `Sidecar still responding after` or `Sidecar exe lock not confirmed released`. **Grep that literal, not the phrase.** Every other line on this path is `info!` under the `Warn` floor. On Windows there is also no `Exit: sidecar shutdown complete` verdict line to fall back on, because the install ends in `std::process::exit(0)` and `RunEvent::Exit` never fires. `respawn_guard_lines_are_warns_and_match_the_smoke_checklist` in `src-tauri/src/sidecar.rs` pins this literal to this row and to its `warn!` in `lib.rs`.
 - [ ] **Quit flushes unsaved edits (#1756).** Edit an open `.md` and Quit from the tray **within 10 s, without saving** — autosave has not fired yet, so this is the graceful stop or nothing. Relaunch: **the edit is present**. Then **one grep** of `tandem.log` for `Exit: sidecar shutdown complete`, and the line it finds must read `verdict=Flushed`, `timed_out=false`, `owned_child=true`. Task Manager shows **no orphaned `node-sidecar` process**.
 
   **Grep that one line, not the `info!` banners.** In release the log floor is `LevelFilter::Warn`, so `Exit: stopping sidecar gracefully` and `Sidecar exited gracefully after /api/shutdown` are `info!` and never reach `tandem.log` on an installed build — a checklist that greps for them finds nothing and reads as a failure. The verdict line is a `warn!` for exactly this reason, and `verdict_line_carries_the_substrings_the_smoke_checklist_greps` in `src-tauri/src/sidecar.rs` is what keeps **this row's** four strings and the code's format agreeing — it covers the verdict line and nothing else. The row below has its own guard, `respawn_guard_lines_are_warns_and_match_the_smoke_checklist`, which pins both of that row's literals *and* their level, plus the updater row's `Pre-install:` literal above; until it existed one of those two sat at `info!` under this same floor. A neutered attempt cannot forge them: it shows `verdict=none` with `timed_out=true` and `elapsed` in single-digit ms.
@@ -119,15 +127,24 @@ exactly this residual).
 
 The per-release sections above test updating **to** this release from the
 previous one. The RC pass also has to prove this release can update **forward**
-— the seam users actually hit after launch — and exercise the license gate
+— the seam users actually hit after launch — and exercise the [license gate](glossary.md#licensing-gate)
 before it meets a paying user.
 
-- [ ] **Forward-update**: verify the just-built RC updates to a *next* version.
-      Mechanic: the updater's `.sig` signs the artifact bytes and the
-      `latest.json` `version` field is independent of the signature — so
-      re-serve the **current RC's own signed artifact** under a bumped version
-      number in a staged `latest.json`, point the updater endpoint override at
-      it, and confirm: update dot appears → install → restart → app healthy.
+- [ ] **Forward-update — NOT RUNNABLE AS WRITTEN.** Goal: verify the
+      just-built RC updates to a *next* version. Mechanic: the updater's `.sig`
+      signs the artifact bytes and the `latest.json` `version` field is
+      independent of the signature — so re-serve the **current RC's own signed
+      artifact** under a bumped version number in a staged `latest.json`, point
+      the updater at it, and confirm: update dot appears → install → restart →
+      app healthy. **The pointing step has no mechanism today.** There is no
+      runtime updater-endpoint override: the endpoint list is fixed in
+      `src-tauri/tauri.conf.json` (the public GitHub `latest.json`), no
+      environment variable reaches the updater, and the only alternate route is
+      the compile-time `LICENSE_UPDATE_ENDPOINT` const in `src-tauri/src/lib.rs`,
+      which is empty while licensing ships dark. Running this row needs either a
+      staging build compiled with a different endpoint or a real override; which
+      one is a maintainer decision still to be made. Until then, record this row
+      as not run rather than ticking it.
       (Added 2026-06-11; once the updater authenticates against the
       license-checked endpoint — #1116 L3 — run this against the staging
       endpoint so the entitlement check is in the loop.)
@@ -303,7 +320,7 @@ Three things this run established:
 - **§4's boot log is worth reading, not just its exit code.** `doctor` exited 0 with
   no FAIL while the server had already logged
   `integrations.json schemaVersion 4 is newer than this Tandem build supports (3)`
-  and disabled the launcher supervisor. That one traced to a **paused, unmerged
+  and disabled the launcher [supervisor](glossary.md#supervisor). That one traced to a **paused, unmerged
   branch** (`db14a9b`, #1265 Codex) that wrote the file on 2026-08-04 —
   `INTEGRATIONS_SCHEMA_VERSION` has been `3` since it was introduced and no shipped
   path writes `4` — so it is local residue and the forward-compat guard behaved
@@ -371,3 +388,13 @@ one changes how a future run should be done:
   entry in `~/.claude.json`, and any entry whose `env` Tandem did not write.
 - **A Windows matrix leg failing inside Azure Trusted Signing is a re-run, not a
   burned tag.** The discriminator is whether the *same commit* passes on retry.
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md) — the release skill, the signing runbook and the v1.0 gates.
+- [The release skill](../.claude/skills/release/SKILL.md) — the steps that produce the build this checklist checks.
+- [macOS signing and notarization runbook](428-macos-notarization-runbook.md) — what to do when a macOS signing row goes red.
+- [Troubleshooting](troubleshooting.md) — the user-facing fixes several rows link to.
+- [Roadmap: v1.0 exit criteria](roadmap.md#v100-exit-criteria) — the deeper one-time gates this pass does not replace.
+- [Data locations](data-locations.md) — where `tandem.log`, sessions and credentials live when a row says to look.
+- [Glossary: ships dark](glossary.md#ships-dark) — why several rows check that a feature is absent.

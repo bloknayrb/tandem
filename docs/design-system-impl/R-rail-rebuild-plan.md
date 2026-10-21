@@ -1,4 +1,14 @@
+---
+tags: [audience/contributor, topic/design-system, historical]
+aliases: [Rail rebuild plan, Sub-PR R]
+status: historical
+---
+
 # Sub-PR R — Rail collapse rebuild (always-mounted dual-layer)
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
+
+> **Status: historical.** This plan shipped in v0.13.5 (the always-mounted rail shell; see `motion.md` A12). The bundle paths it cites are external to this repo.
 
 > Status: PLAN (for adversarial review). Target branch: `design-impl/r-rail-rebuild` → `feat/design-system-impl`.
 > Conflict-resolved ref: this is the one genuine structural delta in the refreshed bundle (per the
@@ -181,3 +191,9 @@ Layout (mirrors bundle `app.css` 245–353, ported to production tokens — all 
 - LayoutModel semantics, solo-mode rules, margin-view interaction (R only changes how the rail
   *renders* collapsed; `marginLeft/RightVisible` already derive from `effectiveVisible`).
 - Cluster 3.5 (Margin Column) also edits App.svelte → serializes *after* R.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the live design references.
+- [Motion](motion.md): A12 records the rail shell as shipped.
+- [Gotchas → Client / UI](../gotchas.md#client--ui): the rail and panel rules that hold today.

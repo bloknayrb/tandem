@@ -82,6 +82,7 @@ import {
 } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN, RELOAD_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
 // `mkfifo` (coreutils) is how a test plants a FIFO — Node has no binding for
@@ -141,9 +142,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 // ---------------------------------------------------------------------------

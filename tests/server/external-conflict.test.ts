@@ -98,6 +98,7 @@ import {
   withBrowser,
 } from "../../src/shared/origins.js";
 import type { ExternalConflictState } from "../../src/shared/types.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
 /** Build a minimal one-paragraph .docx buffer with the given text. */
 async function buildSimpleDocx(text: string): Promise<Buffer> {
@@ -181,9 +182,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 // ---------------------------------------------------------------------------

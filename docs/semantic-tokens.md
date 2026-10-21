@@ -1,24 +1,41 @@
+---
+tags: [audience/contributor, topic/design-system, reference]
+aliases: [Semantic tokens, Design tokens, CSS tokens]
+---
+
 # Semantic Tokens
 
-Full reference for Tandem's CSS custom property families. The summary lives in `CLAUDE.md > Semantic Tokens`; this document is the full enumeration.
+[Home](README.md) › [Contributing](maps/contributing.md)
 
-Token families are defined in `index.html` `:root` (light theme) and `[data-theme="dark"]` (dark theme) blocks. Lint: `npm run check:tokens` (also runs on pre-commit via lint-staged) scans `src/client/` for raw hex/rgba violations.
+Reference for Tandem's CSS custom property families. The summary lives in `CLAUDE.md > Semantic Tokens`. This document covers every family by name; `index.html` (`:root`, about 139 distinct `--tandem-*` tokens) stays the authority on individual tokens and their values.
+
+Token families are defined in `index.html`: `:root` (light theme, and every token's default), then override blocks for `[data-theme="dark"]`, `[data-theme="warm"]` (neutrals, page and scrollbar tokens only; everything else inherits light), `[data-density="compact"]` / `[data-density="spacious"]` (the spacing scale), `[data-high-contrast="true"]` (borders and muted text), and a `forced-colors` media block that hands colours to the OS. Lint: `npm run check:tokens` (also runs on pre-commit via lint-staged) scans `src/client/` for raw hex/rgba violations.
 
 ## Status families
 
-Each family exposes `--tandem-{name}`, `-fg`, `-fg-strong`, `-bg`, `-border` variants.
+Each family exposes `--tandem-{name}`, `-fg-strong`, `-bg` and `-border`; every family except `suggestion` also exposes `-fg`.
 
 - **`--tandem-success-*`** — green. Success toasts, completion states.
-- **`--tandem-warning-*`** — amber. Warnings, held-annotation banners, unsaved indicators.
-- **`--tandem-error-*`** — red. Error banners, destructive actions, flag annotations.
+- **`--tandem-warning-*`** — amber. Warnings, the read-only store and settings banners, unsaved indicators.
+- **`--tandem-error-*`** — red. Error banners, destructive actions, the find bar's no-match state, source-view parse errors.
 - **`--tandem-info-*`** — blue. Informational banners, review-only mode.
-- **`--tandem-suggestion-*`** — violet. Replacement/suggestion annotations. Visually distinct from indigo accent. Exposes `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-suggestion-*`** — violet. Replacement/[suggestion](glossary.md#suggestion) annotations. Visually distinct from indigo accent. Exposes `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`.
+
+## Neutrals and surfaces
+
+- **Neutral ladder:** `--tandem-bg`, `--tandem-surface`, `--tandem-surface-muted`, `--tandem-surface-sunk`, `--tandem-fg`, `--tandem-fg-muted`, `--tandem-fg-subtle`, `--tandem-fg-faint`, `--tandem-border`, `--tandem-border-strong`. These are what the warm theme re-tints.
+- **Page:** `--tandem-page-bg`, `--tandem-page-paper`, `--tandem-page-shadow` (the editor sheet).
+- **Scrollbar:** `--tandem-scrollbar-track`, `--tandem-scrollbar-thumb`.
+- **Selection:** `--tandem-selection-blurred-bg` (the editor selection while focus is elsewhere).
+- **Theme-picker swatches:** `--tandem-swatch-light|dark|warm` — `:root` only, never overridden per theme, because they preview each scheme.
+- **File-type badges:** `--tandem-filetype-html`, `--tandem-filetype-txt`.
 
 ## Accent / authorship
 
+- **Accent:** `--tandem-accent`, `-hover`, `-fg`, `-fg-strong`, `-bg`, plus `--tandem-accent-h`, the hue the user picks, from which the others derive.
 - **`--tandem-accent-border`** — single token for accent-family bordered elements.
-- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors. Blue/orange in light, adjusted in dark. Authorship decorations use `data-tandem-author` attributes (not CSS classes) per ADR-026.
-- **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). Used in `awareness.ts` for the paragraph gutter decoration.
+- **`--tandem-author-user`** / **`--tandem-author-claude`** — authorship colors, with `--tandem-author-user-bg`, `--tandem-author-claude-bg|-fg|-fg-strong|-border` variants and `--tandem-author-import-bg`. Model-specific agent colors: `--tandem-agent-openai|gemini|local-ollama|local-llamacpp` (the local ones serve the dark-shipped local-model feature). Blue/orange in light, adjusted in dark. Authorship decorations use `data-tandem-author` attributes (not CSS classes) per ADR-026.
+- **`--tandem-claude-focus-bg`** / **`--tandem-claude-focus-border`** — Claude focus paragraph indicator. Derived from `--tandem-author-claude` via `color-mix` (10% / 40% opacity against transparent). `awareness.ts` only sets the `.tandem-claude-focus` class; the tokens are read in `src/client/editor/editor.css` for the paragraph gutter decoration (and reused by a few chips such as `AnnotationCard.svelte` and `StatusBar.svelte`).
 
 ## Scales
 
@@ -26,25 +43,29 @@ Use these instead of raw px literals in client surfaces:
 
 - **Spacing:** `--tandem-space-1..7`
 - **Radius:** `--tandem-r-1..5`, `--tandem-r-pill`, `--tandem-r-circle`
-- **Type:** `--tandem-text-2xs..3xl`
+- **Type:** `--tandem-text-2xs..3xl`; font stacks `--tandem-font-sans|serif|mono`; type roles `--tandem-h1-*`, `--tandem-h2-*`, `--tandem-body-*` and `--tandem-ui-*` (each with `-font`, `-size`, `-leading`, and for headings `-weight`, `-tracking`); and the user's editor font, `--tandem-editor-font-family` / `--tandem-editor-font-size`
 - **Elevation:** `--tandem-shadow-1..4`, plus `--tandem-shadow-inset` (the toggle
-  PRESSED state — see *Light vs dark derivation*; it is the only shadow token with
-  a per-theme override)
-- **Stacking:** `--tandem-z-base..tooltip`
+  PRESSED state — see *Light vs dark derivation*; it is the only token in the
+  elevation scale with a per-theme override. Outside the scale, dark also overrides
+  `--tandem-page-shadow` and `--tandem-rail-shadow-left|right`, and warm overrides
+  `--tandem-page-shadow`)
+- **Stacking:** `--tandem-z-base..tooltip`, including `--tandem-z-titlebar`, `--tandem-z-above-titlebar` and `--tandem-z-rail-float`
+- **Motion:** `--tandem-ease-standard`, `--tandem-ease-out`
+- **Layout metrics:** `--tandem-h-fmtbar`, `--tandem-fmtbar-top`, `--tandem-rail-top-clearance`, `--tandem-status-clearance`, `--tandem-status-clearance-total`, `--tandem-banner-stack-bottom`
 
 ## Highlights
 
-CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep `HIGHLIGHT_COLORS` raw rgba values for non-CSS export/runtime paths; Svelte surfaces should use `HIGHLIGHT_COLOR_VARS`.
+CSS-facing [highlight](glossary.md#highlight) fills use `--tandem-highlight-yellow|green|blue|pink`. Keep `HIGHLIGHT_COLORS` raw rgba values for non-CSS export/runtime paths; Svelte surfaces should use `HIGHLIGHT_COLOR_VARS`.
 
 ## Light vs dark derivation
 
 - **Light mode:** every *status* `*-bg` — `success`, `warning`, `error`, `info`, `suggestion` — is derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` is the exception in both themes: it is `oklch(0.95 0.03 var(--tandem-accent-h))`, because the accent hue is a user setting and the token has to follow it.
 - **Dark mode:** the status `*-bg` tokens use hand-coded saturated hex (`#052e16`, `#451a03`, `#450a0a`, `#0c4a6e`, `#2e1065`). `color-mix` produces washed-out surfaces against the dark neutral; hand-picked values read as intentionally colored. `--tandem-accent-bg` stays `oklch`, at `oklch(0.30 0.05 var(--tandem-accent-h))`.
-- **`--tandem-shadow-inset`** is the one shadow token that varies by theme, and the reason is not the one people guess. **Measure it on gamma-encoded sRGB, not linear light** — CSS composites `box-shadow` alpha in the encoded space, and compositing in linear space under-reports the band by ~16%. Measured ΔL\* over each theme's `--tandem-surface-sunk`: light `0.16` → **13.69**, warm → **13.07**, dark `0.45` → **3.85**. Warm **inherits the light value deliberately** — a fixed alpha is near-constant in contrast across light bases, so warm lands within 0.6 ΔL\* of light despite a much darker sunk surface. That near-constancy holds only while luminance sits well above the `0.05` in the contrast formula, which is why **dark** is the case that breaks: a black inset saturates on a near-black base (still only 5.68 at `0.75` alpha), so its override is a floor, not a fix. The band is the sole separator between pressed and hover on `.toolbar-btn` and `.fr-scope-pill`, so its strength is load-bearing.
+- **`--tandem-shadow-inset`** is the one elevation-scale token that varies by theme, and the reason is not the one people guess. **Measure it on gamma-encoded sRGB, not linear light** — CSS composites `box-shadow` alpha in the encoded space, and compositing in linear space under-reports the band by ~16%. Measured ΔL\* over each theme's `--tandem-surface-sunk`: light `0.16` → **13.69**, warm → **13.07**, dark `0.45` → **3.85**. Warm **inherits the light value deliberately** — a fixed alpha is near-constant in contrast across light bases, so warm lands within 0.6 ΔL\* of light despite a much darker sunk surface. That near-constancy holds only while luminance sits well above the `0.05` in the contrast formula, which is why **dark** is the case that breaks: a black inset saturates on a near-black base (still only 5.68 at `0.75` alpha), so its override is a floor, not a fix. The band is the sole separator between pressed and hover on `.toolbar-btn` and `.fr-scope-pill`, so its strength is load-bearing.
 
 ## Color utilities
 
-`src/client/utils/colors.ts` exports `warningStateColors` — import it instead of inlining all three CSS vars when you need the full set (e.g. `SidePanel.svelte` held-banner). Error/success/suggestion variants were removed in audit v2 (zero consumers); re-add the same shape if a future surface needs them.
+`src/client/utils/colors.ts` exports `warningStateColors` — import it instead of inlining all three CSS vars when you need the full set (e.g. the read-only store banner in `SidePanel.svelte` and `SettingsReadonlyBanner.svelte`). Error/success/suggestion variants were removed in audit v2 (zero consumers); re-add the same shape if a future surface needs them.
 
 ## Lint enforcement
 
@@ -59,3 +80,12 @@ CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep
 - **Outside a literal, an inconclusive declaration walk-back fails toward REPORTING.** The literal stack crosses line breaks; the raw-CSS walk-back (`lastIndexOf` of `;`/`{`/`}`, then look for a property colon) does not, and cannot — it only ever sees one line. So on a continuation line of a wrapped declaration there is no property colon to find, and reading that as "not a color value" silently exempted an all-decimal-digit gray in ordinary multi-line CSS: `box-shadow:\n  0 0 0 1px #000, 0 0 0 2px var(--tandem-border);` reported nothing, because the keyword line gate passes on `--tandem-border` containing `border` — which is how every token in this repo is named. No line in `src/client` has that shape today, so the hole was **latent**, and the byte-identical-output evidence below could not see it. `cut === -1` — nothing on the line closed a declaration or opened a block before the token — is now treated as a color position at any wrap depth. The cost is bounded: only all-decimal-digit bodies reach this arm at all, so an issue reference in ungoverned, uncommented, unquoted prose on a keyword-bearing line reports. Pinned by the wrapped-`box-shadow` and wrapped-`linear-gradient` cases in `tests/cli/check-semantic-tokens.test.ts`.
 - Residuals, accepted and enumerated. Inside a literal: one whose **declaration segment** opens with a real CSS property name and a colon reports — `"background: still wrong, see #1364"` is the same shape the raw-CSS walk-back accepts, so the two agree, and segmenting extends it to prose with a semicolon in it (`"reset failed; background: see #1364"` now reports where the literal-anchored form did not). That widening is the accepted price of the false negatives segmenting buys back; prose carrying `;` followed by `<cssword>:` is far rarer than a multi-declaration value string. Going the other way, the one-line governor look-back does **not** reach a wrapped `setAttribute`: after a biome wrap the physical line above the value is `"style",`, which matches no governor arm, so `#333` in `el.setAttribute(`↵`"style",`↵`"shadow 2px border #333")` is missed. Adding an arm for a line that is just `"style",` would report every hex-looking issue number in a string array, which is the #1534 bug class, so it stays a residual. One whose every word happens to be a CSS **value** word (`title="scroll to end #1364"` — `scroll`, `to`, `end` all are) reports. Outside those, a string whose words include a font-family name or a `url()` filename is not recognised as a CSS value, so a raw gray in `"bold 12px Helvetica, #333"` is missed; a word list cannot fix that class. A literal with **no alphabetic words at all** passes the value-word test vacuously, so `const borderIssue = "(#1364)";` reports — correct for `"0 0 0 #333"`, wrong here, and the two are indistinguishable from the string alone. Note also that `CSS_PROPERTY_WORDS` is wider than the six `CSS_KEYWORDS` the line gate matches on, so a name like `outline` or `caret` only ever fires when one of the six is *also* on the line — do not "fix" the narrower list to match. The line gate bounds the carry the same way: it is a per-**line**, case-sensitive substring test applied *before* any literal machinery runs, so a continuation line carrying none of the six keywords is skipped no matter what the literal it belongs to says.
 - The **bundle blocklist (#799) is deliberately outside that narrowing** — it matches on exact value, so `#222222` is caught in any position.
+
+## Related
+
+- [Contributing map → Design system](maps/contributing.md#design-system): the other live design references.
+- [Token audit](design-system-impl/token-audit.md): the protected-token list and the dated re-audits.
+- [Derived-surface spec](design-system-impl/derived-spec.md): how the tokens compose into card and batch surfaces.
+- [Motion](design-system-impl/motion.md): the animation canon that uses the easing tokens.
+- [Gotchas → Client / UI](gotchas.md#client--ui): the CSS-pipeline rules the lint does not catch.
+- [Accessibility gate results](a11y-gate-results.md): the contrast measurements behind the neutral ladder.

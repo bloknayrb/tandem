@@ -1,12 +1,14 @@
 # CLI Reference
 
+[Home](README.md) › [Using Tandem](maps/using-tandem.md)
+
 The `tandem` command is the entry point for the npm-installed Tandem package. It dispatches to a small set of subcommands. All commands log to stderr; stdout is reserved for the MCP wire protocol in stdio mode.
 
 ## Subcommands
 
 ### `tandem`
 
-Starts the Tandem server (Hocuspocus on `:3478` + MCP HTTP on `:3479`). Browser auto-open was removed in v0.12.0 (#637) — the Tauri desktop app is the primary editor; with the npm package, open `http://127.0.0.1:3479` in your browser once the server is running. This is the command you run day-to-day after installing the npm package.
+Starts the Tandem server ([Hocuspocus](glossary.md#hocuspocus) on `:3478` + MCP HTTP on `:3479`). Browser auto-open was removed in v0.12.0 (#637) — the Tauri desktop app is the primary editor; with the npm package, open `http://127.0.0.1:3479` in your browser once the server is running. This is the command you run day-to-day after installing the npm package.
 
 ```bash
 tandem
@@ -57,7 +59,7 @@ It never deletes your data (sessions, annotations, document backups, keychain en
 
 ### `tandem rotate-token`
 
-Generates a new 32-byte auth token, posts it to the running server's `/api/rotate-token` endpoint, and updates Claude's MCP configs to the new value. The previous token remains valid for a **60-second grace window**.
+Generates a new 32-byte [auth token](glossary.md#auth-token), posts it to the running server's `/api/rotate-token` endpoint, and updates Claude's MCP configs to the new value. The previous token remains valid for a **60-second grace window**.
 
 ```bash
 tandem rotate-token
@@ -89,13 +91,13 @@ Not intended for direct user invocation — the `tandem-channel` MCP entry (writ
 
 ### `tandem monitor`
 
-Runs the Tandem plugin monitor: subscribes to `/api/events` and writes a payload-free wake line to stdout for Claude Code to surface as a notification (the event's type only — the details come from `tandem_checkInbox`). This is the flagless alternative to the channel shim — it needs no `--dangerously-load-development-channels` — under four conditions.
+Runs the Tandem [plugin monitor](glossary.md#plugin-monitor): subscribes to `/api/events` and writes a payload-free wake line to stdout for Claude Code to surface as a notification (the event's type only — the details come from `tandem_checkInbox`). This is the flagless alternative to the [channel shim](glossary.md#channel-shim) — it needs no `--dangerously-load-development-channels` — under four conditions.
 
 It **starts on first use of the Tandem skill**, not at session start: the manifest arms it with `on-skill-invoke`, so a session that never mentions Tandem never spawns it (#1354). It requires **Claude Code 2.1.212 or newer** (on older versions the plugin installs fine and the monitor simply never runs, with nothing to say so). And it must be able to resolve Node from the PATH Claude Code itself was started with: monitors are spawned through a non-login shell, so a GUI-launched Claude Code often cannot run it and reports `exit 127`. Start `claude` from a terminal.
 
-The fourth condition is the one nobody can act on: the plugin monitor sits behind the same `tengu_amber_sentinel` remote feature gate as Claude Code's own `Monitor` tool, and that flag **defaults to false**. Both read the identical flag — see [ADR-049](decisions.md) and its 2026-08-09 amendment, plus [docs/spikes/plugin-monitor-tty-activation.md](spikes/plugin-monitor-tty-activation.md). It is not observable from Tandem's source and no `tandem doctor` check can assert it, which is why the plugin monitor cannot cover for a Claude Code that offers no `Monitor` tool. The channel shim is the fallback that can.
+The fourth condition is the one nobody can act on: the plugin monitor sits behind the same remote, per-account Claude Code feature gate as Claude Code's own `Monitor` tool, and that gate **defaults to off**. Both read the identical gate — see [ADR-049](decisions.md) and its 2026-08-09 amendment, plus [docs/spikes/plugin-monitor-tty-activation.md](spikes/plugin-monitor-tty-activation.md). It is not observable from Tandem's source and no `tandem doctor` check can assert it, which is why the plugin monitor cannot cover for a Claude Code that offers no `Monitor` tool. The channel shim is the fallback that can.
 
-Neither this nor the channel shim is involved in a session Tandem auto-launches; those are woken over the supervisor's stdin ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)).
+Neither this nor the channel shim is involved in a session Tandem auto-launches; those are woken over the [supervisor](glossary.md#supervisor)'s stdin ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)).
 
 ```bash
 tandem monitor
@@ -107,14 +109,14 @@ Each line it prints is a **wake, not a report**: the event type and an instructi
 
 ### `tandem activate <license|path>`
 
-Activates a signed license, given either the license blob itself or a path to the `.license` file you were emailed. Writes `license.json` into the app-data directory. Verification is offline — an Ed25519 signature checked against a public key baked into the build — so activation works air-gapped.
+Activates a signed license, given either the license blob itself or a path to the `.license` file you were emailed. Writes `license.json` into the [app-data directory](glossary.md#app-data-directory). Verification is offline — an Ed25519 signature checked against a public key baked into the build — so activation works air-gapped.
 
 ```bash
 tandem activate ~/Downloads/tandem.license
 tandem activate "eyJ...blob..."
 ```
 
-The desktop equivalent is Settings → License. Licensing ships dark until v1.0; activating early is still worth doing, because an unactivated key is easy to lose.
+The desktop equivalent is Settings → License. Licensing [ships dark](glossary.md#licensing-gate) until v1.0; activating early is still worth doing, because an unactivated key is easy to lose.
 
 ### `tandem license`
 
@@ -152,7 +154,7 @@ Prints usage and exits.
 
 ## npm run scripts (source checkouts only)
 
-These commands are available when running Tandem from a source checkout (`git clone` + `npm install`). They aren't shipped with the npm package.
+**For contributors.** These commands are available only when running Tandem from a source checkout (`git clone` + `npm install`). They aren't shipped with the npm package or the desktop app, and you don't need any of them to use Tandem. Setup and workflow for contributors are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### Development
 
@@ -187,7 +189,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run test:tauri-driver` | WebDriver-based Tauri shell tests. |
 | `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393), through the fail-closed runner `scripts/spikes/run_acceptance_tests.py` — launched by `scripts/spikes/run-acceptance-harness.mjs`, which resolves `python3` then `python`. Also run by CI's `check` job (#1399). The 82-test harness itself is still **not** run by `npm test` or the pre-push hook, but **Python is a prerequisite of those anyway**: `tests/scripts/acceptance-harness-wiring.test.ts` spawns that runner against broken fixtures and fails, rather than skips, with no interpreter on `PATH`. Preconditions: Python 3.10+ on `PATH` as `python3` or `python` (needed for `npm test` too), and — for this command alone — the `v0.21.0` tag present, which is where the harness reads its immutable v9 skill baseline. A fresh shallow clone has neither. Takes **no arguments**: unittest flags and selectors (`-v`, `-k`, `Class.test_name`) are refused with exit 2, because the runner always loads the whole module and honouring them is not possible — run `python -m unittest test_session_monitor_acceptance <args>` directly to narrow, remembering that bare `unittest` is not the gate. |
 | `npm run capture:screenshots` | Re-captures README screenshots via Playwright. |
-| `npm run capture:design-baselines` | Re-captures the design-system baseline screenshots. |
+| `npm run capture:design-baselines` | Regenerates the design-system baseline gallery, a single self-contained HTML page (`docs/design-system-impl/preview/baselines/baselines.html`) showing each covered surface in light and dark. |
 
 ### Diagnostics and linting
 
@@ -200,7 +202,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run lint` | ESLint across the repo. |
 | `npm run format` | Biome auto-format. |
 | `npm run check:tokens` | Scans `src/client/` for raw hex / rgba violations of the semantic-token system. |
-| `npm run check:links` | Resolves every relative Markdown link and `#anchor` in the repo. Run it before and after moving any doc — a moved file with a dangling inbound link is worse than one left where it was. |
+| `npm run check:links` | Resolves every relative Markdown link, `#anchor` and local image in the repo, and checks that every live doc is reachable from `docs/README.md`. CI's `check` job runs it; run it yourself before and after moving any doc — a moved file with a dangling inbound link is worse than one left where it was. |
 
 ### Audits
 
@@ -219,3 +221,14 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run channel` | Run the channel shim via tsx. |
 | `npm run start:channel` | Run the bundled channel shim. |
 | `npm run preview` | Vite preview of the built client. |
+
+## Related
+
+- [Using Tandem map](maps/using-tandem.md): the rest of the user docs, from install to keyboard shortcuts.
+- [Configuration](configuration.md): the environment variables these commands read.
+- [Troubleshooting → Quick diagnostic](troubleshooting.md#quick-diagnostic): what to do with what `tandem doctor` reports.
+- [Data locations](data-locations.md#uninstalling-cleanly): what `tandem --uninstall-scrub` removes and what it leaves.
+- [Connecting an AI map](maps/connecting-ai.md): the setup routes `tandem setup` is one of.
+- [How licensing works](licensing-explained.md): background for `tandem activate` and `tandem license`.
+- [CONTRIBUTING](../CONTRIBUTING.md): how the npm run scripts fit into building and checking a change.
+- [Glossary](glossary.md): Hocuspocus, the channel shim, the plugin monitor and other terms used here.

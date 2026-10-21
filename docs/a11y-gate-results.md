@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, audience/contributor, topic/accessibility, topic/v1-gates]
+aliases: [Accessibility gate results, A11y gate, Accessibility gate]
+---
+
 # Accessibility gate — results
+
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
 
 v1.0 exit criterion, `docs/roadmap.md` § "v1.0.0 Exit Criteria → Accessibility".
 Run date: 2026-08-05. Branch: `feat/v10-accessibility-gate`.
@@ -16,7 +23,10 @@ inferred from the automated rows.
 | A5 | Keyboard-only navigation | **Pass**, with fixes | `tests/e2e/keyboard-a11y.spec.ts` — 7 tests. Four defects found and fixed. |
 | A6 | WCAG AA contrast across all status colours and themes | **Pass**, with fixes | `tests/e2e/token-contrast.spec.ts` (3) + `tests/e2e/editor-contrast.spec.ts` (3). Fifteen defects found and fixed, one recorded as a non-assertion. |
 
-Total: 64 automated tests across four files.
+Total: 64 automated tests across four files. The per-file counts in this table
+are as of the 2026-08-05 run; the spec files have gained tests since (for
+example the #1778 focus-trap tests in the keyboard spec), so read the
+files for today's numbers.
 
 > **Revised 2026-08-06 (post-review).** The first version of this table said "44
 > automated tests … all passing", and both halves were wrong. The arithmetic did
@@ -168,14 +178,14 @@ Four real defects, all found by the suite failing first:
 
 Two suites, because axe alone cannot answer the criterion as written. axe
 evaluates only elements *painted at scan time*: an error banner, a success
-toast, a suggestion annotation are not on screen during a normal run, so an
+toast, a [suggestion](glossary.md#suggestion) annotation are not on screen during a normal run, so an
 axe-only pass says nothing about them. It would report green on a palette where
 every error colour was unreadable, purely because nothing had errored.
 
 `token-contrast.spec.ts` resolves the declared token pairs per theme and runs
 the contrast formula over them directly. `editor-contrast.spec.ts` covers the
 three classes axe structurally cannot reach inside the excluded editor:
-authorship colours, highlight fills (alpha-composited over the editor
+authorship colours, [highlight](glossary.md#highlight) fills (alpha-composited over the editor
 background, since what the eye receives is the composite, not the token), and
 annotation underlines.
 
@@ -254,7 +264,8 @@ read firmer than the soft sketch it was designed as.
 ### `--tandem-warning-fg` — accepted 2026-08-05
 
 Flipping it white → `#0f172a` takes the one surface that uses it (the `Private`
-pill in `NoteCard.svelte:33` — the token's **only** consumer) from 3.76:1 to
+pill, `data-testid="annotation-private-pill"` in `NoteCard.svelte` — as of
+2026-08-05 the token's **only** consumer) from 3.76:1 to
 4.75:1. Visual review's verdict: legible but muddier than the white it replaced,
 because dark theme pairs that same near-black with a genuinely light amber
 (`#fbbf24`) while light theme pairs it with a mid-dark ochre
@@ -372,3 +383,11 @@ caught by noticing a causally impossible reading, not by review.
    4.09 failures. `editor.css` paints `color-mix(author 58–64%, fg)`, not the raw
    token. Measuring the token would have sent someone to retune brand colours
    that render fine.
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md) — the other v1.0 gates and the release process.
+- [Roadmap: v1.0 exit criteria](roadmap.md#v100-exit-criteria) — where the accessibility criteria are defined.
+- [Semantic tokens](semantic-tokens.md) — the colour tokens whose contrast A6 measures.
+- [Performance gate results](perf-gate-results.md) — the sibling gate's recorded runs.
+- [Glossary: annotation](glossary.md#annotation) — the cards and underlines several criteria scan.

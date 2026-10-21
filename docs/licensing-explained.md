@@ -1,19 +1,26 @@
+---
+tags: [audience/maintainer, audience/user, topic/licensing]
+aliases: [How Tandem licensing works, Licensing explained, Licence system, AI admission points]
+---
+
 # How Tandem licensing works
+
+[Home](README.md) › [Security and licensing](maps/security-and-licensing.md)
 
 > One document, two readings. **Part 1** is for anyone — no code, no jargon.
 > **Part 2** is the engineering detail. **Part 3** is the failure modes, which
 > is the part worth reading twice.
 >
-> Related: [ADR-040](decisions.md) (the decision),
+> Related: [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) (the decision),
 > [licensing-operations.md](licensing-operations.md) (the runbook — what to *do*),
 > [licensing-terms.md](licensing-terms.md) (what a purchase grants),
 > [security.md](security.md), [data-locations.md](data-locations.md).
 >
-> **Status: the whole system ships dark.** Everything below is built and tested, and none
+> **Status: the whole system [ships dark](glossary.md#ships-dark).** Everything below is built and tested, and none
 > of it does anything to a user today.
 >
 > **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
-> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the run gate on, and
+> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the [run gate](glossary.md#licensing-gate) on, and
 > `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs` must be pointed at
 > the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits on
 > its first line and `build_updater()` takes its `Public` arm, `app.updater()` — so **every
@@ -41,7 +48,7 @@ You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
 (**double-clicking the file does nothing** — Tandem registers no `.license` file
 association; its only associations are `.md`/`.markdown`, `.txt` and `.html`,
-`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working
+`bundle.fileAssociations` in `src-tauri/tauri.conf.json`), and Tandem is yours: it keeps working
 forever, with no internet connection required to prove it. Every future update
 is included too, with no time limit, though no one can promise that future
 updates will come.
@@ -54,7 +61,7 @@ directory** — so running a separately installed CLI to license a desktop app
 succeeds and changes nothing the desktop can see. Nothing reports that, which is
 why it is worth stating here. That holds even if you reach the desktop's own
 editor through a browser (it serves the same UI on `http://127.0.0.1:3479`): the
-server there still reads the desktop's app-data directory, so Settings → License
+server there still reads the desktop's [app-data directory](glossary.md#app-data-directory), so Settings → License
 is still the only route, and it stops offering the command accordingly.
 
 ## What you get, precisely
@@ -89,15 +96,18 @@ activate.** That is the first paragraph of the BUSL Additional Use Grant in
 [LICENSE](../LICENSE), so it is a term you are granted rather than an enforcement
 gap you are getting away with. The grant also reaches back: it covers every
 pre-1.0 release that shipped under an earlier wording of the licence, including
-v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. Releases
+v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. This wording
+first ships with the next release: v0.26 to v0.28 still carry the earlier wording in their
+own `LICENSE`. Releases
 before v0.11.0, and the v0.11.0 to v0.14.3 desktop builds whose package metadata
 said MIT, are MIT-licensed. None of it is enforced: the gate ships dark, so a
 beta build has no trial clock running at all and the three states below are
 unreachable in it.
 
-At v1.0 the gate flips and the 14-day trial starts for new installs. **Beta users
-are grandfathered with a free license and skip the trial entirely** — see the
-claiming instructions in the README, which matter because Tandem has no telemetry
+At v1.0 the gate flips, and the 14-day trial starts on every install at its first
+launch of v1.0 or later — beta installs included — and an activated key takes
+precedence over it. **Beta users are grandfathered with a free license, and they skip the
+trial by activating it** — see the claiming instructions in the README, which matter because Tandem has no telemetry
 and therefore no list of beta users to work from.
 
 ## The three states Tandem can be in
@@ -107,7 +117,7 @@ and therefore no list of beta users to work from.
 3. **Restricted** — the trial ended and there's no license. **Your documents are
    never held hostage:** Tandem stays a working editor. You can open, edit, save
    and export your documents. What a key adds is the AI features, such as Claude
-   (or any other agent) over the MCP server, the chat panel and local models. The
+   (or any other agent) over the [MCP server](glossary.md#mcp-server), the [chat](glossary.md#chat) panel and [local models](glossary.md#local-model-collaborator). The
    [LICENSE](../LICENSE) grants exactly that: v1.0 and later may be used without
    a key, for personal use and individual self-hosting, provided the use does
    not include the AI features.
@@ -135,7 +145,7 @@ that were entirely our fault.
 |---|---|
 | "That's longer than a license key…" | You pasted the whole email. Just the long block, or use the attachment. |
 | "That doesn't look like a license key." | Something got mangled in copying. |
-| "This key wasn't issued for this build…" | Genuinely ours to fix — email support and we'll reissue it. |
+| "This key wasn't issued for this build…" | Update Tandem first — a newer build may trust the key that signed it. If it still fails, it's genuinely ours to fix: email support and we'll reissue it. |
 | "This license needs a newer version of Tandem." | Update Tandem, then activate. |
 | "Your license is valid, but Tandem couldn't save it…" | Our problem, not your key. A permissions issue on your machine's app-data folder. |
 
@@ -280,11 +290,14 @@ aiRefusal()  ->  null                                     (dark build, trial, li
 re-reads disk on every call like `resolveLicenseState` does — no memo, because a cache is what caused
 the mid-session-expiry bugs. `kind: "unverifiable"` means a licence file is installed but fails to
 verify; its message is the fix-or-reissue copy from `unverifiableLicenseMessage()` and **never carries
-the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL.
-The wire envelope is that object everywhere: the `/api` 403 body, and the `data` of the MCP error.
+the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL
+in its message. On the wire, the `/api` 403 body is that object, `{ error, kind, message }`
+(`res.status(403).json({ ...extra, ...refusal })` in `ai-refusal.ts`). The MCP refusal is a JSON-RPC
+`-32003` error whose `message` is the refusal's message and whose `data` is `{ error, kind, purchaseUrl }`,
+with `purchaseUrl` present only for `unlicensed` (`licenseRefusalRpcError` in `src/server/mcp/server.ts`).
 
 Until #1521 enforcement worked the other way round, and that history explains several tests: **Surface
-A** marked Hocuspocus document rooms read-only, and **Surface B** (`gatedTool()` on 14 MCP write tools,
+A** marked [Hocuspocus](glossary.md#hocuspocus) document rooms read-only, and **Surface B** (`gatedTool()` on 14 MCP write tools,
 `licenseGateMiddleware` on 7 `/api` routes, plus two in-handler `licenseGate()` calls) refused content
 writes — while chat, push and Claude's read tools stayed open. All of that is deleted.
 
@@ -625,8 +638,10 @@ Worth stating plainly, because they look like bugs:
   key's update entitlement. A partial refund changes nothing automatically; the
   buyer keeps the license and the operator gets a notice (decided 2026-10-18).
 - **Nothing counts devices or people.** `LICENSE` sets no per-key limit either,
-  and customer copy deliberately states none: how a key is used is left to
-  good faith (decided 2026-10-15).
+  and customer copy states no device or person count: how a key is used is left
+  to good faith (decided 2026-10-15). Checkout copy is still to state its one
+  exclusion, until a commercial SKU exists: a shared or hosted deployment (see
+  *What is not built yet*).
 - **In restricted mode a Claude Code with shell access can still reach Tandem
   out of band** — edit the file on disk (the watcher reloads it) or call
   Tandem's local endpoints directly. Tandem refuses the AI at its own admission
@@ -659,3 +674,13 @@ Worth stating plainly, because they look like bugs:
 - **The legal documents.** See [licensing-terms.md](licensing-terms.md) — a
   working draft exists. No counsel is being consulted, so the licensor writes
   the real ones.
+
+## Related
+
+- [Security and licensing map](maps/security-and-licensing.md) — the rest of the licence material, and the security model it sits inside.
+- [Licensing operations](licensing-operations.md) — the owner's runbook: keys, grandfathering, the Workers and the [v1.0 flag flip](licensing-operations.md#4-the-v10-flag-flip-enabling-enforcement).
+- [Licence terms](licensing-terms.md) — the working draft of what a purchase grants; not legal advice.
+- [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) — the decision this page implements, as amended.
+- [Security: licensing activation](security.md#licensing-activation-v10) — the same system read as a threat surface.
+- [The issuance Worker](../infra/license-issuance-worker/README.md) and [the update Worker](../infra/license-update-worker/README.md) — the two Cloudflare Workers in Part 2.
+- [Glossary: licensing gate](glossary.md#licensing-gate) and [ships dark](glossary.md#ships-dark) — the short definitions.

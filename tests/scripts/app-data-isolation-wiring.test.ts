@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,5 +94,54 @@ describe("vitest app-data isolation", () => {
     expect(dir).not.toBe(root);
     expect(path.dirname(dir)).toBe(root);
     expect(path.basename(dir)).toMatch(/^worker-\d+$/);
+  });
+});
+
+/**
+ * A test file that points `TANDEM_APP_DATA_DIR` at a directory of its own must
+ * tear it down through `teardownFileAppDataDir()`. The hand-written teardown it
+ * replaced removed the directory and then deleted the variable while annotation
+ * writes were still debounced, so the late write resolved to the REAL app-data
+ * directory (reproduced: running those files left an annotation envelope in
+ * the real `annotations/` folder). Where the directory itself was gone the
+ * same write logged `ENOENT` during worker shutdown, an unhandled
+ * `EnvironmentTeardownError` that failed the `coverage` job with every test
+ * green. The helper cancels pending writes first and restores the variable
+ * instead of deleting it; this keeps a new file from copying the old block.
+ */
+describe("per-file app-data teardown", () => {
+  const testsDir = path.join(ROOT, "tests");
+  const files = (readdirSync(testsDir, { recursive: true }) as string[])
+    .map((f) => f.replaceAll("\\", "/"))
+    .filter((f) => f.endsWith(".ts") && !f.includes("node_modules/"));
+  // Files that repoint the variable from a mock of `src/server/platform`, under
+  // whatever local name they give the directory.
+  const MOCKS_PLATFORM = /vi\.mock\((?:import\()?["'](?:\.\.\/)+src\/server\/platform/;
+  const repointing = files.filter((f) => {
+    if (f === "scripts/app-data-isolation-wiring.test.ts") return false;
+    const text = readFileSync(path.join(testsDir, f), "utf-8");
+    return MOCKS_PLATFORM.test(text) && text.includes("process.env.TANDEM_APP_DATA_DIR =");
+  });
+
+  it("finds the files that repoint the app-data directory", () => {
+    // A vacuous pass is the failure mode of any sweep: if the mock is ever
+    // respelled, this goes red instead of the check below checking nothing.
+    expect(repointing.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("never unsets the variable, and removes the directory only through the helper", () => {
+    // A conditional restore (`if (prev === undefined) delete …` / `else delete …`)
+    // is fine: the statement does not start the line. An unconditional one, or a
+    // hand-written removal of the directory while writes may be pending, is not.
+    const UNSET = /^\s*delete process\.env\.TANDEM_APP_DATA_DIR;/m;
+    const REMOVES_BY_HAND = /\brm(?:Sync)?\(\s*appData\w*\b/;
+    const offenders = repointing.filter((f) => {
+      const text = readFileSync(path.join(testsDir, f), "utf-8");
+      return UNSET.test(text) || REMOVES_BY_HAND.test(text);
+    });
+    expect(
+      offenders,
+      "use teardownFileAppDataDir() from tests/helpers/app-data-teardown.ts",
+    ).toEqual([]);
   });
 });

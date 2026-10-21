@@ -14,8 +14,8 @@
     { "id": "launcher_latch", "type": "backend", "label": "LAUNCHER_DEFERRED", "sublabel": "atomic latch", "pos": [1000, 110], "size": [160, 62] },
     { "id": "rejection_buf", "type": "backend", "label": "Rejection Buffer", "sublabel": "get_startup_rejection()", "pos": [25, 220], "size": [150, 60] },
     { "id": "origin_check", "type": "security", "label": "Origin Checks", "sublabel": "CORS, apiMiddleware, Hocuspocus", "pos": [495, 220], "size": [170, 62] },
-    { "id": "updater", "type": "cloud", "label": "resolve_update_route", "sublabel": "entitlement branch", "pos": [700, 220], "size": [160, 62] },
-    { "id": "show_window", "type": "frontend", "label": "show_main_window", "sublabel": "single release point", "pos": [1005, 220], "size": [150, 62] },
+    { "id": "updater", "type": "cloud", "label": "resolve_update_route", "sublabel": "Rust host; Public if no endpoint", "pos": [700, 220], "size": [160, 62] },
+    { "id": "show_window", "type": "frontend", "label": "note_user_presence", "sublabel": "single release point", "pos": [1005, 220], "size": [150, 62] },
     { "id": "public_manifest", "type": "external", "label": "Public Manifest", "sublabel": "tauri.conf.json", "pos": [605, 328], "size": [150, 60] },
     { "id": "licensed_route", "type": "external", "label": "Licensed Route", "sublabel": "gate dark today", "pos": [805, 328], "size": [150, 60] }
   ],
@@ -30,13 +30,13 @@
     { "from": "webview", "to": "sidecar", "label": "HTTP/WS to 127.0.0.1", "labelDy": 20 },
     { "from": "webview", "to": "origin_check", "label": "tauri.localhost origin", "variant": "security", "route": "orthogonal-h" },
     { "from": "origin_check", "to": "sidecar", "label": "must match TAURI_HOSTNAME", "variant": "security", "route": "orthogonal-h" },
-    { "from": "sidecar", "to": "updater", "label": "checks entitlement", "variant": "dashed", "labelDy": 24 },
+    { "from": "updater", "to": "sidecar", "label": "probes licence status", "variant": "dashed", "labelDy": 24 },
     { "from": "updater", "to": "public_manifest", "label": "Public route", "variant": "dashed", "route": "orthogonal-h" },
     { "from": "updater", "to": "licensed_route", "label": "licensed route (dark)", "variant": "dashed", "route": "orthogonal-h" }
   ],
   "cards": [
     { "dot": "cyan", "title": "Sidecar Model", "items": ["Rust host bundles and spawns its own Tandem server", "No separately-running tandem server is required", "strip_win_prefix() strips \\\\?\\ before any sidecar path"] },
     { "dot": "amber", "title": "Cold-Start Validation", "items": ["Argv and macOS RunEvent::Opened share validate_open_candidate", "UNC refusal happens before any filesystem call", "Rejection is a buffered reason code, not an event payload"] },
-    { "dot": "violet", "title": "Origin & Login Gating", "items": ["TAURI_HOSTNAME must match CORS, apiMiddleware, and Hocuspocus", "LAUNCHER_DEFERRED is re-read on every spawn, never captured once", "show_main_window is the single release point"] }
+    { "dot": "violet", "title": "Origin & Login Gating", "items": ["TAURI_HOSTNAME must match CORS, apiMiddleware, and Hocuspocus", "LAUNCHER_DEFERRED is re-read on every spawn, never captured once", "note_user_presence, reached via show_main_window_for_user, is the single release point", "show_main_window is the mechanical boot path and releases nothing"] }
   ]
 }

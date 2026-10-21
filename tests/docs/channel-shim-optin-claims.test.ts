@@ -64,6 +64,10 @@ const SURFACES = [
   "docs/troubleshooting.md",
   "docs/user-guide.md",
   "docs/cli.md",
+  // The docs vault's navigation surfaces: each names the shim as a push path.
+  "docs/README.md",
+  "docs/glossary.md",
+  "docs/maps/connecting-ai.md",
   "skills/tandem/SKILL.md",
   "src/cli/doctor.ts",
   "src/cli/setup.ts",

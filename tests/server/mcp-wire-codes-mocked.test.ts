@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { createMinimalDocx, seedAcceptedSuggestion } from "../helpers/wire-code-fixtures.js";
 
@@ -106,10 +107,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appData = process.env.TANDEM_APP_DATA_DIR;
-  if (appData?.includes("tandem-test-wire-mocked-")) {
-    await fsp.rm(appData, { recursive: true, force: true }).catch(() => {});
-  }
+  await teardownFileAppDataDir();
 });
 
 describe("tandem_rename narrows renameDocument's open errorCode (#1851)", () => {

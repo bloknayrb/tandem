@@ -1,14 +1,15 @@
 /**
  * Visual baseline HTML capture — Phase 0i of the design-system-impl umbrella.
  *
- * Captures the eight cross-cutting / shared-recipe surfaces in light + dark
- * (16 scenes) and combines them into ONE self-contained gallery,
+ * Captures the nine cross-cutting / shared-recipe surfaces in light + dark
+ * (18 scenes; warm is not captured) and combines them into ONE self-contained
+ * gallery,
  * `docs/design-system-impl/preview/baselines/baselines.html`, which
  * OpenDesign and any browser render as-is. Each scene is embedded in an
  * `<iframe srcdoc>` so its inlined `<html data-theme>` + stylesheet stay
  * isolated. See `combine.ts` for the gallery shell.
  *
- * Single file (not 16) because OpenDesign flattens every file under
+ * Single file (not 18) because OpenDesign flattens every file under
  * docs/design-system-impl into one list — one artifact keeps that view clean.
  *
  * NOT a test — no assertions, no regression gate. The role is **visual
@@ -18,10 +19,9 @@
  * Run:
  *   npm run capture:design-baselines
  *
- * Sub-PR ritual: when a sub-PR re-skins a surface covered here, re-run this
- * command and commit the regenerated baselines.html so reviewers can see the
- * change in OpenDesign. (The combined file is large and not hand-diffable;
- * the visual review happens in OD, not the git diff.)
+ * The gallery is gitignored and generated on demand — do not commit it. Re-run
+ * this when you want to look at a re-skinned surface; see
+ * docs/design-system-impl/baseline-procedure.md for why it is not committed.
  */
 
 import fs from "node:fs";

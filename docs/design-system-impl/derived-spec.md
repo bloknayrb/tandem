@@ -1,6 +1,21 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Derived-surface spec, Derived spec]
+---
+
 # Derived-Surface Design Spec
 
-> **Phase 0f.** This document is the design source of truth for every Phase 3
+[Home](../README.md) › [Contributing](../maps/contributing.md)
+
+> **Status: mixed (re-checked 2026-10-20).** The Phase 3 cluster recipes
+> (3.1–3.10) are a historical record of what the design-system-impl umbrella
+> was built against; where a section has since been overtaken it says so in
+> place. Two parts are still live and maintained: **3.4 (Batch + bulk
+> actions)**, whose layout claims `tests/docs/batch-bulk-layout-claims.test.ts`
+> pins against the components, and the **Annotation card chrome** section
+> below. When a recipe here disagrees with shipped code, the code wins.
+>
+> **Phase 0f.** This document was the design source of truth for every Phase 3
 > sub-PR on the design-system-impl umbrella branch. Each cluster row below
 > answers four prescriptive questions so a sub-PR author can build without
 > re-litigating design. If a recipe is ambiguous, flag it here — do not
@@ -57,9 +72,13 @@ Each row:
 - **Anti-patterns.** Do NOT introduce a left-edge accent stripe — that
   recipe is reserved for annotation cards (Conflict #7 + the
   README "edge color" rule). Do NOT vary the height per banner; D2/D3/D4
-  must stack predictably when more than one is visible. Do NOT add a
-  CTA-button-as-banner-action — banners offer dismiss only; recovery
-  actions belong inside the surface they describe.
+  must stack predictably when more than one is visible. Do NOT turn a
+  banner into a general toolbar: a banner carries only the actions that
+  resolve the state it reports, styled with the shared
+  `.tandem-banner__cta` recipe (`tandem-banner.css`). (This recipe once said
+  banners offer dismiss only; that never held — the connection banner ships a
+  retry, the updater banner an install, and the external-conflict banner
+  keep / reload.)
 
 ### 3.2 Error / help / file modals — D6 ErrorBoundary, D8 HelpModal, D9 FileOpenDialog
 
@@ -82,6 +101,10 @@ Each row:
   they're an error-recovery affordance, must remain easy to hit.
 
 ### 3.3 Annotation conversation — C9 ReplyThreadOverlay, C10 CommentThread, C11 ImportedCard, C12 AnnotationEditForm
+
+> **C9 is retired.** The portaled `ReplyThreadOverlay` was removed (A13, #798):
+> the inline disclosure in `ReplyThread` is now the reply reader, so the
+> thread-overlay sentence below describes nothing that ships.
 
 - **Bundle ref.** Card chrome follows `ui_kits/app/AnnotationCard.svelte`
   per Conflict #8 (five-file split preserved). The card shell is
@@ -235,18 +258,24 @@ Each row:
 - **Anti-patterns.** Do NOT show count = 0 (hide instead). Do NOT add a
   third action button — the primary CTA is "Send N to Claude" (C7) or
   "Accept N" / "Dismiss N" (C8); a third action invites accidental
-  destructive use. Do NOT block scroll under the bar — the bar sits over
-  the editor, the editor must still scroll behind it. Do NOT make one bar
+  destructive use. Do NOT block scroll under the bars — they sit above the
+  annotation list inside the side panel's own scroller, and the list must
+  still scroll beneath them. Do NOT make one bar
   suppress the other (see above) — that reads as a simplification and is a
   regression. Do NOT take the manifest's "absolute at rail bottom" phrasing as
   describing the BARS — it describes the rail, and the bars are neither.
 
 ### 3.5 Margin column (risky) — C4 MarginColumn
 
+> **Shipped.** Phase 3.5 landed (#909): the editor-stage grid (content track
+> plus per-side margin tracks, `editor-stage`) and the `editorMeasure`
+> reading-measure preset. The design-proposal gate described below was the
+> plan at the time; it is history now.
+
 - **Bundle ref.** No bundle precedent for the leader-line + bubble
   layout. Recipe inherits from production's current implementation;
-  this cluster's sub-PR proposes a design and waits for explicit review
-  before any code lands per the plan's Phase 3.5 callout.
+  this cluster's sub-PR was to propose a design and wait for explicit review
+  before any code landed, per the plan's Phase 3.5 callout.
 - **Tokens.** Bubble surface = `var(--tandem-surface)`, border =
   `var(--tandem-border)`, leader line = `var(--tandem-border-strong)`,
   shadow = `var(--tandem-shadow-1)`. Hover state lifts to
@@ -258,9 +287,16 @@ Each row:
   state" — collapse the bubble width to the leader-line stub, do not
   display: none (would collapse the leader-line geometry). Do NOT
   position bubbles by absolute pixel — use the rail-content scroll-sync
-  pattern from lesson `feedback_dom_nested_overlay_scroll_sync`.
+  pattern instead.
 
 ### 3.6 Settings tabs — E7 Collaboration, E8 Models, E9 ClaudeCode, E10 Shortcuts, E11 About
+
+> **Historical (recipe era).** This cluster covered five tabs. The settings
+> modal now has eleven — Appearance, Editor, Network, Accessibility,
+> Collaboration, Notifications, AI Assistant, Models, Shortcuts, License and
+> About (`SettingsModal.svelte`) — and the Models tab is filtered out entirely
+> while `BYO_MODELS_ENABLED` is false. The shared-shell rule below still
+> applies to all of them.
 
 - **Bundle ref.** Tab content shell follows
   `ui_kits/app/Settings.svelte` from the bundle — sidebar nav on the
@@ -280,12 +316,20 @@ Each row:
   for hover treatment.
 - **Motion.** Tab switch = no animation. Settings modal as a whole
   follows the modal-family motion from cluster 3.2.
-- **Anti-patterns.** Do NOT collapse to a different layout per tab — all
-  five share the same shell so the sidebar-nav-to-content-panel
+- **Anti-patterns.** Do NOT collapse to a different layout per tab — every
+  tab shares the same shell so the sidebar-nav-to-content-panel
   relationship is unbroken. Do NOT introduce per-tab background colors —
   the tab content area is always `var(--tandem-surface)`.
 
 ### 3.7 Integration wizard — F1 FirstRunModelPicker, F2 ModelEditModal, F3 IntegrationWizardModal, F4–F6 Cowork trio
+
+> **Superseded.** The wizard shipped as a detection-led single screen plus a
+> Cowork opt-in sub-view, not the stepped flow reciped below: there is no
+> step-dot indicator, no Continue/Back pair and no secrets step (see the
+> Integration wizard section of `testid-manifest.md`). Two anti-patterns
+> below still hold and are kept: never log secret values, and never remove
+> the keychain-fallback banner. Cowork setup and the local-model surfaces
+> (F1, F2) ship dark.
 
 - **Bundle ref.** Wizard shell follows the cluster-3.2 modal recipe
   (palette + settings family). Step indicator follows the bundle's
@@ -298,8 +342,9 @@ Each row:
 - **Motion.** Step transition = 200ms ease-out opacity fade on content
   area; step indicator dot transitions via A2 (Save) keyframes
   (dot → check, 200ms).
-- **Anti-patterns.** Do NOT auto-advance past the secrets step — the
-  user must explicitly press Continue (per ADR-027 + security review). Do
+- **Anti-patterns.** (Historical: do NOT auto-advance past the secrets
+  step — the user must explicitly press Continue, per ADR-027 + security
+  review. No secrets step shipped.) Do
   NOT log secret values to the console even in error states. Do NOT
   remove the keychain-fallback banner — `integration-wizard-keychain-fallback`
   testid is asserted by E2E.
@@ -395,7 +440,7 @@ README L122–123 "edge color" line is stale text from an earlier design
 and must not be the source.
 
 The taxonomy below is **audience-first** per ADR-027 + Conflict #9 — who
-the annotation is for picks the variant first, with author and
+the [annotation](../glossary.md#annotation) is for picks the variant first, with author and
 `suggestedText` as the refinement signals. The bundle's `cardType` values
 (`note`, `comment-user`, `suggest`, `highlight` in `samples.ts:32–51`)
 map to production's five-component split.
@@ -427,19 +472,34 @@ by author. The icon is hidden at stub density; its accessible name sits on the
 wrapping `role="img"`, and a visually-hidden word is revealed under
 `forced-colors: active`, where every tint collapses to `Canvas`.
 
-| audience  | author   | suggestedText | Production variant | Bundle `cardType` | Background tint | Header (dot + name + icon) | Actions row |
-| --------- | -------- | ------------- | ------------------ | ----------------- | --------------- | -------------------------- | ----------- |
-| `private` | `user`   | —             | `NoteCard`         | `note`            | user tint | **hollow** cobalt dot · "You" · note icon | Send to Claude (neutral + coral disc) · Archive (ghost) |
-| `claude`  | `user`   | —             | `CommentCard`      | `comment-user`    | user tint | cobalt dot · "You" · comment icon | Resolve (primary) · Edit (ghost) · Delete (ghost) |
-| `claude`  | `claude` | —             | `CommentCard`      | (`comment`)       | claude tint | agent-coloured dot · "Claude" · comment icon | Resolve (primary) · Edit (ghost) · Delete (ghost) |
-| `claude`  | `claude` | present       | `SuggestionCard`   | `suggest`         | claude tint | agent-coloured dot · "Claude" · replacement icon | Accept (primary) · Dismiss (ghost) · Edit (ghost) |
-| `private` | `import` | —             | `ImportedCard`     | (production-only) | import tint | no author dot · italic byline "Sarah · 2024-12-05" (`--tandem-fg-subtle`) · note icon (accessible name "Private note") | Promote (primary) · Dismiss (ghost) |
+| audience   | author   | suggestedText | Production variant | Bundle `cardType` | Background tint | Header (dot + name + icon) | Actions row (while pending) |
+| ---------- | -------- | ------------- | ------------------ | ----------------- | --------------- | -------------------------- | --------------------------- |
+| `private`  | `user`   | —             | `NoteCard`         | `note`            | user tint | **hollow** cobalt dot · "You" · note icon | Archive (ghost) · Send to {agent} (neutral + coral disc); Edit in the header |
+| `outbound` | `user`   | —             | `CommentCard`      | `comment-user`    | user tint | cobalt dot · "You" · comment icon | Remove (ghost); Edit in the header |
+| `outbound` | `claude` | —             | `CommentCard`      | (`comment`)       | claude tint | agent-coloured dot · "Claude" · comment icon | Accept · Dismiss |
+| `outbound` | `claude` | present       | `SuggestionCard`   | `suggest`         | claude tint | agent-coloured dot · "Claude" · replacement icon | Accept · Dismiss |
+| `private`  | `import` | —             | `ImportedCard`     | (production-only) | import tint | no author dot · italic byline "Sarah · 2024-12-05" (`--tandem-fg-subtle`) · note icon (accessible name "Private note") | Accept · Dismiss; promotion is the selection checkbox + `BatchPromoteBar`, not a card button |
+| `private`  | `user`   | —             | `HighlightCard`    | `highlight`       | user tint | cobalt dot · "You" · filled highlight icon | Remove (ghost); Edit in the header |
 
-Note the first column on that last row: imported Word comments land as
-`type: "note"`, `audience: "private"`, `author: "import"`
-(`src/server/file-io/docx-comments.ts:635-637`), and `BatchPromoteBar` is what
-flips all three at once. An earlier revision of this table said `claude`, which
-read as though an import were visible to the AI on arrival. It is not.
+The actions row is `AnnotationCardActions.svelte`, and which branch renders is
+decided by the callbacks its callers (`SidePanel`, `MarginColumn`) pass, gated
+by the shared predicates in `annotation-context-menu.ts`: Accept and Dismiss
+for any pending record not authored by the user; Archive and Send to {agent}
+for the user's own pending note; Remove for the user's other pending records.
+Edit is not in that row — it is the header's `edit-btn-{*}`, for pending
+user-authored records only. Once a record is resolved the row shows Undo
+(when the change can still be undone) and nothing else. There is no Resolve,
+Delete or Promote card button.
+
+Note the first column on the imported row: imported Word comments land as
+`type: "note"`, `audience: "private"`, `author: "import"` (see the
+`injectCommentsAsAnnotations` docblock in
+`src/server/file-io/docx-comments.ts`; `.docx` import ships dark, ADR-053), and
+`BatchPromoteBar` is what flips all three at once. An earlier revision of this
+table gave that row the AI-visible audience, which read as though an import
+were visible to the AI on arrival. It is not. (The AI-visible audience value
+is `outbound`, per `src/shared/types.ts`; an earlier revision of the table
+used a value that does not exist.)
 
 Privacy is carried by **three** header signals, not one, and which of them are
 present depends on the row:
@@ -459,14 +519,16 @@ that budget, and do not treat it as load-bearing on its own.
 
 **Suggestions are Claude-only.** Users can author notes, comments, and
 highlights; they cannot author suggestions. A `suggestedText` field on a
-user-authored annotation is a data-model violation — `tandem_createAnnotation`
-should not accept it from a user, and the UI should never render one.
-The five rows above are the complete taxonomy.
+user-authored annotation is a data-model violation. Claude's creator,
+`tandem_comment`, stamps Claude as the author; the browser's create path (the
+selection popup's note and comment composer) offers no suggestion field; and
+the UI should never render one. The six rows above — five record shapes plus
+the highlight — are the complete taxonomy.
 
-**Highlights are a different surface entirely.** They render as inline
-mark fills in the editor (no card body) and carry no chrome — color comes
-from the user-picked highlight color in `HIGHLIGHT_COLOR_VARS`
-(`src/client/utils/colors.ts`).
+**Highlights have two surfaces.** In the editor they render as inline mark
+fills with no chrome — color comes from the user-picked highlight color in
+`HIGHLIGHT_COLOR_VARS` (`src/client/utils/colors.ts`). In the rail they also get
+a `HighlightCard` (last row above), whose body is the optional note text.
 
 **Header chrome details (per `app.css:518–547`):**
 - `.author-dot` = 6×6px circle, `var(--tandem-author-user)` or `var(--tandem-author-claude)` background, `flex-shrink: 0`
@@ -496,24 +558,41 @@ from the user-picked highlight color in `HIGHLIGHT_COLOR_VARS`
   everywhere except the `highlight` fill, which carries the user's picked
   highlight colour. A second coloured element in the header competes with
   the author dot for the same signal.
-- Do NOT add an `Accept` action to non-suggestion cards. The bundle's
-  `card-actions` row is type-specific:
-  - `note` → Send to Claude (neutral `.aca-btn--send` + coral destination disc), Archive (ghost)
-  - `comment` → Resolve (primary), Edit (ghost), Delete (ghost)
-  - `suggest` → Accept (primary), Dismiss (ghost), Edit (ghost)
-  - `imported` → Promote (primary), Dismiss (ghost) (production-only)
-  - `highlight` → no actions row at all
+- Do NOT add an `Accept` action to the user's own cards — Accept and Dismiss
+  are review actions on records someone else authored. The bundle's
+  `card-actions` row is type-specific; production's `AnnotationCardActions`
+  renders, for a pending record:
+  - user `note` → Archive (`.aca-btn--ghost`), Send to {agent} (neutral
+    `.aca-btn--send` + coral destination disc)
+  - user `comment` or `highlight` → Remove (`.aca-btn--ghost`)
+  - Claude `comment` and `suggest` → Accept (`.aca-btn--accept`), Dismiss
+    (`.aca-btn--reject`)
+  - `imported` → Accept, Dismiss (production-only; promotion goes through the
+    selection checkbox and `BatchPromoteBar`)
+  - any resolved record → Undo, while the change is still undoable
 
-Visual rendering of all six taxonomy combinations in the bundle's actual
+  Edit is the header's button, not part of this row.
+
+Visual rendering of the six taxonomy combinations (the five record shapes
+plus the highlight) in the bundle's actual
 chrome: see `docs/design-system-impl/preview/annotation-edge-colors.html`
 — OD picks it up from the watched directory.
 
 ## What this spec deliberately does NOT do
 
-- It does not specify margin column geometry (Phase 3.5 needs an
-  explicit design proposal per the plan).
+- It does not specify margin column geometry (Phase 3.5 was to get an
+  explicit design proposal per the plan; it has since shipped, #909).
 - It does not thread motion through every surface; Phase 4 is the
   follow-up that handles full motion-language adoption.
 - It does not enumerate per-state pixel measurements where the bundle's
   CSS already encodes them — the sub-PR reads the cited `app.css` line
   ranges directly.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Conflicts resolved](conflicts-resolved.md): the decisions this spec builds on.
+- [Token audit](token-audit.md): the production token values the recipes use.
+- [Semantic tokens](../semantic-tokens.md): the token family reference.
+- [Motion](motion.md): entrance and state-change timing for these surfaces.
+- [ADR-027](../decisions.md#adr-027-annotation-system-redesign--audience-based-model): the audience-first taxonomy behind the card variants.
