@@ -77,6 +77,7 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_DOCUMENT_META, Y_MAP_FIDELITY_REPORT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import type { FidelityReport } from "../../src/shared/types.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
 /** A minimal clean one-paragraph .docx (no mammoth warnings). */
 async function buildSimpleDocx(text: string): Promise<Buffer> {
@@ -163,9 +164,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const appDataDir = process.env.TANDEM_APP_DATA_DIR;
-  if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
-  delete process.env.TANDEM_APP_DATA_DIR;
+  await teardownFileAppDataDir();
 });
 
 // ---------------------------------------------------------------------------
