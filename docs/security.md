@@ -636,7 +636,7 @@ bound in full, and the conditions that void the acceptance.
 
   **The acceptance is void — reopen it — if either becomes true:** `LAN_BIND_ENABLED` flips, or any other path makes the MCP server listen beyond this computer.
 
-- **[#2278](https://github.com/bloknayrb/tandem/issues/2278) — a document's Windows DACL and its file ownership are not preserved on save. ACCEPTED 2026-10-22 in the approved plan for the app-data half of the save-mode finding; revisit by 2027-04-22.** The residue of #2266, whose fixed half is recorded under *Resolved since this list was last reconciled* above; #2278 is the dated gate, because #2266 itself is closed by that fix.
+- **[#2278](https://github.com/bloknayrb/tandem/issues/2278) — a document's Windows DACL and its file ownership are not preserved on save. ACCEPTED by Bryan 2026-10-22, in the plan for the app-data half of the save-mode finding; revisit by 2027-04-22.** The residue of #2266, whose fixed half is recorded under *Resolved since this list was last reconciled* above; #2278 is the dated gate, because #2266 itself is closed by that fix.
 
   **The condition.** A save is `writeTempThenRename` (`src/server/file-io/index.ts`): a temp sibling renamed over the document. On POSIX the temp is created at the replaced file's mode, so the permission bits survive. Two things still do not. **Windows DACL:** mode bits carry no access control there (`existingMode` returns nothing on win32), and the temp inherits its *directory's* DACL, so an explicit restrictive DACL set on the document itself is dropped on the first save. **Ownership, any platform:** the renamed file belongs to the Tandem process's user and primary group; keeping the original's uid/gid needs privileges Tandem does not have.
 
