@@ -214,6 +214,7 @@ describe("saveSkippedMessage", () => {
     ["EXTERNAL_CONFLICT", "changed on disk"],
     ["PROMOTION_REQUIRED", "Save As"],
     ["READ_ONLY", "read-only"],
+    ["READ_ONLY_FILE", "read-only on disk"],
     ["UNSUPPORTED_FORMAT", "format"],
     ["SAVE_IN_PROGRESS", "already in progress"],
     ["SOURCE_MISSING", "no longer exists"],
@@ -235,6 +236,19 @@ describe("saveSkippedMessage", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(notified(notify, "warning", "read-only")).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("says nothing for a clean document on a read-only file (#2273)", async () => {
+    const notify = vi.fn();
+    wireDeps(notify, "/tmp/doc.md");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "skipped", skipCode: "NO_CHANGES", reason: "No unsaved changes" })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(saveStore.lastSaveOk).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 });

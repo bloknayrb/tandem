@@ -42,6 +42,7 @@ import LicenseBanner from "./components/LicenseBanner.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import PendingUpdateBanner from "./components/PendingUpdateBanner.svelte";
+import ReadOnlyFileBanner from "./components/ReadOnlyFileBanner.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
@@ -3213,6 +3214,19 @@ const shouldShowModelPicker = $derived(
           documentId={activeTab.id}
           fileName={activeTab.fileName}
           format={activeTab.format}
+        />
+      {/key}
+    {/if}
+    <!-- #2273. Per-tab remount for the same in-flight reason as the conflict
+         banner above. Shown in source view too: it never reloads content, so
+         the stale-draft hazard that keeps the conflict banner out does not
+         apply, and a source-view commit is itself a save that can raise it. -->
+    {#if activeTab}
+      {#key activeTab.id}
+        <ReadOnlyFileBanner
+          ydoc={activeTab.ydoc}
+          documentId={activeTab.id}
+          fileName={activeTab.fileName}
         />
       {/key}
     {/if}

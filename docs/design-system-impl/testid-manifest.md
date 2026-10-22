@@ -282,6 +282,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `external-conflict-banner`, `external-conflict-keep-btn`,
   `external-conflict-reload-btn` (#1069 — keep-vs-reload after an external
   write; every format since #1238)
+- `read-only-file-banner`, `read-only-file-overwrite-btn` (absent on Windows),
+  `read-only-file-dismiss-btn`, `read-only-file-live` (#2273 — ask before
+  overwriting a file that is read-only on disk)
 - `wake-stall-banner` (Track D-5 — "Claude hasn't picked this up for N
   minutes"). No dismiss selector, deliberately: like `fidelity-report-banner`
   it is a projection of live state rather than an event, so it erases itself

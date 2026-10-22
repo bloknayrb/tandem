@@ -38,6 +38,14 @@ import {
   snapshotDirtyVersion,
 } from "../documents/dirty.js";
 import { openFromRestore } from "../documents/open.js";
+import {
+  clearReadOnlyFileState,
+  endReadOnlyFileEpisode,
+  gateReadOnlyFileSave,
+  hasReadOnlyFileEpisode,
+  isWritableOnDisk,
+  noteFileWritable,
+} from "../documents/read-only-file.js";
 import { wireFileWatcher } from "../documents/watcher.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
@@ -153,6 +161,9 @@ export function canSaveToDisk(format: string): boolean {
  */
 export const EXTERNAL_CONFLICT_SKIP_REASON = "External conflict pending";
 
+/** `reason` for a save refused because the file is read-only on disk (#2273). */
+export const READ_ONLY_FILE_SKIP_REASON = "File is read-only on disk";
+
 /** The persisted fidelity report, defensively typed: it is server-written but
  * survives session restore un-revalidated, so every read tolerates a legacy or
  * malformed value rather than throwing inside a save. */
@@ -200,7 +211,9 @@ export type SkipCode =
   | "EXTERNAL_CONFLICT"
   | "FILE_MODIFIED"
   | "SOURCE_MISSING"
-  | "FILE_STATE_UNAVAILABLE";
+  | "FILE_STATE_UNAVAILABLE"
+  | "READ_ONLY_FILE"
+  | "NO_CHANGES";
 
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
@@ -476,6 +489,34 @@ export async function saveDocumentToDisk(
     }
 
     const doc = getOrCreateDocument(safeDocId);
+
+    // The file itself is read-only on disk (#2273): ask before overwriting.
+    // Here, inside the lock and after the conflict and mtime guards but before
+    // the pre-overwrite snapshot, so a refusal writes nothing and consumes no
+    // backup gate. Without it a POSIX rename replaces a `chmod 444` file
+    // silently; on Windows the rename fails after `renameWithRetry`'s retries.
+    if (!(await isWritableOnDisk(docState.filePath))) {
+      // Nothing unsaved: the file already holds this content, so a Ctrl+S or
+      // `tandem_save` here is a quiet no-op rather than an "edits not saved"
+      // prompt offering to rewrite identical bytes. Any prompt left over (an
+      // undo back to clean) is moot for the same reason.
+      if (!isDirty(safeDocId)) {
+        endReadOnlyFileEpisode(safeDocId, doc);
+        return { status: "skipped", reason: "No unsaved changes", skipCode: "NO_CHANGES" };
+      }
+      if (!gateReadOnlyFileSave(safeDocId, doc, docState.filePath, source)) {
+        return {
+          status: "skipped",
+          reason: READ_ONLY_FILE_SKIP_REASON,
+          skipCode: "READ_ONLY_FILE",
+        };
+      }
+    } else {
+      // Writable now — perhaps unlocked outside Tandem since a prompt or an
+      // approval. Drop both, so re-protecting the file later asks again.
+      noteFileWritable(safeDocId, doc);
+    }
+
     // Snapshot the dirty version BEFORE the async write so a content edit that
     // lands DURING the write isn't lost — markCleanIfUnchanged only clears the
     // flag if no newer edit arrived (#851).
@@ -677,6 +718,7 @@ export async function saveDocumentToDisk(
       }
     });
     markCleanIfUnchanged(safeDocId, dirtySnapshot);
+    endReadOnlyFileEpisode(safeDocId, doc);
 
     // Session write LAST, and in its own try/catch (#1750). The
     // `SAVED_AT_VERSION` stamp above is a claim about the disk, and the disk
@@ -1213,6 +1255,25 @@ export function serializeDocument(
   // we re-stem to match the requested format here (Scratchpad.md → Scratchpad.txt).
   const baseStem = path.basename(docState.filePath, path.extname(docState.filePath)) || "document";
   return { ok: true, content, fileName: `${baseStem}.${format}` };
+}
+
+/**
+ * `saveDocumentToDisk`, retried briefly while the per-document lock is held —
+ * the one transient skip (a concurrent 60 s autosave holding `savingDocs` at
+ * this instant). Every other skip is standing and is returned at once, so a
+ * file read-only on disk (#2273) is not re-asked five times. For callers that
+ * act on a user's explicit request and must not answer it with a no-op.
+ */
+export async function saveDocumentToDiskRetryingLock(
+  docId: string,
+  source: "manual" | "mcp",
+): Promise<SaveResult> {
+  let result = await saveDocumentToDisk(docId, source);
+  for (let attempt = 0; attempt < 5 && result.skipCode === "SAVE_IN_PROGRESS"; attempt++) {
+    await new Promise((r) => setTimeout(r, 50));
+    result = await saveDocumentToDisk(docId, source);
+  }
+  return result;
 }
 
 /**
@@ -1764,9 +1825,22 @@ export async function closeDocumentById(
   // Normally closing really does discard: a dirty .md/.txt autosaves within
   // 60s, so the session is redundant and deleting it is what makes a closed tab
   // stay closed. That path is unchanged.
+  //
+  // A save refused because the file is read-only on disk (#2273) is the same
+  // case: no autosave will ever land, so the session is the only copy of the
+  // edits. The client confirms before closing such a tab; `POST /api/close`
+  // and `tandem_close` do not, so the server keeps the session too.
   const closingDoc = getOrCreateDocument(safeId);
   const conflictAtClose = readPendingConflict(closingDoc);
-  if (conflictAtClose) {
+  // Probed as well as remembered: after a restart the episode is gone until
+  // the next save attempt, and a restored tab closed in that window would
+  // otherwise lose the edits the previous close kept.
+  const readOnlyBlockedAtClose =
+    isDirty(safeId) &&
+    (hasReadOnlyFileEpisode(safeId) ||
+      (docState.source === "file" && !(await isWritableOnDisk(docState.filePath))));
+  const keepSession = conflictAtClose !== undefined || readOnlyBlockedAtClose;
+  if (keepSession) {
     try {
       await saveSession(docState.filePath, docState.format, closingDoc, {
         dirty: isDirty(safeId),
@@ -1774,7 +1848,7 @@ export async function closeDocumentById(
       });
     } catch (err) {
       console.error(
-        "[Tandem] closeDocumentById: conflict session write failed for %s:",
+        "[Tandem] closeDocumentById: unsaved-edits session write failed for %s:",
         safeId,
         err,
       );
@@ -1804,6 +1878,7 @@ export async function closeDocumentById(
 
   // Drop dirty-tracking state + detach its body observer (#851).
   clearDirtyState(safeId);
+  clearReadOnlyFileState(safeId);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and
@@ -1814,10 +1889,11 @@ export async function closeDocumentById(
   // unless the block above just wrote it as the surviving copy of unpersisted
   // edits. Keeping it means the document reopens still carrying its unanswered
   // keep-vs-reload choice, which is the conservative outcome.
-  if (conflictAtClose) {
+  if (keepSession) {
     console.warn(
-      "[Tandem] Keeping the session for %s: closed with an unresolved external conflict, so the session holds the only copy of its unsaved edits.",
+      "[Tandem] Keeping the session for %s: closed with %s, so the session holds the only copy of its unsaved edits.",
       path.basename(closedPath),
+      conflictAtClose ? "an unresolved external conflict" : "edits a read-only file refused",
     );
   } else {
     try {

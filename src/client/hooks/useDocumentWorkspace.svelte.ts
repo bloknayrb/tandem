@@ -56,6 +56,7 @@
  */
 
 import { tick } from "svelte";
+import { Y_MAP_DIRTY, Y_MAP_DOCUMENT_META, Y_MAP_READ_ONLY_FILE } from "../../shared/constants";
 import { crossBasename } from "../../shared/cross-basename.js";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../../shared/paths";
 import { generateNotificationId } from "../../shared/utils";
@@ -455,6 +456,18 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     if (sourceDirtyTabs.has(tabId)) {
       const ok = opts.confirm(
         "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
+      );
+      if (!ok) return false;
+    }
+    // #2273: a document whose saves a read-only file refused never autosaves,
+    // so its unsaved edits survive a close only in the session the server
+    // keeps for them — warn before the user loses track of them. Keyed on the
+    // server's own dirty mirror as well as the prompt, so a prompt left behind
+    // by an undo-to-clean does not cry wolf.
+    const meta = tab.ydoc.getMap(Y_MAP_DOCUMENT_META);
+    if (meta.get(Y_MAP_READ_ONLY_FILE) !== undefined && meta.get(Y_MAP_DIRTY) === true) {
+      const ok = opts.confirm(
+        `${tab.fileName} is read-only on disk, so your edits haven't been saved to it. Close it anyway? Tandem keeps the edits and reopens the file the next time it starts.`,
       );
       if (!ok) return false;
     }
