@@ -237,7 +237,7 @@ async function migrateLegacyTree(appDataDir: string): Promise<void> {
   // default before #2266. Nothing will boot against that directory again on a
   // desktop-only machine to tighten it, so do it here. `create: false`: never
   // create a store dir that is not there, and a failure only logs.
-  for (const store of ["sessions", "annotations"]) {
+  for (const store of ["sessions", "annotations", "doc-backups"]) {
     await hardenPrivateDir(path.join(legacy, store), { create: false });
   }
 

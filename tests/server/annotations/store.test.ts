@@ -45,6 +45,7 @@ import {
   makeAnnotationDoc,
 } from "../../helpers/annotation-fixtures.js";
 import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env.js";
+import { modeOf } from "../../helpers/file-mode.js";
 
 const env = useTmpAnnotationsEnvWithFlag("tandem-store-test-");
 
@@ -910,7 +911,6 @@ describe("repeated future-schema parks (#1791)", () => {
 
 describe.skipIf(process.platform === "win32")("annotation store modes (#2266)", () => {
   let savedUmask: number;
-  const modeOf = async (p: string) => (await fs.stat(p)).mode & 0o777;
 
   beforeEach(() => {
     savedUmask = process.umask(0o022);
@@ -938,11 +938,11 @@ describe.skipIf(process.platform === "win32")("annotation store modes (#2266)", 
     store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await store.flush();
 
-    expect(await modeOf(annotationsDir)).toBe(0o700);
-    expect(await modeOf(envelope)).toBe(0o600);
-    expect(await modeOf(path.join(annotationsDir, "store.lock"))).toBe(0o600);
+    expect(modeOf(annotationsDir)).toBe(0o700);
+    expect(modeOf(envelope)).toBe(0o600);
+    expect(modeOf(path.join(annotationsDir, "store.lock"))).toBe(0o600);
     // Never rewritten, so untouched: the 0700 directory is what covers it.
-    expect(await modeOf(parked)).toBe(0o644);
+    expect(modeOf(parked)).toBe(0o644);
   });
 
   it("creates a fresh store dir at 0700 and a fresh envelope at 0600", async () => {
@@ -950,8 +950,8 @@ describe.skipIf(process.platform === "win32")("annotation store modes (#2266)", 
     store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
     await store.flush();
 
-    expect(await modeOf(getAnnotationsDir())).toBe(0o700);
-    expect(await modeOf(path.join(getAnnotationsDir(), `${HASH_A}.json`))).toBe(0o600);
+    expect(modeOf(getAnnotationsDir())).toBe(0o700);
+    expect(modeOf(path.join(getAnnotationsDir(), `${HASH_A}.json`))).toBe(0o600);
   });
 
   it("the boot hook tightens an existing dir", async () => {
@@ -960,7 +960,7 @@ describe.skipIf(process.platform === "win32")("annotation store modes (#2266)", 
 
     await ensureAnnotationsDirPrivate();
 
-    expect(await modeOf(getAnnotationsDir())).toBe(0o700);
+    expect(modeOf(getAnnotationsDir())).toBe(0o700);
   });
 
   it("with TANDEM_ANNOTATION_STORE=off, neither boot step creates the dir", async () => {

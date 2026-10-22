@@ -11,6 +11,7 @@ import {
 } from "../../src/server/app-data-owner.js";
 import { ATOMIC_TEMP_PREFIX } from "../../src/server/file-io/index.js";
 import { TOKEN_FILE_NAME } from "../../src/shared/constants.js";
+import { modeOf } from "../helpers/file-mode.js";
 
 /**
  * #1787 — the desktop sidecar and an npm `tandem` shared one app-data root.
@@ -442,13 +443,11 @@ describe("claimAppDataDir — failure contract", () => {
 describe.skipIf(process.platform === "win32")(
   "claimAppDataDir — the legacy copy's stores are made owner-only (#2266)",
   () => {
-    const modeOf = (p: string) => fs.statSync(p).mode & 0o777;
-
-    it("tightens the legacy sessions/ and annotations/ dirs to 0700", async () => {
+    it("tightens the legacy sessions/, annotations/ and doc-backups/ dirs to 0700", async () => {
       const source = tempDir("legacy-modes");
       const target = tempDir("desktop-modes");
       withLegacyRoot(source);
-      for (const store of ["sessions", "annotations"]) {
+      for (const store of ["sessions", "annotations", "doc-backups"]) {
         fs.mkdirSync(path.join(source, store), { mode: 0o755 });
         fs.chmodSync(path.join(source, store), 0o755);
         fs.writeFileSync(path.join(source, store, "x.json"), "{}", "utf8");
@@ -458,6 +457,7 @@ describe.skipIf(process.platform === "win32")(
 
       expect(modeOf(path.join(source, "sessions"))).toBe(0o700);
       expect(modeOf(path.join(source, "annotations"))).toBe(0o700);
+      expect(modeOf(path.join(source, "doc-backups"))).toBe(0o700);
       // The copy itself still arrived.
       expect(fs.existsSync(path.join(target, "sessions", "x.json"))).toBe(true);
     });

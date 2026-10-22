@@ -12,7 +12,6 @@
  * plumbing that a mock proves completely.
  */
 
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,12 +28,9 @@ import {
   hardenPrivateDir,
 } from "../../../src/server/file-io/private-dir.js";
 import { setRestrictiveAcl } from "../../../src/server/integrations/acl-win.js";
+import { modeOf } from "../../helpers/file-mode.js";
 
 const setRestrictiveAclMock = vi.mocked(setRestrictiveAcl);
-
-function modeOf(p: string): number {
-  return statSync(p).mode & 0o777;
-}
 
 let base: string;
 let savedUmask: number | undefined;

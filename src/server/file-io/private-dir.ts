@@ -29,6 +29,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setRestrictiveAcl } from "../integrations/acl-win.js";
 
+/** The mode ceiling for every file the app-data stores write (#2266). */
+export const PRIVATE_FILE_MODE = 0o600;
+
 /**
  * What an ACL application did, from one caller's view. The doc-backup sweep
  * reports all four in its log line; see `logUnreadable` in `doc-backup.ts`.

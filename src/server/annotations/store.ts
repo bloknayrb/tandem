@@ -23,7 +23,7 @@ import * as crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
-import { ensurePrivateStoreDir } from "../file-io/private-dir.js";
+import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
@@ -211,7 +211,7 @@ export async function acquireStoreLock(
       // Exclusive create — fails with EEXIST if the file already exists.
       // `0o600`: the lock holds only a PID and start time, so this is tidiness
       // rather than a leak fix, but it keeps the directory uniformly owner-only.
-      const handle = await fs.open(lockPath, "wx", 0o600);
+      const handle = await fs.open(lockPath, "wx", PRIVATE_FILE_MODE);
       try {
         await handle.writeFile(lockfilePayload(), "utf-8");
       } finally {
@@ -569,7 +569,7 @@ async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void
   await ensureDirReady();
   const target = filePathFor(docHash);
   // Owner-only (#2266): the envelope quotes document text (`textSnapshot`).
-  await atomicWrite(target, JSON.stringify(doc), { maxMode: 0o600 });
+  await atomicWrite(target, JSON.stringify(doc), { maxMode: PRIVATE_FILE_MODE });
   // Success — clear transient failure state but LEAVE `lastNotifiedAt` in
   // place so a brief recovery + re-failure within 60s doesn't re-spam the
   // user. Also leave `disabled`/`persistentNotified` alone: those only clear

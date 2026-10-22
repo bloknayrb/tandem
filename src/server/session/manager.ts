@@ -21,7 +21,7 @@ import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
-import { ensurePrivateStoreDir, hardenPrivateDir } from "../file-io/private-dir.js";
+import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
 import { pushNotification } from "../notifications.js";
 import { SESSION_DIR } from "../platform.js";
 
@@ -35,7 +35,7 @@ let sessionDirReady = false;
  * that is never rewritten (a quarantined `*.corrupt.*`) is covered by the
  * `0700` directory instead, because nothing chmods a file by path.
  */
-const SESSION_FILE_WRITE = { maxMode: 0o600 } as const;
+const SESSION_FILE_WRITE = { maxMode: PRIVATE_FILE_MODE } as const;
 
 /** Create (or tighten) `SESSION_DIR` once per run before the first write. */
 async function ensureSessionDirReady(): Promise<void> {
@@ -952,7 +952,9 @@ interface RawSessionFileEntry extends SessionFileEntry {
 
 export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
   try {
-    await hardenPrivateDir(SESSION_DIR);
+    // Create-only (0700 if missing); tightening an existing dir is the boot
+    // hook's and the first save's job, not every listing's.
+    await fs.mkdir(SESSION_DIR, { recursive: true, mode: 0o700 });
     const files = await fs.readdir(SESSION_DIR);
     const results: RawSessionFileEntry[] = [];
 

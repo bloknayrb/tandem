@@ -101,7 +101,7 @@ backup is a byte copy). They are private to your account:
 - **Windows:** the same folders get an owner-only access list that their files and subfolders
   inherit.
 - **The desktop app's one-time import from the npm folder** leaves the npm copy in place. Tandem
-  makes that copy's `sessions/` and `annotations/` folders private too when it imports them
+  makes that copy's `sessions/`, `annotations/` and `doc-backups/` folders private too when it imports them
   (`0700` on macOS and Linux; on Windows the old copy keeps the access list it already had).
 
 Files Tandem creates **next to a document** follow the document instead. The annotation export

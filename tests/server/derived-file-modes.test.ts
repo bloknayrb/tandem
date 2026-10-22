@@ -14,7 +14,6 @@
  * applied.
  */
 
-import { statSync } from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +24,7 @@ import { convertToMarkdown } from "../../src/server/mcp/convert.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { modeOf } from "../helpers/file-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
 
 const CASES = [
@@ -33,10 +33,6 @@ const CASES = [
   { source: 0o640, expected: 0o640 },
   { source: 0o600, expected: 0o600 },
 ] as const;
-
-function modeOf(p: string): number {
-  return statSync(p).mode & 0o777;
-}
 
 describe.skipIf(process.platform === "win32")("derived files take the source's ceiling", () => {
   let savedUmask: number;

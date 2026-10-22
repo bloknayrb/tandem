@@ -13,7 +13,6 @@
  * helper deliberately keeps today's behaviour there.
  */
 
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,14 +23,10 @@ import {
   derivedFileModeCeiling,
 } from "../../../src/server/file-io/index.js";
 import { ATOMIC_TEMP_RE } from "../../../src/server/file-io/reaper.js";
+import { modeOf } from "../../helpers/file-mode.js";
 
 let dir: string;
 let savedUmask: number;
-
-/** Sync `statSync`, so a spec that mocks `fs.stat` cannot also fool the assertion. */
-function modeOf(p: string): number {
-  return statSync(p).mode & 0o777;
-}
 
 describe.skipIf(process.platform === "win32")(
   "atomicWrite preserves the replaced file's mode (#2266)",

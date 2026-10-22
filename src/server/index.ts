@@ -568,12 +568,8 @@ async function main() {
   // instance holds the store lock). Fire-and-forget with a belt-and-braces
   // .catch(): an escaping rejection would hit the unhandledRejection handler.
   if (!isStoreReadOnly()) {
-    // #2266: both store dirs hold document content, so restrict them to their
-    // owner (`0700` on POSIX, an inheritable owner-only DACL on Windows). An
-    // older build created them at the umask default, and a file nothing ever
-    // rewrites is protected by the directory alone. Never awaited: the Windows
-    // ACL spawns icacls, which must not delay boot. `ensureAnnotationsDirPrivate`
-    // is a no-op with the store off, so an inert store still creates no dir.
+    // #2266: owner-only store dirs, tightened even if an older build made them
+    // wider. Not awaited, for the reason in `ensurePrivateStoreDir`.
     Promise.all([ensureSessionDirPrivate(), ensureAnnotationsDirPrivate()]).catch((err) =>
       console.error(
         `[Tandem] App-data directory hardening failed: ${err instanceof Error ? err.message : err}`,

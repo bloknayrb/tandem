@@ -10,7 +10,6 @@
  * chmods a file by path; the 0700 directory is what protects it.
  */
 
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,10 +34,7 @@ import {
   sessionKey,
 } from "../../../src/server/session/manager";
 import { CTRL_ROOM, Y_MAP_CHAT } from "../../../src/shared/constants.js";
-
-function modeOf(p: string): number {
-  return statSync(p).mode & 0o777;
-}
+import { modeOf } from "../../helpers/file-mode.js";
 
 function docWithText(text: string): Y.Doc {
   const doc = new Y.Doc();
