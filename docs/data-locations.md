@@ -85,6 +85,31 @@ folder, then renames it into place. A failed save removes it, but a force-quit a
 wrong moment can leave one behind. Tandem never sweeps your document folders, so it will not
 remove that file for you; it is safe to delete.
 
+### Who can read these folders
+
+`sessions/`, `annotations/` and `doc-backups/` hold copies of your documents' content (a session
+is the whole open document; an annotation file quotes the text each comment is anchored to; a
+backup is a byte copy). They are private to your account:
+
+- **macOS and Linux:** the three folders are `0700` (only you can list or open anything inside),
+  and Tandem writes the files in them at `0600`. Tandem tightens a folder an older version created
+  more openly when it starts (`doc-backups/` the first time it takes a backup), wherever your
+  app-data folder lives. It never changes a file's permissions directly, so a file
+  written by an older version keeps its old mode until Tandem next rewrites it; until then the
+  `0700` folder is what keeps it private. Quarantined files (`*.corrupt.*`, `*.partial.*`,
+  `*.future`) are never rewritten, so the folder is all that protects them.
+- **Windows:** the same folders get an owner-only access list that their files and subfolders
+  inherit.
+- **The desktop app's one-time import from the npm folder** leaves the npm copy in place. Tandem
+  makes that copy's `sessions/`, `annotations/` and `doc-backups/` folders private too when it imports them
+  (`0700` on macOS and Linux; on Windows the old copy keeps the access list it already had).
+
+Files Tandem creates **next to a document** follow the document instead. The annotation export
+(`<file>.annotations.md` / `.json`) and the Markdown output of a conversion are never readable by
+more people than the document itself is. **Save As** creates your new document with your system's
+default permissions, as other editors do. The reasoning and the limits, including what Windows
+does not preserve on save, are in [the security register](security.md#open-findings).
+
 ## Logs
 
 | Distribution | Path |
@@ -94,6 +119,11 @@ remove that file for you; it is safe to delete.
 | Desktop app (Linux) | `~/.local/share/com.tandem.editor/logs/tandem.log` |
 | `tandem --uninstall-scrub` (Windows) | `%LOCALAPPDATA%\tandem\Logs\uninstall.log` |
 | npm install | stderr only (no log file) |
+
+Tandem's own log lines name files and documents but do not include their text. The desktop
+`tandem.log` is written with your system's default permissions, not restricted like the folders
+above, and it also records whatever Claude Code itself prints to its error output (lines starting
+`[Claude]`), which Tandem does not control.
 
 The uninstall log belongs to the npm CLI's scrub, the command under
 [Uninstalling cleanly](#uninstalling-cleanly). The Windows desktop uninstaller's

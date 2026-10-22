@@ -26,7 +26,18 @@ const REPO_ROOT = join(__dirname, "../..");
 const CLAUDE_MD = readFileSync(join(REPO_ROOT, "CLAUDE.md"), "utf-8");
 const SECURITY_MD = readFileSync(join(REPO_ROOT, "docs/security.md"), "utf-8");
 
-const NUMBER_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"];
+const NUMBER_WORDS = [
+  "Zero",
+  "One",
+  "Two",
+  "Three",
+  "Four",
+  "Five",
+  "Six",
+  "Seven",
+  "Eight",
+  "Nine",
+];
 
 /**
  * Issue references at parenthetical depth zero.
@@ -306,6 +317,10 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
   {
     issue: 2144,
     why: "FIXED for planted reparse points, NARROWED for the swap race and not counted (Bryan, 2026-10-06)",
+  },
+  {
+    issue: 2266,
+    why: "FIXED on POSIX (save keeps the mode; 0700 app-data dirs, 0600 store files, derived-file ceiling); the Windows DACL / ownership residue is counted as accepted under #2278",
   },
 ];
 
