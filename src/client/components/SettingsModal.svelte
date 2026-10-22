@@ -499,6 +499,9 @@ $effect(() => {
     const target = e.target as Node | null;
     if (!target) return;
     if (triggerEl?.contains(target)) return;
+    // Toasts paint ABOVE modals (#2257), so a click on one lands outside this
+    // dialog. Dismissing "Working directory saved." must not close Settings.
+    if (target instanceof Element && target.closest("[data-testid='toast-container']")) return;
     if (modalEl && !modalEl.contains(target)) {
       onClose();
     }

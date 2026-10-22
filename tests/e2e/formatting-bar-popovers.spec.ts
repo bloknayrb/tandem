@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  ownsItsPixels,
   selectTextStable,
 } from "./helpers";
 
@@ -75,19 +76,6 @@ async function tokenValue(page: import("@playwright/test").Page, name: string): 
     (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(),
     name,
   );
-}
-
-/**
- * Does this element actually receive clicks at its own centre? The load-bearing
- * assertion for #1302: a clipped element still reports a non-empty box, so
- * `toBeVisible()` passes on a popover the user can neither see nor click.
- */
-async function ownsItsPixels(locator: import("@playwright/test").Locator): Promise<boolean> {
-  return locator.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !!hit && el.contains(hit);
-  });
 }
 
 /**
@@ -247,16 +235,16 @@ test("bar lifts above the selection popup only while a popover is open", async (
   // lift-only check while leaving the bar floating over unrelated chrome, so the
   // closed state is as load-bearing as the open one.
   const sticky = await tokenValue(page, "--tandem-z-sticky");
-  const toast = await tokenValue(page, "--tandem-z-toast");
+  const popover = await tokenValue(page, "--tandem-z-popover");
   const modal = await tokenValue(page, "--tandem-z-modal");
-  expect(Number(toast)).toBeGreaterThan(Number(modal));
+  expect(Number(popover)).toBeGreaterThan(Number(modal));
 
   await editor.locator("p").first().click();
   expect(await wrapZIndex(page), "closed: bar must not outrank the popup").toBe(sticky);
 
   await bar.getByRole("button", { name: "Heading", exact: true }).click();
   await expect(page.getByRole("menu", { name: "Heading level" })).toBeVisible();
-  expect(await wrapZIndex(page), "heading menu open: bar must lift").toBe(toast);
+  expect(await wrapZIndex(page), "heading menu open: bar must lift").toBe(popover);
 
   // Dismissed by clicking away, not Escape — clickOutside is the dismissal path
   // being asserted here, and releasing the lift on close is the half that
@@ -276,7 +264,7 @@ test("bar lifts above the selection popup only while a popover is open", async (
   // track, so it exercises a different DOM path to the same rule).
   await bar.locator("[data-testid='decorations-menu-caret']").click();
   await expect(page.locator("[data-testid='decorations-menu']")).toBeVisible();
-  expect(await wrapZIndex(page), "decorations menu open: bar must lift").toBe(toast);
+  expect(await wrapZIndex(page), "decorations menu open: bar must lift").toBe(popover);
 });
 
 test("format track truncates rather than wrapping, and never scrolls", async ({ page }) => {

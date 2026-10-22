@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  ownsItsPixels,
   selectTextStable,
 } from "./helpers";
 
@@ -235,6 +236,18 @@ test("E5: saving the working directory surfaces the success toast", async ({ pag
   const toast = page.locator("[data-testid='toast-container']");
   await expect(toast).toBeVisible({ timeout: 5_000 });
   await expect(toast).toContainText("Working directory saved.");
+
+  // #2257: the toast must paint ABOVE the still-open modal's scrim, not as a
+  // washed-out ghost beneath it. Probe the card (pointer-events: auto), not the
+  // stack (pointer-events: none, which elementFromPoint skips), under poll
+  // because the card slides in.
+  await expect(page.locator(MODAL)).toBeVisible();
+  await expect.poll(() => ownsItsPixels(toast.getByRole("status").first())).toBe(true);
+  // And now that it is clickable over the modal, dismissing it must not count
+  // as a click outside Settings.
+  await toast.locator("[data-testid^='toast-dismiss-']").first().click();
+  await expect(toast).toHaveCount(0);
+  await expect(page.locator(MODAL)).toBeVisible();
 });
 
 // Escape closes Settings wherever focus is (Bryan: "Escape should always close

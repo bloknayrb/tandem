@@ -491,10 +491,10 @@ async function redactAccountName(page: Page): Promise<AccountRedactionPlan> {
 /**
  * Load the app and wait until the status pill has settled on "Synced".
  *
- * The pill's connection label is a rising-edge detector, and the page's FIRST
- * connect is a rising edge: for two seconds after load it reads "Reconnected".
- * Every shot that included the pill — slot 06 is nothing else — photographed
- * that transient instead of the steady state a reader will actually see.
+ * Until #2258 the page's FIRST connect counted as a reconnect, so for two
+ * seconds after load the pill read "Reconnected" and every shot that included
+ * it (slot 06 is nothing else) photographed that transient. The pill no longer
+ * does that; the wait stays as a harmless guard on the steady state.
  */
 async function loadEditor(page: Page): Promise<void> {
   await page.goto("/");
@@ -882,13 +882,13 @@ test("07-toast-notification", async ({ page }) => {
   await expect(toast).toBeVisible({ timeout: 5_000 });
   await expect(toast).toContainText("Working directory saved.");
   await expect(page.locator("[data-testid^='toast-dismiss-']").first()).toBeVisible();
-  // Close Settings before the shot. Its backdrop is a 70% wash of the page
-  // background on the above-titlebar tier (z 100000), far above the toast tier
-  // (1100), so every capture of this slot until now was a pale ghost of the
-  // toast seen through it. The toast outlives the modal by design. Closed with
-  // its button: Escape works here too since it stopped requiring focus inside
-  // the dialog (Save disables itself mid-POST and drops focus on <body>; pinned
-  // in tests/e2e/settings-modal.spec.ts), but the button is the direct path.
+  // Close Settings before the shot so the clip shows the toast over the page,
+  // not over the modal's 70% backdrop. (Until #2257 the toast also painted
+  // UNDER that backdrop, as a pale ghost; it now sits above every modal.) The
+  // toast outlives the modal by design. Closed with its button: Escape works
+  // here too since it stopped requiring focus inside the dialog (Save disables
+  // itself mid-POST and drops focus on <body>; pinned in
+  // tests/e2e/settings-modal.spec.ts), but the button is the direct path.
   await page.getByTestId("settings-modal-close-btn").click();
   await expect(page.getByTestId("settings-modal")).toHaveCount(0);
   await expect(toast).toContainText("Working directory saved.");
