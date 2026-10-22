@@ -6,7 +6,7 @@ description: Run parallel divergent ideation on an open-ended design problem bef
 
 The user's problem statement: **$ARGUMENTS**
 
-You are running the `/diverge` workflow. This is a heavy, opt-in step that runs **before** `/plan` for genuinely open-ended design problems. This file is the complete, tracked definition of the workflow and its review gate. (An earlier reference doc, `.claude/plans/diverge-workflow.md`, lived in a gitignored directory and is absent from any fresh clone; nothing here depends on it.)
+You are running the `/diverge` workflow. This is a heavy, opt-in step that runs **before** `/plan` for genuinely open-ended design problems. This file is the complete, tracked definition of the workflow. (An earlier reference doc, `.claude/plans/diverge-workflow.md`, lived in a gitignored directory and is absent from any fresh clone; nothing here depends on it.)
 
 Follow the six steps below exactly. Do not skip the sanity check.
 
@@ -220,7 +220,7 @@ Use the `preview` field on each survivor option to show the deepened content (fi
 After the user picks:
 
 - If a survivor: update the persisted `.md` file's **Outcome** section with the choice. Suggest the user run `/plan` next, citing the file path.
-- If "None of these — reframe": update **Outcome** to `"none — reframe"`. Tell the user this counts toward the review gate below — a second "reframe" within a review period is a retirement criterion. Because the persisted `.md` file is gitignored, the reframe must also leave a tracked trace: ask the user to put `via /diverge (reframed)` in the commit or PR body of whatever work follows (or, if the problem is abandoned, in a comment on its issue). Ask if they want to retry diverge with a reframed problem statement or abandon.
+- If "None of these — reframe": update **Outcome** to `"none — reframe"`. Ask if they want to retry diverge with a reframed problem statement or abandon.
 
 ---
 
@@ -237,44 +237,8 @@ These were captured during the first-use validation (two runs against known-answ
 - **Isolation is leaky.** The generator's "no project context" instruction is *not* fully obeyed. Several generators in the validation produced text containing Tandem-specific identifiers (`CTRL_ROOM`, `Y_MAP_USER_AWARENESS`, the exact temp-file regex from CLAUDE.md gotchas) — implying CLAUDE.md still bleeds into their context somehow. Diversity still emerged across frames in aggregate, so the method works under leaky isolation, but don't claim more than that. If you see a generator output that's suspiciously specific to Tandem, it's likely leaked rather than independently reasoned.
 - **Speedrunner is the lowest-yield frame.** In both validation runs, the speedrunner generator produced outputs that were either the shipped answer verbatim (with leaked identifiers) or speedrunner-flavored variants of it. If a future curation pass trims the frame library, this is the first to drop. Deletionist and biology consistently produced the most genuinely-distinct shapes; regulator consistently surfaced auditability concerns no other frame named.
 
-## Review gate — leaves a tracked trace, on purpose
+## No review gate
 
-**Status: kept. Next review 2026-11-01.**
-
-The original gate ("delete if not invoked within 30 days", set 2026-05-28) was
-**evaluated wrongly on 2026-08-06** and this command was briefly deleted. It had in
-fact been invoked on day two — `9657de1` is first-use validation from two runs, and
-the limitations section above is its output — plus at least once more on 2026-07-20.
-The sweep that judged it searched tracked files for *references to* the command, which
-cannot answer "was it used": invocation writes to `.claude/plans/`, which `.gitignore`
-excludes. The criterion's own definition lived at `.claude/plans/diverge-workflow.md`,
-inside that same ignored directory, so the rule was as invisible as the evidence. It is
-now stated here, in this tracked file.
-
-The generalisable failure: **a kill criterion whose evidence lives in an ignored path
-cannot be checked by the sweep that will judge it**, and the elapsed date is what makes
-the question due, never the answer to it. Note the perverse incentive — the knowledge
-graph left 28 tracked files that made its disuse legible and was correctly retired,
-while `/diverge` was used more and left less trace. A gate read from tracked files
-systematically favours whichever artifact generates tracked clutter.
-
-**So this gate is now evaluable from tracked history.** When `/diverge` informs a piece
-of work, say so in the commit or PR body of that work — the phrase `via /diverge` is
-enough. At review time the question is answered by:
-
-```sh
-git log --since=<gate-set-date> -P --grep='via /diverge(?! \(reframed\))' --oneline
-git log --since=<gate-set-date> --grep='via /diverge (reframed)' --fixed-strings --oneline
-```
-
-The first command's negative lookahead is what keeps a `via /diverge (reframed)` trace out
-of the use count; a plain `--grep='via /diverge'` matches those too, so a run of reframes
-alone would read as use and mask the retirement test. A commit carrying both phrases still
-counts once as a use. `-P` needs a git built with PCRE; one without it refuses the command
-loudly rather than returning nothing.
-
-Retire it if the first returns nothing across a full review period, or if "none of these —
-reframe" is chosen more than once (the second command, plus any issue comments carrying the
-same phrase). Do **not** retire it on the strength of an elapsed
-date alone, and do not conclude "unused" from a search that could only ever have found
-references rather than uses.
+`/diverge` has no review date and no retirement criterion (Bryan, 2026-10-22): it is a tool to
+use when a problem fits step 1, and nothing more. Its runs are not counted, so nothing needs to
+mark a commit or PR as informed by it.
