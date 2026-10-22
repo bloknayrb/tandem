@@ -21,11 +21,37 @@ import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
+import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
 import { pushNotification } from "../notifications.js";
 import { SESSION_DIR } from "../platform.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
 let sessionDirReady = false;
+
+/**
+ * Every session and ctrl/chat file holds document content (a document's full
+ * `ydocState`, or chat history), so it is written owner-only (#2266). The
+ * ceiling narrows an existing `0644` file the next time it is rewritten; a file
+ * that is never rewritten (a quarantined `*.corrupt.*`) is covered by the
+ * `0700` directory instead, because nothing chmods a file by path.
+ */
+const SESSION_FILE_WRITE = { maxMode: PRIVATE_FILE_MODE } as const;
+
+/** Create (or tighten) `SESSION_DIR` once per run before the first write. */
+async function ensureSessionDirReady(): Promise<void> {
+  if (sessionDirReady) return;
+  await ensurePrivateStoreDir(SESSION_DIR);
+  sessionDirReady = true;
+}
+
+/**
+ * Boot-time hardening of `SESSION_DIR` (#2266): `0700` on POSIX, an inheritable
+ * owner-only DACL on Windows (fired, not awaited). Not memoised, so the boot
+ * call always runs even if a save already created the directory.
+ */
+export function ensureSessionDirPrivate(): Promise<void> {
+  return ensurePrivateStoreDir(SESSION_DIR);
+}
 
 /**
  * Generate a session key (= the session FILENAME stem) from a file path.
@@ -161,10 +187,7 @@ export async function saveSession(
     }
   }
 
-  if (!sessionDirReady) {
-    await fs.mkdir(SESSION_DIR, { recursive: true });
-    sessionDirReady = true;
-  }
+  await ensureSessionDirReady();
 
   // No await between the snapshot and `atomicWrite`: its per-path queue orders
   // renames by call, so call order must be snapshot order.
@@ -187,7 +210,7 @@ export async function saveSession(
     ...(readOnly ? { readOnly: true } : {}),
   };
 
-  await atomicWrite(sessionPathFor(filePath), JSON.stringify(data));
+  await atomicWrite(sessionPathFor(filePath), JSON.stringify(data), SESSION_FILE_WRITE);
 
   // One-shot #1750 migration, ORDERED AFTER the successful write: a failed
   // new-key save must leave the old file intact, or an ENOSPC destroys the only
@@ -637,7 +660,11 @@ export async function touchSession(filePath: string, stamp: number): Promise<voi
     // Never move a stamp BACKWARDS: `stamp` is the window anchor, and a record
     // already newer than it is one this call has no business aging.
     if (loaded.session.lastAccessed >= stamp) return;
-    await atomicWrite(loaded.path, JSON.stringify({ ...loaded.session, lastAccessed: stamp }));
+    await atomicWrite(
+      loaded.path,
+      JSON.stringify({ ...loaded.session, lastAccessed: stamp }),
+      SESSION_FILE_WRITE,
+    );
   } catch (err) {
     console.error("[Tandem] Failed to refresh session timestamp for %s:", filePath, err);
   }
@@ -752,10 +779,7 @@ function pruneCtrlDocumentNames(doc: Y.Doc): void {
 }
 
 async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
-  if (!sessionDirReady) {
-    await fs.mkdir(SESSION_DIR, { recursive: true });
-    sessionDirReady = true;
-  }
+  await ensureSessionDirReady();
 
   // Fold in-flight streamed text into the chat rows BEFORE pruning/encoding,
   // so a crash mid-stream durably keeps the last-flushed text and the file
@@ -787,7 +811,7 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
   const ydocState = Buffer.from(state).toString("base64");
   const data = { ydocState, lastAccessed: Date.now() };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
-  await atomicWrite(sessionPath, JSON.stringify(data));
+  await atomicWrite(sessionPath, JSON.stringify(data), SESSION_FILE_WRITE);
 }
 
 /** Save the CTRL_ROOM Y.Doc (chat history) */
@@ -931,7 +955,9 @@ interface RawSessionFileEntry extends SessionFileEntry {
 
 export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
   try {
-    await fs.mkdir(SESSION_DIR, { recursive: true });
+    // Create-only (0700 if missing); tightening an existing dir is the boot
+    // hook's and the first save's job, not every listing's.
+    await fs.mkdir(SESSION_DIR, { recursive: true, mode: 0o700 });
     const files = await fs.readdir(SESSION_DIR);
     const results: RawSessionFileEntry[] = [];
 

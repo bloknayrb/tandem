@@ -3,7 +3,7 @@ import path from "path";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { openFromDisk } from "../documents/open.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
-import { atomicWrite } from "../file-io/index.js";
+import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { resolveAppDataDir } from "../platform.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractMarkdown } from "./document-model.js";
@@ -258,7 +258,11 @@ export async function convertToMarkdown(
   // (still) free, so this only costs anything in exactly the racy case.
   try {
     await snapshotBeforeFirstWrite(resolvedOutput, { appDataDir: resolveAppDataDir() });
-    await atomicWrite(resolvedOutput, markdown);
+    // #2266: the output is the document's content, so it is no more readable
+    // to group/other than the source document (owner keeps read/write).
+    await atomicWrite(resolvedOutput, markdown, {
+      maxMode: await derivedFileModeCeiling(docState.filePath),
+    });
   } catch (err: unknown) {
     // Third mouth of the funnel, and the most reachable one: an output
     // directory the caller can read but not write reaches the write with

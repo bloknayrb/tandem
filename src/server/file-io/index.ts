@@ -460,6 +460,46 @@ async function existingMode(filePath: string): Promise<number | undefined> {
   }
 }
 
+/** Options shared by `atomicWrite` / `atomicWriteBuffer`. */
+export interface AtomicWriteOptions {
+  /**
+   * POSIX permission ceiling for the written file (#2266). The temp is created
+   * at `(replaced file's mode ?? 0o666) & maxMode`, so the ceiling only ever
+   * REMOVES bits — it cannot widen a file, and it is applied at create time
+   * rather than by a chmod. Ignored on Windows, mirroring `existingMode`.
+   * Omitted: today's behaviour exactly (the replaced file's mode, else the
+   * process default).
+   */
+  maxMode?: number;
+}
+
+/**
+ * A mode ceiling for a file DERIVED from `sourcePath` (the annotation-export
+ * sidecar, convert output): the owner keeps read/write, and group/other get at
+ * most what the source grants them — `0o600 | (src & 0o066)`. So a `0600`
+ * document yields a `0600` derivative, a `0640` one `0640`, a `0444` one
+ * `0644` (world-readable source, world-readable derivative, but writable by its
+ * owner), and a `0400` one `0600`.
+ *
+ * `undefined` — no ceiling — for an `upload://` source (no file on disk), on
+ * Windows, and whenever the source cannot be stat'd as a regular file.
+ */
+export async function derivedFileModeCeiling(sourcePath: string): Promise<number | undefined> {
+  if (sourcePath.startsWith("upload://")) return undefined;
+  const src = await existingMode(sourcePath);
+  return src === undefined ? undefined : 0o600 | (src & 0o066);
+}
+
+/** The temp's create mode: the replaced file's mode, capped by `maxMode` on POSIX. */
+async function tempMode(
+  filePath: string,
+  maxMode: number | undefined,
+): Promise<number | undefined> {
+  const existing = await existingMode(filePath);
+  if (maxMode === undefined || process.platform === "win32") return existing;
+  return (existing ?? 0o666) & maxMode;
+}
+
 /** Directories whose filesystem refused fsync once; later saves skip the flush. */
 const flushRefusedDirs = new Set<string>();
 
@@ -477,6 +517,12 @@ const flushRefusedDirs = new Set<string>();
  * Tandem's group rather than the original's. `wx` refuses a pre-existing
  * entry at the temp name rather than writing through it.
  *
+ * An optional `maxMode` (app-data store files at `0600`, derived files at the
+ * source's ceiling) is ANDed into that create mode, so it narrows and never
+ * widens, and it keeps the same no-chmod shape: an existing `0644` store file
+ * becomes `0600` the next time it is rewritten, and a file that is never
+ * rewritten keeps whatever mode it has.
+ *
  * The temp is fsynced before the rename publishes it (`flush: true`), so a
  * power loss or OS crash cannot leave the document renamed into place but
  * empty or zero-filled — the failure an unflushed tmp+rename has on XFS and
@@ -485,8 +531,12 @@ const flushRefusedDirs = new Set<string>();
  * fsynced: a lost rename leaves the complete previous file (or, for a file
  * being created, no file), never a torn one.
  */
-async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
-  const mode = await existingMode(filePath);
+async function writeTempThenRename(
+  filePath: string,
+  content: string | Buffer,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
+  const mode = await tempMode(filePath, options.maxMode);
   const dir = path.dirname(filePath);
   let tempPath = tempSiblingPath(filePath);
   try {
@@ -540,9 +590,13 @@ async function writeTemp(
  */
 const writeChains = new Map<string, Promise<void>>();
 
-function serializedWrite(filePath: string, content: string | Buffer): Promise<void> {
+function serializedWrite(
+  filePath: string,
+  content: string | Buffer,
+  options?: AtomicWriteOptions,
+): Promise<void> {
   return runSerialized(writeChains, path.resolve(filePath), () =>
-    writeTempThenRename(filePath, content),
+    writeTempThenRename(filePath, content, options),
   );
 }
 
@@ -573,8 +627,12 @@ export function runSerialized(
  * EPERM/EACCES (Windows file-handle contention) with exponential backoff, and
  * cleans up the temp sibling on a failed write (#1850).
  */
-export function atomicWrite(filePath: string, content: string): Promise<void> {
-  return serializedWrite(filePath, content);
+export function atomicWrite(
+  filePath: string,
+  content: string,
+  options?: AtomicWriteOptions,
+): Promise<void> {
+  return serializedWrite(filePath, content, options);
 }
 
 /**
@@ -582,6 +640,10 @@ export function atomicWrite(filePath: string, content: string): Promise<void> {
  * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
  * Shares the same retry and temp-cleanup behaviour as `atomicWrite`.
  */
-export function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  return serializedWrite(filePath, content);
+export function atomicWriteBuffer(
+  filePath: string,
+  content: Buffer,
+  options?: AtomicWriteOptions,
+): Promise<void> {
+  return serializedWrite(filePath, content, options);
 }

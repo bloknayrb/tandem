@@ -31,10 +31,15 @@ import path from "node:path";
 
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
-import { setRestrictiveAcl } from "../integrations/acl-win.js";
 import { formatTimestamp } from "../integrations/backup.js";
 import { pushNotification } from "../notifications.js";
 import { WIN_RESERVED_NAMES } from "./filename-safety.js";
+import {
+  _resetPrivateDirAclForTests,
+  type AclRepairOutcome,
+  applyPrivateDirAcl,
+  hardenPrivateDir,
+} from "./private-dir.js";
 
 /** Directory name (under appDataDir) for pre-overwrite document snapshots. */
 const DOC_BACKUP_DIR_NAME = "doc-backups";
@@ -87,36 +92,16 @@ let sizeCapNotified = false;
 const failureNotifiedPaths = new Set<string>();
 
 /**
- * The one Windows ACL application for this run (it spawns icacls + PowerShell,
- * so once is enough), memoised as a promise rather than a boolean, and
- * resolving to whether the application actually SUCCEEDED.
- *
- * A boolean latch has to be set BEFORE the await, which leaves a window where a
- * second caller sees "done" and proceeds against a DACL still being rewritten.
- * With one call site that window was unobservable; the sweep (#1433) is a second
- * one. Memoising makes "once per run" mean once-and-settled.
- *
- * The stored promise is the wrapper below, which catches internally and can
- * therefore NEVER reject. That is load-bearing, not defensive: a stored rejected
- * promise would deliver its rejection to every awaiter, and the awaiter that
- * matters is `snapshotBeforeFirstWrite` — its outer catch would return "failed",
- * toast the user, and leave `snapshottedPaths` unset, so every 60s autosave
- * would retry and re-fail. That inverts this module's best-effort contract, in
- * which an ACL failure is hygiene the save never hears about.
- *
- * It resolves to a boolean rather than void because the sweep reports the
- * outcome to the user: `icacls` can fail (or `assertNoBroadAce` can reject its
- * result), and a log line claiming a repair that never happened is worse than
- * no log line at all.
+ * Test-only: reset the per-run gate and notification/ACL latches. The ACL memo
+ * lives in `private-dir.ts` (one promise per directory, never rejecting — see
+ * `aclMemo` there for why that is load-bearing for `snapshotBeforeFirstWrite`),
+ * so this resets it there.
  */
-let aclPromise: Promise<boolean> | null = null;
-
-/** Test-only: reset the per-run gate and notification/ACL latches. */
 export function _resetDocBackupGateForTests(): void {
   snapshottedPaths.clear();
   sizeCapNotified = false;
   failureNotifiedPaths.clear();
-  aclPromise = null;
+  _resetPrivateDirAclForTests();
 }
 
 /** Resolve the doc-backups root under `appDataDir` (injectable for tests). */
@@ -163,8 +148,9 @@ export function snapshotFilename(filePath: string, now: Date = new Date()): stri
 }
 
 /**
- * Create the doc-backups root and apply its restrictive Windows DACL, at most
- * once per server run.
+ * Create the doc-backups root, restrict an existing one to its owner on POSIX
+ * (#2266 — a root created by an older build sits at the umask default), and
+ * apply its restrictive Windows DACL, the DACL at most once per server run.
  *
  * Best-effort by design: snapshots hold user document content (prose, not
  * tokens), so unlike `integrations/backup.ts` an ACL failure keeps the backup
@@ -177,31 +163,14 @@ export function snapshotFilename(filePath: string, now: Date = new Date()): stri
  * `setRestrictiveAcl`'s docblock). It bit the first path snapshotted per
  * install, which on a fresh install is always the auto-opened `welcome.md`.
  * The inheritable grant also REPAIRS subdirs already poisoned by the old
- * behaviour — re-running icacls propagates the new ACE down to them.
+ * behaviour — re-running icacls propagates the new ACE down to them. Both
+ * halves live in `private-dir.ts`, shared with the session and annotation
+ * stores.
  */
 async function ensureBackupRootHardened(root: string): Promise<void> {
-  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  await hardenPrivateDir(root);
   await ensureBackupRootAcl(root);
 }
-
-/**
- * What the ACL application for this run actually did, from this caller's view.
- *
- * The sweep needs all four for its log line, and the distinctions are about not
- * lying to the user: `repaired` vs `already-repaired` stops every poisoned
- * subdir after the first from claiming its own repair, and `repair-failed`
- * stops us reporting a repair at all when `icacls` is itself what is broken —
- * which is a live possibility on the very installs this path exists for.
- */
-type AclRepairOutcome =
-  /** This call applied the ACL, and it succeeded. */
-  | "repaired"
-  /** An earlier call this run applied it successfully; this one only awaited. */
-  | "already-repaired"
-  /** The ACL application ran and FAILED (this call's or an earlier one's). */
-  | "repair-failed"
-  /** Not Windows — there is no ACL to apply and nothing was done. */
-  | "unsupported";
 
 /**
  * Apply the backup root's restrictive Windows DACL, at most once per run, and
@@ -209,27 +178,14 @@ type AclRepairOutcome =
  * use `ensureBackupRootHardened`; the sweep deliberately must not create a root
  * that does not exist.
  *
- * Never rejects (see `aclPromise`). Latches on ATTEMPT rather than on success,
- * matching the boolean it replaces: a failing icacls that we retried on every
- * poisoned subdir would spawn subprocesses in a loop for no gain.
+ * Never rejects, and latches on ATTEMPT rather than on success (see
+ * `applyPrivateDirAcl`). The sweep needs all four outcomes for its log line:
+ * `repaired` vs `already-repaired` stops every poisoned subdir after the first
+ * from claiming its own repair, and `repair-failed` stops us reporting a repair
+ * at all when `icacls` is itself what is broken.
  */
-async function ensureBackupRootAcl(root: string): Promise<AclRepairOutcome> {
-  if (process.platform !== "win32") return "unsupported";
-  const startedHere = aclPromise === null;
-  // `??=` assigns synchronously, before any await, so concurrent callers share
-  // one application instead of racing two.
-  aclPromise ??= (async () => {
-    try {
-      await setRestrictiveAcl(root, { inheritable: true });
-      return true;
-    } catch (aclErr) {
-      console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
-      return false;
-    }
-  })();
-  const applied = await aclPromise;
-  if (!applied) return "repair-failed";
-  return startedHere ? "repaired" : "already-repaired";
+function ensureBackupRootAcl(root: string): Promise<AclRepairOutcome> {
+  return applyPrivateDirAcl(root, { logLabel: "[DocBackup] Restrictive ACL on backup root" });
 }
 
 /**
