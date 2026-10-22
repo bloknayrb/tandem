@@ -57,7 +57,7 @@ for clients, and "individual self-hosting" is one natural person running Tandem
 on a device that person controls, for that person's use only. For v1.0 and later
 the grant runs for 14 days from first launch, then for as long as the person holds
 a key, and without a key for use that leaves out the AI features. This wording
-first ships with the next release: v0.26 to v0.28 carry the earlier wording in
+first ships in v0.29: v0.26 to v0.28 carry the earlier wording in
 their own `LICENSE`.
 
 **Employees are inside** (decision A1, 2026-10-09). The definitions say nothing
@@ -137,7 +137,7 @@ software's own licence doesn't grant is the worst version of this problem.
   such versions", which is the one `trial.json` the product keeps across
   versions. The licence still says *device* where the product's clock belongs
   to an [app-data directory](glossary.md#app-data-directory); that is the deliberate soft gate above. This wording
-  first ships with the next release; v0.26 to v0.28 carry the earlier wording.
+  first ships in v0.29; v0.26 to v0.28 carry the earlier wording.
 - After the 14 days, `LICENSE` grants keyless use that leaves out the AI
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
   (unlicensed = an editor with no AI), which Bryan confirmed on 2026-10-11 as
