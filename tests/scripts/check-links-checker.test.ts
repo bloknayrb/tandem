@@ -25,6 +25,7 @@ import {
   resolveTarget,
   slugify,
 } from "../../scripts/check-doc-links.mjs";
+import { isolatedGitEnv } from "../helpers/git-env.js";
 
 const ROOT = path.resolve(__dirname, "../..");
 const SCRIPT = path.join(ROOT, "scripts/check-doc-links.mjs");
@@ -257,7 +258,12 @@ describe("reachability", () => {
  */
 describe("entry point", () => {
   const run = (script: string, cwd: string) =>
-    spawnSync(process.execPath, [script], { cwd, encoding: "utf-8", timeout: 30_000 });
+    spawnSync(process.execPath, [script], {
+      cwd,
+      env: isolatedGitEnv(),
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
 
   /** A git repo holding `files` plus a copy of the checker; returns its root. */
   function fixtureRepo(files: Record<string, string>): string {
@@ -268,7 +274,7 @@ describe("entry point", () => {
     }
     mkdirSync(path.join(root, "scripts"), { recursive: true });
     copyFileSync(SCRIPT, path.join(root, "scripts/check-doc-links.mjs"));
-    spawnSync("git", ["init", "-q"], { cwd: root });
+    spawnSync("git", ["init", "-q"], { cwd: root, env: isolatedGitEnv() });
     return root;
   }
 
