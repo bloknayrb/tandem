@@ -24,7 +24,7 @@ import {
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { isClaudeFacing } from "../annotations/projection.js";
-import { atomicWrite } from "../file-io/index.js";
+import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { splitsSurrogatePair } from "../positions.js";
@@ -919,7 +919,11 @@ export function registerAnnotationTools(server: McpServer): void {
                 2,
               )
             : (markdown ?? "");
-          await atomicWrite(sidecarPath, contents);
+          // #2266: the sidecar quotes the document, so it is no more readable
+          // to group/other than the document itself (owner keeps read/write).
+          await atomicWrite(sidecarPath, contents, {
+            maxMode: await derivedFileModeCeiling(filePath),
+          });
           writtenPath = sidecarPath;
         }
 

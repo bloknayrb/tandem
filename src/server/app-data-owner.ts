@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { TOKEN_FILE_NAME } from "../shared/constants.js";
 import { ATOMIC_TEMP_PREFIX, atomicWrite } from "./file-io/index.js";
+import { hardenPrivateDir } from "./file-io/private-dir.js";
 
 /**
  * Ownership stamp for the app-data root (#1787, decision D).
@@ -229,6 +230,15 @@ async function migrateLegacyTree(appDataDir: string): Promise<void> {
     if (!stat.isDirectory()) return;
   } catch {
     return;
+  }
+
+  // #2266: the copy leaves the legacy tree behind, and its document-bearing
+  // stores sit at whatever mode the npm install created them with — the umask
+  // default before #2266. Nothing will boot against that directory again on a
+  // desktop-only machine to tighten it, so do it here. `create: false`: never
+  // create a store dir that is not there, and a failure only logs.
+  for (const store of ["sessions", "annotations", "doc-backups"]) {
+    await hardenPrivateDir(path.join(legacy, store), { create: false });
   }
 
   const failures: string[] = [];

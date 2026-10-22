@@ -13,21 +13,20 @@
  * helper deliberately keeps today's behaviour there.
  */
 
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { atomicWrite, atomicWriteBuffer } from "../../../src/server/file-io/index.js";
+import {
+  atomicWrite,
+  atomicWriteBuffer,
+  derivedFileModeCeiling,
+} from "../../../src/server/file-io/index.js";
 import { ATOMIC_TEMP_RE } from "../../../src/server/file-io/reaper.js";
+import { modeOf } from "../../helpers/file-mode.js";
 
 let dir: string;
 let savedUmask: number;
-
-/** Sync `statSync`, so a spec that mocks `fs.stat` cannot also fool the assertion. */
-function modeOf(p: string): number {
-  return statSync(p).mode & 0o777;
-}
 
 describe.skipIf(process.platform === "win32")(
   "atomicWrite preserves the replaced file's mode (#2266)",
@@ -162,3 +161,91 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+/**
+ * #2266 — the optional `maxMode` ceiling: app-data store files at `0600`, and
+ * files derived from a document (sidecar, convert output) capped at the
+ * source's group/other bits. The ceiling is ANDed into the create mode, so it
+ * narrows and never widens, and it adds no chmod.
+ */
+describe.skipIf(process.platform === "win32")("atomicWrite maxMode ceiling (#2266)", () => {
+  beforeEach(async () => {
+    savedUmask = process.umask(0o022);
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-atomic-ceiling-"));
+  });
+
+  afterEach(async () => {
+    process.umask(savedUmask);
+    vi.restoreAllMocks();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("a new file written with maxMode 0o600 is created at 0600", async () => {
+    const target = path.join(dir, "fresh.json");
+    await atomicWrite(target, "{}", { maxMode: 0o600 });
+    expect(modeOf(target)).toBe(0o600);
+  });
+
+  it("an existing 0644 file rewritten with maxMode 0o600 comes back 0600", async () => {
+    const target = path.join(dir, "old.json");
+    await fs.writeFile(target, "{}");
+    await fs.chmod(target, 0o644);
+
+    await atomicWrite(target, "{}", { maxMode: 0o600 });
+
+    expect(modeOf(target)).toBe(0o600);
+  });
+
+  it("an existing 0600 file with a 0o644 ceiling stays 0600 — a ceiling never widens", async () => {
+    const target = path.join(dir, "private.md");
+    await fs.writeFile(target, "x");
+    await fs.chmod(target, 0o600);
+
+    await atomicWriteBuffer(target, Buffer.from("y"), { maxMode: 0o644 });
+
+    expect(modeOf(target)).toBe(0o600);
+  });
+
+  it("no ceiling is today's behaviour: a new file at the default, an existing 0644 kept", async () => {
+    const fresh = path.join(dir, "fresh.md");
+    await atomicWrite(fresh, "x", {});
+    expect(modeOf(fresh)).toBe(0o644);
+
+    const existing = path.join(dir, "existing.md");
+    await fs.writeFile(existing, "x");
+    await fs.chmod(existing, 0o644);
+    await atomicWrite(existing, "y", { maxMode: undefined });
+    expect(modeOf(existing)).toBe(0o644);
+  });
+
+  it("applies the ceiling at create, with no chmod by path", async () => {
+    const target = path.join(dir, "store.json");
+    const write = vi.spyOn(fs, "writeFile");
+    const chmod = vi.spyOn(fs, "chmod");
+
+    await atomicWrite(target, "{}", { maxMode: 0o600 });
+
+    expect(write.mock.calls[0]?.[2]).toMatchObject({ flag: "wx", mode: 0o600 });
+    expect(chmod).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { src: 0o444, ceiling: 0o644, why: "world-readable source, owner keeps write" },
+    { src: 0o400, ceiling: 0o600, why: "owner-only read-only source" },
+    { src: 0o640, ceiling: 0o640, why: "group-readable source" },
+    { src: 0o600, ceiling: 0o600, why: "private source" },
+    { src: 0o666, ceiling: 0o666, why: "the ceiling is never narrower than the source grants" },
+  ])("derivedFileModeCeiling: a $src source gives $ceiling ($why)", async ({ src, ceiling }) => {
+    const source = path.join(dir, "source.md");
+    await fs.writeFile(source, "x");
+    await fs.chmod(source, src);
+
+    expect(await derivedFileModeCeiling(source)).toBe(ceiling);
+  });
+
+  it("derivedFileModeCeiling gives no ceiling for an upload:// or unstat-able source", async () => {
+    expect(await derivedFileModeCeiling("upload://scratchpad/abc.md")).toBeUndefined();
+    expect(await derivedFileModeCeiling(path.join(dir, "missing.md"))).toBeUndefined();
+    expect(await derivedFileModeCeiling(dir)).toBeUndefined();
+  });
+});

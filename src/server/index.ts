@@ -14,6 +14,7 @@ import {
 import { docHash } from "./annotations/doc-hash.js";
 import {
   acquireStoreLock,
+  ensureAnnotationsDirPrivate,
   getAnnotationsDir,
   isStoreReadOnly,
   releaseStoreLock,
@@ -74,6 +75,7 @@ import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
   cleanupStaleTombstones,
+  ensureSessionDirPrivate,
   stopAutoSave,
 } from "./session/manager.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
@@ -566,6 +568,13 @@ async function main() {
   // instance holds the store lock). Fire-and-forget with a belt-and-braces
   // .catch(): an escaping rejection would hit the unhandledRejection handler.
   if (!isStoreReadOnly()) {
+    // #2266: owner-only store dirs, tightened even if an older build made them
+    // wider. Not awaited, for the reason in `ensurePrivateStoreDir`.
+    Promise.all([ensureSessionDirPrivate(), ensureAnnotationsDirPrivate()]).catch((err) =>
+      console.error(
+        `[Tandem] App-data directory hardening failed: ${err instanceof Error ? err.message : err}`,
+      ),
+    );
     reapOrphanedTemps([getAnnotationsDir(), SESSION_DIR])
       .then(({ cleaned, failed }) => {
         if (cleaned > 0)
