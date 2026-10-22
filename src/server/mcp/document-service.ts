@@ -1249,10 +1249,6 @@ export function serializeDocument(
 }
 
 /**
- * Auto-save all eligible open documents to disk.
- * Called by the 60-second auto-save timer.
- */
-/**
  * `saveDocumentToDisk`, retried briefly while the per-document lock is held —
  * the one transient skip (a concurrent 60 s autosave holding `savingDocs` at
  * this instant). Every other skip is standing and is returned at once, so a
@@ -1271,6 +1267,10 @@ export async function saveDocumentToDiskRetryingLock(
   return result;
 }
 
+/**
+ * Auto-save all eligible open documents to disk.
+ * Called by the 60-second auto-save timer.
+ */
 export async function autoSaveAllToDisk(): Promise<void> {
   for (const [docId, state] of openDocs) {
     if (state.source === "upload" || state.readOnly) continue;

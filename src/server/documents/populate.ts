@@ -485,12 +485,13 @@ export async function clearAndReload(
       ) {
         meta.delete(Y_MAP_EXTERNAL_CONFLICT);
       }
+      // The content was rebuilt, so a read-only-file prompt (#2273) about the
+      // edits it replaced is moot. A caller that then saves (the source-view
+      // commit) re-raises it if the file is still read-only. Inside the
+      // transaction (its own `withInternal` nests into this one), so the
+      // banner's removal lands in the same atomic update as the new content.
+      endReadOnlyFileEpisode(id, doc);
     });
-
-    // The content was rebuilt, so a read-only-file prompt (#2273) about the
-    // edits it replaced is moot. A caller that then saves (the source-view
-    // commit) re-raises it if the file is still read-only.
-    endReadOnlyFileEpisode(id, doc);
 
     // 3. Reattach event queue observers (idempotent — detaches existing first).
     //    A scratchpad never carries the annotation/reply channel observers (#2219).

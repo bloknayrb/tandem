@@ -1487,7 +1487,7 @@ export function registerDocumentTools(server: McpServer): void {
           // until the user answers, the session is the only copy of the edits.
           message:
             result.skipCode === "READ_ONLY_FILE"
-              ? `Session saved. Disk save skipped: ${r.filePath} is read-only on disk. Tandem does not overwrite a read-only file unless the user chooses Overwrite in the editor's banner (Windows offers no Overwrite: the user clears Read-only in the file's Properties). If no editor is attached, the user can make the file writable and you can call tandem_save again. Do not close the document meanwhile: its unsaved edits exist only in the session.`
+              ? `Session saved. Disk save skipped: ${r.filePath} is read-only on disk. Tandem does not overwrite a read-only file unless the user chooses Overwrite in the editor's banner (Windows offers no Overwrite: the user clears Read-only in the file's Properties). If the user dismissed the banner with Not now, pressing Ctrl+S in the editor shows it again. If no editor is attached, the user can make the file writable and you can call tandem_save again. Do not close the document meanwhile: its unsaved edits exist only in the session.`
               : `Session saved. Disk save skipped: ${result.reason}`,
         });
       }

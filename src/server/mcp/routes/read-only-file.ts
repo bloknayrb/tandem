@@ -8,7 +8,11 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
-import { type SaveResult, saveDocumentToDiskRetryingLock } from "../document-service.js";
+import {
+  persistSkippedSaveSession,
+  type SaveResult,
+  saveDocumentToDiskRetryingLock,
+} from "../document-service.js";
 import { isValidDocumentId, sendApiError } from "./_shared.js";
 
 /**
@@ -71,7 +75,12 @@ export async function handleResolveReadOnlyFile(req: Request, res: Response): Pr
       return;
     }
     let save: SaveResult | undefined;
-    if (outcome === "approved") save = await saveDocumentToDiskRetryingLock(id, "manual");
+    if (outcome === "approved") {
+      save = await saveDocumentToDiskRetryingLock(id, "manual");
+      // Same carry as `POST /api/save` and `tandem_save`: a save that still
+      // did not land must not leave a clean-looking session behind.
+      if (save.status === "skipped") await persistSkippedSaveSession(id);
+    }
     res.json({ data: { outcome, ...(save ? { save } : {}) } });
   } catch (err: unknown) {
     sendApiError(res, err);

@@ -44,6 +44,14 @@ interface Episode {
 
 const episodes = new Map<string, Episode>();
 const approvals = new Map<string, string>();
+/**
+ * The last `detectedAt` issued per document. Kept past the episode's end (only
+ * close forgets it), so a re-raise in the same millisecond as an ENDED episode
+ * — a source-view commit ends one in `clearAndReload` and its save raises the
+ * next — still gets a new id, and an answer in flight from the old banner
+ * reads as `stale` instead of deciding the new prompt.
+ */
+const lastIssued = new Map<string, number>();
 
 /** Read per call, not captured, so a test can stub `process.platform`. */
 export function canOverwriteReadOnly(): boolean {
@@ -96,7 +104,8 @@ export function gateReadOnlyFileSave(
   }
   // Strictly increasing per document, so a re-raise within the same
   // millisecond is still a different episode to the resolve route.
-  const detectedAt = Math.max(Date.now(), (live?.detectedAt ?? 0) + 1);
+  const detectedAt = Math.max(Date.now(), (lastIssued.get(id) ?? 0) + 1);
+  lastIssued.set(id, detectedAt);
   const episode = { detectedAt, declined: false };
   episodes.set(id, episode);
   mirror(doc, episode);
@@ -134,6 +143,7 @@ export function hasReadOnlyFileEpisode(id: string): boolean {
 export function clearReadOnlyFileState(id: string): void {
   episodes.delete(id);
   approvals.delete(id);
+  lastIssued.delete(id);
 }
 
 export type ReadOnlyFileResolution = "approved" | "declined" | "stale" | "unsupported";
@@ -173,4 +183,5 @@ function mirror(doc: Y.Doc, episode: Episode): void {
 export function resetReadOnlyFileStateForTests(): void {
   episodes.clear();
   approvals.clear();
+  lastIssued.clear();
 }
