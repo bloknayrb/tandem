@@ -37,6 +37,7 @@ import {
 } from "../../../src/server/annotations/store.js";
 import { pushNotification } from "../../../src/server/notifications.js";
 import {
+  annRecord,
   FILE_A,
   FILE_B,
   HASH_A,
@@ -900,5 +901,79 @@ describe("repeated future-schema parks (#1791)", () => {
     expect(await fs.readFile(path.join(annotationsDir, archives[0] as string), "utf-8")).toContain(
       "CYCLE-1",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Write ordering: a flush must not race a timer-fired write that is still in
+// flight. atomicWrite fsyncs before its rename, so "in flight" is long enough
+// for an older envelope's rename to land after a newer one's.
+// ---------------------------------------------------------------------------
+
+describe("disk-write ordering per doc", () => {
+  let writeSpy: { mockRestore(): void } | undefined;
+  afterEach(() => {
+    writeSpy?.mockRestore();
+    writeSpy = undefined;
+  });
+
+  function gateFirstWrite() {
+    const realWrite = fs.writeFile;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const counter = { calls: 0 };
+    writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      counter.calls += 1;
+      if (counter.calls === 1) await gate;
+      return realWrite.apply(fs, args as never);
+    });
+    return { counter, release };
+  }
+
+  async function onDiskIds(): Promise<string[]> {
+    const raw = await fs.readFile(path.join(getAnnotationsDir(), `${HASH_A}.json`), "utf-8");
+    return (JSON.parse(raw) as { annotations: { id: string }[] }).annotations.map((a) => a.id);
+  }
+
+  it("a flush queues behind an in-flight timer write, so the newer envelope lands last", async () => {
+    const { counter, release } = gateFirstWrite();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+
+    store.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, { annotations: [annRecord({ id: "ann_removed" })] }),
+    );
+    await vi.waitFor(() => expect(counter.calls).toBe(1)); // timer fired; write held open
+
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A, { annotations: [] }));
+    const flushed = store.flush();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(counter.calls, "the newer write must wait, not race the older one").toBe(1);
+
+    release();
+    await flushed;
+    expect(await onDiskIds()).toEqual([]);
+  });
+
+  it("a flush with nothing pending still waits for the in-flight write", async () => {
+    const { counter, release } = gateFirstWrite();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+
+    store.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, { annotations: [annRecord({ id: "ann_kept" })] }),
+    );
+    await vi.waitFor(() => expect(counter.calls).toBe(1));
+
+    let done = false;
+    const flushed = store.flush().then(() => {
+      done = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(done).toBe(false);
+
+    release();
+    await flushed;
+    expect(await onDiskIds()).toEqual(["ann_kept"]);
   });
 });
