@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { isolatedGitEnv } from "../helpers/git-env.js";
 
 /**
  * `npx biome check .` is the whole-repo form, run by CI's `check` job and by
@@ -54,24 +55,6 @@ afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-/**
- * `process.env` minus every `GIT_*` variable, for anything spawned into a
- * miniature repo (#1957).
- *
- * `git push` from a LINKED worktree exports `GIT_DIR=<repo>/.git/worktrees/<name>`
- * to the pre-push hook, and the hook runs this suite. A `git init` that inherits
- * it ignores `cwd`, re-initializes the REAL repository instead, and — with
- * `GIT_DIR` set and no work tree — writes `core.bare = true` into the config
- * every worktree shares. The main checkout then fails every git command with
- * "this operation must be run in a work tree". Reproduced in throwaway repos:
- * a pre-push hook running `git init` in a temp dir flips the main checkout's
- * `core.bare` when pushed from a worktree, and not when pushed from main (whose
- * hook environment carries no `GIT_DIR`).
- */
-function isolatedGitEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-}
 
 /**
  * A miniature repo: a real git repo (biome resolves the VCS root from `.git`),
