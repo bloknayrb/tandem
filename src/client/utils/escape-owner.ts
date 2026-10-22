@@ -46,3 +46,65 @@ export const ESCAPE_OWNER_ATTR = "data-tandem-escape-owner";
 export function escapeIsClaimed(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(`[${ESCAPE_OWNER_ATTR}]`) !== null;
 }
+
+/**
+ * Escape ownership across modal layers.
+ *
+ * Every app-level modal (`SettingsModal`, `HelpModal`, `IntegrationWizardModal`,
+ * `FileOpenDialog`, `CommandPalette`, `FirstRunModelPickerModal`,
+ * `CoworkAdminDeclinedModal`) renders its `aria-modal="true"` dialog only
+ * while open, on the above-titlebar tier or higher, and after `SettingsModal`
+ * in `App.svelte`; `ModelEditModal` renders inside Settings' own subtree. So
+ * an open `aria-modal` dialog is always the top of the stack relative to the
+ * page, and relative to Settings whenever Settings is the other one open.
+ *
+ * Two kinds of surface use that:
+ *   - a surface that lives BENEATH every modal (the selection popup, the
+ *     activity tray) and listens for Escape in the window capture phase must
+ *     yield while any modal is open. Capture at `window` runs before every
+ *     dialog's own handler, so without the yield Escape dismisses the hidden
+ *     surface under the scrim and leaves the dialog the user is looking at
+ *     open;
+ *   - `SettingsModal`, whose Escape handler is document-level and acts
+ *     whatever holds focus, must yield while any OTHER modal is open, because
+ *     that one is layered over it and owns the key.
+ *
+ * The rule a layer over Settings must follow follows from that: by the time
+ * Settings' document listener runs, the layer has either stopped the event or
+ * is still in the DOM. A bubbling handler that closes its dialog and lets the
+ * event go on breaks it — with a real key press the browser runs microtasks
+ * between listeners, Svelte's flush removes the dialog in that gap, and
+ * Settings, seeing no other modal, closes too. So such a layer stops
+ * propagation (ModelEditModal) or listens in the window capture phase and
+ * stops it there (HelpModal, CommandPalette, FileOpenDialog).
+ *
+ * Only `"true"` counts: `FindReplaceBar` declares `aria-modal="false"`. A
+ * dialog that is in the DOM but not on screen does not count either — one
+ * hidden with CSS, or one Svelte has marked `inert` while its `out:`
+ * transition plays — or it would silently disable Escape for Settings, the
+ * selection popup and the activity tray.
+ */
+export const MODAL_DIALOG_SELECTOR = '[aria-modal="true"]';
+
+/**
+ * True when an `aria-modal="true"` dialog other than `except` is in the
+ * document. Pass the caller's own dialog as `except` to ask "is something
+ * layered over me?"; pass nothing to ask "is any modal open?".
+ */
+export function modalDialogOpen(except: Element | null = null): boolean {
+  for (const dialog of document.querySelectorAll(MODAL_DIALOG_SELECTOR)) {
+    if (dialog === except) continue;
+    if (dialog.closest("[inert]")) continue;
+    // Optional: absent on older engines (WebKitGTK before 2.44), where a
+    // CSS-hidden dialog still counts — the pre-hardening behaviour. The
+    // historic `checkVisibilityCSS` alias is passed for engines that predate
+    // `visibilityProperty`.
+    if (
+      dialog.checkVisibility?.({ visibilityProperty: true, checkVisibilityCSS: true }) === false
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}

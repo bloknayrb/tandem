@@ -29,7 +29,7 @@ import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import DisplayMenu from "../../shell/DisplayMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
-import { escapeIsClaimed } from "../../utils/escape-owner";
+import { escapeIsClaimed, modalDialogOpen } from "../../utils/escape-owner";
 import { AI_OFF_TITLE } from "../../utils/license-ui";
 import {
   type AnnotationComposerIntent,
@@ -837,6 +837,10 @@ $effect(() => {
     // picker open got the POPUP dismissed on the first Escape and had to press
     // it twice (#1302 review).
     if (escapeIsClaimed(e.target)) return;
+    // Yield to a modal dialog: the popup survives Ctrl+, / Ctrl+/ underneath
+    // Settings or Help, and swallowing Escape here closed the hidden popup
+    // instead of the dialog on screen (see escape-owner.ts).
+    if (modalDialogOpen()) return;
     e.preventDefault();
     e.stopPropagation();
     dismissPopup();
