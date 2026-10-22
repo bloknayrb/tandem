@@ -438,7 +438,7 @@ Bryan decided the items above on 2026-10-22; a follow-up PR applies them. One li
 - **LIC02:** the [roadmap](../roadmap.md) shows the price as decided; only the accountant question stays open, and the v1.0 checklist item is split in two.
 - **LIC27:** no counsel was engaged; Bryan approved the in-repo draft. ADR-040 and [roadmap-history](../roadmap-history.md) get dated correction notes, and their original lines stay.
 - **LIC29:** kept, recast as effort: a self-built copy is under the same `LICENSE` terms, so building it changes nothing about what you may do and leaves you maintaining that copy.
-- **LIC20 and the README beta grant:** the licensor decided to ship the reach-back clause as written, with no `LICENSE` change. The README promise stands.
+- **LIC20 and the README beta grant:** the licensor decided to ship the reach-back clause as written, with no `LICENSE` change. LIC20's legal question (whether a later version's `LICENSE` can grant rights on earlier versions) stays unanswered, because no counsel is engaged.
 - **OPS08:** a staging build pointed at a separate update manifest offering a fake newer version; a runtime endpoint override in shipped builds was rejected as updater attack surface. The staging channel is #2280, and the checklist row stays not runnable until it lands.
 - **OPS15:** the release skill's project-memory step is deleted and the later step renumbered.
 - **OPS20, MERGE-METHOD, OPS22:** deferred.
