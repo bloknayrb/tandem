@@ -58,6 +58,9 @@ export function canOverwriteReadOnly(): boolean {
  */
 export async function isWritableOnDisk(filePath: string): Promise<boolean> {
   try {
+    // Safe FS sink (CodeQL js/path-injection): every caller passes the
+    // registry's server-managed `docState.filePath`, the same value the save
+    // path's `fs.stat` reads — never raw request input. Dismiss per #1042.
     await fs.access(filePath, fs.constants.W_OK);
     return true;
   } catch (err) {
@@ -71,8 +74,9 @@ export async function isWritableOnDisk(filePath: string): Promise<boolean> {
  * the user already approved overwriting this path. Otherwise raises the prompt
  * — once per episode, so repeated autosaves do not re-stamp it and the
  * banner's in-flight `detectedAt` stays valid — and returns false. After "Not
- * now", autosave stays silent; any explicit save (Ctrl+S, `tandem_save`)
- * raises a fresh episode.
+ * now", only the user's own save (Ctrl+S, `source: "manual"`) raises a fresh
+ * episode: autosave stays silent, and so does `tandem_save`, which must not
+ * re-show a banner the user dismissed.
  */
 export function gateReadOnlyFileSave(
   id: string,
@@ -82,7 +86,14 @@ export function gateReadOnlyFileSave(
 ): boolean {
   if (canOverwriteReadOnly() && approvals.get(id) === filePath) return true;
   const live = episodes.get(id);
-  if (live && (!live.declined || source === "auto-save")) return false;
+  if (live && (!live.declined || source !== "manual")) {
+    // Re-mirror a live prompt whose mirror vanished (any WS peer can delete
+    // the key), so "use the banner" never points at nothing.
+    if (!live.declined && !doc.getMap(Y_MAP_DOCUMENT_META).has(Y_MAP_READ_ONLY_FILE)) {
+      mirror(doc, live);
+    }
+    return false;
+  }
   // Strictly increasing per document, so a re-raise within the same
   // millisecond is still a different episode to the resolve route.
   const detectedAt = Math.max(Date.now(), (live?.detectedAt ?? 0) + 1);

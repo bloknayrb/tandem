@@ -1823,7 +1823,13 @@ export async function closeDocumentById(
   // and `tandem_close` do not, so the server keeps the session too.
   const closingDoc = getOrCreateDocument(safeId);
   const conflictAtClose = readPendingConflict(closingDoc);
-  const readOnlyBlockedAtClose = hasReadOnlyFileEpisode(safeId) && isDirty(safeId);
+  // Probed as well as remembered: after a restart the episode is gone until
+  // the next save attempt, and a restored tab closed in that window would
+  // otherwise lose the edits the previous close kept.
+  const readOnlyBlockedAtClose =
+    isDirty(safeId) &&
+    (hasReadOnlyFileEpisode(safeId) ||
+      (docState.source === "file" && !(await isWritableOnDisk(docState.filePath))));
   const keepSession = conflictAtClose !== undefined || readOnlyBlockedAtClose;
   if (keepSession) {
     try {

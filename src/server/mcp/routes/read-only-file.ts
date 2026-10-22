@@ -26,6 +26,8 @@ import { isValidDocumentId, sendApiError } from "./_shared.js";
  * must name the exact prompt episode it answers — the live one is held in
  * server memory, never read off the forgeable Y.Map mirror, so with no prompt
  * pending nothing can be approved. A mismatch is a no-op `stale` success.
+ * `detectedAt` is a STALENESS check, not a secret: it is near `Date.now()`
+ * and guessable, so it is no authentication control.
  *
  * Reach (security review): on POSIX every save already overwrote a read-only
  * file with no check at all, so a page able to call this route gains nothing

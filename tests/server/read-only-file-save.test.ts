@@ -296,6 +296,29 @@ describe.skipIf(!POSIX)("a read-only file is never overwritten without asking (#
     expect(session?.dirty).toBe(true);
   });
 
+  it("after Not now, tandem_save does not re-show the banner", async () => {
+    const { id, doc } = await refusedDoc();
+    const first = promptOf(doc)!;
+    await resolve({ documentId: id, choice: "dismiss", detectedAt: first.detectedAt });
+    await callTool("tandem_save", { documentId: id });
+    expect(promptOf(doc)).toMatchObject({ declined: true, detectedAt: first.detectedAt });
+  });
+
+  it("a live prompt whose mirror was deleted is mirrored again on the next refusal", async () => {
+    const { doc } = await refusedDoc();
+    const live = promptOf(doc)!.detectedAt;
+    doc.getMap(Y_MAP_DOCUMENT_META).delete(Y_MAP_READ_ONLY_FILE);
+    await autoSaveAllToDisk();
+    expect(promptOf(doc)).toMatchObject({ detectedAt: live, declined: false });
+  });
+
+  it("close keeps the session even when no episode is remembered (after a restart)", async () => {
+    const { id, filePath } = await refusedDoc();
+    resetReadOnlyFileStateForTests(); // what a restart leaves behind
+    await closeDocumentById(id);
+    expect((await loadSession(filePath))?.dirty).toBe(true);
+  });
+
   it("a source-view commit stops at the refusal instead of retrying it", async () => {
     const { id, doc, filePath } = await refusedDoc();
     const first = promptOf(doc)!.detectedAt;
