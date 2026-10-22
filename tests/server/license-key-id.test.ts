@@ -35,7 +35,19 @@ function keypair() {
   };
 }
 
-const A = keypair();
+/**
+ * A's id must contain a hex letter: the "uppercase hex" case below is
+ * `A.id.toUpperCase()`, and an all-digit id (about 1 draw in 1,800) uppercases
+ * to A's own valid id, which verifies instead of answering MALFORMED.
+ */
+function keypairWithHexLetter(): ReturnType<typeof keypair> {
+  for (;;) {
+    const k = keypair();
+    if (/[a-f]/.test(k.id)) return k;
+  }
+}
+
+const A = keypairWithHexLetter();
 const B = keypair();
 
 const FIELDS = {
