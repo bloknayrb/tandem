@@ -969,6 +969,8 @@ export {
   isBareNameLaunchable,
 } from "../../shared/integrations/detect-claude-cli.js";
 
+import { isFlushUnsupported } from "../file-io/flush-unsupported.js";
+
 /**
  * Atomic write: write to a temp file in the SAME directory as the destination,
  * tighten its mode/DACL, then rename. Same-directory tempfile avoids EXDEV
@@ -1029,11 +1031,17 @@ async function atomicWrite(
   // mode at create, not chmod-after: on POSIX a plain writeFile lands at
   // 0o666 & ~umask, leaving sibling vendors' tokens world-readable until the
   // tighten below. Windows ignores mode (the ACL step is the protection).
-  try {
-    await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600, signal });
-  } catch (writeErr) {
-    await unlinkOrLeak(tmp, writeErr);
-    throw writeErr;
+  // `flush`: durable before the rename publishes it; a filesystem that refuses
+  // fsync falls back to an unflushed write, as `atomicWrite` does.
+  for (const flush of [true, false]) {
+    try {
+      await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600, signal, flush });
+      break;
+    } catch (writeErr) {
+      if (flush && isFlushUnsupported(writeErr)) continue;
+      await unlinkOrLeak(tmp, writeErr);
+      throw writeErr;
+    }
   }
 
   try {

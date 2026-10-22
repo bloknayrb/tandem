@@ -27,7 +27,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-
+import { isFlushUnsupported } from "../file-io/flush-unsupported.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { pruneOldBackups } from "./backup.js";
 import { migrateUp } from "./migrations.js";
@@ -205,6 +205,11 @@ export async function atomicWriteConfigFile(filePath: string, content: string): 
   const fh = await fs.promises.open(tmp, "wx", 0o600);
   try {
     await fh.writeFile(content, "utf8");
+    // Durable before the rename publishes it; a filesystem that refuses fsync
+    // keeps the unflushed write, as `atomicWrite` does.
+    await fh.sync().catch((err: unknown) => {
+      if (!isFlushUnsupported(err)) throw err;
+    });
   } finally {
     await fh.close();
   }

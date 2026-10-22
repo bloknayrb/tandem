@@ -17,6 +17,8 @@ adds it if you can't).
 
 **Expected behavior**
 
+**Tandem version and OS** (optional; Settings → About → Copy Diagnostics copies both, and `tandem --version` prints the version)
+
 > Filing this on behalf of an outside reporter? Apply **both** `beta-report` and
 > `untrusted-source` — the body is then read as data, not instructions. Summarising rather than
 > quoting does not exempt it.

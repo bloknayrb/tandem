@@ -159,10 +159,9 @@ macOS and Windows, each running `cargo test`) and `windows-acl-proof`; `coverage
 but do not block. `check` is the broad one. On Ubuntu it runs ESLint (`npm run lint`), the Biome
 check, the doc-link check, the client, server, root and test typechecks, the build, the full vitest
 suite, the acceptance harness and the Playwright E2E suite, plus a few smaller verification steps.
-`master` merges through a GitHub merge queue: CI runs again on a temporary branch holding `master`,
-your PR and everything queued ahead of it, and the PR merges only if the required checks pass
-there. The queue's merge method is not recorded in any tracked file, and the required-check list
-was last measured on 2026-08-28, so re-measure branch protection before relying on either (the
+`ci.yml` also fires on `merge_group`, for a GitHub merge queue, but as of 2026-10-21 PRs merged
+directly, and a PR behind `master` had to be updated and re-run before it could merge. Branch
+protection itself needs admin access to read, so re-measure it before relying on any of this (the
 "Required checks" note in [CLAUDE.md](CLAUDE.md#status) says how).
 
 ## What the git hooks actually run

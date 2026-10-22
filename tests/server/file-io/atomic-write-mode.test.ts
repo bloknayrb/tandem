@@ -133,7 +133,7 @@ describe.skipIf(process.platform === "win32")(
 
       await atomicWrite(target, "y");
 
-      expect(write.mock.calls[0]?.[2]).toMatchObject({ flag: "wx", mode: 0o600 });
+      expect(write.mock.calls[0]?.[2]).toMatchObject({ flag: "wx", mode: 0o600, flush: true });
       expect(chmod).not.toHaveBeenCalled();
       expect(lchmod).not.toHaveBeenCalled();
       expect((await fs.readdir(dir)).filter((n) => ATOMIC_TEMP_RE.test(n))).toEqual([]);

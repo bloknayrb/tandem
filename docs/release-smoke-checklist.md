@@ -141,10 +141,12 @@ before it meets a paying user.
       `src-tauri/tauri.conf.json` (the public GitHub `latest.json`), no
       environment variable reaches the updater, and the only alternate route is
       the compile-time `LICENSE_UPDATE_ENDPOINT` const in `src-tauri/src/lib.rs`,
-      which is empty while licensing ships dark. Running this row needs either a
-      staging build compiled with a different endpoint or a real override; which
-      one is a maintainer decision still to be made. Until then, record this row
-      as not run rather than ticking it.
+      which is empty while licensing ships dark. *Decided 2026-10-22 (Bryan):*
+      the route is a staging build compiled against a separate update manifest
+      that offers a fake newer version. A runtime endpoint override in shipped
+      builds was rejected, because it would add attack surface to the updater.
+      That staging channel is not built yet; #2280 tracks it. Until #2280 lands,
+      record this row as not run rather than ticking it.
       (Added 2026-06-11; once the updater authenticates against the
       license-checked endpoint — #1116 L3 — run this against the staging
       endpoint so the entitlement check is in the loop.)
