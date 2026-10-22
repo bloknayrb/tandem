@@ -241,7 +241,12 @@ test("E5: saving the working directory surfaces the success toast", async ({ pag
   // stack (pointer-events: none, which elementFromPoint skips), under poll
   // because the card slides in.
   await expect(page.locator(MODAL)).toBeVisible();
-  await expect.poll(() => ownsItsPixels(toast.locator(".toast-card").first())).toBe(true);
+  await expect.poll(() => ownsItsPixels(toast.getByRole("status").first())).toBe(true);
+  // And now that it is clickable over the modal, dismissing it must not count
+  // as a click outside Settings.
+  await toast.locator("[data-testid^='toast-dismiss-']").first().click();
+  await expect(toast).toHaveCount(0);
+  await expect(page.locator(MODAL)).toBeVisible();
 });
 
 // PR 6 — Network two-tier refactor.
