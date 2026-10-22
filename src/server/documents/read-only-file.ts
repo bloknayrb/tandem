@@ -121,6 +121,16 @@ export function gateReadOnlyFileSave(
   return false;
 }
 
+/**
+ * Another program changed the file (#2273): the user's "Overwrite" was for the
+ * file as it stood then, not for whatever replaced it, so the next refused
+ * save asks again. Tandem's own reloads (source-view commit, Reload from file,
+ * restore) never reach here, so working on the same file does not re-ask.
+ */
+export function revokeOverwriteApproval(id: string): void {
+  approvals.delete(id);
+}
+
 /** A probe found the file writable: drop the approval and any prompt. */
 export function noteFileWritable(id: string, doc: Y.Doc): void {
   approvals.delete(id);

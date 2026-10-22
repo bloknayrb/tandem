@@ -62,6 +62,7 @@ import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { flagExternalConflict, readPendingConflict } from "./conflict.js";
 import { isDirty, markClean } from "./dirty.js";
 import { writeImportLossReport } from "./populate.js";
+import { revokeOverwriteApproval } from "./read-only-file.js";
 import { getOpenDocs } from "./registry.js";
 
 /** Per-document concurrent-reload guard -- see the module header. */
@@ -478,6 +479,9 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
       try {
         const doc = getDocument(id);
         if (!doc) return; // closed between arrival and delivery (or already evicted)
+        // Self-writes are filtered before this callback, so this is another
+        // program's change: an Overwrite approval no longer covers the file.
+        revokeOverwriteApproval(id);
         const alreadyConflicted = readPendingConflict(doc) !== undefined;
         // An unregistered id keeps the old `!undefined` answer: flag rather than
         // reload, the non-destructive direction when we cannot tell the tier.

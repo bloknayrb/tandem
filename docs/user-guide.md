@@ -321,7 +321,7 @@ Until you answer, autosave leaves that document alone, and while the disk holds 
 
 If a file is marked read-only on disk (`chmod 444` on macOS and Linux, or **Read-only** ticked in the file's Properties on Windows), Tandem still opens it for editing, but it asks before it writes over the file. The first time a save is due, by autosave or `Ctrl+S`, Tandem leaves the file alone and shows a banner saying it is read-only and your edits haven't been saved:
 
-- **Overwrite** (macOS and Linux) — save your edits into the file anyway. The file stays read-only afterwards, and Tandem doesn't ask again while the document stays open.
+- **Overwrite** (macOS and Linux) — save your edits into the file anyway. The file stays read-only afterwards, and Tandem doesn't ask again while the document stays open, unless another program changes the file in the meantime.
 - **Not now** — keep editing without saving. Autosave stops asking; pressing `Ctrl+S` asks again.
 
 A read-only file you haven't changed is never touched, and pressing `Ctrl+S` on it does nothing. On Windows there is no **Overwrite**: clear **Read-only** in the file's Properties, then save. Your AI cannot answer the banner for you; `tandem_save` reports that the file is read-only and leaves the choice to you. Closing the tab asks first, and if you close it anyway Tandem keeps the unsaved edits and reopens the file the next time it starts.

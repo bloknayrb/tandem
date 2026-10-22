@@ -42,6 +42,7 @@ import { resetForTesting as resetDirtyState } from "../../src/server/documents/d
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { resetReadOnlyFileStateForTests } from "../../src/server/documents/read-only-file.js";
 import { reloadDocumentFromMarkdown } from "../../src/server/documents/reload-family.js";
+import { watchFile } from "../../src/server/file-watcher.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import {
   autoSaveAllToDisk,
@@ -127,6 +128,13 @@ async function callTool(name: string, args: Record<string, unknown>) {
 }
 
 let tmpDir: string;
+
+/** Deliver an external change through the (mocked) watcher's latest callback. */
+async function externalChange(filePath: string): Promise<void> {
+  const calls = vi.mocked(watchFile).mock.calls.filter(([p]) => p === filePath);
+  expect(calls.length, `watchFile was not called for ${filePath}`).toBeGreaterThan(0);
+  await (calls[calls.length - 1][1] as (p: string) => Promise<void>)(filePath);
+}
 
 /** A dirty, open, read-only `.md` whose first autosave has been refused. */
 async function refusedDoc(name = "locked.md") {
@@ -300,6 +308,31 @@ describe.skipIf(!POSIX)("a read-only file is never overwritten without asking (#
     await autoSaveAllToDisk();
     expect(await fs.readFile(filePath, "utf-8")).not.toContain("after relock");
     expect(promptOf(doc)).toMatchObject({ declined: false });
+  });
+
+  it("another program replacing the file revokes Overwrite; the next edit asks again", async () => {
+    const { id, doc, filePath } = await refusedDoc();
+    await resolve({ documentId: id, choice: "overwrite", detectedAt: promptOf(doc)!.detectedAt });
+    expect(await fs.readFile(filePath, "utf-8")).toContain("local unsaved edit");
+
+    // Another program writes a new read-only version; the watcher delivers it.
+    await makeWritable(filePath);
+    await fs.writeFile(filePath, "# Replaced\n\nBy someone else.\n");
+    await makeReadOnly(filePath);
+    await externalChange(filePath);
+
+    makeDirty(doc, "edit after replace");
+    await autoSaveAllToDisk();
+    expect(await fs.readFile(filePath, "utf-8")).toBe("# Replaced\n\nBy someone else.\n");
+    expect(promptOf(doc)).toMatchObject({ declined: false });
+  });
+
+  it("Tandem's own reload (a source-view commit) keeps the Overwrite approval", async () => {
+    const { id, doc, filePath } = await refusedDoc();
+    await resolve({ documentId: id, choice: "overwrite", detectedAt: promptOf(doc)!.detectedAt });
+    await reloadDocumentFromMarkdown(id, "# Locked\n\nRewritten in source view.\n");
+    expect(await fs.readFile(filePath, "utf-8")).toContain("Rewritten in source view.");
+    expect(promptOf(doc)).toBeUndefined();
   });
 
   it("closing a refused document keeps its session, so the edits survive", async () => {
