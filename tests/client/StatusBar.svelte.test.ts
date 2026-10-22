@@ -543,6 +543,16 @@ describe("StatusBar — Reconnected flash (#2258)", () => {
     expect(container.textContent).not.toContain("Reconnected");
   });
 
+  it("before the first connect, the pill says Connecting…, not Reconnecting… (#2277)", async () => {
+    const { container, rerender } = render(StatusBar, { props: down });
+    expect(container.textContent).toContain("Connecting…");
+    expect(container.textContent).not.toContain("Reconnecting");
+    // Positive control: after a connect and a drop it is a reconnect.
+    await rerender(up);
+    await rerender(down);
+    expect(container.textContent).toContain("Reconnecting…");
+  });
+
   it("mounting already connected does not flash", () => {
     const { container } = render(StatusBar, { props: up });
     expect(container.textContent).not.toContain("Reconnected");
