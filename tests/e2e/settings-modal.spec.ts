@@ -349,22 +349,26 @@ test("Escape in Help opened over Settings closes only Help", async ({ page }) =>
   await expect(page.locator(MODAL)).toHaveCount(0);
 });
 
-test("Escape never closes Settings out from under a dialog layered over it", async ({ page }) => {
-  // Ctrl+O is not gated on Settings either, so the browser build's file-open
-  // dialog opens on top of it. Unlike Help it listens for Escape on its own
-  // backdrop (bubble phase), and its Browse `autofocus` yields when something
-  // already holds focus — so focus stays on the Settings dialog beneath it.
-  // The old focus-inside rule then closed Settings, the layer underneath, and
-  // left the file dialog up. Settings must stand down whenever another
-  // aria-modal dialog is open.
+test("Escape in the file-open dialog over Settings closes only that dialog", async ({ page }) => {
+  // Ctrl+O is not gated on Settings, so the browser build's file-open dialog
+  // opens on top of it. It used to listen for Escape only on its own backdrop,
+  // and its Browse `autofocus` yielded to the focus Settings already held, so
+  // the first Escape closed Settings out from under it (master) or, once
+  // Settings stood down, closed nothing. It now takes focus on mount and owns
+  // Escape in the window capture phase, like Help and the command palette.
   await openEditor(page);
   await openSettingsModal(page);
 
   await page.keyboard.press("Control+KeyO");
-  await expect(page.locator("[data-testid='file-open-dialog']")).toBeVisible({ timeout: 2_000 });
+  const fileDialog = page.locator("[data-testid='file-open-dialog']");
+  await expect(fileDialog).toBeVisible({ timeout: 2_000 });
 
   await page.keyboard.press("Escape");
+  await expect(fileDialog).toHaveCount(0);
   await expect(page.locator(MODAL)).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
 });
 
 test("Escape closes Settings even with the selection popup open beneath it", async ({ page }) => {

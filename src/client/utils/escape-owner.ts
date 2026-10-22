@@ -69,7 +69,20 @@ export function escapeIsClaimed(target: EventTarget | null): boolean {
  *     whatever holds focus, must yield while any OTHER modal is open, because
  *     that one is layered over it and owns the key.
  *
- * Only `"true"` counts: `FindReplaceBar` declares `aria-modal="false"`.
+ * The rule a layer over Settings must follow follows from that: by the time
+ * Settings' document listener runs, the layer has either stopped the event or
+ * is still in the DOM. A bubbling handler that closes its dialog and lets the
+ * event go on breaks it — with a real key press the browser runs microtasks
+ * between listeners, Svelte's flush removes the dialog in that gap, and
+ * Settings, seeing no other modal, closes too. So such a layer stops
+ * propagation (ModelEditModal) or listens in the window capture phase and
+ * stops it there (HelpModal, CommandPalette, FileOpenDialog).
+ *
+ * Only `"true"` counts: `FindReplaceBar` declares `aria-modal="false"`. A
+ * dialog that is in the DOM but not on screen does not count either — one
+ * hidden with CSS, or one Svelte has marked `inert` while its `out:`
+ * transition plays — or it would silently disable Escape for Settings, the
+ * selection popup and the activity tray.
  */
 export const MODAL_DIALOG_SELECTOR = '[aria-modal="true"]';
 
@@ -80,7 +93,18 @@ export const MODAL_DIALOG_SELECTOR = '[aria-modal="true"]';
  */
 export function modalDialogOpen(except: Element | null = null): boolean {
   for (const dialog of document.querySelectorAll(MODAL_DIALOG_SELECTOR)) {
-    if (dialog !== except) return true;
+    if (dialog === except) continue;
+    if (dialog.closest("[inert]")) continue;
+    // Optional: absent on older engines (WebKitGTK before 2.44), where a
+    // CSS-hidden dialog still counts — the pre-hardening behaviour. The
+    // historic `checkVisibilityCSS` alias is passed for engines that predate
+    // `visibilityProperty`.
+    if (
+      dialog.checkVisibility?.({ visibilityProperty: true, checkVisibilityCSS: true }) === false
+    ) {
+      continue;
+    }
+    return true;
   }
   return false;
 }

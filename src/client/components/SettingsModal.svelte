@@ -537,15 +537,15 @@ $effect(() => {
 //
 // What Settings does yield to is a layer ABOVE it, which owns Escape:
 //   - an app-level modal opened over Settings (Help via its shortcut, which
-//     is not gated on Settings) or the nested ModelEditModal. Help and the
-//     command palette already win by listening in the window capture phase;
-//     a dialog that listens on its own element (file-open via Ctrl+O, model
-//     edit) would otherwise lose to this document listener whenever focus is
-//     not inside it — and file-open's Browse `autofocus` yields to the focus
-//     Settings already holds, so that is the usual case. (The integration
-//     wizard never stacks: opening it closes Settings.) `modalDialogOpen`
+//     is not gated on Settings), the file-open dialog (nor is Ctrl+O), or
+//     the nested ModelEditModal. Help, the command palette and the file-open
+//     dialog win by listening in the window capture phase and stopping the
+//     event; ModelEditModal stops it on its own element. The check here is
+//     the second line of defence for a layer that stops nothing but is still
+//     in the DOM when this listener runs. (The integration wizard never
+//     stacks: opening it closes Settings.) `modalDialogOpen`
 //     (utils/escape-owner.ts) has why "another aria-modal is open" means
-//     "something is above Settings";
+//     "something is above Settings", and the rule a layer must follow;
 //   - a native `<select>` popup. The browser closes it on Escape and focus
 //     stays on the select inside this dialog, so whether the engine also
 //     dispatches the keydown to the page is the same question it was under

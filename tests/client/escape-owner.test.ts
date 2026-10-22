@@ -69,6 +69,16 @@ describe("modalDialogOpen", () => {
     expect(modalDialogOpen()).toBe(true);
   });
 
+  it("does not count a dialog that is in the DOM but not on screen", () => {
+    document.body.innerHTML = `
+      <div role="dialog" aria-modal="true" style="display: none"></div>
+      <div style="display: none"><div role="dialog" aria-modal="true"></div></div>
+      <div role="dialog" aria-modal="true" style="visibility: hidden"></div>
+      <div inert><div role="dialog" aria-modal="true"></div></div>
+    `;
+    expect(modalDialogOpen()).toBe(false);
+  });
+
   it("excludes the caller's own dialog, so only a layer over it counts", () => {
     document.body.innerHTML = `
       <div id="self" role="dialog" aria-modal="true">
