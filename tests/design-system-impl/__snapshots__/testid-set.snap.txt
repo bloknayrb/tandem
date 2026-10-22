@@ -395,6 +395,10 @@ popup-show-formatbar-btn
 railFloat.left ? "rail-float-left" : undefined
 railFloat.right || railContent.revealOpen ? "rail-float-right" : undefined
 reachability-harness
+read-only-file-banner
+read-only-file-dismiss-btn
+read-only-file-live
+read-only-file-overwrite-btn
 recent-file-{*}
 recent-files-list
 reduce-motion-toggle

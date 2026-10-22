@@ -565,6 +565,21 @@ export interface ExternalConflictState {
 }
 
 /**
+ * Per-document read-only-file prompt (#2273), mirrored into Y_MAP_DOCUMENT_META
+ * under Y_MAP_READ_ONLY_FILE while saves are refused because the file on disk
+ * is not writable (POSIX permissions, or the Windows read-only attribute).
+ * Display state only: the authoritative episode lives in server memory.
+ */
+export interface ReadOnlyFileState {
+  /** Episode id; the resolve route must echo it. */
+  detectedAt: number;
+  /** The user chose "Not now": autosave stops asking, the banner hides. */
+  declined: boolean;
+  /** False on Windows, where Tandem never clears the read-only attribute. */
+  canOverwrite: boolean;
+}
+
+/**
  * Per-document docx fidelity report (#1145, `.docx` only) — the "honesty layer".
  * Tells the user what won't round-trip BEFORE they invest edits. Stored under
  * Y_MAP_DOCUMENT_META at Y_MAP_FIDELITY_REPORT; server write-only, client reads
@@ -704,6 +719,7 @@ export interface TandemNotification {
     | "file-reloaded"
     | "review-pending"
     | "external-conflict"
+    | "read-only-file"
     | "launcher"
     | "documents-not-reopened";
   /** Also selects the notice's lifetime, and therefore its tense. Only `info`

@@ -54,7 +54,7 @@ import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
 import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
 import { restoreBom } from "../file-io/line-endings.js";
 import { rearmWatch, recordSelfWrite, suppressNextChange } from "../file-watcher.js";
-import { canSaveToDisk, saveDocumentToDisk } from "../mcp/document-service.js";
+import { canSaveToDisk, saveDocumentToDiskRetryingLock } from "../mcp/document-service.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
@@ -197,11 +197,11 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
       // (markCleanAfter:false) and the next autosave persists it — which is
       // sound precisely BECAUSE no conflict can be pending here; with one
       // pending, #1238 blocks autosave and that fallback would not fire.
-      let saved = await saveDocumentToDisk(id, "manual");
-      for (let attempt = 0; attempt < 5 && saved.status === "skipped"; attempt++) {
-        await new Promise((r) => setTimeout(r, 50));
-        saved = await saveDocumentToDisk(id, "manual");
-      }
+      //
+      // One standing skip is reachable since #2273: a file read-only on disk.
+      // The save has already raised the prompt that decides it, so the retry
+      // helper returns it at once and the edits stay dirty in memory.
+      const saved = await saveDocumentToDiskRetryingLock(id, "manual");
       if (saved.status === "error") {
         // The disk write failed (saveDocumentToDisk already pushed a save-error
         // notification). The Y.Doc reload succeeded and the doc is left dirty,

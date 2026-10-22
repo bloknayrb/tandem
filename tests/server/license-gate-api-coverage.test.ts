@@ -50,6 +50,7 @@ const ROUTE_GATES: RouteGate[] = [
   { constant: "API_DOCUMENT_RELOAD", gate: "open", why: BROWSER_WRITE },
   { constant: "API_BACKUPS_RESTORE", gate: "open", why: BROWSER_WRITE },
   { constant: "API_EXTERNAL_CONFLICT_RESOLVE", gate: "open", why: BROWSER_WRITE },
+  { constant: "API_READ_ONLY_FILE_RESOLVE", gate: "open", why: BROWSER_WRITE },
   { constant: "API_ANNOTATION_REPLY", gate: "open", why: BROWSER_WRITE },
   { constant: "API_REMOVE_ANNOTATION", gate: "open", why: BROWSER_WRITE },
 

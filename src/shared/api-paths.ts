@@ -55,6 +55,9 @@ export const API_BACKUPS_RESTORE = "/api/backups/restore";
 // Resolve an external-conflict prompt (#1069, all formats since #1238): keep
 // the in-memory unsaved edits (re-baseline) or reload fresh from the on-disk file.
 export const API_EXTERNAL_CONFLICT_RESOLVE = "/api/external-conflict/resolve";
+// Answer the read-only-file prompt (#2273): overwrite the read-only file
+// anyway (POSIX only), or stop asking on autosave for this open document.
+export const API_READ_ONLY_FILE_RESOLVE = "/api/read-only-file/resolve";
 
 // --- Annotations ------------------------------------------------------------
 export const API_ANNOTATION_REPLY = "/api/annotation-reply";

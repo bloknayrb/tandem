@@ -29,6 +29,7 @@
 
 import { flushSync } from "svelte";
 import { describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import type { ClosedTabRecord } from "../../src/client/hooks/useClosedTabStack.svelte.js";
 import {
   type CreateDocumentWorkspaceOpts,
@@ -36,11 +37,17 @@ import {
   type DocumentWorkspace,
 } from "../../src/client/hooks/useDocumentWorkspace.svelte.js";
 import type { OpenTab } from "../../src/client/types.js";
+import {
+  Y_MAP_DIRTY,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_READ_ONLY_FILE,
+} from "../../src/shared/constants.js";
 
 /**
  * A tab carrying only the fields this module reads. `ydoc` is compared for
- * identity and never dereferenced, and `provider` is untouched, so sentinels
- * keep the harness free of a Yjs/Hocuspocus mount.
+ * identity and, since #2273, read by the close guard for the read-only-file
+ * prompt — a bare Y.Doc, no provider. `provider` is untouched, so a sentinel
+ * keeps the harness free of a Hocuspocus mount.
  */
 function tab(overrides: Partial<OpenTab> & { id: string }): OpenTab {
   return {
@@ -49,7 +56,7 @@ function tab(overrides: Partial<OpenTab> & { id: string }): OpenTab {
     format: "md",
     readOnly: false,
     source: "file",
-    ydoc: { id: overrides.id } as unknown as OpenTab["ydoc"],
+    ydoc: new Y.Doc(),
     provider: {} as unknown as OpenTab["provider"],
     ...overrides,
   };
@@ -791,6 +798,32 @@ describe("createDocumentWorkspace — the close funnel", () => {
     expect(h.calls.closeTab).toEqual([]);
     expect(h.calls.onTabClosed).toEqual([]);
     expect(h.calls.scratchpadCleared).toEqual([]);
+    h.dispose();
+  });
+
+  it("confirms before closing a dirty tab whose read-only file refused the save (#2273)", () => {
+    const blocked = tab({ id: "r" });
+    const meta = blocked.ydoc.getMap(Y_MAP_DOCUMENT_META);
+    meta.set(Y_MAP_READ_ONLY_FILE, { detectedAt: 1, declined: true, canOverwrite: true });
+    meta.set(Y_MAP_DIRTY, true);
+    const h = harness({ tabs: [blocked], activeTabId: "r" });
+    h.confirmReplies.push(false);
+    expect(h.ws.closeTabAndRecord("r")).toBe(false);
+    expect(h.calls.closeTab).toEqual([]);
+    h.confirmReplies.push(true);
+    expect(h.ws.closeTabAndRecord("r")).toBe(true);
+    expect(h.calls.closeTab).toEqual(["r"]);
+    h.dispose();
+  });
+
+  it("does not confirm for a read-only-file prompt once the tab is clean", () => {
+    const clean = tab({ id: "c" });
+    const meta = clean.ydoc.getMap(Y_MAP_DOCUMENT_META);
+    meta.set(Y_MAP_READ_ONLY_FILE, { detectedAt: 1, declined: false, canOverwrite: true });
+    meta.set(Y_MAP_DIRTY, false);
+    const h = harness({ tabs: [clean], activeTabId: "c" });
+    h.ws.closeTabAndRecord("c"); // an unqueued confirm would throw
+    expect(h.calls.closeTab).toEqual(["c"]);
     h.dispose();
   });
 

@@ -327,6 +327,9 @@ const FAN_IN = [
   // import document-service to ask a question about a map it writes itself.
   "server/mcp/document-service.ts -> server/documents/annotation-wiring.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/conflict.ts (value) x1",
+  // #2273: the read-only-file prompt, the conflict flag's sibling. Its state
+  // is server memory the save path, close and the resolve route all consult.
+  "server/mcp/document-service.ts -> server/documents/read-only-file.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/watcher.ts (value) x1",
   // The restore path, by its name on the seam. This edge replaced a dynamic
   // import whose only purpose was breaking the cycle; a static edge here is
@@ -350,6 +353,8 @@ const FAN_IN = [
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/external-conflict.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/read-only-file.ts -> server/documents/read-only-file.ts (value) x1",
+  "server/mcp/routes/read-only-file.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/mode-release.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/open.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/scratchpad.ts -> server/documents/open.ts (value) x1",
@@ -395,6 +400,11 @@ const FAN_OUT = [
   "server/documents/conflict.ts -> shared/origins.ts (value) x1",
   "server/documents/conflict.ts -> shared/types.ts (type) x1",
   "server/documents/conflict.ts -> shared/utils.ts (value) x1",
+  "server/documents/read-only-file.ts -> server/notifications.ts (value) x1",
+  "server/documents/read-only-file.ts -> shared/constants.ts (value) x1",
+  "server/documents/read-only-file.ts -> shared/origins.ts (value) x1",
+  "server/documents/read-only-file.ts -> shared/types.ts (type) x1",
+  "server/documents/read-only-file.ts -> shared/utils.ts (value) x1",
   // TWO things in documents/ still reach document-service, and they leave
   // together or not at all. Autosave is why `ensureAutoSave` got its own
   // module instead of riding the open seam: leaving it in open.ts would have

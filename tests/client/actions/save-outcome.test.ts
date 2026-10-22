@@ -214,6 +214,7 @@ describe("saveSkippedMessage", () => {
     ["EXTERNAL_CONFLICT", "changed on disk"],
     ["PROMOTION_REQUIRED", "Save As"],
     ["READ_ONLY", "read-only"],
+    ["READ_ONLY_FILE", "read-only on disk"],
     ["UNSUPPORTED_FORMAT", "format"],
     ["SAVE_IN_PROGRESS", "already in progress"],
     ["SOURCE_MISSING", "no longer exists"],

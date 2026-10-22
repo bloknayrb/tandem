@@ -34,6 +34,7 @@ import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { deleteSession } from "../session/manager.js";
 import { markClean } from "./dirty.js";
+import { endReadOnlyFileEpisode } from "./read-only-file.js";
 import type { OpenDoc } from "./registry.js";
 
 /**
@@ -485,6 +486,11 @@ export async function clearAndReload(
         meta.delete(Y_MAP_EXTERNAL_CONFLICT);
       }
     });
+
+    // The content was rebuilt, so a read-only-file prompt (#2273) about the
+    // edits it replaced is moot. A caller that then saves (the source-view
+    // commit) re-raises it if the file is still read-only.
+    endReadOnlyFileEpisode(id, doc);
 
     // 3. Reattach event queue observers (idempotent — detaches existing first).
     //    A scratchpad never carries the annotation/reply channel observers (#2219).

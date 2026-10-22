@@ -88,6 +88,7 @@ import {
   Y_MAP_FOOTNOTE_BODIES,
   Y_MAP_LINE_ENDING,
   Y_MAP_READ_ONLY,
+  Y_MAP_READ_ONLY_FILE,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
 import { crossBasename } from "../../shared/cross-basename.js";
@@ -1460,6 +1461,10 @@ function writeDocMeta(
     // state — clear it here; openFromDisk re-flags freshly when the current
     // open actually warrants it (#1069).
     meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+    // Same for the read-only-file prompt (#2273): its episode lives in server
+    // memory and does not survive a restart, so a restored mirror would be a
+    // banner no answer could resolve. The next refused save raises a fresh one.
+    meta.delete(Y_MAP_READ_ONLY_FILE);
   });
 }
 

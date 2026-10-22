@@ -609,6 +609,8 @@ export function saveSkippedMessage(skipCode?: string, reason?: string): string {
       return "Not saved — choose Save As to turn this upload or scratchpad into a file.";
     case "READ_ONLY":
       return "Not saved — this document is read-only.";
+    case "READ_ONLY_FILE":
+      return "Not saved — this file is read-only on disk. Use the banner above the document to decide.";
     case "UNSUPPORTED_FORMAT":
     case "ADAPTER_UNAVAILABLE":
       return "Not saved — this document format cannot be written to disk.";

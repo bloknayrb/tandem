@@ -391,6 +391,16 @@ export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
  */
 export const Y_MAP_EXTERNAL_CONFLICT = "externalConflict";
 /**
+ * Per-document "this file is read-only on disk" prompt (#2273). Holds a
+ * `ReadOnlyFileState` (see shared/types.ts) while a save has been refused
+ * because the file is not writable; absent otherwise. A MIRROR of server
+ * memory (`documents/read-only-file.ts`) for the banner to render — any WS
+ * peer can write this map, so the server never decides anything from it.
+ * Written via `withInternal`; cleared by a successful save, a writable probe,
+ * a content reload, and at open.
+ */
+export const Y_MAP_READ_ONLY_FILE = "readOnlyFile";
+/**
  * Per-document docx fidelity report (#1145, `.docx` only). Holds a
  * `FidelityReport` (see shared/types.ts): Word features mammoth dropped on
  * import (`importLosses`, set at open / force-reload / file-watcher reload) and

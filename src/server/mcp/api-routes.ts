@@ -25,6 +25,7 @@ import {
   API_MODE_RELEASE,
   API_NOTIFY_STREAM,
   API_OPEN,
+  API_READ_ONLY_FILE_RESOLVE,
   API_REMOVE_ANNOTATION,
   API_RENAME,
   API_ROTATE_TOKEN,
@@ -60,6 +61,7 @@ import { handleMode } from "./routes/mode.js";
 import { handleModeRelease } from "./routes/mode-release.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
+import { handleResolveReadOnlyFile } from "./routes/read-only-file.js";
 import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
 import { handleRename } from "./routes/rename.js";
 import { makeRotateTokenHandler } from "./routes/rotate-token.js";
@@ -469,6 +471,11 @@ export function registerApiRoutes(
   // origin allowlist + loopback inside the handler (#1121 F6).
   app.options(API_EXTERNAL_CONFLICT_RESOLVE, mw);
   app.post(API_EXTERNAL_CONFLICT_RESOLVE, mw, largeBody, handleResolveExternalConflict);
+
+  // Read-only-file prompt (#2273). Gated on origin allowlist + loopback inside
+  // the handler, like external-conflict above.
+  app.options(API_READ_ONLY_FILE_RESOLVE, mw);
+  app.post(API_READ_ONLY_FILE_RESOLVE, mw, largeBody, handleResolveReadOnlyFile);
 
   // Annotation reply: browser user posts a reply to an annotation thread.
   app.options(API_ANNOTATION_REPLY, mw);

@@ -299,7 +299,8 @@ Press `Ctrl+S` to save the active document to disk. Your AI can also save via `t
 - read-only documents, including every HTML file and the changelog opened from Settings;
 - files uploaded in the browser build, which have no file on disk to write to;
 - scratchpads, which have no file until you use **Save As** — see [Scratchpads](#scratchpads);
-- a file whose [disk-change banner](#when-a-file-changes-on-disk) is waiting for your answer.
+- a file whose [disk-change banner](#when-a-file-changes-on-disk) is waiting for your answer;
+- a file that is [read-only on disk](#read-only-files), until you choose to overwrite it.
 
 Separately from the file itself, Tandem saves each open document's editing state and annotations every 60 seconds, so a restart (or a crash) brings your tabs back where you left them. If that state held edits that never reached the file, the document reopens with a banner asking whether to keep them; see [When a file changes on disk](#when-a-file-changes-on-disk). Before Tandem first writes to a file in a session, it keeps a copy of the file as it was — see the note under [Markdown Formatting](#markdown-formatting).
 
@@ -315,6 +316,15 @@ If you *do* have unsaved edits, Tandem won't choose for you. A banner at the top
 ![A banner across the top of the document saying the file changed on disk while you have unsaved edits, with Keep my edits and Reload from file buttons](screenshots/18-external-conflict-banner.png)
 
 Until you answer, autosave leaves that document alone, and while the disk holds changes you haven't chosen to discard, `Ctrl+S` won't write over them either — so neither version is lost by accident. The same banner appears when Tandem restores unsaved edits from your last session ("Unsaved edits for … were restored from your last session"), asking whether to keep them or reload fresh from the file. For a format Tandem can't write back to disk, keeping your edits keeps them in this session only, and the banner says so.
+
+### Read-only Files
+
+If a file is marked read-only on disk (`chmod 444` on macOS and Linux, or **Read-only** ticked in the file's Properties on Windows), Tandem still opens it for editing, but it asks before it writes over the file. The first time a save is due, by autosave or `Ctrl+S`, Tandem leaves the file alone and shows a banner saying it is read-only and your edits haven't been saved:
+
+- **Overwrite** (macOS and Linux) — save your edits into the file anyway. The file stays read-only afterwards, and Tandem doesn't ask again while the document stays open.
+- **Not now** — keep editing without saving. Autosave stops asking; pressing `Ctrl+S` asks again.
+
+On Windows there is no **Overwrite**: clear **Read-only** in the file's Properties, then save. Your AI cannot answer the banner for you; `tandem_save` reports that the file is read-only and leaves the choice to you. Closing the tab asks first, and if you close it anyway Tandem keeps the unsaved edits and reopens the file the next time it starts.
 
 ## Annotations
 
