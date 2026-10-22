@@ -524,7 +524,11 @@ export async function triggerSave(
       //
       const result = json?.data;
       if (result?.status === "skipped") {
-        notifyUser("warning", saveSkippedMessage(result.skipCode, result.reason));
+        // #2273: a clean document on a read-only file — nothing to write, so
+        // say nothing (and flash no "Saved", which would claim a write).
+        if (result.skipCode !== "NO_CHANGES") {
+          notifyUser("warning", saveSkippedMessage(result.skipCode, result.reason));
+        }
         return false;
       }
       if (result?.status === "error") {
@@ -609,6 +613,8 @@ export function saveSkippedMessage(skipCode?: string, reason?: string): string {
       return "Not saved — choose Save As to turn this upload or scratchpad into a file.";
     case "READ_ONLY":
       return "Not saved — this document is read-only.";
+    case "NO_CHANGES":
+      return "Nothing to save — there are no unsaved changes.";
     case "READ_ONLY_FILE":
       return "Not saved — this file is read-only on disk. Use the banner above the document to decide.";
     case "UNSUPPORTED_FORMAT":

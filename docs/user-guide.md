@@ -324,7 +324,7 @@ If a file is marked read-only on disk (`chmod 444` on macOS and Linux, or **Read
 - **Overwrite** (macOS and Linux) — save your edits into the file anyway. The file stays read-only afterwards, and Tandem doesn't ask again while the document stays open.
 - **Not now** — keep editing without saving. Autosave stops asking; pressing `Ctrl+S` asks again.
 
-On Windows there is no **Overwrite**: clear **Read-only** in the file's Properties, then save. Your AI cannot answer the banner for you; `tandem_save` reports that the file is read-only and leaves the choice to you. Closing the tab asks first, and if you close it anyway Tandem keeps the unsaved edits and reopens the file the next time it starts.
+A read-only file you haven't changed is never touched, and pressing `Ctrl+S` on it does nothing. On Windows there is no **Overwrite**: clear **Read-only** in the file's Properties, then save. Your AI cannot answer the banner for you; `tandem_save` reports that the file is read-only and leaves the choice to you. Closing the tab asks first, and if you close it anyway Tandem keeps the unsaved edits and reopens the file the next time it starts.
 
 ## Annotations
 

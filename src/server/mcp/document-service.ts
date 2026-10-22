@@ -212,7 +212,8 @@ export type SkipCode =
   | "FILE_MODIFIED"
   | "SOURCE_MISSING"
   | "FILE_STATE_UNAVAILABLE"
-  | "READ_ONLY_FILE";
+  | "READ_ONLY_FILE"
+  | "NO_CHANGES";
 
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
@@ -495,6 +496,14 @@ export async function saveDocumentToDisk(
     // backup gate. Without it a POSIX rename replaces a `chmod 444` file
     // silently; on Windows the rename fails after `renameWithRetry`'s retries.
     if (!(await isWritableOnDisk(docState.filePath))) {
+      // Nothing unsaved: the file already holds this content, so a Ctrl+S or
+      // `tandem_save` here is a quiet no-op rather than an "edits not saved"
+      // prompt offering to rewrite identical bytes. Any prompt left over (an
+      // undo back to clean) is moot for the same reason.
+      if (!isDirty(safeDocId)) {
+        endReadOnlyFileEpisode(safeDocId, doc);
+        return { status: "skipped", reason: "No unsaved changes", skipCode: "NO_CHANGES" };
+      }
       if (!gateReadOnlyFileSave(safeDocId, doc, docState.filePath, source)) {
         return {
           status: "skipped",

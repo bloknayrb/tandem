@@ -460,6 +460,7 @@ A save that did not reach disk answers `saved: false` with `sessionOnly: true` a
 | `FILE_MODIFIED` | The file's mtime moved under the save guard |
 | `SOURCE_MISSING` | The source file is gone |
 | `FILE_STATE_UNAVAILABLE` | The file's state could not be read |
+| `NO_CHANGES` | The file is read-only on disk and the document has no unsaved changes, so there was nothing to write and nothing to ask the user (#2273) |
 | `READ_ONLY_FILE` | The file is read-only on disk (POSIX permissions, or the Windows Read-only attribute), so Tandem asked the user in the editor before overwriting it (#2273). There is no override parameter: the answer is the user's. The message says not to close the document meanwhile |
 
 Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'s `reason`**: `READ_ONLY` and `EXTERNAL_CONFLICT` are handled earlier (the first short-circuits to the read-only branch above, the second returns an `EXTERNAL_CONFLICT` *error*), and `EXPLICIT_ONLY` fires only for the auto-save trigger, which `tandem_save` never is.

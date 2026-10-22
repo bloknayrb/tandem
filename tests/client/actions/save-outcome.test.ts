@@ -238,6 +238,19 @@ describe("saveSkippedMessage", () => {
     expect(notified(notify, "warning", "read-only")).toBe(true);
     vi.unstubAllGlobals();
   });
+
+  it("says nothing for a clean document on a read-only file (#2273)", async () => {
+    const notify = vi.fn();
+    wireDeps(notify, "/tmp/doc.md");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "skipped", skipCode: "NO_CHANGES", reason: "No unsaved changes" })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(saveStore.lastSaveOk).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
 });
 
 // ---------------------------------------------------------------------------

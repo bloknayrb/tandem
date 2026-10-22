@@ -183,6 +183,20 @@ describe.skipIf(!POSIX)("a read-only file is never overwritten without asking (#
     expect(await fs.readFile(filePath, "utf-8")).toBe("# Locked\n\nOriginal body.\n");
   });
 
+  it("a clean document on a read-only file is a silent no-op", async () => {
+    const filePath = path.join(tmpDir, "clean.md");
+    await fs.writeFile(filePath, "Just reading.\n");
+    const opened = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    await makeReadOnly(filePath);
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result).toMatchObject({ status: "skipped", skipCode: "NO_CHANGES" });
+    expect(promptOf(doc)).toBeUndefined();
+    expect(getBuffer().filter((n) => n.type === "read-only-file")).toHaveLength(0);
+    expect(await fs.readFile(filePath, "utf-8")).toBe("Just reading.\n");
+  });
+
   it("an explicit save is refused with READ_ONLY_FILE too", async () => {
     const { id, filePath } = await refusedDoc();
     const result = await saveDocumentToDisk(id, "manual");
