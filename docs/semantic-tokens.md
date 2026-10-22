@@ -49,7 +49,7 @@ Use these instead of raw px literals in client surfaces:
   elevation scale with a per-theme override. Outside the scale, dark also overrides
   `--tandem-page-shadow` and `--tandem-rail-shadow-left|right`, and warm overrides
   `--tandem-page-shadow`)
-- **Stacking:** `--tandem-z-base..tooltip`, including `--tandem-z-titlebar`, `--tandem-z-above-titlebar` and `--tandem-z-rail-float`
+- **Stacking:** `--tandem-z-base..tooltip`, including `--tandem-z-titlebar`, `--tandem-z-above-titlebar` (full-screen modal overlays) and `--tandem-z-rail-float`. `--tandem-z-toast` is the toast stack only, above every modal and so above `--tandem-z-tooltip` too. Floating chrome that must clear the selection popup but stay under modal backdrops (the formatting bar's popover lift, the activity tray, the slash menu) uses `--tandem-z-popover`
 - **Motion:** `--tandem-ease-standard`, `--tandem-ease-out`
 - **Layout metrics:** `--tandem-h-fmtbar`, `--tandem-fmtbar-top`, `--tandem-rail-top-clearance`, `--tandem-status-clearance`, `--tandem-status-clearance-total`, `--tandem-banner-stack-bottom`
 

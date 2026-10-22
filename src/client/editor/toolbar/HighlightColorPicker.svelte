@@ -78,7 +78,7 @@ function handleColorSelect(color: HighlightColor) {
        - `focusout` is the dismissal for the keyboard path that Escape cannot
          cover: the picker is otherwise only closed by an outside *mousedown*,
          so a keyboard user who Tabs past it would leave it mounted — and a
-         mounted popover pins the whole bar at --tandem-z-toast via
+         mounted popover pins the whole bar at --tandem-z-popover via
          FormattingBar's `:has([aria-expanded="true"])` rule. -->
 <div
   class="highlight-picker-wrap"
@@ -109,7 +109,7 @@ function handleColorSelect(color: HighlightColor) {
   <!-- `aria-expanded` is dropped while disabled: a selection can collapse while
        the menu is open, and publishing aria-expanded="true" on a disabled button
        keeps FormattingBar's `:has([aria-expanded="true"])` rule matching, which
-       pins the whole bar at --tandem-z-toast. Dropping the attribute closes that
+       pins the whole bar at --tandem-z-popover. Dropping the attribute closes that
        without adding a dismissal path a transient selection blip could trip. -->
   <button
     bind:this={toggleEl}

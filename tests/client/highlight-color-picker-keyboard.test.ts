@@ -166,7 +166,7 @@ describe("HighlightColorPicker keyboard operation", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
     // A selection collapse disables the control without closing the menu.
-    // FormattingBar lifts the whole bar to --tandem-z-toast while any descendant
+    // FormattingBar lifts the whole bar to --tandem-z-popover while any descendant
     // reports aria-expanded="true"; a disabled button must not hold that open.
     await rerender({ disabled: true, onHighlight: vi.fn() });
     expect(toggle.hasAttribute("aria-expanded")).toBe(false);

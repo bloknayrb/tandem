@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StatusBar from "../../src/client/status/StatusBar.svelte";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
@@ -505,5 +505,56 @@ describe("StatusBar — Tandem's Claude in standby (#2195)", () => {
       },
     });
     expect(getByTestId("status-ai-indicator").textContent).toContain("Starting Claude…");
+  });
+});
+
+describe("StatusBar — Reconnected flash (#2258)", () => {
+  const down = { ...baseProps, connected: false, connectionStatus: "connecting" as const };
+  const up = { ...baseProps, connected: true, connectionStatus: "connected" as const };
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("the page's first connect is not a reconnect", async () => {
+    const { container, rerender } = render(StatusBar, { props: down });
+    await rerender(up);
+    expect(container.textContent).toContain("Synced");
+    expect(container.textContent).not.toContain("Reconnected");
+  });
+
+  it("a connect after a drop flashes, then settles to Synced", async () => {
+    const { container, rerender } = render(StatusBar, { props: down });
+    await rerender(up);
+    await rerender(down);
+    await rerender(up);
+    expect(container.textContent).toContain("Reconnected");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(container.textContent).not.toContain("Reconnected");
+    expect(container.textContent).toContain("Synced");
+  });
+
+  it("a drop inside the flash window shows the drop, not a stuck Reconnected", async () => {
+    const { container, rerender } = render(StatusBar, { props: up });
+    await rerender(down);
+    await rerender(up);
+    expect(container.textContent).toContain("Reconnected");
+    await rerender(down);
+    expect(container.textContent).toContain("Reconnecting…");
+    expect(container.textContent).not.toContain("Reconnected");
+  });
+
+  it("before the first connect, the pill says Connecting…, not Reconnecting… (#2277)", async () => {
+    const { container, rerender } = render(StatusBar, { props: down });
+    expect(container.textContent).toContain("Connecting…");
+    expect(container.textContent).not.toContain("Reconnecting");
+    // Positive control: after a connect and a drop it is a reconnect.
+    await rerender(up);
+    await rerender(down);
+    expect(container.textContent).toContain("Reconnecting…");
+  });
+
+  it("mounting already connected does not flash", () => {
+    const { container } = render(StatusBar, { props: up });
+    expect(container.textContent).not.toContain("Reconnected");
   });
 });

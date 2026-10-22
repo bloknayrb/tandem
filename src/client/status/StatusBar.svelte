@@ -213,18 +213,29 @@ const SAVED_FLASH_MS = 4_000;
 
 let showReconnectedFlash = $state(false);
 let elapsedSeconds = $state(0);
-// intentional snapshot — updated inside $effect to detect rising-edge reconnect
-let prevConnected = untrack(() => connected);
+// intentional snapshot — updated inside $effect to detect a reconnect. #2258:
+// "never" until the first connect, so the page's first connect (a rising edge
+// too, but nothing was lost) never flashes; only "down" → connected does.
+let link: "never" | "up" | "down" = untrack(() => connected) ? "up" : "never";
+// The label's reactive copy of `link !== "never"` (#2277): before the first
+// connect there is nothing to REconnect, so "connecting" reads "Connecting…".
+let everConnected = $state(untrack(() => connected));
 
 $effect(() => {
-  const was = prevConnected;
-  prevConnected = connected;
-  if (connected && !was) {
+  const isReconnect = connected && link === "down";
+  link = connected ? "up" : link === "never" ? "never" : "down";
+  if (connected) everConnected = true;
+  if (isReconnect) {
     showReconnectedFlash = true;
     const timer = setTimeout(() => {
       showReconnectedFlash = false;
     }, RECONNECTED_FLASH_MS);
-    return () => clearTimeout(timer);
+    // Clear the flash too: a drop inside the window would otherwise cancel the
+    // timer and leave "Reconnected" (which outranks the status) stuck on.
+    return () => {
+      clearTimeout(timer);
+      showReconnectedFlash = false;
+    };
   }
 });
 
@@ -276,7 +287,7 @@ const connLabel = $derived(
       ? "Synced"
       : connectionStatus === "connecting"
         ? (() => {
-            const parts = ["Reconnecting…"];
+            const parts = [everConnected ? "Reconnecting…" : "Connecting…"];
             if (reconnectAttempts > 0 || elapsedSeconds > 0) {
               const details: string[] = [];
               if (reconnectAttempts > 0) details.push(`attempt ${reconnectAttempts}`);
