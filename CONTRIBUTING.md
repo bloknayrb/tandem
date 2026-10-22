@@ -7,6 +7,10 @@ Start with [README.md](README.md) for what Tandem is. Read [AGENTS.md](AGENTS.md
 code: it lists the invariants that fail *silently* — code that type-checks, passes tests, and is
 wrong at runtime. If you are working with Claude Code, [CLAUDE.md](CLAUDE.md) is the long form.
 
+The rest of the documentation is indexed from the [docs hub](docs/README.md). The
+[Contributing map](docs/maps/contributing.md) lists the pages that matter for code work: the rules
+that fail silently and the reasons behind them, the design system and the review tooling.
+
 ## Prerequisites
 
 - **Node.js 22.12.0 or newer**, and npm. This is the floor `package.json`'s `engines` field
@@ -129,13 +133,36 @@ Three things about it that are easy to get wrong:
 | `npm run typecheck:tests` | tsc over `tests/` (three configs). `npm run typecheck` does not chain it |
 | `npm run test:e2e` | Playwright — starts its own servers on reserved harness ports, so it runs alongside a live Tandem (see [Running E2E tests](#running-e2e-tests)) |
 | `npm run check:tokens` | Raw hex/rgba scan over `src/client/` |
-| `npm run check:links` | Relative markdown links across the repo. Runs in neither CI nor the hooks |
+| `npm run check:links` | Relative Markdown links, anchors and images across the repo, plus docs-vault reachability. Runs in CI's `check` job, not in the hooks |
 | `npm run audit:origins` / `npm run audit:ymap-keys` | Static walks for the Y.Doc origin-tagging and Y.Map-key invariants |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | The Rust/Tauri layer |
 
 `npm run check:links` is the one to run after moving or renaming any Markdown file, since nothing
-else will catch the dangling links. It reads relative links only; `docs/workflows.md` opens inside
-the app and uses absolute GitHub URLs instead, which `tests/docs/shipped-doc-links.test.ts` checks.
+else will catch the dangling links before CI does. It reads relative links only; `docs/workflows.md`
+opens inside the app and uses absolute GitHub URLs instead, which
+`tests/docs/shipped-doc-links.test.ts` checks.
+
+**`docs/` is a linked vault.** [docs/README.md](docs/README.md) is its hub, and every live doc must
+be reachable from it by relative links — `check:links` reports an unlinked doc as an orphan, so a
+new doc needs an inbound link from the hub, a map or a neighbouring doc. Dated records (plans,
+spikes, reviews, archive; the `HISTORICAL` list in `scripts/check-doc-links.mjs`) are exempt from
+reachability and anchor checks but not from path checks. The repo root opens as an Obsidian vault:
+the tracked `.obsidian/app.json` makes Obsidian write relative Markdown links (never `[[wikilinks]]`,
+which GitHub and the checker cannot follow) and rewrite them when a file moves. The checker reads
+files from `git ls-files`, plus untracked files that are not ignored, so it needs a git checkout.
+
+### What CI requires
+
+`.github/workflows/ci.yml` runs on every pull request, on pushes to `master` and on the merge
+queue. The checks a PR needs before it can merge are `check`, the three `rust-test` legs (Ubuntu,
+macOS and Windows, each running `cargo test`) and `windows-acl-proof`; `coverage` and CodeQL report
+but do not block. `check` is the broad one. On Ubuntu it runs ESLint (`npm run lint`), the Biome
+check, the doc-link check, the client, server, root and test typechecks, the build, the full vitest
+suite, the acceptance harness and the Playwright E2E suite, plus a few smaller verification steps.
+`ci.yml` also fires on `merge_group`, for a GitHub merge queue, but as of 2026-10-21 PRs merged
+directly, and a PR behind `master` had to be updated and re-run before it could merge. Branch
+protection itself needs admin access to read, so re-measure it before relying on any of this (the
+"Required checks" note in [CLAUDE.md](CLAUDE.md#status) says how).
 
 ## What the git hooks actually run
 
@@ -311,3 +338,13 @@ rather than by CI, and the enumerated route lists in [CLAUDE.md](CLAUDE.md) *are
 not condense them.
 
 Report a suspected vulnerability privately to the maintainers rather than opening a public issue.
+
+## Related
+
+- [Contributing map](docs/maps/contributing.md): every contributor doc, grouped by task.
+- [AGENTS.md](AGENTS.md): the invariants that fail silently, for any coding agent.
+- [CLAUDE.md](CLAUDE.md): Claude Code's project memory, whose rules apply to anyone.
+- [Gotchas](docs/gotchas.md): the mechanism and evidence behind each silent-failure rule.
+- [Architecture](docs/architecture.md): how the editor, server and AI fit together.
+- [Stacked PRs](docs/stacked-prs.md): chaining dependent pull requests safely.
+- [Glossary → Claim tests](docs/glossary.md#claim-tests): why some doc edits fail CI.

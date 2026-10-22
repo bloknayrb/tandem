@@ -1,5 +1,7 @@
 # Tandem — Positioning & Market Context
 
+[Home](README.md) › [Using Tandem](maps/using-tandem.md)
+
 _Last updated: 2026-10-20_
 
 > **Markdown-first; Word support shelved ([ADR-053](decisions.md#adr-053-docx-ships-dark), 2026-09-24).** `.docx` support is out of the live build for now because it wasn't reliable enough for serious work, and the SuperDoc engine evaluation ([ADR-052](decisions.md)) was shelved after its spike came back NO-GO. The positioning below still names the `.docx` review loop as part of the moat; read that as the direction Word support would return to, not as something a current release offers. Tandem today is a Markdown, plain-text and HTML editor.
@@ -22,7 +24,7 @@ Most AI document tools are either writing assistants (generate content for you) 
 
 ### The annotation model
 
-Tandem's core differentiator is that AI suggestions are **first-class data objects**, not ephemeral UI. Each annotation (highlight, comment — including replacement suggestions — or note) is:
+Tandem's core differentiator is that AI suggestions are **first-class data objects**, not ephemeral UI. Each [annotation](glossary.md#annotation) (highlight, comment — including replacement suggestions — or note) is:
 
 - **Addressable** — stored in a Y.Map with a unique ID
 - **Typed** — highlight, comment, or note; comments carry an optional replacement suggestion. Notes are user-private and are never surfaced to the AI (ADR-027).
@@ -36,7 +38,7 @@ No shipping product does this today. Word Copilot generates rewrite suggestions,
 
 ### The presence model
 
-The AI has a cursor, a status indicator, and awareness of what the user is doing (Claude, in the default integration; the cursor label is settable by any MCP client that wires it up). It's not a button in a toolbar that you invoke — it's a collaborator in the session. The user can see when the AI is reading, what paragraph it's focused on, and what its current status is. This is built on Yjs/Hocuspocus CRDT collaboration, the same infrastructure that powers real-time multi-user editing in tools like Notion and Figma.
+The AI has a cursor, a status indicator, and awareness of what the user is doing (Claude, in the default integration; the cursor label is settable by any MCP client that wires it up). It's not a button in a toolbar that you invoke — it's a collaborator in the session. The user can see when the AI is reading, what paragraph it's focused on, and what its current status is. This is built on [Yjs/Hocuspocus CRDT collaboration](glossary.md#ydoc-and-crdt), the same infrastructure that powers real-time multi-user editing in tools like Notion and Figma.
 
 ### The .docx review workflow
 
@@ -48,7 +50,7 @@ This maps directly to how a huge amount of real document work actually happens: 
 
 ## The Market
 
-Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is who already runs an MCP-capable LLM **or, from v1.0, a local model** (the 2026-06-11 [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) decision brings Ollama/LM Studio into v1.0 via Tandem's own loop — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1 note); we grow that audience by lowering setup friction, not by adding a hosted backend. Today that local half is committed, not shipped: the loop is merged dark (`BYO_MODELS_ENABLED = false`) and turns on at v1.0.
+Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is who already runs an [MCP](glossary.md#mcp)-capable LLM **or, from v1.0, a local model** (the 2026-06-11 [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) decision brings Ollama/LM Studio into v1.0 via Tandem's own loop — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1 note); we grow that audience by lowering setup friction, not by adding a hosted backend. Today that local half is committed, not shipped: the loop is [merged dark](glossary.md#local-model-collaborator) (`BYO_MODELS_ENABLED = false`) and turns on at v1.0.
 
 ### Who this is
 
@@ -103,7 +105,7 @@ Tandem's architecture bets on MCP becoming a standard interface for AI tool use.
 
 ### Revenue model (decided — ADR-040)
 
-The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license). Tandem is **free during the public beta** for personal use and individual self-hosting, and moves to a **one-time paid license at v1.0**, activated by an **offline Ed25519-signed license file** — no hosted offering, no subscription, no support-contract dependency, consistent with the local-first promise. Paddle, as Merchant of Record, handles checkout, global tax, receipts and refunds (chosen 2026-10-17, replacing Polar; the issuance Worker verifies Paddle's webhook signature scheme specifically); auto-updates are served by a small license-checked endpoint, and every key includes all future updates (amended 2026-10-09: no update window, no renewal). Existing beta users are grandfathered with a free license; new users pay for the AI features after the trial, while the keyless editor stays free for personal use and individual self-hosting. Pricing is set low so paying beats building from source: $45, and students get $25 off by emailing support@ from a school address (decided 2026-10-17). Revenue is expected to be modest, and that is an accepted risk (full commitment, no kill-criterion) — see ADR-040 §3 and the licensing-change prerequisite in §5.
+The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license). Tandem is **free during the public beta** for personal use and individual self-hosting, and moves to a **one-time paid license at v1.0**, activated by an **offline Ed25519-signed license file** — no hosted offering, no subscription, no support-contract dependency, consistent with the local-first promise. Paddle, as Merchant of Record, handles checkout, global tax, receipts and refunds (chosen 2026-10-17, replacing Polar; the issuance Worker verifies Paddle's webhook signature scheme specifically); auto-updates are served by a small license-checked endpoint, and every key includes all future updates (amended 2026-10-09: no update window, no renewal). Existing beta users are grandfathered with a free license; new users pay for the AI features after the trial, while the keyless editor stays free for personal use and individual self-hosting. The price is $45, and students get $25 off (so $20) by emailing support@tandem.ink from a school address for a discount code (decided 2026-10-17). It is set low so that buying is the easy path. You may build Tandem from source, modified or not, but that copy is under the same `LICENSE`: after the 14-day trial its AI features still need a license key, and you would also be building and maintaining the copy yourself. Revenue is expected to be modest, and that is an accepted risk (full commitment, no kill-criterion) — see ADR-040 §3 and the licensing-change prerequisite in §5.
 
 ## Positioning Summary
 
@@ -115,3 +117,14 @@ The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-a
 **Do say:** "Point at text, the AI sees it, iterate together"
 
 The narrower and more specific the positioning, the stronger it is. The broadest defensible claim: **Tandem is the first tool that connects your full AI to your document via MCP, so you iterate on text together without copy-paste — and the AI's suggestions are first-class, addressable, persistent objects you can accept, dismiss, and converse about.**
+
+## Related
+
+- [Using Tandem map](maps/using-tandem.md): the user docs this positioning describes.
+- [README → How you work with Tandem](../README.md#how-you-work-with-tandem): the same pitch, told to a new user.
+- [Integrations](integrations.md): which AI clients connect today, and how well.
+- [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration): MCP as the integration contract.
+- [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license): the audience and the one-time licence.
+- [How licensing works](licensing-explained.md): the licence and trial in plain English.
+- [Roadmap](roadmap.md): what is left before v1.0.
+- [Glossary](glossary.md#ships-dark): what "ships dark" means for the features named here.

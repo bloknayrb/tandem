@@ -88,7 +88,7 @@ const dirty = $derived(!loading && currentMarkdown !== originalMarkdown);
 
 // Mirror the annotation-map size into reactive $state via a Y.Map observer.
 // A plain `$derived(ydoc.getMap(...).size)` would NOT update — Yjs mutations
-// don't notify Svelte's reactivity graph — leaving the clear-on-commit warning
+// don't notify Svelte's reactivity graph — leaving the annotation warning
 // stale if Claude adds/removes annotations while source view is open.
 let annotationCount = $state(0);
 $effect(() => {
@@ -102,16 +102,17 @@ $effect(() => {
 });
 
 /**
- * One source of truth for the clear-on-commit warning, so the visible strip and
- * the sr-only announcer below it can never drift apart (#1431). Empty string
- * when there is nothing to say — the announcer stays mounted and silent.
+ * One source of truth for the annotation warning (they are kept, but may lose
+ * their place — #2219, #2269), so the visible strip and the sr-only announcer
+ * below it can never drift apart (#1431). Empty string when there is nothing to
+ * say — the announcer stays mounted and silent.
  */
 const annotationWarning = $derived(
-  annotationCount > 0
-    ? `Editing the source clears this document's ${annotationCount} annotation${
-        annotationCount === 1 ? "" : "s"
-      } when you return to the editor.`
-    : "",
+  annotationCount === 0
+    ? ""
+    : annotationCount === 1
+      ? "This document's 1 annotation is kept where possible, but editing the source can detach it or move it onto different text."
+      : `This document's ${annotationCount} annotations are kept where possible, but editing the source can detach some of them or move them onto different text.`,
 );
 
 // Fetch the literal markdown source on mount / when the target doc changes.

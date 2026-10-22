@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Conflicts resolved, Design conflicts]
+---
+
 # Conflicts Resolved — Tandem Design System Impl Umbrella
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: live decision record.** These resolutions are still cited from code (e.g. `Toolbar.svelte`) and from the other files here; later entries amend earlier ones in place. Line-number citations inside entries are as of the date each entry was written.
 
@@ -137,7 +144,7 @@ This is intentionally heavyweight — the default is "follow the locked resoluti
 
 #1444 above says "expect this to be re-litigated; this is the reason." This is that re-litigation. It **narrows** #1444 rather than reversing it; read both, and read this one for what is true of the composer today.
 
-- **What changed:** the composer's two co-equal submit buttons (`Send to Claude` / `Note`) are replaced by a **segmented audience toggle** — `Self` / *{agent family}*, the Solo/Tandem `ModeToggle` recipe on a different axis — plus **one** commit button labelled `Add`. The eyebrow is gone; the toggle states the audience continuously instead of three surfaces restating the question and none answering it. `Add` is tinted in the destination's authorship family: `--tandem-author-claude-bg` + a coral hairline outbound, `--tandem-author-user-bg` + a blue hairline private.
+- **What changed:** the composer's two co-equal submit buttons (`Send to Claude` / `Note`) are replaced by a **segmented audience toggle** — `Self` / *{agent family}*, the [Solo](../glossary.md#solo-mode)/Tandem `ModeToggle` recipe on a different axis — plus **one** commit button labelled `Add`. The eyebrow is gone; the toggle states the audience continuously instead of three surfaces restating the question and none answering it. `Add` is tinted in the destination's authorship family: `--tandem-author-claude-bg` + a coral hairline outbound, `--tandem-author-user-bg` + a blue hairline private.
 - **Why this does not reinstate the hierarchy #1444 removed:** #1444's argument is about **rank between two buttons** — "styling one primary asserted something untrue" about a fork where neither branch is recommended. There is now **one** button, and a single control cannot be ranked against itself. The colour therefore moves off the rank axis entirely and onto the **destination** axis, which #1444 already assigns to the marker: *"a filled disc in the destination's authorship colour, a ring in yours."* The `Add` tint is that same two-family vocabulary applied to a larger surface. Both tints are 10% of their own author colour and both labels stay `--tandem-fg`, so the two states are equally weighted — coding, not recommending.
 - **Both of #1444's fragility arguments are answered, one of them structurally:**
   - *"a hovered secondary pixel-matched a resting primary — press Ctrl+Enter believing it sends, get a private note."* This is now **impossible by construction**, not merely avoided. Hover is a neutral alpha scrim composited over whichever tint is showing, so a hovered private `Add` differs from a resting outbound `Add` by hue, and there is no second button for either to counterfeit.
@@ -181,3 +188,12 @@ This is intentionally heavyweight — the default is "follow the locked resoluti
 - **Why this is an override:** like 1.9, the *intent* exceeds Phase 1's "visual-only" rule. In practice it stays client-only: `TandemNotification`'s fixed `type` union already lets the client derive actions (Retry-for-`save-error` lands in 1.10b), so **no `src/server/` change** was needed.
 - **Scope guardrails still hold:** the `NotificationsState` interface (`toasts`/`dismiss`/`push`) is preserved verbatim so App.svelte's ~10 call sites and the test harness keep working; all transient `toast-*` testids preserved; no new color tokens (reuses info/warning/error families); the bundle's trayIn/rowIn/ledpulse animations are deferred to #798 per Conflict #9 (shipped static).
 - **1.10b (Retry action):** the tray's per-row action button is wired for `save-error` → **Retry** only (re-run the failed doc's save). **Undo is deferred** — no production notification has a safe revert semantic (they're post-hoc). A closed-doc Retry surfaces a "reopen to retry" notice rather than silently no-opping. Still client-only.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Derived-surface spec](derived-spec.md): the surface recipes these resolutions feed.
+- [Semantic tokens](../semantic-tokens.md): the token families the protected-token resolution governs.
+- [ADR-027](../decisions.md#adr-027-annotation-system-redesign--audience-based-model): the audience model behind the popup and composer decisions.
+- [Test-selector manifest](testid-manifest.md): the selectors the sub-PR constraints keep verbatim.
+- [Toolbar UX research](../design-notes/toolbar-ux-research.md): the earlier research that Conflict #5 decided against.

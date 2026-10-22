@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Visual baseline procedure, Design baselines]
+---
+
 # Visual Baseline Procedure
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: live.** Describes `scripts/design-baselines/` as it ships today (re-checked 2026-10-20).
 
@@ -91,3 +98,8 @@ What it does NOT contain:
 ## Related
 
 The Phase 0 procedure docs (this file, `derived-spec.md`, `conflicts-resolved.md`) stay in `docs/design-system-impl/` as the historical record of the umbrella's design decisions.
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Derived-surface spec](derived-spec.md) and [Conflicts resolved](conflicts-resolved.md): the two Phase 0 records named above.
+- [Semantic tokens](../semantic-tokens.md): the token families the captured surfaces use.
+- [Screenshots](../screenshots/README.md): the docs' screenshot spec, which is a separate capture.

@@ -3,6 +3,5 @@ documents, how a real upgrade behaves, what a specific OS or Claude Code build d
 "nothing — it's all derivable from the code" if that is the answer.
 
 - [ ] Adversarial agents reviewed the plan before implementation
-- [ ] `via /diverge` noted above, if `/diverge` informed this work
 
 Problem/solution, commands run, screenshots, `Closes #N`: see CONTRIBUTING.md.

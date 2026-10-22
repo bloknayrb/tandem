@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Motion, Motion language, Reduced motion]
+---
+
 # Tandem — Motion Language (Phase 4 / #798 canon)
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: live.** The scene table, the surface-entrance principles and the
 > reduced-motion policy are current canon (code comments and the reduce-motion
@@ -496,3 +503,11 @@ surface. Shipping half a scene the user cannot watch is not coherence.
 
 Both were reviewed on 2026-08-08 and accepted as exemptions rather than backlog.
 Reopening either is a design decision, not a cleanup task.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Semantic tokens → Scales](../semantic-tokens.md#scales): the easing tokens.
+- [Derived-surface spec](derived-spec.md): the surfaces these motions apply to.
+- [Conflicts resolved](conflicts-resolved.md): the design trade-offs this canon follows.
+- [Gotchas → Client / UI](../gotchas.md#client--ui): the tab-drag and CSS-pipeline rules that touch animation.

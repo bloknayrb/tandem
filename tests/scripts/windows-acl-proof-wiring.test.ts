@@ -180,9 +180,9 @@ describe("windows-acl-proof CI wiring", () => {
   });
 
   it("still triggers on the merge queue, unfiltered", () => {
-    // Since the switch from `strict: true` to a merge queue, the run that
-    // satisfies master's required checks is the `merge_group` one against the
-    // temporary queue branch, not the PR-time run. A workflow that does not fire
+    // When a PR goes through the merge queue, the run that satisfies master's
+    // required checks is the `merge_group` one against the temporary queue
+    // branch, not the PR-time run. A workflow that does not fire
     // there leaves this proof out of the decision that actually merges -- and it
     // fails by HANGING (nothing reports, the PR is evicted on timeout), which
     // reads as a platform problem rather than a missing trigger.

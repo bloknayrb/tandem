@@ -1,10 +1,121 @@
+---
+tags: [audience/contributor, topic/lessons]
+aliases: [Lessons learned, Lessons]
+---
+
 # Lessons Learned
+
+[Home](README.md) › [Contributing](maps/contributing.md)
 
 > **Scope note:** Many lessons below reference Claude-specific behavior (channel push, plugin monitor, cowork, Claude Code skill, etc.). Cowork setup has shipped dark since 2026-10-02 ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)), so the Cowork lessons describe code that is merged but not offered. Tandem's default integration is Claude per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration), so lessons learned working ON that path are the deepest documented; lessons that generalize to any MCP client are noted as such inline. Other MCP clients are best-effort and not validated today.
 
+## Index
+
+One line per lesson, in file order. Other docs and tests cite lessons by number, such as §33.
+
+1. [Y.Doc Identity Mismatch](#1-ydoc-identity-mismatch)
+2. [Y.XmlElement.toJSON() Does Not Return Plain Text](#2-yxmlelementtojson-does-not-return-plain-text)
+3. [MCP stdio Transport Reserves stdout](#3-mcp-stdio-transport-reserves-stdout)
+4. [Hocuspocus Callbacks Must Be Async](#4-hocuspocus-callbacks-must-be-async)
+5. [React StrictMode Double-Mount](#5-react-strictmode-double-mount)
+6. [y-websocket Is Protocol-Incompatible with Hocuspocus v2](#6-y-websocket-is-protocol-incompatible-with-hocuspocus-v2)
+7. [MCP Server Must Start Before Hocuspocus](#7-mcp-server-must-start-before-hocuspocus)
+8. [MCP Tool Response Boilerplate](#8-mcp-tool-response-boilerplate)
+9. [Yjs Detached Y.XmlText Reverses Insert Order](#9-yjs-detached-yxmltext-reverses-insert-order)
+10. [StrictMode-Unsafe Allocation in React State Updaters](#10-strictmode-unsafe-allocation-in-react-state-updaters)
+11. [broadcastOpenDocs Must Update All Open Doc Rooms](#11-broadcastopendocs-must-update-all-open-doc-rooms)
+12. [Bootstrap Room Must Receive Doc List Broadcast](#12-bootstrap-room-must-receive-doc-list-broadcast)
+13. [MCP Stdio Transport Disconnects Under Claude Code](#13-mcp-stdio-transport-disconnects-under-claude-code)
+14. [Y.Map Observers Created in Event Handlers Need Explicit Cleanup](#14-ymap-observers-created-in-event-handlers-need-explicit-cleanup)
+15. [Streamable HTTP Transport: Per-Session Lifecycle](#15-streamable-http-transport-per-session-lifecycle)
+16. [Hocuspocus `afterUnloadDocument` vs MCP Document Lifetime](#16-hocuspocus-afterunloaddocument-vs-mcp-document-lifetime)
+17. [Extracting Shared Logic from MCP Handlers](#17-extracting-shared-logic-from-mcp-handlers)
+18. [E2E Test Reliability with Yjs Sync](#18-e2e-test-reliability-with-yjs-sync)
+19. [Centralize Y.Map Key Strings as Constants](#19-centralize-ymap-key-strings-as-constants)
+20. [Y.Map Origin Tagging for Echo Prevention](#20-ymap-origin-tagging-for-echo-prevention)
+21. [Hocuspocus Session Restore Creates "add" Not "update" Events](#21-hocuspocus-session-restore-creates-add-not-update-events)
+22. [Channels API Meta Keys Must Use Underscores](#22-channels-api-meta-keys-must-use-underscores)
+23. [Hocuspocus Internal State for Force-Unload](#23-hocuspocus-internal-state-for-force-unload)
+24. [Port Polling vs Fixed Sleep on Windows](#24-port-polling-vs-fixed-sleep-on-windows)
+25. [Atomic Undo for Accepted Suggestions](#25-atomic-undo-for-accepted-suggestions)
+26. [Deterministic E2E State via MCP Tool Calls](#26-deterministic-e2e-state-via-mcp-tool-calls)
+27. [SSE for Ephemeral Data Instead of CRDT](#27-sse-for-ephemeral-data-instead-of-crdt)
+28. [React Ref Identity in useEffect Dependencies](#28-react-ref-identity-in-useeffect-dependencies)
+29. [localStorage Access Needs try-catch in Client Code](#29-localstorage-access-needs-try-catch-in-client-code)
+30. [Ambiguous indexOf Targeting for Annotation Range Resolution](#30-ambiguous-indexof-targeting-for-annotation-range-resolution)
+31. [Coordinate System Consistency: extractText vs extractMarkdown](#31-coordinate-system-consistency-extracttext-vs-extractmarkdown)
+32. [Channel Selection Events Flood the Context Window](#32-channel-selection-events-flood-the-context-window)
+33. [Security Audit Patterns](#33-security-audit-patterns)
+34. [Clear Y.Docs In-Place Instead of Destroying Them](#34-clear-ydocs-in-place-instead-of-destroying-them)
+35. [Startup Document Opens Must Precede Server Bind](#35-startup-document-opens-must-precede-server-bind)
+36. [Dead CRDT RelativePositions Must Be Stripped, Not Preserved](#36-dead-crdt-relativepositions-must-be-stripped-not-preserved)
+37. [File Watcher Self-Write Suppression Must Check at Event Arrival](#37-file-watcher-self-write-suppression-must-check-at-event-arrival)
+38. [Mode Is Stale-Preserving — A Transient Failure Never Changes It](#38-mode-is-stale-preserving--a-transient-failure-never-changes-it)
+39. [Retry Budgets Must Reset on Stable Uptime, Not Per Event](#39-retry-budgets-must-reset-on-stable-uptime-not-per-event)
+40. [Stdio Plugin Hosts Route stdout to the User, Not stderr](#40-stdio-plugin-hosts-route-stdout-to-the-user-not-stderr)
+41. [Vitest Isolates Modules Per File, Not Per Test](#41-vitest-isolates-modules-per-file-not-per-test)
+42. [AbortSignal Passed to fetch Governs the Response Body Too](#42-abortsignal-passed-to-fetch-governs-the-response-body-too)
+43. [Fire-and-Forget POSTs Must Be Drained Before process.exit](#43-fire-and-forget-posts-must-be-drained-before-processexit)
+44. [Shared Observer Cleanups Need a Phase Parameter, Not a Single Lambda](#44-shared-observer-cleanups-need-a-phase-parameter-not-a-single-lambda)
+45. [Tiptap Markdown Round-Trip Destroys Content It Can't Parse](#45-tiptap-markdown-round-trip-destroys-content-it-cant-parse)
+46. [Annotation Offsets Can Diverge Between Editor and Server After File Edit](#46-annotation-offsets-can-diverge-between-editor-and-server-after-file-edit)
+47. [Tag Release Commits Only After All Fixes Are Merged](#47-tag-release-commits-only-after-all-fixes-are-merged)
+48. [NSIS Installer Hooks Only Cover the Sidecar — Tauri Handles the Main Binary](#48-nsis-installer-hooks-only-cover-the-sidecar--tauri-handles-the-main-binary)
+49. [SDK `package.json` Resolves to CJS Stub via Exports Map](#49-sdk-packagejson-resolves-to-cjs-stub-via-exports-map)
+50. [AbortSignal.any Is Not Available in Older Safari / WKWebView](#50-abortsignalany-is-not-available-in-older-safari--wkwebview)
+51. [Browser Testing with Y.js Writes File Content Back to Disk](#51-browser-testing-with-yjs-writes-file-content-back-to-disk)
+52. [Discriminated Union Variants Need Exhaustive Handling, Not Default Fallthroughs](#52-discriminated-union-variants-need-exhaustive-handling-not-default-fallthroughs)
+53. [Silent v0→v1 Migrations Destroy Forensic Trail](#53-silent-v0v1-migrations-destroy-forensic-trail)
+54. [Package Removal in Git Worktrees: Windows Node Resolution Masks CI Failures](#54-package-removal-in-git-worktrees-windows-node-resolution-masks-ci-failures)
+55. [Restart Long-Lived Backend State Before Browser Verification](#55-restart-long-lived-backend-state-before-browser-verification)
+56. [WAI-ARIA APG Toolbar Pattern for Transient Contextual Toolbars](#56-wai-aria-apg-toolbar-pattern-for-transient-contextual-toolbars)
+57. [`tauri_build::build()` Checks All Declared Resources, Not Just the Sidecar](#57-tauri_buildbuild-checks-all-declared-resources-not-just-the-sidecar)
+58. [Ubuntu CI Needs GTK/WebKit System Libs for `cargo test` on Tauri Projects](#58-ubuntu-ci-needs-gtkwebkit-system-libs-for-cargo-test-on-tauri-projects)
+59. [`tauri-plugin-decorum`'s `create_overlay_titlebar()` Must Be Called After Page Load, Not in `setup()`](#59-tauri-plugin-decorums-create_overlay_titlebar-must-be-called-after-page-load-not-in-setup)
+60. [Vitest for Svelte Components Using `invoke` Must Mock `@tauri-apps/api/core`](#60-vitest-for-svelte-components-using-invoke-must-mock-tauri-appsapicore)
+61. [Tauri Desktop Smoke Test for Live Theme-Flipping Requires the App Window to Have Focus](#61-tauri-desktop-smoke-test-for-live-theme-flipping-requires-the-app-window-to-have-focus)
+62. [Agent Branch Checkouts Stomp Uncommitted Working Tree Changes](#62-agent-branch-checkouts-stomp-uncommitted-working-tree-changes)
+63. [Sequential PR Merges Accumulate CHANGELOG/CLAUDE.md Conflicts](#63-sequential-pr-merges-accumulate-changelogclaudemd-conflicts)
+64. [`gh pr merge --squash --auto` Is Disabled on This Repo](#64-gh-pr-merge---squash---auto-is-disabled-on-this-repo)
+65. [Normative Default-Filling Should Not Emit SanitizationEvents](#65-normative-default-filling-should-not-emit-sanitizationevents)
+66. [In-Memory Docs Need Explicit Channel Event Filter](#66-in-memory-docs-need-explicit-channel-event-filter)
+67. [Triage Milestoned Issues Before Executing — Half May Already Be Done](#67-triage-milestoned-issues-before-executing--half-may-already-be-done)
+68. ["Frozen Desktop UI" with Working Hover/Right-Click = Server Disconnected, Not JS-Hung](#68-frozen-desktop-ui-with-working-hoverright-click--server-disconnected-not-js-hung)
+69. [CHANGELOG.md Was Silently Rewritten on Every Upgrade](#69-changelogmd-was-silently-rewritten-on-every-upgrade)
+70. [Playwright `locator.dragTo()` Does Not Fire HTML5 Drag Events](#70-playwright-locatordragto-does-not-fire-html5-drag-events)
+71. [DOM-Nested Positioning Beats Manual Scroll Sync for Content-Anchored Overlays](#71-dom-nested-positioning-beats-manual-scroll-sync-for-content-anchored-overlays)
+72. [Narrowing CORS / Host Allowlists Requires a Three-Surface Audit](#72-narrowing-cors--host-allowlists-requires-a-three-surface-audit)
+73. [Schema-Backed Enums Make Palette Migrations Self-Sanitizing](#73-schema-backed-enums-make-palette-migrations-self-sanitizing)
+74. [Distinguish a Re-Sync from a Re-Command with an Epoch, Not a Value](#74-distinguish-a-re-sync-from-a-re-command-with-an-epoch-not-a-value)
+75. [A SIGKILL Between writeFile and rename Orphans Atomic-Write Temps — Only a Startup Sweep Can Reap Them](#75-a-sigkill-between-writefile-and-rename-orphans-atomic-write-temps--only-a-startup-sweep-can-reap-them)
+76. [Verify a Feature's Shipped-State in Code Before Planning to Build It](#76-verify-a-features-shipped-state-in-code-before-planning-to-build-it)
+77. [Two Privacy Surfaces, Two Different Gates — Channel Emit Keys on author+type, MCP-Read Keys on audience](#77-two-privacy-surfaces-two-different-gates--channel-emit-keys-on-authortype-mcp-read-keys-on-audience)
+78. [A Freshness / Snapshot Guard Must Exercise the Real Operation, Not Compare a Lossy Projection](#78-a-freshness--snapshot-guard-must-exercise-the-real-operation-not-compare-a-lossy-projection)
+79. [A Merged PR's Head Branch May Be Auto-Deleted — `--force-with-lease` Then Fails "stale info"; Use a Plain Push](#79-a-merged-prs-head-branch-may-be-auto-deleted----force-with-lease-then-fails-stale-info-use-a-plain-push)
+80. [To Preserve a Parsed-But-Unsupported Markdown Construct, Re-Emit It as an mdast `html` Node — Verbatim and Escaper-Proof](#80-to-preserve-a-parsed-but-unsupported-markdown-construct-re-emit-it-as-an-mdast-html-node--verbatim-and-escaper-proof)
+81. [A Background Retry Guard Must Classify the Outcome Before Marking — "Attempted" ≠ "Don't Retry"](#81-a-background-retry-guard-must-classify-the-outcome-before-marking--attempted--dont-retry)
+82. [Measure the Pipeline, Don't Read It — a Live Round-Trip Corrected Three Static-Analysis Fidelity Claims](#82-measure-the-pipeline-dont-read-it--a-live-round-trip-corrected-three-static-analysis-fidelity-claims)
+83. [One Repo, Two CSS Pipelines — Identical CSS Compiles Differently Depending On Which File It Lives In](#83-one-repo-two-css-pipelines--identical-css-compiles-differently-depending-on-which-file-it-lives-in)
+84. [A Wrong Error Message Sent Me Hunting A Component That Didn't Exist](#84-a-wrong-error-message-sent-me-hunting-a-component-that-didnt-exist)
+85. [A Flex Floor Belongs On The Outermost Shrinking Box, Not The One Whose Contents Define It](#85-a-flex-floor-belongs-on-the-outermost-shrinking-box-not-the-one-whose-contents-define-it)
+86. [A Converter's Silence Is Not Evidence Of Fidelity](#86-a-converters-silence-is-not-evidence-of-fidelity)
+87. [A Component With No Format Branching Can Still Be Format-Gated At Its Mount](#87-a-component-with-no-format-branching-can-still-be-format-gated-at-its-mount)
+88. [Position-As-Indicator And Hit-Test-As-Commit Cannot Coexist](#88-position-as-indicator-and-hit-test-as-commit-cannot-coexist)
+89. ["Installed" And "Startable" Are Different Questions, And Only One Of Them Was Being Asked](#89-installed-and-startable-are-different-questions-and-only-one-of-them-was-being-asked)
+90. [A Recovery CTA Whose Precondition Is Its Host's Mount Condition Can Never Fire](#90-a-recovery-cta-whose-precondition-is-its-hosts-mount-condition-can-never-fire)
+91. [The Changelog Round-Trip Test Is A Gate On Prose, Not A Formatting Nit](#91-the-changelog-round-trip-test-is-a-gate-on-prose-not-a-formatting-nit)
+92. [A Number With More Than One Possible Holder Is Not A Measurement](#92-a-number-with-more-than-one-possible-holder-is-not-a-measurement)
+93. [A Fail-Safe Must Ask "Did The Right Party Answer", Not "Did Anything Answer"](#93-a-fail-safe-must-ask-did-the-right-party-answer-not-did-anything-answer)
+94. [A Test Harness That Cannot See Failure Reports Universal Success](#94-a-test-harness-that-cannot-see-failure-reports-universal-success)
+95. [Grep The Error Strings Before Reading The Control Flow](#95-grep-the-error-strings-before-reading-the-control-flow)
+96. [An Absence Assertion Can Only Refuse What The Fixture Happens To Contain](#96-an-absence-assertion-can-only-refuse-what-the-fixture-happens-to-contain)
+97. [A Guard That Tests Topic And Offence At The Same Scope Covers Unevenly](#97-a-guard-that-tests-topic-and-offence-at-the-same-scope-covers-unevenly)
+98. [A Safety Gate Built From The Wrong Signal Can Be Exactly Inverted](#98-a-safety-gate-built-from-the-wrong-signal-can-be-exactly-inverted)
+99. [A Protocol Signal Nobody Consumes Is Not A Recovery Path](#99-a-protocol-signal-nobody-consumes-is-not-a-recovery-path)
+
 ## 1. Y.Doc Identity Mismatch
 
-**Problem:** When both MCP tools and Hocuspocus create Y.Docs, they must share the same instance. If each creates its own Y.Doc for the same room, edits on one don't appear in the other.
+**Problem:** When both MCP tools and [Hocuspocus](glossary.md#hocuspocus) create [Y.Docs](glossary.md#ydoc-and-crdt), they must share the same instance. If each creates its own Y.Doc for the same room, edits on one don't appear in the other.
 
 **Solution:** Use a fixed room name ('default'). In `onLoadDocument`, merge any pre-existing MCP content into the Hocuspocus-provided doc via `Y.encodeStateAsUpdate`/`Y.applyUpdate`, then swap the map entry so both sides reference the same instance.
 
@@ -80,7 +191,7 @@
 
 **Problem (revised):** Writing the open documents list only to the active document's Y.Map leaves previously-active docs with a stale list. Example: open `a.md` (active, writes `[a]` to `a`'s room), then open `b.md` (active, writes `[a,b]` to `b`'s room and CTRL_ROOM). When the browser connects and creates a HocuspocusProvider for `a.md`, `a`'s `documentMeta.openDocuments` is still `[a]`. The per-tab `metaObserver` fires with `serverIds = {a}`, which triggers removal of `b`'s tab — the browser is left with 1 tab even though 2 docs are open.
 
-**Solution:** `broadcastOpenDocs` writes the full list to ALL open doc rooms on every call (O(n) writes), plus the CTRL_ROOM bootstrap channel. This ensures every Y.Doc in every room always carries the current complete list, so no per-tab sync can produce a stale removal.
+**Solution:** `broadcastOpenDocs` writes the full list to ALL open doc rooms on every call (O(n) writes), plus the [CTRL_ROOM](glossary.md#ctrl_room) bootstrap channel. This ensures every Y.Doc in every room always carries the current complete list, so no per-tab sync can produce a stale removal.
 
 **Tradeoff:** O(n) writes per broadcast vs. the original O(1) design. With typical document counts (1–10 docs), this is not a practical concern.
 
@@ -167,9 +278,9 @@ A secondary issue: `saveCtrlSession` persists the entire `__tandem_ctrl__` Y.Doc
 
 ## 20. Y.Map Origin Tagging for Echo Prevention
 
-**Problem:** When the channel shim forwards real-time events to Claude Code, Claude must not receive notifications for its own tool calls. Without filtering, a `tandem_comment` call would trigger an `annotation:created` event that the shim would push back to Claude, creating confusion and wasted tokens.
+**Problem:** When the [channel shim](glossary.md#channel-shim) forwards real-time events to Claude Code, Claude must not receive notifications for its own tool calls. Without filtering, a `tandem_comment` call would trigger an `annotation:created` event that the shim would push back to Claude, creating confusion and wasted tokens.
 
-**Solution:** All MCP-initiated Y.Map writes wrap mutations in `doc.transact(() => { ... }, 'mcp')`. Y.Map observers in the event queue check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions. The `MCP_ORIGIN` constant is exported from `events/queue.ts` and imported at all 10 callsites across 6 files.
+**Solution:** All MCP-initiated Y.Map writes wrap mutations in `doc.transact(() => { ... }, 'mcp')`. Y.Map observers in the event queue check `txn.origin === MCP_ORIGIN` and skip events from [MCP-tagged](glossary.md#origin-tags) transactions. The `MCP_ORIGIN` constant is exported from `events/queue.ts` and imported at all 10 callsites across 6 files.
 
 **Impact:** Critical for channel correctness. Browser-originated changes use Hocuspocus Connection objects as the transaction origin, which are always distinct from the `'mcp'` string.
 
@@ -287,7 +398,7 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 
 ## 31. Coordinate System Consistency: extractText vs extractMarkdown
 
-**Problem:** `tandem_getTextContent` used `extractMarkdown()` for .md files, which produces markdown syntax (`> ` for blockquotes, `- ` for list items, etc.). But the annotation coordinate system uses flat text offsets from `extractText()`, which includes heading prefixes (`## `) and `\n` separators but NOT markdown block-level syntax. After a blockquote, the character offsets from `extractMarkdown()` diverge from `extractText()` — every `> ` prefix shifts subsequent offsets by 2 characters per blockquote line. Claude would read text via `tandem_getTextContent`, find a passage at offset N, then place an annotation at offset N — but the annotation coordinate system expected a different offset, so the annotation landed in the wrong place.
+**Problem:** `tandem_getTextContent` used `extractMarkdown()` for .md files, which produces markdown syntax (`> ` for blockquotes, `- ` for list items, etc.). But the annotation coordinate system uses [flat text offsets](glossary.md#flat-offsets) from `extractText()`, which includes heading prefixes (`## `) and `\n` separators but NOT markdown block-level syntax. After a blockquote, the character offsets from `extractMarkdown()` diverge from `extractText()` — every `> ` prefix shifts subsequent offsets by 2 characters per blockquote line. Claude would read text via `tandem_getTextContent`, find a passage at offset N, then place an annotation at offset N — but the annotation coordinate system expected a different offset, so the annotation landed in the wrong place.
 
 **Solution:** `tandem_getTextContent` now always uses `extractText()` regardless of file format. The flat text format is the single source of truth for all offset-bearing operations. If Claude needs actual markdown, `tandem_save` writes the file to disk and Claude can read it via other means.
 
@@ -344,7 +455,7 @@ Initial attempts to filter at the bridge and server levels had no effect because
 
 ## 36. Dead CRDT RelativePositions Must Be Stripped, Not Preserved
 
-**Problem:** After `reloadFromDisk` replaces Y.Doc content, all CRDT items are new. Old `relRange` RelativePositions reference deleted items. `refreshRange` tried `relPosToFlatOffset` → got null → returned the annotation unchanged with the dead `relRange` still set. The lazy re-attachment path (which creates new relRange from flat offsets) only fires when `relRange` is absent, so annotations were permanently stuck with non-functional CRDT anchors.
+**Problem:** After `reloadFromDisk` replaces Y.Doc content, all CRDT items are new. Old `relRange` [RelativePositions](glossary.md#relativeposition) reference deleted items. `refreshRange` tried `relPosToFlatOffset` → got null → returned the annotation unchanged with the dead `relRange` still set. The lazy re-attachment path (which creates new relRange from flat offsets) only fires when `relRange` is absent, so annotations were permanently stuck with non-functional CRDT anchors.
 
 **Fix:** When `relPosToFlatOffset` returns null for either endpoint, strip the dead `relRange` and attempt re-anchoring from flat offsets via `flatOffsetToRelPos`. If that also fails, delete `relRange` entirely so the lazy path can recover on the next call.
 
@@ -360,7 +471,7 @@ Initial attempts to filter at the bridge and server levels had no effect because
 
 ## 38. Mode Is Stale-Preserving — A Transient Failure Never Changes It
 
-**Problem:** Solo/Tandem mode is a user-driven setting. The original monitor warm-up failed *closed* to "solo" and the channel failed *open* to "tandem"; #822's first refactor unified both on fail-closed-to-"solo". Both behaviors share the same defect: a transient `/api/mode` hiccup silently *changes the user's mode* to a hardcoded default. The user directive is that mode must NOT change unless the user explicitly changes it — neither fail-open nor fail-closed honors that.
+**Problem:** [Solo](glossary.md#solo-mode)/[Tandem mode](glossary.md#tandem-mode) is a user-driven setting. The original monitor warm-up failed *closed* to "solo" and the channel failed *open* to "tandem"; #822's first refactor unified both on fail-closed-to-"solo". Both behaviors share the same defect: a transient `/api/mode` hiccup silently *changes the user's mode* to a hardcoded default. The user directive is that mode must NOT change unless the user explicitly changes it — neither fail-open nor fail-closed honors that.
 
 **Solution (#822):** The mode cache is **stale-preserving**. `getCachedMode()` returns the last successfully-fetched mode on any failure and never overwrites `cachedMode` with a default. The hardcoded cold-start default (`TANDEM_MODE_DEFAULT`, `"tandem"`) is used in exactly one state: `cachedModeAt === 0`, meaning no fetch has ever succeeded. After the first success `cachedModeAt` is non-zero forever, so failures can never revert a known mode. The hot-path background refresh (`refreshMode()`) was already stale-preferred; this extends the same guarantee to the warm-up / first-fetch path. The net contract: once a real mode has been observed, the mode changes only when the server reports a new value — i.e. when the user toggles it.
 
@@ -988,3 +1099,12 @@ seam that disables it.**
 **Key insight:** an error code chosen to *mean* something only means it if some implementation reads it. The ADR that picked `404 -32001` reasoned entirely about the wire — 404 over 503, because "that session is gone, re-initialize" beats "the server is down" — and was right about every word of that, while the recovery it described existed nowhere in the codebase. The comment in the bridge was not an oversight either; it was a decision, correct for the one host it had been reasoned about, generalized silently to every host that reuses the same entry point. Two things generalize. **A protocol decision is only half-shipped until a consumer acts on it**, and the ADR is the natural place to name which one — had ADR-045 written "the stdio bridge re-initializes on this," the contradicting comment three files away would have been a visible conflict rather than a private assumption. And **a liveness heuristic built from one signal will misclassify whatever that signal cannot see**: idleness cannot distinguish "gone" from "attached and quiet", and quiet is the *normal* state of a long-lived desktop client between tool calls, so the reaper's failure mode was aimed squarely at its best-behaved user.
 
 **Corollary — the fix's own load-bearing lines were not the ones the plan named.** Mutation testing said so. The plan called unwiring the old transport's `onclose` before closing it the "top ship-it-broken risk"; removing that line alone changes nothing, because bumping a generation counter that every handler closes over already covers it — only removing *both* reintroduces the bug. The rule "do not delete the pending-request entry on the retry branch" was likewise non-load-bearing on its own, because the enqueue path re-arms a missing timer as a structural backstop. In both cases the mechanism that actually holds is a piece of ordinary defensive code somewhere else, and the dramatic-sounding line is a belt. **A comment that names one line as the thing standing between you and disaster is a hypothesis; run the mutation before writing it that way**, or the next reader refactors the belt away believing the braces are load-bearing — or, worse, preserves a line that does nothing while removing the one that matters.
+
+## Related
+
+- [Contributing map](maps/contributing.md): the rest of the contributor docs.
+- [Gotchas](gotchas.md): the operational rule each lesson turned into, by area.
+- [CLAUDE.md → Gotchas](../CLAUDE.md#gotchas): the one-line rules that cite these lessons.
+- [Decisions](decisions.md): the ADRs several of these lessons led to.
+- [Architecture](architecture.md): the current design these lessons hardened.
+- [Glossary](glossary.md): the terms the lessons use.

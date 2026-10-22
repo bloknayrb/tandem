@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, topic/licensing, topic/operations]
+aliases: [Licensing operations, Licensing runbook, Licence operations runbook]
+---
+
 # Licensing Operations Runbook
+
+[Home](README.md) › [Security and licensing](maps/security-and-licensing.md)
 
 > Operator guide for issuing Tandem licenses, grandfathering beta testers, and
 > running the license-checked update endpoint. Audience: the project owner
@@ -8,8 +15,22 @@
 > [licensing-explained.md](licensing-explained.md).
 > `docs/superpowers/specs/2026-06-18-licensing-system-design.md` is the historical
 > design: its §4 still describes the per-tool and per-route gates (Surface A and
-> Surface B) that #1521 deleted, so read it for rationale, not for what ships. The gate
-> ships **dark** (`LICENSE_GATE_ENABLED = false` in `tsup.config.ts`) until v1.0.
+> Surface B) that #1521 deleted, so read it for rationale, not for what ships. The [gate](glossary.md#licensing-gate)
+> [ships **dark**](glossary.md#ships-dark) (`LICENSE_GATE_ENABLED = false` in `tsup.config.ts`) until v1.0.
+
+**Contents**
+
+- [Vocabulary](#vocabulary-use-these-words-consistently) — license key, order number and license id
+- [0. Key management](#0-key-management-the-ceremony--do-this-once-and-it-freezes-more-than-the-key), including [rotating the signing key](#rotating-the-signing-key)
+- [1. Grandfathering beta testers](#1-grandfathering-beta-testers-the-main-flow)
+- [2. Issuing a paid license manually](#2-issuing-a-paid-license-manually-fallback)
+- [3. The update endpoint](#3-the-l3-update-endpoint-cloudflare--owner-deployed) and [3.5. the issuance endpoint](#35-the-issuance-endpoint-cloudflare--owner-deployed)
+- [4. The v1.0 flag flip](#4-the-v10-flag-flip-enabling-enforcement)
+- [5. First-sale verification and reconciling from Paddle](#5-first-sale-verification-and-reconciling-from-paddle)
+- [6. Backing up the ledger](#6-back-up-ledger_kv)
+- [7. Refunds, revocation and the kill switch](#7-refunds-revocation-and-the-kill-switch)
+- [8. Pre-launch gate](#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay)
+- [9. Quick reference](#9-quick-reference)
 
 ## Vocabulary (use these words consistently)
 
@@ -173,7 +194,7 @@ tandem activate <paste-the-license-key>
 tandem activate ./jane.license
 ```
 
-A separately installed CLI writes its own app-data directory, so running
+A separately installed CLI writes its own [app-data directory](glossary.md#app-data-directory), so running
 `tandem activate` to license a desktop app succeeds and changes nothing the
 desktop can see (see [licensing-explained.md](licensing-explained.md)). On an npm
 install, confirm with `tandem license` — it prints `Status: licensed`, the licensee, and
@@ -1283,3 +1304,13 @@ Then walk §5a steps 2–4 with that order number.
 | **Prove a license gets updates** | `curl -H "X-Tandem-License-Id: <licenseId>" https://<endpoint>/latest.json -i` (expect 200, not 204) |
 | Revoke updates (tombstone, never delete — §7) | `npx wrangler@4.130.0 kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"revoked"}' --remote --namespace-id <LICENSE_KV>` |
 | Stop the bleeding (§7) | Archive the Paddle price; remove it from `PADDLE_PRICE_IDS`; deactivate the destination if the Worker is broken |
+
+## Related
+
+- [Security and licensing map](maps/security-and-licensing.md) — the other licence and security docs.
+- [How Tandem licensing works](licensing-explained.md) — what the system does and why; this runbook says what to do.
+- [Licence terms](licensing-terms.md) — the draft terms that refunds, trials and checkout copy must match.
+- [The issuance Worker](../infra/license-issuance-worker/README.md) and [the update Worker](../infra/license-update-worker/README.md) — the code behind §3 and §3.5.
+- [Release smoke checklist](release-smoke-checklist.md) — the per-release check the flip release also has to pass.
+- [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) — the decision, including the amendments this runbook cites.
+- [Glossary: licensing gate](glossary.md#licensing-gate) — the one-paragraph definition.

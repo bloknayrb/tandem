@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system, topic/testing]
+aliases: [Tutorial-anchor manifest, Tutorial anchors]
+---
+
 # Tutorial-Anchor Manifest
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: live.** Every `targetText` substring in
 > `src/server/mcp/tutorial-annotations.ts` is listed below with the
@@ -46,7 +53,7 @@ seeds at a `rev` above their tombstone; the function returns how many it
 re-created, and a caller that gets a non-zero count must persist a snapshot
 for the replay to outlive the session. Every seed is written with
 `audience: "outbound"` — a Claude-authored seed the user is invited to accept
-or dismiss is outbound by intent — and the note stays private through its
+or dismiss is outbound by intent — and the [note](../glossary.md#note) stays private through its
 `user` author and sanitize's demote guard.
 
 ## Contract
@@ -62,8 +69,8 @@ or dismiss is outbound by intent — and the note stays private through its
    (uniqueness check). Either disambiguate (e.g. lengthen the anchor) or
    restructure the prose so the substring stays unique.
 3. **Author seeding stays intentional.** Notes are seeded as `user` per
-   ADR-027 (Claude cannot author user-private content); comments and
-   highlights are seeded as `claude` so the cross-author authorship
+   ADR-027 (Claude cannot author user-private content); [comments](../glossary.md#comment) and
+   [highlights](../glossary.md#highlight) are seeded as `claude` so the cross-author authorship
    indicator shows correctly in the demo. Don't flip these.
 
 ## Enforcement
@@ -92,3 +99,12 @@ sentence means updating both.
   assert the seeded `author` matches expectation. If the rules change,
   update both the table here and the seeding logic in
   `injectTutorialAnnotations` in the same commit.
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [The welcome document](../../sample/welcome.md): the text every anchor must resolve in.
+- [Workflows → Onboarding tutorial](../workflows.md#onboarding-tutorial-first-run): what the tutorial looks like to a user.
+- [Architecture → Onboarding tutorial](../architecture.md#onboarding-tutorial): how the tutorial is wired.
+- [ADR-027](../decisions.md#adr-027-annotation-system-redesign--audience-based-model): why notes are seeded as the user's.
+- [Test-selector manifest](testid-manifest.md): the sibling manifest for E2E selectors.

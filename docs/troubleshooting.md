@@ -1,6 +1,15 @@
 # Troubleshooting
 
+[Home](README.md) › [Troubleshooting and your data](maps/troubleshooting-and-data.md)
+
 Common first-launch and runtime issues, with diagnostic steps.
+
+**Contents**
+
+- **Setup and connection:** [Quick diagnostic](#quick-diagnostic) · [Windows SmartScreen warning](#windows-smartscreen-warning) · ["MCP failed to connect"](#claude-code-says-mcp-failed-to-connect) · [Connected but tools fail](#mcp-shows-connected-but-tandem-tools-fail) · [Claude doesn't know Tandem](#claude-doesnt-seem-to-know-what-tandem-is) · [Tandem can't start Claude on Windows](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal) · ["Set up Claude Code" when it is installed](#tandem-says-set-up-claude-code-but-claude-code-is-already-installed) · [Port already in use](#port-already-in-use) · [`TANDEM_BIND_HOST` refused](#tandem_bind_host-is-not-supported-in-this-version)
+- **Claude isn't reacting:** [A message or comment got no response](#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) · [No hello from Tandem's Claude](#tandems-claude-didnt-say-hello) · [Channel shim fails to start](#channel-shim-fails-to-start) · [Plugin install: "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory) · [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127) · [Claude Desktop: failed to spawn](#failed-to-spawn-process-no-such-file-or-directory-claude-desktop) · [Plugin install fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https) · [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version)
+- **Editor and documents:** [Server unavailable / lost connection](#editor-shows-server-unavailable-or-weve-lost-the-connection-to-the-tandem-server) · [Empty editor](#empty-editor-with-no-document) · [A link won't open](#a-link-in-the-document-wont-open) · [Double-clicking a file does nothing](#double-clicking-a-file-does-nothing) · [Settings are read-only](#settings-say-they-are-read-only) · ["May not have finished updating"](#tandem-may-not-have-finished-updating) · [A document will not open](#a-document-will-not-open--a-tab-did-not-come-back) · [Recovering a previous version](#recovering-a-previous-version-of-a-document)
+- **Resetting and reporting:** [Reset session state](#reset-session-state) · [Reading server logs](#reading-server-logs) · [Sharing diagnostics](#sharing-diagnostics)
 
 ## Quick diagnostic
 
@@ -13,7 +22,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 - The Node toolchain the MCP connection depends on
 - **Claude Code is installed *and startable*** — on Windows these are different questions, and an `npm install -g` install passes the first while failing the second (see [below](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal))
 - No stale global `tandem-editor` shadowing the version you meant to run
-- Ports `3478` (Hocuspocus WebSocket) and `3479` (MCP HTTP) listening
+- Ports `3478` ([Hocuspocus](glossary.md#hocuspocus) WebSocket) and `3479` (MCP HTTP) listening
 - `/health` endpoint responds
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
@@ -52,8 +61,8 @@ If you restart the server while Claude Code is open, run `/mcp` inside Claude Co
 
 1. **The server isn't running anymore.** The connection state is cached from session start. Launch Tandem (or `tandem` in a terminal), then `/mcp` to reconnect.
 2. **Stale URL or port.** If you've set `TANDEM_MCP_PORT` (or an old install used a different port), `~/.claude.json`'s `mcpServers.tandem.url` points at the wrong place. Re-run the in-app integration wizard or `tandem setup --apply`.
-3. **Stale auth token.** A rotated token with an old `Authorization` header in a non-Claude client config rejects every call (Claude configs are updated automatically by `tandem rotate-token`).
-4. **Orphaned entry from an old install.** You uninstalled (or reinstalled differently) and the old `mcpServers.tandem` entry survived. Re-run the wizard, or remove the entry — see [data-locations.md](data-locations.md) for every place Tandem writes config and the `tandem --uninstall-scrub` command that cleans them.
+3. **Stale [auth token](glossary.md#auth-token).** A rotated token with an old `Authorization` header in a non-Claude client config rejects every call (Claude configs are updated automatically by `tandem rotate-token`).
+4. **Orphaned entry from an old install.** You uninstalled (or reinstalled differently) and the old `mcpServers.tandem` entry survived. Re-run the wizard, or remove the entry — see [data-locations.md](data-locations.md) for every place Tandem writes config and the `tandem --uninstall-scrub` command that cleans them (with only the desktop app installed, run it as `npx tandem-editor --uninstall-scrub`).
 
 `tandem doctor` (or **Settings → About → Copy Diagnostics**) distinguishes 1 from 2–4: if the health checks pass but tool calls still fail, the problem is on the config side.
 
@@ -121,7 +130,7 @@ Claude yourself in a terminal keeps working either way; only Tandem's auto-launc
 ## Tandem says "Set up Claude Code" but Claude Code is already installed
 
 Tandem gives up restarting Claude after repeated crashes in a short window, and asks the
-supervisor which kind of failure it was: the CLI being missing or unstartable, or the CLI being
+[supervisor](glossary.md#supervisor) which kind of failure it was: the CLI being missing or unstartable, or the CLI being
 fine and crashing for some other reason (a stale saved conversation, an expired login, a plugin
 that fails on load). Only the first routes you to the setup wizard.
 
@@ -219,9 +228,9 @@ Either way, look for the push line. `No real-time push consumer attached` means 
 
 **Fix it** — three setup routes; choose one setup route where possible.
 
-*The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The channel shim further down avoids both requirements. Tandem's bundled skill tells Claude how to open a watch on Tandem's wake stream, which wakes it whenever you comment or send a message. No install, no flag, and it lasts only for that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that Tandem reports a `wakeUrl` — `tandem_status`, `tandem_open` and `tandem_scratchpad` all return one, the watch has nothing to attach to without it, and stdio-mode Tandem reports none. The current bundled skill tells a hand-started session to try once on the first response carrying one, and to re-arm that same watch when Claude Code ends it at its 30-minute deadline. Asking directly is recovery if that attempt was skipped or the watch ended, for example after Tandem restarted. It is not a subscriber-count override.
+*The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The [channel shim](glossary.md#channel-shim) further down avoids both requirements. Tandem's bundled skill tells Claude how to open a watch on Tandem's [wake stream](glossary.md#wake-watch), which wakes it whenever you comment or send a message. No install, no flag, and it lasts only for that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that Tandem reports a `wakeUrl` — `tandem_status`, `tandem_open` and `tandem_scratchpad` all return one, the watch has nothing to attach to without it, and stdio-mode Tandem reports none. The current bundled skill tells a hand-started session to try once on the first response carrying one, and to re-arm that same watch when Claude Code ends it at its 30-minute deadline. Asking directly is recovery if that attempt was skipped or the watch ended, for example after Tandem restarted. It is not a subscriber-count override.
 
-*Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). It starts watching when Claude first uses Tandem's skill in a session, so ask for Tandem by name; if you have been chatting about something else, it is not listening yet. Start `claude` from a terminal window: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127`](#plugin-monitor-reports-script-failed-exit-127).
+*Or* install the Tandem plugin, which registers a [plugin monitor](glossary.md#plugin-monitor) that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). It starts watching when Claude first uses Tandem's skill in a session, so ask for Tandem by name; if you have been chatting about something else, it is not listening yet. Start `claude` from a terminal window: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127`](#plugin-monitor-reports-script-failed-exit-127).
 
 *Or* register the channel shim and start Claude Code with the channel flag:
 
@@ -230,7 +239,7 @@ tandem setup --apply --with-channel-shim
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Both halves are needed. The shim is **not registered by default** — so on a fresh setup the flag alone names a server that is not in your config. (If you configured it before that changed, your existing entry is untouched and the flag alone is still enough.) The flag has to be on every session: it is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary — Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for.
+Both halves are needed. The shim is **not registered by default** — so on a fresh setup the flag alone names a server that is not in your config. (If you configured it before that changed, your existing entry is untouched and the flag alone is still enough.) The flag has to be on every session: it is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary — Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for. The desktop app does not install the `tandem` command, so if you have only the desktop app, install the npm package first (`npm install -g tandem-editor`, which needs Node.js 22.12.0 or newer) rather than running the setup once through `npx`: the shim entry records the path the setup ran from, and npm can clear its `npx` cache.
 
 **Avoid configuring more than one route.** Each can deliver independently. Note that `No real-time push consumer attached` cannot tell you which one is missing — they all attach to the same stream — so pick the one you meant to be using. Plugin sessions are the exception you cannot always prevent: first skill use can start both the packaged monitor and a built-in watch automatically.
 
@@ -249,7 +258,7 @@ Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude p
 
 ## Tandem's Claude didn't say hello
 
-On a first run (and once on the first run of v1.0) Tandem's own Claude greets you in the chat panel after setup. If nothing arrives within about a minute, the chat panel says **Tandem's Claude hasn't said hello**. The two usual causes:
+On a first run (and once on the first run of v1.0) [Tandem's own Claude](glossary.md#tandems-claude) greets you in the chat panel after setup. If nothing arrives within about a minute, the chat panel says **Tandem's Claude hasn't said hello**. The two usual causes:
 
 - **Claude Code isn't signed in.** Tandem's Claude is Claude Code running in the background, and it can't answer until you sign in. Open a terminal, run `claude` and sign in, then click the note's button (**Check Claude sign-in** or **Restart Tandem's Claude**).
 - **It isn't allowed to use Tandem's tools.** It runs without a window, so it cannot ask you to approve a tool the way an interactive session does; a tool it isn't allowed to use is refused. Open a terminal in the same folder, run `claude`, ask it to use one of Tandem's tools (for example "check the Tandem inbox"), and choose to always allow Tandem's tools. Then click **Restart Tandem's Claude**.
@@ -402,7 +411,7 @@ your Applications folder and reopen it. `tandem doctor` names this explicitly.
 manifest cannot carry a path that only makes sense on one machine:
 
 - the **Tandem plugin**'s two MCP servers and two monitors (see the previous section),
-- the **Cowork** guest registry, where a host path would be meaningless anyway. (Only a version that offered Cowork setup wrote entries there; it ships dark since ADR-055.)
+- the **Cowork** guest registry, where a host path would be meaningless anyway. (Only a version that offered Cowork setup wrote entries there; it [ships dark](glossary.md#cowork-setup) since ADR-055.)
 
 For those, the remedies are the same as the exit-127 section: start the client from a
 terminal, or put Node on the PATH the GUI launcher provides.
@@ -476,7 +485,7 @@ By the time either message shows, the connection has been down for a while, so i
 
 ## Empty editor with no document
 
-On first run, `sample/welcome.md` auto-opens. On upgrades, `CHANGELOG.md` opens (read-only). If you've cleared session state, deleted the sample file, or set `TANDEM_NO_SAMPLE=1`, the editor starts empty.
+On first run, `sample/welcome.md` auto-opens. On upgrades, `CHANGELOG.md` opens ([read-only](glossary.md#read-only-document)). If you've cleared session state, deleted the sample file, or set `TANDEM_NO_SAMPLE=1`, the editor starts empty.
 
 Click the **+** in the tab bar, drop a file onto the editor, or ask your AI to open one (`"open notes.md in tandem"`).
 
@@ -585,3 +594,13 @@ Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-05
 Don't port-forward around the refusal. A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access.
 
 > **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.
+
+## Related
+
+- [Troubleshooting and your data map](maps/troubleshooting-and-data.md): where Tandem keeps its files, how to remove them, and what it sends anywhere.
+- [Connecting an AI map](maps/connecting-ai.md#when-it-doesnt-connect): the AI-connection problems gathered in one place, with the setup routes.
+- [Data locations](data-locations.md): every folder, keychain entry and config entry Tandem writes, and a clean uninstall.
+- [Configuration](configuration.md): the environment variables behind ports, tokens and the app-data folder.
+- [CLI reference](cli.md#tandem-doctor): what `tandem doctor` checks and its exit codes.
+- [User guide → Troubleshooting](user-guide.md#troubleshooting): the shorter, editor-side list.
+- [Glossary](glossary.md#push-and-pull): push, pull and the routes that wake Claude, in plain language.

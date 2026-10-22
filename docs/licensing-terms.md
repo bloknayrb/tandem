@@ -1,4 +1,12 @@
+---
+tags: [audience/maintainer, topic/licensing, topic/legal]
+aliases: [Licence terms, License terms, Terms draft]
+status: draft
+---
+
 # Tandem licence terms — working draft
+
+[Home](README.md) › [Security and licensing](maps/security-and-licensing.md)
 
 _Drafted 2026-08-06 · reviewed 2026-08-13 · no counsel is being consulted; the ⚖️ items are the licensor's decisions (2026-10-09)._
 
@@ -35,7 +43,7 @@ Stated as the code behaves, not as marketing:
 | **Transfer** | Not restricted (left out of the terms by decision, 2026-10-09). |
 | **Organisational use** | Each production use must be personal use or individual self-hosting, which `LICENSE` defines as one natural person's. An employee using Tandem for their own work is inside; a deployment one installation serves to several people is not. See §2. |
 
-Nothing above is live yet: the gate ships **dark** — `LICENSE_GATE_ENABLED` is a
+Nothing above is live yet: the [gate](glossary.md#licensing-gate) [ships **dark**](glossary.md#ships-dark) — `LICENSE_GATE_ENABLED` is a
 `const false` in `tsup.config.ts`, so today's builds neither trial nor gate. It
 flips at v1.0 together with `LICENSE_UPDATE_ENDPOINT` (`src-tauri/src/lib.rs`), and
 these terms must exist before it does.
@@ -128,7 +136,7 @@ software's own licence doesn't grant is the worst version of this problem.
   first launch of any such version on a given device, counted once across all
   such versions", which is the one `trial.json` the product keeps across
   versions. The licence still says *device* where the product's clock belongs
-  to an app-data directory; that is the deliberate soft gate above. This wording
+  to an [app-data directory](glossary.md#app-data-directory); that is the deliberate soft gate above. This wording
   first ships with the next release; v0.26 to v0.28 carry the earlier wording.
 - After the 14 days, `LICENSE` grants keyless use that leaves out the AI
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
@@ -242,3 +250,13 @@ Roughly in priority order:
 - [ ] Refund policy (customer-facing wording of §3)
 - [ ] Privacy notice (customer-facing wording of §5)
 - [ ] Checkout copy stating that a key is not for a shared or hosted deployment, and no other rule about who may use it (§2)
+
+## Related
+
+- [Security and licensing map](maps/security-and-licensing.md) — the rest of the licence material.
+- [How Tandem licensing works](licensing-explained.md) — what the software does, which these terms must not overpromise.
+- [Licensing operations](licensing-operations.md) — refunds, revocation and the pre-launch gate in practice.
+- [LICENSE](../LICENSE) — the Business Source License 1.1 text these terms sit beside.
+- [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) — the decision, and the dated amendments cited above.
+- [Data locations](data-locations.md) — what the product stores, for the privacy notice in §5.
+- [Glossary: licensing gate](glossary.md#licensing-gate) — the short definition.

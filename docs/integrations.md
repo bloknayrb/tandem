@@ -1,11 +1,13 @@
 # Integrations
 
+[Home](README.md) › [Connecting an AI](maps/connecting-ai.md)
+
 Which AI clients connect to Tandem, how, and what the MCP surface exposes. For setting one up, see
 [Install](../README.md#install) in the README — the in-app wizard does the configuration.
 
 ## The MCP integration policy
 
-The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open standard for AI clients to talk to tools and data sources. Tandem exposes its document and annotation surface over MCP, which is how AI clients like Claude read and modify the file you are editing.
+The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open standard for AI clients to talk to tools and data sources ([glossary](glossary.md#mcp)). Tandem exposes its document and annotation surface over MCP, which is how AI clients like Claude read and modify the file you are editing.
 
 The integration policy is set by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration):
 
@@ -31,14 +33,24 @@ Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md
 
 - **Document.** Open, switch, list, close and rename documents; read text content and outlines; edit text ranges; append content; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations and replies; query the annotation list; export a review report.
-- **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes ships dark with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
+- **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes [ships dark](glossary.md#docx-support) with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
 - **Navigation.** Search the document, resolve a match to a range, and pull surrounding context.
-- **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for chat messages, annotation actions and the user's current selection; reply in the chat sidebar.
+- **Awareness.** Read user presence and [Solo](glossary.md#solo-mode)/[Tandem](glossary.md#tandem-mode) mode; check the [inbox](glossary.md#inbox) for chat messages, annotation actions and the user's current selection; reply in the chat sidebar.
 - **Diagnostics.** Report connection and boot health over MCP itself, so a client that can't reach loopback can still self-diagnose.
 
 ## Real-time push
 
-The Claude-specific push transports — the self-armed watch, the plugin monitor, and the channel
-shim — are described in [Real-time updates](../README.md#real-time-updates) in the README. Other MCP
+The Claude-specific push transports — the [self-armed watch](glossary.md#wake-watch), the [plugin monitor](glossary.md#plugin-monitor), and the [channel
+shim](glossary.md#channel-shim) — are described in [Real-time updates](../README.md#real-time-updates) in the README. Other MCP
 clients pull with `tandem_checkInbox`, which is authoritative for every client regardless of which
 push route is active.
+
+## Related
+
+- [Connecting an AI map](maps/connecting-ai.md): every setup route, how Claude hears about your comments, and what to do when it doesn't connect.
+- [MCP tool reference](mcp-tools.md): each tool's parameters and responses.
+- [User guide → Working with Claude Code](user-guide.md#working-with-claude-code): the connection from the editor's side.
+- [CLI → `tandem setup`](cli.md#tandem-setup): the scriptable alternative to the setup wizard.
+- [Troubleshooting](troubleshooting.md): when a client connects but the tools fail.
+- [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration): the decision that made MCP the integration contract.
+- [Glossary](glossary.md#push-and-pull): push and pull, and why the inbox is the authority.

@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Token audit, Protected tokens]
+---
+
 # Token Audit — design-system-impl umbrella branch
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: mixed.** The bundle-vs-production reconciliation below is a
 > historical record of the 2026-05-21 audit. Still live: the protected-token
@@ -311,3 +318,11 @@ tables above originally recorded as SAME:
 
 Neither is a protected token. Full measurements and the accepted residuals are in
 [`docs/a11y-gate-results.md`](../a11y-gate-results.md).
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Semantic tokens](../semantic-tokens.md): the family reference for every token named here.
+- [Accessibility gate results](../a11y-gate-results.md): the measurements behind the later re-audits.
+- [Conflicts resolved](conflicts-resolved.md): the decision to keep production tokens over the bundle's.
+- [Derived-surface spec](derived-spec.md): where the audited tokens are composed into surfaces.

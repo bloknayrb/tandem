@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system, topic/testing]
+aliases: [Test-selector manifest, testid manifest, data-testid]
+---
+
 # Test-Selector Manifest
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: live orientation copy, not the contract.** The contract is
 > `tests/design-system-impl/__snapshots__/testid-set.snap.txt`, which
@@ -568,3 +575,11 @@ two `-dark-` hints are what the License tab shows in that state.
   `harness-{acknowledge,version,banner-dismiss,banner-version}`,
   `ai-readiness-harness`, `reachability-harness`, `cwd-drift-harness`
   (`src/client/svelte-harness/`)
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [CLAUDE.md → Critical rules](../../CLAUDE.md#critical-rules): rule 7, which makes the selector set a contract.
+- [CONTRIBUTING → Running E2E tests](../../CONTRIBUTING.md#running-e2e-tests): how the suite that uses these selectors runs.
+- [Gotchas → Testing & E2E](../gotchas.md#testing--e2e): the harness rules.
+- [Tutorial-anchor manifest](tutorial-anchor-manifest.md): the sibling manifest for tutorial anchors.

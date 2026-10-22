@@ -140,3 +140,10 @@ coverage/
 # anchored rule would leave those untracked-but-committable.
 .ui-inspector/
 .mut.json
+
+# Obsidian. docs/ doubles as an Obsidian vault opened at the repo root; only
+# the shared link settings are tracked (Markdown links, relative paths, update
+# on move -- the forms `npm run check:links` can verify). Workspace layout,
+# plugins and themes are personal.
+.obsidian/*
+!.obsidian/app.json

@@ -1,6 +1,32 @@
+---
+tags: [audience/contributor, topic/architecture]
+aliases: [Architecture, System architecture, How Tandem is built]
+---
+
 # Architecture
 
+[Home](README.md) › [Internals](maps/internals.md)
+
 > **`.docx` ships dark ([ADR-053](decisions.md#adr-053-docx-ships-dark), 2026-09-24).** A release build refuses `.docx` files and registers neither `.docx`-only MCP tool. The `.docx` material below still describes the code accurately, because the code stays merged and tested behind `DOCX_ENABLED`, but none of it is reachable in a shipped Tandem until the flag flips.
+
+## Contents
+
+- [Integration Compatibility](#integration-compatibility)
+- [System Context](#system-context)
+- [Container Diagram](#container-diagram)
+- [Data Flows](#data-flows)
+- [Chat Data Flow](#chat-data-flow)
+- [Channel Push (Real-Time Events)](#channel-push-real-time-events)
+- [Plugin Monitor](#plugin-monitor)
+- [Shared State: Y.Doc](#shared-state-ydoc)
+- [Coordinate Systems](#coordinate-systems)
+- [Toast Notification Pipeline](#toast-notification-pipeline)
+- [Tab Overflow and Reorder](#tab-overflow-and-reorder)
+- [Onboarding Tutorial](#onboarding-tutorial)
+- [Security](#security)
+- [Tauri Desktop Layer](#tauri-desktop-layer)
+- [Design Decisions](#design-decisions)
+- [File Map](#file-map)
 
 ## Integration Compatibility
 
@@ -30,15 +56,15 @@ graph TB
 
 Tandem is a single Node.js process that serves three roles simultaneously:
 1. **MCP server** (HTTP on port 3479) — any MCP client connects here for tool discovery and execution via Streamable HTTP transport. Claude Code is the default and best-tested client.
-2. **Hocuspocus WebSocket server** (port 3478) — Editor connects here for real-time Yjs sync.
-3. **Channel event source** (SSE on port 3479) — The channel shim connects here to receive real-time push events. Other MCP clients can subscribe to `/api/events` directly.
+2. **[Hocuspocus](glossary.md#hocuspocus) WebSocket server** (port 3478) — Editor connects here for real-time Yjs sync.
+3. **Channel event source** (SSE on port 3479) — The [channel shim](glossary.md#channel-shim) connects here to receive real-time push events. Other MCP clients can subscribe to `/api/events` directly.
 4. **Static file server** (HTTP on port 3479) — Serves the Vite-built client from `dist/client/` when present (global install mode).
 
 When installed globally (`npm install -g tandem-editor`), the `tandem` CLI starts the server and serves the editor, printing the `http://127.0.0.1:3479` URL to open in a browser (it opens no window itself). Bare `tandem setup` prints wizard-driven setup guidance and writes nothing; `tandem setup --apply` writes MCP config to Claude Code and/or Claude Desktop (the auto-config-removal change that made bare setup a no-op printer shipped in v0.14.0 — #477 PR 3c-ii, ADR-038 §2b). In development, `npm run dev:standalone` starts the backend and the Vite dev server, and waits for the backend to become healthy. It does **not** start the monitor: an always-on consumer with no Claude behind it holds `subscribers >= 1` for the whole session, and `subscribers === 0` is the only sound negative the server has — so a standing fake consumer suppresses every feature keyed on it, for exactly the people building those features. Run `npx tsx src/monitor/index.ts` by hand when testing push delivery.
 
 A separate **channel shim** process (`dist/channel/index.js`) bridges the Tandem server and Claude Code's Channels API. **Claude-default — this is one of the six Claude-specific extras per ADR-038.** Claude Code spawns it as a stdio subprocess. The shim connects to the server's SSE endpoint and forwards events as `notifications/claude/channel` to Claude Code, enabling push-based communication instead of polling. Other MCP clients subscribe to `/api/events` directly without going through this shim.
 
-Both the MCP server and editor share the same `Y.Doc` instance. Edits from either side propagate to the other in real-time.
+Both the MCP server and editor share the same [`Y.Doc`](glossary.md#ydoc-and-crdt) instance. Edits from either side propagate to the other in real-time.
 
 ## Container Diagram
 
@@ -504,7 +530,7 @@ User accepts annotation in browser
 
 ### Origin Tagging (Echo Prevention)
 
-All MCP-initiated Y.Map writes go through **`withMcp(doc, () => { ... })`** from `src/shared/origins.ts` — never a hand-written `doc.transact(…, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions, which prevents Claude from seeing its own tool calls echoed back as channel notifications. The wrapper is the contract, not a convenience: `withMcp` is one of six helpers (`withMcp`, `withFileSync`, `withInternal`, `withReload`, `withModeRelease`, `withBrowser`), each of which selects a different row in the skip-set matrix at the top of `origins.ts`, and only `browser` writes generate channel events. A raw `.transact(` anywhere in `src/` is a Critical Rule 2 violation — see ADR-031.
+All MCP-initiated Y.Map writes go through **`withMcp(doc, () => { ... })`** from `src/shared/origins.ts` — never a hand-written `doc.transact(…, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from [MCP-tagged](glossary.md#origin-tags) transactions, which prevents Claude from seeing its own tool calls echoed back as channel notifications. The wrapper is the contract, not a convenience: `withMcp` is one of six helpers (`withMcp`, `withFileSync`, `withInternal`, `withReload`, `withModeRelease`, `withBrowser`), each of which selects a different row in the skip-set matrix at the top of `origins.ts`, and only `browser` writes generate channel events. A raw `.transact(` anywhere in `src/` is a Critical Rule 2 violation — see ADR-031.
 
 ### Event Types
 
@@ -526,7 +552,7 @@ brand, so the only way to construct an annotation-bearing payload is through
 | `annotation:edited` | User edits their own comment's body and `editedAt` advances | `annotationId`, `content`, `textSnippet`, `editedAt` |
 
 Two fields carry more weight than they look. `replyAuthor` is what `isUserPrivacyHeld`
-(`events/queue.ts:205-214`) reads to decide whether a reply is held in Solo mode, and `editedAt`
+(`events/queue.ts:205-214`) reads to decide whether a reply is held in [Solo mode](glossary.md#solo-mode), and `editedAt`
 is half the channel de-duplication key for edits (`getAnnotationEditedChannelKey`), so an edit
 payload without it would collapse every edit of one annotation onto a single trackable id.
 `parentAuthor` is what decides whether a user's reply starts a stopped Tandem's Claude (#2196):
@@ -701,9 +727,9 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 
 Three coordinate systems, unified in dedicated position modules:
 
-1. **Flat text offsets** (server) — includes heading prefixes (`## `) and `\n` separators
-2. **ProseMirror positions** (client) — structural node boundaries, no prefixes
-3. **Yjs RelativePositions** (CRDT-anchored) — survive concurrent edits
+1. **[Flat text offsets](glossary.md#flat-offsets)** (server) — includes heading prefixes (`## `) and `\n` separators
+2. **[ProseMirror positions](glossary.md#prosemirror-positions)** (client) — structural node boundaries, no prefixes
+3. **Yjs [RelativePositions](glossary.md#relativeposition)** (CRDT-anchored) — survive concurrent edits
 
 **Two properties of the flat system that nothing else states, and that both fail silently.**
 
@@ -1302,3 +1328,13 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `.claude/hooks/` -- 19 shell scripts plus one `.mjs` helper, enforcing Critical Rules, type-checking, formatting, test running, and the workflow nudges. Inventory and semantics: [`.claude/hooks/README.md`](../.claude/hooks/README.md)
 - `.claude/agents/` -- specialized reviewers (annotation-model, svelte-migration, crdt, security, license) plus the `/diverge` generator (run once per frame) and its critic
 - `.claude/skills/` -- Seven Tandem-specific project skills (changelog, dev-server, e2e, e2e-debug, release, screenshots, ui-inspector). Other entries resolving under this path at runtime are user-level or plugin skills, not part of this repo's set.
+
+## Related
+
+- [Internals map](maps/internals.md): this doc's sections next to the coordinate-system notes and the ADRs grouped by topic.
+- [MCP tool reference](mcp-tools.md): what each tool, HTTP route and channel route takes and returns.
+- [Decisions](decisions.md): why the layers, transports and annotation model are shaped this way.
+- [Gotchas](gotchas.md): the silent-failure rules for each area described here.
+- [Security](security.md): the network posture and what guards each route.
+- [Lessons learned](lessons-learned.md): the incidents behind several of these designs.
+- [Glossary](glossary.md): Y.Doc, flat offsets, origin tags and the other shared terms.
