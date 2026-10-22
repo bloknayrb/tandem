@@ -27,9 +27,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { setRestrictiveAcl } from "../integrations/acl-win.js";
-import { assertPathSafe } from "../integrations/apply.js";
 
 /**
  * What an ACL application did, from one caller's view. The doc-backup sweep
@@ -77,10 +75,14 @@ export function _resetPrivateDirAclForTests(): void {
  *   `O_DIRECTORY | O_NOFOLLOW` and `fchmod`s the descriptor, so a symlink
  *   swapped in at the leaf is refused rather than followed, and the mode
  *   written is `mode & ~0o077` — it never ADDS a bit, so a `0500` directory
- *   stays `0500`. `assertPathSafe` runs first for the ancestors (a symlinked
- *   component, a root outside home/tmp, a UNC prefix). Any refusal or failure
- *   is a `console.warn` (stderr — stdout is the MCP wire) and the directory is
- *   left as it was.
+ *   stays `0500`. There is deliberately no root-containment check: the
+ *   directory is wherever the user put their app data (`TANDEM_APP_DATA_DIR`,
+ *   an `XDG_DATA_HOME` on another mount), and a narrow-only `fchmod` on a
+ *   descriptor the caller had to be able to open cannot widen anything, so a
+ *   home/tmp allowlist would only leave such a directory open. A symlinked
+ *   ANCESTOR is followed, which is harmless for the same reason (and `fchmod`
+ *   needs ownership). Any refusal or failure is a `console.warn` (stderr —
+ *   stdout is the MCP wire) and the directory is left as it was.
  * - Windows: mkdir only. Mode bits carry no access control there; see
  *   {@link applyPrivateDirAcl}.
  */
@@ -92,7 +94,6 @@ export async function hardenPrivateDir(
   if (create) await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") return;
   try {
-    assertPathSafe(dir);
     const handle = await fs.open(
       dir,
       fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,

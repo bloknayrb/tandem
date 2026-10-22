@@ -22,19 +22,6 @@ vi.mock(import("../../../src/server/integrations/acl-win.js"), () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
 
-/** Lets one spec reach the `O_NOFOLLOW` layer by switching the ancestor guard off. */
-const guard = vi.hoisted(() => ({ bypass: false }));
-vi.mock(import("../../../src/server/integrations/apply.js"), async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    assertPathSafe: (targetPath: string, opts?: { allowedRoots?: string[] }) => {
-      if (guard.bypass) return;
-      actual.assertPathSafe(targetPath, opts);
-    },
-  };
-});
-
 import {
   _resetPrivateDirAclForTests,
   applyPrivateDirAcl,
@@ -59,13 +46,11 @@ describe.skipIf(process.platform === "win32")("hardenPrivateDir (POSIX)", () => 
     savedUmask = process.umask(0o022);
     base = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-private-dir-"));
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    guard.bypass = false;
   });
 
   afterEach(async () => {
     if (savedUmask !== undefined) process.umask(savedUmask);
     warnSpy.mockRestore();
-    guard.bypass = false;
     // A 0500 fixture would make rm fail on its children.
     await fs.chmod(base, 0o700).catch(() => {});
     await fs.rm(base, { recursive: true, force: true });
@@ -112,20 +97,19 @@ describe.skipIf(process.platform === "win32")("hardenPrivateDir (POSIX)", () => 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Could not restrict permissions"));
   });
 
-  it("O_NOFOLLOW alone refuses the symlink when the ancestor guard is out of the way", async () => {
-    // The guard and the descriptor are two layers; this pins the second one,
-    // which is what closes the swap-after-check window the guard cannot.
-    guard.bypass = true;
-    const real = path.join(base, "real");
-    await fs.mkdir(real);
-    await fs.chmod(real, 0o755);
-    const link = path.join(base, "link");
-    await fs.symlink(real, link);
-
-    await hardenPrivateDir(link);
-
-    expect(modeOf(real)).toBe(0o755);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Could not restrict permissions"));
+  it("tightens a directory outside home and tmp (no root allowlist)", async () => {
+    // A custom TANDEM_APP_DATA_DIR or XDG_DATA_HOME on another mount must still
+    // be tightened. The guard is O_NOFOLLOW plus a narrow-only mask, not a
+    // root check; this pins that no allowlist came back.
+    const outside = await fs.mkdtemp(path.join(process.cwd(), ".tandem-private-dir-outside-"));
+    try {
+      await fs.chmod(outside, 0o755);
+      await hardenPrivateDir(outside);
+      expect(modeOf(outside)).toBe(0o700);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("a tighten failure is non-fatal and logged to stderr, not stdout", async () => {

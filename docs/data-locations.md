@@ -93,14 +93,16 @@ backup is a byte copy). They are private to your account:
 
 - **macOS and Linux:** the three folders are `0700` (only you can list or open anything inside),
   and Tandem writes the files in them at `0600`. Tandem tightens a folder an older version created
-  more openly each time it starts. It never changes a file's permissions directly, so a file
+  more openly when it starts (`doc-backups/` the first time it takes a backup), wherever your
+  app-data folder lives. It never changes a file's permissions directly, so a file
   written by an older version keeps its old mode until Tandem next rewrites it; until then the
   `0700` folder is what keeps it private. Quarantined files (`*.corrupt.*`, `*.partial.*`,
   `*.future`) are never rewritten, so the folder is all that protects them.
 - **Windows:** the same folders get an owner-only access list that their files and subfolders
   inherit.
 - **The desktop app's one-time import from the npm folder** leaves the npm copy in place. Tandem
-  makes that copy's `sessions/` and `annotations/` folders private too when it imports them.
+  makes that copy's `sessions/` and `annotations/` folders private too when it imports them
+  (`0700` on macOS and Linux; on Windows the old copy keeps the access list it already had).
 
 Files Tandem creates **next to a document** follow the document instead. The annotation export
 (`<file>.annotations.md` / `.json`) and the Markdown output of a conversion are never readable by
