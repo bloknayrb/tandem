@@ -546,7 +546,7 @@
         <ul>
           <li><strong>No left-border edge color.</strong> The card border is the standard 1px <code>var(--tandem-border)</code> all the way around. Background tint is the primary signal.</li>
           <li>No <code>if (annotation.author === "claude")</code> branch in any card render path — the production card variant (<code>NoteCard / CommentCard / SuggestionCard / ImportedCard / HighlightCard</code>) is the predicate.</li>
-          <li><strong>Suggestions are Claude-authored only.</strong> Users author notes, comments, and highlights — never suggestions. <code>tandem_createAnnotation</code> must reject a user-authored annotation with <code>suggestedText</code> set, and the UI must never render one.</li>
+          <li><strong>Suggestions are Claude-authored only.</strong> Users author notes, comments, and highlights — never suggestions. Claude's creator, <code>tandem_comment</code>, always stamps Claude as the author; the browser's note and comment composer offers no suggestion field; and the UI must never render a user-authored annotation with <code>suggestedText</code> set.</li>
           <li>Imported cards have <strong>no author dot</strong> — the italic byline replaces it.</li>
           <li>Notes never show a type badge — they're audience-private; the absence of a badge is the visual signal.</li>
           <li>Highlights are a separate surface entirely — they render as inline editor marks, no card chrome, color from <code>HIGHLIGHT_COLOR_VARS</code>.</li>

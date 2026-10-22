@@ -1,16 +1,20 @@
 # User Guide
 
+[Home](README.md) › [Using Tandem](maps/using-tandem.md)
+
 A complete guide to using Tandem — from first launch to advanced workflows.
 
 > **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same MCP tools. The Claude-specific transports (channel push, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [Integrations → The MCP integration policy](integrations.md#the-mcp-integration-policy) for the generic MCP path.
 
+**Contents:** [Overview](#overview) · [First launch](#first-launch) · [The editor](#the-editor) · [Working with documents](#working-with-documents) · [Annotations](#annotations) · [Reviewing annotations](#reviewing-annotations) · [Chat](#chat) · [Settings](#settings) · [Keyboard shortcuts](#keyboard-shortcuts) · [Working with Claude Code](#working-with-claude-code) · [Troubleshooting](#troubleshooting)
+
 ## Overview
 
-Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through [MCP](glossary.md#mcp), it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each [annotation](glossary.md#annotation) is a first-class object you can accept, dismiss, edit, or discuss. Edits to a Markdown or plain-text file — yours or the AI's — are written back to that file when you save, and automatically about once a minute while it has unsaved changes (see [Saving](#saving)). Opening a file just to read or annotate it never rewrites it.
 
-Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
+Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through [Yjs CRDT](glossary.md#ydoc-and-crdt) collaboration.
 
 Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`), which opens the same editor in your browser. The desktop app manages the server automatically; the npm install requires starting it from the terminal. Editing, annotations, chat and the integration wizard work the same in both. The desktop app adds what only a native shell can do: a system tray, native right-click menus and file dialogs, start-at-login, in-app log access, and automatic updates. Instructions below that apply to only one of the two say so.
 
@@ -36,7 +40,7 @@ A "You're ready!" card follows the three steps. The tutorial dismisses after tha
 
 ## The Editor
 
-![Five documents open in tabs, the formatting toolbar, and a selected sentence with the popup offering highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
+![Four documents open in tabs, one marked with an unsaved-changes dot, above the formatting toolbar, and a text selection with the popup offering formatting, highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
 
 ### Document Area
 
@@ -46,13 +50,14 @@ The main editing area is a rich text editor powered by Tiptap. You can type, sel
 
 Open documents appear as tabs along the top. Each tab shows the file name, and a dot while there are unsaved changes. A read-only document shows **Review Only** in the status bar, and its tab's tooltip ends in "(read-only)".
 
+- Switch tabs with `Ctrl+Tab` / `Ctrl+Shift+Tab` (in the desktop app; a browser keeps those keys for its own tabs), or jump straight to one with `Ctrl+1`–`Ctrl+9`
 - Drag tabs to reorder them, or use `Alt+Left` / `Alt+Right`
 - Double-click a tab title (or press `F2`) to rename the file inline
 - Click the **+** button at the end of the tab bar to open a new file
 
 ### Formatting Toolbar
 
-Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough**, **Code**, **Link** (`Ctrl+K`), **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
+Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough**, **Code**, **Link** (see [Links](#links)), **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
 
 The persistent formatting bar (Settings → Appearance → **Show formatting bar**, or `Ctrl+Alt+F`) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
 
@@ -69,13 +74,25 @@ When text is selected, a floating popup appears with two parts:
 
 The popup also includes a toggle to show or hide the formatting bar, and mirrors the bar's **Decorations** and **Display** menus so both stay reachable while the bar is hidden.
 
+If you'd rather not see the popup at all, turn off **Settings → AI Assistant → Show floating selection toolbar**. The formatting bar still works; `Ctrl+Alt+M` (comment on selection) needs the popup, so it stops working while the popup is off.
+
 ### Slash Menu
 
-Type `/` at the start of a line (or after a space) to open a block menu: Paragraph, Heading 1, Heading 2, Heading 3, Bullet list, Numbered list, Task list, Quote, Code block, Horizontal rule, and a 3×3 Table with a header row. Keep typing to filter — each command also has a short alias (`p`, `h1`, `h2`, `h3`, `ul`, `ol`, `todo`, `q`, `code`, `hr`, `3x3`).
+Type `/` at the start of a line (or after a space) to open a block menu: Paragraph, Heading 1, Heading 2, Heading 3, Bullet list, Numbered list, Task list, Quote, Code block, Horizontal rule, and a 3×3 Table with a header row. Keep typing to filter by name. The menu also shows each command's short alias (`p`, `h1`, `h2`, `h3`, `ul`, `ol`, `todo`, `q`, `code`, `hr`, `3x3`) beside it. Most aliases filter too, but `3x3` does not — type "table" to find the table.
 
 **Paragraph** is a reset rather than an insert: it turns the current block back into plain body text, lifting it out of a list or a quote. It is first in the list, so `/p` reaches it directly and pressing `Enter` on the unfiltered menu does nothing rather than inserting a heading you didn't ask for.
 
 Use `↑` / `↓` to move, `Enter` to insert, `Esc` to close. The `/` and whatever you typed after it are removed when the command runs. The menu only opens on text you actually type, so clicking after an existing `/` won't summon it, and it stays out of the way while the find bar, command palette, or an annotation popup is open, or when the caret is inside a code block.
+
+### Links
+
+Select some text and click **Link** on the selection popup or the formatting bar to open a small link editor: type or paste the address in the `https://` field and click **Apply** (or press `Enter`), or **Cancel** to back out. With the caret in an existing link, the same button opens the editor on that link; clear the field and apply to remove the link. In the desktop app, right-clicking a link also offers **Edit Link…** and **Remove Link**.
+
+Clicking a link to a web page opens it in your default browser. A relative link to another Markdown, plain-text or HTML file opens that file in a new Tandem tab, resolved from the current document's folder; a link that points outside that folder is refused, and so is a relative link in a document that hasn't been saved to disk yet.
+
+### Collapsing Sections
+
+Hover over a heading and a small chevron appears to its left. Click it to collapse everything under that heading, down to the next heading of the same or a higher level; click it again to expand. A collapsed heading keeps its chevron visible so you can find your way back. Collapsing is a personal view: it only hides the section on your screen, doesn't change the file, and isn't shared with the AI. Tandem remembers which sections you collapsed in each file (not in scratchpads or uploaded files).
 
 ### Right-Click Menus
 
@@ -113,12 +130,13 @@ Either rail can be resized by dragging the thin strip between it and the documen
 
 The floating pill at the bottom-left shows the following — it stays faint until you hover or focus it:
 
-- **Connection state** — Green when connected, with reconnect attempt count and elapsed time during disconnects. A prominent banner appears after 30 seconds of continuous disconnect.
+- **Connection state** — Green when connected, with reconnect attempt count and elapsed time during disconnects. A prominent banner appears once the connection has been down for 30 seconds (adjustable; see [Connection lost](#server-unavailable-or-weve-lost-the-connection-to-the-tandem-server)).
 - **Word count** — Click to cycle through words, characters, sentences, and paragraphs.
 - **Save state** — "Saving…" while a write is in flight, then "Saved HH:MM".
-- **Review Only badge** — Appears when the active document is read-only (an uploaded file, or the changelog opened via View Changelog).
+- **Review Only badge** — Appears when the active document is read-only (an uploaded file, any HTML file, or the changelog opened via View Changelog).
 - **Held count** — In Solo mode, how many of your comments and replies are being withheld.
 - **AI connection** — Who is attached. **Tandem's Claude** means the Claude session Tandem started for you is running; Tandem wakes it when you send a message, and it shows "Tandem's Claude is working…" while it is mid-turn. **AI attached** means something else is connected — a Claude Code session you started, Claude Desktop, or another MCP client — which sees your messages only when it checks in, unless it set up notifications. **AI not connected** means nothing is. Beside **Tandem's Claude**, a **green dot** means Tandem has matched a live connection to its own Claude, and a **hollow ring** means it can't confirm which connection that is (with the plain config entry `tandem setup` writes, the ring is the normal look). Beside **AI attached**, a green dot means a live session is connected, and a hollow ring usually means a session that closed without disconnecting. **· 2 sessions** after the label counts the connections Tandem can see. It's an estimate: a session that just closed still counts for about a minute, one Claude connected two ways counts twice, and clients on the newest MCP protocol revision aren't counted. [Troubleshooting](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) has the details. If Tandem's own Claude has stopped while something else is attached, a separate **Tandem's Claude** button says why (not running, needs sign-in, or can't start) and offers the fix (it leaves any Claude you started yourself alone).
+- **Tandem's Claude standby** — When Tandem's Claude isn't running by your choice, the pill says so instead of reporting a fault: **Tandem's Claude is off** (you turned it off, or chose **Off** in Settings), **Tandem's Claude hasn't started** (it is set to wait until you click Start), or **Tandem's Claude stopped (idle)** (it stopped after the idle time you chose; its conversation resumes when it starts again). In these states — unless you are in Solo or another AI is connected — the pill is a **Start Tandem's Claude** button: click it and the pill shows **Starting Claude…** until it is running. Sending a chat message also starts it — see [Tandem's Claude in chat](#tandems-claude-in-chat).
 - **Working-folder pill** — Appears when the AI's working directory has drifted from the document you have open.
 
 Your display name is set in **Settings → Collaboration**. The Solo / Tandem toggle (`Ctrl+Shift+M`) lives in the title bar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
@@ -129,9 +147,53 @@ Your display name is set in **Settings → Collaboration**. The Solo / Tandem to
 
 Annotation failures and save errors surface as dismissible toast notifications at the bottom of the screen. Toasts auto-dismiss by severity (errors linger longest) and show a count badge when the same message repeats.
 
+### Activity Tray
+
+![The Activity tray open above its pill, listing a file reloaded from disk and a file that changed on disk while it had unsaved edits, with Clear all](screenshots/21-activity-tray.png)
+
+Toasts disappear; the **Activity** tray keeps them. Its pill sits at the bottom-right of the window and reads **No activity** or **Activity** with a count. Click it to open the list of recent saves, errors and integration events, newest first, each with how long ago it happened and a ×2, ×3… badge when the same event repeats. A failed save carries a **Retry** button. Dismiss a row with its ×, or empty the list with **Clear all**; click outside the tray or press `Esc` to close it. The list survives a reload of the window, holds the most recent 50 events, and drops informational events after five minutes.
+
+### Brand Menu
+
+The Tandem logo at the top-left of the title bar opens the brand menu:
+
+- **Color scheme** — swatches for **Match system**, **Light**, **Dark** and **Warm**. This is the same setting as Settings → Appearance → Theme, so the two always agree. Warm is a paper-toned light theme.
+- **Settings…** (`Ctrl+,`)
+- **Keyboard Shortcuts** (`?`)
+
+In the desktop app, a dot on the logo means an update is ready; opening Settings clears it.
+
+![The editor in the Dark theme: the document on the left and AI annotation cards on the right, on dark surfaces](screenshots/15-dark-theme.png)
+
+![The same editor in the Warm theme, with paper-toned surfaces](screenshots/16-warm-theme.png)
+
 ### Help Modal
 
-Press `?` at any time to open the keyboard shortcuts reference. Press `?` or `Esc` to close it.
+Press `?` (or `Ctrl+/`) at any time, or choose **Keyboard Shortcuts** from the brand menu, to open the keyboard shortcuts reference. Press `?` or `Esc` to close it.
+
+![The Keyboard Shortcuts reference, with shortcuts grouped under Editor, View, Annotations, Navigation, Document and Other; the list scrolls for more](screenshots/20-help-modal.png)
+
+### Banners
+
+A few messages appear as a banner across the top of the window rather than as a toast, because they need an answer or stay true until something changes:
+
+- **Connection lost** — "We've lost the connection to the Tandem server…", with **Retry now**. See [Connection lost](#server-unavailable-or-weve-lost-the-connection-to-the-tandem-server).
+- **Server restarted — refreshing documents** — shown briefly while open tabs reconnect after the Tandem server restarts.
+- **A file changed on disk** — offers **Keep my edits** or **Reload from file**. See [When a file changes on disk](#when-a-file-changes-on-disk).
+- **Update available** (desktop app) — "Tandem v… is available." with **Restart to install**. The app checks when it starts and every eight hours after that; the tray's **Check for Updates** checks on demand. Dismiss the banner with its × (opening Settings also clears it) to install later.
+- **Update didn't finish** (desktop app) — "Tandem may not have finished updating — it restarted on the previous version." with **Check for updates**, which looks for the update again.
+
+### System Tray (desktop app)
+
+The desktop app puts a Tandem icon in the system tray (the menu bar on macOS). Closing the window hides it to the tray rather than quitting, so the server — and any Claude Tandem started for you — keeps running; click the tray icon to bring the window back. Its menu has:
+
+- **Open Editor** — show the window.
+- **Setup AI Assistant** — show the window and open the integration wizard.
+- **Check for Updates** — check now and tell you the result.
+- **About Tandem** — the version number.
+- **Quit** — close Tandem completely, including the server.
+
+On Linux without tray support, there is no icon and closing the window quits Tandem.
 
 ## Working with Documents
 
@@ -143,7 +205,22 @@ You can open a file a few ways:
 
 **Recent files** — Click **+** in the tab bar to see recently opened files; type to filter, then click one to open it.
 
-**Browse or upload** — Click **+** in the tab bar, then **Browse files…**. On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an upload dialog: uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk.
+**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: [uploaded files](glossary.md#upload) get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
+
+**New scratchpad** — Click **+**, then **New scratchpad** (or press `Ctrl+N` in the desktop app; a browser keeps that key for itself). See [Scratchpads](#scratchpads).
+
+### Saved Sessions (browser)
+
+Tandem keeps a saved session for each file you have had open: its editing state and its annotations, so they come back the next time the file opens. In the browser build, the **Open File** dialog's **Saved sessions** section (click it to expand) lists them, each with its folder, when you last had it open and how many annotations it holds. Click a row to reopen that file. Click a row's **×** and then **Delete** to discard that file's saved session, or **Clear all…** and confirm to discard every one. Deleting can't be undone: the annotations stored with it are gone, though the file itself is untouched.
+
+### Scratchpads
+
+A [scratchpad](glossary.md#scratchpad) is a Markdown document that isn't tied to a file — somewhere to draft, paste or think before you decide where the text belongs. To keep one, use **Save As** (`Ctrl+Shift+S`): it becomes an ordinary file, in the same tab.
+
+Until then, a scratchpad lives only in this window, so Tandem guards it in two ways:
+
+- **Close warning** — closing a scratchpad tab that has text in it asks "This scratchpad has unsaved content that will be lost. Close it anyway?". In the browser, closing or reloading the Tandem tab while a scratchpad has text in it triggers the browser's own leave-page warning.
+- **Recovery** — as you type, Tandem keeps a copy of a scratchpad's text in this browser's (or the desktop app's) local storage. If Tandem, the window or the computer goes away without the scratchpad being saved or closed, the next new scratchpad you open starts with that text. Only the text comes back; annotations on a scratchpad are not recovered. Closing a scratchpad and confirming the warning discards its copy.
 
 ### Supported Formats
 
@@ -152,7 +229,7 @@ You can open a file a few ways:
   see [Line breaks in plain text](#line-breaks-in-plain-text) below.
 - **HTML** (`.html`, `.htm`) — Read-only. It opens for reading and annotating, and the file is never written back: HTML is the one supported format with no save path at all, so it opens read-only rather than accepting edits it would silently drop on tab close.
 
-**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been taken out of the app for now, and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
+**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been [taken out of the app for now](glossary.md#docx-support), and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
 
 ### Line breaks in plain text
 
@@ -215,7 +292,29 @@ Each open file gets its own tab and its own collaboration room. Tabs scroll hori
 
 ### Saving
 
-Press `Ctrl+S` to save the active document to disk. Your AI can also save via `tandem_save`. A dot on the tab title indicates unsaved changes. Saves are atomic (write to temp file, then rename) to prevent partial writes.
+Press `Ctrl+S` to save the active document to disk. Your AI can also save via `tandem_save`. A dot on the tab title indicates unsaved changes — edits, yours or the AI's, that haven't been written to the file yet. Saves are atomic (write to temp file, then rename) to prevent partial writes.
+
+**Autosave.** You don't have to remember `Ctrl+S`. Every 60 seconds Tandem writes each open Markdown (`.md`) or plain-text (`.txt`) file that has unsaved changes back to disk, and it does the same once more when Tandem shuts down normally. A file you only opened to read or annotate is never rewritten. Some documents are never autosaved:
+
+- read-only documents, including every HTML file and the changelog opened from Settings;
+- files uploaded in the browser build, which have no file on disk to write to;
+- scratchpads, which have no file until you use **Save As** — see [Scratchpads](#scratchpads);
+- a file whose [disk-change banner](#when-a-file-changes-on-disk) is waiting for your answer.
+
+Separately from the file itself, Tandem saves each open document's editing state and annotations every 60 seconds, so a restart (or a crash) brings your tabs back where you left them. If that state held edits that never reached the file, the document reopens with a banner asking whether to keep them; see [When a file changes on disk](#when-a-file-changes-on-disk). Before Tandem first writes to a file in a session, it keeps a copy of the file as it was — see the note under [Markdown Formatting](#markdown-formatting).
+
+### When a File Changes on Disk
+
+If another program changes a file you have open — a git checkout, a sync service, another editor — Tandem notices. If you have no unsaved edits in that document, it simply reloads the new version from disk, and your annotations stay attached to their text where that text still exists.
+
+If you *do* have unsaved edits, Tandem won't choose for you. A banner at the top of the document says the file changed on disk while you have unsaved edits, and offers:
+
+- **Keep my edits** — keep what's in the editor. Your next save overwrites the changes on disk.
+- **Reload from file** — load the version on disk and discard your unsaved edits.
+
+![A banner across the top of the document saying the file changed on disk while you have unsaved edits, with Keep my edits and Reload from file buttons](screenshots/18-external-conflict-banner.png)
+
+Until you answer, autosave leaves that document alone, and while the disk holds changes you haven't chosen to discard, `Ctrl+S` won't write over them either — so neither version is lost by accident. The same banner appears when Tandem restores unsaved edits from your last session ("Unsaved edits for … were restored from your last session"), asking whether to keep them or reload fresh from the file. For a format Tandem can't write back to disk, keeping your edits keeps them in this session only, and the banner says so.
 
 ## Annotations
 
@@ -238,6 +337,8 @@ The AI's comments may carry a **replacement suggestion** (`suggestedText`) — a
 ### Note
 
 A private note to yourself. Notes are never sent to the AI — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide the AI should see it.
+
+![The annotation list: an AI comment with its reply thread open, showing your reply and the AI's answer, and below it a private note marked Private](screenshots/17-reply-thread-and-note.png)
 
 ### Creating Annotations
 
@@ -302,7 +403,7 @@ If you would rather not see the annotation list at all while you write, **Settin
 |---|---|
 | `tandem_checkInbox` (what Claude is told) | Yes |
 | `tandem_getAnnotations` (Claude reading the annotation list) | Yes |
-| Real-time push (channel shim and plugin monitor) | Yes — annotation events only; chat messages always deliver |
+| Real-time push — the built-in Monitor watch, the plugin monitor, the channel shim, and the wake-up Tandem sends its own Claude | Yes — annotation events only; chat messages always deliver |
 | `tandem_exportAnnotations` (generating a review report) | Yes — the export reports how many items it withheld, so the report never reads as complete when it isn't. (This was previously exempt, on the reasoning that an export is an explicit "give everything" action. It isn't: only the AI can invoke this tool, so the "explicit action" was always the AI's, not yours.) |
 | `tandem_getTextContent`, `tandem_getContext`, `tandem_search` | Not applicable — these return document text only, never annotation records |
 
@@ -321,6 +422,21 @@ Toggle between the **Annotations** and **Chat** views using the tabs at the top 
 Type in the input box and press `Enter` to send. Messages go to your AI via the server.
 
 A line under your latest message shows where it is: **waiting for your AI to pick it up** (after a few seconds, with how long it has waited; after two minutes it says **still waiting**), then **your AI has your message**, then **your AI is working on it** once it has said it is starting. The line goes away when the answer arrives, or after ten minutes either way.
+
+### Tandem's Claude in Chat
+
+**Tandem's Claude** is a Claude Code session that Tandem runs in the background so it can answer your chat and comments. When Tandem is set up to run one, the chat panel's header has a button for it:
+
+- **Turn off Tandem's Claude** while it is running. It stays off — including the next time Tandem starts — until you start it again.
+- **Start Tandem's Claude** while it is off, waiting for its first Start, or stopped after being idle. Its conversation resumes where it left off.
+
+You don't have to press Start before writing, though. Sending a chat message — or replying to one of Claude's comments — while Tandem's Claude is stopped starts it to answer you (unless another AI is connected, which answers instead). While it starts, the line under your message reads "Starting Tandem's Claude… it will answer when it's ready", or "Claude is resuming… it will answer when it's back" if it had stopped for being idle. If it can't start, the line says "Tandem's Claude couldn't start, so your message hasn't been answered yet." and offers the fix, such as starting it again or checking your Claude sign-in.
+
+When to start it, and whether it stops after a stretch of idle time, are set in [Settings → AI Assistant](#ai-assistant-settings).
+
+**The first hello.** The first time Tandem's Claude starts on a new install, it says hello in the chat: a few sentences on what it can do here, and that it waits to be asked. If no hello arrives within about a minute, the chat shows "Tandem's Claude hasn't said hello", with the two usual causes: Claude Code isn't signed in (run `claude` in a terminal to sign in), or Claude isn't allowed to use Tandem's tools. A button offers to restart Tandem's Claude, or the relevant fix, once you've sorted that out. [Troubleshooting → Tandem's Claude didn't say hello](troubleshooting.md#tandems-claude-didnt-say-hello) has the details.
+
+**No Claude Code yet?** If nothing Tandem can wake is answering your chat — for example, you have only Claude Desktop connected — the chat panel offers: "Answers here can come from Tandem's own Claude, as you send them. It isn't set up yet." It appears on an empty chat, or once a message has been left waiting. **Set up…** opens the setup wizard to install and connect Claude Code; **Not now** hides the offer until Tandem next starts. It never installs anything by itself, and it stays hidden while you are in Solo.
 
 ### Text Anchors
 
@@ -348,11 +464,13 @@ On macOS, clicking opens chat for the first notification each time you step away
 
 The "working on it" message your AI sends before starting longer work doesn't notify. The answer that follows does.
 
+![Settings open on the Notifications tab: the browser's permission status, Show a notification, the notification content, the tab-title count, the sound and volume, and Send a test notification](screenshots/22-settings-notifications.png)
+
 Change any of this under **Settings → Notifications**:
 
 - **Show a notification** — on by default. In the browser, notifications also need your browser's permission. Tandem asks only when you click **Allow notifications** in this tab, or turn the setting on. With it off, you still hear the sound, at the same limit of once every 30 seconds while you're away.
 - **Notification content** — what the notification says: *Generic* ("Claude replied"), *Document name* (the default, "Claude replied in report.md"), or *Message preview* (adds the start of the reply). Notifications can appear on your lock screen, so the reply text is off unless you choose it.
-- **Flash the taskbar icon** (desktop) / **Show the unread count in the tab title** (browser).
+- **Flash the taskbar icon until you switch to Tandem** (desktop) / **Show the unread count in the tab title** (browser).
 - **I keep Tandem visible beside other apps** — off by default. When it's on, replies count as read whenever Tandem is open on screen with chat showing, even behind other windows, and Tandem treats that window as the one you're using: you hear the sound but get no notification, flash or title count while it's on screen.
 - **Sound** — Chime, Bell, Pop, Ping or None, with a **Preview** button and a volume slider.
 - **Send a test notification** — check that notifications reach you. Clicking the test notification only brings Tandem forward.
@@ -367,16 +485,16 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 
 | Tab | What's in it |
 |-----|--------------|
-| **Appearance** | Theme (light / warm / dark / system), which panel opens by default, text size, accent hue, spacing density, which decorations are shown (authorship, comments, highlights, notes), reduce motion, the optional formatting bar, reveal-rails-on-hover, uniform tab width, and the scroll pill |
+| **Appearance** | Theme (Light / Warm / Dark / System, plus **Use Warm when system is light**), which panel opens by default, text size, accent hue, spacing density, which decorations are shown (authorship, comments, highlights, notes), reduce motion, the optional formatting bar, reveal-rails-on-hover, uniform tab width, and the scroll pill |
 | **Editor** | Reading measure, editor font, default font by file type, default save folder, smart typography, spellcheck, raw-markdown view, and source-view line wrap — see [Editor settings](#editor-settings) below |
-| **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
+| **Network** | Connection details, start-at-login (desktop app only), **Restart server**, and an **Advanced** section with the port, **Show degraded banner after** (how long the connection can be down before the [connection banner](#server-unavailable-or-weve-lost-the-connection-to-the-tandem-server) appears), the reconnect strategy and token rotation |
 | **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
 | **Notifications** | Reply notifications, what they say, the taskbar flash or tab-title count, whether a visible Tandem window counts as the one you're using (**I keep Tandem visible beside other apps**), and the reply sound and its volume — see [Reply Notifications](#reply-notifications) |
-| **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, and Replay tutorial |
+| **AI Assistant** | **Selection Sensitivity**, **Show floating selection toolbar**, the margin annotation view, **Claude working directory**, **Tandem's Claude** (when it starts and how long it runs), **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), and the integration wizard — see [AI Assistant settings](#ai-assistant-settings) below |
 | **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
-| **License** | Activation and current license or trial status |
-| **About** | Version, Copy Diagnostics, and Open log folder (desktop app only) |
+| **License** | License status — this version of Tandem doesn't require a license — and a field to activate a key you've been sent |
+| **About** | **View Documentation**, version details, **Copy Diagnostics**, and **Open Log Folder** (desktop app only) |
 
 ### Editor settings
 
@@ -387,12 +505,39 @@ Most of what shapes the reading surface lives here.
 - **Default font by file type** — Overrides the editor font per format (`.md`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
 - **Default save folder** — Where **Save As** puts new files. Leave it empty to fall back to your AI's working directory, then your home folder. In the desktop app a **Choose…** button opens a native folder picker; in the browser you type the path, and browser Save As is a download that ignores this setting.
 - **Smart typography** — Converts straight quotes, dashes, and `...` to typographic characters as you type. Opt-in.
-- **Spellcheck** — Shows the browser's spelling underlines. Opt-in.
+- **Spellcheck** — Shows the browser's spelling underlines. On by default; turn it off here.
 - **Show raw markdown** — Reveals footnotes, reference-style links, and inline HTML that Tandem keeps as raw source. When hidden they stay in the file and always save; only the on-screen markers are hidden. (This control used to sit under Appearance.)
+- **Wrap long lines in Markdown source** — In the Markdown source view (`Ctrl+Shift+E`), long paragraphs wrap to the width of the view instead of scrolling sideways. Off by default; the file itself is unchanged either way.
+
+### AI Assistant settings
+
+- **Selection Sensitivity** — How long you must hold a selection still before your AI notices it, from 0.5 to 3 seconds (1 second by default).
+- **Show floating selection toolbar** — The [selection popup](#selection-popup) that appears over selected text. On by default. With it off, `Ctrl+Alt+M` (comment on selection) also stops working, and Tandem tells you so when you press it.
+- **Margin annotation view (Word-style)** — Shows annotation cards beside the text they refer to; see [Keyboard Review](#keyboard-review).
+- **Claude working directory** — The folder Claude launches in. Empty means your home folder. Type a path and click **Save**, use **Choose folder…** in the desktop app, or **Reset to default**.
+- **Tandem's Claude** — the Claude Code session Tandem runs in the background to answer your chat and comments (see [Tandem's Claude in chat](#tandems-claude-in-chat)):
+  - *When should it start?* **Start automatically** (the default — when Tandem starts), **Wait until I click Start** (from the status bar or the chat panel), or **Off** (Tandem doesn't run its own Claude; choosing Off stops it now).
+  - *How long should it run?* **Keep it running in the background** (the default), or **Stop it when it has been idle** for a number of minutes you choose (30 by default, 1 to 1440). The idle time counts from the end of its last turn, so it never stops in the middle of one, and an idle stop keeps its conversation for the next start.
+- **Real-time updates** — How a Claude Code session you started yourself hears about your comments as they happen. See [Real-Time Push](#real-time-push-recommended).
+- **Open integration wizard…** / **Reopen integration wizard…** — Connect Claude Code or Claude Desktop.
+
+The Claude working directory, Tandem's Claude and Real-time updates sections appear once Claude Code has been set up through the wizard; until then the tab shows **No AI connected yet** with a **Connect AI…** button.
+
+### Below the settings list
+
+The bottom of the settings sidebar holds a few links that aren't settings:
+
+- **Changelog** — Opens the release notes, read-only.
+- **View license** — Opens Tandem's licence text (desktop app).
+- **Replay tutorial** — Reopens `welcome.md` and runs the first-launch tutorial again.
+- **Report a bug** — Opens a new GitHub issue in your browser, with diagnostics filled in where Tandem can gather them.
+- **Connection status** — A dot and label for the editor's connection to the Tandem server: **MCP connected**, **Reconnecting…** or **MCP offline**. (It doesn't tell you whether an AI is connected; the status bar does.)
+
+If your settings were saved by a newer version of Tandem, a banner at the top of the modal says "Settings are read-only — they were saved by a newer version of Tandem. Changes are disabled to protect them." The controls still show your settings, but you can't change them in this version.
 
 ## Keyboard Shortcuts
 
-Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Twenty app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — text formatting, undo/redo, heading levels, tab jumps and `?` itself — are fixed. The defaults are listed below.
+Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Twenty app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — including text formatting, undo/redo, heading levels, find, tab switching and `?` itself — are fixed. The defaults are listed below.
 
 ### Editor
 
@@ -402,10 +547,12 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Ctrl+I` | Italic |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
-| `Ctrl+K` | Insert/remove link |
 | `Ctrl+S` | Save document |
 | `Ctrl+Shift+S` | Save As (e.g. promote a scratchpad to a file) |
+| `Ctrl+Alt+1`–`Ctrl+Alt+6` | Heading 1–6 |
+| `Ctrl+Shift+V` | Paste as plain text |
 | `Ctrl+F` | Find / replace |
+| `Ctrl+Shift+F` | Find in open tabs |
 | `Ctrl+G` | Find next match |
 | `Ctrl+Shift+G` | Find previous match |
 | `Alt+L` | Select containing block |
@@ -427,6 +574,8 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 
 ### Navigation & General
 
+![The command palette with "annotation" typed, listing the matching annotation commands and their shortcuts](screenshots/19-command-palette.png)
+
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Shift+P` | Command palette |
@@ -436,6 +585,8 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Ctrl+W` | Close tab |
 | `Ctrl+Alt+T` | Reopen closed tab |
 | `Ctrl+1`–`Ctrl+9` | Jump to tab 1–9 |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| `F2` | Rename the active tab's file |
 | `Alt+Left` / `Alt+Right` | Reorder the focused tab |
 | `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle the outline panel / the Annotations + Chat panel |
 | `Ctrl+Alt+F` | Show / hide the formatting bar |
@@ -443,7 +594,8 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Ctrl+Shift+J` | Focus chat |
 | `Ctrl+,` | Settings |
 | `Enter` | Send message (chat panel) |
-| `?` | Show/hide keyboard shortcuts |
+| `?` or `Ctrl+/` | Show/hide keyboard shortcuts |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset (desktop app; in a browser, its own zoom keys do the same) |
 
 > **On Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian and Serbian (Latin) keyboards, `AltGr+F` types `[`.** Windows (and some Linux setups) report AltGr as `Ctrl+Alt`, so Tandem ignores `Ctrl+Alt+F` when the browser flags the press as AltGr. If `[` still toggles the formatting bar instead of typing, remap **Toggle formatting bar** in **Settings → Shortcuts**.
 
@@ -457,19 +609,19 @@ Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets
 
 Start the Tandem server first (`tandem` for global install, or `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available via the MCP configuration written by the integration wizard (or `tandem setup --apply` for a scripted setup), or `.mcp.json` (development).
 
-**Desktop app:** The server is already running. On first run the integration wizard configures Claude Code; once connected, your `tandem_*` tools are available immediately. You can re-open the wizard any time from the tray "Setup AI Assistant" item or Settings. Skip to [Real-Time Push](#real-time-push-recommended) if you want channel notifications.
+**Desktop app:** The server is already running. On first run the integration wizard configures Claude Code; once connected, your `tandem_*` tools are available immediately. You can re-open the wizard any time from the tray "Setup AI Assistant" item or Settings. Skip to [Real-Time Push](#real-time-push-recommended) if you want Claude to react to your comments and chat messages on its own, without waiting to be asked.
 
 Claude can check the connection with `tandem_status`, which reports open documents, connection state, and your current mode (Solo or Tandem).
 
 ### Real-Time Push (Recommended)
 
-Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; on the first Tandem response that returns a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — the skill automatically arms one built-in Monitor watch using it. Claude Code ends each watch after at most 30 minutes, and the skill re-arms it when that happens, which costs one short turn every 30 minutes while the session is idle. On a Claude Code older than 2.1.271 (unmeasured), the watch most likely ends after 30 minutes with no notice.
+Your chat messages, the comments and replies you write, and your accepts, dismisses and edits of annotations can push to Claude in real time rather than waiting for it to poll (in Solo, only chat messages are pushed — see [Solo / Tandem Mode](#solo--tandem-mode)). A text selection isn't pushed on its own; it travels with your next chat message. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; on the first Tandem response that returns a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — the skill automatically arms one [built-in Monitor watch](glossary.md#wake-watch) using it. Claude Code ends each watch after at most 30 minutes, and the skill re-arms it when that happens, which costs one short turn every 30 minutes while the session is idle.
 
 The **built-in Monitor watch** needs no installation or flag and lasts only for that session. It requires a Claude Code account where Monitor is enabled and, on Windows, Git Bash. Asking Claude to watch is recovery if the automatic attempt was skipped or the watch ended (for example after Tandem restarted), not a required setup step.
 
-The **Tandem plugin** also needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
+The **Tandem plugin** also needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its [plugin monitor](glossary.md#plugin-monitor) uses that session's program path to find Node.
 
-The **channel flag** is the third route and must be present on every session:
+The **channel flag** is the third route. It drives the [channel shim](glossary.md#channel-shim), which is not registered by default: register it once with `tandem setup --apply --with-channel-shim` (the desktop app does not install the `tandem` command, so a desktop-only user needs the npm install for this; see [Troubleshooting](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened)). The flag itself must be present on every session:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
@@ -479,7 +631,7 @@ Choose one setup route where possible. A session with the plugin and built-in Mo
 
 ### Polling Remains Authoritative
 
-Push wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
+[Push](glossary.md#push-and-pull) wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
 
 ```
 /loop 30s check tandem inbox and respond to any new messages
@@ -524,13 +676,19 @@ Previously-open documents are auto-restored when the server starts — no manual
 
 ## Troubleshooting
 
-### "Cannot reach the Tandem server"
+### "Server unavailable" or "We've lost the connection to the Tandem server"
 
-The editor couldn't connect to the server via WebSocket. Make sure the server is running:
+The editor can't reach the Tandem server. Two messages say so:
+
+- **With no document open**, after 3 seconds the empty editor shows **Server unavailable**: "Tandem can't reach its sync server. Make sure it's running locally.", with **Retry** and **Open settings**.
+- **Whether or not a document is open**, a banner across the top says "We've lost the connection to the Tandem server. Please check that it's still running.", with **Retry now**. It appears once the connection has been down for 30 seconds; change that under **Settings → Network → Advanced → Show degraded banner after** (5 to 120 seconds). Dismiss it with its ×; it comes back the next time the connection drops. Meanwhile the status bar shows the reconnect attempts, and Tandem keeps retrying on its own.
+
+Make sure the server is running:
+- **Desktop app:** check the system tray — see [Desktop app: server won't start](#desktop-app-server-wont-start)
 - **Global install:** Run `tandem` in a terminal
 - **Development:** Run `npm run dev:standalone`
 
-The message appears after 3 seconds of failed connection. If the server was restarted, refresh the page.
+If the server was restarted, refresh the page.
 
 ### Annotations not appearing
 
@@ -546,6 +704,8 @@ Verify the file path exists and is readable. The server logs (terminal where you
 
 ### Claude isn't responding
 
+If you sent a chat message or left a comment and Claude did nothing, start with [I sent a chat message (or left a comment) and nothing happened](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened): it explains what the status bar's AI label means and walks through the real-time routes.
+
 Make sure Claude Code is running and connected. Check `tandem_status` from Claude Code — if it returns an error, Claude can't reach the server. Run `/mcp` in Claude Code to reconnect.
 
 If using channels, the server must be running before Claude Code starts. If you restarted the server, restart Claude Code or run `/mcp`. Channel timeout messages such as `/api/events timed out after 10000ms`, `SSE inactivity timeout`, or `/api/channel-reply timed out after 5000ms` mean the server accepted a connection but stopped responding; restart Tandem and reconnect Claude.
@@ -555,3 +715,14 @@ For server-side and MCP troubleshooting, see [troubleshooting.md](troubleshootin
 ### Desktop app: server won't start
 
 The desktop app runs the server as a background sidecar process. Check the system tray — if Tandem's icon is there, the server is running. If the icon is missing or the app shows an error dialog, the sidecar failed to start (port conflict, missing resources, or crash). The error dialog offers **Retry Server Start**; Settings → Network → **Restart server** does the same thing later. For persistent issues, open **Settings → About → Open Log Folder** and read `tandem.log` — see [troubleshooting → Reading server logs](troubleshooting.md#reading-server-logs).
+
+## Related
+
+- [Using Tandem map](maps/using-tandem.md): everything else about writing and reviewing in Tandem.
+- [Workflows](workflows.md): worked examples of a review, a multi-document check and a draft, with the MCP calls Claude makes.
+- [Troubleshooting](troubleshooting.md): the full list of problems and fixes, beyond the short one above.
+- [Configuration](configuration.md): environment variables, the app-data folders and start at login.
+- [Integrations](integrations.md): connecting an AI client other than Claude Code.
+- [MCP tool reference](mcp-tools.md): every tool Claude can call on your documents.
+- [Glossary](glossary.md): Solo mode, notes, suggestions and the other terms this guide uses.
+- [ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model): why notes stay private from the AI.

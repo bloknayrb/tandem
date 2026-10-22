@@ -1,10 +1,24 @@
+---
+tags: [audience/contributor, topic/design-system]
+aliases: [Token audit, Protected tokens]
+---
+
 # Token Audit — design-system-impl umbrella branch
 
+[Home](../README.md) › [Contributing](../maps/contributing.md)
+
+> **Status: mixed.** The bundle-vs-production reconciliation below is a
+> historical record of the 2026-05-21 audit. Still live: the protected-token
+> list (enforced by `tests/design-system-impl/token-protection.test.ts`) and the
+> dated re-audit sections at the end, which record later value changes. The
+> table rows give today's production values where a later change is recorded
+> (re-checked 2026-10-20); `index.html` is the authority.
+>
 > **Phase 0c deliverable.** Produced 2026-05-21 as part of the `feat/design-system-impl` umbrella branch. Reconciles the bundle's `colors_and_type.css` (398 lines) against production's `index.html` `:root` + `[data-theme="dark"]` + `[data-theme="warm"]` blocks. Resolution per **Conflict #6 / Option A** from the umbrella plan: *Production tokens win for shipped colors; bundle adds NEW tokens only.*
 
 ## Sources
 
-- **Production:** [`index.html` lines 65–195 (`:root`), 291–353 (`[data-theme="dark"]`), 360–388 (`[data-theme="warm"]`)](../../index.html). Hand-tuned across PRs #556 (WCAG AA audit), #621 (dark-bg fix), #776 (calm-v7 dark canon).
+- **Production:** [`index.html`](../../index.html), the `:root`, `[data-theme="dark"]` and `[data-theme="warm"]` blocks (cited by selector, not line, because the lines move). Hand-tuned across PRs #556 (WCAG AA audit), #621 (dark-bg fix), #776 (calm-v7 dark canon).
 - **Bundle:** OpenDesign project `Tandem Design System` (UUID `019e2685-a2d8-7b24-8d55-864b738f47be`), file `colors_and_type.css`. Originally generated 2026-05-21 10:30 during the React → Svelte 5 port, from the superseded project `Tandem Design System (1)` (`2a0312b0-b34a-40e8-b9c8-306987dce4e2`). **Any `app.css:NNN` / line-number citation downstream predates the repoint and is unverified against the current project — see [#1712](https://github.com/bloknayrb/tandem/issues/1712).**
 
 ## Resolution categories
@@ -30,7 +44,7 @@ Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped beha
 - `--tandem-suggestion-fg-strong`
 - `--tandem-suggestion-bg`
 - `--tandem-suggestion-border`
-- `--tandem-fg-subtle` (light + dark — both backed off after the #556 audit; light at oklch 0.54, dark at oklch 0.70)
+- `--tandem-fg-subtle` (light + dark — both backed off after the #556 audit; light was oklch 0.54 and is now 0.455 after the 2026-08-05 AA re-audit below, dark is oklch 0.70)
 - `--tandem-fg-muted` (light + dark — symmetric WCAG-AA pair with `-subtle`)
 
 ## Light mode
@@ -42,9 +56,9 @@ Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped beha
 | `--tandem-surface-muted` | `oklch(0.975 0.005 80)` | same | **SAME ✓** |
 | `--tandem-surface-sunk` | `oklch(0.96 0.006 80)` | same | **SAME ✓** |
 | `--tandem-fg` | `oklch(0.22 0.012 280)` | same | **SAME ✓** |
-| `--tandem-fg-muted` | `oklch(0.48 0.008 280)` | same | **SAME ✓** (PROTECTED) |
-| `--tandem-fg-subtle` | `oklch(0.54 0.008 280)` | same | **SAME ✓** (PROTECTED; backed off from 0.44 per #556) |
-| `--tandem-fg-faint` | `oklch(0.64 0.005 280)` | same | **SAME ✓** |
+| `--tandem-fg-muted` | `oklch(0.42 0.008 280)` | `oklch(0.48 0.008 280)` | **PROD WINS** (PROTECTED) — was SAME at 0.48 until the 2026-08-05 AA re-audit below |
+| `--tandem-fg-subtle` | `oklch(0.455 0.008 280)` | `oklch(0.54 0.008 280)` | **PROD WINS** (PROTECTED) — was SAME at 0.54 (backed off from 0.44 per #556) until the 2026-08-05 re-audit |
+| `--tandem-fg-faint` | `oklch(0.50 0.005 280)` | `oklch(0.64 0.005 280)` | **PROD WINS** — was SAME at 0.64 until the 2026-08-05 re-audit |
 | `--tandem-border` | `oklch(0.92 0.005 280)` | same | **SAME ✓** |
 | `--tandem-border-strong` | `oklch(0.86 0.006 280)` | same | **SAME ✓** |
 | `--tandem-accent-h` | `275deg` | same | **SAME ✓** |
@@ -64,7 +78,7 @@ Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped beha
 | `--tandem-success-bg` | `color-mix(in srgb, var(--tandem-success) 10%, var(--tandem-surface))` | same | **SAME ✓** |
 | `--tandem-success-border` | `color-mix(in srgb, var(--tandem-success) 40%, var(--tandem-border))` | same | **SAME ✓** |
 | `--tandem-warning` | `oklch(0.62 0.16 65)` | same | **SAME ✓** |
-| `--tandem-warning-fg` | `#ffffff` | same | **SAME ✓** |
+| `--tandem-warning-fg` | `#0f172a` | `#ffffff` | **PROD WINS** — white on amber was 3.76:1; changed for AA in the 2026-08-05 a11y gate (see "Later AA fixes" below) |
 | `--tandem-warning-fg-strong` | `#92400e` | same | **SAME ✓** |
 | `--tandem-warning-bg` | color-mix derived | same | **SAME ✓** |
 | `--tandem-warning-border` | color-mix derived | same | **SAME ✓** |
@@ -72,7 +86,7 @@ Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped beha
 | `--tandem-error-fg` | `#ffffff` | same | **SAME ✓** |
 | `--tandem-error-fg-strong` | `#991b1b` | same | **SAME ✓** |
 | `--tandem-error-bg` / `-border` | color-mix derived | same | **SAME ✓** |
-| `--tandem-info` | `oklch(0.58 0.2 258)` | same | **SAME ✓** |
+| `--tandem-info` | `oklch(0.55 0.2 258)` | `oklch(0.58 0.2 258)` | **PROD WINS** — 0.58 left white `info-fg` at 4.41:1; changed for AA in the 2026-08-05 a11y gate (see "Later AA fixes" below) |
 | `--tandem-info-fg` | `#ffffff` | same | **SAME ✓** |
 | `--tandem-info-fg-strong` | `oklch(0.38 0.16 258)` | same | **SAME ✓** |
 | `--tandem-info-bg` / `-border` | color-mix derived | same | **SAME ✓** |
@@ -105,7 +119,7 @@ Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped beha
 | `--tandem-fg` | `oklch(0.94 0.006 280)` | `oklch(0.94 0.005 80)` | **PROD WINS** — hue 280° matches dark canvas hue (warm 80° clashes) |
 | `--tandem-fg-muted` | `oklch(0.74 0.008 280)` | `oklch(0.72 0.008 80)` | **PROD WINS** (PROTECTED) |
 | `--tandem-fg-subtle` | `oklch(0.70 0.008 280)` | `oklch(0.70 0.008 80)` | **PROD WINS** (PROTECTED, lightness same but hue differs) |
-| `--tandem-fg-faint` | `oklch(0.58 0.008 280)` | `oklch(0.58 0.010 270)` | **PROD WINS** |
+| `--tandem-fg-faint` | `oklch(0.68 0.008 280)` | `oklch(0.58 0.010 270)` | **PROD WINS** — raised from 0.58 by the 2026-08-05 re-audit and its follow-up (see below) |
 | `--tandem-border` | `oklch(0.34 0.010 280)` | `oklch(0.30 0.012 270)` | **PROD WINS** |
 | `--tandem-border-strong` | `oklch(0.42 0.012 280)` | `oklch(0.38 0.014 270)` | **PROD WINS** |
 | `--tandem-accent` | `oklch(0.72 0.14 var(--tandem-accent-h))` | same | **SAME ✓** |
@@ -155,7 +169,14 @@ These tokens exist in the bundle but not production. They're additive (no confli
 
 ### Semantic type roles
 
-The bundle defines `--tandem-h1-font` / `--tandem-h1-size` / `--tandem-h1-weight` / `--tandem-h1-leading` / `--tandem-h1-tracking` (and mirrors for h2, body, ui, code). Today, production uses raw `font-size`/`font-family` declarations inline at consumer sites; adopting these named roles centralises the type scale.
+The bundle defines `--tandem-h1-font` / `--tandem-h1-size` / `--tandem-h1-weight` / `--tandem-h1-leading` / `--tandem-h1-tracking` (and mirrors for h2, body, ui, code). When this audit was written production used raw `font-size`/`font-family` declarations inline at consumer sites; adopting these named roles centralises the type scale.
+
+**Adoption status (re-checked 2026-10-20).** The h1 and h2 roles are **adopted**:
+`index.html` `:root` defines them and `src/client/editor/editor.css` consumes
+them for editor headings. The body and ui roles are defined in `index.html`
+too (body on the sans stack, not the bundle's serif, per the PROD WINS editor-font
+row above; `--tandem-ui-leading` has a consumer in `ChatPanel.svelte`). The code
+role is not defined.
 
 | Token | Bundle value | Adoption sub-PR |
 |---|---|---|
@@ -196,10 +217,10 @@ These do not exist in production today. Adding them is additive.
 
 ## Enforcement
 
-Two CI gates protect this audit's decisions across the 46+ sub-PRs in the umbrella branch:
+Two gates protect this audit's decisions across the 46+ sub-PRs in the umbrella branch:
 
-1. **Existing semantic-tokens lint** (`scripts/check-semantic-tokens.ts`): blocks raw hex/rgba in `src/client/**/*.{ts,svelte}` outside the approved exemption list (neutral-shadow rgba). Unchanged by this audit; continues to enforce that component code references only `var(--tandem-*)`.
-2. **NEW: protected-token snapshot gate** (`tests/design-system-impl/token-protection.test.ts`): vitest test that reads `index.html`, extracts the `:root` and `[data-theme="dark"]` token blocks, and asserts each protected token value matches a snapshot. Changing a protected token requires updating the snapshot in the same PR with an explicit per-token WCAG re-audit committed alongside.
+1. **Existing semantic-tokens lint** (`scripts/check-semantic-tokens.ts`): runs at pre-commit through the `lint-staged` block in `package.json` (and by hand as `npm run check:tokens`); no CI workflow runs it — see `conflicts-resolved.md`. It blocks raw hex/rgba in `src/client/**/*.{ts,svelte}` outside the approved exemption list (neutral-shadow rgba). Unchanged by this audit; continues to enforce that component code references only `var(--tandem-*)`.
+2. **NEW: protected-token snapshot gate** (`tests/design-system-impl/token-protection.test.ts`): a vitest test, so it runs in CI with the rest of the suite, that reads `index.html`, extracts the `:root` and `[data-theme="dark"]` token blocks, and asserts each protected token value matches a snapshot. Changing a protected token requires updating the snapshot in the same PR with an explicit per-token WCAG re-audit committed alongside.
 
 Snapshot update is intentionally noisy: it surfaces every protected-token change for human review during PR review. No "auto-update on `--update-snapshots`" allowance for these tokens.
 
@@ -252,6 +273,12 @@ Dark was already monotonic (muted 0.74 > subtle 0.70 > faint 0.67) and its
 `muted`/`subtle` remain at their audited values — the protected snapshot for dark
 is unchanged.
 
+*Superseded:* a follow-up raised dark `faint` to **0.68**, because that sweep
+missed the authorship-tinted card surfaces, which are the worst surface for
+every rung — dark `faint` now measures **4.61:1** worst, on
+`--tandem-author-claude-bg`. The token comment in `index.html` records the
+reasoning.
+
 **Known limit, recorded rather than papered over.** Dark `faint` does **not**
 clear AA against `--tandem-info-bg` (#0c4a6e): **3.16:1**. No consumer pairs
 faint text with that background today. Do not introduce one without re-checking;
@@ -276,3 +303,26 @@ on light backgrounds, and three de-emphasis tiers is what fits in it. A future
 pass wanting genuinely distinct tiers should reach for fewer tokens or a
 non-colour differentiator — not a lighter `faint`, which is what failed AA to
 begin with.
+
+---
+
+## Later AA fixes (2026-08-05 a11y gate)
+
+The same v1.0 accessibility gate changed two light-theme status tokens that the
+tables above originally recorded as SAME:
+
+- `--tandem-warning-fg` `#ffffff` → `#0f172a`: white on amber measured 3.76:1;
+  dark text gives 4.75:1, matching the choice dark mode already made.
+- `--tandem-info` `oklch(0.58 0.2 258)` → `oklch(0.55 0.2 258)`: 0.58 left the
+  white `--tandem-info-fg` at 4.41:1; 0.55 gives 4.97:1.
+
+Neither is a protected token. Full measurements and the accepted residuals are in
+[`docs/a11y-gate-results.md`](../a11y-gate-results.md).
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the other live design references.
+- [Semantic tokens](../semantic-tokens.md): the family reference for every token named here.
+- [Accessibility gate results](../a11y-gate-results.md): the measurements behind the later re-audits.
+- [Conflicts resolved](conflicts-resolved.md): the decision to keep production tokens over the bundle's.
+- [Derived-surface spec](derived-spec.md): where the audited tokens are composed into surfaces.

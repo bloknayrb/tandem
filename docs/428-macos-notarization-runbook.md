@@ -1,21 +1,37 @@
-# macOS Code-Signing & Notarization Runbook (#428)
+---
+tags: [audience/maintainer, topic/release, topic/macos]
+aliases: [macOS notarization runbook, macOS signing runbook, Notarization runbook]
+---
 
-**Goal:** ship a Tandem macOS build that launches cleanly on a fresh Mac with
+# macOS Code-Signing & Notarization: Rotation and Recovery Runbook (#428)
+
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
+
+**Goal:** keep every Tandem macOS build launching cleanly on a fresh Mac with
 **no Gatekeeper warning** — no "Tandem is damaged and can't be opened", no
 "unidentified developer", no right-click → Open workaround.
 
-This requires three things to be true at once:
+That needs three things to be true at once:
 
-1. An **active Apple Developer Program** membership (the calendar gate).
+1. An **active Apple Developer Program** membership, with its agreements signed.
 2. The signing/notarization **secrets populated** in the GitHub repo.
 3. Apple's **notary service healthy** at build time.
 
-The release workflow (`.github/workflows/tauri-release.yml`) is already wired
-for all of this. The notary trio was re-enabled on the
-`claude/highest-impact-prioritization-vksRg` branch; until the secrets are
-populated the build ships unsigned **by design** and the verification gate
-no-ops with a `::notice::`. The moment the secrets land, signing + notarization
-+ stapling activate and the gate enforces them.
+**Current state.** The secrets have been populated since 2026-05-15, and the
+release workflow (`.github/workflows/tauri-release.yml`) signs, notarizes and
+staples every macOS build. Since #1746 its macOS gates all **fail closed**:
+"Validate Apple signing material" refuses to start the build if any value is
+missing, "Decode App Store Connect API key" fails on an empty key, and "Verify
+macOS signature + notarization" fails a bundle that is unsigned or has no
+stapled ticket. So **a red macOS leg usually means a secret rotated or expired**
+(or an Apple agreement lapsed), not that the workflow is broken. The per-release
+check is the macOS signing row in
+[release-smoke-checklist.md §0](release-smoke-checklist.md#0-ci-signal-before-touching-hardware).
+
+Use this runbook when you need to rotate the certificate or API key, recover
+from an expired Apple agreement, or ride out a notary outage. Sections 0–3 are
+the steps for (re)creating the material; section 5 is how to prove it works
+without cutting a real release.
 
 ---
 
@@ -141,28 +157,38 @@ System status: <https://developer.apple.com/system-status/> (watch the
 
 ---
 
-## 5. Smoke-test with a throwaway release-candidate tag
+## 5. Smoke-test with a release-candidate build
 
-Do **not** debug signing on a real `vX.Y.Z` tag. The workflow triggers on any
-`v*` tag, so use a disposable RC tag:
+Do **not** debug signing on a real `vX.Y.Z` tag. **A throwaway tag name does
+not work either:** the workflow's `create-release` job first checks that the
+tag is exactly `v<version>` from `src-tauri/tauri.conf.json`, and any other tag
+fails there, before any macOS leg starts. So the RC has to be a real version:
 
-```bash
-git tag v0.0.0-rc-notarize-1
-git push origin v0.0.0-rc-notarize-1
-```
+1. On a branch, bump the version surfaces to an RC version (for example
+   `0.29.0-rc.1`), as in step 1 of
+   [the release skill](../.claude/skills/release/SKILL.md).
+   `src-tauri/tauri.conf.json` is the one the tag check reads.
+2. Tag that commit with an **annotated** tag and push it:
+   ```bash
+   git tag -a v0.29.0-rc.1 -m "Tandem v0.29.0-rc.1 (signing smoke)"
+   git push origin v0.29.0-rc.1
+   ```
+3. `create-release` creates the **draft** release once, and because the tag
+   contains a hyphen it is flagged **prerelease**, so it stays off
+   `releases/latest`. The matrix legs upload into that draft; never publish it.
 
 Then watch the **two macOS matrix jobs** (`aarch64-apple-darwin` and
 `x86_64-apple-darwin`):
 
+- **"Validate Apple signing material"** runs first. A missing secret or
+  variable fails here, and the error names every missing value.
 - The **"Verify macOS signature + notarization"** step must print
-  `ok: …app code-signed + notarization-stapled` for each `.app`. If
-  `APPLE_CERTIFICATE` is missing it will instead print the skip `::notice::` —
-  which tells you the secret didn't take.
-- `tauri-action` produces a **draft** release (`releaseDraft: true`), so the RC
-  won't go public. Delete the draft release and the RC tag afterward:
+  `ok: …app code-signed + notarization-stapled` for each `.app`. An empty
+  `APPLE_CERTIFICATE` fails this step too, with an `::error::` and exit 1.
+- Afterwards, delete the draft release, the RC tag and the branch:
   ```bash
-  git push --delete origin v0.0.0-rc-notarize-1
-  git tag -d v0.0.0-rc-notarize-1
+  git push --delete origin v0.29.0-rc.1
+  git tag -d v0.29.0-rc.1
   # delete the draft release in the GitHub UI (Releases → … → Delete)
   ```
 
@@ -198,32 +224,46 @@ v1.0 install matrix (D12, macOS 14 + macOS 26.1 M1).
 
 ---
 
-## 6. Re-enable for the real release
-
-Once the RC is green and a real Mac launches the app cleanly, no code change is
-needed — the signing path is permanent. Cut the real `vX.Y.Z` tag and the same
-steps run against it.
-
----
-
 ## What the workflow already does for you
 
+Every macOS step below fails closed; none of them skips when material is
+missing.
+
+- **`tauri-release.yml` → "Validate Apple signing material"** — fails the leg
+  before the build if any of the six secrets or the `APPLE_SIGNING_IDENTITY`
+  variable is empty, naming every missing value.
 - **`tauri-release.yml` → "Decode App Store Connect API key"** — base64-decodes
-  `APPLE_API_KEY_BASE64` to a `umask 077` file, exports `APPLE_API_KEY_PATH`,
-  no-ops cleanly when the secret is unset.
-- **`tauri-release.yml` → `tauri-apps/tauri-action@v0`** — infers the signing
-  identity from `APPLE_CERTIFICATE`, signs the `.app`, and submits to the notary
-  via the API key trio (`APPLE_API_ISSUER` / `APPLE_API_KEY` /
-  `APPLE_API_KEY_PATH`). All empty → graceful skip.
+  `APPLE_API_KEY_BASE64` to a `umask 077` file and exports
+  `APPLE_API_KEY_PATH`; fails if the secret is empty.
+- **`tauri-release.yml` → `tauri-apps/tauri-action` (v1.0.0, pinned by commit
+  SHA)** — infers the signing identity from `APPLE_CERTIFICATE`, signs the
+  `.app`, and submits to the notary via the API key trio (`APPLE_API_ISSUER` /
+  `APPLE_API_KEY` / `APPLE_API_KEY_PATH`). It uploads into the draft that
+  `create-release` made.
 - **`tauri-release.yml` → "Wipe App Store Connect API key"** — removes the
   decoded `.p8` from the runner (`if: always()`).
 - **`tauri-release.yml` → "Verify macOS signature + notarization"** — fails the
-  job if a produced `.app` is unsigned or missing a stapled notarization ticket,
-  *once* `APPLE_CERTIFICATE` is set. Uses `codesign --verify --deep --strict`
-  plus `xcrun stapler validate` (offline, deterministic — no `spctl` CI
-  flakiness). Skips with a `::notice::` while unsigned-by-design.
+  job if `APPLE_CERTIFICATE` is empty, or if a produced `.app` is unsigned or
+  missing a stapled notarization ticket. Uses `codesign --verify --deep
+  --strict` plus `xcrun stapler validate` (offline, deterministic — no `spctl`
+  CI flakiness).
+- **`tauri-release.yml` → "Smoke-test bundled sidecar (macOS arm64)"** — boots
+  the bundled `node-sidecar` on Apple Silicon and checks it serves `/health`,
+  so a signed but dead-on-arrival app still fails the release.
 - **`release-check` job** — fails if any matrix build (incl. either macOS arch)
   failed, blocking a half-signed release.
+- **`verify-release-manifest` job** — checks the draft's `latest.json` against
+  the uploaded assets, and its "Verify updater signatures against
+  tauri.conf.json pubkey" step checks every updater signature.
+
+## History
+
+Signing and notarization were brought up for #428 after Apple's notary service
+hung for hours during the v0.12.0 release and the notary settings were
+switched off. They were later re-enabled, the secrets were populated on
+2026-05-15, and #1746 then turned the old "skip quietly when unsigned"
+behaviour into the fail-closed gates above. v0.24.1 and v0.25.0 exercised the
+full path with a real certificate.
 
 ## Gotchas
 
@@ -236,6 +276,18 @@ steps run against it.
 - **Stapling needs network at build time** (notarization is an online round
   trip) but the *stapled result* is verified offline — which is exactly why the
   app then launches with no network on the user's machine.
+- **An expired Apple agreement looks like a notarization failure.** If the
+  notary step returns a 403 naming a missing or expired agreement, only the
+  Account Holder can clear it, by accepting the updated agreement at
+  developer.apple.com / App Store Connect. Then re-run the failed macOS jobs.
 - **Notary latency is unpredictable.** Submissions usually take minutes but can
   spike. If CI times out mid-notarization, re-run the macOS jobs rather than
   re-cutting the tag.
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md) — the release skill, smoke checklist and v1.0 gates.
+- [Release smoke checklist](release-smoke-checklist.md#0-ci-signal-before-touching-hardware) — the per-release row that tells you this runbook is needed.
+- [The release skill](../.claude/skills/release/SKILL.md) — cutting the tag that triggers these signing steps.
+- [Troubleshooting](troubleshooting.md) — what a user sees when a macOS build is not signed or notarized.
+- [Security: open findings](security.md#open-findings) — the register entry that records when the fail-closed signing gates were first verified on a tag build.

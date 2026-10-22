@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, audience/ai-setup, topic/mcp, reference]
+aliases: [MCP tool reference, MCP tools, Tool reference]
+---
+
 # MCP Tool Reference
+
+[Home](README.md) › [Connecting an AI](maps/connecting-ai.md)
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
@@ -6,7 +13,22 @@ Tandem registers 30 tools in source (28 active, 2 shipped dark); a release expos
 
 **`.docx` ships dark.** A release refuses `.docx` files, so every `.docx` behaviour described below (Word comment import and export, `allowImageLoss`, the `.docx` sidecar backup, the error codes only the two dark tools return) is reachable only in a build with `.docx` enabled. It stays documented so the re-enable starts from an accurate reference.
 
-The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text offsets for positions, counted in **UTF-16 code units** rather than characters — use `tandem_resolveRange` to get safe offsets from text patterns.
+The [channel shim](glossary.md#channel-shim) also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use [flat text offsets](glossary.md#flat-offsets) for positions, counted in **UTF-16 code units** rather than characters — use `tandem_resolveRange` to get safe offsets from text patterns.
+
+## Contents
+
+- [Response Format](#response-format), including [structured output](#structured-output-outputschema--structuredcontent) and [error codes](#error-codes)
+- [Coordinate System](#coordinate-system)
+- [Multi-Document Support](#multi-document-support)
+- [Document Tools](#document-tools): `tandem_open`, `tandem_scratchpad`, `tandem_getTextContent`, `tandem_getOutline`, `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_save`, `tandem_status`, `tandem_close`, `tandem_rename`, `tandem_listDocuments`, `tandem_switchDocument`, `tandem_convertToMarkdown`
+- [Annotation Tools](#annotation-tools): `tandem_comment`, `tandem_getAnnotations`, `tandem_resolveAnnotation`, `tandem_removeAnnotation`, `tandem_editAnnotation`, `tandem_annotationReply`, `tandem_exportAnnotations`
+- [Apply Tools](#apply-tools): `tandem_applyChanges`, `tandem_restoreBackup`
+- [Navigation Tools](#navigation-tools): `tandem_search`, `tandem_resolveRange`, `tandem_getContext`
+- [Awareness Tools](#awareness-tools): `tandem_getActivity`, `tandem_checkInbox`, `tandem_reply`
+- [Diagnostics Tools](#diagnostics-tools): `tandem_diagnostics`
+- [HTTP API](#http-api), starting from its [route index](#route-index)
+- [Channel API (Real-Time Push)](#channel-api-real-time-push)
+- [Claude Code CLI Runtime Contract](#claude-code-cli-runtime-contract)
 
 ## Response Format
 
@@ -105,7 +127,7 @@ Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The edit
 
 ## Multi-Document Support
 
-All tools that operate on a document accept an optional `documentId` parameter. If omitted, the tool targets the **active document** (the most recently opened or switched-to document). Use `tandem_listDocuments` to see all open documents and their IDs, and `tandem_switchDocument` to change the default target.
+All tools that operate on a document accept an optional `documentId` parameter. If omitted, most target the **active document** (the most recently opened or switched-to document). Two kinds differ: `tandem_checkInbox` polls every open document and tags each item with its `documentId`, and the four tools keyed by annotation ID (`tandem_resolveAnnotation`, `tandem_removeAnnotation`, `tandem_editAnnotation`, `tandem_annotationReply`) default to the open document that holds that annotation, refusing as `ambiguous-document` when more than one does. Use `tandem_listDocuments` to see all open documents and their IDs, and `tandem_switchDocument` to change the default target.
 
 Document IDs are stable -- the same file path always produces the same ID across sessions.
 
@@ -127,7 +149,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 ```json
 {
   "documentId": "report-a1b2c3",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "filePath": "C:\\Users\\you\\docs\\report.md",
   "fileName": "report.md",
   "format": "md",
   "readOnly": false,
@@ -148,7 +170,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 
 **Example:**
 ```
-tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
+tandem_open({ filePath: "C:\\Users\\you\\Documents\\progress-report-feb.md" })
 ```
 
 **Notes:**
@@ -190,7 +212,7 @@ tandem_scratchpad({ content: "# Test plan\n\n- Step one\n- Step two" })
 
 **Notes:**
 - Each call creates a new scratchpad with a unique ID.
-- Scratchpads use `upload://` synthetic paths — they are not saved to disk.
+- [Scratchpads](glossary.md#scratchpad) use `upload://` synthetic paths — they are not saved to disk.
 - Seeded content parses real block structure; to add more later, use `tandem_appendContent`.
 - Also available via `Ctrl+N` in the editor or the `+` button in the tab bar.
 
@@ -209,7 +231,7 @@ Read document as plain text whose offsets match the annotation coordinate system
 ```json
 {
   "text": "# Title\nFirst paragraph...\n## Section\nMore text...",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "filePath": "C:\\Users\\you\\docs\\report.md",
   "documentId": "report-a1b2c3"
 }
 ```
@@ -218,7 +240,7 @@ Read document as plain text whose offsets match the annotation coordinate system
 ```json
 {
   "text": "## Section\nMore text...",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.md",
+  "filePath": "C:\\Users\\you\\docs\\report.md",
   "section": "Section"
 }
 ```
@@ -386,7 +408,7 @@ Target an item by a flat offset anywhere inside it. Flat text is structurally bl
 
 **Errors:** `READ_ONLY` (read-only document), `FORMAT_ERROR` (a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
 
-**Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.csv`, `.html`, unknown extensions) have no list model at all.
+**Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.html`) have no list model at all.
 
 **No `move` or list-type conversion, deliberately -- and reordering by hand is lossy.** Yjs has no move primitive and `nodeName` is immutable, so relocating an item or switching a list between bulleted and numbered means delete-and-rebuild, which destroys the annotations, authorship and CRDT anchors on everything it touches -- the same loss the range-replace design was rejected for. Composing `remove` + `insertAfter` to reorder has exactly that cost: **the moved item's annotations and authorship do not survive**, and nothing warns you. Prefer leaving the item where it is, or accept the loss knowingly.
 
@@ -415,14 +437,14 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 
 **Returns:**
 ```json
-{ "saved": true, "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
+{ "saved": true, "filePath": "C:\\Users\\you\\docs\\report.md" }
 ```
 
 A save that did not reach disk answers `saved: false` with `sessionOnly: true` and a machine-readable `reason` (#1798 — it used to answer `saved: true`, which is why `.html` edits looked accepted and were then lost on tab close):
 
 ```json
 { "saved": false, "sessionOnly": true, "reason": "UNSUPPORTED_FORMAT",
-  "filePath": "C:\\Users\\bkolb\\docs\\report.html",
+  "filePath": "C:\\Users\\you\\docs\\report.html",
   "message": "Session saved (annotations preserved). Source file unchanged — this format (html) cannot be written back to disk." }
 ```
 
@@ -514,7 +536,7 @@ Close a document's tab (the active document if no `documentId` is specified); if
 
 **Returns:**
 ```json
-{ "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" }
+{ "closed": true, "was": "C:\\Users\\you\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" }
 ```
 
 ---
@@ -530,7 +552,7 @@ Rename an open on-disk document's file, keeping the same directory and extension
 
 **Returns:**
 ```json
-{ "renamed": true, "from": "C:\\Users\\bkolb\\docs\\draft.md", "to": "C:\\Users\\bkolb\\docs\\final.md", "fileName": "final.md" }
+{ "renamed": true, "from": "C:\\Users\\you\\docs\\draft.md", "to": "C:\\Users\\you\\docs\\final.md", "fileName": "final.md" }
 ```
 
 **Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (uploads, `readOnly` opens) are rejected. A disk-opened `.docx` is renamable (#576). The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
@@ -593,7 +615,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 ```json
 {
   "converted": true,
-  "outputPath": "C:\\Users\\bkolb\\docs\\report.md",
+  "outputPath": "C:\\Users\\you\\docs\\report.md",
   "documentId": "report-a1b2c3",
   "fileName": "report.md",
   "message": "Converted to Markdown: report.md"
@@ -845,7 +867,7 @@ Export the annotations Claude can see — the same records `tandem_getAnnotation
 | `writeToDisk` | boolean | no | Also write the export to a sharable sidecar next to the document (`<docPath>.annotations.{json\|md}`). Overwrites any existing sidecar. |
 | `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. The final filename must end in `.annotations.md` or `.annotations.json`, matching `format`; the destination **directory** is unrestricted ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
-Solo mode applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
+[Solo mode](glossary.md#solo-mode) applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
 
 The sidecar and the response carry `heldFromExport` and `privateExcluded` as **two separate floors** — the first counts what the Solo hold withheld, the second what ADR-027's audience gate withheld before it (#1619/#1710) — and both are absent when zero. Neither count appears in the markdown text.
 
@@ -883,8 +905,8 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
   "applied": 5,
   "rejected": 1,
   "rejectedDetails": [{"id": "ann-xyz", "reason": "..."}],
-  "backupPath": "C:\\Users\\bkolb\\docs\\report.backup.docx",
-  "outputPath": "C:\\Users\\bkolb\\docs\\report.docx",
+  "backupPath": "C:\\Users\\you\\docs\\report.backup.docx",
+  "outputPath": "C:\\Users\\you\\docs\\report.docx",
   "pendingWarning": "3 annotations are still pending review",
   "commentsResolved": 2
 }
@@ -1120,7 +1142,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 
 On a default poll a background document that produced nothing on its last pass, has not changed since (any transaction on it, deletions included), and was polled under the same Solo/Tandem mode is not re-read. `activity.documentId` names the active document even when its pass failed (its other fields are then empty); it is `null` only when no document is active. When two listed files share a name the summary adds the `documentId`, e.g. `README.md (readme-ab12cd)`. Before #2187 a default poll read only the active document, so a comment on a background tab came back as `No new actions.`, which nothing distinguished from a quiet poll.
 
-**No document open:** the tool never returns `NO_DOCUMENT`. Chat lives in `CTRL_ROOM`, not on a document, so with no document open (or a `documentId` that names no open document) it still returns `chatMessages`, `mode`, `modeProvenance` and `storeReadOnly`, with `userActions` / `userResponses` / `userReplies` empty and every `activity` field `false`/`null`. The `summary` then leads with `No document is open.` (or names the unknown id), and carries no advice to call `tandem_open`: Tandem's Claude opens a document only when the user asks. An empty-string `documentId` is treated as omitted. Before this, the tool refused with `NO_DOCUMENT` ahead of the chat read, so a chat sent with every tab closed never reached the supervisor's Claude.
+**No document open:** the tool never returns `NO_DOCUMENT`. Chat lives in [`CTRL_ROOM`](glossary.md#ctrl_room), not on a document, so with no document open (or a `documentId` that names no open document) it still returns `chatMessages`, `mode`, `modeProvenance` and `storeReadOnly`, with `userActions` / `userResponses` / `userReplies` empty and every `activity` field `false`/`null`. The `summary` then leads with `No document is open.` (or names the unknown id), and carries no advice to call `tandem_open`: Tandem's Claude opens a document only when the user asks. An empty-string `documentId` is treated as omitted. Before this, the tool refused with `NO_DOCUMENT` ahead of the chat read, so a chat sent with every tab closed never reached the supervisor's Claude.
 
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
@@ -1257,7 +1279,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
 
-`/api/open` and `/api/upload` converge with `tandem_open` in `documents/open.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
+`/api/open` and `/api/upload` converge with `tandem_open` in `documents/open.ts`, so the resulting [Y.Doc](glossary.md#ydoc-and-crdt) and [Hocuspocus](glossary.md#hocuspocus) sync behave identically regardless of how the file was opened.
 
 ### GET /api/info
 
@@ -1344,7 +1366,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 
 **Request:**
 ```json
-{ "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
+{ "filePath": "C:\\Users\\you\\docs\\report.md" }
 ```
 
 | Field | Type | Required | Description |
@@ -1392,7 +1414,7 @@ Close an open document by its document ID. Equivalent to `tandem_close` but call
 
 **Response (200):**
 ```json
-{ "data": { "closedPath": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
+{ "data": { "closedPath": "C:\\Users\\you\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
 ```
 
 `closedPath` is scrubbed to a basename for non-loopback callers (#1294).
@@ -1435,7 +1457,7 @@ The channel API endpoints expose real-time events from the editor as an SSE stre
 
 ### GET /api/events
 
-SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`; the plugin monitor is a second consumer of this same stream, writing a payload-free wake line — the event's `type` and nothing else — to stdout as a plugin notification (#1354). It reads the full stream rather than `?filter=wake` only because its awareness flush needs `event.documentId`; the payload never leaves the monitor process.
+SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`; the [plugin monitor](glossary.md#plugin-monitor) is a second consumer of this same stream, writing a payload-free wake line — the event's `type` and nothing else — to stdout as a plugin notification (#1354). It reads the full stream rather than `?filter=wake` only because its awareness flush needs `event.documentId`; the payload never leaves the monitor process.
 
 **Headers:**
 - `Accept: text/event-stream`
@@ -1605,3 +1627,14 @@ This is deliberately a **read-only metadata header**, not a route schema change:
 ### `claude mcp` secret redaction
 
 CLI **2.1.141** fixed `claude mcp` list/get/add printing secrets to the terminal: `${VAR}` references are no longer expanded, and credential headers and URL secrets are redacted. Tandem writes a bearer token into the `.mcp.json` MCP-server entry headers (`src/server/integrations/apply.ts`), so on CLI ≥ 2.1.141 `claude mcp get tandem` no longer echoes that token to the terminal. See [troubleshooting.md](troubleshooting.md) for the operator-facing note.
+
+## Related
+
+- [Connecting an AI map](maps/connecting-ai.md): setup routes and real-time updates, with this reference in context.
+- [Integrations](integrations.md): which clients work, and the one-screen summary of the tools.
+- [Architecture](architecture.md): how tool calls, channel push and the plugin monitor move through the server.
+- [Workflows](workflows.md): real sessions with the tool calls in them.
+- [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration): the MCP-first integration policy.
+- [ADR-045](decisions.md#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id): one MCP server per client session.
+- [Security](security.md): the loopback and origin gates in front of the HTTP API.
+- [Glossary → Flat offsets](glossary.md#flat-offsets): the coordinate system every position argument uses.

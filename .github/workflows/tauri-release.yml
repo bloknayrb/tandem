@@ -453,17 +453,10 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Apple notarization (issue #428). Re-enabled after the v0.12.0-era
-          # notary-service outage that originally forced these three lines to be
-          # commented out. When the notary trio is unset they expand to empty
-          # strings and tauri-action skips notarization (and skips signing too
-          # when APPLE_CERTIFICATE is also empty) — the same graceful no-op the
-          # build had while disabled. Populate the App Store Connect API key
-          # secrets (APPLE_API_ISSUER_ID, APPLE_API_KEY_ID, APPLE_API_KEY_BASE64)
-          # plus APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_TEAM_ID
-          # and the APPLE_SIGNING_IDENTITY variable to activate. The "Verify
-          # macOS signature + notarization" step below then asserts the produced
-          # .app is signed and has a stapled notarization ticket.
+          # Apple notarization (issue #428). tauri-action reads the notary trio
+          # under these names: APPLE_API_ISSUER and APPLE_API_KEY come from the
+          # APPLE_API_ISSUER_ID and APPLE_API_KEY_ID secrets, and
+          # APPLE_API_KEY_PATH is the .p8 path the decode step above exported.
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}

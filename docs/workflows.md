@@ -1,8 +1,8 @@
 # Workflows
 
-> **Scope:** Real-world usage patterns. Examples use Claude Code as the default AI integration per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration); patterns generalize to any MCP-capable client speaking the same MCP tools at `http://127.0.0.1:3479/mcp`.
+> **Scope:** Real-world usage patterns. Examples use Claude Code as the default AI integration per [ADR-038](https://github.com/bloknayrb/tandem/blob/master/docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration); patterns generalize to any MCP-capable client speaking the same MCP tools at `http://127.0.0.1:3479/mcp`.
 
-> **Looking for editor UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
+> **Looking for editor UI help?** See the [User Guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
 
 Real-world patterns for using Tandem with Claude on the kinds of documents an individual writes and reviews — reports, proposals, and prose drafts. The scenarios below use concrete example documents, but the workflow is the same whatever you are working on.
 
@@ -64,7 +64,7 @@ tandem setup --apply --with-channel-shim
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-See [troubleshooting → I sent a chat message and nothing happened](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) for choosing between the routes. Whichever you use, `tandem_checkInbox` is what the AI actually reads, so nothing is ever lost.
+See [troubleshooting → I sent a chat message and nothing happened](https://github.com/bloknayrb/tandem/blob/master/docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) for choosing between the routes. Whichever you use, `tandem_checkInbox` is what the AI actually reads, so nothing is ever lost.
 
 **After upgrading** (re-apply to update the skill and MCP paths):
 ```bash
@@ -77,7 +77,7 @@ tandem setup --apply    # re-writes MCP config with new paths
 **Setup:** Bryan has a monthly progress report draft and wants a review pass before sending it on.
 
 ```
-Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
+Claude: tandem_open({ filePath: "C:\\Users\\you\\Documents\\progress-report-feb.md" })
 ```
 
 Editor opens, document loads. Claude starts by understanding the structure:
@@ -128,10 +128,10 @@ Claude: tandem_status({ text: "Done" })
 **Setup:** Bryan needs to verify that an invoice matches the work described in a progress report. Both files are open simultaneously.
 
 ```
-Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
+Claude: tandem_open({ filePath: "C:\\Users\\you\\Documents\\progress-report-feb.md" })
 → { documentId: "progress-report-f-1a2b3c", fileName: "progress-report-feb.md", ... }
 
-Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.txt" })
+Claude: tandem_open({ filePath: "C:\\Users\\you\\Documents\\invoice-feb.txt" })
 → { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.txt", readOnly: false, ... }
 ```
 
@@ -172,7 +172,7 @@ Claude: tandem_comment({ from: 612, to: 621, text: "Not found in invoice -- veri
   documentId: "progress-report-f-1a2b3c" })
 ```
 
-Bryan switches to the progress report tab and sees green/red/yellow highlights. Claude adds a summary:
+Bryan switches to the progress report tab and sees three comment cards, one per figure. Claude adds a summary:
 
 ```
 Claude: tandem_comment({
@@ -182,14 +182,14 @@ Claude: tandem_comment({
 })
 ```
 
-Bryan reviews the highlights and addresses discrepancies before approving the invoice.
+Bryan reviews the comments and addresses discrepancies before approving the invoice.
 
 ## Drafting an RFP Response
 
 **Setup:** Bryan needs to draft a response to an RFP. He has the RFP open in another window for reference.
 
 ```
-Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\rfp-response-draft.md" })
+Claude: tandem_open({ filePath: "C:\\Users\\you\\Documents\\rfp-response-draft.md" })
 ```
 
 The document starts with a skeleton. Claude drafts a section:
@@ -281,19 +281,21 @@ For bulk operations, use **Accept All** or **Dismiss All** in the side panel hea
 
 ### Solo / Tandem Mode
 
-The **Solo / Tandem** toggle in the title bar (`Ctrl+Shift+M`) holds work back in *both* directions.
+The **Solo / Tandem** toggle in the title bar (`Ctrl+Shift+M`) controls whether the comments and replies you write reach the AI.
 
 - **Tandem** (default) — the AI's annotations appear as they arrive, and the comments and replies you write are visible to it.
-- **Solo** — the AI's pending annotations are held back from the document, *and* the comments and replies you author are withheld from the AI. Each held item shows an amber **Held** pill, and the status bar keeps a running count. Resolved annotations are always visible regardless of mode. Solo also hides the right rail, so the annotation list is out of sight while you write.
+- **Solo** — the comments and replies you author are withheld from the AI until you switch back. Each held item shows an amber **Held** pill, and the status bar keeps a running count. Chat and document edits are not affected: your chat messages still reach the AI, and it can still read, answer and edit.
 
-Switching back to Tandem releases the whole set at once, in both directions. See [User Guide → Solo / Tandem Mode](user-guide.md#solo--tandem-mode) for exactly which surfaces the hold covers.
+Solo is a one-way hold. Tandem's skill asks the AI to hold off on new annotations while you are in Solo, but nothing hides one it creates anyway. If you would rather not see the annotation list while you write, **Settings → Collaboration → Hide side panel in Solo mode** (on by default) collapses the right rail whenever you are in Solo.
+
+Switching back to Tandem releases everything you held at once. See [User Guide → Solo / Tandem Mode](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md#solo--tandem-mode) for exactly which surfaces the hold covers.
 
 ## Onboarding Tutorial (First Run)
 
 **Setup:** First-time user launches Tandem with no restored sessions.
 
 The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
-1. A **highlight** on the welcome heading — demonstrates visual markers
+1. A **highlight** on a sentence in the opening paragraph — demonstrates visual markers
 2. A **comment** on a paragraph — shows the annotation side panel
 3. A **comment** with replacement text — introduces accept/reject workflow
 4. A **note** on a paragraph — a private reminder the AI never sees
@@ -302,7 +304,7 @@ A floating tutorial card appears at the bottom-left of the editor with three act
 
 **Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or pressing `Ctrl+Enter` / `Ctrl+Shift+Enter`) completes this step.
 
-**Step 2: Ask a question.** The card prompts the user to select text and create a Comment (sent to the AI) or a Note (private to the user). Creating any user annotation completes this step.
+**Step 2: Ask a question.** The card prompts the user to select text and create a Comment (sent to the AI) or a Note (private to the user), or to ask in the Chat panel. Creating any annotation of their own, or sending a chat message during this step, completes it.
 
 **Step 3: Make an edit.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
 
@@ -378,7 +380,6 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 2. **Unless the document has unsaved edits.** Then the reload is held and the editor shows a keep-vs-reload banner, because reloading would discard the only copy of those edits (the CRDT undo stack does not cover a server-side content replacement). Saves stay blocked until the user answers; `tandem_save` returns `EXTERNAL_CONFLICT` rather than reporting a success that didn't happen. Only the user can resolve it — there is no MCP tool for the choice
 3. Call `tandem_open({ filePath: "...", force: true })` to force a reload regardless
 4. Force-reload discards unsaved edits and the session; annotations are kept and re-anchored, but one whose text changed may come back `degraded` — don't use it mid-review
-5. `POST /api/open` also accepts `force: true` for editor-initiated reloads
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.
 
@@ -422,30 +423,18 @@ tandem_edit({ from: 0, to: 0, newText: "# Draft Outline\n\n1. Introduction\n2. A
 → Content appears in the scratchpad tab
 ```
 
-The user can edit alongside Claude in real-time. When done, close the tab — content is discarded. To keep the work, copy it to a real file first (`tandem_open` + `tandem_edit`).
+The user can edit alongside Claude in real-time. To keep the work, use **Save As** (`Ctrl+Shift+S`) — it turns the scratchpad into a real file. Closing a scratchpad tab that has content asks for confirmation first, and confirming discards the text. If the app or browser window closes instead, the unsaved text is kept in local storage and restored into the next new scratchpad; its annotations are not kept.
 
 **Notes:**
 - Each `Ctrl+N` / `tandem_scratchpad` call creates a new scratchpad with a unique ID
 - Scratchpads are excluded from session restore and channel events (Claude is not notified of scratchpad opens/closes)
 - Multiple scratchpads can be open simultaneously
 
-## Running E2E Tests
+## Related
 
-Playwright E2E tests verify the annotation lifecycle end-to-end (browser + server).
-
-```bash
-# Run all E2E tests (auto-starts servers)
-npm run test:e2e
-
-# Playwright UI mode for debugging
-npm run test:e2e:ui
-```
-
-**Requirements:** none in particular — since #1492 the harness runs on its own reserved ports (defined in `scripts/test-ports.ts`, never the product's `:3478`/`:3479` or Vite's `:5173`) and starts its backend with `reuseExistingServer: false`, so a running Tandem or `npm run dev:server` coexists with a test run instead of being killed by it.
-
-**How tests work:**
-1. `beforeEach`: McpTestClient connects to MCP, fixture files copied to temp dir
-2. Test body: MCP calls open documents/create annotations, Playwright asserts browser state
-3. `afterEach`: All docs closed via MCP, temp dir cleaned up
-
-Tests use `data-testid` attributes for reliable selectors (e.g. `[data-testid="accept-btn"]`). Timing uses Playwright's auto-waiting with 10s timeout for annotation sync (multi-hop: MCP → Y.Doc → Hocuspocus WS → browser → Svelte → ProseMirror).
+- [User guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md): the editor itself, annotations, chat and keyboard shortcuts.
+- [MCP tool reference](https://github.com/bloknayrb/tandem/blob/master/docs/mcp-tools.md): the parameters and responses of every tool used above.
+- [Integrations](https://github.com/bloknayrb/tandem/blob/master/docs/integrations.md): using these patterns with an AI client other than Claude Code.
+- [Troubleshooting](https://github.com/bloknayrb/tandem/blob/master/docs/troubleshooting.md): when Claude doesn't respond or a document won't open.
+- [Glossary](https://github.com/bloknayrb/tandem/blob/master/docs/glossary.md): annotations, scratchpads, Solo mode and the other terms used here.
+- [All documentation](https://github.com/bloknayrb/tandem/blob/master/docs/README.md): every page, grouped by what you are trying to do.
