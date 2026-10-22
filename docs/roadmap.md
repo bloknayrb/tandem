@@ -12,7 +12,7 @@ this file in the same PR, or say what replaced it. Every status below carries th
 last checked. Re-check before relying on it, and use `gh issue view` rather than trusting a
 state recorded here.
 
-_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed is left for the maintainer._
+_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided._
 
 ## Active — Toward v1.0
 
@@ -48,7 +48,7 @@ commercial setup, hardware verification, and two flag flips.
 
 | Question | Where | Why it blocks |
 |---|---|---|
-| **Pricing.** Still unset. #1117 tracked it and closed with it unchecked, and licensing-operations.md §8 does not have it. ADR-040 §6's LLC requirement was withdrawn on 2026-10-09 (no company will be formed); whether an accountant is wanted before taking money was not decided then and stays here. | ADR-040 §6 | Nothing else tracks it |
+| **Whether an accountant is wanted before taking money.** The price itself is decided: $45, with a $25 student discount (so $20), recorded in ADR-040's 2026-10-17 amendment and confirmed for the README on 2026-10-22. ADR-040 §6's LLC requirement was withdrawn on 2026-10-09 (no company will be formed); the accountant question was not decided then and stays here. | ADR-040 §6 | Nothing else tracks it |
 | **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
 | **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether it joins the commercial gate |
 | **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
@@ -164,7 +164,8 @@ v0.26.0, v0.27.0 or v0.28.0.
 - **If a run fails, that is a finding to fix, not a reason to relax the numbers.** [perf-gate-results.md](perf-gate-results.md) relies on this rule.
 
 **Commercial readiness.** UNMET. This gates the license flip. If it is not ready at code-complete, the date floats and **the gate flag does not ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
-- Pricing settled, and the accountant question answered (ADR-040 §6; see above).
+- Pricing settled. **Done:** $45, students $20 (ADR-040's 2026-10-17 amendment).
+- The accountant question answered (ADR-040 §6; see above).
 - **MoR checkout live end to end:** a test purchase goes through the issuance webhook, the signed license is delivered, and it activates a gate-ON build.
 - Grandfather licenses issued to the cohort decided under §1c.
 - **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) is complete.** §8 owns the item list, and several of its items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and a failure there returns 503 on every webhook. Two items need more than their checkbox says:

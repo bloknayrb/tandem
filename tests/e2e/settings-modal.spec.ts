@@ -6,6 +6,7 @@ import {
   createFixtureDir,
   McpTestClient,
   ownsItsPixels,
+  selectTextStable,
 } from "./helpers";
 
 // SettingsModal (Wave 1 sibling component) — covers the three dismiss paths
@@ -247,6 +248,176 @@ test("E5: saving the working directory surfaces the success toast", async ({ pag
   await toast.locator("[data-testid^='toast-dismiss-']").first().click();
   await expect(toast).toHaveCount(0);
   await expect(page.locator(MODAL)).toBeVisible();
+});
+
+// Escape closes Settings wherever focus is (Bryan: "Escape should always close
+// Settings"). It used to act only when the event target was inside the dialog,
+// so anything that left focus on <body> made Escape a no-op. The rule's
+// exceptions are pinned alongside: the narrow drawer closes first, and a layer
+// ABOVE Settings keeps its own Escape.
+
+async function openEditor(page: Page): Promise<void> {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+}
+
+test("Escape closes Settings after working-directory Save drops focus on <body>", async ({
+  page,
+}) => {
+  // The reported path. Save carries `disabled={wdInflight}`, so it disables
+  // itself for the length of its POST; Blink then blurs it to <body> (a
+  // focusout with no relatedTarget). The dialog's stranded-focus recovery runs
+  // a frame later, by which time this fast POST has answered and Save is
+  // enabled again, so the recovery reads "nothing was lost" and focus stays on
+  // <body> — where the old focus-inside rule ignored Escape.
+  await page.route("**/api/integrations", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ integrations: [{ kind: "claude-code" }] }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.route("**/api/launcher/working-directory", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, workingDirectory: null }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await openEditor(page);
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+  await expect(page.locator("[data-testid='settings-modal-working-directory']")).toBeVisible({
+    timeout: 5_000,
+  });
+  await page.locator("[data-testid='settings-modal-working-directory-save']").click();
+  await expect(page.locator("[data-testid='toast-container']")).toContainText(
+    "Working directory saved.",
+    { timeout: 5_000 },
+  );
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
+});
+
+test("Escape closes Settings when focus is on <body>", async ({ page }) => {
+  // The general form of the bug, independent of which control stranded focus.
+  await openEditor(page);
+  await openSettingsModal(page);
+
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
+});
+
+test("Escape closes the narrow drawer first, then Settings", async ({ page }) => {
+  // W9: below 860px the section list is a drawer, and Escape closes it before
+  // the dialog. Pressed from <body> so the drawer rule is shown to survive the
+  // focus-anywhere change, not just the focus-inside path it was written for.
+  await page.setViewportSize({ width: 600, height: 800 });
+  await openEditor(page);
+  await openSettingsModal(page);
+
+  const modal = page.locator(MODAL);
+  await page.locator("[data-testid='settings-modal-narrow-hamburger']").click();
+  await expect(modal).toHaveAttribute("data-narrow-sidebar-open", "true");
+
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveAttribute("data-narrow-sidebar-open", "false");
+  await expect(modal).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+});
+
+test("Escape in Help opened over Settings closes only Help", async ({ page }) => {
+  // The help shortcut is not gated on Settings, so Help stacks over it (later
+  // in App.svelte, same z tier) and takes focus. Help listens in the window
+  // capture phase, ahead of Settings' document listener.
+  await openEditor(page);
+  await openSettingsModal(page);
+
+  await page.keyboard.press("Control+Slash");
+  const help = page.locator("[data-testid='help-modal']");
+  await expect(help).toBeVisible({ timeout: 2_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(help).toHaveCount(0);
+  await expect(page.locator(MODAL)).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
+});
+
+test("Escape in the file-open dialog over Settings closes only that dialog", async ({ page }) => {
+  // Ctrl+O is not gated on Settings, so the browser build's file-open dialog
+  // opens on top of it. It used to listen for Escape only on its own backdrop,
+  // and its Browse `autofocus` yielded to the focus Settings already held, so
+  // the first Escape closed Settings out from under it (master) or, once
+  // Settings stood down, closed nothing. It now takes focus on mount and owns
+  // Escape in the window capture phase, like Help and the command palette.
+  await openEditor(page);
+  await openSettingsModal(page);
+
+  await page.keyboard.press("Control+KeyO");
+  const fileDialog = page.locator("[data-testid='file-open-dialog']");
+  await expect(fileDialog).toBeVisible({ timeout: 2_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(fileDialog).toHaveCount(0);
+  await expect(page.locator(MODAL)).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
+});
+
+test("Escape closes Settings even with the selection popup open beneath it", async ({ page }) => {
+  // The popup listens for Escape in the window CAPTURE phase and stops
+  // propagation, so it ran before Settings' document listener and dismissed
+  // itself under the scrim while the dialog on screen stayed open — with focus
+  // inside the dialog. It now yields while any aria-modal dialog is open.
+  await openEditor(page);
+  await selectTextStable(page.locator(".tandem-editor p").first());
+  const popup = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(popup).toBeVisible();
+
+  await page.keyboard.press("Control+Comma");
+  await expect(page.locator(MODAL)).toBeVisible({ timeout: 2_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
+});
+
+test("Escape closes Settings even with the activity tray open beneath it", async ({ page }) => {
+  // Same shape as the selection popup: the tray's capture-phase Escape
+  // preempted Settings when Settings was opened from the keyboard over it.
+  await openEditor(page);
+  await page.locator("[data-testid='activity-pill']").click();
+  const tray = page.locator("[data-testid='activity-tray']");
+  await expect(tray).toBeVisible();
+
+  await page.keyboard.press("Control+Comma");
+  await expect(page.locator(MODAL)).toBeVisible({ timeout: 2_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(MODAL)).toHaveCount(0);
+  // The tray beneath is untouched by that press and takes the next one.
+  await expect(tray).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(tray).toHaveCount(0);
 });
 
 // PR 6 — Network two-tier refactor.

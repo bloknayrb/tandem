@@ -2,6 +2,7 @@
 import { onDestroy, untrack } from "svelte";
 import type { ActivityItem } from "../hooks/useNotifications.svelte";
 import { emptyUnfold, rowEnter, rowOut } from "../panels/cardMotion.js";
+import { modalDialogOpen } from "../utils/escape-owner";
 import "../panels/morphTiming.css";
 import { resolveActivityAction } from "./activityActions.js";
 import { formatActivityMessage, relativeTime, SEVERITY_GLYPHS } from "./activityCenter.js";
@@ -40,6 +41,10 @@ $effect(() => {
   };
   const handleKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
+    // Yield to a modal dialog: a keyboard-opened Settings (Ctrl+,) leaves the
+    // tray open beneath it, and swallowing Escape here closed the hidden tray
+    // instead of the dialog on screen (see escape-owner.ts).
+    if (modalDialogOpen()) return;
     event.preventDefault();
     event.stopPropagation();
     onToggle();

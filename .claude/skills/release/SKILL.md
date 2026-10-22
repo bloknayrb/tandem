@@ -10,7 +10,7 @@ The version bump has **SEVEN surfaces**, none of which bump automatically. Surfa
 CI-guarded by `tests/plugin/plugin-version-pin.test.ts` (any divergence from
 `package.json` fails CI); surfaces 5–6 are **not guarded** — this skill is what
 prevents them drifting. Surface 7 is guarded more loosely and is bumped **last,
-in its own PR, after the release is published** (step 10), never with the
+in its own PR, after the release is published** (step 9), never with the
 other six.
 
 ## The seven version surfaces
@@ -71,7 +71,7 @@ other six.
    release tag the Claude Code plugin installs from (`"ref": "v<version>"`).
    **Do NOT bump it with surfaces 1–6.** It must name a tag that exists, and
    the tag is cut from master after the bump PR merges (step 6), so it moves
-   in its own PR at step 10, once the release is published and npm serves the
+   in its own PR at step 9, once the release is published and npm serves the
    version. Why it exists at all: the licensor decided on 2026-10-09 (A7; the
    analysis is L1 in `docs/reviews/2026-10-01-license-review.md`) that a
    version of the Licensed Work is a release on the Releases page, and
@@ -86,9 +86,9 @@ other six.
 
    `plugin-version-pin.test.ts` allows this ref to be `v<package.json version>`
    or the previous stable release (by `CHANGELOG.md` heading), so the bump PR
-   stays green with the old ref and a forgotten step 10 fails CI at the next
+   stays green with the old ref and a forgotten step 9 fails CI at the next
    release's bump. It cannot check that the tag exists (CI is tagless), and it
-   refuses a prerelease ref: on an RC (`v1.0.0-rc.1`), skip step 10 and leave
+   refuses a prerelease ref: on an RC (`v1.0.0-rc.1`), skip step 9 and leave
    the plugin on the last stable release.
 
 ## Steps
@@ -107,7 +107,7 @@ other six.
 
    **Read the survivors, don't just count them — they are not all bugs.**
    Expect three kinds: the surfaces themselves (before you bump them; surface
-   7's `"ref": "v<old-version>"` is SUPPOSED to survive until step 10);
+   7's `"ref": "v<old-version>"` is SUPPOSED to survive until step 9);
    deliberate prose naming a version as history (this skill's own dated
    plugin-install measurement — leave it alone); and source comments,
    which the exclusions do NOT hide — `src/server/license/gate-flag.ts` carries a `Default: false (v<version>)`
@@ -165,10 +165,11 @@ other six.
    terminal. `--run` makes that unconditional; `ci.yml` and `.husky/pre-push`
    both pass it.
 
-5. Ship the bump through the normal flow: branch → PR → CI green → merge
-   (through the merge queue) → verify CI green on **the commit the merge queue
-   landed on master**. `ci.yml` runs twice for it — the `merge_group` run that
-   gated the merge and the `push` run on master — so check both.
+5. Ship the bump through the normal flow: branch → PR → CI green → merge →
+   verify CI green on **the commit that landed on master**: the `push` run on
+   master, plus the `merge_group` run if the PR went through a merge queue. As
+   of 2026-10-21 PRs merged directly, and a PR behind master had to be updated
+   and re-run first (CLAUDE.md, Status).
 
 6. Tag the release on the master tip and push the tag:
    ```bash
@@ -273,12 +274,7 @@ other six.
    doctor`. Record the outcome (platforms covered, anything skipped) on the
    release PR or tracking issue — an unstated skip reads as "verified".
 
-9. Update the project memory SHIPPED entry (per the archive rotation
-   discipline). CLAUDE.md carries no version stamp; edit its **Status**
-   section only if a flag flip, a dark system, a v1.0 blocker or the MCP tool
-   counts changed in this release.
-
-10. Bump surface 7 in its own PR: set the `tandem` entry's `source.ref` in
+9. Bump surface 7 in its own PR: set the `tandem` entry's `source.ref` in
    `.claude-plugin/marketplace.json` to `v<version>`. Only after all three hold:
    - the tag exists on the remote: `git ls-remote --tags origin v<version>`;
    - the release is published (step 7), not a draft;
@@ -297,6 +293,9 @@ other six.
 
 ## Important
 
+- CLAUDE.md carries no version stamp; edit its **Status** section only if a
+  flag flip, a dark system, a v1.0 blocker or the MCP tool counts changed in
+  this release.
 - Never hand-edit either lockfile — always regenerate (surfaces 5–6).
 - Changelog entries follow ADR-038 framing: "your AI" / "the AI" generically;
   "Claude" as the concrete example only for Claude-specific features.

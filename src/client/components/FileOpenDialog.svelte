@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import { API_UPLOAD } from "../../shared/api-paths.js";
 import { CLIENT_EXTENSIONS } from "../../shared/constants.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
@@ -282,6 +283,44 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
+// Focus and Escape, owned for the dialog's whole lifetime (App mounts it only
+// while open, so mount/unmount IS open/close).
+//
+// Focus moves in on mount. The Browse button's `autofocus` alone was not
+// enough: Svelte applies it only when focus is on <body>, so opened from the
+// editor or over Settings (Ctrl+O is gated on neither) focus stayed behind the
+// scrim. It goes back to where it came from on close, if that is still there.
+//
+// Escape is a window CAPTURE listener that stops propagation, as in HelpModal
+// and CommandPalette, rather than an element `onkeydown`: an element handler
+// never fires while focus is outside the dialog, and a bubbling one lets the
+// same press reach Settings' document listener after Svelte's flush has
+// already removed this dialog — so one press closed both (see escape-owner.ts
+// for the rule a layer over Settings must follow). This dialog is the top
+// layer whenever it is open: it renders after Settings and Help in App.svelte,
+// and the command palette's opener refuses to stack over it.
+onMount(() => {
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const dialog = dialogEl;
+  if (dialog && !dialog.contains(document.activeElement)) {
+    const browse = dialog.querySelector<HTMLElement>("[data-testid='file-open-browse']");
+    (browse ?? dialog).focus();
+  }
+  const onEscape = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onClose();
+  };
+  window.addEventListener("keydown", onEscape, { capture: true });
+  return () => {
+    window.removeEventListener("keydown", onEscape, { capture: true });
+    const active = document.activeElement;
+    const focusLeftWithUs = !active || active === document.body || !!dialog?.contains(active);
+    if (focusLeftWithUs && opener?.isConnected && opener !== document.body) opener.focus();
+  };
+});
+
 function handleBrowse() {
   if (isTauriRuntime()) {
     void browseNative();
@@ -291,6 +330,10 @@ function handleBrowse() {
 }
 </script>
 
+<!-- The backdrop click is the pointer dismiss; its keyboard counterpart is the
+     window-capture Escape listener in onMount, which works wherever focus is
+     (an element `onkeydown` here would not). -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   bind:this={dialogEl}
   role="dialog"
@@ -300,9 +343,6 @@ function handleBrowse() {
   style="position: fixed; inset: 0; z-index: var(--tandem-z-above-titlebar); display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent);"
   onclick={(e) => {
     if (e.target === e.currentTarget) onClose();
-  }}
-  onkeydown={(e) => {
-    if (e.key === "Escape") onClose();
   }}
 >
   <div
