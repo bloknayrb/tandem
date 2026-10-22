@@ -7,9 +7,10 @@ on:
   # Merge queue. GitHub builds a temporary `gh-readonly-queue/master/...` branch
   # holding master plus this PR plus everything queued ahead of it, and fires
   # `merge_group` against it; the PR merges only if the required checks pass
-  # THERE. That is what replaced `strict: true` (require-branches-up-to-date),
-  # which forced a manual `gh pr update-branch` and a full re-run on every open
-  # PR each time any other one merged.
+  # THERE. The queue was meant to replace `strict: true` (require-branches-up-
+  # to-date), but as measured on 2026-10-21 a PR behind master is still refused
+  # by the merge API until it is updated and re-run, and a direct merge works
+  # without the queue. See CLAUDE.md's Status section before relying on either.
   #
   # **Without this trigger the queue does not fail — it HANGS.** No workflow runs
   # on the merge group, the required checks never report, and each PR sits until
