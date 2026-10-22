@@ -108,3 +108,27 @@ describe("ModelEditModal — per-provider gating", () => {
     expect(queryByTestId("model-edit-provider-note")).not.toBeNull();
   });
 });
+
+describe("ModelEditModal — Escape", () => {
+  it("cancels and keeps the key from SettingsModal's document listener", () => {
+    // The modal renders inside SettingsModal. With a real key press, Svelte's
+    // flush removes this dialog in the microtask gap between its delegated
+    // handler and Settings' document listener, so Settings' "another modal is
+    // open" check no longer sees it — only stopPropagation keeps one press from
+    // closing both. A synthetic dispatch has no such gap, so this pins the
+    // stop itself.
+    const onCancel = vi.fn();
+    const { getByTestId } = render(ModelEditModal, { props: { onCancel, onSave: vi.fn() } });
+    const reachedDocument = vi.fn();
+    document.addEventListener("keydown", reachedDocument);
+    try {
+      getByTestId("model-edit-provider").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    } finally {
+      document.removeEventListener("keydown", reachedDocument);
+    }
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(reachedDocument).not.toHaveBeenCalled();
+  });
+});

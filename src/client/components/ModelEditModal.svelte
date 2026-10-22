@@ -176,7 +176,15 @@ function startReplacingKey() {
     if (e.target === e.currentTarget) onCancel();
   }}
   onkeydown={(e) => {
-    if (e.key === "Escape") onCancel();
+    if (e.key === "Escape") {
+      // Stop it here: this dialog renders inside SettingsModal, whose
+      // document-level Escape listener stands down only while another
+      // aria-modal dialog is still in the DOM — and with a real key press
+      // Svelte's flush removes this one in the microtask gap before that
+      // listener runs, so one press would close Settings as well.
+      e.stopPropagation();
+      onCancel();
+    }
   }}
 >
   <form class="mem-dialog" onsubmit={handleSubmit}>
