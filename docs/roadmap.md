@@ -41,8 +41,8 @@ commercial setup, hardware verification, and two flag flips.
    - **[Local models](glossary.md#local-model-collaborator).** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
      whole M1a→M4 track is merged dark and has been in the tree since v0.20.0. What remains
      is the flip and its gates.
-5. **The pre-v1.0 review's remainder.** 9 of 93 `v1-review` issues are open: #1792, #1822,
-   #1823, #1825, #1827, #1920, #1943, #2001, and #1754 (moot while `.docx` is dark).
+5. **The pre-v1.0 review's remainder.** 8 of 93 `v1-review` issues are open: #1792, #1822,
+   #1823, #1825, #1920, #1943, #2001, and #1754 (moot while `.docx` is dark).
 
 ### Decisions still owed
 
@@ -90,7 +90,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
-- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1862, #1911, #1937, #2073, #1333, #1734.
+- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333, #1734.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + zod 4 + TS 7), #2098, #2099, #2100.
 - **Docs owed:** #2075.
 
