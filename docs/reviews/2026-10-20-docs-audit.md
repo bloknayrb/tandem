@@ -430,6 +430,21 @@ Slot 14 (the desktop window) is still manual and still has no embedding page.
 | README beta grant (from the licence review) | The README says releases v0.14.2–v0.25 are covered by the current beta grant, but that reach-back clause is in no released `LICENSE` yet. Keep the promise as written, or say it applies once the next release ships the clause. This is a public promise, and LIC20's counsel question applies to it. | Untouched |
 | OPS32 | Whether to add an environment block to the [bug template](../../.github/ISSUE_TEMPLATE/bug_report.md) (version, install type, OS, or pasted diagnostics), given that #1605 deliberately keeps the template short. | Untouched |
 
+### Decisions (2026-10-22)
+
+Bryan decided the items above on 2026-10-22; a follow-up PR applies them. One line each:
+
+- **P06 / LIC01:** the README states the price: $45, and $25 off for students ($20), who email support@tandem.ink from a school address for a code. ADR-040 already recorded the price in its 2026-10-17 amendment, so it gets no new note.
+- **LIC02:** the [roadmap](../roadmap.md) shows the price as decided; only the accountant question stays open, and the v1.0 checklist item is split in two.
+- **LIC27:** no counsel was engaged; Bryan approved the in-repo draft. ADR-040 and [roadmap-history](../roadmap-history.md) get dated correction notes, and their original lines stay.
+- **LIC29:** kept, recast as effort: a self-built copy is under the same `LICENSE` terms, so building it changes nothing about what you may do and leaves you maintaining that copy.
+- **LIC20 and the README beta grant:** the licensor decided to ship the reach-back clause as written, with no `LICENSE` change. LIC20's legal question (whether a later version's `LICENSE` can grant rights on earlier versions) stays unanswered, because no counsel is engaged.
+- **OPS08:** a staging build pointed at a separate update manifest offering a fake newer version; a runtime endpoint override in shipped builds was rejected as updater attack surface. The staging channel is #2280, and the checklist row stays not runnable until it lands.
+- **OPS15:** the release skill's project-memory step is deleted and the later step renumbered.
+- **OPS20, MERGE-METHOD, OPS22:** deferred.
+- **OPS29:** `/diverge` has no review gate; it is a tool to use when it fits. The gate, its retirement criterion and the `via /diverge` trace requirement are removed from the command, CLAUDE.md and the PR template.
+- **OPS32:** the [bug template](../../.github/ISSUE_TEMPLATE/bug_report.md) gets one optional line for the Tandem version and OS, naming Settings → About → Copy Diagnostics as the place to find both.
+
 ## 6. Code issues found (not fixed in this docs PR)
 
 | Item | Where | Issue |
