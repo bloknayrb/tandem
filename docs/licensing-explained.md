@@ -97,7 +97,7 @@ activate.** That is the first paragraph of the BUSL Additional Use Grant in
 gap you are getting away with. The grant also reaches back: it covers every
 pre-1.0 release that shipped under an earlier wording of the licence, including
 v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. This wording
-first ships with the next release: v0.26 to v0.28 still carry the earlier wording in their
+first ships in v0.29: v0.26 to v0.28 still carry the earlier wording in their
 own `LICENSE`. Releases
 before v0.11.0, and the v0.11.0 to v0.14.3 desktop builds whose package metadata
 said MIT, are MIT-licensed. None of it is enforced: the gate ships dark, so a
