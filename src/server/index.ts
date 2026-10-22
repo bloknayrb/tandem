@@ -14,6 +14,7 @@ import {
 import { docHash } from "./annotations/doc-hash.js";
 import {
   acquireStoreLock,
+  ensureAnnotationsDirPrivate,
   getAnnotationsDir,
   isStoreReadOnly,
   releaseStoreLock,
@@ -74,6 +75,7 @@ import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
   cleanupStaleTombstones,
+  ensureSessionDirPrivate,
   stopAutoSave,
 } from "./session/manager.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
@@ -566,6 +568,17 @@ async function main() {
   // instance holds the store lock). Fire-and-forget with a belt-and-braces
   // .catch(): an escaping rejection would hit the unhandledRejection handler.
   if (!isStoreReadOnly()) {
+    // #2266: both store dirs hold document content, so restrict them to their
+    // owner (`0700` on POSIX, an inheritable owner-only DACL on Windows). An
+    // older build created them at the umask default, and a file nothing ever
+    // rewrites is protected by the directory alone. Never awaited: the Windows
+    // ACL spawns icacls, which must not delay boot. `ensureAnnotationsDirPrivate`
+    // is a no-op with the store off, so an inert store still creates no dir.
+    Promise.all([ensureSessionDirPrivate(), ensureAnnotationsDirPrivate()]).catch((err) =>
+      console.error(
+        `[Tandem] App-data directory hardening failed: ${err instanceof Error ? err.message : err}`,
+      ),
+    );
     reapOrphanedTemps([getAnnotationsDir(), SESSION_DIR])
       .then(({ cleaned, failed }) => {
         if (cleaned > 0)

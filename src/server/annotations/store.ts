@@ -23,6 +23,7 @@ import * as crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
+import { ensurePrivateStoreDir } from "../file-io/private-dir.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
@@ -139,10 +140,26 @@ function getOrInitFailureState(docHash: string): DocFailureState {
   return state;
 }
 
+/**
+ * Create (or tighten) the annotations directory once per run (#2266): `0700` on
+ * POSIX, an inheritable owner-only DACL on Windows. Runs inside
+ * `acquireStoreLock`, i.e. before the stdio MCP handshake, which is why the
+ * Windows ACL is fired rather than awaited (see `ensurePrivateStoreDir`).
+ */
 async function ensureDirReady(): Promise<void> {
   if (annotationsDirReady) return;
-  await fs.mkdir(getAnnotationsDir(), { recursive: true });
+  await ensurePrivateStoreDir(getAnnotationsDir());
   annotationsDirReady = true;
+}
+
+/**
+ * Boot-time hardening of the annotations directory (#2266). A no-op when the
+ * store is off (`TANDEM_ANNOTATION_STORE=off`): an inert store must not create
+ * its directory. Not memoised, so it runs even after `ensureDirReady` has.
+ */
+export async function ensureAnnotationsDirPrivate(): Promise<void> {
+  if (isFeatureDisabled()) return;
+  await ensurePrivateStoreDir(getAnnotationsDir());
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +209,9 @@ export async function acquireStoreLock(
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       // Exclusive create — fails with EEXIST if the file already exists.
-      const handle = await fs.open(lockPath, "wx");
+      // `0o600`: the lock holds only a PID and start time, so this is tidiness
+      // rather than a leak fix, but it keeps the directory uniformly owner-only.
+      const handle = await fs.open(lockPath, "wx", 0o600);
       try {
         await handle.writeFile(lockfilePayload(), "utf-8");
       } finally {
@@ -549,7 +568,8 @@ export async function annotationFileExists(docHash: string): Promise<boolean> {
 async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {
   await ensureDirReady();
   const target = filePathFor(docHash);
-  await atomicWrite(target, JSON.stringify(doc));
+  // Owner-only (#2266): the envelope quotes document text (`textSnapshot`).
+  await atomicWrite(target, JSON.stringify(doc), { maxMode: 0o600 });
   // Success — clear transient failure state but LEAVE `lastNotifiedAt` in
   // place so a brief recovery + re-failure within 60s doesn't re-spam the
   // user. Also leave `disabled`/`persistentNotified` alone: those only clear

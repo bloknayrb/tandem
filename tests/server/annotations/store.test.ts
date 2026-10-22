@@ -28,6 +28,7 @@ import {
   acquireStoreLock,
   closeStore,
   createStore,
+  ensureAnnotationsDirPrivate,
   getAnnotationsDir,
   isStoreReadOnly,
   parseLockfile,
@@ -900,5 +901,74 @@ describe("repeated future-schema parks (#1791)", () => {
     expect(await fs.readFile(path.join(annotationsDir, archives[0] as string), "utf-8")).toContain(
       "CYCLE-1",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2266 — owner-only store: `annotations/` at 0700, envelopes and lock at 0600
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.platform === "win32")("annotation store modes (#2266)", () => {
+  let savedUmask: number;
+  const modeOf = async (p: string) => (await fs.stat(p)).mode & 0o777;
+
+  beforeEach(() => {
+    savedUmask = process.umask(0o022);
+  });
+
+  afterEach(async () => {
+    process.umask(savedUmask);
+    await releaseStoreLock();
+  });
+
+  it("tightens a pre-existing 0755 dir and rewrites a 0644 envelope at 0600", async () => {
+    // The shape an older build left behind: umask-default dir and files.
+    const annotationsDir = path.join(env.tmpRoot, "annotations");
+    const envelope = path.join(annotationsDir, `${HASH_A}.json`);
+    const parked = path.join(annotationsDir, `${HASH_B}.json.corrupt.1700000000000`);
+    await fs.mkdir(annotationsDir, { mode: 0o755 });
+    await fs.chmod(annotationsDir, 0o755);
+    await fs.writeFile(envelope, JSON.stringify(makeAnnotationDoc(HASH_A, FILE_A)));
+    await fs.chmod(envelope, 0o644);
+    await fs.writeFile(parked, "not json");
+    await fs.chmod(parked, 0o644);
+
+    expect(await acquireStoreLock()).toBe("locked");
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
+    await store.flush();
+
+    expect(await modeOf(annotationsDir)).toBe(0o700);
+    expect(await modeOf(envelope)).toBe(0o600);
+    expect(await modeOf(path.join(annotationsDir, "store.lock"))).toBe(0o600);
+    // Never rewritten, so untouched: the 0700 directory is what covers it.
+    expect(await modeOf(parked)).toBe(0o644);
+  });
+
+  it("creates a fresh store dir at 0700 and a fresh envelope at 0600", async () => {
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
+    await store.flush();
+
+    expect(await modeOf(getAnnotationsDir())).toBe(0o700);
+    expect(await modeOf(path.join(getAnnotationsDir(), `${HASH_A}.json`))).toBe(0o600);
+  });
+
+  it("the boot hook tightens an existing dir", async () => {
+    await fs.mkdir(getAnnotationsDir(), { mode: 0o755 });
+    await fs.chmod(getAnnotationsDir(), 0o755);
+
+    await ensureAnnotationsDirPrivate();
+
+    expect(await modeOf(getAnnotationsDir())).toBe(0o700);
+  });
+
+  it("with TANDEM_ANNOTATION_STORE=off, neither boot step creates the dir", async () => {
+    process.env.TANDEM_ANNOTATION_STORE = "off";
+
+    expect(await acquireStoreLock()).toBe("locked");
+    await ensureAnnotationsDirPrivate();
+
+    await expect(fs.stat(getAnnotationsDir())).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

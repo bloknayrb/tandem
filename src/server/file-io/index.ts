@@ -459,6 +459,46 @@ async function existingMode(filePath: string): Promise<number | undefined> {
   }
 }
 
+/** Options shared by `atomicWrite` / `atomicWriteBuffer`. */
+export interface AtomicWriteOptions {
+  /**
+   * POSIX permission ceiling for the written file (#2266). The temp is created
+   * at `(replaced file's mode ?? 0o666) & maxMode`, so the ceiling only ever
+   * REMOVES bits — it cannot widen a file, and it is applied at create time
+   * rather than by a chmod. Ignored on Windows, mirroring `existingMode`.
+   * Omitted: today's behaviour exactly (the replaced file's mode, else the
+   * process default).
+   */
+  maxMode?: number;
+}
+
+/**
+ * A mode ceiling for a file DERIVED from `sourcePath` (the annotation-export
+ * sidecar, convert output): the owner keeps read/write, and group/other get at
+ * most what the source grants them — `0o600 | (src & 0o066)`. So a `0600`
+ * document yields a `0600` derivative, a `0640` one `0640`, a `0444` one
+ * `0644` (world-readable source, world-readable derivative, but writable by its
+ * owner), and a `0400` one `0600`.
+ *
+ * `undefined` — no ceiling — for an `upload://` source (no file on disk), on
+ * Windows, and whenever the source cannot be stat'd as a regular file.
+ */
+export async function derivedFileModeCeiling(sourcePath: string): Promise<number | undefined> {
+  if (sourcePath.startsWith("upload://")) return undefined;
+  const src = await existingMode(sourcePath);
+  return src === undefined ? undefined : 0o600 | (src & 0o066);
+}
+
+/** The temp's create mode: the replaced file's mode, capped by `maxMode` on POSIX. */
+async function tempMode(
+  filePath: string,
+  maxMode: number | undefined,
+): Promise<number | undefined> {
+  const existing = await existingMode(filePath);
+  if (maxMode === undefined || process.platform === "win32") return existing;
+  return (existing ?? 0o666) & maxMode;
+}
+
 /**
  * Shared body of `atomicWrite` / `atomicWriteBuffer`: write a temp sibling,
  * then rename it over the target.
@@ -473,6 +513,12 @@ async function existingMode(filePath: string): Promise<number | undefined> {
  * Tandem's group rather than the original's. `wx` refuses a pre-existing
  * entry at the temp name rather than writing through it.
  *
+ * An optional `maxMode` (app-data store files at `0600`, derived files at the
+ * source's ceiling) is ANDed into that create mode, so it narrows and never
+ * widens, and it keeps the same no-chmod shape: an existing `0644` store file
+ * becomes `0600` the next time it is rewritten, and a file that is never
+ * rewritten keeps whatever mode it has.
+ *
  * On a failed write, unlink the partial temp before rethrowing — mirroring
  * `renameWithRetry`'s own failure arm. A partial sibling in the USER's document
  * directory is never reaped (the boot reaper sweeps the annotations + sessions
@@ -481,9 +527,13 @@ async function existingMode(filePath: string): Promise<number | undefined> {
  * the temp may legitimately not exist (an ENOSPC that failed before `open`).
  * An EEXIST is not ours to unlink. (#1850)
  */
-async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
+async function writeTempThenRename(
+  filePath: string,
+  content: string | Buffer,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
   const tempPath = tempSiblingPath(filePath);
-  const opts = { flag: "wx", mode: await existingMode(filePath) } as const;
+  const opts = { flag: "wx", mode: await tempMode(filePath, options.maxMode) } as const;
   try {
     if (typeof content === "string")
       await fs.writeFile(tempPath, content, { ...opts, encoding: "utf-8" });
@@ -501,8 +551,12 @@ async function writeTempThenRename(filePath: string, content: string | Buffer): 
  * EPERM/EACCES (Windows file-handle contention) with exponential backoff, and
  * cleans up the temp sibling on a failed write (#1850).
  */
-export function atomicWrite(filePath: string, content: string): Promise<void> {
-  return writeTempThenRename(filePath, content);
+export function atomicWrite(
+  filePath: string,
+  content: string,
+  options?: AtomicWriteOptions,
+): Promise<void> {
+  return writeTempThenRename(filePath, content, options);
 }
 
 /**
@@ -510,6 +564,10 @@ export function atomicWrite(filePath: string, content: string): Promise<void> {
  * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
  * Shares the same retry and temp-cleanup behaviour as `atomicWrite`.
  */
-export function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  return writeTempThenRename(filePath, content);
+export function atomicWriteBuffer(
+  filePath: string,
+  content: Buffer,
+  options?: AtomicWriteOptions,
+): Promise<void> {
+  return writeTempThenRename(filePath, content, options);
 }

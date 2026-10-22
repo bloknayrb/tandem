@@ -434,6 +434,60 @@ describe("claimAppDataDir — failure contract", () => {
   });
 });
 
+/**
+ * #2266 — the migration COPIES the legacy npm tree and leaves it behind, so its
+ * document-bearing stores would otherwise sit at the npm install's umask
+ * default with nothing ever booting against that directory again.
+ */
+describe.skipIf(process.platform === "win32")(
+  "claimAppDataDir — the legacy copy's stores are made owner-only (#2266)",
+  () => {
+    const modeOf = (p: string) => fs.statSync(p).mode & 0o777;
+
+    it("tightens the legacy sessions/ and annotations/ dirs to 0700", async () => {
+      const source = tempDir("legacy-modes");
+      const target = tempDir("desktop-modes");
+      withLegacyRoot(source);
+      for (const store of ["sessions", "annotations"]) {
+        fs.mkdirSync(path.join(source, store), { mode: 0o755 });
+        fs.chmodSync(path.join(source, store), 0o755);
+        fs.writeFileSync(path.join(source, store, "x.json"), "{}", "utf8");
+      }
+
+      await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+
+      expect(modeOf(path.join(source, "sessions"))).toBe(0o700);
+      expect(modeOf(path.join(source, "annotations"))).toBe(0o700);
+      // The copy itself still arrived.
+      expect(fs.existsSync(path.join(target, "sessions", "x.json"))).toBe(true);
+    });
+
+    it("never creates a legacy store dir that is not there", async () => {
+      const source = tempDir("legacy-no-stores");
+      const target = tempDir("desktop-no-stores");
+      withLegacyRoot(source);
+      fs.writeFileSync(path.join(source, "integrations.json"), "{}", "utf8");
+
+      await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+
+      expect(fs.existsSync(path.join(source, "sessions"))).toBe(false);
+      expect(fs.existsSync(path.join(source, "annotations"))).toBe(false);
+    });
+
+    it("leaves the legacy tree alone for the npm flavor", async () => {
+      const source = tempDir("legacy-npm-modes");
+      const target = tempDir("npm-modes");
+      withLegacyRoot(source);
+      fs.mkdirSync(path.join(source, "sessions"), { mode: 0o755 });
+      fs.chmodSync(path.join(source, "sessions"), 0o755);
+
+      await expect(claimAppDataDir(target, "1.0.0", "npm")).resolves.toBe("claimed");
+
+      expect(modeOf(path.join(source, "sessions"))).toBe(0o755);
+    });
+  },
+);
+
 describe("refusalMessage", () => {
   const owner = { version: "1.0.0", flavor: "desktop" as AppDataFlavor };
 

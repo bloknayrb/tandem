@@ -264,6 +264,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/auth/token-store.ts": 3,
   "src/server/file-io/doc-backup.ts": 2,
   "src/server/file-io/index.ts": 3,
+  // #2266: `hardenPrivateDir`'s `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` open of
+  // an app-data store DIRECTORY, so it can `fchmod` the descriptor. The idiom
+  // list counts every `fs.open` conservatively; this one writes no file at
+  // all, and never a Claude config, so the accepted #1599 scope is unchanged.
+  "src/server/file-io/private-dir.ts": 1,
   "src/server/integrations/apply.ts": 9,
   "src/server/integrations/install-claude-cli.ts": 2,
   "src/server/integrations/storage.ts": 8,
