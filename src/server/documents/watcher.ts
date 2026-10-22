@@ -236,9 +236,11 @@ export async function reloadFromDisk(
  * on all three callers rather than only on the watcher's.
  *
  * Three callers, all after the body has been replaced and (for the two
- * caller-initiated ones) after `wireAnnotationStore` has merged the envelope
- * back in: `reloadFromDisk` above, `reloadDocumentFromMarkdown` (source-view
- * commit) and `openFromDisk`'s force-reload arm.
+ * caller-initiated ones, on a file-backed document) after `wireAnnotationStore`
+ * has merged the envelope back in: `reloadFromDisk` above,
+ * `reloadDocumentFromMarkdown` (source-view commit) and `openFromDisk`'s
+ * force-reload arm. A scratchpad's source-view commit keeps its annotation map
+ * instead (`keepAnnotations`, #2219) and calls this on the kept records.
  *
  * Not exported from a new module: the two `textTag` literals below are pinned to
  * THIS file by `tests/server/positions.test.ts` (#1622), which reads it to prove
