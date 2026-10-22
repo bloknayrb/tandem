@@ -88,6 +88,7 @@ import { BYO_MODELS_ENABLED } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import { createBugReportUrl } from "../hooks/useBugReportUrl.svelte";
+import { modalDialogOpen } from "../utils/escape-owner";
 import { focusablesWithin, trapTab } from "../utils/focus-trap";
 import { activationKeydown } from "../utils/keyboard-activate";
 import { hasOpenableExtension, openServerPath } from "../utils/server-paths";
@@ -337,8 +338,13 @@ $effect(() => {
  *     activated, and on the error branch the dialog stays open around it;
  *   - a delete-confirm button removes the row it lives in, and
  *     `{#key activeTab.id}` destroys the whole tab body.
- * Until the next Tab press the dialog then held no focus at all, so Escape
- * (whose handler requires focus inside) stopped closing it.
+ * Until the next Tab press the dialog then held no focus at all: a keyboard or
+ * screen-reader user had lost their place, and the next Tab restarted from the
+ * top of the dialog. (Escape no longer depends on this — its handler acts
+ * wherever focus is, because this recovery is not total: a control that
+ * disables itself only briefly, such as working-directory Save during its
+ * POST, is focusable again by the time the frame below runs, so it reads as
+ * "not stranded" and focus stays on `<body>`.)
  *
  * The trigger is the *event that means this*, not a list of the paths above:
  * a `focusout` carrying no `relatedTarget` is the UA saying focus went
@@ -507,21 +513,54 @@ $effect(() => {
 });
 
 // Escape close — registered once via onMount with a `document` listener so we
-// stop propagation BEFORE other window-level handlers (e.g. command palette,
-// find/replace bar) react to the same Escape. The handler reads `open`,
-// `modalEl`, and `onClose` through the closure (they're tracked $state /
-// props), so we don't need to re-register on open changes. Specifically NOT
-// wired via `$effect` with prop-reading cleanup — that's the v0.11.2 freeze
-// pattern (feedback_svelte_prop_in_effect_cleanup) where reading a prop in
-// cleanup gets the CURRENT value, causing null.off() retry storms.
+// stop propagation BEFORE window-level bubble handlers (App's annotation
+// deselect, the shortcut dispatcher) react to the same Escape. The handler
+// reads `open`, `modalEl`, and `onClose` through the closure (they're tracked
+// $state / props), so we don't need to re-register on open changes.
+// Specifically NOT wired via `$effect` with prop-reading cleanup — that's the
+// v0.11.2 freeze pattern (feedback_svelte_prop_in_effect_cleanup) where
+// reading a prop in cleanup gets the CURRENT value, causing null.off() retry
+// storms.
+//
+// Escape closes Settings wherever focus is. It used to act only when the
+// event target was inside the dialog, which made every way of stranding focus
+// on `<body>` a way of making Escape do nothing — and `rehomeStrandedFocus`
+// cannot catch them all: working-directory Save disables itself for the
+// length of its POST, Blink blurs it to `<body>`, and on a fast POST the
+// button is enabled again by the recovery frame, which then reads "nothing
+// was lost". The page under the scrim is not a competing owner: it takes no
+// pointer input (a pointerdown outside closes Settings) and the Tab trap
+// keeps keyboard focus in here. The two page surfaces that listen for Escape
+// in the window capture phase — and so ran first and swallowed it, with focus
+// inside this dialog — the selection popup and the activity tray, yield
+// while any modal is open (`modalDialogOpen`).
+//
+// What Settings does yield to is a layer ABOVE it, which owns Escape:
+//   - an app-level modal opened over Settings (Help via its shortcut, which
+//     is not gated on Settings) or the nested ModelEditModal. Help and the
+//     command palette already win by listening in the window capture phase;
+//     a dialog that listens on its own element (file-open via Ctrl+O, model
+//     edit) would otherwise lose to this document listener whenever focus is
+//     not inside it — and file-open's Browse `autofocus` yields to the focus
+//     Settings already holds, so that is the usual case. (The integration
+//     wizard never stacks: opening it closes Settings.) `modalDialogOpen`
+//     (utils/escape-owner.ts) has why "another aria-modal is open" means
+//     "something is above Settings";
+//   - a native `<select>` popup. The browser closes it on Escape and focus
+//     stays on the select inside this dialog, so whether the engine also
+//     dispatches the keydown to the page is the same question it was under
+//     the old focus-inside rule; this change does not alter it;
+//   - an in-dialog control that stops propagation for its own Escape
+//     (ShortcutEditorList while recording), exactly as before.
+// Toasts sit below the scrim (z 1100 vs 100000) and are not a layer above.
 onMount(() => {
   const escapeHandler = (e: KeyboardEvent) => {
     if (e.key !== "Escape") return;
-    if (!open) return;
-    const target = e.target as Node | null;
-    // Only handle when focus is inside the modal — avoids stealing Escape
-    // from unrelated surfaces that share the document.
-    if (!modalEl || !target || !modalEl.contains(target)) return;
+    if (!open || !modalEl) return;
+    // Escape during IME composition cancels the composition, not the dialog.
+    if (e.isComposing) return;
+    // Not ours: leave the event untouched for the layer above.
+    if (modalDialogOpen(modalEl)) return;
     e.stopPropagation();
     // W9: at narrow widths, Escape closes the drawer first instead of
     // killing the whole modal — matches drawer UX expectations.

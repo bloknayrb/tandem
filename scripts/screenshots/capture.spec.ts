@@ -886,8 +886,9 @@ test("07-toast-notification", async ({ page }) => {
   // background on the above-titlebar tier (z 100000), far above the toast tier
   // (1100), so every capture of this slot until now was a pale ghost of the
   // toast seen through it. The toast outlives the modal by design. Closed with
-  // its button, not Escape: the modal's Escape handler acts only while focus is
-  // inside it, and after Save focus is not guaranteed to be.
+  // its button: Escape works here too since it stopped requiring focus inside
+  // the dialog (Save disables itself mid-POST and drops focus on <body>; pinned
+  // in tests/e2e/settings-modal.spec.ts), but the button is the direct path.
   await page.getByTestId("settings-modal-close-btn").click();
   await expect(page.getByTestId("settings-modal")).toHaveCount(0);
   await expect(toast).toContainText("Working directory saved.");
