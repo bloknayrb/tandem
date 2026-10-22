@@ -105,10 +105,11 @@ Two entry points, and the difference matters:
 - A PR merges only when **it and every PR below it** meet all merge requirements *and* the stack
   has a **fully linear history**. A non-linear stack blocks the merge — fix with
   `gh stack rebase` then `gh stack push`.
-- Branch protections and required checks still apply, per PR. `master` merges through a GitHub
-  merge queue (the `merge_group` trigger in `.github/workflows/ci.yml`), and the queue's own
-  merge method is not recorded in any tracked file. Whether `gh stack merge` goes through that
-  queue, and whether its method flag below is honoured there, is unverified: GitHub described
+- Branch protections and required checks still apply, per PR. `.github/workflows/ci.yml` fires
+  on `merge_group` for a merge queue, but as of 2026-10-21 PRs merged directly and a PR behind
+  `master` had to be updated first (see CLAUDE.md's Status section); whether a queue is
+  configured at all is unverified. Whether `gh stack merge` goes through a queue, and whether its
+  method flag below is honoured there, is unverified too: GitHub described
   stack support for merge queues as still rolling out at the preview announcement. Check both
   before relying on a stack merge here.
 - `gh stack merge` takes `--merge` / `--squash` / `--rebase` (or `--merge-method`) and `-y`.

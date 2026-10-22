@@ -165,10 +165,11 @@ other six.
    terminal. `--run` makes that unconditional; `ci.yml` and `.husky/pre-push`
    both pass it.
 
-5. Ship the bump through the normal flow: branch → PR → CI green → merge
-   (through the merge queue) → verify CI green on **the commit the merge queue
-   landed on master**. `ci.yml` runs twice for it — the `merge_group` run that
-   gated the merge and the `push` run on master — so check both.
+5. Ship the bump through the normal flow: branch → PR → CI green → merge →
+   verify CI green on **the commit that landed on master**: the `push` run on
+   master, plus the `merge_group` run if the PR went through a merge queue. As
+   of 2026-10-21 PRs merged directly, and a PR behind master had to be updated
+   and re-run first (CLAUDE.md, Status).
 
 6. Tag the release on the master tip and push the tag:
    ```bash

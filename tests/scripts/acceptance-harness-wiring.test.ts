@@ -176,9 +176,9 @@ describe("acceptance-harness CI wiring", () => {
   });
 
   it("still triggers on the merge queue, unfiltered", () => {
-    // Since the switch from `strict: true` to a merge queue, the PR-time run is
-    // no longer the last word: master's required checks are satisfied by the
-    // `merge_group` run against the temporary queue branch. A workflow that does
+    // When a PR goes through the merge queue, the PR-time run is not the last
+    // word: master's required checks are satisfied by the `merge_group` run
+    // against the temporary queue branch. A workflow that does
     // not fire there leaves this gate out of the decision that actually merges.
     //
     // The failure is silent in the worst way. Nothing reports, so the PR does not

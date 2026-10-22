@@ -4,10 +4,10 @@ on:
   push:
     branches: [master]
   pull_request:
-  # Merge queue. GitHub builds a temporary `gh-readonly-queue/master/...` branch
-  # holding master plus this PR plus everything queued ahead of it, and fires
-  # `merge_group` against it; the PR merges only if the required checks pass
-  # THERE. The queue was meant to replace `strict: true` (require-branches-up-
+  # Merge queue. If one is enabled, GitHub builds a temporary
+  # `gh-readonly-queue/master/...` branch holding master plus this PR plus
+  # everything queued ahead of it, and fires `merge_group` against it; the PR
+  # merges only if the required checks pass THERE. The queue was meant to replace `strict: true` (require-branches-up-
   # to-date), but as measured on 2026-10-21 a PR behind master is still refused
   # by the merge API until it is updated and re-run, and a direct merge works
   # without the queue. See CLAUDE.md's Status section before relying on either.
@@ -79,7 +79,7 @@ jobs:
       # Packages.gz whose hash disagrees with its Release file, `apt-get update`
       # exits 100 and every job that touches apt dies in its dependency step,
       # before any Tandem code runs. Dropping the source makes an outage in a
-      # repository we have no use for stop gating the merge queue.
+      # repository we have no use for stop gating merges.
       - name: Drop the unused Google Chrome apt source
         if: matrix.os == 'ubuntu-latest'
         run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
@@ -487,7 +487,7 @@ jobs:
       # Packages.gz whose hash disagrees with its Release file, `apt-get update`
       # exits 100 and every job that touches apt dies in its dependency step,
       # before any Tandem code runs. Dropping the source makes an outage in a
-      # repository we have no use for stop gating the merge queue.
+      # repository we have no use for stop gating merges.
       - name: Drop the unused Google Chrome apt source
         run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
 
