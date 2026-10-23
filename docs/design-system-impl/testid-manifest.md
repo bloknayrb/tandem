@@ -154,6 +154,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   button and upload drop zone are gone, and with them `file-path-input`,
   `file-open-submit` and `file-upload-zone`; the dialog now opens files
   through `file-open-browse`.
+- `file-open-path-{input,submit}` (#1895): the browser build's (non-Tauri)
+  typed-path field in the same dialog, which opens a real on-disk file through
+  `/api/open`. Distinct from the retired `file-path-input`/`file-open-submit`,
+  which stay retired.
 - New-tab launcher (a7, sub-PR 1.9b): `new-tab-search`, `new-tab-recent-{*}`,
   `new-tab-browse`, `new-tab-reopen-closed`, `new-tab-empty`, `new-tab-no-match`
   (the primary action keeps `palette-item-new-scratchpad`)
