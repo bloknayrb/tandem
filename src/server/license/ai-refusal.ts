@@ -14,6 +14,7 @@
  */
 import type { Response } from "express";
 import {
+  AI_REFUSAL_STATE_UNREADABLE_MESSAGE,
   AI_REFUSAL_UNLICENSED_MESSAGE,
   type AiRefusalKind,
   aiRefusalUnverifiableMessage,
@@ -35,7 +36,8 @@ export interface AiRefusal {
  *
  * `restricted` is the only refusing status (the literal is not renamed —
  * ADR-040 decision 5). `kind: "unverifiable"` when a licence file is present
- * but fails to verify; its message never carries the purchase URL.
+ * but fails to verify; its message never carries the purchase URL. (The same
+ * kind also covers `aiRefusal()`'s fail-closed catch, with licence-neutral copy.)
  */
 export function aiRefusalFor(state: LicenseState): AiRefusal | null {
   if (!state.gateActive) return null;
@@ -59,7 +61,9 @@ let loggedResolveFailure = false;
  * Total: it runs unguarded inside `pushEvent` and above every `/mcp` dispatch,
  * so a throw from resolving (a hand-edited `trial.json` near the maximum Date
  * makes `toISOString()` throw) would break event delivery outright. It fails
- * CLOSED, as unverifiable, which never carries the purchase URL.
+ * CLOSED, as unverifiable, which never carries the purchase URL. The copy is
+ * licence-neutral (#2206): a throw here says nothing about whether a licence
+ * exists, so it must not claim one is installed.
  */
 export function aiRefusal(): AiRefusal | null {
   if (!GATE_ENABLED) return null;
@@ -73,7 +77,7 @@ export function aiRefusal(): AiRefusal | null {
     return {
       error: LICENSE_REQUIRED,
       kind: "unverifiable",
-      message: aiRefusalUnverifiableMessage("UNKNOWN"),
+      message: AI_REFUSAL_STATE_UNREADABLE_MESSAGE,
     };
   }
 }

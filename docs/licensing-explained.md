@@ -290,7 +290,11 @@ aiRefusal()  ->  null                                     (dark build, trial, li
 re-reads disk on every call like `resolveLicenseState` does — no memo, because a cache is what caused
 the mid-session-expiry bugs. `kind: "unverifiable"` means a licence file is installed but fails to
 verify; its message is the fix-or-reissue copy from `unverifiableLicenseMessage()` and **never carries
-the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL
+the purchase URL**, because that reader most likely already paid. The fail-closed catch in
+`aiRefusal()` (resolving the state threw, e.g. a corrupt `trial.json`) is also `unverifiable`, but with
+licence-neutral copy, `AI_REFUSAL_STATE_UNREADABLE_MESSAGE` ("could not read its license state",
+restart, then email support): it cannot know a licence exists, so it never says one is installed, and
+it carries no purchase URL either (#2206). `kind: "unlicensed"` carries the URL
 in its message. On the wire, the `/api` 403 body is that object, `{ error, kind, message }`
 (`res.status(403).json({ ...extra, ...refusal })` in `ai-refusal.ts`). The MCP refusal is a JSON-RPC
 `-32003` error whose `message` is the refusal's message and whose `data` is `{ error, kind, purchaseUrl }`,

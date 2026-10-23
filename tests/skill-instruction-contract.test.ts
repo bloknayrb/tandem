@@ -5,6 +5,7 @@ import { WAKE_URL_PRODUCERS } from "../src/server/mcp/wake-url.js";
 import { TANDEM_PURCHASE_URL } from "../src/shared/constants.js";
 import {
   AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_STATE_UNREADABLE_MESSAGE,
   AI_REFUSAL_UNLICENSED_MESSAGE,
   AI_REFUSAL_UNLICENSED_OPENING,
   AI_REFUSAL_UNVERIFIABLE_OPENING,
@@ -568,6 +569,17 @@ describe("shipped Tandem skill instruction contract", () => {
       [aiRefusalUnverifiableMessage("UNKNOWN"), AI_REFUSAL_UNVERIFIABLE_OPENING],
     ])("refusal message %# begins with the opening the skill keys on", (message, opening) => {
       expect(message.slice(0, opening.length + 2)).toBe(`${opening}. `);
+    });
+
+    // #2206: the fail-closed copy keys on neither opening, so the skill sends it to the
+    // "Any other message" arm (say only that AI is off; do not guess).
+    it("routes the state-unreadable refusal to the skill's no-opening arm", () => {
+      const m = AI_REFUSAL_STATE_UNREADABLE_MESSAGE;
+      expect(m.startsWith(AI_REFUSAL_UNLICENSED_OPENING)).toBe(false);
+      expect(m.startsWith(AI_REFUSAL_UNVERIFIABLE_OPENING)).toBe(false);
+      expect(m).not.toContain(AI_REFUSAL_UNVERIFIABLE_OPENING);
+      expect(m).not.toContain(TANDEM_PURCHASE_URL);
+      expect(m).not.toMatch(/installed|unlicensed|buy|purchase|activate a license/i);
     });
 
     it("names the third absent-tools cause, keyed on -32003, before the not-running step", () => {
