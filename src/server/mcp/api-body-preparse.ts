@@ -24,8 +24,10 @@
  * the limit each route really gets is its row in
  * {@link ROUTE_OWNED_BODY_PARSERS}.
  *
- * **Both Host checks stay in front of the parse, on purpose.** The router's
- * first layer is a path-less `use` of {@link sdkHostValidationFor} — a copy of
+ * **Both Host checks stay in front of the parse, on purpose.** After
+ * {@link exitRouterOnPreflight} (an OPTIONS leaves at once and gets its CORS
+ * answer downstream), the router's first layer is a path-less `use` of
+ * {@link sdkHostValidationFor} — a copy of
  * the SDK sub-app's own first layer — so it runs before any route layer
  * decodes a `:ref` param, and every request reaching it would have hit the
  * identical check one layer later anyway: no Host refusal changes. Then each
@@ -159,6 +161,12 @@ export const reloadBodyParser: Handler = express.json({ limit: "8mb" });
 export const smallBodyParser: Handler = express.json({ limit: "100kb" });
 export const licenseBodyParser: Handler = express.json({ limit: "64kb" });
 
+/** The router's first layer: an OPTIONS request exits it untouched (see below). */
+export const exitRouterOnPreflight: Handler = (req, _res, next) => {
+  if (req.method === "OPTIONS") next("router");
+  else next();
+};
+
 function pathsOf(kind: RouteBodyKind): string[] {
   return Object.entries(ROUTE_OWNED_BODY_PARSERS)
     .filter(([, k]) => k === kind)
@@ -180,7 +188,14 @@ export function createApiBodyPreParser({
   largeBody,
 }: ApiBodyPreParserDeps): Router {
   const router = express.Router();
-  // First layer, path-less: no param is decoded before the SDK Host check.
+  // A preflight leaves before any route can match it. Left in, an OPTIONS for a
+  // listed path collects "POST" and the router answers it itself (`Allow: POST`,
+  // no CORS headers), so the real preflight handler downstream never runs and
+  // the browser refuses every cross-origin JSON POST. Exiting here records no
+  // method, so the router's OPTIONS responder passes the request on. mcpApp
+  // still runs its own Host check on it.
+  router.use(exitRouterOnPreflight);
+  // Then path-less: no param is decoded before the SDK Host check.
   router.use(sdkHostGate);
   router.post(pathsOf("upload"), mw, largeBody);
   router.post(pathsOf("reload"), mw, reloadBodyParser);

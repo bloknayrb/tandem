@@ -1093,9 +1093,11 @@ export async function startMcpServerHttp(
 
   // Route-sized /api body parsing (#1981). MUST sit directly above the SDK
   // sub-app: the SDK's root express.json (100kb) would otherwise read every /api
-  // body first, and body-parser skips a stream that is already consumed. Its
-  // first layer is the SDK Host check (copy), then lanAwareApiMiddleware, then
-  // the parser — it never answers a success. See api-body-preparse.ts.
+  // body first, and body-parser skips a stream that is already consumed. A
+  // preflight leaves it untouched (its CORS answer comes from the registrations);
+  // for the rest its first layer is the SDK Host check (copy), then
+  // lanAwareApiMiddleware, then the parser — it never answers a success. See
+  // api-body-preparse.ts.
   app.use(createApiBodyPreParser({ sdkHostGate, mw: lanAwareApiMiddleware, largeBody }));
 
   // Mount SDK app (handles /mcp with 100kb body parser + DNS rebinding). Its

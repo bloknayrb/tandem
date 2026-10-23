@@ -37,6 +37,7 @@ import { unwatchAll } from "../../src/server/file-watcher.js";
 import * as integrationsRoutes from "../../src/server/integrations/api-routes.js";
 import {
   createApiBodyPreParser,
+  exitRouterOnPreflight,
   licenseBodyParser,
   ROUTE_OWNED_BODY_PARSERS,
   reloadBodyParser,
@@ -214,6 +215,28 @@ describe("#1981 — /api bodies are parsed at their route's limit, after the gat
         message: "Scratchpad content must be no larger than 1 MiB.",
       });
     });
+  });
+
+  // The router owns POST on these paths. Before the preflight exit, Express's
+  // router answered their OPTIONS itself (`Allow: POST`, no CORS headers), so a
+  // browser on an allowlisted origin could not send any of them (#2301 E2E).
+  describe("A2 — a CORS preflight on a listed route still gets its CORS answer", () => {
+    for (const path of Object.keys(ROUTE_OWNED_BODY_PARSERS)) {
+      it(`OPTIONS ${path} grants the allowlisted origin`, async () => {
+        const res = await raw(port, path, {
+          method: "OPTIONS",
+          host: HOST,
+          headers: {
+            Origin: ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+          },
+        });
+        expect(res.status).toBeLessThan(300);
+        expect(res.headers["access-control-allow-origin"]).toBe(ORIGIN);
+        expect(String(res.headers["access-control-allow-methods"])).toContain("POST");
+      });
+    }
   });
 
   describe("B — ceilings that must not move", () => {
@@ -494,7 +517,7 @@ describe("#1981 G — the pre-parse router never answers a success", () => {
     expect(gate).toBeLessThan(code.indexOf("router.post("));
   });
 
-  it("runtime: stack[0] is the path-less gate; each route is POST-only, mw first, a parser last", () => {
+  it("runtime: stack[0] lets a preflight out, stack[1] is the path-less gate; each route is POST-only, mw first, a parser last", () => {
     const sdkHostGate = vi.fn();
     const mw = vi.fn();
     const largeBody = vi.fn();
@@ -508,8 +531,10 @@ describe("#1981 G — the pre-parse router never answers a success", () => {
         };
       }>;
     };
-    expect(router.stack[0].handle).toBe(sdkHostGate);
+    expect(router.stack[0].handle).toBe(exitRouterOnPreflight);
     expect(router.stack[0].route).toBeUndefined();
+    expect(router.stack[1].handle).toBe(sdkHostGate);
+    expect(router.stack[1].route).toBeUndefined();
 
     const parsers = new Set<unknown>([
       largeBody,
@@ -519,7 +544,7 @@ describe("#1981 G — the pre-parse router never answers a success", () => {
       scratchpadJsonBody,
     ]);
     const paths: string[] = [];
-    for (const layer of router.stack.slice(1)) {
+    for (const layer of router.stack.slice(2)) {
       const route = layer.route;
       expect(route, "every layer after the gate is a route").toBeDefined();
       if (!route) continue;
