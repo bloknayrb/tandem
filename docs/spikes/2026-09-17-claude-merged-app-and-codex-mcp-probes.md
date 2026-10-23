@@ -167,6 +167,8 @@ resolved it. **Record as a Tandem finding**: Tandem's tools carry no `readOnlyHi
 `destructiveHint`, so a non-interactive client has no basis to auto-approve even a pure read.
 `--dangerously-bypass-approvals-and-sandbox` was never used.
 
+> **Addressed (2026-10-23):** the eight pure-read tools now carry `readOnlyHint: true`; see [Tool annotations](../mcp-tools.md#tool-annotations-readonlyhint--idempotenthint). Not re-probed against Codex since.
+
 ### 5d. Capability checklist
 
 | # | Result | Evidence |
@@ -435,7 +437,7 @@ The caveats:
   users will file "Codex can't see Tandem".
 - **Tandem's tools carry no `readOnlyHint` / `destructiveHint`**, so non-interactive Codex refuses
   every call until a per-invocation approval override is passed. That is Tandem's to fix and it is
-  cheap.
+  cheap. *(Addressed for the read tools 2026-10-23; see §5c.)*
 
 What is **not** sayable: that a second client sees the user's actions. `tandem_checkInbox`
 returned nothing three times, and the cause could not be isolated from the §1.6b confound.

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 
+### Changed
+
+- **Tandem tells AI clients which of its tools are safe to repeat.** Eight tools that only read your documents are now marked read-only, and three that write but end in the same state when repeated are marked safe to repeat. Two of those three look like reads but are not marked read-only, because they also save small fixes: `tandem_getAnnotations` (it repairs annotation positions) and `tandem_status` (it can set Claude's status). On current Claude Code, if the connection drops in the middle of one of these calls, the call is sent again instead of failing; edits, comments and replies are never re-sent. Clients that decide approval from these marks, such as Codex running unattended, now have what they need to let a read through without asking. `tandem_checkInbox` is deliberately left unmarked, because sending it twice could lose your messages.
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New

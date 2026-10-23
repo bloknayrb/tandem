@@ -25,6 +25,7 @@ import { collectHostInfo } from "./host-info.js";
 import { diagnosticsOutputShape } from "./output-schemas.js";
 import { mcpStructured, withErrorBoundary, withStructuredErrors } from "./response.js";
 import { filterDevRepoChecks } from "./routes/diagnostics.js";
+import { READ_ONLY_TOOL } from "./tool-annotations.js";
 
 export interface DiagnosticsToolDeps {
   /** Running app version string (APP_VERSION from server.ts). */
@@ -60,6 +61,7 @@ export function registerDiagnosticsTools(server: McpServer, deps: DiagnosticsToo
   server.registerTool(
     "tandem_diagnostics",
     {
+      annotations: READ_ONLY_TOOL,
       description:
         "Read connection and boot health (Node version, config registration, port probes, " +
         "/health, SSE) as a structured report. No params. Use this to self-diagnose a broken " +

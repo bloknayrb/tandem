@@ -143,6 +143,7 @@ import {
   withErrorBoundary,
   withStructuredErrors,
 } from "./response.js";
+import { IDEMPOTENT_WRITE_TOOL, READ_ONLY_TOOL } from "./tool-annotations.js";
 import { withTypingPresence } from "./typing-presence.js";
 
 // ElementPosition re-exported as ResolvedOffset for backward compatibility — prefer ElementPosition.
@@ -609,6 +610,7 @@ export function registerDocumentTools(server: McpServer): void {
   server.registerTool(
     "tandem_getTextContent",
     {
+      annotations: READ_ONLY_TOOL,
       description:
         "Read the document as plain text whose character offsets are the coordinate system every " +
         "range-taking tool uses (tandem_edit, tandem_comment, tandem_resolveRange). This is the " +
@@ -671,6 +673,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
+    READ_ONLY_TOOL,
     withErrorBoundary("tandem_getOutline", async ({ includeBlocks, documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
@@ -1507,6 +1510,7 @@ export function registerDocumentTools(server: McpServer): void {
   server.registerTool(
     "tandem_status",
     {
+      annotations: IDEMPOTENT_WRITE_TOOL,
       description:
         'Read or set editor status. Without `text`: returns the collaboration mode ("solo" means hold annotations, "tandem" means surface them), the active document, every open document with its readOnly flag, and the wake URL to arm a watch on (absent when no wake transport is running). With `text`: sets your status text for the target document, which the editor\'s status bar may show; focusParagraph/focusOffset optionally place your presence marker. A status is not a chat message — use tandem_reply to talk to the user.',
       inputSchema: {
@@ -1680,6 +1684,7 @@ export function registerDocumentTools(server: McpServer): void {
   server.registerTool(
     "tandem_listDocuments",
     {
+      annotations: READ_ONLY_TOOL,
       description: "List all open documents with their IDs, file paths, and formats.",
       inputSchema: {},
       outputSchema: listDocumentsOutputShape,
