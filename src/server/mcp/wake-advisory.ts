@@ -61,6 +61,13 @@ import { readModeState } from "../mode.js";
  * Has the advisory already fired during the current "nothing attached" period?
  * Reset when a consumer is observed, so the next loss of the wake path speaks
  * again.
+ *
+ * **Process-global, not per-session (#1953).** This is module scope, so one
+ * session consuming the advisory silences every later session in the same
+ * server run until an external consumer attaches and resets it. No per-session
+ * key is available at this layer (see the module header), so this is a stated
+ * bound rather than a per-session guarantee. A later session's silence is not
+ * evidence that a consumer is attached.
  */
 let advisedWhileEmpty = false;
 
@@ -91,8 +98,14 @@ export function takeWakeAdvisory(externalConsumerCount: number): string | null {
 
   // Solo gates before any string is built. During Solo the user has opted out
   // of AI surfacing entirely, and nagging a session into arming a watch is the
-  // opposite of the mode's promise. `indeterminate` fails CLOSED — silent —
-  // matching every other push-path gate.
+  // opposite of the mode's promise.
+  //
+  // `indeterminate` is currently silent here, the same as Solo. That is NOT the
+  // fail-closed rule the push gates use, and it is not a settled choice: the
+  // key is absent from server start until the first editor client syncs, so
+  // this suppresses the advisory in the window where it is most needed (#1953).
+  // Whether an indeterminate read should speak is an open policy decision for
+  // Bryan. Until it is made, this gate is left as it is.
   if (readModeState() !== "tandem") return null;
 
   if (externalConsumerCount > 0 || advisedWhileEmpty) return null;
