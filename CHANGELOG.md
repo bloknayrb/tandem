@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The markdown annotation export quoted the wrong text for anything below a heading (#2112).** Each excerpt was shifted by the length of the heading markers above it, so it could start mid-word or come out empty. It now quotes the text you actually annotated.
 
+### Internal
+
+- **`.docx` tracked-change apply no longer deletes the rest of a paragraph or a comment's reference mark, and refuses an inverted range (#2106, #2107).** A suggestion whose range spans a Word comment's reference mark is now refused ("Spans a Word comment's reference mark") rather than deleting the mark without a record. `.docx` ships dark, so nothing in the shipped app changes.
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New
