@@ -41,8 +41,7 @@ import {
 } from "../../src/server/mcp/schema-dialect.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
-
-const MCP_ACCEPT = "application/json, text/event-stream";
+import { type ListedTool, listToolsOverHttp } from "../helpers/mcp-http-tools-list.js";
 
 /** The tools that declare an `outputSchema` — the exact set #1564 knocked out. */
 const OUTPUT_SCHEMA_TOOLS = [
@@ -55,74 +54,8 @@ const OUTPUT_SCHEMA_TOOLS = [
   "tandem_status",
 ];
 
-interface Tool {
-  name: string;
-  inputSchema?: Record<string, unknown>;
-  outputSchema?: Record<string, unknown>;
-}
-
 let httpServer: Server;
 let baseUrl: string;
-
-/**
- * The transport answers with SSE, so the JSON-RPC payload is a `data:` line.
- *
- * Matched by request id rather than by taking the first frame: only one frame
- * rides this stream today, but a notification interleaved on it would otherwise
- * be parsed as the response and surface as a TypeError on `.tools` instead of a
- * readable failure.
- */
-function parseRpc(body: string, id: number): Record<string, unknown> {
-  const frames = body
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith("data:"))
-    .map((l) => JSON.parse(l.slice("data:".length).trim()) as Record<string, unknown>);
-  const match = frames.find((f) => f.id === id);
-  expect(match, `no JSON-RPC frame with id ${id} in ${body}`).toBeDefined();
-  return match as Record<string, unknown>;
-}
-
-/** Initialize a session and return its `tools/list` payload. */
-async function listToolsOverHttp(): Promise<Tool[]> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: MCP_ACCEPT,
-  };
-  const init = await fetch(`${baseUrl}/mcp`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "dialect-test", version: "1.0.0" },
-      },
-    }),
-  });
-  const sessionId = init.headers.get("mcp-session-id") ?? "";
-  await init.text();
-  expect(sessionId).not.toBe("");
-
-  const withSession = { ...headers, "mcp-session-id": sessionId };
-  await fetch(`${baseUrl}/mcp`, {
-    method: "POST",
-    headers: withSession,
-    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-  }).then((r) => r.text());
-
-  const res = await fetch(`${baseUrl}/mcp`, {
-    method: "POST",
-    headers: withSession,
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
-  });
-  const rpc = parseRpc(await res.text(), 2);
-  expect(rpc.result, `tools/list returned no result: ${JSON.stringify(rpc)}`).toBeDefined();
-  return (rpc.result as { tools: Tool[] }).tools;
-}
 
 /** Every JSON-pointer path at which `key` appears, at any depth. */
 function pathsTo(value: unknown, key: string, path = ""): string[] {
@@ -175,7 +108,7 @@ describe("advertised tool schemas declare no dialect (#1564)", () => {
   });
 
   it("emits no $schema on any input or output schema", async () => {
-    const tools = await listToolsOverHttp();
+    const tools = await listToolsOverHttp(baseUrl);
     const offenders = tools.flatMap((t) => [
       ...pathsTo(t.inputSchema, "$schema").map((p) => `${t.name}.inputSchema${p}`),
       ...pathsTo(t.outputSchema, "$schema").map((p) => `${t.name}.outputSchema${p}`),
@@ -184,7 +117,7 @@ describe("advertised tool schemas declare no dialect (#1564)", () => {
   });
 
   it("still advertises every tool, and every output schema, with its interior intact", async () => {
-    const tools = await listToolsOverHttp();
+    const tools = await listToolsOverHttp(baseUrl);
     // A strip that replaced the schemas with `{}` would satisfy the test above,
     // and one that dropped a few tools would satisfy a `>=` floor.
     // `tests/docs/tool-count-drift.test.ts` pins this number independently.
@@ -205,7 +138,7 @@ describe("advertised tool schemas declare no dialect (#1564)", () => {
   });
 
   it("emits nothing whose meaning depends on the dialect it no longer declares", async () => {
-    const tools = await listToolsOverHttp();
+    const tools = await listToolsOverHttp(baseUrl);
     const hits = tools.flatMap((t) => [
       ...dialectSensitive(t.inputSchema, `${t.name}.inputSchema`),
       ...dialectSensitive(t.outputSchema, `${t.name}.outputSchema`),
@@ -231,7 +164,9 @@ describe("advertised tool schemas declare no dialect (#1564)", () => {
     )._requestHandlers;
     const raw = handlers.get("tools/list");
     expect(raw).toBeDefined();
-    const listed = (await raw?.({ method: "tools/list", params: {} }, {})) as { tools: Tool[] };
+    const listed = (await raw?.({ method: "tools/list", params: {} }, {})) as {
+      tools: ListedTool[];
+    };
     expect(listed.tools[0].inputSchema?.$schema).toBe("http://json-schema.org/draft-07/schema#");
     expect(listed.tools[0].outputSchema?.$schema).toBe("http://json-schema.org/draft-07/schema#");
 
