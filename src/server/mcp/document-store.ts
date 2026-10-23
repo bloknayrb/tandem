@@ -90,7 +90,7 @@ import {
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { narrowForChannel } from "../annotations/projection.js";
-import { exportAnnotations } from "../file-io/docx.js";
+import { type ExportAnnotation, exportAnnotations } from "../file-io/docx.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -372,8 +372,13 @@ export class YDocStore {
    * would strip notes and still leak Solo-held comments. Anything bound for
    * Claude must apply the mode gate before calling, exactly as
    * {@link listReplies} requires for replies.
+   *
+   * The same holds for attached `replies` (#2113): they must already be
+   * `channelVisibleReplies(...)` + `hideFromAI` filtered, as {@link listReplies}
+   * requires. The exporter re-checks only the ADR-027 halves (outbound-comment
+   * parent, non-`private` reply); it cannot see the Solo hold.
    */
-  exportAnnotationsMarkdown(anns: Annotation[]): string {
+  exportAnnotationsMarkdown(anns: readonly ExportAnnotation[]): string {
     return exportAnnotations(this.#ydoc, anns);
   }
 

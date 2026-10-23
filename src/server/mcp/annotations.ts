@@ -657,7 +657,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_exportAnnotations",
-    "Export the annotations you can see as a review summary (markdown by default, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user's annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.",
+    "Export the annotations you can see as a review summary (markdown by default, listing each item's status and its visible replies, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user's annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.",
     {
       format: ExportFormatSchema.optional().describe("Output format (default: markdown)"),
       documentId: z
@@ -764,7 +764,9 @@ export function registerAnnotationTools(server: McpServer): void {
         const isJson = format === "json";
         // The markdown summary is computed once and reused for both the
         // response and (when requested) the sidecar — no double work.
-        const markdown = isJson ? undefined : store.exportAnnotationsMarkdown(exportable);
+        // #2113: markdown reads the same `enriched` list, so its replies pass
+        // the same two gates (ADR-027 + Solo) as the JSON `replies`.
+        const markdown = isJson ? undefined : store.exportAnnotationsMarkdown(enriched);
 
         // Sidecar write (#314): persist a sharable export next to the document.
         let writtenPath: string | undefined;

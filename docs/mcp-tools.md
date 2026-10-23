@@ -862,6 +862,8 @@ tandem_annotationReply({
 
 Export the annotations Claude can see — the same records `tandem_getAnnotations` returns — as a formatted summary. Useful for review reports.
 
+The markdown lists each item's status (pending, accepted or dismissed), quotes its text in the same coordinates as `tandem_getTextContent` (heading prefixes included), and nests under each comment the replies Claude can see — the same set as the JSON `replies`. Private replies, replies on private parents and Solo-held user replies are left out.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `format` | enum | no | `markdown` (default) or `json` |
@@ -877,7 +879,7 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 
 **Returns (markdown):**
 ```json
-{ "markdown": "# Review Report\n\n## Highlights\n...", "count": 5 }
+{ "markdown": "# Document Review\n\n## Highlights\n...", "count": 5 }
 ```
 
 **Returns (json):**

@@ -6,8 +6,8 @@ import {
   loadDocx,
   partitionMammothMessages,
 } from "../../src/server/file-io/docx.js";
-import { getElementText } from "../../src/server/mcp/document.js";
-import type { Annotation } from "../../src/shared/types.js";
+import { extractText, getElementText, populateYDoc } from "../../src/server/mcp/document.js";
+import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { buildMarks } from "../helpers/docx-corpus.js";
 import { range } from "../helpers/positions.js";
 import { getFragment, makeAnnotation } from "../helpers/ydoc-factory.js";
@@ -477,6 +477,132 @@ describe("exportAnnotations", () => {
     const annotations = [makeAnnotation({ range: range(4, 9), content: "fast animal" })];
     const result = exportAnnotations(doc, annotations);
     expect(result).toContain("quick");
+  });
+
+  function loadMarkdown(md: string): Y.Doc {
+    doc = new Y.Doc();
+    populateYDoc(doc, md);
+    return doc;
+  }
+
+  function reply(overrides: Partial<AnnotationReply>): AnnotationReply {
+    return {
+      id: "r",
+      annotationId: "c1",
+      author: "user",
+      text: "",
+      timestamp: 0,
+      ...overrides,
+    };
+  }
+
+  it("quotes the annotated text below headings (#2112)", () => {
+    loadMarkdown("# Title\n## Section\nHello world");
+    // Flat offsets include heading prefixes: "world" sits at 25..30.
+    expect(extractText(doc).slice(25, 30)).toBe("world");
+    const result = exportAnnotations(doc, [
+      makeAnnotation({ range: range(25, 30), content: "noun" }),
+    ]);
+    expect(result).toContain('**"world"**');
+  });
+
+  it("a single heading does not shift the excerpt (#2112)", () => {
+    loadMarkdown("# Title\nHello world");
+    const result = exportAnnotations(doc, [
+      makeAnnotation({ range: range(8, 13), content: "greeting" }),
+    ]);
+    expect(result).toContain('**"Hello"**');
+    expect(result).not.toContain('"llo w"');
+  });
+
+  it("renders each item's status under its own headline (#2113)", () => {
+    loadHtml("<p>alpha beta gamma delta</p>");
+    const result = exportAnnotations(doc, [
+      makeAnnotation({ id: "a", range: range(0, 5), content: "c-pending", status: "pending" }),
+      makeAnnotation({ id: "b", range: range(6, 10), content: "c-accepted", status: "accepted" }),
+      makeAnnotation({
+        id: "c",
+        range: range(11, 16),
+        content: "c-dismissed",
+        status: "dismissed",
+      }),
+    ]);
+    const items = result.split("\n- ").slice(1);
+    expect(items).toHaveLength(3);
+    const byContent = (needle: string) => items.find((i) => i.includes(needle)) ?? "";
+    expect(byContent("c-pending")).toContain("  - Status: Pending");
+    expect(byContent("c-accepted")).toContain("  - Status: Accepted");
+    expect(byContent("c-dismissed")).toContain("  - Status: Dismissed");
+    // The status line directly follows the headline.
+    for (const item of items) expect(item.split("\n")[1]).toMatch(/^ {2}- Status: /);
+  });
+
+  it("renders attached replies nested under their comment (#2113)", () => {
+    loadHtml("<p>Hello world</p>");
+    const result = exportAnnotations(doc, [
+      {
+        ...makeAnnotation({ id: "c1", range: range(0, 5), content: "greeting" }),
+        audience: "outbound",
+        replies: [
+          reply({ id: "r1", author: "user", text: "first" }),
+          reply({
+            id: "r2",
+            author: "claude",
+            text: "second\nline two",
+            suggestedText: "Hi\nthere",
+          }),
+        ],
+      },
+    ]);
+    expect(result).toContain("  - Replies:");
+    expect(result).toContain("    - You: first");
+    expect(result).toContain("    - Assistant: second\n      line two");
+    expect(result).toContain('      - Proposes: "Hi\n        there"');
+  });
+
+  it("re-checks private replies, the comment parent and the audience (defence in depth)", () => {
+    loadHtml("<p>Hello world test content</p>");
+    const replies = [
+      reply({ id: "rp", text: "secret private reply", private: true }),
+      reply({ id: "rv", text: "visible sibling" }),
+      reply({ id: "ri", author: "import", text: "word reply", importAuthor: "Jane Reviewer" }),
+    ];
+    const result = exportAnnotations(doc, [
+      {
+        ...makeAnnotation({ id: "c1", range: range(0, 5), content: "outbound" }),
+        audience: "outbound",
+        replies,
+      },
+      {
+        ...makeAnnotation({ id: "c2", range: range(6, 11), content: "no-audience" }),
+        replies: [reply({ id: "rx", text: "reply on unscoped comment" })],
+      },
+      {
+        ...makeAnnotation({
+          id: "h1",
+          type: "highlight",
+          range: range(12, 16),
+          content: "",
+          color: "yellow",
+        }),
+        audience: "outbound",
+        replies: [reply({ id: "rh", text: "reply on highlight" })],
+      },
+    ]);
+    expect(result).toContain("    - You: visible sibling");
+    expect(result).not.toContain("secret private reply");
+    expect(result).toContain("    - Imported: word reply");
+    expect(result).not.toContain("Jane Reviewer");
+    expect(result).not.toContain("reply on unscoped comment");
+    expect(result).not.toContain("reply on highlight");
+  });
+
+  it("emits no Replies line when there are none", () => {
+    loadHtml("<p>Hello world</p>");
+    const result = exportAnnotations(doc, [
+      { ...makeAnnotation({ range: range(0, 5) }), audience: "outbound", replies: [] },
+    ]);
+    expect(result).not.toContain("Replies:");
   });
 });
 

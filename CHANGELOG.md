@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
+- **The markdown annotation export now shows each item's status and its reply thread (#2113).** Every highlight, comment and suggestion says whether it is pending, accepted or dismissed, and each comment lists the replies under it. Private replies and replies held back in Solo mode are left out, exactly as in the JSON export.
+
+### Fixed
+
+- **The markdown annotation export quoted the wrong text for anything below a heading (#2112).** Each excerpt was shifted by the length of the heading markers above it, so it could start mid-word or come out empty. It now quotes the text you actually annotated.
 
 ## [0.29.0] - 2026-10-22
 

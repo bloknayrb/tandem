@@ -1164,6 +1164,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const raw = await fs.readFile(sidecarPath, "utf-8");
     expect(raw).toContain("# Document Review");
     expect(raw).toContain("A public comment");
+    expect(raw).toContain("Status: Pending");
     expect(raw).not.toContain("A private reminder");
   });
 

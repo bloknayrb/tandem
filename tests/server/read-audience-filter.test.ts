@@ -216,6 +216,87 @@ describe("the Claude-facing reads honour audience (#1619, #1710)", () => {
     expect(md.data.markdown).not.toContain("heldFromExport");
   });
 
+  it("tandem_exportAnnotations markdown shows status and the same replies as JSON (#2113)", async () => {
+    withInternal(doc, () => {
+      const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+      replies.set("rv", {
+        id: "rv",
+        annotationId: "ctl",
+        author: "user",
+        text: "visible user reply",
+        timestamp: 10,
+        rev: 1,
+      });
+      replies.set("rp", {
+        id: "rp",
+        annotationId: "ctl",
+        author: "user",
+        text: "secret private reply",
+        private: true,
+        timestamp: 11,
+        rev: 1,
+      });
+      replies.set("rc", {
+        id: "rc",
+        annotationId: "ctl",
+        author: "claude",
+        text: "claude reply",
+        timestamp: 12,
+        rev: 1,
+      });
+      replies.set("rh", {
+        id: "rh",
+        annotationId: "ctl",
+        author: "user",
+        text: "held solo reply",
+        heldInSolo: true,
+        timestamp: 13,
+        rev: 1,
+      });
+    });
+
+    const exportMd = async (): Promise<string> =>
+      parseResult(
+        await client.callTool({
+          name: "tandem_exportAnnotations",
+          arguments: { format: "markdown" },
+        }),
+      ).data.markdown;
+
+    const md = await exportMd();
+    expect(md).toContain("visible user reply");
+    expect(md).toContain("claude reply");
+    // Tandem mode releases a reply stamped in Solo.
+    expect(md).toContain("held solo reply");
+    expect(md).not.toContain("secret private reply");
+    // Pins only that `priv` stays out — its parent never reaches the exporter.
+    expect(md).not.toContain("a reply on the private parent");
+    expect(md).toContain("Status: Pending");
+
+    // Parity: the markdown renders exactly the JSON `replies` of `ctl`.
+    const json = parseResult(
+      await client.callTool({ name: "tandem_exportAnnotations", arguments: { format: "json" } }),
+    );
+    const ctl = json.data.annotations.find((a: { id: string }) => a.id === "ctl");
+    const jsonReplies = ctl.replies as AnnotationReply[];
+    expect(jsonReplies.map((r) => r.id).sort()).toEqual(["rc", "rh", "rv"]);
+    for (const r of jsonReplies) expect(md).toContain(r.text);
+
+    // Solo: user replies are hidden from the AI; Claude's own reply stays.
+    setCtrlMode("solo");
+    const solo = await exportMd();
+    expect(solo).not.toContain("visible user reply");
+    expect(solo).not.toContain("held solo reply");
+    expect(solo).toContain("claude reply");
+
+    // Indeterminate (mode lost): fail closed on exactly the Solo-stamped reply.
+    setCtrlMode(null);
+    const lost = await exportMd();
+    expect(lost).not.toContain("held solo reply");
+    expect(lost).toContain("visible user reply");
+    expect(lost).toContain("claude reply");
+  });
+
   it("processInboxAnnotations puts a private record in neither bucket and writes no ledger entry", () => {
     // The ledger check is what kills a filter placed AFTER `surfaced.set`: such
     // a filter would return nothing this poll AND permanently dedup-skip the
