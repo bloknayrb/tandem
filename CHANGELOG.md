@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opening or uploading a document from the browser, and committing a large source-view edit, no longer fails for content over about 100 kB (#1981).
 
+### Changed
+
+- **Ready for v1.0: `tandem activate` hands the key to a running Tandem, which restarts its Claude by itself (#2205).** With no Tandem running at `http://127.0.0.1:3479` (or whatever `TANDEM_URL` names, as long as it is `127.0.0.1`), it writes the key directly as before, and the next launch picks it up.
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New

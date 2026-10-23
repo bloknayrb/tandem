@@ -24,10 +24,9 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 i
 The code is essentially complete. What remains is the licence gate's last checks, the
 commercial setup, hardware verification, and two flag flips.
 
-1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; two things remain before the flip.**
+1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
-   and real-key activation), which needs a signed key. #2205: `tandem activate` from the CLI
-   should resume Tandem's Claude the way activating in Settings does.
+   and real-key activation), which needs a signed key.
 2. **Commercial readiness** — see [the exit criteria](#v100-exit-criteria). The live
    checklist is [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay),
    and all of it is unchecked. #1117, the old commercial-infra tracker, was closed on

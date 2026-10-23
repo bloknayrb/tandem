@@ -335,8 +335,9 @@ export function enforceLoopbackMutation(req: Request, res: Response, next: NextF
  *
  * Checks the declared `Content-Length` only — the pre-parse router's 64 KB
  * `express.json` (`api-body-preparse.ts`, #1981) is the backstop for a
- * missing/lying header. This is defense in depth, not the
- * primary gate: the route is origin- and loopback-restricted inside the handler.
+ * missing/lying header. This is defense in depth, not the primary gate: the
+ * route is loopback-restricted, origin-checked when an Origin is present,
+ * inside the handler (#2205).
  */
 export function rejectOversizeLicenseBody(req: Request, res: Response, next: NextFunction): void {
   const declared = Number(req.headers["content-length"]);
@@ -414,8 +415,9 @@ export function registerApiRoutes(
   // (licensee email + licenseId), non-loopback gets a PII-scrubbed subset.
   app.get(API_LICENSE_STATUS, mw, handleGetLicenseStatus);
 
-  // License activate (#1116). Gated on origin allowlist + loopback inside the
-  // handler — a license is a credential, installable only by a local caller.
+  // License activate (#1116). Gated on loopback, plus the origin allowlist when
+  // an Origin is present (the `tandem activate` CLI sends none, #2205), inside
+  // the handler — a license is a credential, installable only by a local caller.
   //
   // `rejectOversizeLicenseBody` runs BEFORE the body parser, because a license
   // blob is under 2 KB. The parse that actually reads this body is the

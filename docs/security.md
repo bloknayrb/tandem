@@ -124,6 +124,21 @@ the names promise more than they deliver (#1293):
   Every multi-handler module gates all of its mutating handlers today; split such a module
   rather than trusting the pin to notice.
 
+  `POST /api/license/activate` is gated, but differently from its siblings since #2205: it
+  keeps the loopback gate and applies the origin allowlist **only when an `Origin` is
+  present** (`assertOriginAllowlistedIfPresent`), because `tandem activate` hands the key
+  over from Node `fetch`, which sends none. A present Origin, `"null"` and `""` included, is
+  still refused. Its required string `license` field in a parsed JSON body is the preflight
+  proof for an Origin-less caller, exactly as for `rotate-token`. That body proof does not
+  cover DNS rebinding — a rebinding page's request is same-origin and may send
+  `application/json` with no preflight — so what stops rebinding there is `isHostAllowed`
+  refusing the attacker's `Host` and the Origin the page's browser does send being refused.
+  The CLI sends the key only to a literal `http://127.0.0.1:<port>` URL and never follows a
+  redirect. What remains: a process on this machine that has taken the port while Tandem is
+  down receives the signed blob, including the buyer's email, before any response could
+  prove it is Tandem — the same trust class as `tandem rotate-token` sending its bearer token
+  (`src/cli/rotate-token.ts`), and narrower.
+
 ### The `/api` invariant (#1320)
 
 Since #1320 the default is structural rather than per-handler. `enforceLoopbackMutation`
