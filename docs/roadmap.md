@@ -84,7 +84,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 
 - **Security findings:** #1884 (the channel permission relay serves its `description` to local callers; its LAN half is dark under ADR-056), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
-- **Correctness:** #2001, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523, #2187 (`tandem_checkInbox` misses a comment on a non-active document), #2188, #2219 (a scratchpad's source-view commit drops its notes).
+- **Correctness:** #2001, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #2187 (`tandem_checkInbox` misses a comment on a non-active document), #2188, #2219 (a scratchpad's source-view commit drops its notes).
 - **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2180 (launcher action per setup), #2192, #2186 (a beta report's diagnosis tracker).
 - **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245, #2206, #2231, #2201.
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
@@ -179,7 +179,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** UNMET. #2001, #2112, #2114, #1523, #1632, #2070 and #2188 are open.
+- **Zero open position- or anchor-related bugs.** UNMET. #2001, #2112, #2114, #1632, #2070 and #2188 are open.
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**

@@ -998,12 +998,17 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             let capture: StructuralCapture | null = null;
             if (tr.getMeta("appendedTransaction")) {
               // An appended transaction is invisible to the ROOT transaction's
-              // mapping, which is what `onTransaction` maps through — but its
-              // steps are in the Y.Doc the repair reads. Mapping across that
-              // gap would place an anchor one frame behind. So any appended
-              // change invalidates the round, structural or not: `@tiptap/core`
-              // appends TEXT-moving steps on every paste that matches a paste
-              // rule, and `prosemirror-tables` appends structural ones.
+              // mapping, which is what the repair maps through in
+              // `reanchorCaptured` — but its steps are in the Y.Doc the repair
+              // reads. Mapping across that gap would place an anchor one frame
+              // behind. So any appended change invalidates the round,
+              // structural or not: `@tiptap/core` appends TEXT-moving steps on
+              // every paste that matches a paste rule, and `prosemirror-tables`
+              // appends structural ones. (The STAMP path does map through
+              // appended steps since #1523; the repair cannot, because its
+              // captured positions are mapped by the root mapping.)
+              // `onTransaction` relies on this: a surviving capture means no
+              // doc-changing append, so its `pmDoc` is `transaction.doc`.
               capture = tr.docChanged ? null : pluginState.capture;
             } else if (
               authorshipMap.size > 0 &&
@@ -1156,7 +1161,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
    * filed because accepting a Claude suggestion rendered the words as the
    * user's own.
    */
-  onTransaction({ transaction, editor }) {
+  onTransaction({ transaction, editor, appendedTransactions }) {
     const ydoc = this.options.ydoc;
     if (!ydoc) return;
 
@@ -1179,7 +1184,28 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
 
     const author = readAuthorshipOrigin(transaction);
     const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
-    const pmDoc = transaction.doc;
+    // #1523: the transactions `appendTransaction` plugins folded into this
+    // dispatch. Their steps are in `view.state.doc` — which is what
+    // y-prosemirror wrote to Y — but NOT in `transaction.mapping` or
+    // `transaction.doc`, so the insertion branch below maps through them too.
+    // See the "MINTED IN THE FINAL FRAME" comment there.
+    //
+    // A plain loop and a lazily-built Mapping, because this is the keystroke
+    // hot path: ordinary typing appends nothing and pays a zero-iteration loop
+    // and a null check. Only a doc-changing append (a rule-matching paste or
+    // drop, an autolink keystroke, a tables fix-up) allocates.
+    let appendMapping: Mapping | null = null;
+    for (const appended of appendedTransactions) {
+      if (appended.docChanged) (appendMapping ??= new Mapping()).appendMapping(appended.mapping);
+    }
+    // The LAST appended transaction's doc, never `editor.state.doc`: an
+    // earlier-registered `transaction` listener that dispatches synchronously
+    // would advance `editor.state` past this event's frame. Each appended
+    // transaction is built from the state after the one before it, so the last
+    // one's doc is the final state's doc — exactly what Y holds.
+    const pmDoc = appendMapping
+      ? appendedTransactions[appendedTransactions.length - 1].doc
+      : transaction.doc;
     const beforeDoc = transaction.before;
 
     const additions: AuthorshipRange[] = [];
@@ -1320,10 +1346,17 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
         // cost the transaction its attribution. These are independent failures.
         if (insertedLen > 0) {
           try {
-            const pm = {
-              from: toPmPos(toFinal.map(newStart, 1)),
-              to: toPmPos(toFinal.map(newEnd, -1)),
-            };
+            let insFrom = toFinal.map(newStart, 1);
+            let insTo = toFinal.map(newEnd, -1);
+            if (appendMapping) {
+              insFrom = appendMapping.map(insFrom, 1);
+              insTo = appendMapping.map(insTo, -1);
+            }
+            // An appended step that wholly deletes the insertion inverts the
+            // pair (start maps right past the deletion, end maps left of it).
+            // Bail before any position conversion sees an inverted range.
+            if (insTo <= insFrom) return;
+            const pm = { from: toPmPos(insFrom), to: toPmPos(insTo) };
             const range = pmSelectionToFlat(pmDoc, pm);
             if (range.to <= range.from) return;
             // An Enter inserts a block boundary and nothing else, and the flat
@@ -1355,29 +1388,47 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             // offset inside a heading prefix, or either endpoint adjacent to an
             // empty block. The entry then behaves exactly as it does today.
             //
-            // A LIVE ASSUMPTION, not an invariant — an earlier version of this
-            // comment claimed the latter and was wrong about both halves.
+            // MINTED IN THE FINAL FRAME (#1523). `EditorState.apply` folds
+            // every `appendTransaction` plugin's steps into the state handed to
+            // `updateState`, and y-prosemirror writes from `view.state.doc` —
+            // but the transaction Tiptap emits is the ROOT one, whose `doc` and
+            // `mapping` do not include them. Tiptap's `transaction` event hands
+            // us `appendedTransactions` alongside it, so `toFinal` is extended
+            // through their mappings (`appendMapping`, built at the top of the
+            // handler) and `pmDoc` is the last appended doc. The flat `range`,
+            // the anchor and everything downstream (`splitCoveringEntries`,
+            // `coalesceIntoPrevious`) are therefore in the same frame as Y.
             //
-            // The assumption: no `appendTransaction` plugin moves TEXT.
-            // `EditorState.apply` folds appended steps into the state handed to
-            // `updateState`, and y-prosemirror writes from `view.state.doc` — but
-            // the transaction Tiptap emits is the ROOT one, so `transaction.doc`
-            // does not include them. A text-moving append puts `range` and the
-            // Y.Doc in different frames, which binds the flat `range` exactly as
-            // much as the anchor: it is a property of the whole handler.
+            // Mapping sequentially — `toFinal` then `appendMapping`, same
+            // `assoc` — equals mapping through one concatenated Mapping only
+            // while neither carries a mirror. Both are mirror-free today:
+            // `appended.mapping` comes from `Transform.addStep`, and the
+            // mirror-free argument and its two guards (the collab import walk,
+            // `warnOnMirroredMapping`) are at the reap branch above.
             //
-            // Four plugins in this stack define `appendTransaction`, not one.
-            // `clearDocument` and `prosemirror-tables`' `tableEditing` do not
-            // move text, and `@tiptap/extension-link`'s autolink only adds and
-            // removes marks. `@tiptap/core`'s PasteRules DOES move text, so the
-            // assumption is already false on a rule-matching paste — it fires
-            // only on a `uiEvent` of paste or drop, so ordinary typing is not
-            // exposed. Filed rather than smuggled in here.
+            // The stamp stays on the ROOT transaction: there may be several
+            // appended transactions, and the root is what carries the
+            // authorship meta. Deferring the mint to a microtask reading
+            // `view.state` was rejected — it would race `lastStampId`
+            // coalescing and the Y.Map observer's rebuild dispatch.
             //
-            // The exposure is this mint, NOT the structural repair below: that
-            // one invalidates its capture whenever an appended transaction
-            // changes the doc, so it declines instead of repairing from a
-            // mapping it cannot trust.
+            // Four plugins in this stack define `appendTransaction`, for
+            // context. `clearDocument` and `prosemirror-tables`' `tableEditing`
+            // do not move text, and `@tiptap/extension-link`'s autolink only
+            // adds and removes marks (a mark-only append still swaps `pmDoc`,
+            // harmlessly). `@tiptap/core`'s PasteRules DOES move text — on a
+            // `uiEvent` of paste or drop, or an `applyPasteRules` meta — which
+            // is the case this handles.
+            //
+            // HANDLED IS NOT THE SAME AS FULLY HANDLED. Only the INSERTION is
+            // mapped through appended steps. An appended step that deletes
+            // PRE-EXISTING text is not reaped (the reap stays in the root
+            // before-frame), and an appended insertion is not stamped. That is
+            // reachable: PasteRules matches over the window `findDiffStart` /
+            // `findDiffEnd` report, and pasted text that repeats the adjacent
+            // pre-existing characters shifts that window, so a rule can rewrite
+            // text the user did not paste. The structural repair below also
+            // still declines on any doc-changing append.
             const relRange = anchorFlatRange(ydoc, range.from, range.to) ?? undefined;
             if (!relRange) {
               warnOnce(
@@ -1469,6 +1520,16 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
     if (additions.length === 1) this.storage.lastStampId = additions[0].id;
     else if (additions.length > 1) this.storage.lastStampId = null;
 
+    // Frame-consistent by construction: `apply` nulls the capture on any
+    // doc-changing appended transaction, so a non-null `structuralCapture`
+    // means `appendMapping` is null and `pmDoc === transaction.doc`, matching
+    // `transaction.mapping` below.
+    if (import.meta.env.DEV && structuralCapture && appendMapping) {
+      warnOnce(
+        "capture-with-append",
+        "[authorship] A structural capture survived a doc-changing append; the repair is a frame behind (#1523)",
+      );
+    }
     const repairs = structuralCapture
       ? reanchorCaptured(
           ydoc,

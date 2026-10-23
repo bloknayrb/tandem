@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`tandem_checkInbox` no longer reports a selection you never made (#1997).** When the text at your last recorded selection has changed, for example because your AI edited a document in a background tab, `activity.selectedText` and `selectionAt` are now null rather than whatever text had moved under the old position. **Bound:** in the active tab they can also read null briefly, for about 150 ms after an edit that shifts the selection. **Bound:** a selection saved before this version reads null until you select again.
 
+### Fixed
+
+- Pasting text that contains markdown such as `**bold**` no longer colours the text after the paste as yours in the authorship overlay (#1523).
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New
