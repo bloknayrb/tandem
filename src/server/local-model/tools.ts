@@ -145,6 +145,15 @@ export const TOOLS: ToolSchema[] = [
   },
 ];
 
+/**
+ * The `not-owned` remedy for the local model (#2216). The shared default names
+ * `tandem_reply` / `tandem_comment`, neither of which this tool set has; the
+ * equivalent here is `comment_on_quote`. Kept as a named const so the dispatch
+ * site stays a plain `describeReplyWriteRefusal(` call for the seam census.
+ */
+const LOCAL_NOT_OWNED_REMEDY =
+  "start a fresh thread on the user's text with comment_on_quote instead";
+
 function asString(v: unknown): string {
   return typeof v === "string" ? v : String(v ?? "");
 }
@@ -365,7 +374,9 @@ export function dispatch(
           effect: { kind: "reply", ok: true, annotationId, replyId: reply.replyId },
         };
       }
-      const refusal = describeReplyWriteRefusal(reply);
+      const refusal = describeReplyWriteRefusal(reply, {
+        notOwnedRemedy: LOCAL_NOT_OWNED_REMEDY,
+      });
       return {
         result: { error: refusal.code, message: refusal.message },
         effect: { kind: "reply", ok: false, annotationId, errorCode: refusal.code },

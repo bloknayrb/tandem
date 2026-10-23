@@ -424,8 +424,19 @@ export type ReplyRefusalCode =
  *
  * The three codes are exactly what the ternary produced for the three reachable
  * cases, so 8f changes how the answer is derived and not what it is.
+ *
+ * **`opts.notOwnedRemedy` replaces only the remedy half of the `not-owned`
+ * message (#2216).** The default names `tandem_reply` and `tandem_comment`,
+ * which exist on the MCP surface only; the local-model loop has neither, and a
+ * model told to call an absent tool burns a turn. A consumer whose tool set
+ * differs passes its own remedy, and the stem, the code and the single `never`
+ * anchor stay shared. Omitting `opts` keeps the MCP and `/api` output
+ * byte-identical.
  */
-export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { kind: "ok" }>): {
+export function describeReplyWriteRefusal(
+  result: Exclude<ClaudeReplyResult, { kind: "ok" }>,
+  opts?: { notOwnedRemedy?: string },
+): {
   code: ReplyRefusalCode;
   message: string;
 } {
@@ -465,8 +476,10 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
     case "not-owned":
       return {
         code: "NOT_OWNED",
-        message:
-          "Claude can only reply on annotations it authored; answer a user's comment with tandem_reply or a fresh tandem_comment",
+        message: `Claude can only reply on annotations it authored; ${
+          opts?.notOwnedRemedy ??
+          "answer a user's comment with tandem_reply or a fresh tandem_comment"
+        }`,
       };
     default: {
       const unhandled: never = result;
