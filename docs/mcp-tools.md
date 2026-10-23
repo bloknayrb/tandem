@@ -1546,7 +1546,7 @@ The shim gives this best-effort report a 3-second deadline.
 
 #### POST /api/channel-permission
 
-The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged.
+The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged. A non-string `description` is stored as `""`.
 
 **Request:**
 ```json
@@ -1559,14 +1559,14 @@ The permission relay has a 5-second deadline; failures are logged, and the reque
 
 #### GET /api/channel-permission
 
-Returns the pending requests. **No client polls this.**
+Returns the pending requests. **No client polls this.** **Loopback only.** A non-loopback caller (decided by peer address, never `Host`) gets `403 { "error": "FORBIDDEN", "message": "Loopback only." }`, and the request evicts nothing (#1884). That refusal matters only under a non-loopback bind, which no release build has; any process on this machine can still read the pending entries.
 
 **Response:**
 ```json
 { "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
 ```
 
-Stale requests (>30s) are evicted whenever either channel-permission route runs — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
+Stale requests (>30s) are evicted whenever either channel-permission route runs for an admitted caller — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
 
 #### POST /api/channel-permission-verdict
 

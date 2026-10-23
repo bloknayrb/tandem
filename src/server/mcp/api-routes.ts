@@ -260,8 +260,8 @@ function normalizeApiPath(path: string): string {
  * **Non-GET, not "mutating".** The distinction is load-bearing:
  * `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A
  * rule phrased over mutation would require the same per-route inventory this
- * exists to abolish. Reads keep their existing per-route posture — `document/raw`
- * and `diagnostics` 403 by hand, while `info`, `sessions`, `backups`,
+ * exists to abolish. Reads keep their existing per-route posture — `document/raw`,
+ * `diagnostics` and `channel-permission` 403 by hand, while `info`, `sessions`, `backups`,
  * `launcher/status`, `models` and `integrations` scrub their payload for a
  * non-loopback caller instead of refusing. That scrubbing is what the LAN Host
  * accommodation (`createApiMiddleware`'s `extraHosts`) is for, and widening this
