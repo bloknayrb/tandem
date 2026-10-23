@@ -3339,7 +3339,7 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
   if (scan.quarantined > 0) {
     r.warn(
       `${scan.quarantined} quarantined annotation file(s) in ${dir}`,
-      "Kept indefinitely — nothing deletes them. Safe to delete after inspection; reading one back is manual today. See #1980.",
+      `Kept indefinitely: nothing deletes them, and they may hold private notes, so delete only after inspecting. Files are in ${dir} as <hash>.json.corrupt.<ts>. Tandem never reads them back. To recover by hand: quit Tandem, back up the live <hash>.json, then open the quarantined file in a text editor. It may be malformed or truncated, so look for the annotation records (normally under "annotations") and copy what you need into <hash>.json, or re-create them in the editor. See #1980.`,
       { corruptCount: scan.quarantined, dir },
     );
   }
@@ -3351,7 +3351,7 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
   if (scan.parkedFuture > 0) {
     r.warn(
       `${scan.parkedFuture} annotation file(s) parked as .future in ${dir}`,
-      "Written by a newer Tandem and renamed aside to <hash>.json.future, so this build does not load them — it reads <hash>.json. They are never deleted; recovering one is manual today. See #1980.",
+      `Written by a newer Tandem and renamed aside in ${dir} to <hash>.json.future (older parks are archived as <hash>.json.future.<ts>-<hex>), so this build does not load them; it reads <hash>.json. They are never deleted. Recover by hand: quit Tandem, then COPY the .future file under a new name and inspect it. Do not overwrite <hash>.json, because it is usually rewritten with current annotations after a park. Back up <hash>.json, and after updating Tandem merge any rows you want from the copy into it, keeping only rows that build accepts. See #1980.`,
       { parkedFuture: scan.parkedFuture, dir },
     );
   }
