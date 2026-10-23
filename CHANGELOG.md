@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Tandem tells AI clients which of its tools are safe to repeat.** The tools that only read your documents are now marked read-only, and three that write but end in the same state when repeated are marked safe to repeat. On current Claude Code, if the connection drops in the middle of one of these calls, the call is sent again instead of failing; edits, comments and replies are never re-sent. Clients that approve read-only tools automatically, such as Codex running unattended, can now read your documents without asking each time. `tandem_checkInbox` is deliberately left unmarked, because sending it twice could lose your messages.
+- **Tandem tells AI clients which of its tools are safe to repeat.** Eight tools that only read your documents are now marked read-only, and three that write but end in the same state when repeated are marked safe to repeat. Two of those three look like reads but are not marked read-only, because they also save small fixes: `tandem_getAnnotations` (it repairs annotation positions) and `tandem_status` (it can set Claude's status). On current Claude Code, if the connection drops in the middle of one of these calls, the call is sent again instead of failing; edits, comments and replies are never re-sent. Clients that decide approval from these marks, such as Codex running unattended, now have what they need to let a read through without asking. `tandem_checkInbox` is deliberately left unmarked, because sending it twice could lose your messages.
 
 ## [0.29.0] - 2026-10-22
 

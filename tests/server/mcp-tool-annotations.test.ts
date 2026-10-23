@@ -2,10 +2,10 @@
  * Every tool's MCP `annotations`, pinned one row per tool against the
  * production `tools/list`.
  *
- * A hint is behaviour, not documentation. Claude Code (2.1.307+) re-sends a
- * call whose HTTP connection closed mid-call only when the tool is read-only
- * or idempotent, and non-interactive Codex auto-approves only `readOnlyHint`
- * tools. So the dangerous error is a hint on a tool that is neither: a lost
+ * A hint is behaviour, not documentation. Claude Code (2.1.307+, per its
+ * CHANGELOG.md) re-sends a call whose HTTP connection closed mid-call only when
+ * the tool is read-only or idempotent, and non-interactive Codex gates approval
+ * on these hints (docs/spikes/2026-09-17-claude-merged-app-and-codex-mcp-probes.md §5c). So the dangerous error is a hint on a tool that is neither: a lost
  * response executes twice, or a write is auto-approved. The table below fails
  * on any hint change in either direction, and on a tool with no row — whoever
  * adds a tool decides here, with a reason, whether a repeat is safe.
@@ -19,14 +19,26 @@
 import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
-import {
-  IDEMPOTENT_OVERWRITE_TOOL,
-  IDEMPOTENT_WRITE_TOOL,
-  READ_ONLY_TOOL,
-} from "../../src/server/mcp/tool-annotations.js";
 import { allocPort } from "../helpers/alloc-port.js";
 import { type ListedTool, listToolsOverHttp } from "../helpers/mcp-http-tools-list.js";
 import { allMcpSource, registeredToolNames } from "../helpers/mcp-source.js";
+
+// Written out rather than imported from `src/server/mcp/tool-annotations.ts`:
+// an imported constant pins only WHICH constant a tool uses, so an edit that
+// added `readOnlyHint: true` to the idempotent-write constant would stay green.
+const READ_ONLY_TOOL = { readOnlyHint: true, openWorldHint: false };
+const IDEMPOTENT_WRITE_TOOL = {
+  readOnlyHint: false,
+  idempotentHint: true,
+  destructiveHint: false,
+  openWorldHint: false,
+};
+const IDEMPOTENT_OVERWRITE_TOOL = {
+  readOnlyHint: false,
+  idempotentHint: true,
+  destructiveHint: true,
+  openWorldHint: false,
+};
 
 /** `annotations` omitted = the tool must advertise none. */
 type Row = { annotations?: object; why: string };
@@ -59,7 +71,7 @@ const TABLE: Record<string, Row> = {
   },
   tandem_exportAnnotations: {
     annotations: IDEMPOTENT_OVERWRITE_TOOL,
-    why: "writeToDisk overwrites an existing sidecar, with identical bytes on a repeat",
+    why: "the same range repairs, and writeToDisk overwrites an existing sidecar with identical bytes on a repeat",
   },
 
   // ── Not safe to repeat ────────────────────────────────────────────────────

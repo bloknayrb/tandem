@@ -66,14 +66,14 @@ For these tools, `structuredContent` carries the exact same object as the text e
 
 Tools whose repeat is safe advertise MCP `annotations`. Clients act on them, so they are behaviour rather than documentation:
 
-- **Retry.** Since Claude Code 2.1.307, a call whose HTTP connection closes mid-call is re-sent only when the tool is read-only or idempotent. Every other Tandem tool is not retried, so a dropped connection can no longer run `tandem_edit` or `tandem_comment` twice.
-- **Approval.** Non-interactive Codex refuses any call that is not `readOnlyHint` ([spike §5c](spikes/2026-09-17-claude-merged-app-and-codex-mcp-probes.md#5c-approval-wall)), so the read-only tools can be auto-approved there. Reads are not Solo-gated, and notes and other private records are filtered on the server whatever the client approves.
+- **Retry.** Since Claude Code 2.1.307 ([changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md): *"only read-only or idempotent tools are now retried"*), a call whose HTTP connection closes mid-call is re-sent only when the tool is read-only or idempotent. Every other Tandem tool is not retried, so a dropped connection can no longer run `tandem_edit` or `tandem_comment` twice.
+- **Approval.** Non-interactive Codex refused every Tandem call while none carried a hint ([spike §5c](spikes/2026-09-17-claude-merged-app-and-codex-mcp-probes.md#5c-approval-wall)); its approval gating keys on these hints, so the read-only tools are the ones it may now auto-approve. That has not been re-probed with the hints in place. The eight read-only tools return document text, structure, presence and diagnostics, never annotations, so the Solo hold does not apply to them, and notes and other private records are filtered on the server whatever the client approves.
 
 | Annotations | Tools |
 |---|---|
 | `readOnlyHint: true` | `tandem_getTextContent`, `tandem_getOutline`, `tandem_listDocuments`, `tandem_search`, `tandem_resolveRange`, `tandem_getContext`, `tandem_getActivity`, `tandem_diagnostics` |
-| `idempotentHint: true`, `destructiveHint: false` | `tandem_getAnnotations` (persists range repairs, which converge after one pass), `tandem_status` (with `text`, overwrites your status) |
-| `idempotentHint: true`, `destructiveHint: true` | `tandem_exportAnnotations` (`writeToDisk` overwrites an existing sidecar) |
+| `idempotentHint: true`, `destructiveHint: false` | `tandem_getAnnotations` (persists range repairs, which converge after one pass, so it is not `readOnlyHint`), `tandem_status` (with `text`, overwrites your status) |
+| `idempotentHint: true`, `destructiveHint: true` | `tandem_exportAnnotations` (the same range repairs, and `writeToDisk` overwrites an existing sidecar) |
 
 The hinted tools also carry `openWorldHint: false`. Everything else is unannotated. **`tandem_checkInbox` is unannotated on purpose:** it records what it surfaced and marks chat read before the response is delivered, so a retry after a lost response would answer "No new actions" and the items would be gone. A lost response already loses them today, retry or not (#2294). The constants live in `src/server/mcp/tool-annotations.ts`, and `tests/server/mcp-tool-annotations.test.ts` holds one row per tool, with its reason, against the production `tools/list` — a new tool fails it until it gets a row.
 
