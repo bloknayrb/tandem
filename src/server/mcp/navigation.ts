@@ -309,7 +309,7 @@ export function registerNavigationTools(server: McpServer): void {
       "pattern) and ambiguous (true when totalCount > 1). When ambiguous, the returned range is only " +
       "occurrence N of totalCount: before editing or annotating, pass a longer unique string or an " +
       "explicit occurrence, and check the returned text in context. Matching is substring matching, so a " +
-      'short pattern can hit inside a longer word ("replaceme" inside "replacement").',
+      'short pattern can hit inside a longer string ("replaceme" inside "replacement").',
     {
       pattern: z.string().describe("Literal text to find (not a regex; case-sensitive)"),
       occurrence: z.number().optional().describe("Which occurrence to return, 1-based (default 1)"),
