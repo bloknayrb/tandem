@@ -175,21 +175,19 @@ async function openLogger(): Promise<ScrubLogger> {
   const localAppData = usableEnvDir("LOCALAPPDATA", stderrLogger);
   if (!localAppData) return stderrLogger;
 
-  const logDir = path.join(localAppData, "tandem", "Logs");
-  await fsPromises.mkdir(logDir, { recursive: true }).catch(() => {});
-  const logPath = path.join(logDir, "uninstall.log");
-  const stream = await fsPromises.open(logPath, "a").catch(() => null);
+  // A refusal returns the stderr logger, as a refused `%LOCALAPPDATA%` does,
+  // which also keeps the refusal's warn in `warnings()` (#2163).
+  const stream = await openUninstallLog(localAppData, stderrLogger);
+  if (!stream) return stderrLogger;
 
   const write = (level: string, msg: string): void => {
     const line = `[${new Date().toISOString()}] [${level}] ${msg}\n`;
     process.stderr.write(line);
-    if (stream) {
-      stream.write(line).catch(() => {});
-    }
+    stream.write(line).catch(() => {});
   };
 
   return makeScrubLogger(write, async () => {
-    if (stream) await stream.close().catch(() => {});
+    await stream.close().catch(() => {});
   });
 }
 
@@ -509,8 +507,9 @@ export const PLUGIN_FILES = [
 type ScreenResult = "absent" | "ok" | "refused";
 
 /**
- * Look at a registry file or lockfile, and at the `cowork_plugins` folder
- * holding it, without following either (#2144).
+ * Look at a registry file, lockfile or the uninstall log, and at the folder
+ * holding it (`cowork_plugins`, or `tandem\Logs`), without following either
+ * (#2144, #2163).
  *
  * `readFile` and `open` follow a link at the path, and `open` with `O_CREAT`
  * creates the target of a dangling one. A junction needs no privilege and can
@@ -548,6 +547,58 @@ async function screenPluginFile(filePath: string, logger: ScrubLogger): Promise<
     }
   }
   return "ok";
+}
+
+/**
+ * Open `%LOCALAPPDATA%\tandem\Logs\uninstall.log` for append, refusing a link
+ * at any level below `localAppData` (#2163). Exported for tests.
+ *
+ * `localAppData` itself was screened by `usableEnvDir`. `tandem` and `Logs` are
+ * each `lstat`ed and screened by {@link isSafeDirectory}; a missing level is
+ * created one at a time, non-recursively, under a parent this loop already
+ * verified (a `mkdir` of an existing name, link or not, is EEXIST and never
+ * traverses it). The leaf goes through {@link screenPluginFile}: absent is
+ * created, a regular file is appended to, anything else is refused. Every
+ * refusal is warned through `logger`, path only, and returns `null`.
+ *
+ * The open adds `O_NOFOLLOW` where the platform defines it (POSIX), as
+ * defence in depth over the screen for a link swapped in after it. **Residual,
+ * the same as {@link screenPluginFile}'s:** Node has no no-follow open on
+ * Windows, and `O_EXCL` creates through a dangling link there, so that swap
+ * window stays open on Windows. The mode equals the old `"a"`.
+ */
+export async function openUninstallLog(
+  localAppData: string,
+  logger: ScrubLogger,
+): Promise<FileHandle | null> {
+  let dir = localAppData;
+  for (const segment of ["tandem", "Logs"]) {
+    dir = path.join(dir, segment);
+    const missing = await fsPromises.lstat(dir).then(
+      () => false,
+      (err) => (err as NodeJS.ErrnoException).code === "ENOENT",
+    );
+    if (missing) await fsPromises.mkdir(dir).catch(() => {});
+    if (!(await isSafeDirectory(dir, logger))) return null;
+  }
+  const logPath = path.join(dir, "uninstall.log");
+  if ((await screenPluginFile(logPath, logger)) === "refused") return null;
+  // POSIX only: undefined on Windows (see `reload-family.ts` for the precedent).
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  try {
+    return await fsPromises.open(
+      logPath,
+      fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | noFollow,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
+      logger.warn(`refusing to follow a reparse point: ${logPath}`);
+    } else {
+      logger.warn(`cannot open ${logPath}: ${(err as Error).message}`);
+    }
+    return null;
+  }
 }
 
 /** Read and parse `filePath` as a JSON object. `null` means "skip": absent
@@ -911,11 +962,15 @@ export function removeCoworkSettings(obj: Record<string, unknown>): boolean {
  * Runs on every platform. Returns the failure count; each target is
  * isolated so one failure never skips the rest.
  *
- * `detect` is injectable for tests only.
+ * `detect` is injectable for tests only. The default passes a callback so a
+ * Claude Desktop config that detection refused (a link at the file, #2163) is
+ * a warning in this log rather than a silent omission: any Tandem entry behind
+ * it stays in place.
  */
 export async function scrubMcpConfigs(
   logger: ScrubLogger,
-  detect: () => DetectedTarget[] = detectRemovalTargets,
+  detect: () => DetectedTarget[] = () =>
+    detectRemovalTargets({}, (p, reason) => logger.warn(`left ${p} untouched (${reason})`)),
 ): Promise<number> {
   let failures = 0;
   let targets: DetectedTarget[];
