@@ -294,9 +294,12 @@ export function reanchorAnnotations(doc: Y.Doc, filePath: string): void {
         //    the record ends up durably pinned to the wrong text and every
         //    later reload resolves it cleanly and never revisits it. Since
         //    #1764 that re-anchor happens only when the stored range still
-        //    holds its `textSnapshot` — a contradicting one answers
-        //    `degraded` and writes nothing — so the durable mispin is now the
-        //    snapshot-less and still-matching cases rather than all of them.
+        //    holds its `textSnapshot`. On a contradicting snapshot the mint
+        //    arms answer `degraded` and mint nothing (the dead-`relRange`
+        //    repair arm still strips the `relRange` and writes that stripped
+        //    record), and the collapse arm preserves the stored span only under
+        //    the same check. So the durable mispin is now the snapshot-less and
+        //    still-matching cases rather than all of them.
         //    Relocating on the prefix is what this pass is for either way.
         //
         // So: search on the prefix, and carry the span across unchanged. That
