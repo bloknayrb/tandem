@@ -16,6 +16,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants";
 import { toFlatOffset, toPmPos } from "../../src/shared/positions/types";
+import { selectionFingerprint } from "../../src/shared/selection-fingerprint";
 
 /**
  * `activity.cursor` is published to MCP clients, which hold no ProseMirror
@@ -296,7 +297,8 @@ describe("activity is not published for a remote change (#1918)", () => {
     // The refresh lives in an editor plugin, so a background tab (unmounted
     // under `{#key activeTab.id}`) or a document no browser is showing has
     // nobody to run it — the record keeps its pre-edit offset indefinitely.
-    // This is the `cursor` twin of #1997's `selectedText` carve-out.
+    // `cursor` has no snapshot guard; `selectedText` does (#1997: the record
+    // carries a fingerprint the inbox checks), so only `cursor` reads stale.
     const { ydoc, editor, activity } = typeZBeforeThree();
     await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
     const captured = { ...(activity() as object) };
@@ -353,7 +355,13 @@ describe("activity is not published for a remote change (#1918)", () => {
  * the way a server edit does: an update applied from a second `Y.Doc`.
  */
 describe("Y_MAP_SELECTION lifetime (#1624)", () => {
-  type SelectionRecord = { from: number; to: number; timestamp?: number; selectedText?: string };
+  type SelectionRecord = {
+    from: number;
+    to: number;
+    timestamp?: number;
+    selectedText?: string;
+    textFingerprint?: string;
+  };
 
   function selectionRecord(ydoc: Y.Doc): SelectionRecord | undefined {
     return ydoc.getMap(Y_MAP_USER_AWARENESS).get(Y_MAP_SELECTION) as SelectionRecord | undefined;
@@ -511,5 +519,101 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     editor.commands.blur();
     await vi.advanceTimersByTimeAsync(300);
     expect(selectionRecord(ydoc)).toStrictEqual(before);
+  });
+
+  /** What the server's #1997 check computes for `rec` against `ydoc`'s current text. */
+  function serverFingerprint(ydoc: Y.Doc, rec: SelectionRecord): string {
+    return selectionFingerprint(extractText(ydoc).slice(rec.from, rec.to));
+  }
+
+  it("(f) the record carries a fingerprint of the flat span it names (#1997)", async () => {
+    const { ydoc } = await selectThree();
+    const rec = selectionRecord(ydoc) as SelectionRecord;
+    expect(typeof rec.textFingerprint).toBe("string");
+    expect(rec.textFingerprint).toBe(serverFingerprint(ydoc, rec));
+    expect(rec.textFingerprint).toBe(selectionFingerprint("three"));
+  });
+
+  it.each([
+    ["a blockquote", "Intro\n\n> quoted words here\n\nTail\n", "words"],
+    ["a table cell", "Intro\n\n| a | b |\n| --- | --- |\n| cell one | cell two |\n", "two"],
+  ])(
+    "(f2) the fingerprint matches the server's projection inside %s (#1997)",
+    async (_label, markdown, word) => {
+      // Any projection disagreement fails toward null, which for these shapes
+      // would quietly withhold every selection the user makes inside one.
+      vi.useFakeTimers();
+      const { ydoc, editor } = boundEditor(markdown);
+      selectWord(editor, ydoc, word);
+      await vi.advanceTimersByTimeAsync(200);
+
+      const rec = selectionRecord(ydoc) as SelectionRecord;
+      expect(extractText(ydoc).slice(rec.from, rec.to)).toBe(word);
+      expect(rec.textFingerprint).toBe(serverFingerprint(ydoc, rec));
+    },
+  );
+
+  it("(g) the fingerprint hashes the server's flat projection, not textBetween (#1997)", async () => {
+    // A span crossing a heading's "## " prefix: the flat text holds the prefix,
+    // `textBetween` (and so the record's own `selectedText`) does not. Hashing
+    // the wrong projection would null every selection spanning a heading.
+    vi.useFakeTimers();
+    const { ydoc, editor } = boundEditor("Intro\n\n## Head\n\nBody\n");
+    const flat = extractText(ydoc);
+    const prefixAt = flat.indexOf("## ");
+    const from = toFlatOffset(flat.indexOf("Intro") + 2);
+    const to = toFlatOffset(flat.indexOf("Head") + 2);
+    editor.commands.setTextSelection({
+      from: flatOffsetToPmPos(editor.state.doc, from),
+      to: flatOffsetToPmPos(editor.state.doc, to),
+    });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const rec = selectionRecord(ydoc) as SelectionRecord;
+    // The offsets themselves are flat: the end inside "Head" lies past the
+    // prefix, so a hash of the flat text sliced at PM positions cannot pass.
+    expect(rec.from).toBe(from);
+    expect(rec.to).toBe(to);
+    expect(rec.to).toBeGreaterThan(prefixAt + "## ".length);
+    expect(flat.slice(rec.from, rec.to)).toContain("## ");
+
+    const { from: pmFrom, to: pmTo } = editor.state.selection;
+    const textBetween = editor.state.doc.textBetween(pmFrom, pmTo, "\n");
+    expect(textBetween).not.toBe(flat.slice(rec.from, rec.to));
+    expect(rec.textFingerprint).toBe(serverFingerprint(ydoc, rec));
+    expect(rec.textFingerprint).not.toBe(selectionFingerprint(textBetween));
+  });
+
+  it("(h) a remote shift re-records the fingerprint against the new document (#1997)", async () => {
+    const { ydoc } = await selectThree();
+    const before = selectionRecord(ydoc) as SelectionRecord;
+    remoteChange(ydoc, (fragment) => {
+      findText(fragment, "Some text here")?.insert(0, "AB");
+    });
+    await vi.advanceTimersByTimeAsync(300);
+
+    const after = selectionRecord(ydoc) as SelectionRecord;
+    expect(after.from).toBe(before.from + 2);
+    expect(after.textFingerprint).toBe(serverFingerprint(ydoc, after));
+  });
+
+  it("(i) with no mounted editor a shifting edit leaves a record the server will refuse (#1997)", async () => {
+    // The client half of the server's null rule: nothing re-records the
+    // selection of a background tab, so the stored fingerprint no longer
+    // matches the text at the stale offsets, and the inbox reports null.
+    const { ydoc, editor } = await selectThree();
+    const captured = { ...(selectionRecord(ydoc) as SelectionRecord) };
+    expect(captured.textFingerprint).toBe(serverFingerprint(ydoc, captured));
+
+    live.splice(live.indexOf(editor), 1);
+    editor.destroy();
+    remoteChange(ydoc, (fragment) => {
+      findText(fragment, "Some text here")?.insert(0, "AB");
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const rec = selectionRecord(ydoc) as SelectionRecord;
+    expect(rec).toStrictEqual(captured);
+    expect(serverFingerprint(ydoc, rec)).not.toBe(rec.textFingerprint);
   });
 });

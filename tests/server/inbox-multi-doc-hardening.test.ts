@@ -49,6 +49,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
@@ -350,7 +351,12 @@ describe("C: client-written activity is narrowed to the declared types", () => {
     withInternal(doc, () => {
       const awareness = doc.getMap(Y_MAP_USER_AWARENESS);
       awareness.set(Y_MAP_ACTIVITY, { isTyping: "yes", cursor: Number.NaN, lastEdit: "soon" });
-      awareness.set(Y_MAP_SELECTION, { from: 0, to: 5, timestamp: Number.NaN });
+      awareness.set(Y_MAP_SELECTION, {
+        from: 0,
+        to: 5,
+        timestamp: Number.NaN,
+        textFingerprint: selectionFingerprint("Hello"),
+      });
     });
 
     const data = await poll();

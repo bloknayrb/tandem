@@ -170,6 +170,8 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // Outside the wake section.
   // 37 adds the `tandem_resolveRange` ambiguity note to Hard Rule 1 (#2114: `totalCount` /
   // `ambiguous` on a hit). Outside the wake section.
+  // 37 also carries #1997: the Reacting to Document Events paragraph's background-tab caveat
+  // becomes the null rule. Outside the wake section; every wake assertion below was re-read.
   expect(skill).toMatch(/^version:\s*37$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
@@ -547,7 +549,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "37", bodyHash: "9fce59bbb854" });
+    ).toEqual({ version: "37", bodyHash: "f20c2f34428a" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

@@ -106,6 +106,14 @@ import { extractText, type FlatBreak } from "./document-model.js";
 // and this module needs nothing the re-export does not already carry.
 import { getCurrentDoc, getOpenDocs } from "./document-service.js";
 
+/** The `Y_MAP_SELECTION` record as the editor writes it; a cast, not a check. */
+interface SelectionRecord {
+  from: FlatOffset;
+  to: FlatOffset;
+  timestamp: number;
+  textFingerprint?: unknown;
+}
+
 /**
  * The operations MCP tool handlers perform against a single document's
  * in-memory Y.Doc / Y.Map state. Method names and argument shapes are derived
@@ -385,18 +393,20 @@ export class YDocStore {
   /**
    * The user's current selection and typing activity, typed.
    *
+   * `selection.textFingerprint` (#1997) is `selectionFingerprint` of the flat
+   * span the editor recorded. It stays `unknown`: the record is client-written
+   * and absent from records saved before #1997, so the reader must narrow it.
+   *
    * Deliberately not a `getMap` returning the raw `Y.Map` — that would be the
    * `ydoc` hatch under a new name, which is the whole thing Unit 8j-2 removes.
    */
   getUserAwareness(): {
-    selection?: { from: FlatOffset; to: FlatOffset; timestamp: number };
+    selection?: SelectionRecord;
     activity?: { isTyping: boolean; cursor: number; lastEdit: number };
   } {
     const userAwareness = this.#ydoc.getMap(Y_MAP_USER_AWARENESS);
     return {
-      selection: userAwareness.get(Y_MAP_SELECTION) as
-        | { from: FlatOffset; to: FlatOffset; timestamp: number }
-        | undefined,
+      selection: userAwareness.get(Y_MAP_SELECTION) as SelectionRecord | undefined,
       activity: userAwareness.get(Y_MAP_ACTIVITY) as
         | { isTyping: boolean; cursor: number; lastEdit: number }
         | undefined,

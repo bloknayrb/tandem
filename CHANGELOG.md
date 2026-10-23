@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Tandem's own Claude no longer looks cleanly stopped when it failed to start (#2145).** If it could not start when Tandem launched or after a crash, because its integration config (`integrations.json`) could not be read or the launcher program was missing, the status bar now says it isn't running and offers Restart. A restart also no longer resets its back-off early, and an old process's error is no longer counted against the new one.
 
+### Fixed
+
+- **`tandem_checkInbox` no longer reports a selection you never made (#1997).** When the text at your last recorded selection has changed, for example because your AI edited a document in a background tab, `activity.selectedText` and `selectionAt` are now null rather than whatever text had moved under the old position. **Bound:** in the active tab they can also read null briefly, for about 150 ms after an edit that shifts the selection. **Bound:** a selection saved before this version reads null until you select again.
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New
