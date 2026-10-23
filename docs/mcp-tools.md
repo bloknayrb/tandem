@@ -338,7 +338,7 @@ An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rat
 ```
 // First, find the text you want to edit:
 tandem_resolveRange({ pattern: "$12.4 million" })
-// Returns: { from: 180, to: 193 }
+// Returns: { from: 180, to: 193, text: "$12.4 million", occurrence: 1, totalCount: 1, ambiguous: false }
 
 // Then edit it:
 tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
@@ -1040,8 +1040,10 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 
 **Returns:**
 ```json
-{ "from": 42, "to": 55, "text": "$12.4 million" }
+{ "from": 42, "to": 55, "text": "$12.4 million", "occurrence": 1, "totalCount": 1, "ambiguous": false }
 ```
+
+`totalCount` is the number of matches of `pattern` in the document (the same matching as the search, including the zero-exact-match space fallback below), `ambiguous` is `totalCount > 1`, and `occurrence` echoes which match was returned. `ambiguous` reflects `totalCount` even when you pass an explicit `occurrence`. When it is `true`, the range is only occurrence N of `totalCount`: pass a longer unique string or an explicit `occurrence`, and check the returned `text` in context before editing or annotating. Matching is **substring** matching, so a short pattern can hit inside a longer word — `"replaceme"` matches inside `"replacement"` (#2114), and a `textSnapshot` taken from that match cannot object because it matches the same substring.
 
 The search prefers an **exact** match and falls back to the same space-separator normalization described under the range errors above, but only when the exact search finds nothing at all (#1622) — so a pattern you typed with an ordinary space still finds a span the document spells with a no-break space, and the returned `text` carries the document's real bytes.
 

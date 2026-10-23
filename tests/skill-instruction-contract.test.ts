@@ -168,7 +168,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // Also unreleased at 36: the Settings label for the launch directory is corrected to
   // "Claude working directory" (2026-10-20 docs audit).
   // Outside the wake section.
-  expect(skill).toMatch(/^version:\s*36$/m);
+  // 37 adds the `tandem_resolveRange` ambiguity note to Hard Rule 1 (#2114: `totalCount` /
+  // `ambiguous` on a hit). Outside the wake section.
+  expect(skill).toMatch(/^version:\s*37$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -545,7 +547,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "36", bodyHash: "2b4366082d99" });
+    ).toEqual({ version: "37", bodyHash: "a47914a139b5" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

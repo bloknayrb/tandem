@@ -1477,6 +1477,68 @@ describe("MCP tool integration — navigation tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.from).toBe(6);
     expect(parsed.data.to).toBe(11);
+    expect(parsed.data.occurrence).toBe(1);
+    expect(parsed.data.totalCount).toBe(1);
+    expect(parsed.data.ambiguous).toBe(false);
+  });
+
+  it("tandem_resolveRange flags an ambiguous substring match (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-1", "a replacement is for replaceme here");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "replaceme" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.from).toBe(2);
+    expect(parsed.data.to).toBe(11);
+    expect(parsed.data.occurrence).toBe(1);
+    expect(parsed.data.totalCount).toBe(2);
+    expect(parsed.data.ambiguous).toBe(true);
+  });
+
+  it("tandem_resolveRange reports totalCount for an explicit occurrence (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-2", "a replacement is for replaceme here");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "replaceme", occurrence: 2 },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.from).toBe(21);
+    expect(parsed.data.to).toBe(30);
+    expect(parsed.data.occurrence).toBe(2);
+    expect(parsed.data.totalCount).toBe(2);
+    expect(parsed.data.ambiguous).toBe(true);
+  });
+
+  it("tandem_resolveRange counts a unique space-class fallback match as unambiguous (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-3", "price is 5 dollars today");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "5 dollars" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.text).toBe("5 dollars");
+    expect(parsed.data.totalCount).toBe(1);
+    expect(parsed.data.ambiguous).toBe(false);
+  });
+
+  it("tandem_resolveRange miss still reports the total in the INVALID_RANGE message (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-4", "foo bar foo");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "foo", occurrence: 5 },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+    expect(parsed.message).toContain("found 2 total");
   });
 
   it("tandem_status updates awareness when text param is provided", async () => {
