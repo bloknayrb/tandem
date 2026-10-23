@@ -11,7 +11,8 @@ import { isValidDocumentId, sendApiError } from "./_shared.js";
 
 /**
  * 1 MB cap on the inline `markdown` field. `mdParser.parse` is synchronous and
- * blocks the event loop, so the 50 MB `largeBody` body limit is far too loose
+ * blocks the event loop, so the route's 8 MB body limit
+ * (`ROUTE_OWNED_BODY_PARSERS`, sized for JSON escaping) is far too loose
  * for an inline reload argument — this mirrors `tandem_appendContent`'s cap.
  */
 const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;

@@ -415,9 +415,9 @@ export async function activateLicense(
   verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
 ): Promise<LicenseState> {
   // Bound BEFORE normalizing. `normalizePastedLicense` allocates a copy per
-  // pass, and the route's body parser admits up to 70 MB — its `Content-Length`
-  // pre-check can be sidestepped with chunked transfer encoding, so this is the
-  // guard that actually holds. Rejecting (rather than truncating) also gives the
+  // pass, and this is the guard that holds for every caller: the route's
+  // `Content-Length` pre-check can be sidestepped with chunked transfer
+  // encoding, and its 64 KB body parser (#1981) still admits ~3x this bound. Rejecting (rather than truncating) also gives the
   // buyer the right message: they pasted the whole email.
   if (rawBlob.length > MAX_NORMALIZE_INPUT) {
     throw new LicenseActivationError("TOO_LONG", "License input exceeds maximum length");

@@ -329,12 +329,13 @@ export function enforceLoopbackMutation(req: Request, res: Response, next: NextF
  *   is not registered and callers get a 404.
  */
 /**
- * Reject an implausibly large body on the license-activate route before the
- * 70 MB shared parser buffers it. A signed license is ~650 bytes; 64 KB is a
- * generous ceiling that still refuses anything that isn't a license.
+ * Reject an implausibly large body on the license-activate route before any
+ * parser buffers it. A signed license is ~650 bytes; 64 KB is a generous
+ * ceiling that still refuses anything that isn't a license.
  *
- * Checks the declared `Content-Length` only — the parser's own limit is the
- * backstop for a missing/lying header. This is defense in depth, not the
+ * Checks the declared `Content-Length` only — the pre-parse router's 64 KB
+ * `express.json` (`api-body-preparse.ts`, #1981) is the backstop for a
+ * missing/lying header. This is defense in depth, not the
  * primary gate: the route is origin- and loopback-restricted inside the handler.
  */
 export function rejectOversizeLicenseBody(req: Request, res: Response, next: NextFunction): void {
@@ -386,6 +387,11 @@ export function registerApiRoutes(
   /** Launcher resume on activation (#1521). Omitted in tests → no resume. */
   licenseDeps?: ActivateLicenseDeps,
 ): void {
+  // Body limits (#1981): the parser each POST below names is a backstop. The
+  // body is read first by the pre-parse router in `api-body-preparse.ts`, at
+  // the limit in that route's `ROUTE_OWNED_BODY_PARSERS` row — or, for a route
+  // with no row, by the SDK sub-app's 100 kB `express.json`. A route-level
+  // parser added here without a row is dead code.
   // App metadata endpoint — consumed by the client's About panel
   app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
 
@@ -411,9 +417,10 @@ export function registerApiRoutes(
   // License activate (#1116). Gated on origin allowlist + loopback inside the
   // handler — a license is a credential, installable only by a local caller.
   //
-  // `rejectOversizeLicenseBody` runs BEFORE the body parser, because the shared
-  // `largeBody` parser admits 70 MB (it exists for document uploads) and a
-  // license blob is under 2 KB.
+  // `rejectOversizeLicenseBody` runs BEFORE the body parser, because a license
+  // blob is under 2 KB. The parse that actually reads this body is the
+  // pre-parse router's (`ROUTE_OWNED_BODY_PARSERS`, #1981): the same check, then
+  // a 64 KB `express.json`; the `largeBody` below is a backstop that skips it.
   //
   // It is defense in depth ONLY: it reads the caller's own `Content-Length`, so
   // omitting that header (or using chunked transfer encoding) skips it

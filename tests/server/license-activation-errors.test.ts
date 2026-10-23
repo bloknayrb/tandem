@@ -235,8 +235,9 @@ describe("activateLicense error taxonomy", () => {
 
   it("TOO_LONG is rejected BEFORE the normalizer allocates", async () => {
     // The route's Content-Length pre-check is sidesteppable with chunked
-    // transfer encoding, and the shared body parser admits 70 MB — so this
-    // bound, not that one, is what stops a paste from becoming memory pressure.
+    // transfer encoding; the pre-parse router caps the body at 64 KB (#1981),
+    // and this bound is defence in depth below that — the one that holds for
+    // every caller of activateLicense, not only the route.
     const dir = tmp();
     await expect(activateLicense(dir, "x".repeat(20_001), verify)).rejects.toMatchObject({
       code: "TOO_LONG",

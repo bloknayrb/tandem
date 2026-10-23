@@ -342,7 +342,8 @@ export function registerIntegrationsRoutes(
 
   app.options(API_INTEGRATIONS_WALKTHROUGH_CONFIRM, mw);
   // No `largeBody`: the body is `{ serverVersion }`, which the app's global
-  // JSON parser already reads.
+  // JSON parser already reads (the SDK sub-app's 100 kB one — this route has no
+  // `ROUTE_OWNED_BODY_PARSERS` row, #1981).
   app.post(API_INTEGRATIONS_WALKTHROUGH_CONFIRM, mw, makeWalkthroughConfirmHandler(deps));
 
   app.options(API_INTEGRATIONS_SECRET, mw);

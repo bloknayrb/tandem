@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Pasting text that contains markdown such as `**bold**` no longer colours the text after the paste as yours in the authorship overlay (#1523).
 
+### Fixed
+
+- Opening or uploading a document from the browser, and committing a large source-view edit, no longer fails for content over about 100 kB (#1981).
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New

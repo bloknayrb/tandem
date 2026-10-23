@@ -1453,7 +1453,7 @@ Uploaded files are always read-only — there is no disk path to save to. The sy
 
 Every `/api/*` route registered today passes the CORS + Host middleware explicitly as its `mw` argument. It is threaded **per route**, not mounted path-wide — only `enforceLoopbackMutation` is `app.use("/api", …)` — so a registration that omits `mw` loses both the CORS allowlist and the Host-header DNS-rebinding check (`isHostAllowed`). True by convention, not by construction.
 
-The allowlist is three origins: `http(s)://127.0.0.1` and `http(s)://tauri.localhost` with any port, plus the Linux Tauri scheme `tauri://localhost` matched as an **exact string, never a `tauri://*` wildcard**. Bare `localhost` was narrowed out in PR #637. Absence of `Access-Control-Allow-Origin` is the denial — never `null` (#1291). Full posture: [security.md](security.md#cors-allowlist). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
+The allowlist is three origins: `http(s)://127.0.0.1` and `http(s)://tauri.localhost` with any port, plus the Linux Tauri scheme `tauri://localhost` matched as an **exact string, never a `tauri://*` wildcard**. Bare `localhost` was narrowed out in PR #637. Absence of `Access-Control-Allow-Origin` is the denial — never `null` (#1291). Full posture: [security.md](security.md#cors-allowlist). The body size limit is 70 MB for `/api/upload`, to accommodate base64-encoded .docx files (50 MB file → ~67 MB base64); the other routes' limits are in `ROUTE_OWNED_BODY_PARSERS` (`src/server/mcp/api-body-preparse.ts`), and a route not listed there gets 100 kB (#1981).
 
 ---
 

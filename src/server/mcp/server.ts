@@ -39,6 +39,7 @@ import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
 import { isShuttingDown } from "../shutdown-state.js";
 import { registerAnnotationTools } from "./annotations.js";
+import { createApiBodyPreParser, sdkHostValidationFor } from "./api-body-preparse.js";
 import {
   apiMiddleware,
   createApiMiddleware,
@@ -457,8 +458,9 @@ function isMcpPath(path: string): boolean {
  *
  * `createMcpExpressApp` installs a bare `express.json()` (100 kB) at the SDK
  * sub-app root, and `app.use(mcpApp)` mounts that sub-app at the ROOT, above
- * `registerApiRoutes` — so this parser sees every `/api` body too. Without a
- * handler its `PayloadTooLargeError` fell through to Express's `finalhandler`,
+ * `registerApiRoutes` — so this parser sees every `/api` body not listed in
+ * `ROUTE_OWNED_BODY_PARSERS` (#1981) too. Without a handler its
+ * `PayloadTooLargeError` fell through to Express's `finalhandler`,
  * which serves an HTML page with `err.stack` in a `<pre>` whenever
  * `NODE_ENV !== "production"`. Measured before this landed: a 200 kB
  * `application/json` POST to `/mcp` returned `413 text/html` carrying
@@ -479,7 +481,9 @@ function isMcpPath(path: string): boolean {
  * param decode and used to answer `400 text/html` carrying
  * `node_modules/router/lib/layer.js` frames. The outer copy is registered
  * after the last registrar, so it closes the CLASS rather than one trigger of
- * it.
+ * it. It is also what answers a parse error from the pre-parse router (#1981):
+ * that router sits on the outer app, so its 400/413 skips `mcpApp` (a
+ * non-error layer) and lands here.
  *
  * **Classification discriminates on `err.type`, never on the path** — the path
  * picks only the response envelope. All three `/mcp` handlers are `async` (each
@@ -780,10 +784,14 @@ export async function startMcpServerHttp(
   );
   idleReaper.unref();
 
-  // We need two different body parser limits: 100kb for MCP (SDK default)
-  // and 70MB for file upload API. createMcpExpressApp applies express.json()
-  // globally with 100kb limit. Solution: create our own outer app, register
-  // /api routes with a larger body parser, then mount the SDK app for /mcp.
+  // We need different body parser limits: 100kb for MCP (SDK default) and
+  // route-sized limits for /api (70MB for upload). createMcpExpressApp applies
+  // express.json() at its root with the 100kb limit, and the SDK sub-app is
+  // mounted at the ROOT above every /api registrar, so whichever parser runs
+  // first owns the body. Solution (#1981): a pre-parse router mounted directly
+  // above `app.use(mcpApp)` parses each route listed in
+  // ROUTE_OWNED_BODY_PARSERS at its own limit — after auth, loopback and both
+  // Host checks — and every other body is left to the SDK's parser.
   const { default: express } = await import("express");
   const app = express();
 
@@ -805,8 +813,10 @@ export async function startMcpServerHttp(
     ? createApiMiddleware([resolvedLanIP])
     : apiMiddleware;
 
-  // Large body parser for file-open and upload routes only (up to 70MB).
-  // NOT mounted globally — other routes (MCP, /health) use the SDK's own parser.
+  // Large body parser (up to 70MB). Reached through the pre-parse router for
+  // API_UPLOAD only (see ROUTE_OWNED_BODY_PARSERS); in the registrars it is a
+  // backstop that skips the already-parsed body. NOT mounted globally — other
+  // routes (MCP, /health) use the SDK's own parser.
   const largeBody = express.json({ limit: "70mb" });
 
   // SDK app provides express.json() (100kb limit) + DNS rebinding protection.
@@ -819,6 +829,9 @@ export async function startMcpServerHttp(
     ? ["127.0.0.1", "localhost", "[::1]", resolvedLanIP, TAURI_HOSTNAME]
     : undefined;
   const mcpApp = createMcpExpressApp({ host, ...(allowedHosts ? { allowedHosts } : {}) });
+  // The same Host check as mcpApp's first layer, built from the same inputs, so
+  // the pre-parse router (#1981) refuses exactly what mcpApp would refuse.
+  const sdkHostGate = sdkHostValidationFor(host, allowedHosts);
 
   /**
    * Route a non-initialize request to its existing session.
@@ -1001,6 +1014,12 @@ export async function startMcpServerHttp(
   //     authMiddleware -> enforceLoopbackMutation -> mcpApp's hostHeaderValidation +
   //     express.json -> the route's lanAwareApiMiddleware -> handler
   // (SDK 1.31 moved express.json after the Host check; before that it ran first.)
+  // A route listed in ROUTE_OWNED_BODY_PARSERS (#1981) takes one more branch, through
+  // the pre-parse router mounted directly above mcpApp:
+  //     authMiddleware -> enforceLoopbackMutation -> a copy of the SDK Host check ->
+  //     lanAwareApiMiddleware -> the route-sized parser -> mcpApp (Host check again;
+  //     its express.json skips the parsed body) -> the registration -> handler
+  // so on those routes the body is read only after BOTH Host checks.
   // The SDK check fires first and answers with a JSON-RPC body ("Invalid Host: evil.com");
   // lanAwareApiMiddleware narrows it further per route, rejecting hosts the SDK's list
   // admits (e.g. "localhost:PORT" and "[::1]:PORT") with {"error":"FORBIDDEN"}. Reading a
@@ -1072,7 +1091,15 @@ export async function startMcpServerHttp(
     },
   );
 
-  // Mount SDK app (handles /mcp with 100kb body parser + DNS rebinding)
+  // Route-sized /api body parsing (#1981). MUST sit directly above the SDK
+  // sub-app: the SDK's root express.json (100kb) would otherwise read every /api
+  // body first, and body-parser skips a stream that is already consumed. Its
+  // first layer is the SDK Host check (copy), then lanAwareApiMiddleware, then
+  // the parser — it never answers a success. See api-body-preparse.ts.
+  app.use(createApiBodyPreParser({ sdkHostGate, mw: lanAwareApiMiddleware, largeBody }));
+
+  // Mount SDK app (handles /mcp with 100kb body parser + DNS rebinding). Its
+  // parser reads every body the pre-parse router above did not.
   app.use(mcpApp);
 
   // --- REST API for browser-initiated file opening ---
