@@ -2497,11 +2497,80 @@ describe("zero-width runs at a suggestion's end (#2107)", () => {
     expect(flat).toBe(origFlat.replace("gamma", "G"));
   });
 
+  // The trim is keyed on "contributes no flat text", not on an element-name
+  // allowlist (#2107 review): each of these runs is zero-width to the walker,
+  // so `to` resolved past it into `beta`, and an allowlist trim let it fall
+  // through both the trim and the fence and vanish with no `<w:del>`.
+  it.each([
+    [
+      "an embedded OLE object",
+      `<w:r><w:object><v:shape id="s1"/><o:OLEObject ProgID="Excel.Sheet.12" r:id="rId9"/></w:object></w:r>`,
+    ],
+    ["a carriage return", `<w:r><w:cr/></w:r>`],
+    [
+      "a positional tab",
+      `<w:r><w:ptab w:relativeTo="margin" w:alignment="right" w:leader="none"/></w:r>`,
+    ],
+    ["a field instruction", `<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>`],
+  ])("keeps a trailing %s run in place", async (_name, run) => {
+    const body = `<w:p>${textRun("Hello span")}${run}${textRun(" after")}</w:p>`;
+    const r = applyDirect(body, 6, 10);
+    expect(r.result.ok).toBe(true);
+    expect(r.out).toContain(run);
+
+    const { output, produced, flat } = await applyOrchestrated(body, [
+      { id: "s", from: 6, to: 10, newText: "X" },
+    ]);
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    expect(delTexts(produced)).toEqual(["span"]);
+    expect(flat).toBe("Hello X after");
+    // Left where it stood: after the insertion, outside every `<w:del>`, and
+    // still ahead of the following text.
+    const at = produced.indexOf(run);
+    expect(at).toBeGreaterThan(produced.indexOf("</w:ins>"));
+    expect(at).toBeLessThan(produced.indexOf("> after</w:t>"));
+    expect(produced.slice(produced.indexOf("<w:del "), produced.indexOf("</w:del>"))).not.toContain(
+      run,
+    );
+  });
+
+  // The interior half of the same rule: a run the range genuinely spans is
+  // destroyed whole, and step 4 records only its first `<w:t>`, so anything
+  // else in it is refused rather than deleted without a revision.
+  it.each([
+    ["an embedded OLE object run", `<w:r><w:object><v:shape id="s1"/></w:object></w:r>`],
+    ["a carriage-return run", `<w:r><w:cr/></w:r>`],
+    ["an mc:AlternateContent run", `<w:r><mc:AlternateContent/></w:r>`],
+  ])("refuses a range that spans %s", async (_name, run) => {
+    const body = `<w:p>${textRun("alpha")}${run}${textRun("beta")}${textRun(" gamma")}</w:p>`;
+    const { output, flat, origFlat } = await applyOrchestrated(body, [
+      { id: "s", from: 0, to: 9, newText: "X" }, // "alphabeta"
+    ]);
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails).toEqual([
+      {
+        id: "s",
+        reason:
+          "Spans an embedded object, line break or other non-text content and couldn't be applied",
+      },
+    ]);
+    expect(flat).toBe(origFlat);
+  });
+
+  it("refuses a from-run whose text shares the run with a carriage return", async () => {
+    const body = `<w:p><w:r><w:t>xy</w:t><w:cr/></w:r>${textRun("z")}</w:p>`;
+    const { output } = await applyOrchestrated(body, [{ id: "s", from: 1, to: 2, newText: "Q" }]);
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails[0]?.reason).toMatch(/non-text content/);
+  });
+
   // PINS A CURRENT LIMITATION — flip these when it is fixed. The zero-width
-  // run sits AFTER `[0,5)`, so this refusal is a fail-closed FALSE refusal.
-  // Do not "fix" it by widening `INERT_RUN_CHILDREN`: a field end or a
-  // footnote reference is not inert, and destroying or moving it is the
-  // corruption the fence exists to prevent.
+  // run sits AFTER `[0,5)`, so this refusal is a fail-closed FALSE refusal:
+  // `trimTrailingZeroWidthRuns` deliberately does not trim a run carrying a
+  // `COMPLEX_RUN_ELEMENTS` child, which keeps its pre-#2107 refusal. Do not
+  // "fix" it by letting the fence destroy such a run — that is the corruption
+  // the fence exists to prevent.
   it.each([
     ["a field end", `<w:r><w:fldChar w:fldCharType="end"/></w:r>`],
     ["a footnote reference", `<w:r><w:footnoteReference w:id="1"/></w:r>`],

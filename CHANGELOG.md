@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-- **`.docx` tracked-change apply no longer deletes the rest of a paragraph or a comment's reference mark, and refuses an inverted range (#2106, #2107).** A suggestion whose range spans a Word comment's reference mark is now refused ("Spans a Word comment's reference mark") rather than deleting the mark without a record. `.docx` ships dark, so nothing in the shipped app changes.
+- **`.docx` tracked-change apply no longer deletes the rest of a paragraph or a comment's reference mark, and refuses an inverted range (#2106, #2107).** A suggestion whose range spans a Word comment's reference mark is now refused ("Spans a Word comment's reference mark") rather than deleting the mark without a record, and so is one spanning an embedded object, line break or other non-text content ("Spans an embedded object, line break or other non-text content"). Such content just past the range's end is now kept in place. `.docx` ships dark, so nothing in the shipped app changes.
 
 ## [0.29.0] - 2026-10-22
 
