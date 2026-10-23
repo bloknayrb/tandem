@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Claude Desktop config detection and `tandem --uninstall-scrub`'s log no longer follow a link or junction planted at the file (#2163). A Claude Desktop config that is itself a symlink (for example one managed by a dotfiles tool) is no longer offered in setup; Tandem never wrote through one, and the uninstall scrub now reports it as a warning instead of an error.
 
+### Fixed
+
+- **Tandem's own Claude no longer looks cleanly stopped when it failed to start (#2145).** If it could not start when Tandem launched or after a crash, because its integration config (`integrations.json`) could not be read or the launcher program was missing, the status bar now says it isn't running and offers Restart. A restart also no longer resets its back-off early, and an old process's error is no longer counted against the new one.
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New

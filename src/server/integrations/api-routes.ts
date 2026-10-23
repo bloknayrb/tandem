@@ -1380,9 +1380,11 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
 
 /**
  * Internal-error response. The full error is logged server-side; the client
- * gets only a generic message. Other routes in this codebase follow the
- * same pattern — leaking filesystem paths or stack traces through the
- * response body is a no-no even on a loopback-only server.
+ * gets only a generic message. This module never returns a filesystem path or
+ * a stack, because its GETs are reachable off-loopback under a non-loopback
+ * bind (see `IntegrationsFutureSchemaError` in `storage.ts`). The launcher's
+ * loopback-only, origin-gated `sendUnexpected` is the documented exception —
+ * see `MAX_ERROR_DETAIL` in `launcher/api-routes.ts`.
  */
 function sendInternal(res: Response, err: unknown, label: string): void {
   console.error(`[Tandem] ${label}:`, err);
