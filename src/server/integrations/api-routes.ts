@@ -342,7 +342,8 @@ export function registerIntegrationsRoutes(
 
   app.options(API_INTEGRATIONS_WALKTHROUGH_CONFIRM, mw);
   // No `largeBody`: the body is `{ serverVersion }`, which the app's global
-  // JSON parser already reads.
+  // JSON parser already reads (the SDK sub-app's 100 kB one — this route has no
+  // `ROUTE_OWNED_BODY_PARSERS` row, #1981).
   app.post(API_INTEGRATIONS_WALKTHROUGH_CONFIRM, mw, makeWalkthroughConfirmHandler(deps));
 
   app.options(API_INTEGRATIONS_SECRET, mw);
@@ -448,6 +449,55 @@ export function assertOriginAllowlisted(
     return true;
   }
   return false;
+}
+
+/**
+ * DO NOT USE on a handler that tolerates a missing or non-JSON body — such a
+ * handler becomes reachable by a simple-request (no-preflight) POST from any
+ * web page in a browser on this machine.
+ *
+ * `assertOriginAllowlisted`, but only when the request carries an `Origin`
+ * header at all (#2205: `tandem activate` hands the key to the running server
+ * from Node `fetch`, which sends none).
+ *
+ * (a) A PRESENT Origin must be allowlisted. `"null"`, `""` and a non-string
+ * value all count as present, and all are refused: `isLocalhostOrigin` rejects
+ * `"null"` and `""`, and `assertOriginAllowlisted` turns a non-string into
+ * `undefined` and refuses that. `"null"` is a grant, never a refusal, if it is
+ * ever allowlisted — see CLAUDE.md Critical Rule 8.
+ *
+ * (b) Why an ABSENT Origin is safe to admit: the Fetch spec attaches `Origin`
+ * to every non-GET/HEAD request a browser sends, same-origin included, and
+ * under a no-referrer policy it sends `"null"` rather than omitting it. An
+ * absent Origin on a POST therefore means a non-browser caller.
+ *
+ * (c) This is NOT a CSRF control on its own. A caller must pair it with a
+ * positive proof that the request passed a CORS preflight: a required field in
+ * a parsed `application/json` body. `largeBody` and the SDK root parser are
+ * `express.json` with no `type`, so text/plain, form-urlencoded, multipart and
+ * a missing Content-Type all leave `req.body` undefined (docs/security.md).
+ * That body proof does NOT cover DNS rebinding — there the attacker's request
+ * is same-origin, so it may send `application/json` with no preflight. Two
+ * other things stop rebinding: `isHostAllowed` in `apiMiddleware`
+ * (`src/server/mcp/api-routes.ts`), which refuses a Host that is not
+ * 127.0.0.1 or the Tauri WebView, and the Origin the rebinding page's browser
+ * does send, which (a) refuses. Do not conclude from the JSON-body requirement
+ * alone that an absent-Origin route is safe.
+ *
+ * (d) It mirrors the hand-rolled check in `routes/shutdown.ts` (which is left
+ * as it is), except that a present non-string Origin is refused here rather
+ * than read as absent.
+ *
+ * Returns true if the response was sent (caller should `return`).
+ */
+export function assertOriginAllowlistedIfPresent(
+  req: Request,
+  res: Response,
+  routeLabel: string,
+  friendlyMessage?: string,
+): boolean {
+  if (req.headers.origin === undefined) return false;
+  return assertOriginAllowlisted(req, res, routeLabel, friendlyMessage);
 }
 
 /**
@@ -1380,9 +1430,11 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
 
 /**
  * Internal-error response. The full error is logged server-side; the client
- * gets only a generic message. Other routes in this codebase follow the
- * same pattern — leaking filesystem paths or stack traces through the
- * response body is a no-no even on a loopback-only server.
+ * gets only a generic message. This module never returns a filesystem path or
+ * a stack, because its GETs are reachable off-loopback under a non-loopback
+ * bind (see `IntegrationsFutureSchemaError` in `storage.ts`). The launcher's
+ * loopback-only, origin-gated `sendUnexpected` is the documented exception —
+ * see `MAX_ERROR_DETAIL` in `launcher/api-routes.ts`.
  */
 function sendInternal(res: Response, err: unknown, label: string): void {
   console.error(`[Tandem] ${label}:`, err);

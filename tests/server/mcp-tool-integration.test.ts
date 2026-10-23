@@ -62,6 +62,7 @@ import {
   SUPERVISOR_WAKE_PROMPT,
 } from "../../src/shared/launcher/contract.js";
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
+import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
@@ -1164,6 +1165,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const raw = await fs.readFile(sidecarPath, "utf-8");
     expect(raw).toContain("# Document Review");
     expect(raw).toContain("A public comment");
+    expect(raw).toContain("Status: Pending");
     expect(raw).not.toContain("A private reminder");
   });
 
@@ -1477,6 +1479,68 @@ describe("MCP tool integration — navigation tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.from).toBe(6);
     expect(parsed.data.to).toBe(11);
+    expect(parsed.data.occurrence).toBe(1);
+    expect(parsed.data.totalCount).toBe(1);
+    expect(parsed.data.ambiguous).toBe(false);
+  });
+
+  it("tandem_resolveRange flags an ambiguous substring match (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-1", "a replacement is for replaceme here");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "replaceme" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.from).toBe(2);
+    expect(parsed.data.to).toBe(11);
+    expect(parsed.data.occurrence).toBe(1);
+    expect(parsed.data.totalCount).toBe(2);
+    expect(parsed.data.ambiguous).toBe(true);
+  });
+
+  it("tandem_resolveRange reports totalCount for an explicit occurrence (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-2", "a replacement is for replaceme here");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "replaceme", occurrence: 2 },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.from).toBe(21);
+    expect(parsed.data.to).toBe(30);
+    expect(parsed.data.occurrence).toBe(2);
+    expect(parsed.data.totalCount).toBe(2);
+    expect(parsed.data.ambiguous).toBe(true);
+  });
+
+  it("tandem_resolveRange counts a unique space-class fallback match as unambiguous (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-3", "price is 5 dollars today");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "5 dollars" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.text).toBe("5 dollars");
+    expect(parsed.data.totalCount).toBe(1);
+    expect(parsed.data.ambiguous).toBe(false);
+  });
+
+  it("tandem_resolveRange miss still reports the total in the INVALID_RANGE message (#2114)", async () => {
+    setupDoc("mcp-nav-ambig-4", "foo bar foo");
+
+    const result = await client.callTool({
+      name: "tandem_resolveRange",
+      arguments: { pattern: "foo", occurrence: 5 },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+    expect(parsed.message).toContain("found 2 total");
   });
 
   it("tandem_status updates awareness when text param is provided", async () => {
@@ -2036,7 +2100,12 @@ describe("MCP tool integration — awareness tools", () => {
     const ydoc = setupDoc("mcp-inbox-selection", "Hello world");
     withInternal(ydoc, () => {
       const awareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
-      awareness.set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: T_SEL });
+      awareness.set(Y_MAP_SELECTION, {
+        from: 6,
+        to: 11,
+        timestamp: T_SEL,
+        textFingerprint: selectionFingerprint("world"),
+      });
       awareness.set(Y_MAP_ACTIVITY, { isTyping: false, cursor: 11, lastEdit: T_EDIT });
     });
 
@@ -2069,13 +2138,133 @@ describe("MCP tool integration — awareness tools", () => {
     // fails the WHOLE inbox response. The handler's `typeof` guard is the pin.
     const ydoc = setupDoc("mcp-inbox-selection-untimed", "Hello world");
     withInternal(ydoc, () =>
-      ydoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_SELECTION, { from: 6, to: 11 }),
+      ydoc
+        .getMap(Y_MAP_USER_AWARENESS)
+        .set(Y_MAP_SELECTION, { from: 6, to: 11, textFingerprint: selectionFingerprint("world") }),
     );
 
     const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
     expect(parsed.error).toBe(false);
     expect(parsed.data.activity.selectedText).toBe("world");
     expect(parsed.data.activity.selectionAt).toBeNull();
+  });
+
+  /** Write a selection record on `ydoc` as the editor would (#1997). */
+  function recordSelection(ydoc: Y.Doc, record: Record<string, unknown>) {
+    withInternal(ydoc, () => ydoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_SELECTION, record));
+  }
+
+  async function inboxActivity() {
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error, "the whole inbox response must still validate").toBe(false);
+    return parsed.data.activity as { selectedText: string | null; selectionAt: number | null };
+  }
+
+  it("tandem_checkInbox nulls a selection whose text an edit moved out from under it (#1997)", async () => {
+    // The issue's scenario: the user selected "world", then left the tab, so no
+    // editor re-records the selection. Claude's edit BEFORE the span shortens
+    // the text; the old offsets [6, 11) still lie inside the document but now
+    // hold "ld wi". Pre-fix the inbox reported that as the user's selection.
+    const T_SEL = 1_700_000_000_111;
+    const ydoc = setupDoc("mcp-inbox-selection-stale", "Hello world wide");
+    recordSelection(ydoc, {
+      from: 6,
+      to: 11,
+      timestamp: T_SEL,
+      textFingerprint: selectionFingerprint("world"),
+    });
+    expect((await inboxActivity()).selectedText, "control: the record holds before the edit").toBe(
+      "world",
+    );
+
+    const edit = parseResult(
+      await client.callTool({ name: "tandem_edit", arguments: { from: 0, to: 5, newText: "Hi" } }),
+    );
+    expect(edit.error).toBe(false);
+    expect(extractText(ydoc).slice(6, 11)).toBe("ld wi");
+
+    const activity = await inboxActivity();
+    expect(activity.selectedText).toBeNull();
+    expect(activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox keeps a selection an edit AFTER the span did not move (#1997)", async () => {
+    // A match check, not clear-on-edit: in the mounted editor a server edit
+    // past the selection leaves it `eq`, so nothing re-records it and the
+    // record must still read as the user's selection.
+    const T_SEL = 1_700_000_000_222;
+    const ydoc = setupDoc("mcp-inbox-selection-after", "Hello world");
+    recordSelection(ydoc, {
+      from: 6,
+      to: 11,
+      timestamp: T_SEL,
+      textFingerprint: selectionFingerprint("world"),
+    });
+
+    const edit = parseResult(
+      await client.callTool({ name: "tandem_edit", arguments: { from: 11, to: 11, newText: "!" } }),
+    );
+    expect(edit.error).toBe(false);
+    expect(extractText(ydoc)).toBe("Hello world!");
+
+    const activity = await inboxActivity();
+    expect(activity.selectedText).toBe("world");
+    expect(activity.selectionAt).toBe(T_SEL);
+  });
+
+  it("tandem_checkInbox fails closed on a selection record with no fingerprint (#1997)", async () => {
+    // A record saved before #1997 (session restore) or by a writer that never
+    // set one: the text cannot be checked, so it is not reported.
+    const ydoc = setupDoc("mcp-inbox-selection-unprinted", "Hello world");
+    recordSelection(ydoc, { from: 6, to: 11, timestamp: 1_700_000_000_333 });
+
+    const activity = await inboxActivity();
+    expect(activity.selectedText).toBeNull();
+    expect(activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox nulls a selection whose end lies past the document (#1997)", async () => {
+    // The fingerprint names the full intended text, so only the bounds check
+    // can refuse it: `safeSlice` alone would clamp and report "world".
+    const ydoc = setupDoc("mcp-inbox-selection-oob", "Hello world");
+    recordSelection(ydoc, {
+      from: 6,
+      to: 20,
+      timestamp: 1_700_000_000_444,
+      textFingerprint: selectionFingerprint("world wide web"),
+    });
+
+    const activity = await inboxActivity();
+    expect(activity.selectedText).toBeNull();
+    expect(activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox nulls a selection with a negative start, never reporting a span it did not hash (#1997)", async () => {
+    // `slice(-5, 11)` wraps to [6, 11) = "world" while `safeSlice` clamps to
+    // [0, 11) = "Hello world": without narrowing first, this record would pass
+    // the check on one span and report another.
+    const ydoc = setupDoc("mcp-inbox-selection-negative", "Hello world");
+    recordSelection(ydoc, {
+      from: -5,
+      to: 11,
+      timestamp: 1_700_000_000_555,
+      textFingerprint: selectionFingerprint("world"),
+    });
+
+    const activity = await inboxActivity();
+    expect(activity.selectedText).toBeNull();
+    expect(activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox narrows a non-string fingerprint to no selection (#1997)", async () => {
+    // The record is client-written; a malformed field must cost only the
+    // selection, never the validation of the whole response.
+    const ydoc = setupDoc("mcp-inbox-selection-bad-print", "Hello world");
+    recordSelection(ydoc, { from: 6, to: 11, timestamp: 1_700_000_000_666, textFingerprint: 42 });
+
+    const activity = await inboxActivity();
+    expect(activity.selectedText).toBeNull();
+    expect(activity.selectionAt).toBeNull();
   });
 
   it("tandem_reply sends a chat message", async () => {

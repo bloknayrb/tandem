@@ -27,7 +27,11 @@ vi.mock("../../src/server/license/license-state.js", async (importOriginal) => {
 import { aiRefusal } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
-import { LICENSE_REQUIRED } from "../../src/shared/license-copy.js";
+import {
+  AI_REFUSAL_STATE_UNREADABLE_MESSAGE,
+  aiRefusalUnverifiableMessage,
+  LICENSE_REQUIRED,
+} from "../../src/shared/license-copy.js";
 
 afterEach(() => {
   throwOnResolve = false;
@@ -47,6 +51,12 @@ describe("aiRefusal() is total (#1521)", () => {
     expect(refusal?.error).toBe(LICENSE_REQUIRED);
     expect(refusal?.kind).toBe("unverifiable");
     expect(refusal?.message).not.toContain(TANDEM_PURCHASE_URL);
+    // #2206: the throw says nothing about whether a licence exists, so the copy must not
+    // claim one is installed (a keyless user with a corrupt trial.json lands here).
+    expect(refusal?.message).toBe(AI_REFUSAL_STATE_UNREADABLE_MESSAGE);
+    expect(refusal?.message).not.toMatch(/installed/i);
+    expect(refusal?.message).not.toMatch(/\bunlicensed\b/i);
+    expect(refusal?.message).not.toContain(aiRefusalUnverifiableMessage("UNKNOWN"));
     expect(err).toHaveBeenCalled();
   });
 });

@@ -129,6 +129,14 @@ describe("countOccurrences", () => {
     expect("error" in miss).toBe(true);
     if ("error" in miss) expect(miss.totalCount).toBe(2);
   });
+
+  it("counts every substring hit, the figure tandem_resolveRange reports as totalCount (#2114)", () => {
+    const text = "a replacement is for replaceme here";
+    expect(countOccurrences(text, "replaceme")).toBe(2);
+    // Both occurrences resolve, a third does not: the count and the resolver agree.
+    expect("from" in findOccurrence(text, "replaceme", 2)).toBe(true);
+    expect("error" in findOccurrence(text, "replaceme", 3)).toBe(true);
+  });
 });
 
 /**

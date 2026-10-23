@@ -106,7 +106,10 @@ const handleActivateLicense = makeActivateLicenseHandler();
 describe("handleActivateLicense", () => {
   it("rejects a non-allowlisted origin with 403 before touching the body", async () => {
     const res = fakeRes();
-    await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+    await handleActivateLicense(
+      activateReq({ origin: "https://evil.example", body: { license: "x" } }),
+      res,
+    );
     expect(res.statusCode).toBe(403);
     expect((res.body as { error: string }).error).toBe("FORBIDDEN");
   });
@@ -137,7 +140,10 @@ describe("handleActivateLicense", () => {
     // override is the whole point — and asserting only on `error: FORBIDDEN`
     // (as this suite used to) would stay green if it were dropped.
     const res = fakeRes();
-    await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+    await handleActivateLicense(
+      activateReq({ origin: "https://evil.example", body: { license: "x" } }),
+      res,
+    );
     const message = (res.body as { message: string }).message;
     expect(message).toMatch(/computer running Tandem/);
     expect(message).not.toMatch(/integration routes/);
@@ -158,7 +164,10 @@ describe("handleActivateLicense", () => {
     process.env.TANDEM_APP_DATA_DIR = path.join(os.tmpdir(), "tandem-desktop-root-fixture");
     try {
       const res = fakeRes();
-      await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+      await handleActivateLicense(
+        activateReq({ origin: "https://evil.example", body: { license: "x" } }),
+        res,
+      );
       const message = (res.body as { message: string }).message;
       expect(res.statusCode).toBe(403);
       // The actionable half survives; only the no-op instruction goes.
@@ -176,7 +185,10 @@ describe("handleActivateLicense", () => {
     delete process.env.TANDEM_APP_DATA_DIR;
     try {
       const res = fakeRes();
-      await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+      await handleActivateLicense(
+        activateReq({ origin: "https://evil.example", body: { license: "x" } }),
+        res,
+      );
       expect((res.body as { message: string }).message).toContain("tandem activate");
     } finally {
       if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
@@ -355,6 +367,99 @@ describe("activation resumes a launcher the licence refused (#1521)", () => {
     }
   });
 
+  /**
+   * #2205: `tandem activate` hands the key over from Node `fetch`, which sends
+   * no Origin. An ABSENT Origin is admitted; a PRESENT one must still be
+   * allowlisted, and loopback still holds unconditionally.
+   */
+  it("admits an absent Origin from a loopback socket (the CLI, #2205)", async () => {
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    const res = recordingRes([]);
+    await handler(activateReq({ body: { license: "a-good-key" } }), res);
+    expect(res.statusCode).toBe(-1);
+    expect(res.body).toMatchObject({ gateActive: expect.any(Boolean) });
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("still admits every allowlisted browser Origin (#2205 did not narrow the client path)", async () => {
+    for (const origin of ["http://127.0.0.1:5173", "http://tauri.localhost", "tauri://localhost"]) {
+      const resume = vi.fn(async () => {});
+      const handler = makeActivateLicenseHandler({
+        getSupervisor: () => ({ resumeAfterLicence: resume }),
+      });
+      const res = recordingRes([]);
+      await handler(activateReq({ origin, body: { license: "a-good-key" } }), res);
+      expect(res.statusCode, origin).toBe(-1);
+      expect(resume, origin).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('refuses Origin: "null" — a present Origin, and a grant if ever allowed (#2205)', async () => {
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    const res = recordingRes([]);
+    await handler(activateReq({ origin: "null", body: { license: "a-good-key" } }), res);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: "FORBIDDEN", code: "BAD_ORIGIN" });
+    expect(resume).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(dir, "license.json"))).toBe(false);
+  });
+
+  it("refuses an empty Origin — present, not absent (#2205)", async () => {
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    // Built directly: `activateReq` drops a falsy origin.
+    const req = {
+      headers: { origin: "" },
+      socket: { remoteAddress: "127.0.0.1" },
+      body: { license: "a-good-key" },
+    } as unknown as Request;
+    const res = recordingRes([]);
+    await handler(req, res);
+    expect(res.statusCode).toBe(403);
+    expect(resume).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an absent Origin from a non-loopback socket (#2205)", async () => {
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    const req = {
+      headers: {},
+      socket: { remoteAddress: "203.0.113.5" },
+      body: { license: "a-good-key" },
+    } as unknown as Request;
+    const res = recordingRes([]);
+    await handler(req, res);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: "FORBIDDEN" });
+    expect(resume).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(dir, "license.json"))).toBe(false);
+  });
+
+  it("answers an Origin-less request with no parsed body 400, before any write (#2205)", async () => {
+    // A simple-request POST (text/plain, form-urlencoded) arrives with
+    // `req.body` undefined — the required JSON field is the preflight proof.
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    const res = recordingRes([]);
+    await handler(activateReq({ body: undefined }), res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: "BAD_REQUEST" });
+    expect(resume).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(dir, "license.json"))).toBe(false);
+  });
+
   it("never resumes on a refused key", async () => {
     verifySpy.mockImplementation(() => {
       throw new Error("bad");
@@ -412,14 +517,45 @@ describe("POST /api/license/activate is wired to the launcher (#1521)", () => {
       unavailableReason: () => "stdio-mode",
       startSupervisor: async () => {},
     });
+    const url = `http://127.0.0.1:${port}/api/license/activate`;
+    const licenseFile = path.join(dir, "license.json");
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/license/activate`, {
+      // Simple-request shapes first, while nothing is installed: an
+      // Origin-less caller that skipped the preflight gets a 400 and no write
+      // (#2205 — the parsed JSON body is the proof).
+      const plain = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ license: "a-good-key" }),
+      });
+      expect(plain.status).toBe(400);
+      const form = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "license=a-good-key",
+      });
+      expect(form.status).toBe(400);
+      expect(resume).not.toHaveBeenCalled();
+      expect(fs.existsSync(licenseFile)).toBe(false);
+
+      // The browser path: allowlisted Origin.
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:5173" },
         body: JSON.stringify({ license: "a-good-key" }),
       });
       expect(res.status).toBe(200);
       expect(resume).toHaveBeenCalledTimes(1);
+
+      // The CLI path (#2205): no Origin, application/json.
+      const cli = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ license: "a-good-key" }),
+      });
+      expect(cli.status).toBe(200);
+      expect(resume).toHaveBeenCalledTimes(2);
+      expect(fs.existsSync(licenseFile)).toBe(true);
     } finally {
       await closeMcpSession();
       await new Promise<void>((r) => server.close(() => r()));

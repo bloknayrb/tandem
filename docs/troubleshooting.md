@@ -533,7 +533,7 @@ To reset all session state cleanly:
 
 To reset only chat history without losing per-document state, delete just `__tandem_ctrl__.json`.
 
-Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `<name>.json.corrupt.<timestamp>`) instead of being deleted, so you can recover them by hand if needed.
+Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `<name>.json.corrupt.<timestamp>`) instead of being deleted, so you can recover them by hand if needed. Nothing reads them back or deletes them; `tandem doctor` lists the directory and how to recover a quarantined (`.corrupt.*`) or parked (`.future`) file by hand.
 
 ## A document will not open / a tab did not come back
 

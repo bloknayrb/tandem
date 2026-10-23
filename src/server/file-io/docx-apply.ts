@@ -298,6 +298,101 @@ function countTextNodes(run: Element): number {
 }
 
 /**
+ * The only element children a DESTROYED `<w:r>` may carry. Step 4 records a
+ * destroyed run solely through its first `<w:t>` (as `<w:delText>`) and its
+ * `<w:rPr>`; step 6 then `removeChild`s the whole run. Any other child is
+ * deleted with no revision recording it, so a reject in Word cannot bring it
+ * back (#2107). `w:lastRenderedPageBreak` is here because Word regenerates it
+ * on every layout. `w:commentReference` is here only so the generic refusal
+ * below does not shadow its own, more specific one (`hasCommentRef`).
+ *
+ * This is the FENCE's allowlist and deliberately not the trim's: whether a
+ * trailing run may be left in place is a question about flat text, answered
+ * by `carriesNoFlatText`, not about element names — an earlier allowlist trim
+ * let a trailing `<w:object>`, `<w:cr/>` or `<w:ptab/>` run fall through both
+ * the trim and the fence and be silently destroyed.
+ *
+ * Element names are matched with the literal `w:` prefix, the same convention
+ * as `w:r` and `COMPLEX_RUN_ELEMENTS` in this file. A document using another
+ * prefix fails toward REFUSAL here, never toward silent loss.
+ */
+const RECORDABLE_RUN_CHILDREN = new Set([
+  "w:rPr",
+  "w:t",
+  "w:lastRenderedPageBreak",
+  "w:commentReference",
+]);
+
+/**
+ * Does destroying `run` lose something step 4 does not record? True when it
+ * carries any element child outside `RECORDABLE_RUN_CHILDREN` — a `<w:cr/>`, an
+ * embedded `<w:object>`, a `<w:ptab/>`, an `mc:AlternateContent` drawing, or
+ * anything the walker resolves to nothing. Name-agnostic on purpose: anything
+ * not known to be recorded is refused.
+ */
+function hasUnrecordedChild(run: Element): boolean {
+  return run.children.some((c) => isElement(c) && !RECORDABLE_RUN_CHILDREN.has(c.name));
+}
+
+/**
+ * The runs the walker attributed a `SpecialCharSpan` to — zero-length ones
+ * included (an unmapped `w:sym`, an unknown `w:br w:type`). Such a run is not
+ * "flat-text-free" for `carriesNoFlatText`, so it keeps its run-keyed refusal.
+ */
+function specialSpanRuns(offsetMap: OffsetMap): Set<Element> {
+  const runs = new Set<Element>();
+  for (const span of offsetMap.specialSpans) if (span.run) runs.add(span.run);
+  return runs;
+}
+
+/**
+ * Does `run` contribute nothing to the flat text? No `<w:t>` anywhere in it, no
+ * nested `<w:p>` (a text box's paragraph adds a separator even when empty), and
+ * no walker `SpecialCharSpan`. Keyed on what the walker counts, not on element
+ * names, so an element nobody listed is classified by what it does.
+ */
+function carriesNoFlatText(run: Element, specialRuns: Set<Element>): boolean {
+  return (
+    !specialRuns.has(run) &&
+    findAllByName("w:t", run.children).length === 0 &&
+    findAllByName("w:p", run.children).length === 0
+  );
+}
+
+/**
+ * Drop trailing flat-text-free runs from a collected run span, in place (#2107).
+ *
+ * `buildOffsetMap` resolves an exclusive `to` into the START of the next TEXT
+ * run, so every run between the range's last character and that text run lands
+ * in the collected span — and every such run is zero-width by construction (the
+ * hit holding `to - 1` and the hit starting at `to` are adjacent in flat text).
+ * It therefore sits AFTER `[from, to)`, not inside it, and is left in place:
+ * nothing moves, because the `<w:del>`/`<w:ins>` pair goes where the FIRST
+ * destroyed run stood. Before this trim step 4 gave such a run no `<w:delText>`
+ * and step 6 removed it — a comment lost its reference mark, an embedded OLE
+ * object or a `<w:cr/>` vanished — with no revision recording it.
+ *
+ * One exception: a run carrying a `COMPLEX_RUN_ELEMENTS` child (a field
+ * character, a footnote reference, a drawing) is NOT trimmed and keeps its
+ * pre-#2107 refusal at the fence, pinned as a current limitation in the tests.
+ * That is a fail-closed false refusal, never a silent loss.
+ *
+ * Stops at length 1 so the from-run — which holds the `<w:t>` that `from`
+ * resolved into — is never dropped. Applied identically by
+ * `collectDestroyedRuns` (the fence) and step 3 of `applySingleSuggestion` (the
+ * apply), so both agree on what is destroyed. Anything the trim keeps that
+ * carries an unrecorded child is refused by the fence (`hasUnrecordedChild`).
+ */
+function trimTrailingZeroWidthRuns(runs: Element[], specialRuns: Set<Element>): void {
+  while (runs.length > 1) {
+    const last = runs[runs.length - 1];
+    if (!carriesNoFlatText(last, specialRuns)) break;
+    if (last.children.some((c) => isElement(c) && COMPLEX_RUN_ELEMENTS.has(c.name))) break;
+    runs.pop();
+  }
+}
+
+/**
  * The subset of `collectTouchedRuns` that `applySingleSuggestion` actually
  * DESTROYS: it drops `toRun` when the exclusive `to` offset lands on that run's
  * FIRST character, mirroring the `toEntry.charIndex === 0 && child ===
@@ -311,17 +406,23 @@ function countTextNodes(run: Element): number {
  * to carry a trailing tab (a table-of-contents line) — the false refusal #1754
  * exists to remove.
  *
+ * It then trims trailing zero-width runs (`trimTrailingZeroWidthRuns`, #2107),
+ * exactly as step 3 does after its own loop, so a comment-reference, `<w:cr/>`
+ * or embedded-object run sitting between the range's last character and the
+ * next text run is neither refused here nor destroyed there.
+ *
  * Deliberately NOT used for the run-CLAIM check below, which must keep the
- * conservative superset: a `toRun` this suggestion leaves alone can still be
- * REMOVED by another suggestion applied earlier in the descending pass, and
- * step 3's loop terminates on `child === toEntry.run` — a `toRun` no longer in
- * the paragraph makes it collect every run to the END of the paragraph and
- * delete them all.
+ * conservative superset (untrimmed, `toRun` included): a `toRun` this
+ * suggestion leaves alone can still be REMOVED by another suggestion applied
+ * earlier in the descending pass. `applySingleSuggestion` now refuses such a
+ * `toRun` with its pre-mutation direct-run check rather than deleting the
+ * paragraph tail, but the claim check is what keeps the suggestion applicable.
  */
 function collectDestroyedRuns(
   paragraph: Element,
   fromRun: Element,
   toEntry: OffsetEntry,
+  specialRuns: Set<Element>,
 ): Element[] {
   const runs = collectTouchedRuns(paragraph, fromRun, toEntry.run);
   // `runs.length > 1` keeps the `from` run: when the range opens and closes in
@@ -332,6 +433,7 @@ function collectDestroyedRuns(
   if (toEntry.charIndex === 0 && runs.length > 1 && runs[runs.length - 1] === toEntry.run) {
     runs.pop();
   }
+  trimTrailingZeroWidthRuns(runs, specialRuns);
   return runs;
 }
 
@@ -435,18 +537,72 @@ export function applySingleSuggestion(
 ): ApplyResult {
   const { from, to, newText, author, date, revisionId } = suggestion;
 
-  const fromEntry = offsetMap.get(from);
-  const toEntry = offsetMap.get(to);
+  if (from > to) {
+    return { ok: false, reason: "Range endpoints are out of order" };
+  }
 
-  if (!fromEntry || !toEntry) {
+  const fromHit = offsetMap.get(from);
+  const toHit = offsetMap.get(to);
+
+  if (!fromHit || !toHit) {
     return { ok: false, reason: `Could not resolve offsets: from=${from} to=${to}` };
   }
 
-  if (fromEntry.paragraph !== toEntry.paragraph) {
+  if (fromHit.paragraph !== toHit.paragraph) {
     return { ok: false, reason: "Cross-paragraph suggestions not yet supported" };
   }
 
+  // Work on COPIES, taken here — after the resolve and cross-paragraph checks
+  // and BEFORE step 1 — so step 1's re-pointing never writes through to the
+  // shared `OffsetMap` entries. Mutating the shared entries used to be how
+  // `from === to` kept both endpoints in step (the two lookups returned one
+  // object); the #2106 re-point after step 1 replaces that. Copies are safe
+  // because the orchestrator's run-claim check guarantees that an offset shared
+  // between two applied suggestions only ever resolves inside a claimed run, so
+  // no later suggestion depends on an entry an earlier one re-pointed.
+  const fromEntry = { ...fromHit };
+  const toEntry = { ...toHit };
+
   const paragraph = fromEntry.paragraph;
+
+  // Pre-mutation refusals for shapes the DOM operations below — all expressed
+  // in paragraph-direct children — would get silently wrong. The orchestrator's
+  // fences refuse every one of these first (with the same reason strings), so
+  // this is defence in depth for direct callers, and NOT a complete guard:
+  // `<w:r><w:t>alpha</w:t><w:tab/><w:t>beta</w:t></w:r>` over `alpha` resolves
+  // both endpoints into the first `<w:t>`, passes all three checks, and would
+  // remove the whole run. Only the orchestrator's special-character and
+  // split-text fences protect that shape.
+  //
+  // (a) An endpoint run that is not a direct child of the paragraph (inside a
+  //     hyperlink, or removed by an earlier apply) — see `isParagraphDirectRun`.
+  if (
+    !isParagraphDirectRun(paragraph, fromEntry.run) ||
+    !isParagraphDirectRun(paragraph, toEntry.run)
+  ) {
+    return { ok: false, reason: "Spans a hyperlink or other nested run and couldn't be applied" };
+  }
+  // (b) Endpoints out of document order. Unreachable for a consistent
+  //     `OffsetMap` once the flat `from > to` check above has run; kept because
+  //     step 3 assumes document order, and an inverted pair there collects to
+  //     the END of the paragraph (#2106).
+  const fromIdx = paragraph.children.indexOf(fromEntry.run);
+  const toIdx = paragraph.children.indexOf(toEntry.run);
+  if (
+    toIdx < fromIdx ||
+    (fromEntry.textNode === toEntry.textNode && toEntry.charIndex < fromEntry.charIndex)
+  ) {
+    return { ok: false, reason: "Range endpoints are out of order" };
+  }
+  // (c) Both endpoints in one run but in different `<w:t>` elements: the step-1
+  //     split moves only the from-`<w:t>`'s tail, so the to-endpoint cannot be
+  //     re-pointed, and step 4 would record only the first segment.
+  if (fromEntry.run === toEntry.run && fromEntry.textNode !== toEntry.textNode) {
+    return {
+      ok: false,
+      reason: "Spans a run with multiple text segments and couldn't be applied",
+    };
+  }
 
   // Collect all w:r runs between from and to within this paragraph.
   // We need to find runs that contain text in the [from, to) range.
@@ -454,6 +610,8 @@ export function applySingleSuggestion(
 
   // Step 1: Split the "from" run if charIndex > 0
   if (fromEntry.charIndex > 0) {
+    const splitTextNode = fromEntry.textNode;
+    const splitAt = fromEntry.charIndex;
     splitRun(fromEntry.run, fromEntry.textNode, fromEntry.charIndex, paragraph);
     // After split, fromEntry.run is the "before" part; the text we want
     // starts in the newly created run (next sibling).
@@ -470,6 +628,20 @@ export function applySingleSuggestion(
     }
     fromEntry.textNode = nextTextNode;
     fromEntry.charIndex = 0;
+
+    // #2106: when `to` resolved into the SAME `<w:t>` just split, `toEntry`
+    // still points at the first half (now only the text before `from`) with a
+    // `charIndex` measured against the unsplit text. Step 2 then skipped its
+    // split, and step 3 — starting at `fromEntry.run`, which lies AFTER
+    // `toEntry.run` — never met its break and destroyed every direct `<w:r>` to
+    // the end of the paragraph. Re-point it at the second half. `from <= to`
+    // (checked above) keeps the new index non-negative; `from === to` lands on
+    // index 0, the insertion-only path below.
+    if (toEntry.textNode === splitTextNode) {
+      toEntry.run = nextRun;
+      toEntry.textNode = nextTextNode;
+      toEntry.charIndex -= splitAt;
+    }
   }
 
   // Step 2: Split the "to" run if charIndex < text length
@@ -509,6 +681,10 @@ export function applySingleSuggestion(
       }
     }
   }
+
+  // #2107: a zero-width run between the range's last character and the next
+  // text run is not part of the range. Same trim as `collectDestroyedRuns`.
+  trimTrailingZeroWidthRuns(runsToDelete, specialSpanRuns(offsetMap));
 
   if (runsToDelete.length === 0) {
     // Edge case: from === to (insertion only, no deletion)
@@ -676,6 +852,16 @@ export async function applyTrackedChanges(
   const rejectedDetails: Array<{ id: string; reason: string }> = [];
 
   for (const s of sorted) {
+    // An inverted range is refused first: `snapshotContradicts` passes one that
+    // has no snapshot, and the overlap, fence and run-claim stages below all
+    // assume `from <= to`. `mcp/docx-apply.ts` already skips an inverted
+    // relRange, but a stored flat-range fallback can still arrive inverted from
+    // corrupt data.
+    if (s.from > s.to) {
+      rejectedDetails.push({ id: s.id, reason: "Range endpoints are out of order" });
+      continue;
+    }
+
     // textSnapshot check — has the text under this range changed since the
     // suggestion was WRITTEN? (`captureSnapshot` runs at annotation creation,
     // and everything here is already accepted, so the snapshot always predates
@@ -747,6 +933,7 @@ export async function applyTrackedChanges(
   // unmapped `w:sym`): a zero-length span can never satisfy
   // `s.from < span.offsetStart + 0` for a suggestion starting at or after it.
   const validAfterComplexCheck: AcceptedSuggestion[] = [];
+  const specialRuns = specialSpanRuns(offsetMap);
   for (const s of validAfterOverlapCheck) {
     const fromEntry = offsetMap.get(s.from)!;
     const toEntry = offsetMap.get(s.to)!;
@@ -778,7 +965,12 @@ export async function applyTrackedChanges(
       continue;
     }
 
-    const touchedRuns = collectDestroyedRuns(fromEntry.paragraph, fromEntry.run, toEntry);
+    const touchedRuns = collectDestroyedRuns(
+      fromEntry.paragraph,
+      fromEntry.run,
+      toEntry,
+      specialRuns,
+    );
     const touchedRunSet = new Set(touchedRuns);
 
     const hasComplex = touchedRuns.some((run) =>
@@ -802,7 +994,35 @@ export async function applyTrackedChanges(
     // `toRun`-exclusion applies and an adjacent suggestion is not refused.
     const hasSplitText = touchedRuns.some((run) => countTextNodes(run) > 1);
 
-    if (hasComplex || hasSpecialChar || hasSplitText) {
+    // #2107: a Word comment's reference run INSIDE the destroyed set would be
+    // removed with no revision recording it (step 4 builds `<w:delText>` only
+    // from `<w:t>`), leaving the comment with range markers and no reference.
+    // A TRAILING reference run is already trimmed out of `touchedRuns`, so this
+    // fires only for one the range genuinely spans. Deliberately asymmetric: an
+    // interior `lastRenderedPageBreak`-only or empty run is still destroyed,
+    // because Word regenerates the one and the other carries nothing (both are
+    // in `RECORDABLE_RUN_CHILDREN`; see `hasUnrecorded` below for the rest).
+    //
+    // Run-keyed, not offset-keyed, on purpose: it also refuses a reference that
+    // shares a `<w:r>` with text in the from-run. That is not mere over-refusal
+    // — `splitRun` leaves every non-`<w:t>` child in the BEFORE half, so
+    // `<w:r><w:t>xy</w:t><w:commentReference/></w:r>` split at 1 would move the
+    // reference mark ahead of the deleted `y`. Do not narrow this to "only
+    // references that would be destroyed". Kept out of `COMPLEX_RUN_ELEMENTS`
+    // so the refusal names the comment.
+    const hasCommentRef = touchedRuns.some((run) =>
+      run.children.some((rc) => isElement(rc) && rc.name === "w:commentReference"),
+    );
+
+    // #2107 review: the general case of the above. Any destroyed run carrying a
+    // child step 4 does not record — an interior `<w:object>` or `<w:cr/>` run,
+    // or a `<w:t>` run that also holds one — would vanish with no revision. A
+    // trailing zero-width run is already trimmed out of `touchedRuns`, so this
+    // fires only for content the range genuinely spans (or a run `splitRun`
+    // would reorder: it leaves every non-`<w:t>` child in the BEFORE half).
+    const hasUnrecorded = touchedRuns.some(hasUnrecordedChild);
+
+    if (hasComplex || hasSpecialChar || hasCommentRef || hasSplitText || hasUnrecorded) {
       rejectedDetails.push({
         id: s.id,
         // The named-element reason WINS when both hold: a run reading
@@ -811,7 +1031,11 @@ export async function applyTrackedChanges(
         reason:
           hasComplex || hasSpecialChar
             ? "Overlaps a footnote, drawing, field, tab, break or symbol and couldn't be applied"
-            : "Spans a run with multiple text segments and couldn't be applied",
+            : hasCommentRef
+              ? "Spans a Word comment's reference mark and couldn't be applied"
+              : hasSplitText
+                ? "Spans a run with multiple text segments and couldn't be applied"
+                : "Spans an embedded object, line break or other non-text content and couldn't be applied",
       });
     } else {
       validAfterComplexCheck.push(s);
@@ -822,8 +1046,11 @@ export async function applyTrackedChanges(
   // invalidate the second suggestion's DOM references. Uses the UNFILTERED
   // `collectTouchedRuns` on purpose (see `collectDestroyedRuns`): a `toRun` this
   // suggestion never touches is still the run its own step-3 loop stops on, so
-  // letting another suggestion delete it turns this one into a paragraph-wide
-  // deletion.
+  // letting another suggestion delete it would get this one refused by
+  // `applySingleSuggestion`'s pre-mutation direct-run check (before #2106 it
+  // deleted the paragraph tail instead). Trailing zero-width runs (#2107) stay in
+  // this untrimmed set too, so another suggestion cannot remove a run this one
+  // deliberately keeps — do not move this check onto the trimmed set.
   const validAfterRunCheck: AcceptedSuggestion[] = [];
   const claimedRuns = new Map<Element, string>(); // run -> suggestion id that claimed it
   for (const s of validAfterComplexCheck) {

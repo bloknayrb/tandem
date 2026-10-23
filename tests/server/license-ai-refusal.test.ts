@@ -91,6 +91,13 @@ describe("aiRefusalFor (pure)", () => {
       expect(refusal?.message).not.toContain(TANDEM_PURCHASE_URL);
     },
   );
+
+  // #2206: a licence on disk whose verifier threw genuinely is installed; only the
+  // fail-closed catch arm (state unreadable) uses the licence-neutral copy.
+  it("a real unverifiable UNKNOWN still says a licence is installed", () => {
+    const refusal = aiRefusalFor({ ...RESTRICTED, licenseUnverifiable: "UNKNOWN" });
+    expect(refusal?.message).toMatch(/license is installed/);
+  });
 });
 
 describe("dark: every admission point admits (#1521)", () => {

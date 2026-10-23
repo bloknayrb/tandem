@@ -90,7 +90,7 @@ import {
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { narrowForChannel } from "../annotations/projection.js";
-import { exportAnnotations } from "../file-io/docx.js";
+import { type ExportAnnotation, exportAnnotations } from "../file-io/docx.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -105,6 +105,14 @@ import { extractText, type FlatBreak } from "./document-model.js";
 // `documents/` fan-in is a pinned inventory (`documents-boundary.test.ts`),
 // and this module needs nothing the re-export does not already carry.
 import { getCurrentDoc, getOpenDocs } from "./document-service.js";
+
+/** The `Y_MAP_SELECTION` record as the editor writes it; a cast, not a check. */
+interface SelectionRecord {
+  from: FlatOffset;
+  to: FlatOffset;
+  timestamp: number;
+  textFingerprint?: unknown;
+}
 
 /**
  * The operations MCP tool handlers perform against a single document's
@@ -372,26 +380,33 @@ export class YDocStore {
    * would strip notes and still leak Solo-held comments. Anything bound for
    * Claude must apply the mode gate before calling, exactly as
    * {@link listReplies} requires for replies.
+   *
+   * The same holds for attached `replies` (#2113): they must already be
+   * `channelVisibleReplies(...)` + `hideFromAI` filtered, as {@link listReplies}
+   * requires. The exporter re-checks only the ADR-027 halves (outbound-comment
+   * parent, non-`private` reply); it cannot see the Solo hold.
    */
-  exportAnnotationsMarkdown(anns: Annotation[]): string {
+  exportAnnotationsMarkdown(anns: readonly ExportAnnotation[]): string {
     return exportAnnotations(this.#ydoc, anns);
   }
 
   /**
    * The user's current selection and typing activity, typed.
    *
+   * `selection.textFingerprint` (#1997) is `selectionFingerprint` of the flat
+   * span the editor recorded. It stays `unknown`: the record is client-written
+   * and absent from records saved before #1997, so the reader must narrow it.
+   *
    * Deliberately not a `getMap` returning the raw `Y.Map` — that would be the
    * `ydoc` hatch under a new name, which is the whole thing Unit 8j-2 removes.
    */
   getUserAwareness(): {
-    selection?: { from: FlatOffset; to: FlatOffset; timestamp: number };
+    selection?: SelectionRecord;
     activity?: { isTyping: boolean; cursor: number; lastEdit: number };
   } {
     const userAwareness = this.#ydoc.getMap(Y_MAP_USER_AWARENESS);
     return {
-      selection: userAwareness.get(Y_MAP_SELECTION) as
-        | { from: FlatOffset; to: FlatOffset; timestamp: number }
-        | undefined,
+      selection: userAwareness.get(Y_MAP_SELECTION) as SelectionRecord | undefined,
       activity: userAwareness.get(Y_MAP_ACTIVITY) as
         | { isTyping: boolean; cursor: number; lastEdit: number }
         | undefined,

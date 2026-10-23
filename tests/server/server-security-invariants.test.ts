@@ -502,7 +502,8 @@ describe.skipIf(process.platform !== "linux")(
 //
 // `createMcpExpressApp` installs a bare `express.json()` (100 kB) at the SDK
 // sub-app's root, and `app.use(mcpApp)` mounts that sub-app at the ROOT — above
-// `registerApiRoutes` — so the parser sees every /api body too. Without an error
+// `registerApiRoutes` — so the parser sees every /api body not in
+// `ROUTE_OWNED_BODY_PARSERS` (#1981), `/api/channel-*` included. Without an error
 // handler its PayloadTooLargeError fell through to Express's `finalhandler`,
 // which serves `err.stack` inside a <pre> whenever NODE_ENV !== "production".
 // Measured before the fix: `413 text/html` carrying `PayloadTooLargeError` plus
@@ -512,7 +513,8 @@ describe.skipIf(process.platform !== "linux")(
 // These specs use the shared real-server beforeEach above.
 
 describe("#1822 item 3 — oversized and malformed bodies leak no filesystem path", () => {
-  // Over the SDK sub-app's 100 kB parser limit, under /api's own 70 MB one.
+  // Over the SDK sub-app's 100 kB parser limit, which is what reads /mcp and
+  // /api/channel-* bodies (neither is in ROUTE_OWNED_BODY_PARSERS, #1981).
   const OVERSIZE = JSON.stringify({
     jsonrpc: "2.0",
     method: "x",

@@ -400,24 +400,23 @@ export async function ensureTrialStarted(
 }
 
 /**
- * Activate a license: verify its signature + known version, persist atomically,
- * and return the freshly-resolved state. Does NOT reject an expired update
- * window — a user may activate an older license and still run forever. Issued
- * keys carry no window since every key includes all future updates (ADR-040,
- * 2026-10-09); a dated one exists only if hand-signed with `--expires`, and
- * there is no renewal product to extend it.
+ * The pure half of activation: bound, normalize, verify the signature and the
+ * schema version, and return the normalized blob with its verified metadata.
+ * Writes nothing. Every failure throws a `LicenseActivationError` carrying the
+ * same code `activateLicense` would.
+ *
+ * Split out for `tandem activate` (#2205), which verifies locally BEFORE it
+ * hands the key to a running server, so a junk argument is refused with the
+ * per-cause copy without anything being sent anywhere.
  */
-export async function activateLicense(
-  appDataDir: string,
+export function verifyActivationBlob(
   rawBlob: string,
-  // Injectable for tests (sign with a temp keypair) — mirrors the seam on
-  // resolveLicenseState. Production uses the pinned-key signature verifier.
   verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
-): Promise<LicenseState> {
+): { blob: string; meta: SignatureVerified } {
   // Bound BEFORE normalizing. `normalizePastedLicense` allocates a copy per
-  // pass, and the route's body parser admits up to 70 MB — its `Content-Length`
-  // pre-check can be sidestepped with chunked transfer encoding, so this is the
-  // guard that actually holds. Rejecting (rather than truncating) also gives the
+  // pass, and this is the guard that holds for every caller: the route's
+  // `Content-Length` pre-check can be sidestepped with chunked transfer
+  // encoding, and its 64 KB body parser (#1981) still admits ~3x this bound. Rejecting (rather than truncating) also gives the
   // buyer the right message: they pasted the whole email.
   if (rawBlob.length > MAX_NORMALIZE_INPUT) {
     throw new LicenseActivationError("TOO_LONG", "License input exceeds maximum length");
@@ -445,6 +444,25 @@ export async function activateLicense(
       `Unsupported license version: ${meta.version}`,
     );
   }
+  return { blob, meta };
+}
+
+/**
+ * Activate a license: verify its signature + known version, persist atomically,
+ * and return the freshly-resolved state. Does NOT reject an expired update
+ * window — a user may activate an older license and still run forever. Issued
+ * keys carry no window since every key includes all future updates (ADR-040,
+ * 2026-10-09); a dated one exists only if hand-signed with `--expires`, and
+ * there is no renewal product to extend it.
+ */
+export async function activateLicense(
+  appDataDir: string,
+  rawBlob: string,
+  // Injectable for tests (sign with a temp keypair) — mirrors the seam on
+  // resolveLicenseState. Production uses the pinned-key signature verifier.
+  verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
+): Promise<LicenseState> {
+  const { blob } = verifyActivationBlob(rawBlob, verify);
 
   // Persist. Kept in its OWN try so a filesystem failure can never be reported
   // as a bad license — the blob above is already proven good at this point.

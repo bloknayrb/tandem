@@ -1,17 +1,32 @@
 /**
  * `tandem activate <license-or-path>` and `tandem license` (#1116, ADR-040).
  *
- * Both operate on the LOCAL appData store directly — no running server required.
- * The server re-resolves license state per dispatch (no cache), so activating
- * here takes effect on the running server's next tool call / reconnect.
+ * `tandem activate` verifies the key locally first, then hands it to a Tandem
+ * running at `TANDEM_URL` (default `http://127.0.0.1:3479`) through
+ * `POST /api/license/activate` (#2205). That route writes the key into the
+ * server's OWN app-data root — on desktop the Tauri root, not this CLI's — and
+ * resumes a launcher the licence had stopped. When no Tandem answers there (or
+ * whatever answers is not Tandem, or `TANDEM_URL` names another host), it falls
+ * back to writing the LOCAL app-data store directly, as it always did; the
+ * server re-resolves license state per dispatch (no cache), so that write takes
+ * effect on a running server's next tool call / reconnect.
+ *
+ * `tandem license` stays local-only: it reads this CLI's app-data store.
  */
 import fs from "fs";
 import { LicenseActivationError } from "../server/license/activation.js";
 import { GATE_ENABLED } from "../server/license/gate-flag.js";
-import { activateLicense, resolveLicenseState } from "../server/license/license-state.js";
-import type { LicenseState } from "../server/license/license-types.js";
+import {
+  activateLicense,
+  resolveLicenseState,
+  verifyActivationBlob,
+} from "../server/license/license-state.js";
+import type { LicenseState, SignatureVerified } from "../server/license/license-types.js";
 import { resolveAppDataDir } from "../server/platform.js";
+import { API_LICENSE_ACTIVATE } from "../shared/api-paths.js";
+import { resolveTandemUrl } from "../shared/cli-runtime.js";
 import { TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../shared/constants.js";
+import { ERROR_CODE_BAD_ORIGIN } from "../shared/integrations/contract.js";
 import { activationErrorMessage, unverifiableLicenseMessage } from "../shared/license-copy.js";
 
 /**
@@ -185,21 +200,274 @@ export async function runActivate(args: string[]): Promise<void> {
     process.exit(1);
     return;
   }
+
+  // 1. Verify locally, before anything is sent anywhere (#2205). A junk
+  // argument is refused here with the per-cause copy and never reaches the
+  // network.
+  let verified: { blob: string; meta: SignatureVerified };
+  try {
+    verified = verifyActivationBlob(blob);
+  } catch (err) {
+    printActivationFailure(err);
+    process.exit(1);
+    return;
+  }
+
+  // 2. Hand it to a running Tandem, which writes its own app-data root and
+  // resumes a launcher the licence had stopped.
+  const outcome = await activateViaRunningServer(verified.blob, { url: resolveTandemUrl() });
+
+  if (outcome.kind === "activated") {
+    const extra = ["  Tandem is running, so it picked the license up straight away."];
+    if (outcome.cliSharesRoot === false) {
+      extra.push(
+        "  `tandem license` here reads a separate store and will not list it; Settings → License in Tandem shows it.",
+      );
+    }
+    for (const line of formatActivationSuccess(verified.meta, extra)) console.log(line);
+    // No `process.exit` on success: the fetch's handles drain on their own, as
+    // the direct path's always did.
+    return;
+  }
+
+  if (outcome.kind === "refused") {
+    // The server is up and decided. Writing locally on top would install a key
+    // the running Tandem just refused, so there is no fallback here.
+    console.error(`\n[Tandem] License activation failed.\n${outcome.message}\n`);
+    process.exit(1);
+    // Required, not decorative: under a non-throwing `exit` spy, falling
+    // through would reach the direct write below.
+    return;
+  }
+
+  // 3. No Tandem took it — today's direct write.
   try {
     const state = await activateLicense(resolveAppDataDir(), blob);
     const lic = state.gateActive && state.status === "licensed" ? state.license : null;
-    const who = lic ? `${lic.email} (${lic.type})` : "this device";
-    console.log(`\n✓ License activated for ${who}.`);
-    if (lic?.expiresAt) {
-      console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);
-    } else if (lic) {
-      console.log("  All future updates are included.");
+    const extra: string[] = [];
+    if (outcome.reason === "timeout") {
+      extra.push(
+        "  Tandem didn't confirm it took the key, so it was saved here as well. If Tandem's Claude stays stopped, use Restart in the app.",
+      );
+    } else if (outcome.reason === "origin-refused") {
+      extra.push(
+        "  The running Tandem didn't take the key directly (it may be an older version). If it doesn't show as licensed, paste the key in Settings → License, or restart Tandem.",
+      );
     }
-    console.log("");
+    for (const line of formatActivationSuccess(lic, extra)) console.log(line);
   } catch (err) {
-    // Same per-cause copy the HTTP route uses — one taxonomy, two transports.
-    const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
-    console.error(`\n[Tandem] License activation failed.\n${activationErrorMessage(code)}\n`);
+    printActivationFailure(err);
     process.exit(1);
+    return;
   }
+}
+
+/** Same per-cause copy the HTTP route uses — one taxonomy, two transports. */
+function printActivationFailure(err: unknown): void {
+  const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
+  console.error(`\n[Tandem] License activation failed.\n${activationErrorMessage(code)}\n`);
+}
+
+/**
+ * The success lines `tandem activate` prints, one `console.log` call per
+ * element. The first element carries its own leading newline so the direct
+ * path stays byte-identical, call for call, with what it printed before #2205.
+ */
+export function formatActivationSuccess(
+  meta: { email: string; type: string; expiresAt: string | null } | null,
+  extra: string[] = [],
+): string[] {
+  const who = meta ? `${meta.email} (${meta.type})` : "this device";
+  const lines = [`\n✓ License activated for ${who}.`];
+  if (meta?.expiresAt) {
+    lines.push(`  Updates included through ${meta.expiresAt.slice(0, 10)}.`);
+  } else if (meta) {
+    lines.push("  All future updates are included.");
+  }
+  lines.push(...extra, "");
+  return lines;
+}
+
+export type ServerActivateOutcome =
+  | { kind: "activated"; cliSharesRoot?: boolean }
+  | { kind: "refused"; status: number; message: string }
+  | {
+      kind: "unavailable";
+      reason: "non-loopback-url" | "unreachable" | "timeout" | "not-tandem" | "origin-refused";
+    };
+
+/**
+ * The activate route's closed error vocabulary: `sendActivationError` in
+ * `src/server/mcp/routes/license.ts` (INVALID_LICENSE, LICENSE_WRITE_FAILED),
+ * its `license is required` 400 (BAD_REQUEST), `rejectOversizeLicenseBody` in
+ * `src/server/mcp/api-routes.ts` (PAYLOAD_TOO_LARGE), and the body-parser
+ * error mapper in `src/server/mcp/server.ts` (BAD_REQUEST, PAYLOAD_TOO_LARGE).
+ * Only an answer in this set, at one of {@link TANDEM_REFUSAL_STATUSES}, counts
+ * as Tandem refusing the key. A new route error code must join this set, or
+ * the CLI reads it as "not Tandem" and falls back to the local write.
+ */
+const TANDEM_ACTIVATE_ERRORS = new Set([
+  "BAD_REQUEST",
+  "INVALID_LICENSE",
+  "LICENSE_WRITE_FAILED",
+  "PAYLOAD_TOO_LARGE",
+]);
+const TANDEM_REFUSAL_STATUSES = new Set([400, 413, 500]);
+
+/** A signed license is ~650 bytes and its success wire well under 2 KB. */
+const MAX_RESPONSE_BYTES = 64 * 1024;
+const MAX_REFUSAL_MESSAGE_CHARS = 500;
+
+/**
+ * Strip what a terminal would act on rather than print: C0/C1 controls
+ * (ESC, CSI) become a space, and Unicode bidi overrides and isolates are
+ * dropped so an answer cannot visually reorder the failure line.
+ */
+function sanitizeServerMessage(raw: string): string {
+  const cleaned = raw
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "");
+  return cleaned.length > MAX_REFUSAL_MESSAGE_CHARS
+    ? `${cleaned.slice(0, MAX_REFUSAL_MESSAGE_CHARS)}…`
+    : cleaned;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Read at most {@link MAX_RESPONSE_BYTES} of a response body. `null` means it
+ * ran over (the stream is cancelled), which no Tandem answer does.
+ */
+async function readCappedBody(res: Response): Promise<string | null> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+/**
+ * POST a verified blob to a running Tandem's `/api/license/activate` (#2205).
+ *
+ * Only a literal `http://127.0.0.1:<port>` URL is ever contacted:
+ * - the route refuses a non-loopback caller anyway, and the server binds
+ *   127.0.0.1;
+ * - `isHostAllowed` 403s `Host: localhost` and `[::1]`;
+ * - a `localhost` name goes through getaddrinfo and can be remapped off this
+ *   machine by a hosts file;
+ * - `resolveTandemUrl`'s default is `http://127.0.0.1:<port>`;
+ * - https is refused too: a loopback Tandem never serves TLS.
+ *
+ * The request URL is built from the PARSED URL's origin, so the host checked is
+ * provably the host fetched, and any userinfo, path, query or fragment in
+ * `TANDEM_URL` is dropped. No `Origin` and no `Authorization` are sent: the
+ * route admits an absent Origin, and loopback bypasses `authMiddleware`.
+ *
+ * Anything that is not recognisably Tandem's answer maps to `unavailable`, so
+ * the caller falls back to the direct write: a redirect, a 2xx without the
+ * licence wire, any status or body outside the route's closed vocabulary.
+ */
+export async function activateViaRunningServer(
+  blob: string,
+  opts: { url: string; fetchImpl?: typeof fetch; timeoutMs?: number },
+): Promise<ServerActivateOutcome> {
+  const { fetchImpl = fetch, timeoutMs = 30_000 } = opts;
+  let target: URL;
+  try {
+    const parsed = new URL(opts.url);
+    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+      return { kind: "unavailable", reason: "non-loopback-url" };
+    }
+    target = new URL(API_LICENSE_ACTIVATE, parsed.origin);
+  } catch {
+    return { kind: "unavailable", reason: "non-loopback-url" };
+  }
+
+  let res: Response;
+  let body: unknown;
+  try {
+    res = await fetchImpl(target.href, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ license: blob }),
+      // Node/undici defaults to `follow`, which re-POSTs this body — the
+      // buyer's signed key and email — to a 307/308 `Location`, wherever it
+      // points. Never follow; a redirect is not Tandem's answer.
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (
+      res.type === "opaqueredirect" ||
+      res.status === 0 ||
+      (res.status >= 300 && res.status < 400)
+    ) {
+      await res.body?.cancel().catch(() => {});
+      return { kind: "unavailable", reason: "not-tandem" };
+    }
+    const text = await readCappedBody(res);
+    if (text === null) return { kind: "unavailable", reason: "not-tandem" };
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+  } catch (err) {
+    const name = err instanceof Error || err instanceof DOMException ? err.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      return { kind: "unavailable", reason: "timeout" };
+    }
+    return { kind: "unavailable", reason: "unreachable" };
+  }
+
+  if (res.status >= 200 && res.status < 300) {
+    // The real wire always carries more than `gateActive`: a dark build answers
+    // the `status: "licensed"` sentinel plus `licenseInstalled`, an armed one
+    // `status: "licensed"` after a good activation.
+    if (
+      isPlainObject(body) &&
+      typeof body.gateActive === "boolean" &&
+      (body.licenseInstalled === true || body.status === "licensed")
+    ) {
+      return typeof body.cliActivateEffective === "boolean"
+        ? { kind: "activated", cliSharesRoot: body.cliActivateEffective }
+        : { kind: "activated" };
+    }
+    return { kind: "unavailable", reason: "not-tandem" };
+  }
+
+  if (res.status === 403) {
+    // A pre-#2205 Tandem refuses an Origin-less caller with this code. So do
+    // both loopback refusals (`assertLoopbackForMutation`,
+    // `enforceLoopbackMutation`) — which a 127.0.0.1 socket cannot reach today,
+    // but a port-forward (Docker, WSL2) could — hence the neutral wording of the
+    // hint the caller prints. Either way the local write is the safe fallback.
+    if (isPlainObject(body) && body.code === ERROR_CODE_BAD_ORIGIN) {
+      return { kind: "unavailable", reason: "origin-refused" };
+    }
+    return { kind: "unavailable", reason: "not-tandem" };
+  }
+
+  if (
+    TANDEM_REFUSAL_STATUSES.has(res.status) &&
+    isPlainObject(body) &&
+    typeof body.error === "string" &&
+    TANDEM_ACTIVATE_ERRORS.has(body.error) &&
+    typeof body.message === "string"
+  ) {
+    return { kind: "refused", status: res.status, message: sanitizeServerMessage(body.message) };
+  }
+
+  return { kind: "unavailable", reason: "not-tandem" };
 }

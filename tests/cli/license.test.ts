@@ -4,6 +4,7 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatLicenseStatus, resolveLicenseInput, runActivate } from "../../src/cli/license.js";
 import type { LicenseState } from "../../src/server/license/license-types.js";
+import * as verifier from "../../src/server/license/verifier.js";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 describe("resolveLicenseInput", () => {
@@ -227,5 +228,258 @@ describe("runActivate — unreadable input (#1789)", () => {
     expect(exit).toHaveBeenCalledWith(1);
     expect(errors.join("\n")).toContain("Usage: tandem activate");
     expect(errors.join("\n")).not.toContain("License activation failed");
+  });
+});
+
+/**
+ * #2205: `tandem activate` hands the key to a running Tandem. `fetch` is
+ * stubbed here; the real-socket half is `license-activate-via-server.test.ts`.
+ *
+ * Env is stubbed per test and unstubbed after, so nothing leaks into the
+ * unreadable-input cases above (which all exit before the network call).
+ */
+describe("runActivate — hands the key to a running server (#2205)", () => {
+  let logs: string[];
+  let errors: string[];
+  let exit: ReturnType<typeof vi.spyOn>;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let dir: string;
+  let previousAppDataDir: string | undefined;
+
+  const META = {
+    id: "lic-1",
+    email: "jane@example.com",
+    type: "personal",
+    createdAt: new Date(0).toISOString(),
+    expiresAt: null,
+    version: "1.0",
+    keyId: "0123456789abcdef",
+  } as unknown as ReturnType<typeof verifier.verifyLicenseSignature>;
+
+  // Today's direct-path success lines, exactly.
+  const DIRECT_LINES = [
+    "\n✓ License activated for jane@example.com (personal).",
+    "  All future updates are included.",
+    "",
+  ];
+  const PICKED_UP = "  Tandem is running, so it picked the license up straight away.";
+
+  const licenseFile = () => path.join(dir, "license.json");
+
+  function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json", ...headers },
+    });
+  }
+
+  beforeEach(() => {
+    logs = [];
+    errors = [];
+    vi.stubEnv("CLAUDE_PLUGIN_OPTION_SERVER_URL", "");
+    vi.stubEnv("TANDEM_URL", "http://127.0.0.1:1");
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-"));
+    previousAppDataDir = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = dir;
+    vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(() => META);
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    });
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+    exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    fetchSpy = vi.spyOn(globalThis, "fetch");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    if (previousAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = previousAppDataDir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a 200 licence wire: prints the hand-off line, writes nothing locally", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(200, {
+        gateActive: false,
+        status: "licensed",
+        licenseInstalled: true,
+        cliActivateEffective: true,
+      }),
+    );
+    await runActivate(["activate", "  a-good-key \n"]);
+
+    expect(logs).toEqual([DIRECT_LINES[0], DIRECT_LINES[1], PICKED_UP, ""]);
+    expect(fs.existsSync(licenseFile())).toBe(false);
+    expect(exit).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:1/api/license/activate");
+    const headers = init.headers as Record<string, string>;
+    expect(Object.keys(headers).map((k) => k.toLowerCase())).toEqual(["content-type"]);
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(init.redirect).toBe("manual");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ license: "a-good-key" });
+  });
+
+  it("adds the separate-store note when the CLI's root is not the server's", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(200, {
+        gateActive: false,
+        status: "licensed",
+        licenseInstalled: true,
+        cliActivateEffective: false,
+      }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    expect(logs.join("\n")).toContain(PICKED_UP);
+    expect(logs.join("\n")).toContain("reads a separate store");
+    expect(fs.existsSync(licenseFile())).toBe(false);
+  });
+
+  it("a coded 400 is printed with control characters stripped, exit 1, no local write", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(400, { error: "INVALID_LICENSE", message: "M\u001b[2J‮X" }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    expect(exit).toHaveBeenCalledWith(1);
+    const out = errors.join("\n");
+    expect(out).toContain("License activation failed.");
+    expect(out).toContain("M [2JX");
+    expect(out).not.toContain("\u001b");
+    expect(out).not.toContain("‮");
+    expect(fs.existsSync(licenseFile())).toBe(false);
+    expect(logs).toEqual([]);
+  });
+
+  it("a coded 500 LICENSE_WRITE_FAILED is printed, exit 1, no local write", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse(500, { error: "LICENSE_WRITE_FAILED", message: "W" }));
+    await runActivate(["activate", "a-good-key"]);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors.join("\n")).toContain("\nW\n");
+    expect(fs.existsSync(licenseFile())).toBe(false);
+  });
+
+  it("caps a long refusal message", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(400, { error: "INVALID_LICENSE", message: "x".repeat(2000) }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    const printed = errors.join("\n").match(/x+…?/)?.[0] ?? "";
+    expect(printed.length).toBeLessThanOrEqual(501);
+    expect(printed.endsWith("…")).toBe(true);
+  });
+
+  const notTandem: Array<[string, () => Response]> = [
+    ["500 with no JSON", () => new Response("Internal Server Error", { status: 500 })],
+    [
+      "405 with an HTML body",
+      () =>
+        new Response("<html>Method Not Allowed</html>", {
+          status: 405,
+          headers: { "Content-Type": "text/html" },
+        }),
+    ],
+    ["502 with an empty body", () => new Response("", { status: 502 })],
+    ["401 UNAUTHORIZED", () => jsonResponse(401, { error: "UNAUTHORIZED" })],
+    ["404", () => new Response("Not Found", { status: 404 })],
+    [
+      "a 200 with an HTML body",
+      () =>
+        new Response("<html>hi</html>", { status: 200, headers: { "Content-Type": "text/html" } }),
+    ],
+    ["a 200 with only gateActive", () => jsonResponse(200, { gateActive: false })],
+    [
+      "403 Host not allowed (no code)",
+      () => jsonResponse(403, { error: "FORBIDDEN", message: "Host not allowed." }),
+    ],
+    [
+      "400 with an error outside the route's vocabulary",
+      () => jsonResponse(400, { error: "SOMETHING_ELSE", message: "nope" }),
+    ],
+    [
+      "a 503 carrying a Tandem-looking body",
+      () => jsonResponse(503, { error: "INVALID_LICENSE", message: "nope" }),
+    ],
+  ];
+  for (const [name, make] of notTandem) {
+    it(`falls back to today's direct write on ${name}`, async () => {
+      fetchSpy.mockResolvedValue(make());
+      await runActivate(["activate", "a-good-key"]);
+      expect(fs.existsSync(licenseFile())).toBe(true);
+      expect(logs).toEqual(DIRECT_LINES);
+      expect(exit).not.toHaveBeenCalled();
+    });
+  }
+
+  it("never follows a redirect: one fetch, then the local write", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response("moved", { status: 307, headers: { Location: "http://203.0.113.9/steal" } }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(licenseFile())).toBe(true);
+    expect(logs).toEqual(DIRECT_LINES);
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("a 403 BAD_ORIGIN (a pre-#2205 Tandem) writes locally and says so", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(403, { error: "FORBIDDEN", code: "BAD_ORIGIN", message: "Open Tandem…" }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    expect(fs.existsSync(licenseFile())).toBe(true);
+    expect(logs.join("\n")).toContain("didn't take the key directly");
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("nothing listening: writes locally with today's exact lines", async () => {
+    fetchSpy.mockRejectedValue(
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    expect(fs.existsSync(licenseFile())).toBe(true);
+    expect(logs).toEqual(DIRECT_LINES);
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("a timeout writes locally and says Tandem didn't confirm", async () => {
+    fetchSpy.mockRejectedValue(new DOMException("timed out", "TimeoutError"));
+    await runActivate(["activate", "a-good-key"]);
+    expect(fs.existsSync(licenseFile())).toBe(true);
+    expect(logs.join("\n")).toContain("didn't confirm it took the key");
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  for (const url of [
+    "http://203.0.113.5:3479",
+    "http://localhost:3479",
+    "http://[::1]:3479",
+    "https://127.0.0.1:3479",
+    "not a url",
+  ]) {
+    it(`never contacts TANDEM_URL=${url}; writes locally`, async () => {
+      vi.stubEnv("TANDEM_URL", url);
+      await runActivate(["activate", "a-good-key"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(licenseFile())).toBe(true);
+      expect(logs).toEqual(DIRECT_LINES);
+    });
+  }
+
+  it("a key that does not verify is refused locally and never sent", async () => {
+    vi.mocked(verifier.verifyLicenseSignature).mockImplementation(() => {
+      throw new Error("bad");
+    });
+    await runActivate(["activate", "junk"]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors.join("\n")).toContain("License activation failed.");
+    expect(fs.existsSync(licenseFile())).toBe(false);
   });
 });

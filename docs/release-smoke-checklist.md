@@ -182,9 +182,12 @@ before it meets a paying user.
             (`scripts/sign-license.ts`) into Settings → License: the AI-off
             notice clears, chat re-enables, and Tandem restarts its Claude by
             itself within about 5 s.
-      - [ ] **Activation, CLI path.** `tandem activate <key>`: the pill offers
-            Restart once the licence poll picks the key up, and Restart starts
-            Claude. Once #2205 lands, Claude resumes by itself instead.
+      - [ ] **Activation, CLI path.** With Tandem running, `tandem activate
+            <key>` prints "picked the license up straight away", and Tandem
+            restarts its Claude by itself within about 5 s (#2205).
+      - [ ] **Activation, CLI path with Tandem quit.** Quit Tandem, then run
+            `tandem activate <key>`: it writes the key directly (no "picked
+            the license up" line), and the next launch is licensed.
       - [ ] **Unverifiable holder.** A damaged `license.json` shows "could not
             be verified" copy, never "unlicensed" and never a buy link. The
             Settings form heading "Activate a license" is expected.

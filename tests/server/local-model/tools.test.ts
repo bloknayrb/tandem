@@ -352,6 +352,35 @@ describe("dispatch — replies", () => {
   });
 });
 
+describe("dispatch — replies to a user-authored comment (#2216)", () => {
+  it("refuses NOT_OWNED with a remedy that names a local tool, not an MCP one", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const map = getAnnotationsMap(doc);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "needs detail" },
+      { ydoc: doc },
+    );
+    const annotationId = (created.result as { annotation_id: string }).annotation_id;
+    map.set(annotationId, { ...(map.get(annotationId) as Annotation), author: "user" });
+
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: annotationId, text: "answering the user" },
+      { ydoc: doc },
+    );
+    const result = out.result as { error?: string; message?: string };
+    expect(result.error).toBe("NOT_OWNED");
+    expect(result.message).not.toMatch(/tandem_/);
+    expect(result.message).toContain("comment_on_quote");
+    expect(out.effect.kind).toBe("reply");
+    if (out.effect.kind === "reply") {
+      expect(out.effect.ok).toBe(false);
+      expect(out.effect.errorCode).toBe("NOT_OWNED");
+    }
+  });
+});
+
 describe("dispatch — agent identity stamping (#1123 M3)", () => {
   const identity = { provider: "local-ollama" as const, displayName: "Qwen 2.5" };
 
