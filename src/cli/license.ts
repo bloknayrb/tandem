@@ -320,13 +320,17 @@ const MAX_REFUSAL_MESSAGE_CHARS = 500;
 
 /**
  * Strip what a terminal would act on rather than print: C0/C1 controls
- * (ESC, CSI) become a space, and Unicode bidi overrides and isolates are
- * dropped so an answer cannot visually reorder the failure line.
+ * (ESC, CSI) become a space, and Unicode bidi controls are dropped so an
+ * answer cannot visually reorder the failure line. The bidi class is the one
+ * `sanitizeForLog` (`src/server/log-sanitize.ts`) strips \u2014 embeddings,
+ * overrides and isolates, plus the LRM/RLM/ALM marks \u2014 and must stay in step
+ * with it. Controls become a space here rather than vanishing as they do there,
+ * so words either side of one stay apart.
  */
 function sanitizeServerMessage(raw: string): string {
   const cleaned = raw
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .replace(/[\u202a-\u202e\u2066-\u2069]/g, "");
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c]/g, "");
   return cleaned.length > MAX_REFUSAL_MESSAGE_CHARS
     ? `${cleaned.slice(0, MAX_REFUSAL_MESSAGE_CHARS)}…`
     : cleaned;

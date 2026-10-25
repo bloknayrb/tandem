@@ -530,10 +530,16 @@ function removeChild(node: ChildNode): void {
  *
  * Wraps the original text in `<w:del>` (using `<w:delText>`) and inserts
  * `<w:ins>` with the replacement. Inherits `<w:rPr>` from the first deleted run.
+ *
+ * `specialRuns` is `specialSpanRuns(offsetMap)`. `applyTrackedChanges` passes
+ * the set it already built for its fence, so a batch does not rebuild it once
+ * per suggestion; it is constant across the batch, because `specialSpans` is
+ * computed once with the map and the applies never touch it.
  */
 export function applySingleSuggestion(
   offsetMap: OffsetMap,
   suggestion: SuggestionInput,
+  specialRuns: Set<Element> = specialSpanRuns(offsetMap),
 ): ApplyResult {
   const { from, to, newText, author, date, revisionId } = suggestion;
 
@@ -684,7 +690,7 @@ export function applySingleSuggestion(
 
   // #2107: a zero-width run between the range's last character and the next
   // text run is not part of the range. Same trim as `collectDestroyedRuns`.
-  trimTrailingZeroWidthRuns(runsToDelete, specialSpanRuns(offsetMap));
+  trimTrailingZeroWidthRuns(runsToDelete, specialRuns);
 
   if (runsToDelete.length === 0) {
     // Edge case: from === to (insertion only, no deletion)
@@ -1096,14 +1102,18 @@ export async function applyTrackedChanges(
   const appliedSuggestions: AcceptedSuggestion[] = [];
   for (const s of validAfterRunCheck) {
     maxId += 2;
-    const result = applySingleSuggestion(offsetMap, {
-      from: s.from,
-      to: s.to,
-      newText: s.newText,
-      author: options.author,
-      date,
-      revisionId: maxId - 1,
-    });
+    const result = applySingleSuggestion(
+      offsetMap,
+      {
+        from: s.from,
+        to: s.to,
+        newText: s.newText,
+        author: options.author,
+        date,
+        revisionId: maxId - 1,
+      },
+      specialRuns,
+    );
     if (result.ok) {
       applied++;
       appliedSuggestions.push(s);

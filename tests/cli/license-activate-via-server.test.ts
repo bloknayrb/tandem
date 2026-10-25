@@ -7,6 +7,7 @@ import { runActivate } from "../../src/cli/license.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
 /**
  * #2205, end to end: `tandem activate` against a real Tandem HTTP server, then
@@ -19,7 +20,9 @@ import { allocPort } from "../helpers/alloc-port.js";
  */
 describe("tandem activate hands the key to a running Tandem (#2205)", () => {
   const saved: Record<string, string | undefined> = {};
-  const ENV_KEYS = ["CLAUDE_PLUGIN_OPTION_SERVER_URL", "TANDEM_URL", "TANDEM_APP_DATA_DIR"];
+  // TANDEM_APP_DATA_DIR is not in this list: `teardownFileAppDataDir` restores
+  // it, never by deleting it (CLAUDE.md, Testing & E2E).
+  const ENV_KEYS = ["CLAUDE_PLUGIN_OPTION_SERVER_URL", "TANDEM_URL"];
   let dir: string;
   let logs: string[];
   let exit: ReturnType<typeof vi.spyOn>;
@@ -50,12 +53,13 @@ describe("tandem activate hands the key to a running Tandem (#2205)", () => {
     exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     for (const k of ENV_KEYS) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
+    await teardownFileAppDataDir();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

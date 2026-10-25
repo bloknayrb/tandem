@@ -213,11 +213,23 @@ function indentContinuation(text: string, indent: string): string {
 }
 
 /**
+ * Fold every line break in a quoted excerpt, with the whitespace around it,
+ * into one space. The excerpt comes from `extractText`, so a span crossing a
+ * block carries the `\n\n` separator and any heading prefix after it: kept
+ * raw, the blank line ends the list item and `## \u2026` renders as a stray
+ * heading in the middle of the export.
+ */
+function foldLineBreaks(text: string): string {
+  return text.replace(/\s*[\n\r\u2028\u2029]\s*/g, " ");
+}
+
+/**
  * Generate a Markdown summary of all annotations, grouped by type.
  *
  * - Each item quotes its text sliced from `extractText(doc)`: the same flat
  *   coordinate system as `ann.range` (heading prefixes included), and the same
- *   text the JSON `textSnippet` uses (#2112, Critical Rule 5).
+ *   text the JSON `textSnippet` uses (#2112, Critical Rule 5), with its line
+ *   breaks folded to spaces ({@link foldLineBreaks}).
  * - Each item lists its status (#2113).
  * - Replies render only when the caller attached them (#2113). They must
  *   already have passed `channelVisibleReplies` and `hideFromAI`. The exporter
@@ -271,17 +283,19 @@ export function exportAnnotations(doc: Y.Doc, annotations: readonly ExportAnnota
     lines.push(`## ${groupLabels[key]}`, "");
 
     for (const ann of anns) {
-      const snippet = clampRange(fullText, ann.range.from, ann.range.to);
+      const snippet = foldLineBreaks(clampRange(fullText, ann.range.from, ann.range.to));
       const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "..." : snippet;
 
       lines.push(`- **"${truncated}"** (${exportAuthorLabel(ann)})`);
       lines.push(`  - Status: ${STATUS_LABEL[ann.status]}`);
 
+      // Continuation lines indented like the replies below, so a multi-line
+      // value stays nested under its item.
       if (ann.suggestedText !== undefined) {
-        lines.push(`  - Replace with: "${ann.suggestedText}"`);
-        if (ann.content) lines.push(`  - Reason: ${ann.content}`);
+        lines.push(`  - Replace with: "${indentContinuation(ann.suggestedText, "    ")}"`);
+        if (ann.content) lines.push(`  - Reason: ${indentContinuation(ann.content, "    ")}`);
       } else if (ann.content) {
-        lines.push(`  - ${ann.content}`);
+        lines.push(`  - ${indentContinuation(ann.content, "    ")}`);
       }
 
       if (ann.color) {

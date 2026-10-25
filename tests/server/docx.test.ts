@@ -506,6 +506,23 @@ describe("exportAnnotations", () => {
     expect(result).toContain('**"world"**');
   });
 
+  it("an excerpt spanning into a heading stays inside its list item", () => {
+    loadMarkdown("Hello world\n\n## Section\n\nMore text");
+    const text = extractText(doc);
+    const from = text.indexOf("world");
+    const to = text.indexOf("Sect") + "Sect".length;
+    // The raw flat slice carries the block separator and the heading prefix.
+    expect(text.slice(from, to)).toMatch(/\n## Sect$/);
+    const result = exportAnnotations(doc, [
+      makeAnnotation({ range: range(from, to), content: "first line\nsecond line" }),
+    ]);
+    expect(result).toContain('**"world ## Sect"**');
+    // No stray heading or blank line inside the item, and multi-line content
+    // stays nested under it.
+    expect(result).not.toMatch(/^## Sect/m);
+    expect(result).toContain("  - first line\n    second line");
+  });
+
   it("a single heading does not shift the excerpt (#2112)", () => {
     loadMarkdown("# Title\nHello world");
     const result = exportAnnotations(doc, [

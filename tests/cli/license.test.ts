@@ -6,6 +6,7 @@ import { formatLicenseStatus, resolveLicenseInput, runActivate } from "../../src
 import type { LicenseState } from "../../src/server/license/license-types.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 
 describe("resolveLicenseInput", () => {
   it("reads + trims a file when the arg is an existing path", () => {
@@ -161,14 +162,12 @@ describe("runActivate — unreadable input (#1789)", () => {
   let errors: string[];
   let exit: ReturnType<typeof vi.spyOn>;
   let dir: string;
-  let previousAppDataDir: string | undefined;
 
   beforeEach(() => {
     errors = [];
     // A NAMED temp dir: a bare `mkdtemp` prefix fails platform.test.ts. This
     // path does go through `resolveAppDataDir()`, so it must be redirected.
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-"));
-    previousAppDataDir = process.env.TANDEM_APP_DATA_DIR;
     process.env.TANDEM_APP_DATA_DIR = dir;
     vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
       errors.push(args.map(String).join(" "));
@@ -176,9 +175,10 @@ describe("runActivate — unreadable input (#1789)", () => {
     exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
   });
 
-  afterEach(() => {
-    if (previousAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-    else process.env.TANDEM_APP_DATA_DIR = previousAppDataDir;
+  afterEach(async () => {
+    // Restores the worker's isolated directory and removes this one; never
+    // deletes the variable (CLAUDE.md, Testing & E2E).
+    await teardownFileAppDataDir();
     vi.restoreAllMocks();
   });
 
@@ -244,7 +244,6 @@ describe("runActivate — hands the key to a running server (#2205)", () => {
   let exit: ReturnType<typeof vi.spyOn>;
   let fetchSpy: ReturnType<typeof vi.spyOn>;
   let dir: string;
-  let previousAppDataDir: string | undefined;
 
   const META = {
     id: "lic-1",
@@ -279,7 +278,6 @@ describe("runActivate — hands the key to a running server (#2205)", () => {
     vi.stubEnv("CLAUDE_PLUGIN_OPTION_SERVER_URL", "");
     vi.stubEnv("TANDEM_URL", "http://127.0.0.1:1");
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-"));
-    previousAppDataDir = process.env.TANDEM_APP_DATA_DIR;
     process.env.TANDEM_APP_DATA_DIR = dir;
     vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(() => META);
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -292,11 +290,11 @@ describe("runActivate — hands the key to a running server (#2205)", () => {
     fetchSpy = vi.spyOn(globalThis, "fetch");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-    if (previousAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-    else process.env.TANDEM_APP_DATA_DIR = previousAppDataDir;
+    // As above: the shared teardown, never a hand-written delete.
+    await teardownFileAppDataDir();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -353,6 +351,21 @@ describe("runActivate — hands the key to a running server (#2205)", () => {
     expect(out).not.toContain("‮");
     expect(fs.existsSync(licenseFile())).toBe(false);
     expect(logs).toEqual([]);
+  });
+
+  it("strips the bidi marks sanitizeForLog strips, not only overrides and isolates", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(400, {
+        error: "INVALID_LICENSE",
+        message: "A‎B‏C؜D‪E⁧F",
+      }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    const out = errors.join("\n");
+    expect(out).toContain("ABCDEF");
+    for (const ch of ["‎", "‏", "؜", "‪", "⁧"]) {
+      expect(out).not.toContain(ch);
+    }
   });
 
   it("a coded 500 LICENSE_WRITE_FAILED is printed, exit 1, no local write", async () => {
