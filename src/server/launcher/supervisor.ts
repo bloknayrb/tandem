@@ -171,10 +171,18 @@ interface SupervisorOpts {
    *
    * Wired ONLY to the confirmation timer in `spawnOnce`. It is deliberately
    * **not** wired to `RESUME_CONFIRM_MS`'s second use — the `restartIndex`
-   * backoff reset in `startInternal` — which is a different timer that happens
-   * to share the constant.
+   * backoff reset in `armBackoffReset` — which is a different timer that happens
+   * to share the constant. That second use has its own seam,
+   * `backoffResetMs`.
    */
   resumeConfirmMs?: number;
+  /**
+   * Override for the `restartIndex` backoff reset in `armBackoffReset`, which
+   * defaults to `RESUME_CONFIRM_MS`. It exists so that reset's identity guard
+   * (#2145: a predecessor's timer must not reset a successor's backoff) can be
+   * tested in milliseconds. Same justification as `wakeLatchMs`.
+   */
+  backoffResetMs?: number;
   /**
    * Seam onto the `launcher-settings.json` read (#2195), so a test can make it
    * fail the way a held file does on Windows without racing an antivirus.
@@ -966,6 +974,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
   const turnReceiptMs = opts.turnReceiptMs ?? TURN_RECEIPT_MS;
   const resumeConfirmMs = opts.resumeConfirmMs ?? RESUME_CONFIRM_MS;
+  const backoffResetMs = opts.backoffResetMs ?? RESUME_CONFIRM_MS;
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
@@ -1735,10 +1744,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     plan: SpawnPlan,
     idleLimitMs: number | null,
     claudeBin: string,
-  ): Promise<void> {
+  ): Promise<ChildProcess> {
     if (child) throw new Error("Supervisor already running — call stop() first");
 
-    const reaper = reaperPath();
+    // A missing reaper throws here, before `child` is set (#2145). Recorded as
+    // `binary-not-found` — the code the ENOENT spawn path uses for the same
+    // fault — so a boot or crash-restart start that fails this way is not read
+    // as a clean stop. No breaker trip: nothing schedules a retry from here.
+    // Like the ENOENT branch it overwrites any earlier code, `stop-failed`
+    // included; a reaper that vanished is the more actionable of the two.
+    let reaper: string;
+    try {
+      reaper = reaperPath();
+    } catch (err) {
+      lastError = "binary-not-found";
+      throw err;
+    }
     const claudeArgs = buildClaudeArgs(plan);
 
     const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
@@ -2368,13 +2389,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
     spawned.on("error", (err: NodeJS.ErrnoException) => {
       teardownTurnDelivery();
+      const wasCurrent = child === spawned;
       // CRITICAL: clear child state so status() doesn't lie about being
       // running and so subsequent start()/relaunch() actually re-attempt.
       // ENOENT is unrecoverable without user action — trip the breaker
       // immediately rather than schedule a doomed restart.
       // Guarded on identity: a late event from a superseded spawn must not
       // erase the handle of the process that replaced it.
-      if (child === spawned) {
+      if (wasCurrent) {
         child = null;
         currentCwd = undefined;
         currentSessionId = undefined;
@@ -2390,16 +2412,23 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // risk this clear used to cover is gone: the confirmation callback now
         // nulls the shared slot only while it still owns it.
         //
-        // No test: Node emits `'error'` on a child only for spawn, kill or send
-        // failure, within a tick of `spawn()`, so a spawn that started,
-        // accepted a turn and was then superseded cannot produce one. The
-        // ordering a killing spec needs is not constructible in
-        // `stream-json-protocol.test.ts`, which does no `spawn` mocking by
-        // design, and `SupervisorOpts` exposes no `spawn` seam.
+        // Node emits `'error'` on a child only for spawn, kill or send failure,
+        // within a tick of `spawn()`, so in practice a spawn that started,
+        // accepted a turn and was then superseded does not produce one. The
+        // guard does not rely on that: `supervisor-turn-delivery.test.ts`
+        // mocks `spawn` file-wide and emits `'error'` on a superseded spawn.
         if (confirmTimer) {
           clearTimeout(confirmTimer);
           confirmTimer = null;
         }
+      }
+      // A superseded spawn's error is about a process nobody is waiting on
+      // (#2145). It must not set `lastError` over the successor's state, trip
+      // the breaker (ENOENT) or schedule a restart beside a live successor —
+      // the same rule as the exit handler's `!wasCurrent` return (#1995).
+      if (!wasCurrent) {
+        console.error("[Launcher] Superseded spawn error (ignored):", err);
+        return;
       }
       if (err.code === "ENOENT") {
         lastError = "binary-not-found";
@@ -2527,6 +2556,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       spawned.once("error", onEarlyError);
       spawned.once("exit", onEarlyExit);
     });
+    return spawned;
   }
 
   /** `probeCliUsable`, total and failing OPEN (a probe that could not run is
@@ -2545,9 +2575,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function scheduleRestart(): void {
     // Already given up — nothing to schedule, and re-entering would re-run the
     // trip branch's probe. One failed spawn can reach here TWICE: the "error"
-    // and "exit" handlers both call this. The "exit" handler's call is behind
-    // its `wasCurrent` identity guard; the "error" handler guards its state
-    // clearing but not this call.
+    // and "exit" handlers both call this. Both calls are behind a `wasCurrent`
+    // identity guard (the "error" handler's since #2145), so a superseded
+    // spawn never reaches here; this return stays as defence in depth.
     if (breakerTripped) return;
     if (restartTimer) {
       clearTimeout(restartTimer);
@@ -2746,17 +2776,40 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return;
     }
     try {
-      await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
-      // Reset backoff once a spawn runs long enough to be considered stable.
-      // Must match RESUME_CONFIRM_MS — a doomed --resume exits at ~6s, so
-      // the old 5s timer fired while the process was still alive, resetting
-      // restartIndex before the exit and permanently neutering the backoff.
-      setTimeout(() => {
-        if (child) restartIndex = 0;
-      }, RESUME_CONFIRM_MS);
+      const spawned = await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
+      armBackoffReset(spawned);
     } catch (err) {
       console.error("[Launcher] Spawn failed:", err);
+      // A synchronous `spawn()` throw sets no code anywhere else (#2145), so a
+      // boot or crash-restart start would read as a clean stop. Same idiom as
+      // `recordStartThrow`: no child alive and no more specific code already
+      // recorded (a missing reaper's `binary-not-found`, or the long-lived
+      // error handler's own code on an early spawn error), and no restart
+      // already pending (an exit before `'spawn'` has scheduled one).
+      if (child === null && lastError === undefined && restartTimer === null) {
+        lastError = "spawn-failed";
+      }
     }
+  }
+
+  /**
+   * Reset the backoff once `spawned` has run long enough to be considered
+   * stable. Must match RESUME_CONFIRM_MS — a doomed --resume exits at ~6s, so
+   * the old 5s timer fired while the process was still alive, resetting
+   * restartIndex before the exit and permanently neutering the backoff.
+   *
+   * Only while THIS spawn is still the current child (#2145): nothing cancels
+   * the timer, so a predecessor's must not reset the backoff of a successor
+   * that has only just started. A stop nulls or replaces `child`, so the guard
+   * covers that too. Armed for every spawn, crash restart and `stopAndSpawn`
+   * alike: a message start leaves the index alone when it starts (#2196), so
+   * without its own timer a Claude it started could run for hours and still
+   * pay the crash loop's backoff on its first crash.
+   */
+  function armBackoffReset(spawned: ChildProcess): void {
+    setTimeout(() => {
+      if (child === spawned) restartIndex = 0;
+    }, backoffResetMs);
   }
 
   async function start(): Promise<void> {
@@ -2799,7 +2852,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Synchronous from the decrement above to the increment inside, so no
       // poll lands between them; the settings travel along rather than being
       // read a second time.
-      await startInternal(stopEpoch, settings);
+      try {
+        await startInternal(stopEpoch, settings);
+      } catch (err) {
+        // A boot whose integrations read throws would otherwise leave the
+        // status route reading a clean stop (#2145). Recorded only with no
+        // child alive and no code already set, as in `recordStartThrow`;
+        // rethrown so `index.ts` still logs it.
+        if (child === null && lastError === undefined) lastError = "spawn-failed";
+        throw err;
+      }
     });
   }
 
@@ -2884,6 +2946,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!byMessage) {
       breakerTripped = false;
       recentAttempts = [];
+      // The backoff restarts with the history (#2145): a user relaunch is a
+      // fresh start, not one more rung of the crash loop. A message start
+      // keeps the index and leaves it to `armBackoffReset` below.
+      restartIndex = 0;
       deliveryKillStreak = 0;
     }
     // stopInternal() raised the stop flag on the way in. Lower it before the
@@ -2926,7 +2992,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (standby === "off") setStandby("awaiting-start");
     }
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
-    await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
+    armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin));
     return { spawned: true };
   }
 

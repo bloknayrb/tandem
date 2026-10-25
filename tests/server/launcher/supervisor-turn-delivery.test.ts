@@ -1422,6 +1422,24 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     }
   });
 
+  it("a boot start() that rejects records spawn-failed, and a relaunch clears it (#2145)", async () => {
+    // Without the code the status route reads a clean stop: `index.ts` keeps
+    // the supervisor it created, so its own `launcherUnavailableReason` is
+    // never read.
+    const { sup } = makeSupervisor();
+    const reads = interceptIntegrationsReads(() => Promise.reject(EPERM()));
+    try {
+      await expect(sup.start()).rejects.toMatchObject({ code: "EPERM" });
+    } finally {
+      reads.restore();
+    }
+    expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
+
+    await sup.relaunch(cwdDir);
+    expect(sup.status().running).toBe(true);
+    expect(sup.status()).not.toHaveProperty("lastError");
+  });
+
   it("a persistent I/O error trips the breaker instead of looping", async () => {
     const { sup } = makeSupervisor();
     await sup.startFresh(cwdDir);
@@ -1522,6 +1540,207 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(occurrences("Breaker tripped while building the spawn plan")).toBe(1);
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
+  });
+});
+
+// --- #2145 --------------------------------------------------------------------
+
+/** Makes `reaperPath()` find nothing, whatever the host has built or installed:
+ * `TANDEM_REAPER_PATH` names a missing file (restored by `afterEach`), and every
+ * `tandem-reaper*` candidate reads as absent. Restore it in a `finally`. */
+function hideReaper(): { restore: () => void } {
+  process.env.TANDEM_REAPER_PATH = path.join(baseDir, "no-such-reaper");
+  const realExistsSync = fs.existsSync;
+  const spy = vi
+    .spyOn(fs, "existsSync")
+    .mockImplementation((p) =>
+      path.basename(String(p)).startsWith("tandem-reaper") ? false : realExistsSync(p),
+    );
+  return { restore: () => spy.mockRestore() };
+}
+
+describe("#2145 — supervisor start/restart error paths", () => {
+  const ENOENT = () =>
+    Object.assign(new Error("spawn x ENOENT"), { code: "ENOENT" }) as NodeJS.ErrnoException;
+  const EPERM_KILL = () =>
+    Object.assign(new Error("kill EPERM"), { code: "EPERM" }) as NodeJS.ErrnoException;
+
+  // Item 4: the `'error'` handler's identity guard.
+
+  it("a superseded spawn's non-ENOENT error schedules no restart", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    await sup.relaunch(cwdDir);
+    const child2 = await nthChild(2);
+
+    child1.emit("error", EPERM_KILL());
+    await sleep(50);
+    await settle();
+
+    expect(logText()).toContain("Superseded spawn error (ignored)");
+    expect(logText()).not.toContain("Restarting Claude in");
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+    expect(sup.status()).not.toHaveProperty("lastError");
+
+    // The successor's own first crash is still attempt 1: the stray error
+    // added nothing to the backoff.
+    exitChild(child2, 1);
+    await nthChild(3);
+    expect(occurrences("(attempt 1)")).toBe(1);
+    expect(occurrences("(attempt 2)")).toBe(0);
+  });
+
+  it("a superseded spawn's ENOENT does not trip the breaker", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    await sup.relaunch(cwdDir);
+    const child2 = await nthChild(2);
+
+    child1.emit("error", ENOENT());
+    await settle();
+    expect(sup.status().running).toBe(true);
+    expect(sup.status()).not.toHaveProperty("lastError");
+
+    exitChild(child2, 1);
+    await nthChild(3);
+    expect(sup.status().running).toBe(true);
+  });
+
+  // Item 3: the backoff reset's identity guard.
+
+  it("a predecessor's backoff-reset timer does not reset its successor's backoff", async () => {
+    const spawnedAt: number[] = [];
+    onSpawn = () => spawnedAt.push(Date.now());
+    const { sup } = makeSupervisor({ backoffResetMs: 1_000 });
+    await sup.startFresh(cwdDir); // child 1 exits at once, so its timer never matches
+
+    exitChild(children[0], 1);
+    const child2 = await nthChild(2); // attempt 1; its reset timer is armed
+    const t2 = spawnedAt[1];
+
+    await sleep(Math.max(0, t2 + 500 - Date.now()));
+    exitChild(child2, 1);
+    const child3 = await nthChild(3); // attempt 2; its own timer fires at t2+1500 or later
+
+    // Child 2's timer (≈ t2+1000) has fired while child 3 is current.
+    await sleep(Math.max(0, t2 + 1_200 - Date.now()));
+    exitChild(child3, 1);
+    await nthChild(4);
+
+    expect(occurrences("(attempt 1)")).toBe(1);
+    expect(occurrences("(attempt 2)")).toBe(1);
+    expect(occurrences("(attempt 3)")).toBe(1);
+  });
+
+  it("the current spawn's own timer still resets the backoff", async () => {
+    // Control for the guard above: one that never matched would never reset.
+    const { sup } = makeSupervisor({ backoffResetMs: 100 });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    const child2 = await nthChild(2);
+    await sleep(300);
+    exitChild(child2, 1);
+    await nthChild(3);
+
+    expect(occurrences("(attempt 1)")).toBe(2);
+    expect(occurrences("(attempt 2)")).toBe(0);
+  });
+
+  it("a user relaunch restarts the backoff from the first rung", async () => {
+    // The guarded timer above no longer resets the index for a child a
+    // relaunch spawned, so the relaunch does it itself.
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    await nthChild(2); // attempt 1
+    await sup.relaunch(cwdDir);
+    const child3 = await nthChild(3);
+    exitChild(child3, 1);
+    await nthChild(4);
+
+    expect(occurrences("(attempt 1)")).toBe(2);
+    expect(occurrences("(attempt 2)")).toBe(0);
+  });
+
+  it("a Claude a message started resets the backoff once it has lived the window", async () => {
+    // A message start leaves the crash history alone (#2196), so only the new
+    // child's own timer can bring the index back to the first rung.
+    writeLauncherSettingsFile({ startMode: "auto", lifetime: "always", idleMinutes: 30 });
+    const spawnedAt: number[] = [];
+    onSpawn = () => spawnedAt.push(Date.now());
+    const { sup, emit } = makeSupervisor({ backoffResetMs: 1_000 });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    const child2 = await nthChild(2); // attempt 1
+    exitChild(child2, 1);
+    const child3 = await nthChild(3); // attempt 2: the index is now 2
+    pushJson(child3, RESULT_OK);
+    await settle();
+    await sup.updateSettings({ startMode: "off" });
+    // Child 3 must stop inside its own window, or its timer resets the index
+    // and this test passes without the fix.
+    expect(Date.now() - spawnedAt[2]).toBeLessThan(1_000);
+    await settle();
+    expect(sup.status()).toMatchObject({ running: false, standby: "off" });
+
+    emit(chatEvent());
+    const child4 = await nthChild(4);
+    await sleep(1_300); // child 4 outlives its window
+    exitChild(child4, 1);
+    await nthChild(5);
+
+    expect(occurrences("(attempt 1)")).toBe(2);
+    expect(occurrences("(attempt 3)")).toBe(0);
+  });
+
+  // Item 2: a start that throws before a child exists.
+
+  it("a crash restart that finds no reaper reports binary-not-found", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const reaper = hideReaper();
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => logText().includes("Spawn failed"), "the failed restart");
+      await sleep(50);
+      await settle();
+    } finally {
+      reaper.restore();
+    }
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "binary-not-found" });
+  });
+
+  it("a boot start() that finds no reaper reports binary-not-found", async () => {
+    const { sup } = makeSupervisor();
+    const reaper = hideReaper();
+    try {
+      await sup.start();
+    } finally {
+      reaper.restore();
+    }
+
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    expect(sup.status()).toEqual({ running: false, lastError: "binary-not-found" });
+  });
+
+  it("a crash restart whose spawn() throws synchronously reports spawn-failed", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      throw new Error("spawn EINVAL");
+    });
+    exitChild(children[0], 1);
+    await waitFor(() => logText().includes("Spawn failed"), "the failed restart");
+    await sleep(50);
+    await settle();
+
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
   });
 });
 

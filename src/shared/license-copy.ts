@@ -80,6 +80,38 @@ export function aiRefusalUnverifiableMessage(code: LicenseUnverifiableCode): str
 }
 
 /**
+ * The opening of the fail-closed copy (#2206). Deliberately starts with neither
+ * opening above, so the shipped skill routes it to its "any other message" arm
+ * (say only that AI is off; do not guess a remedy), and names no licence: it is
+ * never the copy for a licence file that is present but fails to verify.
+ */
+export const AI_REFUSAL_STATE_UNREADABLE_OPENING =
+  "Tandem's AI features are off because Tandem could not read its license state";
+
+/**
+ * Refusal copy for `aiRefusal()`'s catch arm (#2206): resolving the state threw
+ * (a corrupt `trial.json`, say), so Tandem cannot tell a keyless user from a
+ * licensed one. The kind stays `unverifiable`, but the copy must not claim a
+ * licence is installed (the reader may hold none) and **never carries the
+ * purchase URL** or talks of activating a key or buying (the reader may have
+ * paid). The remedy is a restart, then support.
+ */
+export const AI_REFUSAL_STATE_UNREADABLE_MESSAGE =
+  `${AI_REFUSAL_STATE_UNREADABLE_OPENING}. Your document is unaffected and ` +
+  `stays fully editable. Restart Tandem; if this keeps happening, email ${TANDEM_SUPPORT_EMAIL}.`;
+
+/**
+ * The activate route's error code and copy when the key WAS saved but
+ * re-reading the licence state afterwards threw (a corrupt `trial.json`, say). Not a refusal:
+ * `tandem activate` reports the key as installed and prints this line, and the
+ * Settings form shows it. The remedy is a restart, then support.
+ */
+export const LICENSE_SAVED_STATE_UNREADABLE = "LICENSE_SAVED_STATE_UNREADABLE";
+export const LICENSE_SAVED_STATE_UNREADABLE_MESSAGE =
+  "Your license was saved, but Tandem couldn't read its license state back. " +
+  `Restart Tandem to finish; if it still doesn't show as licensed, email ${TANDEM_SUPPORT_EMAIL}.`;
+
+/**
  * Why a signature check failed. Produced by `verifyLicenseSignature`.
  *
  * The distinction is the whole point: a buyer who pasted their entire

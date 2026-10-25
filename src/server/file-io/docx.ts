@@ -4,8 +4,13 @@
 
 import mammoth from "mammoth";
 import * as Y from "yjs";
-import type { Annotation } from "../../shared/types.js";
-import { getElementText } from "../mcp/document-model.js";
+import type {
+  Annotation,
+  AnnotationReply,
+  AnnotationStatus,
+  ReplyAuthor,
+} from "../../shared/types.js";
+import { extractText } from "../mcp/document-model.js";
 
 // Re-export for backward compatibility — consumers can import from either module
 export { countDroppedImages, htmlToYDoc, reconcileFootnoteIds } from "./docx-html.js";
@@ -177,10 +182,62 @@ function exportAuthorLabel(ann: Annotation): string {
 }
 
 /**
- * Generate a Markdown summary of all annotations, grouped by type.
- * Includes a text snippet from the document for context.
+ * An annotation as the markdown export receives it: the record plus, when the
+ * caller attached them, the replies it may show (#2113).
  */
-export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string {
+export type ExportAnnotation = Annotation & { replies?: readonly AnnotationReply[] };
+
+const STATUS_LABEL: Record<AnnotationStatus, string> = {
+  pending: "Pending",
+  accepted: "Accepted",
+  dismissed: "Dismissed",
+};
+
+/**
+ * Reply byline. Never `importAuthor` (types.ts: never serialized to a
+ * Claude-facing surface) and never `agentIdentity` — every AI maps to
+ * "Assistant", matching {@link exportAuthorLabel}.
+ */
+const REPLY_AUTHOR_LABEL: Record<ReplyAuthor, string> = {
+  user: "You",
+  claude: "Assistant",
+  import: "Imported",
+};
+
+/**
+ * Indent every continuation line of `text` so a multi-line value stays nested
+ * under its list item instead of landing at column 0 as top-level text.
+ */
+function indentContinuation(text: string, indent: string): string {
+  return text.replace(/\r\n|[\n\r\u2028\u2029]/g, `\n${indent}`);
+}
+
+/**
+ * Fold every line break in a quoted excerpt, with the whitespace around it,
+ * into one space. The excerpt comes from `extractText`, so a span crossing a
+ * block carries the `\n\n` separator and any heading prefix after it: kept
+ * raw, the blank line ends the list item and `## \u2026` renders as a stray
+ * heading in the middle of the export.
+ */
+function foldLineBreaks(text: string): string {
+  return text.replace(/\s*[\n\r\u2028\u2029]\s*/g, " ");
+}
+
+/**
+ * Generate a Markdown summary of all annotations, grouped by type.
+ *
+ * - Each item quotes its text sliced from `extractText(doc)`: the same flat
+ *   coordinate system as `ann.range` (heading prefixes included), and the same
+ *   text the JSON `textSnippet` uses (#2112, Critical Rule 5), with its line
+ *   breaks folded to spaces ({@link foldLineBreaks}).
+ * - Each item lists its status (#2113).
+ * - Replies render only when the caller attached them (#2113). They must
+ *   already have passed `channelVisibleReplies` and `hideFromAI`. The exporter
+ *   re-checks the ADR-027 halves visible on the records it receives (the parent
+ *   is an outbound comment, the reply is not `private`), but it has no mode
+ *   state and CANNOT re-check the Solo hold.
+ */
+export function exportAnnotations(doc: Y.Doc, annotations: readonly ExportAnnotation[]): string {
   // Defense-in-depth (ADR-027): notes are user-private and must never appear in
   // an export, regardless of what the caller passes. The MCP tool already
   // filters them out, but this function is privacy-safe on its own.
@@ -193,13 +250,14 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     return "# Document Review\n\nNo annotations available for export.";
   }
 
-  const fragment = doc.getXmlFragment("default");
-  const fullText = extractFullText(fragment);
+  // Must be `extractText`, the text `ann.range` is measured in. A prefix-free
+  // join of block text shifts every excerpt below a heading (#2112).
+  const fullText = extractText(doc);
 
   // Group by derived category using field presence, not raw type.
   // Notes are already filtered out above (ADR-027), so there is no notes group.
   type GroupKey = "highlights" | "comments" | "suggestions";
-  const groups: Partial<Record<GroupKey, Annotation[]>> = {};
+  const groups: Partial<Record<GroupKey, ExportAnnotation[]>> = {};
   for (const ann of visible) {
     let key: GroupKey;
     if (ann.type === "highlight") key = "highlights";
@@ -225,20 +283,43 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     lines.push(`## ${groupLabels[key]}`, "");
 
     for (const ann of anns) {
-      const snippet = clampRange(fullText, ann.range.from, ann.range.to);
+      const snippet = foldLineBreaks(clampRange(fullText, ann.range.from, ann.range.to));
       const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "..." : snippet;
 
       lines.push(`- **"${truncated}"** (${exportAuthorLabel(ann)})`);
+      lines.push(`  - Status: ${STATUS_LABEL[ann.status]}`);
 
+      // Continuation lines indented like the replies below, so a multi-line
+      // value stays nested under its item.
       if (ann.suggestedText !== undefined) {
-        lines.push(`  - Replace with: "${ann.suggestedText}"`);
-        if (ann.content) lines.push(`  - Reason: ${ann.content}`);
+        lines.push(`  - Replace with: "${indentContinuation(ann.suggestedText, "    ")}"`);
+        if (ann.content) lines.push(`  - Reason: ${indentContinuation(ann.content, "    ")}`);
       } else if (ann.content) {
-        lines.push(`  - ${ann.content}`);
+        lines.push(`  - ${indentContinuation(ann.content, "    ")}`);
       }
 
       if (ann.color) {
         lines.push(`  - Color: ${ann.color}`);
+      }
+
+      // Defence in depth (ADR-027), mirroring `channelVisibleReplies`: only an
+      // outbound comment carries a visible thread (fails closed on a missing
+      // `audience`), and a `private` reply never renders. The Solo half is the
+      // caller's, since this function has no mode state.
+      const replies =
+        ann.type === "comment" && ann.audience === "outbound"
+          ? (ann.replies ?? []).filter((r) => r.private !== true)
+          : [];
+      if (replies.length > 0) {
+        lines.push("  - Replies:");
+        for (const r of replies) {
+          lines.push(
+            `    - ${REPLY_AUTHOR_LABEL[r.author]}: ${indentContinuation(r.text, "      ")}`,
+          );
+          if (r.suggestedText !== undefined) {
+            lines.push(`      - Proposes: "${indentContinuation(r.suggestedText, "        ")}"`);
+          }
+        }
       }
 
       lines.push("");
@@ -246,18 +327,6 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
   }
 
   return lines.join("\n").trimEnd();
-}
-
-/** Extract full flat text from a Y.Doc fragment (simplified — no heading prefixes) */
-function extractFullText(fragment: Y.XmlFragment): string {
-  const parts: string[] = [];
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (node instanceof Y.XmlElement) {
-      parts.push(getElementText(node));
-    }
-  }
-  return parts.join("\n");
 }
 
 /** Safe string slice that handles out-of-bounds gracefully */

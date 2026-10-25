@@ -359,12 +359,19 @@ describe("runDoctor", () => {
     // `remediation`; the code wins).
     const remediation = parked?.fix;
     expect(remediation).toBeDefined();
-    expect(remediation).not.toContain("load again");
+    // Negative assertions run on text with the temp dir masked: its random
+    // mkdtemp suffix could otherwise contain any substring we forbid.
+    const text = (remediation ?? "").replaceAll(annDir, "<dir>");
+    expect(text).not.toContain("load again");
     expect(remediation).toContain(".json.future");
     // And no how-to: after a park, `<hash>.json` is normally rewritten with
     // real, current annotations, so "rename it back over it" destroys live
-    // data — in the one string this fix exists to make honest.
-    expect(remediation).not.toMatch(/rename .* over/i);
+    // data, in the one string this fix exists to make honest.
+    expect(text).not.toMatch(/rename .* over/i);
+    // Honest remediation: where the files are and how to recover by hand.
+    expect(remediation).toContain(annDir);
+    expect(remediation).toMatch(/copy/i);
+    expect(remediation).toContain("never deleted");
   });
 
   it("does not claim a 7-day cleanup for quarantined annotation files (#1980)", async () => {
@@ -390,8 +397,13 @@ describe("runDoctor", () => {
 
     // There is no 7-day mechanism and no reaper: `ATOMIC_TEMP_RE` is anchored
     // to `.tandem-tmp-<ms>-<12 hex>` and nothing else unlinks one.
-    expect(warn?.fix).not.toContain("7d");
+    const text = (warn?.fix ?? "").replaceAll(annDir, "<dir>");
+    expect(text).not.toMatch(/reap|7 ?d/i);
     expect(warn?.fix).toContain("nothing deletes");
+    // Where the files are and how to recover by hand (#1980).
+    expect(warn?.fix).toContain(annDir);
+    expect(warn?.fix).toContain(".json.corrupt.");
+    expect(warn?.fix).toContain("private");
   });
 
   it("warns on a .partial copy left by a partial load (#1791)", async () => {

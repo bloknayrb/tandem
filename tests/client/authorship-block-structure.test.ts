@@ -3,7 +3,7 @@
 import { Editor, Extension } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import { Slice } from "@tiptap/pm/model";
-import { Plugin } from "@tiptap/pm/state";
+import { Plugin, TextSelection, type Transaction } from "@tiptap/pm/state";
 import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -587,5 +587,179 @@ describe("attribution survives a block-structure change", () => {
 
     expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["USERTEXT"] });
     expect(JSON.stringify(entries()[0]), "a surviving anchor must not be re-minted").toBe(before);
+  });
+});
+
+/**
+ * #1523. Tiptap emits the ROOT transaction on `transaction`, but y-prosemirror
+ * writes the state AFTER every `appendTransaction` plugin has run. Before the
+ * fix the stamp's flat range and anchor were minted against the root doc, so a
+ * text-moving append (PasteRules deleting `**` delimiters) left them a frame
+ * behind Y and pre-existing text was painted as the paster's.
+ */
+describe("an appended text-moving transaction (#1523)", () => {
+  const SEED = "seedTAILTAILTAIL\n";
+
+  /** Counts the appended transactions Tiptap reports for each dispatch. */
+  function watchAppends(editor: Editor) {
+    const seen: number[] = [];
+    editor.on("transaction", ({ appendedTransactions }) => {
+      seen.push(appendedTransactions.filter((tr: Transaction) => tr.docChanged).length);
+    });
+    return seen;
+  }
+
+  function hasMark(editor: Editor, text: string, mark: string): boolean {
+    let found = false;
+    editor.state.doc.descendants((node) => {
+      if (
+        node.isText &&
+        node.text?.includes(text) &&
+        node.marks.some((m) => m.type.name === mark)
+      ) {
+        found = true;
+      }
+      return !found;
+    });
+    return found;
+  }
+
+  /** An appender keyed on a test meta, so it fires on exactly the round under test. */
+  function appenderOn(meta: string, append: (tr: Transaction) => Transaction) {
+    return Extension.create({
+      name: `testAppender_${meta}`,
+      addProseMirrorPlugins() {
+        return [
+          new Plugin({
+            appendTransaction(transactions, _oldState, newState) {
+              if (!transactions.some((tr) => tr.getMeta(meta))) return null;
+              return append(newState.tr);
+            },
+          }),
+        ];
+      },
+    });
+  }
+
+  it("a rule-matching paste paints only the pasted text", () => {
+    const { ydoc, editor, entries } = boundEditor(SEED);
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, 5)));
+    const appends = watchAppends(editor);
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/plain", " say **bold** now ");
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: dataTransfer, bubbles: true, cancelable: true }),
+    );
+
+    // Guards against passing for the wrong reason: the paste happened, and a
+    // paste rule appended a doc-changing transaction to it.
+    expect(
+      appends.some((n) => n >= 1),
+      "a paste rule must have appended",
+    ).toBe(true);
+    expect(editor.state.doc.textContent).toBe("seed say bold now TAILTAILTAIL");
+    expect(hasMark(editor, "bold", "bold")).toBe(true);
+
+    // Before the fix: " say bold now TAIL" and {4, 22}.
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: [" say bold now "] });
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0].range).toEqual({ from: 4, to: 18 });
+    expect(entries()[0].relRange).toBeDefined();
+  });
+
+  it("several rules in one Claude paste stay Claude's, next to the user's text", () => {
+    const { ydoc, editor } = boundEditor(SEED);
+    editor.view.dispatch(editor.state.tr.insertText("USER", 5));
+    const appends = watchAppends(editor);
+
+    editor.view.dispatch(
+      editor.state.tr
+        .insertText(" **bold** and *ital* and ~~st~~ ", 9)
+        .setMeta("uiEvent", "paste")
+        .setMeta(AUTHORSHIP_ORIGIN_META, "claude"),
+    );
+
+    expect(appends[0], "each rule appends its own transaction").toBeGreaterThanOrEqual(3);
+    expect(editor.state.doc.textContent).toBe("seedUSER bold and ital and st TAILTAILTAIL");
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({
+      claude: [" bold and ital and st "],
+      user: ["USER"],
+    });
+  });
+
+  it("a same-author rule-matching paste coalesces into the typed run", () => {
+    const { ydoc, editor, entries } = boundEditor(SEED);
+    editor.view.dispatch(editor.state.tr.insertText("USER", 5));
+
+    editor.view.dispatch(
+      editor.state.tr.insertText(" **bold** and *ital* and ~~st~~ ", 9).setMeta("uiEvent", "paste"),
+    );
+
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["USER bold and ital and st "] });
+    expect(entries()).toHaveLength(1);
+  });
+
+  it("an appended insertion BEFORE the stamp shifts it in the final frame", () => {
+    const { ydoc, editor, entries } = boundEditor(SEED, [
+      appenderOn("test:appendZ", (tr) => tr.insertText("Z", 1)),
+    ]);
+
+    editor.view.dispatch(editor.state.tr.insertText("USER", 5).setMeta("test:appendZ", true));
+
+    expect(editor.state.doc.textContent).toBe("ZseedUSERTAILTAILTAIL");
+    // Before the fix: "dUSE".
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["USER"] });
+    expect(entries()[0].range).toEqual({ from: 5, to: 9 });
+  });
+
+  it("an appended BLOCK before the stamp is resolved against the final doc", () => {
+    // Pins the `pmDoc` half of the fix. In a single paragraph, flat = pm - 1
+    // in ANY doc the position resolves in, so mapping positions alone would
+    // pass the test above while still reading the root doc. A block inserted
+    // ahead of the stamp changes that relationship: final-frame positions read
+    // against the root doc give flat offsets one frame away from Y.
+    const { ydoc, editor, entries } = boundEditor(SEED, [
+      appenderOn("test:appendBlock", (tr) =>
+        tr.insert(0, tr.doc.type.schema.nodes.paragraph.create(null, tr.doc.type.schema.text("Z"))),
+      ),
+    ]);
+
+    editor.view.dispatch(editor.state.tr.insertText("USER", 5).setMeta("test:appendBlock", true));
+
+    expect(editor.state.doc.childCount).toBe(2);
+    expect(editor.state.doc.child(1).textContent).toBe("seedUSERTAILTAILTAIL");
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["USER"] });
+    // Flat: "Z" (0), separator (1), "seed" (2..6), "USER" (6..10).
+    expect(entries()[0].range).toEqual({ from: 6, to: 10 });
+    expect(entries()[0].relRange).toBeDefined();
+  });
+
+  it("an appended step that deletes the whole insertion stamps nothing", () => {
+    const { ydoc, editor, entries } = boundEditor(SEED, [
+      appenderOn("test:undoInsert", (tr) => tr.delete(5, 9)),
+    ]);
+
+    editor.view.dispatch(editor.state.tr.insertText("USER", 5).setMeta("test:undoInsert", true));
+
+    expect(editor.state.doc.textContent).toBe("seedTAILTAILTAIL");
+    expect(entries()).toHaveLength(0);
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({});
+  });
+
+  it("autolink's mark-only append on the keystroke path still coalesces", () => {
+    const { ydoc, editor, entries } = boundEditor("seed\n");
+    const appends = watchAppends(editor);
+    for (const ch of " https://example.com tail") {
+      editor.view.dispatch(editor.state.tr.insertText(ch, editor.state.doc.content.size - 1));
+    }
+
+    expect(
+      appends.some((n) => n >= 1),
+      "autolink must have appended",
+    ).toBe(true);
+    expect(hasMark(editor, "example.com", "link"), "autolink must have fired").toBe(true);
+    expect(entries()).toHaveLength(1);
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: [" https://example.com tail"] });
   });
 });

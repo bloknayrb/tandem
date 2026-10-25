@@ -2161,3 +2161,438 @@ describe("applyTrackedChanges on an image-bearing .docx (#1755)", () => {
     expect(Object.keys(zip.files).some((f) => f.startsWith("word/media/"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2106 / #2107 — the apply's destroyed-run span
+// ---------------------------------------------------------------------------
+
+const SPAN_AUTHOR = "A";
+const SPAN_DATE = "2026-01-01T00:00:00Z";
+
+/** A plain text run, space-preserving so leading/trailing blanks survive. */
+function textRun(text: string): string {
+  return `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+}
+
+/** Apply one suggestion directly; return the result and the body before/after. */
+function applyDirect(body: string, from: number, to: number, newText = "X") {
+  const map = buildOffsetMap(wrapBody(body), new Set([from, to]));
+  const before = render(map.body, { xmlMode: true });
+  const result = applySingleSuggestion(map, {
+    from,
+    to,
+    newText,
+    author: SPAN_AUTHOR,
+    date: SPAN_DATE,
+    revisionId: 100,
+  });
+  const out = render(map.doc, { xmlMode: true });
+  return {
+    result,
+    before,
+    after: render(map.body, { xmlMode: true }),
+    out,
+    flat: walkDocumentBody(out).flatText,
+  };
+}
+
+/** Run the orchestrator over a test package, optionally with extra parts. */
+async function applyOrchestrated(
+  body: string,
+  suggestions: Array<{ id: string; from: number; to: number; newText: string }>,
+  extraParts: Record<string, string> = {},
+) {
+  const xml = wrapBody(body);
+  const origFlat = walkDocumentBody(xml).flatText;
+  const output = await applyTrackedChanges(await createTestDocx(xml, extraParts), suggestions, {
+    author: SPAN_AUTHOR,
+    ydocFlatText: origFlat,
+    date: SPAN_DATE,
+  });
+  const produced = await producedDocumentXml(output.buffer);
+  return { output, produced, flat: walkDocumentBody(produced).flatText, origFlat };
+}
+
+function delTexts(xml: string): string[] {
+  return [...xml.matchAll(/<w:delText[^>]*>(.*?)<\/w:delText>/g)].map((m) => m[1]);
+}
+
+function delCount(xml: string): number {
+  return [...xml.matchAll(/<w:del /g)].length;
+}
+
+function commentsPart(id: string): Record<string, string> {
+  return { "word/comments.xml": commentsXml([{ id, paraIds: ["0A0A0A0A"] }]) };
+}
+
+describe("a suggestion that starts and ends in one run (#2106)", () => {
+  it("deletes only the suggested span, not the rest of the paragraph (issue repro)", () => {
+    const body =
+      `<w:p><w:r><w:t>anchored text</w:t></w:r>` +
+      `<w:r><w:commentReference w:id="0"/></w:r>${textRun(" after.")}</w:p>`;
+    const r = applyDirect(body, 4, 8); // "ored"
+
+    expect(r.result.ok).toBe(true);
+    expect(delCount(r.out)).toBe(1);
+    expect(delTexts(r.out)).toEqual(["ored"]);
+    expect(r.flat).toBe("anchX text after.");
+    // The untouched tail keeps its order: insertion, then " text", then the
+    // comment's reference run.
+    const insEnd = r.out.indexOf("</w:ins>");
+    const tail = r.out.indexOf("> text</w:t>");
+    expect(insEnd).toBeGreaterThan(-1);
+    expect(insEnd).toBeLessThan(tail);
+    expect(tail).toBeLessThan(r.out.indexOf("commentReference"));
+    expect(r.out).toContain("> after.</w:t>");
+  });
+
+  // `to = 11` is the END of `Hello World`. For the tab and break tails the
+  // special character takes flat offset [11,12), so no text hit starts at 11
+  // and `to` resolves to the end of the SAME `<w:t>` that `from = 6` splits —
+  // the #2106 shape. The zero-width tails get NO following text run on
+  // purpose: a text run starting at 11 would take `to = 11` instead (its
+  // charIndex 0), and the zero-width run in between is then the orchestrator
+  // fence's to refuse, not this direct call's. The two-`<w:t>` tail IS a text
+  // run starting at 11, so for it only `to = 8` takes the #2106 path.
+  const tails: Array<[string, string]> = [
+    ["tab + text", `<w:r><w:tab/></w:r>${textRun("tail")}`],
+    ["break + text", `<w:r><w:br/></w:r>${textRun("tail")}`],
+    ["footnote reference", `<w:r><w:footnoteReference w:id="1"/></w:r>`],
+    ["field end", `<w:r><w:fldChar w:fldCharType="end"/></w:r>`],
+    ["lastRenderedPageBreak", `<w:r><w:lastRenderedPageBreak/></w:r>`],
+    ["drawing", `<w:r><w:drawing/></w:r>`],
+    ["two-<w:t> run", `<w:r><w:t>ab</w:t><w:t>cd</w:t></w:r>`],
+  ];
+  it.each(
+    tails.flatMap(([name, tail]) => [
+      [name, 8, tail, "Wo"] as const,
+      [name, 11, tail, "World"] as const,
+    ]),
+  )("leaves a %s tail alone (to=%i)", (_name, to, tail, deleted) => {
+    const r = applyDirect(`<w:p><w:r><w:t>Hello World</w:t></w:r>${tail}</w:p>`, 6, to);
+    expect(r.result.ok).toBe(true);
+    expect(delCount(r.out)).toBe(1);
+    expect(delTexts(r.out)).toEqual([deleted]);
+    expect(r.out).toContain(tail);
+  });
+
+  it("inserts at a mid-run point without deleting anything (from === to)", () => {
+    const r = applyDirect(`<w:p><w:r><w:t>Hello World</w:t></w:r>${textRun("Z")}</w:p>`, 6, 6);
+    expect(r.result.ok).toBe(true);
+    expect(r.out).not.toContain("<w:del");
+    expect(r.out.indexOf("<w:ins")).toBeGreaterThan(-1);
+    expect(r.out.indexOf("<w:ins")).toBeLessThan(r.out.indexOf("<w:t>World</w:t>"));
+    expect(r.out).toContain(">Z</w:t>");
+    expect(r.flat).toBe("Hello XWorldZ");
+  });
+
+  // The first row's `<w:sym/>` carries no font, so it maps to "" and is
+  // zero-width: `to = 5` then resolves to the START of `beta`, a different
+  // `<w:t>` of the same run. (A MAPPED symbol takes offset 5, `to` stays in
+  // `alpha`, and only the orchestrator's fence protects that shape — see the
+  // pre-mutation checks' comment in `applySingleSuggestion`.)
+  it.each([
+    [
+      "endpoints in different <w:t> of one run",
+      `<w:p><w:r><w:t>alpha</w:t><w:sym/><w:t>beta</w:t></w:r></w:p>`,
+      0,
+      5,
+      /text segments/,
+    ],
+    [
+      "an inverted cross-run range",
+      `<w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:t>World</w:t></w:r></w:p>`,
+      7,
+      2,
+      /out of order/,
+    ],
+    [
+      "an inverted range inside one run",
+      `<w:p><w:r><w:t>Hello World</w:t></w:r>${textRun("Z")}</w:p>`,
+      6,
+      3,
+      /out of order/,
+    ],
+    [
+      "an inverted range inside one run, nothing after",
+      `<w:p><w:r><w:t>anchored text</w:t></w:r></w:p>`,
+      8,
+      4,
+      /out of order/,
+    ],
+    [
+      "an endpoint inside a hyperlink",
+      `<w:p><w:r><w:t>ab</w:t></w:r><w:hyperlink><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>`,
+      0,
+      4,
+      /nested run/,
+    ],
+  ])("refuses %s before touching the DOM", (_name, body, from, to, reason) => {
+    const r = applyDirect(body, from, to);
+    expect(r.result.ok).toBe(false);
+    expect(r.result.reason).toMatch(reason);
+    expect(r.after).toBe(r.before);
+  });
+
+  // The document-order check in `applySingleSuggestion` is unreachable through
+  // a consistent OffsetMap once the flat `from > to` check has run, so these
+  // hand it an inconsistent one (two entries swapped) to pin that it still
+  // fails closed.
+  it.each([
+    ["across runs", `<w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:t>World</w:t></w:r></w:p>`, 2, 7],
+    ["inside one <w:t>", `<w:p><w:r><w:t>Hello World</w:t></w:r></w:p>`, 3, 6],
+  ])("refuses endpoints out of document order %s", (_name, body, a, b) => {
+    const map = buildOffsetMap(wrapBody(body), new Set([a, b]));
+    const before = render(map.body, { xmlMode: true });
+    const swapped = {
+      ...map,
+      get: (o: number) => map.get(o === a ? b : o === b ? a : o),
+    };
+    const result = applySingleSuggestion(swapped, {
+      from: a,
+      to: b,
+      newText: "X",
+      author: SPAN_AUTHOR,
+      date: SPAN_DATE,
+      revisionId: 100,
+    });
+    expect(result).toEqual({ ok: false, reason: "Range endpoints are out of order" });
+    expect(render(map.body, { xmlMode: true })).toBe(before);
+  });
+
+  it("applies the higher of two suggestions in one run and keeps the paragraph tail", async () => {
+    const body =
+      `<w:p><w:r><w:t>Hello World Today</w:t></w:r>` +
+      `<w:r><w:tab/></w:r>${textRun("tail")}</w:p>`;
+    const { output, produced, flat } = await applyOrchestrated(body, [
+      { id: "s1", from: 0, to: 5, newText: "X" },
+      { id: "s2", from: 6, to: 11, newText: "X" },
+    ]);
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toHaveLength(1);
+    expect(output.rejectedDetails[0].id).toBe("s1");
+    expect(output.rejectedDetails[0].reason).toMatch(/same text run/);
+    expect(flat).toBe("Hello X Today\ttail");
+    expect(produced).toContain("<w:tab/>");
+  });
+
+  it("keeps a comment's reference and range end through the orchestrator", async () => {
+    const body =
+      `<w:p>${textRun("Before ")}<w:commentRangeStart w:id="0"/>` +
+      `<w:r><w:t>anchored text</w:t></w:r><w:commentRangeEnd w:id="0"/>` +
+      `<w:r><w:commentReference w:id="0"/></w:r>${textRun(" after.")}</w:p>`;
+    const { output, produced, flat } = await applyOrchestrated(
+      body,
+      [{ id: "s", from: 11, to: 15, newText: "X" }], // "ored"
+      commentsPart("0"),
+    );
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    expect(flat).toBe("Before anchX text after.");
+    expect(produced).toContain('<w:commentReference w:id="0"/>');
+    const tail = produced.indexOf("> text</w:t>");
+    const rangeEnd = produced.indexOf("commentRangeEnd");
+    expect(tail).toBeGreaterThan(-1);
+    expect(tail).toBeLessThan(rangeEnd);
+    expect(rangeEnd).toBeLessThan(produced.indexOf("commentReference"));
+  });
+
+  it("rejects an inverted range in the orchestrator and leaves the text alone", async () => {
+    const { output, flat, origFlat } = await applyOrchestrated(
+      `<w:p><w:r><w:t>Hello World</w:t></w:r>${textRun("Z")}</w:p>`,
+      [{ id: "inv", from: 6, to: 3, newText: "X" }],
+    );
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails).toEqual([
+      { id: "inv", reason: "Range endpoints are out of order" },
+    ]);
+    expect(flat).toBe(origFlat);
+  });
+});
+
+describe("zero-width runs at a suggestion's end (#2107)", () => {
+  /** The issue's fixture: comment 2 anchored on "resolved span", then " ". */
+  const COMMENTED =
+    `<w:p><w:commentRangeStart w:id="2"/><w:r><w:t>resolved span</w:t></w:r>` +
+    `<w:commentRangeEnd w:id="2"/><w:r><w:commentReference w:id="2"/></w:r>` +
+    `${textRun(" ")}</w:p>`;
+
+  it.each([
+    [0, 13, "resolved span"],
+    [9, 13, "span"],
+  ])("keeps the comment's reference run for [%i,%i)", (from, to, deleted) => {
+    const r = applyDirect(COMMENTED, from, to);
+    expect(r.result.ok).toBe(true);
+    expect(r.out).toContain('<w:commentReference w:id="2"/>');
+    expect(delTexts(r.out)).toEqual([deleted]);
+    const ref = r.out.indexOf("commentReference");
+    expect(r.out.indexOf("</w:ins>")).toBeLessThan(ref);
+    expect(r.out.indexOf("commentRangeEnd")).toBeLessThan(ref);
+  });
+
+  it("keeps the reference run through the orchestrator", async () => {
+    const { output, produced } = await applyOrchestrated(
+      COMMENTED,
+      [{ id: "s", from: 9, to: 13, newText: "X" }],
+      commentsPart("2"),
+    );
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    expect(produced).toContain('<w:commentReference w:id="2"/>');
+  });
+
+  it("keeps a lastRenderedPageBreak-only run in the same position", async () => {
+    const body =
+      `<w:p><w:r><w:t>resolved span</w:t></w:r>` +
+      `<w:r><w:lastRenderedPageBreak/></w:r>${textRun(" ")}</w:p>`;
+    const r = applyDirect(body, 9, 13);
+    expect(r.result.ok).toBe(true);
+    expect(r.out).toContain("<w:lastRenderedPageBreak/>");
+
+    const { output, produced } = await applyOrchestrated(body, [
+      { id: "s", from: 9, to: 13, newText: "X" },
+    ]);
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    expect(produced).toContain("<w:lastRenderedPageBreak/>");
+  });
+
+  it("keeps two consecutive inert runs (the trim pops more than one)", async () => {
+    const body =
+      `<w:p><w:r><w:t>resolved span</w:t></w:r><w:r><w:lastRenderedPageBreak/></w:r>` +
+      `<w:r><w:commentReference w:id="2"/></w:r>${textRun(" ")}</w:p>`;
+    const r = applyDirect(body, 9, 13);
+    expect(r.result.ok).toBe(true);
+    expect(r.out).toContain("<w:lastRenderedPageBreak/>");
+    expect(r.out).toContain('<w:commentReference w:id="2"/>');
+
+    const { output, produced } = await applyOrchestrated(
+      body,
+      [{ id: "s", from: 9, to: 13, newText: "X" }],
+      commentsPart("2"),
+    );
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    expect(produced).toContain("<w:lastRenderedPageBreak/>");
+    expect(produced).toContain('<w:commentReference w:id="2"/>');
+  });
+
+  it("refuses a range that spans the reference mark; a sibling still applies", async () => {
+    const body = `${COMMENTED}<w:p>${textRun("gamma")}</w:p>`;
+    const origFlat = walkDocumentBody(wrapBody(body)).flatText;
+    const g = origFlat.indexOf("gamma");
+    const { output, produced, flat } = await applyOrchestrated(
+      body,
+      [
+        { id: "spanning", from: 9, to: 14, newText: "X" },
+        { id: "sibling", from: g, to: g + 5, newText: "G" },
+      ],
+      commentsPart("2"),
+    );
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toHaveLength(1);
+    expect(output.rejectedDetails[0].id).toBe("spanning");
+    expect(output.rejectedDetails[0].reason).toMatch(/reference mark/);
+    expect(produced).toContain('<w:commentReference w:id="2"/>');
+    expect(flat).toBe(origFlat.replace("gamma", "G"));
+  });
+
+  // The trim is keyed on "contributes no flat text", not on an element-name
+  // allowlist (#2107 review): each of these runs is zero-width to the walker,
+  // so `to` resolved past it into `beta`, and an allowlist trim let it fall
+  // through both the trim and the fence and vanish with no `<w:del>`.
+  it.each([
+    [
+      "an embedded OLE object",
+      `<w:r><w:object><v:shape id="s1"/><o:OLEObject ProgID="Excel.Sheet.12" r:id="rId9"/></w:object></w:r>`,
+    ],
+    ["a carriage return", `<w:r><w:cr/></w:r>`],
+    [
+      "a positional tab",
+      `<w:r><w:ptab w:relativeTo="margin" w:alignment="right" w:leader="none"/></w:r>`,
+    ],
+    ["a field instruction", `<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>`],
+  ])("keeps a trailing %s run in place", async (_name, run) => {
+    const body = `<w:p>${textRun("Hello span")}${run}${textRun(" after")}</w:p>`;
+    const r = applyDirect(body, 6, 10);
+    expect(r.result.ok).toBe(true);
+    expect(r.out).toContain(run);
+
+    const { output, produced, flat } = await applyOrchestrated(body, [
+      { id: "s", from: 6, to: 10, newText: "X" },
+    ]);
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    expect(delTexts(produced)).toEqual(["span"]);
+    expect(flat).toBe("Hello X after");
+    // Left where it stood: after the insertion, outside every `<w:del>`, and
+    // still ahead of the following text.
+    const at = produced.indexOf(run);
+    expect(at).toBeGreaterThan(produced.indexOf("</w:ins>"));
+    expect(at).toBeLessThan(produced.indexOf("> after</w:t>"));
+    expect(produced.slice(produced.indexOf("<w:del "), produced.indexOf("</w:del>"))).not.toContain(
+      run,
+    );
+  });
+
+  // The interior half of the same rule: a run the range genuinely spans is
+  // destroyed whole, and step 4 records only its first `<w:t>`, so anything
+  // else in it is refused rather than deleted without a revision.
+  it.each([
+    ["an embedded OLE object run", `<w:r><w:object><v:shape id="s1"/></w:object></w:r>`],
+    ["a carriage-return run", `<w:r><w:cr/></w:r>`],
+    ["an mc:AlternateContent run", `<w:r><mc:AlternateContent/></w:r>`],
+  ])("refuses a range that spans %s", async (_name, run) => {
+    const body = `<w:p>${textRun("alpha")}${run}${textRun("beta")}${textRun(" gamma")}</w:p>`;
+    const { output, flat, origFlat } = await applyOrchestrated(body, [
+      { id: "s", from: 0, to: 9, newText: "X" }, // "alphabeta"
+    ]);
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails).toEqual([
+      {
+        id: "s",
+        reason:
+          "Spans an embedded object, line break or other non-text content and couldn't be applied",
+      },
+    ]);
+    expect(flat).toBe(origFlat);
+  });
+
+  it("refuses a from-run whose text shares the run with a carriage return", async () => {
+    const body = `<w:p><w:r><w:t>xy</w:t><w:cr/></w:r>${textRun("z")}</w:p>`;
+    const { output } = await applyOrchestrated(body, [{ id: "s", from: 1, to: 2, newText: "Q" }]);
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails[0]?.reason).toMatch(/non-text content/);
+  });
+
+  // PINS A CURRENT LIMITATION — flip these when it is fixed. The zero-width
+  // run sits AFTER `[0,5)`, so this refusal is a fail-closed FALSE refusal:
+  // `trimTrailingZeroWidthRuns` deliberately does not trim a run carrying a
+  // `COMPLEX_RUN_ELEMENTS` child, which keeps its pre-#2107 refusal. Do not
+  // "fix" it by letting the fence destroy such a run — that is the corruption
+  // the fence exists to prevent.
+  it.each([
+    ["a field end", `<w:r><w:fldChar w:fldCharType="end"/></w:r>`],
+    ["a footnote reference", `<w:r><w:footnoteReference w:id="1"/></w:r>`],
+  ])("still refuses a range followed by %s run (current limitation)", async (_name, run) => {
+    const { output } = await applyOrchestrated(
+      `<w:p>${textRun("alpha")}${run}${textRun("beta")}</w:p>`,
+      [{ id: "s", from: 0, to: 5, newText: "X" }],
+    );
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails[0]?.reason).toMatch(/Overlaps a footnote, drawing, field/);
+  });
+
+  // Run-keyed on purpose: `splitRun` would leave the reference in the BEFORE
+  // half, ahead of the deleted "y", so a reference sharing the from-run with
+  // text is refused even though the apply would not destroy it.
+  it("refuses a reference that shares the from-run with text", async () => {
+    const { output } = await applyOrchestrated(
+      `<w:p><w:r><w:t>xy</w:t><w:commentReference w:id="2"/></w:r>${textRun("z")}</w:p>`,
+      [{ id: "s", from: 1, to: 3, newText: "Q" }],
+      commentsPart("2"),
+    );
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails[0]?.reason).toMatch(/reference mark/);
+  });
+});

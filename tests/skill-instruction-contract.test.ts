@@ -5,6 +5,7 @@ import { WAKE_URL_PRODUCERS } from "../src/server/mcp/wake-url.js";
 import { TANDEM_PURCHASE_URL } from "../src/shared/constants.js";
 import {
   AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_STATE_UNREADABLE_MESSAGE,
   AI_REFUSAL_UNLICENSED_MESSAGE,
   AI_REFUSAL_UNLICENSED_OPENING,
   AI_REFUSAL_UNVERIFIABLE_OPENING,
@@ -167,7 +168,11 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // Also unreleased at 36: the Settings label for the launch directory is corrected to
   // "Claude working directory" (2026-10-20 docs audit).
   // Outside the wake section.
-  expect(skill).toMatch(/^version:\s*36$/m);
+  // 37 adds the `tandem_resolveRange` ambiguity note to Hard Rule 1 (#2114: `totalCount` /
+  // `ambiguous` on a hit). Outside the wake section.
+  // 37 also carries #1997: the Reacting to Document Events paragraph's background-tab caveat
+  // becomes the null rule. Outside the wake section; every wake assertion below was re-read.
+  expect(skill).toMatch(/^version:\s*37$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -544,7 +549,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "36", bodyHash: "2b4366082d99" });
+    ).toEqual({ version: "37", bodyHash: "f20c2f34428a" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -568,6 +573,17 @@ describe("shipped Tandem skill instruction contract", () => {
       [aiRefusalUnverifiableMessage("UNKNOWN"), AI_REFUSAL_UNVERIFIABLE_OPENING],
     ])("refusal message %# begins with the opening the skill keys on", (message, opening) => {
       expect(message.slice(0, opening.length + 2)).toBe(`${opening}. `);
+    });
+
+    // #2206: the fail-closed copy keys on neither opening, so the skill sends it to the
+    // "Any other message" arm (say only that AI is off; do not guess).
+    it("routes the state-unreadable refusal to the skill's no-opening arm", () => {
+      const m = AI_REFUSAL_STATE_UNREADABLE_MESSAGE;
+      expect(m.startsWith(AI_REFUSAL_UNLICENSED_OPENING)).toBe(false);
+      expect(m.startsWith(AI_REFUSAL_UNVERIFIABLE_OPENING)).toBe(false);
+      expect(m).not.toContain(AI_REFUSAL_UNVERIFIABLE_OPENING);
+      expect(m).not.toContain(TANDEM_PURCHASE_URL);
+      expect(m).not.toMatch(/installed|unlicensed|buy|purchase|activate a license/i);
     });
 
     it("names the third absent-tools cause, keyed on -32003, before the not-running step", () => {

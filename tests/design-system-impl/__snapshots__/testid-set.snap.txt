@@ -190,6 +190,8 @@ fidelity-report-save-anyway
 file-open-browse
 file-open-dialog
 file-open-error
+file-open-path-input
+file-open-path-submit
 filter-bar-toggle
 find-case-toggle
 find-close-btn

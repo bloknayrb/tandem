@@ -260,8 +260,8 @@ function normalizeApiPath(path: string): string {
  * **Non-GET, not "mutating".** The distinction is load-bearing:
  * `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A
  * rule phrased over mutation would require the same per-route inventory this
- * exists to abolish. Reads keep their existing per-route posture — `document/raw`
- * and `diagnostics` 403 by hand, while `info`, `sessions`, `backups`,
+ * exists to abolish. Reads keep their existing per-route posture — `document/raw`,
+ * `diagnostics` and `channel-permission` 403 by hand, while `info`, `sessions`, `backups`,
  * `launcher/status`, `models` and `integrations` scrub their payload for a
  * non-loopback caller instead of refusing. That scrubbing is what the LAN Host
  * accommodation (`createApiMiddleware`'s `extraHosts`) is for, and widening this
@@ -329,13 +329,15 @@ export function enforceLoopbackMutation(req: Request, res: Response, next: NextF
  *   is not registered and callers get a 404.
  */
 /**
- * Reject an implausibly large body on the license-activate route before the
- * 70 MB shared parser buffers it. A signed license is ~650 bytes; 64 KB is a
- * generous ceiling that still refuses anything that isn't a license.
+ * Reject an implausibly large body on the license-activate route before any
+ * parser buffers it. A signed license is ~650 bytes; 64 KB is a generous
+ * ceiling that still refuses anything that isn't a license.
  *
- * Checks the declared `Content-Length` only — the parser's own limit is the
- * backstop for a missing/lying header. This is defense in depth, not the
- * primary gate: the route is origin- and loopback-restricted inside the handler.
+ * Checks the declared `Content-Length` only — the pre-parse router's 64 KB
+ * `express.json` (`api-body-preparse.ts`, #1981) is the backstop for a
+ * missing/lying header. This is defense in depth, not the primary gate: the
+ * route is loopback-restricted, origin-checked when an Origin is present,
+ * inside the handler (#2205).
  */
 export function rejectOversizeLicenseBody(req: Request, res: Response, next: NextFunction): void {
   const declared = Number(req.headers["content-length"]);
@@ -386,6 +388,11 @@ export function registerApiRoutes(
   /** Launcher resume on activation (#1521). Omitted in tests → no resume. */
   licenseDeps?: ActivateLicenseDeps,
 ): void {
+  // Body limits (#1981): the parser each POST below names is a backstop. The
+  // body is read first by the pre-parse router in `api-body-preparse.ts`, at
+  // the limit in that route's `ROUTE_OWNED_BODY_PARSERS` row — or, for a route
+  // with no row, by the SDK sub-app's 100 kB `express.json`. A route-level
+  // parser added here without a row is dead code.
   // App metadata endpoint — consumed by the client's About panel
   app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
 
@@ -408,12 +415,14 @@ export function registerApiRoutes(
   // (licensee email + licenseId), non-loopback gets a PII-scrubbed subset.
   app.get(API_LICENSE_STATUS, mw, handleGetLicenseStatus);
 
-  // License activate (#1116). Gated on origin allowlist + loopback inside the
-  // handler — a license is a credential, installable only by a local caller.
+  // License activate (#1116). Gated on loopback, plus the origin allowlist when
+  // an Origin is present (the `tandem activate` CLI sends none, #2205), inside
+  // the handler — a license is a credential, installable only by a local caller.
   //
-  // `rejectOversizeLicenseBody` runs BEFORE the body parser, because the shared
-  // `largeBody` parser admits 70 MB (it exists for document uploads) and a
-  // license blob is under 2 KB.
+  // `rejectOversizeLicenseBody` runs BEFORE the body parser, because a license
+  // blob is under 2 KB. The parse that actually reads this body is the
+  // pre-parse router's (`ROUTE_OWNED_BODY_PARSERS`, #1981): the same check, then
+  // a 64 KB `express.json`; the `largeBody` below is a backstop that skips it.
   //
   // It is defense in depth ONLY: it reads the caller's own `Content-Length`, so
   // omitting that header (or using chunked transfer encoding) skips it

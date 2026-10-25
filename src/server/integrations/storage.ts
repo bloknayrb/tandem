@@ -47,9 +47,13 @@ import {
  * hint of why. The route layer branches on this class to answer 409 with a
  * message the user can act on.
  *
- * `filePath` is carried for the server-side log line ONLY. It must never reach
- * the wire: `GET /api/integrations/*` is LAN-reachable, so a resolved path in a
- * response body is out (see CLAUDE.md's MCP/Server gotcha).
+ * `filePath`, and the `message` that embeds it, must not reach a response a
+ * caller off-loopback could read: `GET /api/integrations/*` is reachable
+ * off-loopback under a non-loopback bind, so `sendInternal` there builds its own
+ * text (see CLAUDE.md's MCP/Server gotcha). The one deliberate exception is the
+ * launcher's loopback-only, origin-gated POST routes, which return `message`
+ * through `sendUnexpected` — see the note at `MAX_ERROR_DETAIL` in
+ * `launcher/api-routes.ts`.
  */
 export class IntegrationsFutureSchemaError extends Error {
   readonly found: number;

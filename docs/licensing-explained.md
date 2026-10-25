@@ -56,10 +56,13 @@ updates will come.
 **Where you paste it depends on which Tandem you're running.** On the desktop app
 the only route is Settings → License; the desktop bundle ships no `tandem`
 command, so there is nothing to run. The `tandem activate <file>` command belongs
-to the npm install, and it writes into **that install's own app-data
-directory** — so running a separately installed CLI to license a desktop app
-succeeds and changes nothing the desktop can see. Nothing reports that, which is
-why it is worth stating here. That holds even if you reach the desktop's own
+to the npm install. When a Tandem is running at the default address it hands the
+key to that Tandem, which saves it into its own app-data directory — the
+desktop's, if the desktop app is the one running (#2205). When none is running
+it writes into **that install's own app-data directory** — so running a
+separately installed CLI to license a desktop app that is not running succeeds
+and changes nothing the desktop can see. Nothing reports that, which is why it
+is worth stating here. That holds even if you reach the desktop's own
 editor through a browser (it serves the same UI on `http://127.0.0.1:3479`): the
 server there still reads the desktop's [app-data directory](glossary.md#app-data-directory), so Settings → License
 is still the only route, and it stops offering the command accordingly.
@@ -290,7 +293,11 @@ aiRefusal()  ->  null                                     (dark build, trial, li
 re-reads disk on every call like `resolveLicenseState` does — no memo, because a cache is what caused
 the mid-session-expiry bugs. `kind: "unverifiable"` means a licence file is installed but fails to
 verify; its message is the fix-or-reissue copy from `unverifiableLicenseMessage()` and **never carries
-the purchase URL**, because that reader most likely already paid. `kind: "unlicensed"` carries the URL
+the purchase URL**, because that reader most likely already paid. The fail-closed catch in
+`aiRefusal()` (resolving the state threw, e.g. a corrupt `trial.json`) is also `unverifiable`, but with
+licence-neutral copy, `AI_REFUSAL_STATE_UNREADABLE_MESSAGE` ("could not read its license state",
+restart, then email support): it cannot know a licence exists, so it never says one is installed, and
+it carries no purchase URL either (#2206). `kind: "unlicensed"` carries the URL
 in its message. On the wire, the `/api` 403 body is that object, `{ error, kind, message }`
 (`res.status(403).json({ ...extra, ...refusal })` in `ai-refusal.ts`). The MCP refusal is a JSON-RPC
 `-32003` error whose `message` is the refusal's message and whose `data` is `{ error, kind, purchaseUrl }`,
@@ -315,7 +322,7 @@ points**, each of which asks `aiRefusal()`:
 | Push / wake fan-out | `pushEvent` in `src/server/events/queue.ts` | A refused event is not forwarded and **not recorded** as pushed or as an unanswered ask. External subscribers that supplied `onRevoke` are cut off. |
 | SSE `/api/events` | `sseHandler` | 403 before `writeHead`, so `Last-Event-ID` replays nothing; a live stream is ended by its revoke hook. |
 | WS `/api/wake` | `onUpgrade`, after the pure `verifyWakeUpgrade` | 403 with a JSON body; a live socket is closed `4403 LICENSE_REQUIRED`. |
-| The launcher's Claude Code | `startInternal` and `respawn` in `src/server/launcher/supervisor.ts` | Boot, the deferred start and crash-respawn refuse by **returning** (`lastError: "unlicensed"`); relaunch and start-fresh refuse by **throwing** before anything is stopped, and the routes answer 403 `LAUNCHER_UNLICENSED`. `POST /api/license/activate` resumes a refused launcher (`resumeAfterLicence`), including one whose chip shows an earlier diagnosis; no other way of becoming licensed does. |
+| The launcher's Claude Code | `startInternal` and `respawn` in `src/server/launcher/supervisor.ts` | Boot, the deferred start and crash-respawn refuse by **returning** (`lastError: "unlicensed"`); relaunch and start-fresh refuse by **throwing** before anything is stopped, and the routes answer 403 `LAUNCHER_UNLICENSED`. `POST /api/license/activate` resumes a refused launcher (`resumeAfterLicence`), including one whose chip shows an earlier diagnosis; no other way of becoming licensed does — `tandem activate` reaches it through that route when a server is running (#2205). |
 | Local-model collaborator | `onEvent` in `src/server/local-model/collaborator.ts` | Per run: no turn, no chat write, one stderr line per refused state. |
 
 **Open, deliberately:** every browser and editor write — the seven routes Surface B gated
@@ -387,9 +394,12 @@ Two more, of the same kind:
   transient lock therefore refuses the AI only for as long as it lasts, with one side effect each: an
   SSE consumer refused in that window backs off 5 minutes before retrying, and a launcher refused at
   boot stays down until the restart chip (or an activation) brings it back. The same holds for any
-  licence that becomes valid without `POST /api/license/activate`: `tandem activate` from the CLI or a
-  `license.json` copied in by hand never reaches the launcher, so Restart is the way back. #2205
-  tracks making the CLI path resume it.
+  licence that becomes valid without `POST /api/license/activate` — a `license.json` copied in by
+  hand, or one that starts verifying after a transient read error — and for an activation after the
+  user pressed Stop (`resumeAfterLicence` leaves a user-stopped launcher alone): none of these
+  reaches the launcher, so Restart is the way back. `tandem activate` from the CLI is no longer one
+  of them while Tandem is running, because it goes through that route (#2205); with no Tandem
+  running it writes the file directly, and the next launch reads it.
 - **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
   checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
   unreachable today; revisit if that flag flips.

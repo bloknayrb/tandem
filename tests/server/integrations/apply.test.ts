@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import {
   applyConfig,
@@ -245,6 +245,114 @@ describe("detectRemovalTargets — wider than detectTargets, for removal only (#
     ]);
     // Every WRITE path uses `detectTargets`, which still never receives it.
     expect(msixPackages(detectTargets)).toEqual(["Claude_pzs8sxrjxfjjc"]);
+  });
+});
+
+describe("detectTargets / detectRemovalTargets refuse a link at the Claude Desktop config (#2163)", () => {
+  // `platformOverride: "win32"` so both Desktop branches run on Linux CI. Rows
+  // (i) and (iii) point the link at an EXISTING regular file on purpose: that is
+  // the fixture `existsSync` reports as present, so reverting the leaf probe to
+  // it turns them red. A link to a directory would fail an `isFile` test even
+  // through `statSync`, and could not tell the two apart.
+  const CONFIG = "claude_desktop_config.json";
+  let home: string;
+  let appData: string;
+  let localAppData: string;
+  let elsewhere: string;
+  let errorSpy: MockInstance<typeof console.error>;
+
+  const msixDir = (pkg: string) =>
+    path.join(localAppData, "Packages", pkg, "LocalCache", "Roaming", "Claude");
+  const opts = (extra: { force?: boolean } = {}) => ({
+    homeOverride: home,
+    appDataOverride: appData,
+    localAppDataOverride: localAppData,
+    platformOverride: "win32" as const,
+    ...extra,
+  });
+  const paths = (detect: typeof detectTargets, extra: { force?: boolean } = {}) =>
+    detect(opts(extra)).map((t) => t.configPath);
+  const errorText = () => errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-2163-detect-"));
+    appData = path.join(home, "AppData", "Roaming");
+    localAppData = path.join(home, "AppData", "Local");
+    elsewhere = path.join(home, "elsewhere");
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, "real.json"), "{}");
+    fs.mkdirSync(path.join(elsewhere, "dir"));
+    // Positive control: a regular MSIX config that must still be detected.
+    fs.mkdirSync(msixDir("Claude_good"), { recursive: true });
+    fs.writeFileSync(path.join(msixDir("Claude_good"), CONFIG), "{}");
+    fs.mkdirSync(msixDir("Claude_linked"), { recursive: true });
+    fs.mkdirSync(path.join(appData, "Claude"), { recursive: true });
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it.skipIf(!POSIX_ONLY)("(i) skips an MSIX config that is a symlink to a real file", () => {
+    const leaf = path.join(msixDir("Claude_linked"), CONFIG);
+    fs.symlinkSync(path.join(elsewhere, "real.json"), leaf);
+    const good = path.join(msixDir("Claude_good"), CONFIG);
+
+    for (const detect of [detectTargets, detectRemovalTargets]) {
+      const found = paths(detect);
+      expect(found).not.toContain(leaf);
+      expect(found).toContain(good);
+    }
+    expect(errorText()).toContain(leaf);
+    expect(errorText()).toContain("reparse point");
+  });
+
+  it("(ii) skips an MSIX config name that is a junction to a directory", () => {
+    const leaf = path.join(msixDir("Claude_linked"), CONFIG);
+    fs.symlinkSync(path.join(elsewhere, "dir"), leaf, "junction");
+
+    for (const detect of [detectTargets, detectRemovalTargets]) {
+      const found = paths(detect);
+      expect(found).not.toContain(leaf);
+      expect(found).toContain(path.join(msixDir("Claude_good"), CONFIG));
+    }
+  });
+
+  it.skipIf(!POSIX_ONLY)("(iii) skips a %APPDATA% config that is a symlink to a real file", () => {
+    const leaf = path.join(appData, "Claude", CONFIG);
+    fs.symlinkSync(path.join(elsewhere, "real.json"), leaf);
+
+    for (const detect of [detectTargets, detectRemovalTargets]) {
+      expect(detect(opts()).some((t) => t.label === "Claude Desktop")).toBe(false);
+    }
+    expect(errorText()).toContain(leaf);
+  });
+
+  it("(iii, control) still detects a regular %APPDATA% config", () => {
+    const leaf = path.join(appData, "Claude", CONFIG);
+    fs.writeFileSync(leaf, "{}");
+    const desktop = detectTargets(opts()).find((t) => t.label === "Claude Desktop");
+    expect(desktop?.configPath).toBe(leaf);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("hands a refused leaf to the removal pass's callback, every call", () => {
+    const leaf = path.join(appData, "Claude", CONFIG);
+    fs.symlinkSync(path.join(elsewhere, "dir"), leaf, "junction");
+    const refused: string[] = [];
+    detectRemovalTargets(opts(), (p) => refused.push(p));
+    detectRemovalTargets(opts(), (p) => refused.push(p));
+    // stderr is reported once per process; the callback is not deduplicated.
+    expect(refused).toEqual([leaf, leaf]);
+    expect(errorSpy.mock.calls.filter((c) => String(c[0]).includes(leaf))).toHaveLength(1);
+  });
+
+  it("(iv) force still pushes a linked leaf; the write-side refusal owns it", () => {
+    const leaf = path.join(appData, "Claude", CONFIG);
+    fs.symlinkSync(path.join(elsewhere, "dir"), leaf, "junction");
+    expect(paths(detectTargets, { force: true })).toContain(leaf);
   });
 });
 

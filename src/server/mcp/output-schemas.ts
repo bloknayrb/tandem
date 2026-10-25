@@ -344,13 +344,13 @@ export const checkInboxOutputShape = {
       .string()
       .nullable()
       .describe(
-        "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. For a document not shown in an editor (a background tab, or no browser open) nothing updates the record, so after an edit it can be sliced from stale offsets: text the user never selected.",
+        "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. It is null when the text at the recorded offsets is no longer the text the user selected — for instance after an edit to a document no editor is showing (a background tab, or no browser open), or an edit that rewrites the selection without changing its length — rather than whatever now sits there.",
       ),
     selectionAt: z
       .number()
       .nullable()
       .describe(
-        "Epoch ms when the user last made this selection; null when selectedText is null. While this document is the active editor tab, a remote edit that shifts or rewrites the selected span updates from/to and selectedText without re-stamping the time.",
+        "Epoch ms when the user last made this selection; null when selectedText is null. While this document is the active editor tab, a remote edit that shifts the selected span or changes its length updates from/to and selectedText without re-stamping the time.",
       ),
   }),
 };

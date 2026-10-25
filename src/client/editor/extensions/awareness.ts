@@ -14,8 +14,14 @@ import {
 } from "../../../shared/constants";
 import { withBrowser } from "../../../shared/origins";
 import { toFlatOffset, toPmPos } from "../../../shared/positions/types";
+import { selectionFingerprint } from "../../../shared/selection-fingerprint";
 import type { ClaudeAwareness } from "../../../shared/types";
-import { flatOffsetToPmPos, pmPosToFlatOffset, pmSelectionToFlat } from "../../positions";
+import {
+  flatOffsetToPmPos,
+  pmDocFlatText,
+  pmPosToFlatOffset,
+  pmSelectionToFlat,
+} from "../../positions";
 
 /** Exported so a test can read the decoration set back; see #1669. */
 export const awarenessPluginKey = new PluginKey("tandemAwareness");
@@ -260,11 +266,23 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
                   selectionDebounceTimeout = setTimeout(() => {
                     selectionDebounceTimeout = null;
+                    // #1997: a fingerprint of the span in the SERVER's flat
+                    // projection, so the inbox can tell when the text at these
+                    // offsets is no longer what the user selected (an edit to a
+                    // document no editor is showing re-records nothing).
+                    // `pmDocFlatText`, never `selectedText` above: `textBetween`
+                    // omits heading prefixes (#1631). Computed here rather than
+                    // per update() so a drag does not walk the doc every frame;
+                    // `state` and `flat` are the same captured snapshot.
+                    const textFingerprint = selectionFingerprint(
+                      pmDocFlatText(state.doc).slice(flat.from, flat.to),
+                    );
                     withBrowser(ydoc, () =>
                       userAwareness.set(Y_MAP_SELECTION, {
                         ...flat,
                         selectedText: truncated,
                         timestamp: stampedAt,
+                        textFingerprint,
                       }),
                     );
                   }, 150);

@@ -109,7 +109,9 @@ Each line it prints is a **wake, not a report**: the event type and an instructi
 
 ### `tandem activate <license|path>`
 
-Activates a signed license, given either the license blob itself or a path to the `.license` file you were emailed. Writes `license.json` into the [app-data directory](glossary.md#app-data-directory). Verification is offline — an Ed25519 signature checked against a public key baked into the build — so activation works air-gapped.
+Activates a signed license, given either the license blob itself or a path to the `.license` file you were emailed. Verification is offline — an Ed25519 signature checked against a public key baked into the build — so activation works air-gapped, and a key that does not verify is refused before anything is sent or written.
+
+If Tandem is running at `TANDEM_URL` (default `http://127.0.0.1:3479`; it must be `http://127.0.0.1:<port>`), the CLI hands the key to it. Tandem saves it into its own [app-data directory](glossary.md#app-data-directory) and starts its Claude again if the licence had stopped it, and the CLI prints "picked the license up straight away". Otherwise — nothing is running, something that is not Tandem answers, or `TANDEM_URL` names another host — the CLI writes `license.json` into the app-data directory itself, as before. If a running Tandem refuses the key, its reason is printed, the command exits `1` and nothing else is written.
 
 ```bash
 tandem activate ~/Downloads/tandem.license

@@ -1097,9 +1097,19 @@ function runningCwd(sup: Supervisor | null): string | null {
   return st.running ? st.cwd : null;
 }
 
-/** Cap on the error detail surfaced over the wire. These routes are loopback +
- * origin-gated, so the caller is the same user on the same machine — the detail
- * (including a checked filesystem path) is safe to return, but bound it anyway. */
+/** Cap on the error detail `sendUnexpected` surfaces over the wire.
+ *
+ * The detail can contain a resolved path: an `integrations.json` failure embeds
+ * the file's path in its message (`IntegrationsFutureSchemaError`, a validation
+ * failure, or a Node errno). Returning it is safe ONLY because every
+ * `sendUnexpected` caller — relaunch, start-fresh, start, working-directory and
+ * the settings POST — is a POST confined to this machine (`enforceLoopbackMutation`
+ * plus the handler's own `assertLoopbackForMutation`) and origin-gated, so the
+ * caller is the same user on the same machine. This is the deliberate exception
+ * to the rule in `storage.ts`'s `IntegrationsFutureSchemaError` docblock and
+ * `integrations/api-routes.ts`'s `sendInternal`: no path in a response a caller
+ * off-loopback could reach. A new caller reachable off-loopback (under a
+ * non-loopback bind) must scrub the path before using this. Bounded anyway. */
 const MAX_ERROR_DETAIL = 300;
 
 /**

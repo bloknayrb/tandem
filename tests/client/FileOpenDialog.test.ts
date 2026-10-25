@@ -5,6 +5,7 @@ import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import FileOpenDialog from "../../src/client/components/FileOpenDialog.svelte";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
+import { loadRecentFiles, recentFilePaths } from "../../src/client/utils/recentFiles.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
 import {
   API_SESSIONS,
@@ -55,7 +56,7 @@ describe("FileOpenDialog unified (#378)", () => {
     vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
   });
 
-  it("renders a single Browse button (no tab toggle, no path input)", () => {
+  it("renders a single Browse button (no tab toggle, retired #808 testids stay gone)", () => {
     const { queryByTestId, getByTestId } = render(FileOpenDialog, {
       props: { onClose: vi.fn() },
     });
@@ -559,6 +560,168 @@ describe("FileOpenDialog unified (#378)", () => {
 
       expect(queryByTestId("session-delete-confirm")).toBeNull();
       expect(getAllByTestId("session-delete")).toHaveLength(2);
+    });
+  });
+
+  // Nested INSIDE the outer describe for the same reason as the #1773 block:
+  // it inherits the fetch stub, the recent-files clear and the runtime reset.
+  describe("typed path (#1895)", () => {
+    const flush = async () => {
+      await tick();
+      await new Promise((r) => setTimeout(r, 0));
+    };
+
+    function renderDialog() {
+      const onClose = vi.fn();
+      const utils = render(FileOpenDialog, { props: { onClose } });
+      const input = utils.getByTestId("file-open-path-input") as HTMLInputElement;
+      const submit = utils.getByTestId("file-open-path-submit") as HTMLButtonElement;
+      const form = input.closest("form") as HTMLFormElement;
+      return { ...utils, onClose, input, submit, form };
+    }
+
+    it("(1) renders in the browser runtime only", () => {
+      const browser = render(FileOpenDialog, { props: { onClose: vi.fn() } });
+      expect(browser.queryByTestId("file-open-path-input")).toBeTruthy();
+      expect(browser.queryByTestId("file-open-path-submit")).toBeTruthy();
+      cleanup();
+
+      vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+      const tauri = render(FileOpenDialog, { props: { onClose: vi.fn() } });
+      expect(tauri.queryByTestId("file-open-path-input")).toBeNull();
+      expect(tauri.queryByTestId("file-open-path-submit")).toBeNull();
+    });
+
+    it("(1b) the input is labelled and Browse keeps initial focus", () => {
+      const { input, getByLabelText, getByTestId } = renderDialog();
+      expect(getByLabelText(/open a file on this computer by its full path/)).toBe(input);
+      expect(document.activeElement).toBe(getByTestId("file-open-browse"));
+    });
+
+    it("(2) submit is disabled while the field is empty or whitespace", async () => {
+      const { input, submit } = renderDialog();
+      expect(submit.disabled).toBe(true);
+      await fireEvent.input(input, { target: { value: "   " } });
+      expect(submit.disabled).toBe(true);
+      await fireEvent.input(input, { target: { value: "/a.md" } });
+      expect(submit.disabled).toBe(false);
+    });
+
+    it("(3) happy path opens the trimmed path, closes, and records it as recent", async () => {
+      vi.mocked(serverPaths.openServerPath).mockResolvedValue({ ok: true });
+      const { input, form, onClose } = renderDialog();
+      await fireEvent.input(input, { target: { value: "  /home/u/notes.md  " } });
+      await fireEvent.submit(form);
+      await flush();
+
+      expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith("/home/u/notes.md");
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(recentFilePaths(loadRecentFiles())).toContain("/home/u/notes.md");
+    });
+
+    it("(3b) clicking Open submits the form", async () => {
+      vi.mocked(serverPaths.openServerPath).mockResolvedValue({ ok: true });
+      const { input, submit, onClose } = renderDialog();
+      await fireEvent.input(input, { target: { value: "/home/u/notes.md" } });
+      await fireEvent.click(submit);
+      await flush();
+      expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith("/home/u/notes.md");
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("(4) a server failure keeps the dialog open, says why and marks the field", async () => {
+      vi.mocked(serverPaths.openServerPath).mockResolvedValue({
+        ok: false,
+        error: "File not found.",
+      });
+      const { input, submit, getByTestId, onClose } = renderDialog();
+      await fireEvent.input(input, { target: { value: "/home/u/typo.md" } });
+      submit.focus();
+      await fireEvent.click(submit);
+      await flush();
+
+      const err = getByTestId("file-open-error");
+      expect(err.textContent?.trim()).toBe("File not found.");
+      expect(err.getAttribute("role")).toBe("alert");
+      expect(onClose).not.toHaveBeenCalled();
+      expect(input.value).toBe("/home/u/typo.md");
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(input.getAttribute("aria-describedby")).toBe(err.id);
+      // Focus goes back to the field so the typo can be fixed.
+      expect(document.activeElement).toBe(input);
+      expect(recentFilePaths(loadRecentFiles())).not.toContain("/home/u/typo.md");
+    });
+
+    it("(4b) editing the path after a failure clears the error and aria-invalid", async () => {
+      vi.mocked(serverPaths.openServerPath).mockResolvedValue({
+        ok: false,
+        error: "File not found.",
+      });
+      const { input, form, queryByTestId } = renderDialog();
+      await fireEvent.input(input, { target: { value: "/home/u/typo.md" } });
+      await fireEvent.submit(form);
+      await flush();
+      expect(queryByTestId("file-open-error")).toBeTruthy();
+
+      await fireEvent.input(input, { target: { value: "/home/u/notes.md" } });
+      await tick();
+      expect(queryByTestId("file-open-error")).toBeNull();
+      expect(input.getAttribute("aria-invalid")).toBeNull();
+      expect(input.getAttribute("aria-describedby")).toBeNull();
+    });
+
+    it("(5) a relative path is refused client-side with the full-path message", async () => {
+      const { input, form, getByTestId, onClose } = renderDialog();
+      await fireEvent.input(input, { target: { value: "notes.md" } });
+      await fireEvent.submit(form);
+      await flush();
+
+      expect(vi.mocked(serverPaths.openServerPath)).not.toHaveBeenCalled();
+      expect(getByTestId("file-open-error").textContent).toMatch(/^\s*Enter a full path/);
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("(6) a quoted Windows path is unwrapped before opening", async () => {
+      vi.mocked(serverPaths.openServerPath).mockResolvedValue({ ok: true });
+      const { input, form } = renderDialog();
+      await fireEvent.input(input, { target: { value: '"C:\\Users\\me\\a.md"' } });
+      await fireEvent.submit(form);
+      await flush();
+      expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith("C:\\Users\\me\\a.md");
+    });
+
+    it("(7) a second submit while an open is in flight is ignored", async () => {
+      vi.mocked(serverPaths.openServerPath).mockReturnValue(new Promise(() => {}));
+      const { input, form, submit } = renderDialog();
+      await fireEvent.input(input, { target: { value: "/home/u/notes.md" } });
+      await fireEvent.submit(form);
+      await tick();
+      // Not disabled while loading (that would blur a focused Open button).
+      expect(submit.disabled).toBe(false);
+      expect(submit.getAttribute("aria-disabled")).toBe("true");
+      await fireEvent.submit(form);
+      await flush();
+      expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledTimes(1);
+    });
+
+    it("(8) an unrelated failure does not mark the path field invalid", async () => {
+      vi.mocked(serverPaths.openServerPath).mockResolvedValue({
+        ok: false,
+        error: "File not found.",
+      });
+      try {
+        window.localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(["C:/notes/gone.md"]));
+      } catch {
+        // happy-dom may not have storage
+      }
+      const { input, findByTestId, getByTestId } = renderDialog();
+      await fireEvent.click(await findByTestId("recent-file-0"));
+      await flush();
+      expect(getByTestId("file-open-error")).toBeTruthy();
+      expect(input.getAttribute("aria-invalid")).toBeNull();
+      expect(input.getAttribute("aria-describedby")).toBeNull();
     });
   });
 });

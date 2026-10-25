@@ -45,14 +45,23 @@ declare module "express" {
 
   type Express = Application;
 
+  // A mountable router (`app.use(router)`). `post` takes a path array as well
+  // as a single path (#1981's pre-parse router registers several at once).
+  interface Router {
+    (req: Request, res: Response, next: NextFunction): void;
+    use(...args: RouteHandler[]): Router;
+    post(path: string | string[], ...handlers: RouteHandler[]): Router;
+  }
+
   function express(): Application;
 
   namespace express {
     function json(options?: {
       limit?: string;
     }): (req: Request, res: Response, next: NextFunction) => void;
+    function Router(): Router;
   }
 
   export default express;
-  export { Application, Express, NextFunction, Request, Response };
+  export { Application, Express, NextFunction, Request, Response, Router };
 }

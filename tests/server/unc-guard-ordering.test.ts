@@ -13,15 +13,22 @@ import type { SessionData } from "../../src/shared/types.js";
 import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js";
 
 /**
- * `existsSync`, observable. It delegates to the real implementation, so nothing
- * else changes — the point is only to assert a call did NOT happen.
- * `vi.spyOn(fs, …)` cannot: an ESM module namespace is not configurable.
+ * `existsSync` and `lstatSync`, observable. Each delegates to the real
+ * implementation, so nothing else changes — the point is only to assert a call
+ * did NOT happen. `vi.spyOn(fs, …)` cannot: an ESM module namespace is not
+ * configurable. `lstatSync` is spied because the Claude Desktop leaf probe uses
+ * it since #2163; spying `existsSync` alone would make the Desktop test below
+ * vacuous.
  */
-const { _existsSyncSpy } = vi.hoisted(() => ({ _existsSyncSpy: vi.fn() }));
+const { _existsSyncSpy, _lstatSyncSpy } = vi.hoisted(() => ({
+  _existsSyncSpy: vi.fn(),
+  _lstatSyncSpy: vi.fn(),
+}));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   _existsSyncSpy.mockImplementation(actual.existsSync as never);
-  return { ...actual, existsSync: _existsSyncSpy };
+  _lstatSyncSpy.mockImplementation(actual.lstatSync as never);
+  return { ...actual, existsSync: _existsSyncSpy, lstatSync: _lstatSyncSpy };
 });
 
 /**
@@ -78,7 +85,7 @@ describe("assertPathSafe rejects UNC before any filesystem call (#1417)", () => 
   });
 });
 
-describe("detectTargets screens the Claude Desktop path before existsSync (#1417)", () => {
+describe("detectTargets screens the Claude Desktop path before any filesystem probe (#1417)", () => {
   afterEach(() => vi.restoreAllMocks());
 
   // **`platformOverride` is what makes this test able to fail.** Without it the
@@ -92,13 +99,14 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
   //
   // Same defect class as #1417 itself, and the same one CI caught in
   // `uninstall-scrub.test.ts`: a fixture that does not reach the code it names.
-  it("refuses a UNC-redirected %APPDATA% without calling existsSync", () => {
+  it("refuses a UNC-redirected %APPDATA% without calling existsSync or lstatSync", () => {
     // `%APPDATA%` can be redirected to a share by enterprise folder
     // redirection, and `existsSync` connects. `assertPathSafe` downstream is
     // one syscall too late, so the screen has to sit here — and since the
     // rejection produces the same "no Claude Desktop target" result either
     // way, the syscall is the only thing that distinguishes fixed from broken.
     _existsSyncSpy.mockClear();
+    _lstatSyncSpy.mockClear();
 
     const targets = detectTargets({
       appDataOverride: "\\\\attacker\\share\\Roaming",
@@ -123,6 +131,9 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
     // hostile root became a write target, whatever its `kind`.
     expect(targets.some((t) => t.configPath.includes("attacker"))).toBe(false);
     expect(_existsSyncSpy).not.toHaveBeenCalledWith(expect.stringContaining("attacker"));
+    // The leaf probe is `lstatSync` since #2163; without this the assertion
+    // above passes with the `desktopPrefixRejection` guard deleted.
+    expect(_lstatSyncSpy).not.toHaveBeenCalledWith(expect.stringContaining("attacker"));
     // Positive control: without it, a `detectTargets` that threw early or a
     // mis-wired spy would satisfy the negative assertion for the wrong reason.
     // Claude Code's probe is platform-independent and must still have run.
@@ -130,7 +141,7 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
   });
 });
 
-describe("detectTargets screens the home root before existsSync (#1417)", () => {
+describe("detectTargets screens the home root before any filesystem probe (#1417)", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each(NETWORK_PATHS)("refuses a UNC home (%s) without calling existsSync", (_label, home) => {
@@ -138,9 +149,11 @@ describe("detectTargets screens the home root before existsSync (#1417)", () => 
     // Desktop path, so screening it is what covers all four `existsSync` calls
     // rather than the one that happened to get reviewed.
     _existsSyncSpy.mockClear();
+    _lstatSyncSpy.mockClear();
 
     expect(detectTargets({ homeOverride: home })).toEqual([]);
     expect(_existsSyncSpy).not.toHaveBeenCalled();
+    expect(_lstatSyncSpy).not.toHaveBeenCalled();
   });
 
   it("reports the refusal as distinct from 'nothing installed'", () => {
