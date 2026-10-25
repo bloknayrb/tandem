@@ -171,13 +171,13 @@ interface SupervisorOpts {
    *
    * Wired ONLY to the confirmation timer in `spawnOnce`. It is deliberately
    * **not** wired to `RESUME_CONFIRM_MS`'s second use — the `restartIndex`
-   * backoff reset in `planAndSpawn` — which is a different timer that happens
+   * backoff reset in `armBackoffReset` — which is a different timer that happens
    * to share the constant. That second use has its own seam,
    * `backoffResetMs`.
    */
   resumeConfirmMs?: number;
   /**
-   * Override for the `restartIndex` backoff reset in `planAndSpawn`, which
+   * Override for the `restartIndex` backoff reset in `armBackoffReset`, which
    * defaults to `RESUME_CONFIRM_MS`. It exists so that reset's identity guard
    * (#2145: a predecessor's timer must not reset a successor's backoff) can be
    * tested in milliseconds. Same justification as `wakeLatchMs`.
@@ -2777,19 +2777,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
     try {
       const spawned = await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
-      // Reset backoff once a spawn runs long enough to be considered stable.
-      // Must match RESUME_CONFIRM_MS — a doomed --resume exits at ~6s, so
-      // the old 5s timer fired while the process was still alive, resetting
-      // restartIndex before the exit and permanently neutering the backoff.
-      //
-      // Only while THIS spawn is still the current child (#2145): nothing
-      // cancels this timer, so a predecessor's must not reset the backoff of a
-      // successor that has only just started. A stop nulls or replaces
-      // `child`, so the guard covers that too. A user relaunch resets the
-      // index itself (`stopAndSpawn`).
-      setTimeout(() => {
-        if (child === spawned) restartIndex = 0;
-      }, backoffResetMs);
+      armBackoffReset(spawned);
     } catch (err) {
       console.error("[Launcher] Spawn failed:", err);
       // A synchronous `spawn()` throw sets no code anywhere else (#2145), so a
@@ -2802,6 +2790,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         lastError = "spawn-failed";
       }
     }
+  }
+
+  /**
+   * Reset the backoff once `spawned` has run long enough to be considered
+   * stable. Must match RESUME_CONFIRM_MS — a doomed --resume exits at ~6s, so
+   * the old 5s timer fired while the process was still alive, resetting
+   * restartIndex before the exit and permanently neutering the backoff.
+   *
+   * Only while THIS spawn is still the current child (#2145): nothing cancels
+   * the timer, so a predecessor's must not reset the backoff of a successor
+   * that has only just started. A stop nulls or replaces `child`, so the guard
+   * covers that too. Armed for every spawn, crash restart and `stopAndSpawn`
+   * alike: a message start leaves the index alone when it starts (#2196), so
+   * without its own timer a Claude it started could run for hours and still
+   * pay the crash loop's backoff on its first crash.
+   */
+  function armBackoffReset(spawned: ChildProcess): void {
+    setTimeout(() => {
+      if (child === spawned) restartIndex = 0;
+    }, backoffResetMs);
   }
 
   async function start(): Promise<void> {
@@ -2938,10 +2946,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!byMessage) {
       breakerTripped = false;
       recentAttempts = [];
-      // The backoff restarts with the history (#2145). Before, a crash
-      // restart's backoff-reset timer reset it whenever it outlived its own
-      // spawn; that timer is now identity-guarded and never fires for a child
-      // a relaunch spawned.
+      // The backoff restarts with the history (#2145): a user relaunch is a
+      // fresh start, not one more rung of the crash loop. A message start
+      // keeps the index and leaves it to `armBackoffReset` below.
       restartIndex = 0;
       deliveryKillStreak = 0;
     }
@@ -2985,7 +2992,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (standby === "off") setStandby("awaiting-start");
     }
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
-    await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
+    armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin));
     return { spawned: true };
   }
 

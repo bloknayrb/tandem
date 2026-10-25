@@ -101,6 +101,17 @@ export const AI_REFUSAL_STATE_UNREADABLE_MESSAGE =
   `stays fully editable. Restart Tandem; if this keeps happening, email ${TANDEM_SUPPORT_EMAIL}.`;
 
 /**
+ * The activate route's error code and copy when the key WAS saved but
+ * re-reading the licence state afterwards threw (a corrupt `trial.json`, say). Not a refusal:
+ * `tandem activate` reports the key as installed and prints this line, and the
+ * Settings form shows it. The remedy is a restart, then support.
+ */
+export const LICENSE_SAVED_STATE_UNREADABLE = "LICENSE_SAVED_STATE_UNREADABLE";
+export const LICENSE_SAVED_STATE_UNREADABLE_MESSAGE =
+  "Your license was saved, but Tandem couldn't read its license state back. " +
+  `Restart Tandem to finish; if it still doesn't show as licensed, email ${TANDEM_SUPPORT_EMAIL}.`;
+
+/**
  * Why a signature check failed. Produced by `verifyLicenseSignature`.
  *
  * The distinction is the whole point: a buyer who pasted their entire

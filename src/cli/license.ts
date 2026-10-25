@@ -27,7 +27,11 @@ import { API_LICENSE_ACTIVATE } from "../shared/api-paths.js";
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
 import { TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../shared/constants.js";
 import { ERROR_CODE_BAD_ORIGIN } from "../shared/integrations/contract.js";
-import { activationErrorMessage, unverifiableLicenseMessage } from "../shared/license-copy.js";
+import {
+  activationErrorMessage,
+  LICENSE_SAVED_STATE_UNREADABLE,
+  unverifiableLicenseMessage,
+} from "../shared/license-copy.js";
 
 /**
  * Resolve the activate argument to a license blob. If it names a readable file
@@ -230,6 +234,16 @@ export async function runActivate(args: string[]): Promise<void> {
     return;
   }
 
+  if (outcome.kind === "saved-unconfirmed") {
+    // Tandem wrote the key, then could not read its licence state back. The key
+    // is installed, so this is not a failure, and a local write on top would
+    // change nothing.
+    for (const line of formatActivationSuccess(verified.meta, [`  ${outcome.message}`])) {
+      console.log(line);
+    }
+    return;
+  }
+
   if (outcome.kind === "refused") {
     // The server is up and decided. Writing locally on top would install a key
     // the running Tandem just refused, so there is no fallback here.
@@ -291,6 +305,7 @@ export function formatActivationSuccess(
 export type ServerActivateOutcome =
   | { kind: "activated"; cliSharesRoot?: boolean }
   | { kind: "refused"; status: number; message: string }
+  | { kind: "saved-unconfirmed"; message: string }
   | {
       kind: "unavailable";
       reason: "non-loopback-url" | "unreachable" | "timeout" | "not-tandem" | "origin-refused";
@@ -304,7 +319,8 @@ export type ServerActivateOutcome =
  * error mapper in `src/server/mcp/server.ts` (BAD_REQUEST, PAYLOAD_TOO_LARGE).
  * Only an answer in this set, at one of {@link TANDEM_REFUSAL_STATUSES}, counts
  * as Tandem refusing the key. A new route error code must join this set, or
- * the CLI reads it as "not Tandem" and falls back to the local write.
+ * the CLI reads it as "not Tandem" and falls back to the local write. The one
+ * non-refusal code, `LICENSE_SAVED_STATE_UNREADABLE`, is matched before it.
  */
 const TANDEM_ACTIVATE_ERRORS = new Set([
   "BAD_REQUEST",
@@ -461,6 +477,15 @@ export async function activateViaRunningServer(
       return { kind: "unavailable", reason: "origin-refused" };
     }
     return { kind: "unavailable", reason: "not-tandem" };
+  }
+
+  if (
+    res.status === 500 &&
+    isPlainObject(body) &&
+    body.error === LICENSE_SAVED_STATE_UNREADABLE &&
+    typeof body.message === "string"
+  ) {
+    return { kind: "saved-unconfirmed", message: sanitizeServerMessage(body.message) };
   }
 
   if (

@@ -1615,7 +1615,7 @@ describe("#2145 — supervisor start/restart error paths", () => {
     const spawnedAt: number[] = [];
     onSpawn = () => spawnedAt.push(Date.now());
     const { sup } = makeSupervisor({ backoffResetMs: 1_000 });
-    await sup.startFresh(cwdDir); // a user start arms no reset timer
+    await sup.startFresh(cwdDir); // child 1 exits at once, so its timer never matches
 
     exitChild(children[0], 1);
     const child2 = await nthChild(2); // attempt 1; its reset timer is armed
@@ -1663,6 +1663,37 @@ describe("#2145 — supervisor start/restart error paths", () => {
 
     expect(occurrences("(attempt 1)")).toBe(2);
     expect(occurrences("(attempt 2)")).toBe(0);
+  });
+
+  it("a Claude a message started resets the backoff once it has lived the window", async () => {
+    // A message start leaves the crash history alone (#2196), so only the new
+    // child's own timer can bring the index back to the first rung.
+    writeLauncherSettingsFile({ startMode: "auto", lifetime: "always", idleMinutes: 30 });
+    const spawnedAt: number[] = [];
+    onSpawn = () => spawnedAt.push(Date.now());
+    const { sup, emit } = makeSupervisor({ backoffResetMs: 1_000 });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    const child2 = await nthChild(2); // attempt 1
+    exitChild(child2, 1);
+    const child3 = await nthChild(3); // attempt 2: the index is now 2
+    pushJson(child3, RESULT_OK);
+    await settle();
+    await sup.updateSettings({ startMode: "off" });
+    // Child 3 must stop inside its own window, or its timer resets the index
+    // and this test passes without the fix.
+    expect(Date.now() - spawnedAt[2]).toBeLessThan(1_000);
+    await settle();
+    expect(sup.status()).toMatchObject({ running: false, standby: "off" });
+
+    emit(chatEvent());
+    const child4 = await nthChild(4);
+    await sleep(1_300); // child 4 outlives its window
+    exitChild(child4, 1);
+    await nthChild(5);
+
+    expect(occurrences("(attempt 1)")).toBe(2);
+    expect(occurrences("(attempt 3)")).toBe(0);
   });
 
   // Item 2: a start that throws before a child exists.

@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { API_LICENSE_ACTIVATE } from "../../../shared/api-paths.js";
 import {
   activationErrorMessage,
+  LICENSE_SAVED_STATE_UNREADABLE,
+  LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
   type LicenseUnverifiableCode,
 } from "../../../shared/license-copy.js";
 import { isLoopback } from "../../auth/middleware.js";
@@ -239,17 +241,21 @@ export function makeActivateLicenseHandler(
     // "your update window has ended" warning, on a build that gates nothing.
     // Same shaping as GET /api/license/status, so the two can't disagree.
     //
-    // Inside a try of its own, mapped exactly as the activation's: a throw here
-    // must still reach the buyer as a coded answer, never as an unhandled
-    // rejection (which Express would turn into an HTML 500).
+    // Inside a try of its own: a throw here must still reach the buyer as a
+    // coded answer, never as an unhandled rejection (which Express would turn
+    // into an HTML 500). Not mapped like the activation's, because license.json
+    // is already written: `INVALID_LICENSE` would make the Settings form and
+    // `tandem activate` report a failure for a key that was installed. Its own
+    // code says "saved, restart", and the CLI reads it as installed.
     try {
       const live = resolveLiveLicenseState();
       res.json(loopbackLicenseWire(live));
     } catch (err) {
-      // Sharp edge (pre-existing, very unlikely): this answers 400
-      // INVALID_LICENSE after license.json was already written, so the #2205
-      // CLI reports a failure for a key that was in fact installed.
-      sendActivationError(res, err);
+      console.error("[License] Activated, but re-reading the license state failed:", err);
+      res.status(500).json({
+        error: LICENSE_SAVED_STATE_UNREADABLE,
+        message: LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
+      });
     }
   };
 }

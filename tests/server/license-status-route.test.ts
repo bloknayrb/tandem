@@ -4,6 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as licenseState from "../../src/server/license/license-state.js";
 import type { LicenseState } from "../../src/server/license/license-types.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { canonicalize } from "../../src/server/license/verifier.js";
@@ -14,6 +15,10 @@ import {
   toLicenseStatusWire,
 } from "../../src/server/mcp/routes/license.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
+import {
+  LICENSE_SAVED_STATE_UNREADABLE,
+  LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
+} from "../../src/shared/license-copy.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
 const FULL: LicenseState = {
@@ -251,6 +256,32 @@ describe("handleActivateLicense", () => {
       openSpy.mockRestore();
       verifySpy.mockRestore();
     }
+  });
+});
+
+describe("activation that saved the key but cannot re-read the state", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("answers 500 LICENSE_SAVED_STATE_UNREADABLE, never INVALID_LICENSE", async () => {
+    // license.json is already written when the re-read throws (a corrupt
+    // trial.json, say). INVALID_LICENSE here made `tandem activate` and the
+    // Settings form report a failure for an installed key.
+    vi.spyOn(licenseState, "activateLicense").mockResolvedValue(FULL);
+    vi.spyOn(licenseState, "resolveLiveLicenseState").mockImplementation(() => {
+      throw new Error("trial.json is corrupt");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = fakeRes();
+    await handleActivateLicense(
+      activateReq({ origin: "http://127.0.0.1:5173", body: { license: "a-good-key" } }),
+      res,
+    );
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({
+      error: LICENSE_SAVED_STATE_UNREADABLE,
+      message: LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
+    });
+    expect(JSON.stringify(res.body)).not.toContain("trial.json is corrupt");
   });
 });
 

@@ -376,6 +376,23 @@ describe("runActivate — hands the key to a running server (#2205)", () => {
     expect(fs.existsSync(licenseFile())).toBe(false);
   });
 
+  it("a 500 LICENSE_SAVED_STATE_UNREADABLE is reported as installed, exit 0, no local write", async () => {
+    // Tandem wrote the key, then could not re-read its licence state. Not a
+    // refusal: the key is installed, and a local write on top would change
+    // nothing.
+    fetchSpy.mockResolvedValue(
+      jsonResponse(500, {
+        error: "LICENSE_SAVED_STATE_UNREADABLE",
+        message: "Saved\u001b, restart",
+      }),
+    );
+    await runActivate(["activate", "a-good-key"]);
+    expect(exit).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+    expect(logs).toEqual([DIRECT_LINES[0], DIRECT_LINES[1], "  Saved , restart", ""]);
+    expect(fs.existsSync(licenseFile())).toBe(false);
+  });
+
   it("caps a long refusal message", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse(400, { error: "INVALID_LICENSE", message: "x".repeat(2000) }),
