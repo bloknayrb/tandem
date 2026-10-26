@@ -27,6 +27,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  type Stats,
   statSync,
 } from "node:fs";
 import {
@@ -782,6 +783,65 @@ function descendNoFollowSync(root: string, segments: readonly string[]): string 
   return current;
 }
 
+/** Called with the path and a reason when detection refuses a config leaf. */
+export type LeafRefusedCallback = (path: string, reason: string) => void;
+
+/** Leaves already reported on stderr this process: `detectTargets` runs on
+ * every boot sweep and every wizard poll, so a persistent link would otherwise
+ * print the same line on each. The callback still fires every time. */
+const reportedRefusedLeaves = new Set<string>();
+
+/**
+ * Is there a regular file at `p`, judged WITHOUT following a link at the leaf
+ * (#2163)?
+ *
+ * `existsSync` follows a link at the leaf. A directory junction needs no
+ * privilege and can sit at a file's name, so on a junction pointed at a share
+ * the existence probe alone is an SMB touch. `lstatSync` does not follow the
+ * final component, so a link, a junction or anything that is not a regular file
+ * reads as "not present" and is logged (path only, never contents). ENOENT and
+ * ENOTDIR stay silent: they are the ordinary not-installed case.
+ *
+ * The sync, detection-side twin of the leaf half of `screenPluginFile` in
+ * `src/cli/uninstall-scrub.ts`.
+ *
+ * **Leaf only.** The folders above it are screened only where the caller walks
+ * them with {@link descendNoFollowSync} (the MSIX branch). The `%APPDATA%`
+ * branch does not, so an `lstat` of its leaf still traverses a junction planted
+ * at `%APPDATA%\Claude` (#2163 follow-up). **Residual:** Node has no no-follow
+ * open on Windows, and `readExistingTandemEntries` later `stat`s and reads a
+ * detected path, following a link swapped in after this probe; this narrows
+ * that window rather than closing it. Writes are guarded separately by
+ * {@link assertPathSafe}, which refuses a symlinked config.
+ */
+function configFilePresentNoFollow(p: string, onRefused?: LeafRefusedCallback): boolean {
+  const refuse = (reason: string): false => {
+    if (!reportedRefusedLeaves.has(p)) {
+      reportedRefusedLeaves.add(p);
+      console.error(`[Tandem] ${reason}: ${p}; Claude Desktop will not be detected there.`);
+    }
+    onRefused?.(p, reason);
+    return false;
+  };
+  let st: Stats;
+  try {
+    st = lstatSync(p);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    return refuse(`Cannot inspect (${code ?? "unknown error"})`);
+  }
+  if (st.isSymbolicLink()) {
+    // Worded for the POSIX dotfile user too: a symlinked config was never
+    // writable, because `assertPathSafe` refuses it.
+    return refuse(
+      "Refusing to follow a link or reparse point (Tandem never writes through a linked config)",
+    );
+  }
+  if (!st.isFile()) return refuse("Not a regular file");
+  return true;
+}
+
 /**
  * Why detection will refuse to look at all, or `null` if it will proceed.
  *
@@ -819,13 +879,24 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
  * would ride along into a write path. Only the uninstall scrub may import
  * this; `tests/server/integrations/detect-removal-seam.test.ts` pins that.
  */
-export function detectRemovalTargets(opts: DetectOptions = {}): DetectedTarget[] {
-  return detectWith(opts, isClaudePackageName);
+export function detectRemovalTargets(
+  opts: DetectOptions = {},
+  onLeafRefused?: LeafRefusedCallback,
+): DetectedTarget[] {
+  return detectWith(opts, isClaudePackageName, onLeafRefused);
 }
 
+/**
+ * `onLeafRefused` is positional rather than a `DetectOptions` field for the
+ * same reason {@link detectRemovalTargets} is its own function: options objects
+ * are forwarded whole. It lets the uninstall scrub record a refused Claude
+ * Desktop config in its own log and warning count (#2163); `console.error`
+ * alone would leave that run reading `0 warning(s)` with an entry left behind.
+ */
 function detectWith(
   opts: DetectOptions,
   isMsixPackage: (name: string) => boolean,
+  onLeafRefused?: LeafRefusedCallback,
 ): DetectedTarget[] {
   const home = opts.homeOverride ?? homedir();
   const targets: DetectedTarget[] = [];
@@ -866,7 +937,7 @@ function detectWith(
   const desktopPrefixRejection = rejectUnsafeWindowsPrefix(desktopConfig);
   if (desktopPrefixRejection !== null) {
     console.error(`[Tandem] Claude Desktop config path rejected: ${desktopPrefixRejection}`);
-  } else if (opts.force || existsSync(desktopConfig)) {
+  } else if (opts.force || configFilePresentNoFollow(desktopConfig, onLeafRefused)) {
     targets.push({ label: "Claude Desktop", configPath: desktopConfig, kind: "claude-desktop" });
   }
 
@@ -942,7 +1013,7 @@ function detectWith(
           continue;
         }
         const msixConfig = join(configDir, "claude_desktop_config.json");
-        if (opts.force || existsSync(msixConfig)) {
+        if (opts.force || configFilePresentNoFollow(msixConfig, onLeafRefused)) {
           const suffix = matching.length > 1 ? ` (${pkg.slice(0, 12)}…)` : "";
           targets.push({
             label: `Claude Desktop MSIX${suffix}`,

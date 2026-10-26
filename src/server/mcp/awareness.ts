@@ -5,6 +5,7 @@ import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants
 import { crossBasename } from "../../shared/cross-basename.js";
 import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
+import { selectionFingerprint } from "../../shared/selection-fingerprint.js";
 import type {
   AgentIdentity,
   Annotation,
@@ -796,6 +797,25 @@ function finiteOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * The span `[from, to)` of `text` a selection record names, or null unless it
+ * is a non-empty span lying wholly inside `text`. Narrowed BEFORE hashing so
+ * the span #1997's check hashes is exactly the span reported: `slice` wraps a
+ * negative start and truncates a fraction where `safeSlice` clamps, so a
+ * forged record could otherwise pass the check on one span and report
+ * another. The editor never writes such values.
+ */
+function recordedSpan(
+  text: string,
+  from: unknown,
+  to: unknown,
+): { from: number; to: number; text: string } | null {
+  if (typeof from !== "number" || typeof to !== "number") return null;
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return null;
+  if (from < 0 || from >= to || to > text.length) return null;
+  return { from, to, text: text.slice(from, to) };
+}
+
 /** The `activity` object for `store`, whose flat text is `fullText`. */
 function readActivity(store: DocumentStore, fullText: string): InboxActivity {
   // Current user activity. `getUserAwareness()` is typed rather than a
@@ -808,17 +828,29 @@ function readActivity(store: DocumentStore, fullText: string): InboxActivity {
   // the chat and every document's items with it, not just this field.
   const { selection, activity } = store.getUserAwareness();
 
-  const from = finiteOrNull(selection?.from);
-  const to = finiteOrNull(selection?.to);
-  const hasSelection = from !== null && to !== null && from !== to;
-  const selectedText = hasSelection ? safeSlice(fullText, from, to) : null;
+  const span = recordedSpan(fullText, selection?.from, selection?.to);
+  // #1997: report the selection only while the text at the recorded offsets
+  // is still the text the user selected. Nothing re-records the selection of
+  // a document no editor is showing (a background tab, no browser open), so
+  // an edit there used to slice whatever had moved under the old offsets. The
+  // record's own `selectedText` is NOT the snapshot: it is `textBetween`,
+  // truncated, and omits heading prefixes (#1631), so it disagrees with the
+  // flat slice on ordinary selections. The editor stores a fingerprint of the
+  // flat slice instead. Hash the WHOLE span — never `safeSlice`'s truncated
+  // copy. A record with no fingerprint (saved before #1997) fails closed.
+  const holds =
+    span !== null &&
+    typeof selection?.textFingerprint === "string" &&
+    selection.textFingerprint === selectionFingerprint(span.text);
+  const selectedText = holds ? safeSlice(fullText, span.from, span.to) : null;
   // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
   // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
   // halves of `activity` read as one snapshot while having independent
-  // ages. Null whenever `selectedText` is null, but NOT only then: a record
-  // with no numeric `timestamp` yields a real `selectedText` beside a null
-  // `selectionAt`, so a null here must never be read as "no selection".
-  const selectionAt = hasSelection ? finiteOrNull(selection?.timestamp) : null;
+  // ages. Null whenever `selectedText` is null — including when #1997's
+  // check withholds it — but NOT only then: a record with no numeric
+  // `timestamp` yields a real `selectedText` beside a null `selectionAt`, so
+  // a null here must never be read as "no selection".
+  const selectionAt = holds ? finiteOrNull(selection?.timestamp) : null;
 
   return {
     documentId: store.documentId,
@@ -1135,7 +1167,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Call it with no `documentId` to cover every open document: each comment, response and reply carries its `documentId` (the same imported comment open in two files arrives twice, told apart by it), so pass that id when acting on an item: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one, and a range from one document applied to another lands on the wrong text. Passing a `documentId` limits comments, replies and accept/dismiss responses to that document. An item whose stored record is malformed is left out, counted in `summary` and retried on the next poll. `activity` describes only the active document (`activity.documentId`). `chatMessages` holds every unread user chat message across all documents (with its documentId when it was sent from a document), and returning them marks them read. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server's side only. Does not return user notes or any other record the user has kept private — user highlights never appear here at all. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets.",
+        "Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Call it with no `documentId` to cover every open document: each comment, response and reply carries its `documentId` (the same imported comment open in two files arrives twice, told apart by it), so pass that id when acting on an item: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one, and a range from one document applied to another lands on the wrong text. Passing a `documentId` limits comments, replies and accept/dismiss responses to that document. An item whose stored record is malformed is left out, counted in `summary` and retried on the next poll. `activity` describes only the active document (`activity.documentId`). `chatMessages` holds every unread user chat message across all documents (with its documentId when it was sent from a document), and returning them marks them read. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server's side only. Does not return user notes or any other record the user has kept private — user highlights never appear here at all. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. If the text at that selection has changed since it was recorded (e.g. you edited a document no editor is showing), `selectedText` and `selectionAt` are null.",
       inputSchema: {
         documentId: z
           .string()

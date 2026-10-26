@@ -353,7 +353,7 @@ An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rat
 ```
 // First, find the text you want to edit:
 tandem_resolveRange({ pattern: "$12.4 million" })
-// Returns: { from: 180, to: 193 }
+// Returns: { from: 180, to: 193, text: "$12.4 million", occurrence: 1, totalCount: 1, ambiguous: false }
 
 // Then edit it:
 tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
@@ -877,6 +877,8 @@ tandem_annotationReply({
 
 Export the annotations Claude can see — the same records `tandem_getAnnotations` returns — as a formatted summary. Useful for review reports.
 
+The markdown lists each item's status (pending, accepted or dismissed), quotes its text in the same coordinates as `tandem_getTextContent` (heading prefixes included), and nests under each comment the replies Claude can see — the same set as the JSON `replies`. Private replies, replies on private parents and Solo-held user replies are left out.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `format` | enum | no | `markdown` (default) or `json` |
@@ -892,7 +894,7 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 
 **Returns (markdown):**
 ```json
-{ "markdown": "# Review Report\n\n## Highlights\n...", "count": 5 }
+{ "markdown": "# Document Review\n\n## Highlights\n...", "count": 5 }
 ```
 
 **Returns (json):**
@@ -1055,8 +1057,10 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 
 **Returns:**
 ```json
-{ "from": 42, "to": 55, "text": "$12.4 million" }
+{ "from": 42, "to": 55, "text": "$12.4 million", "occurrence": 1, "totalCount": 1, "ambiguous": false }
 ```
+
+`totalCount` is the number of matches of `pattern` in the document (the same matching as the search, including the zero-exact-match space fallback below), `ambiguous` is `totalCount > 1`, and `occurrence` echoes which match was returned. `ambiguous` reflects `totalCount` even when you pass an explicit `occurrence`. When it is `true`, the range is only occurrence N of `totalCount`: pass a longer unique string or an explicit `occurrence`, and check the returned `text` in context before editing or annotating. Matching is **substring** matching, so a short pattern can hit inside a longer string — `"replaceme"` matches inside `"replacement"` (#2114), and a `textSnapshot` taken from that match cannot object because it matches the same substring.
 
 The search prefers an **exact** match and falls back to the same space-separator normalization described under the range errors above, but only when the exact search finds nothing at all (#1622) — so a pattern you typed with an ordinary space still finds a span the document spells with a no-break space, and the returned `text` carries the document's real bytes.
 
@@ -1095,7 +1099,7 @@ Read content around a range without pulling the full document.
 
 Check if the user is actively editing and where their cursor is.
 
-**`cursor` is a flat text offset in UTF-16 code units** — the same coordinate system as annotation ranges, and the system `tandem_checkInbox`'s `activity.selectedText` is sliced from. Only a document change *triggers* a write — 200 ms debounced while typing, then again at the `TYPING_DEBOUNCE` typing-clear — but that last write publishes the caret's **live** position, so a caret move made inside the window is still reflected by a write the preceding edit already armed. A **remote** edit — another client, or your own `tandem_edit` — publishes no activity for the user (#1918) but does refresh `cursor` in place, because it moves both the caret and the flat coordinate system the offset is expressed in; `isTyping` and `lastEdit` are carried over untouched, and an absent record stays absent. **That refresh lives in the mounted editor and is 200 ms debounced**, so it is not a property of the record: for a background tab (the editor is unmounted under `{#key activeTab.id}`), a document no browser is showing, or a read taken within ~200 ms of your own `tandem_edit`, `cursor` is the **pre-edit** offset — the `cursor` twin of the `selectedText` carve-out below (#1997). It carries no `textSnapshot`, and `lastEdit` is the write's timestamp rather than the moment of the edit it reports. Use it as a proximity hint; take real ranges from `tandem_resolveRange` or `tandem_search`.
+**`cursor` is a flat text offset in UTF-16 code units** — the same coordinate system as annotation ranges, and the system `tandem_checkInbox`'s `activity.selectedText` is sliced from. Only a document change *triggers* a write — 200 ms debounced while typing, then again at the `TYPING_DEBOUNCE` typing-clear — but that last write publishes the caret's **live** position, so a caret move made inside the window is still reflected by a write the preceding edit already armed. A **remote** edit — another client, or your own `tandem_edit` — publishes no activity for the user (#1918) but does refresh `cursor` in place, because it moves both the caret and the flat coordinate system the offset is expressed in; `isTyping` and `lastEdit` are carried over untouched, and an absent record stays absent. **That refresh lives in the mounted editor and is 200 ms debounced**, so it is not a property of the record: for a background tab (the editor is unmounted under `{#key activeTab.id}`), a document no browser is showing, or a read taken within ~200 ms of your own `tandem_edit`, `cursor` is the **pre-edit** offset. Unlike `selectedText`, which is checked against the text it recorded (#1997, below), it carries no `textSnapshot`, and `lastEdit` is the write's timestamp rather than the moment of the edit it reports. Use it as a proximity hint; take real ranges from `tandem_resolveRange` or `tandem_search`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1168,7 +1172,7 @@ On a default poll a background document that produced nothing on its last pass, 
 - **Channel push never suppresses an inbox item.** An item is always returned; when it was also handed to a real-time consumer it carries `alreadyPushed: true` (`userActions` and `userReplies` only -- `userResponses` never carries the flag). The server can observe that it pushed an event to a consumer, but not that any model received it: an attached channel shim whose host never negotiated the channel accepts the notification and discards it. The flag is advisory in **both** directions -- it can be set for an item no model saw, and it is dropped once the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed. (Buffer eviction is size- and age-triggered but runs only when a *later* event is pushed -- there is no timer -- so on a quiet document the flag can outlive the nominal 60s age bound by an unbounded margin. Ids are also process-global rather than per-document; the same imported Word comment promoted in two files shares one id.) Never skip an item on the strength of this flag. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel -- the default configuration.)
 - `chatMessages`: new *unread user* messages from the ChatPanel sidebar. Each entry has `id`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent), `anchor` (a text selection the user attached) and `replyTo`. **There is no `author` field** — the stored `ChatMessage` carries one, but it is used as the filter (`author === "user"`) and then dropped, along with `read` and `agentIdentity` (the "Bucket 3" chat block in `tandem_checkInbox`, `src/server/mcp/awareness.ts`; the output schema omits it too — `inboxChatMessageSchema` in `src/server/mcp/output-schemas.ts`). Every entry is a user message by construction.
 - `activity.cursor` here is the same **flat text offset** (UTF-16 code units) as `tandem_getActivity`'s, the same system `activity.selectedText` beside it is sliced from. Only a document change triggers a write, but the last one (at the `TYPING_DEBOUNCE` typing-clear) publishes the caret's live position — so a caret move can be reflected without any edit. A remote edit refreshes the offset in place, leaving `isTyping` and `lastEdit` alone — in the mounted editor only, 200 ms debounced, so a background tab or an immediate read still carries the pre-edit offset. Use it as a proximity hint rather than a range endpoint.
-- `activity.selectedText` is the **most recent non-empty selection**, not necessarily the current one, and `activity.selectionAt` (#1624) is the epoch-ms timestamp of the record it was sliced from — `null` whenever `selectedText` is null, and also when the record carries no numeric timestamp, so `selectionAt: null` does not mean there is no selection. The two come from `Y_MAP_SELECTION`, a different record from the one `cursor`/`isTyping`/`lastEdit` are read from, so the halves of `activity` have independent ages. The editor writes the record after a **150 ms debounce, not the selection dwell** (1 s by default, configurable 500–3000 ms) that gates the `chat:message` selection; a selection made by clicking an annotation card or a chat anchor counts. While the document is the active editor tab, it is **cleared** (a collapsed record, so `selectedText: null`) when the selection collapses — a click, an arrow key, typing — or when a remote edit deletes the selected text. It is **not cleared** when focus leaves the editor, e.g. into the chat panel. **`selectionAt` is when the user last made the selection (#1991):** in the active editor tab, a remote edit that shifts **or rewrites** the selected span updates `from`/`to` and `selectedText` without re-stamping the time. **Only the active tab's editor maintains the record** (it is mounted under `{#key activeTab.id}`): for a background tab, or a document no browser is showing, nothing clears or remaps it, so after an edit `selectedText` is sliced from stale offsets and can be text the user never selected (#1997).
+- `activity.selectedText` is the **most recent non-empty selection**, not necessarily the current one, and `activity.selectionAt` (#1624) is the epoch-ms timestamp of the record it was sliced from — `null` whenever `selectedText` is null, and also when the record carries no numeric timestamp, so `selectionAt: null` does not mean there is no selection. The two come from `Y_MAP_SELECTION`, a different record from the one `cursor`/`isTyping`/`lastEdit` are read from, so the halves of `activity` have independent ages. The editor writes the record after a **150 ms debounce, not the selection dwell** (1 s by default, configurable 500–3000 ms) that gates the `chat:message` selection; a selection made by clicking an annotation card or a chat anchor counts. While the document is the active editor tab, it is **cleared** (a collapsed record, so `selectedText: null`) when the selection collapses — a click, an arrow key, typing — or when a remote edit deletes the selected text. It is **not cleared** when focus leaves the editor, e.g. into the chat panel. **`selectionAt` is when the user last made the selection (#1991):** in the active editor tab, a remote edit that shifts the selected span **or changes its length** updates `from`/`to` and `selectedText` without re-stamping the time. **Only the active tab's editor maintains the record** (it is mounted under `{#key activeTab.id}`), so the editor also stores a fingerprint of the selected text in the server's flat projection, and the inbox reports `selectedText` only while the text at the recorded offsets still matches it (#1997). For a background tab, or a document no browser is showing, an edit that moves or rewrites the selected text therefore makes both `selectedText` and `selectionAt` `null` rather than slicing stale offsets. They also read `null` in the active tab in three cases the mounted editor does not re-record: an edit that rewrites the span in place without moving either end, a change that moves flat offsets but not editor positions (a heading level change, or a paragraph above the selection turned into a heading, shifts the flat text by the prefix), and the ~150 ms between an edit that shifts the span and the editor's debounced re-record. A record saved by an older build carries no fingerprint and reads `null` until the user selects again.
 - The audience exclusion on `userActions` / `userResponses` is **silent on the wire**: unlike `tandem_getAnnotations` and `tandem_exportAnnotations`, this tool emits no `privateExcluded` (or `notesExcluded`) counter — `checkInboxOutputShape` declares none (`src/server/mcp/output-schemas.ts:274-298`). Withheld records simply do not appear.
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 - `modeProvenance`: who last wrote the mode key (`client` + an opaque connection tag, `server` + origin tag, `restore`, or `unknown`), when, and what the key read at that moment; `null` before any write is observed. It names the last transaction that *touched* the key, so under a lost concurrent tie it is not necessarily the writer of the reported `mode` -- compare `modeProvenance.value` against `mode`.
@@ -1271,7 +1275,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `GET /api/diagnostics` | `tandem doctor` report + host info. | loopback-only by hand (403) |
 | `GET /api/notify-stream` | SSE stream of server notifications. | — |
 | `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. `POST /api/mode/release` no longer writes the mode key: it answers 409 `MODE_NOT_TANDEM` when the room does not read Tandem, and releases nothing (#1769). | origin + loopback |
-| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | origin + loopback |
+| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | activate: loopback; origin when present (the CLI sends none, #2205), plus a required JSON `license` field. Status: scrubbed for non-loopback |
 | `POST /api/open` | Open a file by absolute path. | **one layer** |
 | `POST /api/close` | Close a document by id. | **one layer** |
 | `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |
@@ -1464,7 +1468,7 @@ Uploaded files are always read-only — there is no disk path to save to. The sy
 
 Every `/api/*` route registered today passes the CORS + Host middleware explicitly as its `mw` argument. It is threaded **per route**, not mounted path-wide — only `enforceLoopbackMutation` is `app.use("/api", …)` — so a registration that omits `mw` loses both the CORS allowlist and the Host-header DNS-rebinding check (`isHostAllowed`). True by convention, not by construction.
 
-The allowlist is three origins: `http(s)://127.0.0.1` and `http(s)://tauri.localhost` with any port, plus the Linux Tauri scheme `tauri://localhost` matched as an **exact string, never a `tauri://*` wildcard**. Bare `localhost` was narrowed out in PR #637. Absence of `Access-Control-Allow-Origin` is the denial — never `null` (#1291). Full posture: [security.md](security.md#cors-allowlist). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
+The allowlist is three origins: `http(s)://127.0.0.1` and `http(s)://tauri.localhost` with any port, plus the Linux Tauri scheme `tauri://localhost` matched as an **exact string, never a `tauri://*` wildcard**. Bare `localhost` was narrowed out in PR #637. Absence of `Access-Control-Allow-Origin` is the denial — never `null` (#1291). Full posture: [security.md](security.md#cors-allowlist). The body size limit is 70 MB for `/api/upload`, to accommodate base64-encoded .docx files (50 MB file → ~67 MB base64); the other routes' limits are in `ROUTE_OWNED_BODY_PARSERS` (`src/server/mcp/api-body-preparse.ts`), and a route not listed there gets 100 kB (#1981).
 
 ---
 
@@ -1557,7 +1561,7 @@ The shim gives this best-effort report a 3-second deadline.
 
 #### POST /api/channel-permission
 
-The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged.
+The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged. A non-string `description` is stored as `""`.
 
 **Request:**
 ```json
@@ -1570,14 +1574,14 @@ The permission relay has a 5-second deadline; failures are logged, and the reque
 
 #### GET /api/channel-permission
 
-Returns the pending requests. **No client polls this.**
+Returns the pending requests. **No client polls this.** **Loopback only.** A non-loopback caller (decided by peer address, never `Host`) gets `403 { "error": "FORBIDDEN", "message": "Loopback only." }`, and the request evicts nothing (#1884). That refusal matters only under a non-loopback bind, which no release build has; any process on this machine can still read the pending entries.
 
 **Response:**
 ```json
 { "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
 ```
 
-Stale requests (>30s) are evicted whenever either channel-permission route runs — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
+Stale requests (>30s) are evicted whenever either channel-permission route runs for an admitted caller — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
 
 #### POST /api/channel-permission-verdict
 

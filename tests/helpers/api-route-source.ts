@@ -41,13 +41,15 @@ const MUTATING_METHODS = "post|put|patch|delete";
  * would skip exactly those (the longest chains, which are the gated ones).
  */
 const REGISTRATION = new RegExp(
-  String.raw`\bapp\.(?:${MUTATING_METHODS})\(\s*([A-Za-z_][A-Za-z0-9_]*)`,
+  String.raw`\bapp\.(${MUTATING_METHODS})\(\s*([A-Za-z_][A-Za-z0-9_]*)`,
   "g",
 );
 
 export type Registration = {
   /** The route-path constant's identifier, e.g. `API_SCRATCHPAD`. */
   constant: string;
+  /** The registering method, lowercase: `post`, `put`, `patch` or `delete`. */
+  method: string;
   /** Registrar file, relative to `src/server`. */
   file: string;
   /** The full `app.method(...)` call text, parens balanced. */
@@ -108,7 +110,7 @@ export function mutatingRegistrations(): Registration[] {
     const src = readRegistrar(file);
     for (const m of src.matchAll(REGISTRATION)) {
       const openParen = src.indexOf("(", m.index);
-      out.push({ constant: m[1], file, call: balancedCall(src, openParen) });
+      out.push({ method: m[1], constant: m[2], file, call: balancedCall(src, openParen) });
     }
   }
   return out;

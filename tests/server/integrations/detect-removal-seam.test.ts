@@ -26,8 +26,11 @@ describe("detectRemovalTargets seam", () => {
     // pinned here: back to `detectTargets` and the scrub would stop reaching
     // the wider package set while every other test stayed green.
     const scrub = SRC_FILES.get("src/cli/uninstall-scrub.ts") ?? "";
+    // Since #2163 the default is a closure that also hands detection a
+    // callback, so a refused (linked) Claude Desktop config is a warning in
+    // the uninstall log rather than a silent omission.
     expect(scrub).toMatch(
-      /export async function scrubMcpConfigs\(\s*logger: ScrubLogger,\s*detect: \(\) => DetectedTarget\[\] = detectRemovalTargets,/,
+      /export async function scrubMcpConfigs\(\s*logger: ScrubLogger,\s*detect: \(\) => DetectedTarget\[\] = \(\) =>\s*detectRemovalTargets\(\{\}, \(p, reason\) => logger\.warn\(/,
     );
   });
 });

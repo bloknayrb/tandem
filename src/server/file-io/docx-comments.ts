@@ -838,8 +838,11 @@ export function injectCommentsAsAnnotations(
       // loss is invisible, exactly what the clamp comment argues against. Import
       // therefore matches CAPTURE (`docx-capture.ts`), which also carries
       // externally-supplied stored offsets and only scores. It differs from
-      // EXPORT (`docx-comment-export.ts`), which writes a file and so must SNAP
-      // outward and then reject a residual mid-pair offset loudly.
+      // EXPORT (`docx-comment-export.ts`), which writes a file and so snaps a
+      // stored offset outward off the pair. That snap is total — one outward
+      // step always clears the single boundary that splits a surrogate pair —
+      // so export's post-snap validation covers only out-of-bounds, inverted and
+      // non-integer offsets, never a residual mid-pair one.
       const result = anchoredRange(doc, from, to, undefined, {
         allowEmpty: true,
         surrogates: "ignore",

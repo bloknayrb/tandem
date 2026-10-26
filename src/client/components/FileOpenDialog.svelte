@@ -22,6 +22,7 @@ import {
   fetchSessions,
   type SessionMetadata,
 } from "../utils/sessions.js";
+import { parseTypedPath } from "../utils/typed-path.js";
 
 interface Props {
   onClose: () => void;
@@ -31,6 +32,16 @@ const { onClose }: Props = $props();
 
 let error = $state<string | null>(null);
 let loading = $state(false);
+
+// --- Open by typed path (#1895, browser build only) ---
+const pathInputId = $props.id();
+const errorId = `${pathInputId}-error`;
+let typedPath = $state("");
+let pathInputEl: HTMLInputElement | undefined = $state();
+// `error` is one shared cell: upload, recent-file and session-reopen failures
+// set it too. The path field's aria-invalid/aria-describedby key on this flag
+// instead, so an unrelated failure never reads as "your path is invalid".
+let pathErrored = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
 let dialogEl: HTMLDivElement | undefined = $state();
 let recentFiles = $state<string[]>(recentFilePaths(openableRecentFiles(loadRecentFiles())));
@@ -197,6 +208,7 @@ function handleClearRecent() {
 async function openByPath(pathToOpen: string) {
   if (loading) return;
   error = null;
+  pathErrored = false;
   loading = true;
   try {
     const result = await openServerPath(pathToOpen);
@@ -209,6 +221,35 @@ async function openByPath(pathToOpen: string) {
   } finally {
     loading = false;
   }
+}
+
+/**
+ * Submit the typed path (#1895). The early `loading` return is not redundant
+ * with the one in `openByPath`: without it, a relative-path submit during an
+ * in-flight open would overwrite that open's `error` with the parse message.
+ */
+async function submitTypedPath() {
+  if (loading) return;
+  const parsed = parseTypedPath(typedPath);
+  if (!parsed.ok) {
+    error = parsed.error;
+    pathErrored = true;
+    return;
+  }
+  await openByPath(parsed.path);
+  if (error !== null) {
+    pathErrored = true;
+    // A typo is the common failure here, so hand focus straight back to the
+    // field (a click on Open left it on the button).
+    pathInputEl?.focus();
+  }
+}
+
+/** Editing the path after a failure retires that failure's message. */
+function handlePathInput() {
+  if (!pathErrored) return;
+  pathErrored = false;
+  error = null;
 }
 
 async function browseNative() {
@@ -224,6 +265,7 @@ async function browseNative() {
 async function uploadFile(file: File) {
   if (loading) return;
   error = null;
+  pathErrored = false;
   loading = true;
   try {
     const content = await readFileForUpload(file);
@@ -381,6 +423,48 @@ function handleBrowse() {
         onchange={handleFileSelect}
         style="display: none;"
       />
+      <!-- #1895: the browser build has no native picker, and Browse uploads a
+           read-only copy; this opens the real file on disk via /api/open.
+           Open is disabled only while the field is empty, never while
+           loading: disabling the focused node blurs it to <body> (the #1773
+           note above). The `loading` guards in submitTypedPath and openByPath
+           block re-entry instead. -->
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          void submitTypedPath();
+        }}
+        style="margin-top: 12px; display: flex; flex-direction: column; gap: 6px;"
+      >
+        <label for={pathInputId} style="font-size: 11px; color: var(--tandem-fg-subtle);">
+          …or open a file on this computer by its full path
+        </label>
+        <div style="display: flex; gap: 6px;">
+          <input
+            id={pathInputId}
+            bind:this={pathInputEl}
+            class="path-input"
+            type="text"
+            bind:value={typedPath}
+            oninput={handlePathInput}
+            placeholder="/path/to/notes.md"
+            autocomplete="off"
+            spellcheck="false"
+            aria-invalid={pathErrored ? "true" : undefined}
+            aria-describedby={pathErrored && error ? errorId : undefined}
+            data-testid="file-open-path-input"
+          />
+          <button
+            type="submit"
+            class="path-submit"
+            disabled={typedPath.trim() === ""}
+            aria-disabled={loading ? "true" : undefined}
+            data-testid="file-open-path-submit"
+          >
+            Open
+          </button>
+        </div>
+      </form>
     {/if}
 
     {#if isTauriRuntime()}
@@ -389,6 +473,20 @@ function handleBrowse() {
       >
         …or drop a file anywhere in the window
       </p>
+    {/if}
+
+    <!-- Directly under the open affordances, not at the foot of the dialog:
+         with sessions expanded the foot can sit well below the path field,
+         and a typo'd path must be seen as well as announced (#1895). -->
+    {#if error}
+      <div
+        id={errorId}
+        role="alert"
+        style="margin-top: 10px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-error-border);"
+        data-testid="file-open-error"
+      >
+        {error}
+      </div>
     {/if}
 
     {#if recentFiles.length > 0}
@@ -652,15 +750,6 @@ function handleBrowse() {
         {/if}
       {/if}
     </div>
-
-    {#if error}
-      <div
-        style="margin-top: 10px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-error-border);"
-        data-testid="file-open-error"
-      >
-        {error}
-      </div>
-    {/if}
   </div>
 </div>
 
@@ -687,5 +776,48 @@ function handleBrowse() {
     color: var(--tandem-fg);
     background: var(--tandem-surface-sunk);
     outline: none;
+  }
+
+  /* Typed-path field (#1895). In the class rather than inline so the :hover,
+     :disabled and :focus-visible states can override it. */
+  .path-input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    font-family: var(--tandem-font-mono);
+    font-size: 12px;
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-muted);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+  }
+  .path-input:focus-visible {
+    outline: none;
+    border-color: var(--tandem-accent-border);
+    box-shadow: 0 0 0 1px var(--tandem-accent-border);
+  }
+  .path-submit {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    cursor: pointer;
+  }
+  .path-submit:hover:not(:disabled) {
+    background: var(--tandem-surface-sunk);
+  }
+  .path-submit:disabled {
+    cursor: default;
+    color: var(--tandem-fg-subtle);
+  }
+  .path-submit[aria-disabled="true"] {
+    cursor: wait;
+  }
+  .path-submit:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 </style>

@@ -205,7 +205,9 @@ You can open a file a few ways:
 
 **Recent files** — Click **+** in the tab bar to see recently opened files; type to filter, then click one to open it.
 
-**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: [uploaded files](glossary.md#upload) get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
+**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a copy of a file: [uploaded files](glossary.md#upload) get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. To work on the file itself, use the dialog's path field (below). The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
+
+**Open by path (browser build)** — In the **Open File** dialog, type or paste the full path of a file on this computer (for example `/Users/you/notes.md` or `C:\Users\you\notes.md`) and click **Open** or press Enter. This opens the real file on disk, not a read-only upload: Markdown and text files are editable, and HTML files open read-only as they do everywhere. If the path is wrong or the file is not a supported format, the dialog stays open and says why.
 
 **New scratchpad** — Click **+**, then **New scratchpad** (or press `Ctrl+N` in the desktop app; a browser keeps that key for itself). See [Scratchpads](#scratchpads).
 

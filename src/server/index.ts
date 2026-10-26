@@ -153,8 +153,10 @@ async function startLauncherSupervisor(): Promise<void> {
     const { createSupervisor } = await import("./launcher/supervisor.js");
     const { resolveAppDataDir } = await import("./platform.js");
     // Assigned before `start()` so a supervisor that spawned a reaper and then
-    // threw is still reachable by `shutdown()`. A non-null supervisor with a
-    // `spawn-failed` reason is the pre-existing shape here.
+    // threw is still reachable by `shutdown()`. Once a supervisor exists, the
+    // status route reads its own `lastError`, which `start()` records on a
+    // throw (#2145). `launcherUnavailableReason` (set in the catch below) is
+    // read only while the supervisor is null, i.e. when creation itself threw.
     const appData = resolveAppDataDir();
     launcherSupervisor = createSupervisor({
       integrationsBase: appData,

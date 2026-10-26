@@ -2,12 +2,14 @@ import type { Request, Response } from "express";
 import { API_LICENSE_ACTIVATE } from "../../../shared/api-paths.js";
 import {
   activationErrorMessage,
+  LICENSE_SAVED_STATE_UNREADABLE,
+  LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
   type LicenseUnverifiableCode,
 } from "../../../shared/license-copy.js";
 import { isLoopback } from "../../auth/middleware.js";
 import {
   assertLoopbackForMutation,
-  assertOriginAllowlisted,
+  assertOriginAllowlistedIfPresent,
 } from "../../integrations/api-routes.js";
 import type { Supervisor } from "../../launcher/supervisor.js";
 import { LicenseActivationError } from "../../license/activation.js";
@@ -161,8 +163,9 @@ export interface ActivateLicenseDeps {
  * POST /api/license/activate — persist a signed license blob and return the
  * freshly-resolved (full) state. Body: `{ license: string }` (the signed blob).
  *
- * Gated on origin allowlist THEN loopback (same order as handleRename, #1121):
- * a license is a credential, so only a local caller may install one. Works
+ * Gated on the origin allowlist when an Origin is present (the CLI sends none,
+ * #2205), THEN loopback (same order as handleRename, #1121): a license is a
+ * credential, so only a local caller may install one. Works
  * regardless of GATE_ENABLED — a beta tester can activate a grandfathered
  * license before the v1.0 flag-flip. `activateLicense` verifies the signature
  * and rejects unknown schema versions; a bad blob yields 400 with a generic
@@ -175,8 +178,8 @@ export function makeActivateLicenseHandler(
   deps: ActivateLicenseDeps = {},
 ): (req: Request, res: Response) => Promise<void> {
   return async (req, res) => {
-    // Same gates as before (origin allowlist THEN loopback), but with copy a
-    // buyer can act on. The default messages talk about "integration routes" and
+    // Origin allowlist when an Origin is present (the CLI sends none, #2205),
+    // then loopback — with copy a buyer can act on. The default messages talk about "integration routes" and
     // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
     // activation form verbatim, since the client passes `json.message` straight
     // through.
@@ -193,9 +196,14 @@ export function makeActivateLicenseHandler(
       "A license can only be activated on the computer running Tandem. Open Tandem on that " +
       "computer and paste the key there" +
       (npmCliSharesAppDataRoot() ? ", or run `tandem activate` on it." : ".");
-    if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
+    if (assertOriginAllowlistedIfPresent(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
     if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
 
+    // This check is now the route's preflight proof for an Origin-less caller,
+    // as in rotate-token.ts. A simple-request POST (text/plain, form-urlencoded,
+    // multipart, no Content-Type) leaves `req.body` undefined — every parser on
+    // this path is `express.json` — so it gets this 400 before `activateLicense`
+    // writes anything or the launcher is resumed. Keep it ahead of both.
     const { license: rawLicense } = (req.body ?? {}) as Record<string, unknown>;
     if (!rawLicense || typeof rawLicense !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "license is required" });
@@ -233,14 +241,21 @@ export function makeActivateLicenseHandler(
     // "your update window has ended" warning, on a build that gates nothing.
     // Same shaping as GET /api/license/status, so the two can't disagree.
     //
-    // Inside a try of its own, mapped exactly as the activation's: a throw here
-    // must still reach the buyer as a coded answer, never as an unhandled
-    // rejection (which Express would turn into an HTML 500).
+    // Inside a try of its own: a throw here must still reach the buyer as a
+    // coded answer, never as an unhandled rejection (which Express would turn
+    // into an HTML 500). Not mapped like the activation's, because license.json
+    // is already written: `INVALID_LICENSE` would make the Settings form and
+    // `tandem activate` report a failure for a key that was installed. Its own
+    // code says "saved, restart", and the CLI reads it as installed.
     try {
       const live = resolveLiveLicenseState();
       res.json(loopbackLicenseWire(live));
     } catch (err) {
-      sendActivationError(res, err);
+      console.error("[License] Activated, but re-reading the license state failed:", err);
+      res.status(500).json({
+        error: LICENSE_SAVED_STATE_UNREADABLE,
+        message: LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
+      });
     }
   };
 }

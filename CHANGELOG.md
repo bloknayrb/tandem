@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
+- **The markdown annotation export now shows each item's status and its reply thread (#2113).** Every highlight, comment and suggestion says whether it is pending, accepted or dismissed, and each comment lists the replies under it. Private replies and replies held back in Solo mode are left out, exactly as in the JSON export.
+- **Open a file by its path in the browser (#1895).** The browser build's Open File dialog has a path field: paste or type a file's full path and click **Open** to open the real file on disk instead of a read-only upload (Markdown and text are editable; HTML opens read-only, as it does everywhere). A wrong path keeps the dialog open and says what went wrong.
+- **`tandem_resolveRange` now says when your text appears more than once (#2114).** A match returns `totalCount` and `ambiguous` alongside the range, so Claude can tell it picked one of several identical passages and pick a longer, unique phrase before editing or annotating.
+
+### Changed
+
+- **Ready for v1.0: `tandem activate` hands the key to a running Tandem, which restarts its Claude by itself (#2205).** With no Tandem running at `http://127.0.0.1:3479` (or whatever `TANDEM_URL` names, as long as it is `127.0.0.1`), it writes the key directly as before, and the next launch picks it up.
+
+### Fixed
+
+- **The markdown annotation export quoted the wrong text for anything below a heading (#2112).** Each excerpt was shifted by the length of the heading markers above it, so it could start mid-word or come out empty. It now quotes the text you actually annotated.
+- **Tandem's own Claude no longer looks cleanly stopped when it failed to start (#2145).** If it could not start when Tandem launched or after a crash, because its integration config (`integrations.json`) could not be read or the launcher program was missing, the status bar now says it isn't running and offers Restart. A restart also no longer resets its back-off early, and an old process's error is no longer counted against the new one.
+- **`tandem_checkInbox` no longer reports a selection you never made (#1997).** When the text at your last recorded selection has changed, for example because your AI edited a document in a background tab, `activity.selectedText` and `selectionAt` are now null rather than whatever text had moved under the old position. **Bound:** in the active tab they can also read null briefly, for about 150 ms after an edit that shifts the selection. **Bound:** a selection saved before this version reads null until you select again.
+- Pasting text that contains markdown such as `**bold**` no longer colours the text after the paste as yours in the authorship overlay (#1523).
+- Opening or uploading a document from the browser, and committing a large source-view edit, no longer fails for content over about 100 kB (#1981).
+
+### Security
+
+- Claude Desktop config detection and `tandem --uninstall-scrub`'s log no longer follow a link or junction planted at the file (#2163). A Claude Desktop config that is itself a symlink (for example one managed by a dotfiles tool) is no longer offered in setup; Tandem never wrote through one, and the uninstall scrub now reports it as a warning instead of an error.
+
+### Internal
+
+- **`.docx` tracked-change apply no longer deletes the rest of a paragraph or a comment's reference mark, and refuses an inverted range (#2106, #2107).** A suggestion whose range spans a Word comment's reference mark is now refused ("Spans a Word comment's reference mark") rather than deleting the mark without a record, and so is one spanning an embedded object, line break or other non-text content ("Spans an embedded object, line break or other non-text content"). Such content just past the range's end is now kept in place. `.docx` ships dark, so nothing in the shipped app changes.
 
 ### Changed
 

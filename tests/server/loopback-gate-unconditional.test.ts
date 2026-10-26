@@ -114,12 +114,13 @@ describe("assertLoopbackForMutation — gates regardless of configuration (#1293
   });
 
   it("passes a caller-supplied friendly message through on the unconditional path", () => {
-    // `mcp/routes/license.ts:146` is the only caller using the override, because
-    // its 403 is read by a *buyer* in the activation form. This had NO coverage:
-    // `license-status-route.test.ts` hardcodes remoteAddress 127.0.0.1 in
-    // `activateReq`, so its friendly-message test exercises
-    // assertOriginAllowlisted's override instead, and would stay green if this
-    // path dropped the argument entirely.
+    // `mcp/routes/license.ts` (`makeActivateLicenseHandler`) is the only caller
+    // using the override, because its 403 is read by a *buyer* in the activation
+    // form. `license-status-route.test.ts` hardcodes remoteAddress 127.0.0.1 in
+    // `activateReq`, so its friendly-message tests exercise the origin helper's
+    // override (since #2205, `assertOriginAllowlistedIfPresent` with a present,
+    // non-allowlisted Origin) and would stay green if this path dropped the
+    // argument entirely.
     withFlag(undefined, () => {
       const { response, body } = res();
       const friendly = "Activate Tandem on the computer running it.";

@@ -24,6 +24,7 @@ import {
   notifyTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
 } from "./awareness.js";
+import { isLoopbackRequest } from "./routes/_shared.js";
 
 const pendingPermissions = new Map<
   string,
@@ -193,7 +194,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // prompt. There is no return leg — see docs/architecture.md and ADR-047 §3.
   // The prompt's `input_preview` (file bodies, command lines) is discarded on
   // arrival — the shim no longer sends it either (#1884) — while `description`,
-  // the tool-level summary line, IS stored and served by the GET below. It
+  // the tool-level summary line, IS stored, and served by the GET below to
+  // loopback callers only (#1884). It
   // stays resident until a later request's sweep evicts it: `PERMISSION_TTL_MS`
   // is the age at which a sweep evicts, not a residency bound, because nothing
   // sweeps on a timer (see `sweepStalePermissions`).
@@ -211,7 +213,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     pendingPermissions.set(requestId, {
       requestId,
       toolName,
-      description: (description as string) ?? "",
+      description: typeof description === "string" ? description : "",
       createdAt: Date.now(),
     });
     // `toolName`/`requestId` are `typeof … === "string"`-guarded above, so the
@@ -223,8 +225,17 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     res.json({ ok: true });
   });
 
-  // Browser polls for pending permission requests
-  app.get(API_CHANNEL_PERMISSION, apiMiddleware, (_req: Request, res: Response) => {
+  // Loopback-only read of pending requests (#1884). No client polls this. A
+  // non-loopback peer would learn which tool Claude Code is asking to run and
+  // when (an activity trace, like launcher/status's `busy`), plus the
+  // `requestId`s the verdict carve-out deletes by, so it is refused, not
+  // scrubbed. The refusal runs before the sweep, so a refused caller evicts
+  // nothing. Peer address only, never Host.
+  app.get(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
+    if (!isLoopbackRequest(req)) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
+      return;
+    }
     sweepStalePermissions();
     res.json({ pending: Array.from(pendingPermissions.values()) });
   });

@@ -14,6 +14,11 @@
  * serves or logs `inputPreview`, which carries Claude Code prompt content —
  * file bodies for a `Write`, the command line for a `Bash`. See #1884.
  *
+ * And they pin #1884's partial fix: the GET refuses a non-loopback caller
+ * (403, decided by peer address). That refusal is groundwork for ADR-056's
+ * non-loopback-bind re-enable, not a same-machine control — a local process
+ * chooses its own source address and can always connect from 127.0.0.1.
+ *
  * `pendingPermissions` is module-level with no reset export, so every spec here
  * shares one map. Each opens by pushing a MONOTONIC fake clock past
  * `PERMISSION_TTL_MS` and issuing one draining `GET`, and `beforeEach` asserts
@@ -81,12 +86,30 @@ function makeRes() {
 
 let routes: Map<string, Handler[]>;
 
-/** Invoke the last handler registered for `key` (the route's own body). */
-function call(key: string, body: unknown): ReturnType<typeof makeRes> {
+/** The peer a request arrives from: a socket shape, or `null` for no socket. */
+type Peer = { remoteAddress?: string } | null;
+
+const LOOPBACK_PEER: Peer = { remoteAddress: "127.0.0.1" };
+
+/**
+ * Invoke the last handler registered for `key` (the route's own body).
+ *
+ * `peer` defaults to loopback so every pre-#1884 spec (and the `beforeEach`
+ * drain) stays a loopback call. A default parameter would also turn a passed
+ * literal `undefined` into loopback, silently converting an "unknown address"
+ * row into an admitted one — so that argument is refused outright: pass
+ * `{ remoteAddress: undefined }` (a socket with no address) or `null` (no
+ * socket) instead.
+ */
+function call(key: string, body: unknown, ...rest: [peer?: Peer]): ReturnType<typeof makeRes> {
+  if (rest.length === 1 && rest[0] === undefined) {
+    throw new Error("call(): pass a Peer shape or null, never a literal undefined");
+  }
+  const peer = rest.length === 0 ? LOOPBACK_PEER : (rest[0] as Peer);
   const handlers = routes.get(key);
   if (!handlers || handlers.length === 0) throw new Error(`no route registered for ${key}`);
   const res = makeRes();
-  handlers[handlers.length - 1]!({ body }, res);
+  handlers[handlers.length - 1]!(peer === null ? { body } : { body, socket: peer }, res);
   return res;
 }
 
@@ -141,6 +164,8 @@ describe("channel permission relay (#1794)", () => {
     ]);
     expect(entry.requestId).toBe(REQUEST_ID);
     expect(entry.toolName).toBe("Bash");
+    // Still served whole to a loopback caller (#1884 refuses, never scrubs).
+    expect(entry.description).toBe(description);
     expect(entry.inputPreview).toBeUndefined();
 
     // The other half of "no log line carries prompt content": the stderr line
@@ -208,5 +233,119 @@ describe("channel permission relay (#1794)", () => {
     // `Map<string, {...}>` type declaration survives.
     const src = readFileSync(join(__dirname, "../../src/server/mcp/channel-routes.ts"), "utf-8");
     expect(src).not.toContain("inputPreview");
+  });
+});
+
+describe("GET is loopback-only (#1884)", () => {
+  const SENTINEL_TOOL = "SENTINEL_TOOL";
+  const SENTINEL_DESCRIPTION = "SENTINEL_LAN_DESCRIPTION";
+  const FORBIDDEN = { error: "FORBIDDEN", message: "Loopback only." };
+
+  function postSentinel(requestId: string) {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(
+      call("POST /api/channel-permission", {
+        requestId,
+        toolName: SENTINEL_TOOL,
+        description: SENTINEL_DESCRIPTION,
+      })._body,
+    ).toEqual({ ok: true });
+  }
+
+  // `127.0.0.2` pins `isLoopback`'s classification of the rest of 127/8 (it is
+  // not loopback there), not a protection: a same-machine caller can always
+  // connect from 127.0.0.1 instead.
+  it.each<[string, Peer]>([
+    ["LAN IPv4", { remoteAddress: "192.168.1.50" }],
+    ["private 10/8", { remoteAddress: "10.0.0.7" }],
+    ["IPv4-mapped LAN", { remoteAddress: "::ffff:192.168.1.50" }],
+    ["127.0.0.2 (classification only)", { remoteAddress: "127.0.0.2" }],
+    ["socket with no address", { remoteAddress: undefined }],
+    ["no socket at all", null],
+  ])("refuses %s with 403 and leaks nothing", (_label, peer) => {
+    const requestId = "req_lan_refusal_spec";
+    postSentinel(requestId);
+
+    const refused = call("GET /api/channel-permission", undefined, peer);
+    expect(refused._status).toBe(403);
+    expect(refused._body).toEqual(FORBIDDEN);
+    const serialized = JSON.stringify(refused._body);
+    expect(serialized).not.toContain(SENTINEL_TOOL);
+    expect(serialized).not.toContain(SENTINEL_DESCRIPTION);
+    expect(serialized).not.toContain(requestId);
+
+    // Positive control on the same map: the entry is still there, unaltered,
+    // so the absence above is the gate's doing, not an empty map's.
+    const admitted = call("GET /api/channel-permission", undefined, LOOPBACK_PEER);
+    expect(admitted._status).toBe(200);
+    expect((admitted._body as { pending: unknown[] }).pending).toEqual([
+      expect.objectContaining({
+        requestId,
+        toolName: SENTINEL_TOOL,
+        description: SENTINEL_DESCRIPTION,
+      }),
+    ]);
+  });
+
+  it.each(["127.0.0.1", "::1", "::ffff:127.0.0.1"])("admits loopback peer %s", (address) => {
+    const requestId = "req_loopback_admit_spec";
+    postSentinel(requestId);
+
+    const res = call("GET /api/channel-permission", undefined, { remoteAddress: address });
+    expect(res._status).toBe(200);
+    const { pending } = res._body as { pending: Array<Record<string, unknown>> };
+    expect(pending).toHaveLength(1);
+    const entry = pending[0]!;
+    expect(Object.keys(entry).sort()).toEqual([
+      "createdAt",
+      "description",
+      "requestId",
+      "toolName",
+    ]);
+    expect(entry).toMatchObject({
+      requestId,
+      toolName: SENTINEL_TOOL,
+      description: SENTINEL_DESCRIPTION,
+    });
+  });
+
+  it("a refused GET evicts nothing (the refusal runs before the sweep)", () => {
+    const base = Date.now();
+    postSentinel(REQUEST_ID);
+
+    // At this moment a sweep WOULD evict the entry. A refused caller must not
+    // trigger it.
+    vi.setSystemTime(base + PERMISSION_TTL_MS + 1);
+    expect(
+      call("GET /api/channel-permission", undefined, { remoteAddress: "192.168.1.50" })._status,
+    ).toBe(403);
+
+    // Read back at a moment when the loopback GET's own sweep spares it.
+    vi.setSystemTime(base + 1);
+    const listed = call("GET /api/channel-permission", undefined)._body as {
+      pending: Array<{ requestId: string }>;
+    };
+    expect(listed.pending.map((p) => p.requestId)).toEqual([REQUEST_ID]);
+
+    // Leave the clock ahead of the entry so the next spec's drain works.
+    vi.setSystemTime(base + PERMISSION_TTL_MS + 1);
+  });
+
+  it.each<[string, unknown]>([
+    ["an object", { nested: "x" }],
+    ["an array", ["x"]],
+    ["a number", 42],
+  ])("stores a non-string description (%s) as an empty string", (_label, description) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    call("POST /api/channel-permission", {
+      requestId: REQUEST_ID,
+      toolName: "Bash",
+      description,
+    });
+    const { pending } = call("GET /api/channel-permission", undefined)._body as {
+      pending: Array<Record<string, unknown>>;
+    };
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.description).toBe("");
   });
 });

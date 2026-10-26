@@ -194,9 +194,12 @@ tandem activate <paste-the-license-key>
 tandem activate ./jane.license
 ```
 
-A separately installed CLI writes its own [app-data directory](glossary.md#app-data-directory), so running
-`tandem activate` to license a desktop app succeeds and changes nothing the
-desktop can see (see [licensing-explained.md](licensing-explained.md)). On an npm
+When a Tandem is running at the default address (`http://127.0.0.1:3479`), the
+CLI hands the key to it and that Tandem saves it into its own app-data directory
+— including a running desktop app (#2205). When none is running, a separately
+installed CLI writes its own [app-data directory](glossary.md#app-data-directory), so running
+`tandem activate` to license a desktop app that is not running succeeds and
+changes nothing the desktop can see (see [licensing-explained.md](licensing-explained.md)). On an npm
 install, confirm with `tandem license` — it prints `Status: licensed`, the licensee, and
 `Updates: all future updates included` (a hand-signed `--expires` key shows its
 window instead) even while enforcement still ships dark.

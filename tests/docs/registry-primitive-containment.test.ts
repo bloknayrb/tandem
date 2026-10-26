@@ -142,7 +142,9 @@ describe("registry primitives stay out of production code", () => {
     }
   });
 
-  it("exports exactly the surface ADR-033 sanctions, and nothing else", async () => {
+  it("exports exactly the surface ADR-033 sanctions, and nothing else", {
+    timeout: timeoutMs(45_000, 120_000),
+  }, async () => {
     // Pinned deliberately as an exact set rather than an absence check. See
     // half 3 in this file's header: an absence check keyed to known names is
     // defeated by a new name, and the one file that can introduce a new

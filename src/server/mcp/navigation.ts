@@ -176,8 +176,9 @@ export function findOccurrence(
  * Count how many times `pattern` occurs in `fullText`, using the SAME literal
  * (regex-escaped) matching as `findOccurrence` so the count and a subsequent
  * resolve can never disagree. `findOccurrence` only exposes the total on its
- * miss path; callers that need the count on a HIT (e.g. the local-model
- * occurrence-clamp, #1123) use this instead.
+ * miss path; callers that need the count on a HIT (the local-model
+ * occurrence-clamp, #1123, and `tandem_resolveRange`'s `totalCount` / `ambiguous`
+ * fields, #2114) use this instead.
  *
  * **The pairing covers the {@link normalizeSpaceClass} fallback (#1622), and both
  * halves fall back only on an exact count of ZERO.** One trigger, evaluated the
@@ -305,7 +306,12 @@ export function registerNavigationTools(server: McpServer): void {
       'starts or ends in heading markup such as "## " (including a range ending at the newline before a ' +
       "heading), or, for tandem_edit or a suggestion, runs through it — they refuse those. It describes " +
       "the document at call " +
-      "time — pass the returned text as textSnapshot on the follow-up call to detect concurrent edits.",
+      "time — pass the returned text as textSnapshot on the follow-up call to detect concurrent edits. " +
+      "The result also carries occurrence (the 1-based match returned), totalCount (all matches of the " +
+      "pattern) and ambiguous (true when totalCount > 1). When ambiguous, the returned range is only " +
+      "occurrence N of totalCount: before editing or annotating, pass a longer unique string or an " +
+      "explicit occurrence, and check the returned text in context. Matching is substring matching, so a " +
+      'short pattern can hit inside a longer string ("replaceme" inside "replacement").',
     {
       pattern: z.string().describe("Literal text to find (not a regex; case-sensitive)"),
       occurrence: z.number().optional().describe("Which occurrence to return, 1-based (default 1)"),
@@ -322,7 +328,8 @@ export function registerNavigationTools(server: McpServer): void {
       const fullText = store.getText();
       const result = findOccurrence(fullText, pattern, occurrence);
       if ("error" in result) return mcpError("INVALID_RANGE", result.error);
-      return mcpSuccess(result);
+      const totalCount = countOccurrences(fullText, pattern);
+      return mcpSuccess({ ...result, occurrence, totalCount, ambiguous: totalCount > 1 });
     }),
   );
 

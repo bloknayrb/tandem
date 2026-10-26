@@ -63,10 +63,10 @@ describe("takeWakeAdvisory", () => {
     expect(takeWakeAdvisory(0)).toBeNull();
   });
 
-  it("fails CLOSED when mode is indeterminate", () => {
-    // Matches every other push-path gate: a lost or not-yet-broadcast mode key
-    // means "we may have been in Solo and no longer know", so the speak branch
-    // is the one it must never take.
+  it("is currently silent when mode is indeterminate (not a fail-closed guarantee, #1953)", () => {
+    // Pins today's behaviour, not a settled policy: an indeterminate read is
+    // silent here, unlike the push gates' fail-closed rule. Whether it should
+    // speak is an open decision (#1953). If that flips, this test flips with it.
     // `null` is this helper's "indeterminate": it DELETES the mode key, which is
     // the lost/not-yet-broadcast state the comment above describes.
     setCtrlMode(null);

@@ -83,6 +83,28 @@ describe("the reply seam — write-time length bound", () => {
   });
 });
 
+describe("the reply seam — not-owned remedy (#2216)", () => {
+  it("keeps the MCP / API wording byte-identical when no override is passed", () => {
+    expect(describeReplyWriteRefusal({ kind: "not-owned", author: "user" })).toStrictEqual({
+      code: "NOT_OWNED",
+      message:
+        "Claude can only reply on annotations it authored; answer a user's comment with tandem_reply or a fresh tandem_comment",
+    });
+  });
+
+  it("replaces only the remedy when one is passed", () => {
+    expect(
+      describeReplyWriteRefusal(
+        { kind: "not-owned", author: "user" },
+        { notOwnedRemedy: "do the other thing" },
+      ),
+    ).toStrictEqual({
+      code: "NOT_OWNED",
+      message: "Claude can only reply on annotations it authored; do the other thing",
+    });
+  });
+});
+
 /**
  * #1626 — the same bound, PER FIELD, on a reply's `suggestedText`.
  *
