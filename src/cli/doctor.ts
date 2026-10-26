@@ -355,6 +355,66 @@ function checkNodeVersion(r: Recorder): void {
   else r.fail(result.message, result.fix);
 }
 
+// ── Check: Node.js security release ─────────────────────────────────
+
+/**
+ * The newest Node.js security release doctor knows about: the first patched
+ * version on each line it fixed. Separate from {@link MIN_NODE_VERSION}, which
+ * is a build floor. The desktop app ships its own Node, so this row is for the
+ * npm global install. `fixedIn` must stay ascending: {@link evaluateNodeSecurity}
+ * takes the first entry whose major is >= the running one, so a line it does not
+ * list (odd, end-of-life, pre-22) got no fix and is pointed at the next line up.
+ * Replace the whole object, and its tests, at the next security release (#2305).
+ */
+export const NODE_SECURITY_RELEASE = {
+  name: "October 2026 Node.js security release (CVE-2026-111497, Brotli decoder RCE)",
+  fixedIn: ["22.23.4", "24.22.1", "26.12.1"],
+};
+
+const SECURITY_FLOORS = NODE_SECURITY_RELEASE.fixedIn.map((version) => ({
+  version,
+  parsed: parseNodeVersion(version) as ParsedNodeVersion,
+}));
+
+/** Warn, never fail: the install runs. An unreadable version is `node-version`'s to fail. */
+export function evaluateNodeSecurity(version: string): {
+  status: "pass" | "warn";
+  message: string;
+  fix?: string;
+} {
+  const { name } = NODE_SECURITY_RELEASE;
+  const parsed = parseNodeVersion(version);
+  if (!parsed) {
+    return { status: "pass", message: `Node.js ${version} — version unreadable; see node-version` };
+  }
+  // The first fixed line at or above this one: the same line, or the next line up.
+  const floor = SECURITY_FLOORS.find((f) => f.parsed.major >= parsed.major);
+  if (!floor) {
+    return { status: "pass", message: `Node.js ${version} is newer than the ${name}` };
+  }
+  if (floor.parsed.major !== parsed.major) {
+    return {
+      status: "warn",
+      message: `Node.js ${version} — this release line received no fix in the ${name}`,
+      fix: `Upgrade to Node.js ${floor.version} or later from https://nodejs.org`,
+    };
+  }
+  if (isOlderTriplet(parsed, floor.parsed)) {
+    return {
+      status: "warn",
+      message: `Node.js ${version} — unpatched against the ${name}`,
+      fix: `Upgrade to Node.js ${floor.version} or later from https://nodejs.org`,
+    };
+  }
+  return { status: "pass", message: `Node.js ${version} includes the ${name}` };
+}
+
+function checkNodeSecurity(r: Recorder): void {
+  const result = evaluateNodeSecurity(process.version);
+  if (result.status === "pass") r.pass(result.message);
+  else r.warn(result.message, result.fix);
+}
+
 // ── Check: node_modules exists ──────────────────────────────────────
 
 /**
@@ -3656,6 +3716,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   const cliAvailable = makeCliAvailability();
 
   await r.check("node-version", () => checkNodeVersion(r));
+  await r.check("node-security", () => checkNodeSecurity(r));
   await r.check("node-modules", () => checkNodeModules(r, repo, cwd));
   if (repo === "unreadable") {
     // A package.json we cannot read also disables npm-staleness and

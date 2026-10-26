@@ -176,6 +176,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true
           cache: npm
 
       - run: npm ci --ignore-scripts
@@ -252,6 +253,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true
           cache: npm
 
       - run: npm ci --ignore-scripts
@@ -312,6 +314,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true
 
       - name: Bundled Node pin is current
         run: node scripts/ci/node-sidecar-pin.mjs
@@ -325,6 +328,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true
           cache: npm
 
       # Pinned rather than trusting the runner image to expose a Python at all.

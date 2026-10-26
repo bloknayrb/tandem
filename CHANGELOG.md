@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`tandem doctor` warns when your Node.js is missing the October 2026 security fixes (CVE-2026-111497, a Brotli decoder flaw that can allow remote code execution).** If Tandem runs on your own Node.js (an npm or npx install), doctor now names the version to upgrade to: 22.23.4, 24.22.1 or 26.12.1 or later, or, if your release line got no fix, the next fixed line up. It is a warning, not a failure. The desktop app ships its own Node.js, 22.23.4 as of this release, so desktop users need do nothing.
 - Claude Desktop config detection and `tandem --uninstall-scrub`'s log no longer follow a link or junction planted at the file (#2163). A Claude Desktop config that is itself a symlink (for example one managed by a dotfiles tool) is no longer offered in setup; Tandem never wrote through one, and the uninstall scrub now reports it as a warning instead of an error.
 
 ### Internal
