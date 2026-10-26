@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`.docx` tracked-change apply no longer deletes the rest of a paragraph or a comment's reference mark, and refuses an inverted range (#2106, #2107).** A suggestion whose range spans a Word comment's reference mark is now refused ("Spans a Word comment's reference mark") rather than deleting the mark without a record, and so is one spanning an embedded object, line break or other non-text content ("Spans an embedded object, line break or other non-text content"). Such content just past the range's end is now kept in place. `.docx` ships dark, so nothing in the shipped app changes.
 
+### Changed
+
+- **Tandem tells AI clients which of its tools are safe to repeat.** Eight tools that only read your documents are now marked read-only, and three that write but end in the same state when repeated are marked safe to repeat. Two of those three look like reads but are not marked read-only, because they also save small fixes: `tandem_getAnnotations` (it repairs annotation positions) and `tandem_status` (it can set Claude's status). On current Claude Code, if the connection drops in the middle of one of these calls, the call is sent again instead of failing; edits, comments and replies are never re-sent. Clients that decide approval from these marks, such as Codex running unattended, now have what they need to let a read through without asking. `tandem_checkInbox` is deliberately left unmarked, because sending it twice could lose your messages.
+
 ## [0.29.0] - 2026-10-22
 
 ### What's New

@@ -40,6 +40,7 @@ import {
   withErrorBoundary,
   withStructuredErrors,
 } from "./response.js";
+import { IDEMPOTENT_OVERWRITE_TOOL, IDEMPOTENT_WRITE_TOOL } from "./tool-annotations.js";
 import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
 
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
@@ -373,6 +374,7 @@ export function registerAnnotationTools(server: McpServer): void {
   server.registerTool(
     "tandem_getAnnotations",
     {
+      annotations: IDEMPOTENT_WRITE_TOOL,
       description:
         'Read the annotations on a document, optionally filtered by author/type/status, each comment with its visible replies. Only records shared with you are returned. User notes are private and excluded, counted in notesExcluded (including imported comments awaiting user promotion; promoted ones surface as user comments). Every other record the user has not shared is excluded too and counted in privateExcluded — user highlights are always private, so type: "highlight" returns only a highlight Claude authored (such as the tutorial seed). In solo mode the user\'s own annotations and replies are also held back. A record whose anchor no longer matches its text carries anchor: "degraded" or "failed". For only what is new since your last poll, use tandem_checkInbox.',
       inputSchema: {
@@ -684,6 +686,7 @@ export function registerAnnotationTools(server: McpServer): void {
           "Custom absolute sidecar path (used with writeToDisk). A file path whose name must end in `.annotations.md` or `.annotations.json` (matching `format`), or an existing directory to which the default filename is appended. The directory is unrestricted; only the filename is.",
         ),
     },
+    IDEMPOTENT_OVERWRITE_TOOL,
     withErrorBoundary(
       "tandem_exportAnnotations",
       async ({ format, documentId, writeToDisk, outputPath }) => {

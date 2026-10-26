@@ -17,7 +17,7 @@ The [channel shim](glossary.md#channel-shim) also exposes `tandem_reply` for rea
 
 ## Contents
 
-- [Response Format](#response-format), including [structured output](#structured-output-outputschema--structuredcontent) and [error codes](#error-codes)
+- [Response Format](#response-format), including [structured output](#structured-output-outputschema--structuredcontent), [tool annotations](#tool-annotations-readonlyhint--idempotenthint) and [error codes](#error-codes)
 - [Coordinate System](#coordinate-system)
 - [Multi-Document Support](#multi-document-support)
 - [Document Tools](#document-tools): `tandem_open`, `tandem_scratchpad`, `tandem_getTextContent`, `tandem_getOutline`, `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_save`, `tandem_status`, `tandem_close`, `tandem_rename`, `tandem_listDocuments`, `tandem_switchDocument`, `tandem_convertToMarkdown`
@@ -61,6 +61,21 @@ Seven data-returning tools additionally advertise an MCP `outputSchema` and emit
 **A consequence worth knowing before editing `output-schemas.ts`:** until #1564 the client rejected these seven outright and so never validated their `structuredContent`. It does now, against schemas carrying `additionalProperties: false` — and the SDK's server-side check does not protect you, because it `safeParse`s in strip mode (an undeclared key passes) and then sends the *original* result rather than the parsed one. A schema that drifts from its handler's payload used to be harmless; it now fails the tool call in the client. `tests/server/mcp-output-schemas.test.ts` already catches this by deep-equalling the strip-parsed payload against the emitted one — keep it that way.
 
 For these tools, `structuredContent` carries the exact same object as the text envelope's `data` field — the text content is unchanged for backward compatibility. Error responses from these tools are marked with the MCP-level `isError: true` flag (and carry no `structuredContent`); the text content still holds the `{ "error": true, ... }` JSON envelope above. Schemas live in `src/server/mcp/output-schemas.ts`. Per ADR-027, the annotation schemas deliberately omit `type: "note"` — user-private notes can never appear in structured payloads.
+
+### Tool annotations (`readOnlyHint` / `idempotentHint`)
+
+Tools whose repeat is safe advertise MCP `annotations`. Clients act on them, so they are behaviour rather than documentation:
+
+- **Retry.** Since Claude Code 2.1.307 ([changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md): *"only read-only or idempotent tools are now retried"*), a call whose HTTP connection closes mid-call is re-sent only when the tool is read-only or idempotent. Every other Tandem tool is not retried, so a dropped connection can no longer run `tandem_edit` or `tandem_comment` twice.
+- **Approval.** Non-interactive Codex refused every Tandem call while none carried a hint ([spike §5c](spikes/2026-09-17-claude-merged-app-and-codex-mcp-probes.md#5c-approval-wall)); its approval gating keys on these hints, so the read-only tools are the ones it may now auto-approve. That has not been re-probed with the hints in place. The eight read-only tools return document text, structure, presence and diagnostics, never annotations, so the Solo hold does not apply to them, and notes and other private records are filtered on the server whatever the client approves.
+
+| Annotations | Tools |
+|---|---|
+| `readOnlyHint: true` | `tandem_getTextContent`, `tandem_getOutline`, `tandem_listDocuments`, `tandem_search`, `tandem_resolveRange`, `tandem_getContext`, `tandem_getActivity`, `tandem_diagnostics` |
+| `idempotentHint: true`, `destructiveHint: false` | `tandem_getAnnotations` (persists range repairs, which converge after one pass, so it is not `readOnlyHint`), `tandem_status` (with `text`, overwrites your status) |
+| `idempotentHint: true`, `destructiveHint: true` | `tandem_exportAnnotations` (the same range repairs, and `writeToDisk` overwrites an existing sidecar) |
+
+The hinted tools also carry `openWorldHint: false`. Everything else is unannotated. **`tandem_checkInbox` is unannotated on purpose:** it records what it surfaced and marks chat read before the response is delivered, so a retry after a lost response would answer "No new actions" and the items would be gone. A lost response already loses them today, retry or not (#2294). The constants live in `src/server/mcp/tool-annotations.ts`, and `tests/server/mcp-tool-annotations.test.ts` holds one row per tool, with its reason, against the production `tools/list` — a new tool fails it until it gets a row.
 
 ### Error Codes
 

@@ -16,6 +16,7 @@ import {
   withStructuredErrors,
 } from "./response.js";
 import { searchRegexInWorker } from "./search-worker.js";
+import { READ_ONLY_TOOL } from "./tool-annotations.js";
 
 export interface SearchMatch {
   from: FlatOffset;
@@ -220,6 +221,7 @@ export function registerNavigationTools(server: McpServer): void {
   server.registerTool(
     "tandem_search",
     {
+      annotations: READ_ONLY_TOOL,
       description:
         "Find every occurrence of query in the document's flat text (the tandem_getTextContent " +
         "coordinate system) and return each match's [from, to) range and matched text. Matching is " +
@@ -318,6 +320,7 @@ export function registerNavigationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
+    READ_ONLY_TOOL,
     withErrorBoundary("tandem_resolveRange", async ({ pattern, occurrence = 1, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
@@ -345,6 +348,7 @@ export function registerNavigationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
+    READ_ONLY_TOOL,
     withErrorBoundary(
       "tandem_getContext",
       async ({ from: rawFrom, to: rawTo, windowSize = 500, documentId }) => {

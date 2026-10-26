@@ -46,6 +46,7 @@ import {
   withErrorBoundary,
   withStructuredErrors,
 } from "./response.js";
+import { READ_ONLY_TOOL } from "./tool-annotations.js";
 import { withTypingPresence } from "./typing-presence.js";
 
 /**
@@ -1127,6 +1128,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
+    READ_ONLY_TOOL,
     withErrorBoundary("tandem_getActivity", async ({ documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
