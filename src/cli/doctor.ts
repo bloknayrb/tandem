@@ -359,10 +359,12 @@ function checkNodeVersion(r: Recorder): void {
 
 /**
  * The newest Node.js security release doctor knows about: the first patched
- * version on each line it fixed, ascending. Separate from {@link MIN_NODE_VERSION},
- * which is a build floor. The desktop app ships its own Node, so this row is
- * for the npm global install. Replace the whole object at the next security
- * release; lines it does not list (odd, end-of-life, pre-22) got no fix.
+ * version on each line it fixed. Separate from {@link MIN_NODE_VERSION}, which
+ * is a build floor. The desktop app ships its own Node, so this row is for the
+ * npm global install. `fixedIn` must stay ascending: {@link evaluateNodeSecurity}
+ * takes the first entry whose major is >= the running one, so a line it does not
+ * list (odd, end-of-life, pre-22) got no fix and is pointed at the next line up.
+ * Replace the whole object, and its tests, at the next security release (#2305).
  */
 export const NODE_SECURITY_RELEASE = {
   name: "October 2026 Node.js security release (CVE-2026-111497, Brotli decoder RCE)",

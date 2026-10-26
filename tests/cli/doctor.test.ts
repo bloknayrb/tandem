@@ -3320,6 +3320,12 @@ describe("checkNodeVersion wiring (via runDoctor(), not the pure evaluator)", ()
     const result = report.results.find((r) => r.check === "node-security");
     expect(result?.status).toBe("warn");
     expect(result?.fix).toContain("24.22.1");
+    // A warn, not a fail: the same environment on a patched Node must report
+    // the same failure count, so an unpatched runtime never moves the exit code.
+    setNodeVersion("v24.22.1");
+    const patched = await runDoctor();
+    expect(patched.results.find((r) => r.check === "node-security")?.status).toBe("pass");
+    expect(report.failures).toBe(patched.failures);
   });
 
   it("a version above the floor reports the full declared floor, not just the major", async () => {
