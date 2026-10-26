@@ -37,6 +37,7 @@ import {
   evaluateAbsentChannelEntry,
   evaluateAppTranslocation,
   evaluateClaudeCli,
+  evaluateNodeSecurity,
   evaluateNodeToolchain,
   evaluateNodeVersion,
   evaluateNpmStaleness,
@@ -3253,6 +3254,42 @@ describe("isNodeVersionSupported / MIN_NODE_VERSION drift guard", () => {
   });
 });
 
+describe("evaluateNodeSecurity (CVE-2026-111497)", () => {
+  it.each([
+    ["v22.23.3", "22.23.4"],
+    ["v22.12.0", "22.23.4"],
+    ["v24.2.0", "24.22.1"],
+    ["v24.22.0", "24.22.1"],
+    ["v26.12.0", "26.12.1"],
+  ])("warns on unpatched %s and names its own line's fix, %s", (version, fixed) => {
+    const outcome = evaluateNodeSecurity(version);
+    expect(outcome.status).toBe("warn");
+    expect(outcome.message).toContain("unpatched");
+    expect(outcome.fix).toContain(fixed);
+  });
+
+  it.each(["v22.23.4", "v22.100.0", "v24.22.1", "v24.23.0", "v26.12.1", "v27.0.0", "garbage"])(
+    "passes %s (patched, a newer line, or unreadable — node-version fails that one)",
+    (version) => {
+      expect(evaluateNodeSecurity(version).status).toBe("pass");
+    },
+  );
+
+  it.each([
+    ["v20.19.0", "22.23.4"],
+    ["v23.11.0", "24.22.1"],
+    ["v25.9.0", "26.12.1"],
+  ])(
+    "warns on %s, a line that received no fix, and points at the next fixed line, %s",
+    (version, fixed) => {
+      const outcome = evaluateNodeSecurity(version);
+      expect(outcome.status).toBe("warn");
+      expect(outcome.message).toContain("no fix");
+      expect(outcome.fix).toContain(fixed);
+    },
+  );
+});
+
 describe("checkNodeVersion wiring (via runDoctor(), not the pure evaluator)", () => {
   // evaluateNodeVersion is directly unit-tested above, but checkNodeVersion
   // reads process.version itself and is not parameterized — a suite that
@@ -3276,6 +3313,14 @@ describe("checkNodeVersion wiring (via runDoctor(), not the pure evaluator)", ()
   function setNodeVersion(value: string): void {
     Object.defineProperty(process, "version", { ...originalDescriptor, value, configurable: true });
   }
+
+  it("runDoctor reports an unpatched runtime under node-security as a warn", async () => {
+    setNodeVersion("v24.2.0");
+    const report = await runDoctor();
+    const result = report.results.find((r) => r.check === "node-security");
+    expect(result?.status).toBe("warn");
+    expect(result?.fix).toContain("24.22.1");
+  });
 
   it("a version above the floor reports the full declared floor, not just the major", async () => {
     setNodeVersion("v22.13.0");
