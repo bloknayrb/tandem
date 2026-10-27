@@ -35,8 +35,14 @@ async function leakedTemps(): Promise<string[]> {
   return (await fs.readdir(dir)).filter((n) => ATOMIC_TEMP_RE.test(n));
 }
 
-/** Holds the first `fs.writeFile` open until `release()`; counts every call. */
-function gateFirstWrite() {
+/**
+ * Holds the `fs.writeFile` of `content` open until `release()`; counts every
+ * call. Keyed on content, not call order: `writeTempThenRename` awaits a stat
+ * before its `writeFile`, so two in-flight writes to different paths can reach
+ * `writeFile` in either order, and gating "the first call" could hold the
+ * write the test is about to await -- a deadlock that shows only under load.
+ */
+function gateWriteOf(content: string) {
   const real = fs.writeFile;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -45,7 +51,7 @@ function gateFirstWrite() {
   const counter = { calls: 0 };
   vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
     counter.calls += 1;
-    if (counter.calls === 1) await gate;
+    if (args[1] === content) await gate;
     return real.apply(fs, args as never);
   });
   return { counter, release };
@@ -117,7 +123,7 @@ describe("atomicWrite flushes the temp before the rename", () => {
 describe("writes to one path land in call order", () => {
   it("a second write waits for the first, so the newer content wins", async () => {
     const target = path.join(dir, "doc.md");
-    const { counter, release } = gateFirstWrite();
+    const { counter, release } = gateWriteOf("older");
 
     const older = atomicWrite(target, "older");
     const newer = atomicWrite(target, "newer");
@@ -144,7 +150,7 @@ describe("writes to one path land in call order", () => {
   });
 
   it("writes to different paths do not wait on each other", async () => {
-    const { counter, release } = gateFirstWrite();
+    const { counter, release } = gateWriteOf("a");
 
     const a = atomicWrite(path.join(dir, "a.md"), "a");
     await atomicWrite(path.join(dir, "b.md"), "b");
