@@ -129,8 +129,13 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     // (zod 3: "Expected integer, received float"; zod 4: "expected int,
     // received number at from"), and pinning the literal makes a Zod bump read
     // as a range-validation regression. What IS pinned is what an agent needs
-    // from the refusal: that it is an integer complaint, and which field.
+    // from the refusal: that it is the SDK's input-validation refusal (not the
+    // handler's own "must both be integers" INVALID_RANGE, which would also
+    // match the next two lines), that it is an integer complaint, and which
+    // field.
     const text = res.content[0]?.text ?? "";
+    expect(text).toMatch(/Input validation error/);
+    expect(text).not.toContain("INVALID_RANGE");
     expect(text).toMatch(/\bint(eger)?\b/i);
     expect(text).toMatch(/\bfrom\b/);
     expect(extractText(ydoc)).toBe(before);

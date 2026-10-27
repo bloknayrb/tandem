@@ -90,7 +90,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
 - **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333, #1734.
-- **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + zod 4 + TS 7), #2098, #2099, #2100.
+- **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
 
 ## Shelved
