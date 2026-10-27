@@ -32,14 +32,11 @@ import {
   subscribe,
   unsubscribe,
 } from "../../src/server/events/queue.js";
-import {
-  describeIssues,
-  registerAwarenessTools,
-  resetInbox,
-} from "../../src/server/mcp/awareness.js";
+import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
+import { describeIssues } from "../../src/server/mcp/inbox-log-format.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {

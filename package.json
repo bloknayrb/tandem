@@ -121,7 +121,7 @@
   "dependencies": {
     "@hocuspocus/provider": "3.4.4",
     "@hocuspocus/server": "2.15.3",
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.23.0",
     "@napi-rs/keyring": "^2.0.0",
     "@sentry/browser": "^11.8.0",
     "@sentry/node": "^11.6.0",

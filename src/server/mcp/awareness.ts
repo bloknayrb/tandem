@@ -31,6 +31,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
+import { describeIssues, printableId } from "./inbox-log-format.js";
 import {
   checkInboxOutputShape,
   inboxChatMessageSchema,
@@ -579,39 +580,6 @@ const INBOX_BUCKET_SCHEMAS = {
 
 /** The whole response, checked before anything is committed. Built once. */
 const checkInboxOutputSchema = z.object(checkInboxOutputShape);
-
-/**
- * What an id or a zod path segment must look like to be printed. Anything else
- * prints as a placeholder: a record id is client-written, and a log line is no
- * place for whatever a client chose to put in one.
- */
-const PRINTABLE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
-
-function printableId(id: unknown): string {
-  return typeof id === "string" && PRINTABLE_ID.test(id) ? JSON.stringify(id) : "(unprintable)";
-}
-
-/**
- * Zod issues as `path code` pairs ONLY (PR #2225 review). Never `issue.message`,
- * `.format()` or the value: a message can quote the received value, and the
- * record can be a user's text. Exported for its test, which feeds it a message
- * that does quote one: zod 4's own messages mostly do not, so a test driven
- * through a real parse could not tell whether the message is logged.
- */
-export function describeIssues(issues: readonly z.core.$ZodIssue[]): string {
-  return issues
-    .map((issue) => {
-      const path = issue.path
-        .map((seg) =>
-          typeof seg === "number" || (typeof seg === "string" && PRINTABLE_ID.test(seg))
-            ? String(seg)
-            : "?",
-        )
-        .join(".");
-      return `${path || "(root)"} ${issue.code}`;
-    })
-    .join(", ");
-}
 
 /**
  * Drop log lines already written, keyed `(scope, id, editedAt)`, so a record

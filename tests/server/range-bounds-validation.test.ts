@@ -125,13 +125,15 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     // A protocol-level -32602, surfaced as an isError envelope rather than an
     // INVALID_RANGE from the handler. Stated because the spec permits either.
     expect(res.isError).toBe(true);
-    // Pinned by protocol, not wording: the refusal text is Zod's and the SDK's
-    // (it changed with zod 4), so pinning it makes a dependency bump read as a
-    // range regression. -32602 is JSON-RPC InvalidParams; the handler's own
-    // refusal would be an INVALID_RANGE.
+    // -32602 (JSON-RPC InvalidParams) and no INVALID_RANGE say the schema, not
+    // the handler, refused; naming `from` and an int complaint say it refused
+    // for THIS reason, not some other argument. The rest of the wording is
+    // Zod's (it changed with zod 4) and deliberately left unpinned.
     const text = res.content[0]?.text ?? "";
     expect(text).toMatch(/-32602/);
     expect(text).not.toContain("INVALID_RANGE");
+    expect(text).toMatch(/\bfrom\b/);
+    expect(text).toMatch(/\bint/i);
     expect(extractText(ydoc)).toBe(before);
   });
 
