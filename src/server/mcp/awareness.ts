@@ -600,7 +600,11 @@ function describeIssues(issues: readonly z.ZodIssue[]): string {
   return issues
     .map((issue) => {
       const path = issue.path
-        .map((seg) => (typeof seg === "number" || PRINTABLE_ID.test(seg) ? String(seg) : "?"))
+        .map((seg) =>
+          typeof seg === "number" || (typeof seg === "string" && PRINTABLE_ID.test(seg))
+            ? String(seg)
+            : "?",
+        )
         .join(".");
       return `${path || "(root)"} ${issue.code}`;
     })

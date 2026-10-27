@@ -125,10 +125,14 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     // A protocol-level -32602, surfaced as an isError envelope rather than an
     // INVALID_RANGE from the handler. Stated because the spec permits either.
     expect(res.isError).toBe(true);
-    // Matched loosely. "Expected integer, received float" is Zod's wording, not
-    // this codebase's contract; pinning the literal makes a Zod bump read as a
-    // range-validation regression.
-    expect(res.content[0]?.text).toMatch(/integer/i);
+    // Matched loosely. The wording is Zod's, not this codebase's contract
+    // (zod 3: "Expected integer, received float"; zod 4: "expected int,
+    // received number at from"), and pinning the literal makes a Zod bump read
+    // as a range-validation regression. What IS pinned is what an agent needs
+    // from the refusal: that it is an integer complaint, and which field.
+    const text = res.content[0]?.text ?? "";
+    expect(text).toMatch(/\bint(eger)?\b/i);
+    expect(text).toMatch(/\bfrom\b/);
     expect(extractText(ydoc)).toBe(before);
   });
 

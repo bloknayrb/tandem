@@ -4,7 +4,7 @@
  * Claude Code's MCP client validates advertised output schemas as JSON Schema
  * 2020-12 only, and rejects a tool declaring any other dialect **client-side**,
  * before a call reaches this server. The SDK converts our zod shapes with
- * `zod-to-json-schema` at its default target, which stamps draft-07 on every
+ * zod 4's `toJSONSchema` at its default target, which stamps draft-07 on every
  * one — so the seven `outputSchema` tools, `tandem_checkInbox` and
  * `tandem_status` among them, silently vanished from live sessions while raw
  * JSON-RPC kept working.

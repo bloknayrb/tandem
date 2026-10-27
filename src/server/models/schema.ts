@@ -31,7 +31,7 @@ const ApiKeyRef = z
  * Param values are primitives only (the client persists numbers/strings/bools).
  * Kept permissive on value type; `.strict()` on the entry blocks unknown keys.
  */
-const ParamsSchema = z.record(z.union([z.number(), z.string(), z.boolean()]));
+const ParamsSchema = z.record(z.string(), z.union([z.number(), z.string(), z.boolean()]));
 
 export const ModelsEntrySchema = z
   .object({
