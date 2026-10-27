@@ -4,7 +4,7 @@
  * The MCP SDK converts every `inputSchema` and `outputSchema` with zod 4's
  * `toJSONSchema` at its **default target** (draft-07), which stamps
  * `"$schema": "http://json-schema.org/draft-07/schema#"` on the root of each
- * one. (Under zod 3 the SDK used `zod-to-json-schema`, with the same stamp.) Claude Code's MCP client validates advertised output schemas as JSON
+ * one. Claude Code's MCP client validates advertised output schemas as JSON
  * Schema **2020-12 only** and rejects a tool that declares any other dialect —
  * client-side, before a single `tools/call` reaches this server:
  *
@@ -39,9 +39,9 @@
  * is not a thing to assume — `tests/server/mcp-schema-dialect.test.ts` walks
  * every emitted schema and fails on the keywords whose meaning actually moved
  * between draft-07 and 2020-12 (array-form `items`, `additionalItems`,
- * `dependencies`, and a `$ref` with validation siblings). Today there are none,
- * and since zod 4 inlines a reused schema rather than pointing at it, no `$ref`
- * is emitted at all.
+ * `dependencies`, and a `$ref` with validation siblings). Today there are none:
+ * zod 4 inlines a reused schema rather than pointing at it, so the `$ref`s
+ * zod 3 emitted are gone.
  *
  * ## Why input schemas too, when only output schemas were rejected
  *
@@ -56,7 +56,7 @@
  * The conversion happens inside the SDK's own `tools/list` handler, from zod
  * shapes it holds privately, at list time — there is no seam before it, and no
  * public option reaches it: `toJsonSchemaCompat` accepts a `target`, but
- * `mcp.js` never passes one, and its zod-v4 branch then defaults to draft-07. The
+ * `mcp.js` never passes one. The
  * handler map is the one place the finished result can be intercepted without
  * reimplementing the listing (and thereby silently dropping `title`,
  * `annotations`, `execution`, `_meta`, or the `enabled` filter on the next SDK

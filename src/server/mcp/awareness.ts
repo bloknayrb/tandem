@@ -594,9 +594,11 @@ function printableId(id: unknown): string {
 /**
  * Zod issues as `path code` pairs ONLY (PR #2225 review). Never `issue.message`,
  * `.format()` or the value: a message can quote the received value, and the
- * record can be a user's text.
+ * record can be a user's text. Exported for its test, which feeds it a message
+ * that does quote one: zod 4's own messages mostly do not, so a test driven
+ * through a real parse could not tell whether the message is logged.
  */
-function describeIssues(issues: readonly z.ZodIssue[]): string {
+export function describeIssues(issues: readonly z.core.$ZodIssue[]): string {
   return issues
     .map((issue) => {
       const path = issue.path
@@ -624,7 +626,7 @@ function logInboxDrop(
   scope: string,
   what: string,
   item: { id?: unknown; editedAt?: unknown },
-  issues: readonly z.ZodIssue[],
+  issues: readonly z.core.$ZodIssue[],
 ): void {
   const key = `${scope}\u0000${String(item.id)}\u0000${String(item.editedAt)}`;
   if (loggedInboxDrops.has(key)) return;
