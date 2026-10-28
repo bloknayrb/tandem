@@ -33,6 +33,7 @@ import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
 import {
+  CHAT_SCOPE,
   DeliveryRegistry,
   decodeCursor,
   deliveryRegistry,
@@ -411,6 +412,37 @@ describe("a reply to the latest message of a batch answers the rest of it", () =
     expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual(["msg_l1"]);
     expect((chatMap().get("msg_l1") as ChatMessage).read).toBe(false);
     expect((await poll()).chatMessages.map((m) => m.id)).toEqual(["msg_l1"]);
+  });
+
+  it("a cursor-less return, whose response may be lost, answers nothing for a batch reply", async () => {
+    // B's mark is below both messages.
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_n1", 18);
+    userChat("msg_n2", 19);
+    // A cursor-less caller is returned both (acked, stamped read); its response is lost.
+    expect((await poll()).chatMessages.map((m) => m.id)).toEqual(["msg_n1", "msg_n2"]);
+    // A saw only msg_n2, by push, and answers it.
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "re n2", replyTo: "msg_n2" },
+    });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_n1"]);
+  });
+
+  it("nor does a fresh reader's acknowledgement of a message its mark passed without handing it over", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_o1", 21);
+    userChat("msg_o2", 22);
+    expect((await poll()).chatMessages.map((m) => m.id)).toEqual(["msg_o1", "msg_o2"]); // lost
+    // A fresh session is not handed them (they read as acknowledged), then acknowledges.
+    const c = await poll({ cursor: "start" });
+    expect(c.chatMessages).toEqual([]);
+    await poll({ cursor: c.cursor });
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "re o2", replyTo: "msg_o2" },
+    });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_o1"]);
   });
 
   it("the same across a restart: a `delivered` stamp from before it answers nothing", async () => {
@@ -945,6 +977,23 @@ describe("the cursor codec", () => {
     expect(decoded.cursor.m).toBe(6);
     expect(decoded.cursor.docs.get("doc-a")).toEqual({ mark: 2, held: new Set([1]) });
     expect(decoded.cursor.chat.mark).toBe(4);
+    expect(decoded.cursor.handOut).toBeUndefined();
+    const withToken = decodeCursor(encodeCursor({ ...cursor, handOut: 7 }, registry), registry);
+    expect(withToken.cursor.handOut).toBe(7);
+  });
+
+  it("a chat hand-out token confirms receipt once, and an identical hand-out reuses it", () => {
+    const registry = new DeliveryRegistry();
+    const e1 = registry.assign("c", CHAT_SCOPE, "m1", 0);
+    const e2 = registry.assign("c", CHAT_SCOPE, "m2", 0);
+    expect(registry.recordHandOut([])).toBeUndefined();
+    const token = registry.recordHandOut([e1.seq, e2.seq]);
+    expect(registry.recordHandOut([e1.seq, e2.seq])).toBe(token);
+    expect(e1.received).toBe(false);
+    registry.confirmHandOut(token as number);
+    expect([e1.received, e2.received]).toEqual([true, true]);
+    // Spent: the same list now mints a new token.
+    expect(registry.recordHandOut([e1.seq, e2.seq])).not.toBe(token);
   });
 
   it("folds a maximal cursor to fit, losing nothing that was owed", () => {

@@ -325,8 +325,9 @@ export function appendClaudeChatMessage(
  * message from Claude's inbox the moment `BYO_MODELS_ENABLED` flips.
  *
  * Only the named message is stamped. The earlier messages of its batch that a
- * reply also answers ({@link answeredBy}) are, by that rule, ones some reader
- * already acknowledged, and an acknowledgement stamps `read` itself.
+ * reply also answers ({@link answeredBy}) are, by that rule, ones a cursor
+ * reader acknowledged after being handed them, and that acknowledgement
+ * stamped `read` itself.
  *
  * Only an unread USER message is touched; an unknown id, a Claude row or an
  * already-read one writes nothing.
@@ -1322,7 +1323,8 @@ function viewOf(reader: ReaderCursor, documentId: string): ScopeView {
  * over exactly what this poll covered.
  *
  *  - Chat is read on every poll, so its mark becomes the counter, keeping held
- *    only what `admit` refused.
+ *    only what `admit` refused; the cursor carries this response's chat
+ *    hand-out token, if it handed any chat out.
  *  - A document this poll read (or soundly skipped) gets the counter as its
  *    mark, plus its held seqs.
  *  - A document it did NOT read keeps its old position — a named poll of
@@ -1339,6 +1341,7 @@ function nextCursor(
   pass: InboxDocumentsPass,
   chatHeld: Set<number>,
   defaultPoll: boolean,
+  chatHandOut: number | undefined,
 ): ReaderCursor {
   const counter = deliveryRegistry.counter;
   const m = defaultPoll ? counter : reader.m;
@@ -1363,7 +1366,12 @@ function nextCursor(
     const held = new Set([...old.held].filter((seq) => deliveryRegistry.isLive(id, seq)));
     docs.set(id, { mark: stillOwed ? old.mark : m, held });
   }
-  return { m, docs, chat: { mark: counter, held: chatHeld } };
+  return {
+    m,
+    docs,
+    chat: { mark: counter, held: chatHeld },
+    ...(chatHandOut !== undefined ? { handOut: chatHandOut } : {}),
+  };
 }
 
 /** A user chat message as `tandem_checkInbox` returns it. */
@@ -1385,6 +1393,8 @@ interface UnreadChat {
   commit: () => void;
   /** Cursor polls: chat seqs the reader must keep owed (refused by `admit`). */
   held: Set<number>;
+  /** Cursor polls: the hand-out token the next cursor carries (`recordHandOut`). */
+  handOut?: number;
 }
 
 /**
@@ -1491,31 +1501,33 @@ function collectUnreadChat(): UnreadChat {
   };
 }
 
-/** A user chat message some reader acknowledged, with its place in the hand-out order. */
-interface AcknowledgedChat {
+/** A user chat message some model provably received, with its place in the hand-out order. */
+interface ReceivedChat {
   key: string;
   seq: number;
   timestamp: number;
 }
 
 /**
- * User chat some reader ACKNOWLEDGED — its registry entry is `acked`: a cursor
- * poll that passed it back, or a cursor-less poll's return — so some model
- * demonstrably had it. NOT `delivered`, which is stamped when a response
- * validates, not when it arrives: a response lost in transit leaves its
- * messages `delivered`, and counting those would let a reply to the batch's
- * latest message, from a session that got only that one by push, settle an
- * earlier message no model ever had. Nor a persisted stamp: after a restart
- * the registry is empty, so nothing here.
+ * User chat some model provably RECEIVED — its registry entry is `received`: a
+ * cursor reader that was handed it passed back the cursor from that very
+ * response (`confirmHandOut`). Nothing weaker counts, because each would let a
+ * reply to the batch's latest message, from a session that got only that one by
+ * push, settle an earlier message no model ever had:
+ *  - `delivered`, stamped when a response validates, not when it arrives;
+ *  - `acked` / `read` from a cursor-less return, whose response may be lost;
+ *  - `acked` from a cursor acknowledgement alone, since a fresh reader's mark
+ *    passes entries it skipped as already acknowledged or read.
+ * After a restart the registry is empty, so a persisted stamp counts for nothing.
  */
-function acknowledgedChat(chatMap: Y.Map<unknown>): AcknowledgedChat[] {
-  const out: AcknowledgedChat[] = [];
+function receivedChat(chatMap: Y.Map<unknown>): ReceivedChat[] {
+  const out: ReceivedChat[] = [];
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || typeof msg.timestamp !== "number") return;
     const entry = deliveryRegistry.lookup("c", key, 0);
-    if (entry?.acked) out.push({ key, seq: entry.seq, timestamp: msg.timestamp });
+    if (entry?.received) out.push({ key, seq: entry.seq, timestamp: msg.timestamp });
   });
   return out;
 }
@@ -1525,23 +1537,20 @@ function acknowledgedChat(chatMap: Y.Map<unknown>): AcknowledgedChat[] {
  * target itself, plus — because `CHAT_ACK_DIRECTIVE` tells Claude to reply only
  * to the LATEST of a batch — every user message handed out at or before the
  * target's own hand-out (seq at or below its seq; seqs are assigned oldest
- * first within a poll), no newer than it, that some reader has acknowledged
- * (`acknowledgedChat`). An earlier message nobody acknowledged stays owed: if
- * the answering session never polls again it is re-delivered — a duplicate,
- * never a loss. A target with no registry entry (pushed, never polled) answers
+ * first within a poll), no newer than it, that some model provably received
+ * (`receivedChat`). Any other earlier message stays owed: if the answering
+ * session never polls again it is re-delivered — a duplicate, never a loss. A target with no registry entry (pushed, never polled) answers
  * only itself.
  */
 function answeredBy(
   chatMap: Y.Map<unknown>,
   target: string,
-  acknowledged: readonly AcknowledgedChat[],
+  received: readonly ReceivedChat[],
 ): string[] {
   const entry = deliveryRegistry.lookup("c", target, 0);
   const ts = (chatMap.get(target) as Partial<ChatMessage> | undefined)?.timestamp;
   if (!entry || typeof ts !== "number") return [target];
-  const batch = acknowledged
-    .filter((h) => h.seq <= entry.seq && h.timestamp <= ts)
-    .map((h) => h.key);
+  const batch = received.filter((h) => h.seq <= entry.seq && h.timestamp <= ts).map((h) => h.key);
   return [target, ...batch];
 }
 
@@ -1563,9 +1572,9 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
   });
   const answered = new Set<string>();
   if (targets.size === 0) return answered;
-  const acknowledged = acknowledgedChat(chatMap);
+  const received = receivedChat(chatMap);
   for (const target of targets) {
-    for (const key of answeredBy(chatMap, target, acknowledged)) answered.add(key);
+    for (const key of answeredBy(chatMap, target, received)) answered.add(key);
   }
   return answered;
 }
@@ -1608,6 +1617,7 @@ function collectCursorChat(view: ScopeView): UnreadChat {
   const keys: string[] = [];
   const held = new Set<number>();
   let dropped = 0;
+  const seqs: number[] = [];
   for (const key of inTimestampOrder(chatMap, owedKeys)) {
     const item = admitChatItem(chatMap.get(key) as Partial<ChatMessage>);
     if (!item) {
@@ -1618,10 +1628,17 @@ function collectCursorChat(view: ScopeView): UnreadChat {
     }
     messages.push(item);
     keys.push(key);
-    deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+    seqs.push(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0).seq);
   }
+  const handOut = deliveryRegistry.recordHandOut(seqs);
 
-  return { messages, dropped, held, commit: () => stampUserChat(keys, "delivered") };
+  return {
+    messages,
+    dropped,
+    held,
+    ...(handOut !== undefined ? { handOut } : {}),
+    commit: () => stampUserChat(keys, "delivered"),
+  };
 }
 
 /**
@@ -1633,12 +1650,15 @@ function collectCursorChat(view: ScopeView): UnreadChat {
  *    with the same cursor writes nothing.
  *  - documents: record the acknowledgement in the registry, which only moves
  *    what a FRESH reader is owed (see `inbox-cursor.ts`).
+ *  - the cursor's chat hand-out token, if any: what that response handed out
+ *    is now `received` (the only proof `answeredBy` accepts).
  * A fresh cursor acknowledges nothing.
  */
 function acknowledgeCursor(reader: ReaderCursor): void {
   for (const scope of deliveryRegistry.documentScopes()) {
     deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
   }
+  if (reader.handOut !== undefined) deliveryRegistry.confirmHandOut(reader.handOut);
   const view = reader.chat;
   if (view.mark === null) return;
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
@@ -1840,7 +1860,9 @@ export function registerAwarenessTools(server: McpServer): void {
         const chat = reader ? collectCursorChat(reader.chat) : collectUnreadChat();
         const chatMessages = chat.messages;
         const nextCursorString = reader
-          ? encodeCursor(nextCursor(reader, docs, chat.held, requestedId === undefined))
+          ? encodeCursor(
+              nextCursor(reader, docs, chat.held, requestedId === undefined, chat.handOut),
+            )
           : START_CURSOR;
 
         // Reported mode is the two-state view of the same live read used for

@@ -30,6 +30,13 @@
  *    when its mark passed them (Solo hold, or a record `admit` refused), so a
  *    mark that moved past them does not lose them.
  *
+ * For chat the cursor also carries the hand-out token of the response it came
+ * in ({@link DeliveryRegistry.recordHandOut}), when that response handed any
+ * chat out. Passing it back is the one proof that a model RECEIVED those
+ * messages, which is what lets a reply to the latest of a batch settle the
+ * earlier ones; a mark cannot prove it, since a mark also passes entries its
+ * reader was never handed.
+ *
  * Any OTHER entry a reader's mark passes without handing it over — the item
  * did not qualify at that moment — is retired from the registry
  * ({@link DeliveryRegistry.retire}), so the item gets a new seq if it ever
@@ -71,7 +78,18 @@ export interface RegistryEntry {
   readonly editedAt: number;
   /** Some reader acknowledged it (or a cursor-less poll returned it). Never reset. */
   acked: boolean;
+  /**
+   * Chat only: a cursor reader that was HANDED this entry passed back the cursor
+   * from that response (`confirmHandOut`) — proof some model received it. Not
+   * `acked`, which a cursor-less return (whose response may be lost) also sets,
+   * and which a fresh reader's acknowledgement sets on entries its mark passed
+   * without handing them over. Never reset.
+   */
+  received: boolean;
 }
+
+/** How many chat hand-out tokens the registry keeps unspent. */
+export const MAX_HAND_OUT_TOKENS = 4096;
 
 /** The scope chat entries live in. Not a document id: it never appears in a cursor's `d`. */
 export const CHAT_SCOPE = "\u0000chat";
@@ -102,6 +120,11 @@ export class DeliveryRegistry {
   readonly #byBase = new Map<string, RegistryEntry[]>();
   readonly #byScope = new Map<string, RegistryEntry[]>();
   readonly #unacked = new Map<string, Set<RegistryEntry>>();
+  #handOutCounter = 0;
+  /** Chat hand-out token → the seqs that one response handed out. */
+  readonly #handOuts = new Map<number, readonly number[]>();
+  /** The same, keyed by the seq list, so an identical hand-out reuses its token. */
+  readonly #handOutTokens = new Map<string, number>();
 
   constructor() {
     this.reset();
@@ -126,6 +149,57 @@ export class DeliveryRegistry {
     this.#byBase.clear();
     this.#byScope.clear();
     this.#unacked.clear();
+    this.#handOutCounter = 0;
+    this.#handOuts.clear();
+    this.#handOutTokens.clear();
+  }
+
+  /**
+   * Record that one cursor response hands out the chat `seqs`, and return the
+   * token its next cursor carries (none when it hands out no chat). The token,
+   * not the cursor's chat mark, is what proves receipt: a mark also passes
+   * entries the reader was never handed (a fresh reader skips what is already
+   * acknowledged or read). An unspent token is reused for the same seq list,
+   * so a retry with the same cursor gets the same next cursor; whoever passes
+   * it back proves a response holding exactly those seqs arrived. Only the
+   * newest {@link MAX_HAND_OUT_TOKENS} are kept; a dropped one simply proves
+   * nothing (a later duplicate, never a loss).
+   */
+  recordHandOut(seqs: readonly number[]): number | undefined {
+    if (seqs.length === 0) return undefined;
+    const key = seqs.join(",");
+    const known = this.#handOutTokens.get(key);
+    if (known !== undefined) return known;
+    this.#handOutCounter += 1;
+    this.#handOuts.set(this.#handOutCounter, [...seqs]);
+    this.#handOutTokens.set(key, this.#handOutCounter);
+    if (this.#handOuts.size > MAX_HAND_OUT_TOKENS) {
+      const oldest = this.#handOuts.keys().next().value;
+      if (oldest !== undefined) this.#spend(oldest);
+    }
+    return this.#handOutCounter;
+  }
+
+  #spend(token: number): readonly number[] | undefined {
+    const seqs = this.#handOuts.get(token);
+    if (!seqs) return undefined;
+    this.#handOuts.delete(token);
+    this.#handOutTokens.delete(seqs.join(","));
+    return seqs;
+  }
+
+  /**
+   * The cursor carrying `token` came back, so the response that minted it
+   * arrived: mark what it handed out `received`. Unknown or spent tokens do
+   * nothing; a token is spent on first use.
+   */
+  confirmHandOut(token: number): void {
+    const seqs = this.#spend(token);
+    if (!seqs) return;
+    for (const seq of seqs) {
+      const entry = this.#bySeq.get(seq);
+      if (entry) entry.received = true;
+    }
   }
 
   lookup(kind: EntryKind, base: string, editedAt: number): RegistryEntry | undefined {
@@ -138,7 +212,15 @@ export class DeliveryRegistry {
     const known = this.#byVersion.get(id);
     if (known) return known;
     this.#counter += 1;
-    const entry: RegistryEntry = { seq: this.#counter, kind, scope, base, editedAt, acked: false };
+    const entry: RegistryEntry = {
+      seq: this.#counter,
+      kind,
+      scope,
+      base,
+      editedAt,
+      acked: false,
+      received: false,
+    };
     this.#byVersion.set(id, entry);
     this.#bySeq.set(entry.seq, entry);
     push(this.#byBase, baseId(kind, base), entry);
@@ -292,6 +374,8 @@ export interface ReaderCursor {
   m: number | null;
   docs: Map<string, ScopeView>;
   chat: ScopeView;
+  /** The chat hand-out token of the response that carried this cursor, if it handed out chat. */
+  handOut?: number;
 }
 
 /** What the caller passes on its first poll. */
@@ -323,6 +407,7 @@ const cursorWireSchema = z.strictObject({
     )
     .max(MAX_CURSOR_ENTRIES)
     .optional(),
+  t: z.number().int().min(1).optional(),
 });
 
 type CursorWire = z.infer<typeof cursorWireSchema>;
@@ -378,7 +463,12 @@ export function decodeCursor(
   }
   const [chatMark, ...chatHeld] = wire.c;
   return {
-    cursor: { m: clamp(wire.m), docs, chat: view(chatMark, chatHeld) },
+    cursor: {
+      m: clamp(wire.m),
+      docs,
+      chat: view(chatMark, chatHeld),
+      ...(wire.t !== undefined ? { handOut: wire.t } : {}),
+    },
     recognised: true,
   };
 }
@@ -418,6 +508,7 @@ function toWire(cursor: ReaderCursor, epoch: string): CursorWire {
     m: cursor.m,
     c: [cursor.chat.mark, ...[...cursor.chat.held].sort((a, b) => a - b)],
     ...(d.length > 0 ? { d } : {}),
+    ...(cursor.handOut !== undefined ? { t: cursor.handOut } : {}),
   };
 }
 
@@ -440,7 +531,10 @@ export function encodeCursor(
   for (const [id, view] of cursor.docs) docs.set(id, capHeld(view));
   let chat = capHeld(cursor.chat);
   for (;;) {
-    const wire = toWire({ m, docs, chat }, registry.epoch);
+    const wire = toWire(
+      { m, docs, chat, ...(cursor.handOut !== undefined ? { handOut: cursor.handOut } : {}) },
+      registry.epoch,
+    );
     const encoded = serialize(wire);
     const listed = wire.d?.length ?? 0;
     if (encoded.length <= MAX_CURSOR_LENGTH && listed <= MAX_CURSOR_ENTRIES) return encoded;
