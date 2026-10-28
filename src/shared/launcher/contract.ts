@@ -496,6 +496,12 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
  *
  * An unmatched rule is a silent no-op, not an error, so a wrong spelling here
  * fails toward "auto mode alone decides" rather than toward a crash.
+ *
+ * **A matched rule skips auto mode's classifier** for every Tandem tool,
+ * `tandem_open` → `tandem_edit` → `tandem_save` included. That bypass is not
+ * yet in `docs/security.md`'s register; narrowing this list is one of the two
+ * ways to settle it (see the `docs/security.md` bullet on auto-launched
+ * sessions).
  */
 export const TANDEM_MCP_ALLOW_RULES = ["mcp__tandem__*", "mcp__plugin_tandem_tandem__*"] as const;
 
