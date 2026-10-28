@@ -377,11 +377,12 @@ describe("applyRemap — moved text", () => {
     expect(kindOf(doc, "a")).toBe("degraded");
   });
 
-  it("relocates an untrusted record by its snapshot only, never minting from shifted offsets", () => {
+  it("never follows an untrusted record's snapshot to a moved copy (#1764)", () => {
     const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie\n");
     const flat = extractText(doc);
     const at = flat.indexOf("alpha");
-    // Stored range over "alpha", snapshot claims "one": contradicts.
+    // Stored range over "alpha", snapshot claims "one": contradicts, so there
+    // is no verified old line to follow.
     withMcp(doc, () =>
       annotationsOf(doc).set(
         "u",
@@ -390,7 +391,82 @@ describe("applyRemap — moved text", () => {
     );
     expect(kindOf(doc, "u")).toBe("degraded");
     reload(doc, "bravo two\n\nalpha one\n\ncharlie\n");
-    expect(textOf(doc, "u"), "the snapshot's text, not the stored span").toBe("one");
+    const ann = annotationsOf(doc).get("u");
+    expect(ann?.range.from, "detached").toBe(ann?.range.to);
+    expect(ann?.relRange).toBeUndefined();
+    expect(kindOf(doc, "u")).toBe("degraded");
+  });
+
+  // A false re-anchor is worse than a detach: it reads `ok` with a fresh
+  // relRange, and a suggestion's Accept then rewrites the wrong span. Each of
+  // these once landed on a pre-existing copy because the copy overlapped a
+  // one-character hunk by a single code unit.
+  function expectDetached(doc: Y.Doc, id: string): void {
+    const ann = annotationsOf(doc).get(id);
+    expect(ann?.range.from, "collapsed to a point").toBe(ann?.range.to);
+    expect(ann?.relRange, "no anchor minted").toBeUndefined();
+    expect(kindOf(doc, id)).toBe("degraded");
+  }
+
+  it("does not jump a deleted suggestion onto a copy that a typo fix elsewhere touched", () => {
+    const doc = makeMarkdownDoc("the bar is\n\nmiddle\n\na bor here\n");
+    seedOn(doc, "a", "bar", 0, { suggestedText: "pub" });
+    reload(doc, "the is\n\nmiddle\n\na bar here\n");
+    expectDetached(doc, "a");
+    expect(annotationsOf(doc).get("a")?.suggestedText, "the suggestion survives").toBe("pub");
+  });
+
+  it("does not jump a deleted record onto text completed by one typed character", () => {
+    const doc = makeMarkdownDoc("the bar is\n\nmiddle\n\nxyz ba\n");
+    seedOn(doc, "a", "bar");
+    reload(doc, "the is\n\nmiddle\n\nxyz bar\n");
+    expectDetached(doc, "a");
+  });
+
+  it("does not let an unrelated edit capture a record whose own text was rewritten in place", () => {
+    const doc = makeMarkdownDoc("price is 10\n\nmid\n\nwas 9 ok\n");
+    seedOn(doc, "a", "10");
+    reload(doc, "price is 11\n\nmid\n\nwas 10 ok\n");
+    expectDetached(doc, "a");
+  });
+
+  it("detaches a record whose line was edited while it moved", () => {
+    // The moved line is not verbatim, so it is not a line-diff move.
+    const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie\n");
+    seedOn(doc, "a", "alpha");
+    reload(doc, "bravo two\n\nalpha one!\n\ncharlie\n");
+    expectDetached(doc, "a");
+  });
+
+  it("does not follow a deleted copy to a surviving duplicate in unchanged text", () => {
+    // The second "A B" line is common to both texts, so it was never moved:
+    // it is a different, pre-existing copy even though it is now unique.
+    const doc = makeMarkdownDoc("A B\n\nmid\n\nA B\n");
+    seedOn(doc, "a", "A B");
+    reload(doc, "mid\n\nA B\n");
+    expectDetached(doc, "a");
+  });
+
+  it("detaches a record rewritten in place even when its old line reappears elsewhere", () => {
+    // An in-place rewrite is not a move: the own region held no match, and a
+    // copy of the old line pasted elsewhere is not the record's text.
+    const doc = makeMarkdownDoc("foo bar\n\nmid\n");
+    seedOn(doc, "a", "bar");
+    reload(doc, "foo baz\n\nmid\n\nfoo bar\n");
+    expectDetached(doc, "a");
+  });
+
+  it("never resurrects a prior collapse point from its snapshot", () => {
+    const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie\n");
+    const at = extractText(doc).indexOf("two") + 1;
+    withMcp(doc, () =>
+      annotationsOf(doc).set(
+        "p",
+        makeAnnotation({ id: "p", range: r(at, at), textSnapshot: "zulu" }),
+      ),
+    );
+    reload(doc, "bravo TWO\n\ncharlie\n\nzulu\n");
+    expectDetached(doc, "p");
   });
 });
 

@@ -35,14 +35,18 @@
  *          different copy.
  *        - **Moved text** — a line diff records a move as a deletion in one hunk
  *          and an insertion in ANOTHER, so the moved copy sits in that other
- *          hunk's new span, which the steps above never search. When a record's
- *          text was wholly deleted, or its own window holds no match, the probe
- *          is looked for in every other hunk's new span, and taken only when it
- *          occurs EXACTLY ONCE in the whole new text and that occurrence
- *          overlaps such a span ({@link uniqueMovedMatch}). Text that also
- *          occurs anywhere else is ambiguous and detaches instead — the
- *          wrong-copy hazard a short probe carries is why the search is not
- *          simply widened.
+ *          hunk's new span, which the steps above never search. Only a TRUSTED,
+ *          non-empty record whose every character was DELETED looks for it
+ *          ({@link uniqueMovedMatch}), and the match is structural, not textual:
+ *          the record's whole enclosing old line(s) must reappear verbatim, as
+ *          whole lines, WHOLLY inside one other hunk's new span, with the record
+ *          at the same offset in them — and the record's text must occur
+ *          EXACTLY ONCE in the whole new text. That is what a line-diff move
+ *          is; a probe that merely overlaps some other edit (a narrowed hunk is
+ *          often one character) is a different copy, and so is text that also
+ *          occurs anywhere else. A record whose own window held no match was
+ *          edited in place, not moved, and detaches; so does an untrusted
+ *          record, which has no verified old line to match.
  *        - **No match** — the record collapses to a point at the hunk start with
  *          its relRange stripped, and gains a `textSnapshot` of its OLD text if
  *          it had none. `refreshRange`'s lazy-attach gate then answers
@@ -80,10 +84,13 @@
  *
  * ## What it never does
  *
- * Take a copy of the text found in unchanged regions, or one of several copies.
- * The watcher's old relocation pass searched the whole document and took the
- * nearest, which is how a record whose text was deleted jumped onto another
- * copy of it.
+ * Take a copy of the text found in unchanged regions, or one of several copies,
+ * or one that merely overlaps some other edit. The watcher's old relocation pass
+ * searched the whole document and took the nearest, which is how a record whose
+ * text was deleted jumped onto another copy of it — and a false re-anchor is
+ * worse than a detach: it reads `ok` with a fresh relRange, and a suggestion's
+ * Accept then rewrites the wrong span with nothing to object, because the probe
+ * IS the record's own text.
  *
  * `surrogates: "ignore"` below is one of Critical Rule 4's stored/derived-offset
  * callers: every offset here is derived from a stored range or a diff, nothing is
@@ -593,18 +600,14 @@ function remapOne(
       truncated ? Math.max(at + probe.length, Math.min(at + span, limit)) : at + probe.length,
     );
 
-  // Last resort before detaching: the text moved (see the module header).
-  const movedOrCollapse = (at: number, own: readonly [number, number] | null): Annotation => {
-    const moved = uniqueMovedMatch(probe, newText, hunks, own);
-    return moved ? anchorFound(moved.at, moved.limit) : collapse(at);
-  };
-
   const mapped = mapRange(oldRange, hunks);
   if (mapped !== null) {
     // Every non-empty character of it was deleted (both endpoints fell into
-    // deletions and met) — or moved elsewhere.
+    // deletions and met) — or its lines moved elsewhere. Only a trusted record
+    // has old lines worth following (see the module header).
     if (mapped.from === mapped.to && oldRange.from < oldRange.to) {
-      return movedOrCollapse(mapped.from, null);
+      const moved = trusted ? uniqueMovedMatch(remap.oldText, oldRange, newText, hunks) : null;
+      return moved === null ? collapse(mapped.from) : anchorOrKeep(moved, moved + probe.length);
     }
     // Both endpoints are outside every replaced region. An UNTRUSTED record
     // keeps its shifted stored range unanchored, so it reads `degraded` exactly
@@ -644,39 +647,67 @@ function remapOne(
       if (best === -1 || Math.abs(i - expected) < Math.abs(best - expected)) best = i;
     }
   }
-  if (best === -1) {
-    return movedOrCollapse(first.newFrom, [hunks.indexOf(first), hunks.indexOf(last)]);
-  }
+  // No moved-text search here: the record's own region was REWRITTEN, which
+  // is an edit in place, and a copy of its text in some other hunk is not it.
+  if (best === -1) return collapse(first.newFrom);
   return anchorFound(best, windowTo);
 }
 
 /**
- * Where a record's moved text landed, or `null`. `own` is the index span of the
- * hunks the record itself touched, already searched and excluded here.
+ * Where a deleted record's moved text landed, or `null`. Called only for a
+ * trusted, non-empty record whose every character a deletion hunk removed, so
+ * `oldText.slice(oldRange)` is its real old text and its own hunks have empty
+ * new spans.
  *
- * Taken only when `probe` occurs exactly once in the whole new text and that
- * occurrence overlaps the new span of some other hunk (which is where a line
- * diff puts moved text). A probe that also occurs anywhere else cannot be told
- * apart from the copy it would jump to, so it detaches; an occurrence wholly in
- * unchanged text is a different copy by construction. `limit` is that hunk's
- * new end, the clamp for a truncated snapshot's carried span.
+ * A line diff moves whole lines, so a move is accepted only in that shape:
+ *   - the record's enclosing old line(s) `lines` reappear VERBATIM in the new
+ *     text, as whole lines (a line break or a text edge on either side);
+ *   - that occurrence lies WHOLLY inside one hunk's new span — where a line
+ *     diff puts inserted lines; anything touching unchanged text is a
+ *     different copy by construction;
+ *   - the record's own text occurs EXACTLY ONCE in the new text, and that one
+ *     occurrence sits at the record's own offset inside those lines.
+ * Any probe that merely overlaps another edit — narrowing often leaves a hunk
+ * one character wide — fails the first two, and text that also occurs
+ * elsewhere fails the third, so it detaches rather than jump to a copy
+ * (which a suggestion's Accept would then rewrite).
+ *
+ * The verbatim line match also keeps a probe sliced mid-surrogate-pair
+ * (`surrogates: "ignore"`) from matching the low half of a different astral
+ * character: the units around each endpoint are the old ones. The explicit
+ * surrogate check below states that invariant rather than leaving it implied.
  */
 function uniqueMovedMatch(
-  probe: string,
+  oldText: string,
+  oldRange: DocumentRange,
   newText: string,
   hunks: readonly Hunk[],
-  own: readonly [number, number] | null,
-): { at: number; limit: number } | null {
-  if (probe.length === 0) return null;
+): number | null {
+  const { from, to } = oldRange;
+  if (from >= to) return null;
+  const probe = oldText.slice(from, to);
   const at = newText.indexOf(probe);
   if (at === -1 || newText.indexOf(probe, at + 1) !== -1) return null;
   const end = at + probe.length;
-  for (let i = 0; i < hunks.length; i++) {
-    if (own && i >= own[0] && i <= own[1]) continue;
-    const h = hunks[i];
-    if (h.newFrom < h.newTo && h.newFrom < end && h.newTo > at) {
-      return { at, limit: Math.max(h.newTo, end) };
-    }
+
+  // The enclosing old line(s). A range ending ON a line break ends that line.
+  const lineStart = from === 0 ? 0 : oldText.lastIndexOf("\n", from - 1) + 1;
+  const nl = oldText.indexOf("\n", Math.max(from, to - 1));
+  const lineEnd = Math.max(nl === -1 ? oldText.length : nl, to);
+  const lines = oldText.slice(lineStart, lineEnd);
+  const p = at - (from - lineStart);
+  const q = p + lines.length;
+  if (p < 0 || newText.slice(p, q) !== lines) return null;
+  const wholeStart = p === 0 || newText[p - 1] === "\n";
+  const wholeEnd = q === newText.length || newText[q] === "\n" || lines.endsWith("\n");
+  if (!wholeStart || !wholeEnd) return null;
+
+  if (
+    splitsSurrogatePair(newText, at) !== splitsSurrogatePair(oldText, from) ||
+    splitsSurrogatePair(newText, end) !== splitsSurrogatePair(oldText, to)
+  ) {
+    return null;
   }
-  return null;
+
+  return hunks.some((h) => h.newFrom <= p && q <= h.newTo) ? at : null;
 }
