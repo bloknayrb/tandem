@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`tandem_checkInbox` no longer reports a selection you never made (#1997).** When the text at your last recorded selection has changed, for example because your AI edited a document in a background tab, `activity.selectedText` and `selectionAt` are now null rather than whatever text had moved under the old position. **Bound:** in the active tab they can also read null briefly, for about 150 ms after an edit that shifts the selection. **Bound:** a selection saved before this version reads null until you select again.
 - Pasting text that contains markdown such as `**bold**` no longer colours the text after the paste as yours in the authorship overlay (#1523).
 - Opening or uploading a document from the browser, and committing a large source-view edit, no longer fails for content over about 100 kB (#1981).
+- A tutorial annotation you deleted from the welcome document no longer comes back because its deletion record was cleaned up after 30 days (#2009). Tandem now keeps the deletion record for the tutorial's annotations and for imported Word comments, whose ids are re-created every time. This covers documents whose annotations changed within the last 30 days; a document whose annotations have not changed for longer than that can still bring them back, which is not fixed yet.
 
 ### Security
 

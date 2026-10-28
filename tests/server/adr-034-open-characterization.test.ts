@@ -92,13 +92,14 @@ import {
   resetForTesting as notificationsReset,
 } from "../../src/server/notifications.js";
 import { SESSION_DIR } from "../../src/server/platform.js";
-import { saveSession } from "../../src/server/session/manager.js";
+import { cleanupStaleTombstones, saveSession } from "../../src/server/session/manager.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
   CHARS_PER_PAGE,
   CTRL_ROOM,
   LARGE_FILE_PAGE_THRESHOLD,
   MAX_FILE_SIZE,
+  SESSION_MAX_AGE,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ANNOTATIONS,
@@ -381,6 +382,35 @@ describe("tutorial seeds across a reopen (#1696)", () => {
     for (const id of ids.filter((i) => i !== "tutorial-comment-1")) {
       expect(reopened.has(id), `reopen keeps ${id}`).toBe(true);
     }
+  });
+
+  it("a deleted seed stays deleted after its tombstone outlives the compaction horizon (#2009)", async () => {
+    const { filePath, resolved } = await copyWelcome();
+    const first = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+    expect(removeAnnotationRecord(doc, "tutorial-comment-1", "browser").kind).toBe("ok");
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(first.documentId)).success).toBe(true);
+
+    // Age the tombstone past SESSION_MAX_AGE. The envelope is rewritten now,
+    // so its mtime is fresh and the orphan sweep would leave it alone — this
+    // pins the compaction half only (see tombstone-sweep.test.ts for the rest).
+    const file = envelopePath(docHash(resolved));
+    const env = JSON.parse(await fs.readFile(file, "utf8")) as {
+      tombstones: { id: string; deletedAt: number }[];
+    };
+    const stone = env.tombstones.find((t) => t.id === "tutorial-comment-1");
+    expect(stone, "the delete left a durable tombstone").toBeDefined();
+    stone!.deletedAt = Date.now() - SESSION_MAX_AGE - 60_000;
+    await fs.writeFile(file, JSON.stringify(env), "utf8");
+    storeReset();
+
+    await cleanupStaleTombstones(new Set());
+    await fs.rm(SESSION_DIR, { recursive: true, force: true });
+
+    const second = await openFromDisk(filePath);
+    const reopened = getOrCreateDocument(second.documentId).getMap(Y_MAP_ANNOTATIONS);
+    expect(reopened.has("tutorial-comment-1"), "the compacted seed is not re-injected").toBe(false);
   });
 
   /** Open a fresh welcome.md copy and delete every seed. */

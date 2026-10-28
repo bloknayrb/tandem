@@ -4,7 +4,9 @@ import * as Y from "yjs";
 import {
   CTRL_ROOM,
   DOCUMENT_MODEL_REVISION,
+  IMPORT_ANNOTATION_ID_PREFIX,
   SESSION_MAX_AGE,
+  TUTORIAL_ANNOTATION_PREFIX,
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_STREAM,
@@ -1223,6 +1225,20 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<{
 }
 
 /**
+ * Whether an annotation or reply id is minted deterministically, so that the
+ * producer re-creates the SAME id on its next run (#2009): the onboarding
+ * tutorial's seeds (`tutorial-*`, re-injected on every open of
+ * `sample/welcome.md`) and imported Word comments and replies
+ * (`import-<hash>` / `import-reply-<hash>`, re-created on every re-import).
+ *
+ * Random ids can never match: `generateId` always joins its prefix with an
+ * underscore (`ann_…`, `rpl_…`), and both prefixes here end in a hyphen.
+ */
+export function isDeterministicAnnotationId(id: string): boolean {
+  return id.startsWith(TUTORIAL_ANNOTATION_PREFIX) || id.startsWith(IMPORT_ANNOTATION_ID_PREFIX);
+}
+
+/**
  * Compact stale tombstones from CLOSED documents' annotation envelopes (#318).
  *
  * Tombstones prevent a stale reconnecting browser tab from resurrecting a
@@ -1240,6 +1256,18 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<{
  *     but the guard is load-bearing if the call site ever moves.)
  *   - Only tombstones with `deletedAt` older than `SESSION_MAX_AGE` are
  *     dropped. Annotations, replies, and fresh tombstones are preserved.
+ *   - Tombstones of deterministic ids (`isDeterministicAnnotationId`) are
+ *     never dropped (#2009). The stale-peer argument above does not cover them:
+ *     the tutorial injector and the Word-comment import re-mint the same id on
+ *     their next run, and the tombstone is the only thing that remembers the
+ *     user deliberately deleted it — compacting it resurrects the seed or the
+ *     comment. Growth stays bounded: at most four tutorial ids, all in
+ *     `welcome.md`'s envelope, and import ids bounded by the distinct Word
+ *     comments ever deleted in that document; `recordTombstone` keys by id, so
+ *     a re-delete replaces rather than appends. This exemption only holds while
+ *     the envelope itself survives — `cleanupOrphanedAnnotationFiles` still
+ *     unlinks a whole envelope untouched for `SESSION_MAX_AGE`, tombstones
+ *     included (the remaining half of #2009).
  *   - The rewrite is routed through the store's `queueWrite`/`flush` (atomic
  *     write + debounce coalescing), never a raw `fs.writeFile`.
  *   - No-op in read-only mode.
@@ -1290,7 +1318,9 @@ export async function cleanupStaleTombstones(
     const doc = parsed.doc;
     if (doc.tombstones.length === 0) continue;
 
-    const kept = doc.tombstones.filter((t) => now - t.deletedAt <= SESSION_MAX_AGE);
+    const kept = doc.tombstones.filter(
+      (t) => isDeterministicAnnotationId(t.id) || now - t.deletedAt <= SESSION_MAX_AGE,
+    );
     if (kept.length === doc.tombstones.length) continue; // nothing stale
 
     // Re-key the rewrite to the FILENAME hash, not the envelope's internal

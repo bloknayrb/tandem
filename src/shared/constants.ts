@@ -539,6 +539,15 @@ export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 // this constant without updating useTutorial.svelte.ts would silently
 // re-introduce the step-1 auto-advance bug from PR #621 PR-A2b.
 export const TUTORIAL_ANNOTATION_PREFIX = "tutorial-";
+/**
+ * Prefix of the deterministic ids minted for imported Word comments and their
+ * replies (`import-<hash>` / `import-reply-<hash>`, `file-io/docx-comments.ts`).
+ * The id is a content hash, so re-importing the same file re-creates the same
+ * id — which is why `cleanupStaleTombstones` never compacts a tombstone with
+ * this prefix or `TUTORIAL_ANNOTATION_PREFIX` (#2009): the tombstone is the only
+ * memory that the user deliberately deleted it.
+ */
+export const IMPORT_ANNOTATION_ID_PREFIX = "import-";
 /** Persists "user skipped the Cowork onboarding step" across sessions. */
 export const COWORK_ONBOARDING_SKIPPED_KEY = "tandem:coworkOnboardingSkipped";
 /** Polling interval for `cowork_get_status` while the consumer is active. */
