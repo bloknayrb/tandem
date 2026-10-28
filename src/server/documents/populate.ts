@@ -33,6 +33,7 @@ import { attachObservers, clearFileSyncContext, getFileSyncContext } from "../ev
 import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { deleteSession } from "../session/manager.js";
+import { bumpContentGeneration } from "./content-generation.js";
 import { markClean } from "./dirty.js";
 import { endReadOnlyFileEpisode } from "./read-only-file.js";
 import type { OpenDoc } from "./registry.js";
@@ -466,6 +467,9 @@ export async function clearAndReload(
       // Read every annotation's range while the OLD fragment is still live —
       // after the swap its relRanges resolve to nothing.
       const remapInput = captureRemapInput(doc, resolved);
+      // #2070: a parked local-model turn that captured the old generation sees
+      // the replacement through this, since the Y.Doc instance is unchanged.
+      bumpContentGeneration(doc);
       clearDocMaps(doc, true);
       // Repopulate content via shared helper (idem with populateDocFromContent).
       applyPreparedContent(doc, prepared, ctx);

@@ -45,6 +45,7 @@ import {
   getAnnotationsDir,
   resetForTesting,
 } from "../../src/server/annotations/store.js";
+import { contentGeneration } from "../../src/server/documents/content-generation.js";
 import { openFromDisk, openScratchpad } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
@@ -304,6 +305,27 @@ describe.each(Object.keys(PATHS))("%s carries annotations onto the new content",
     const { range: _a, relRange: _b, ...restAfter } = annMap(doc).get("mcp") as Annotation;
     const { range: _c, relRange: _d, ...restBefore } = before;
     expect(restAfter, "identical apart from range and relRange").toEqual(restBefore);
+  });
+
+  it("bumps the content generation exactly once, in the transaction that swaps the content (#2070)", async () => {
+    const { doc, reload } = await open(OLD);
+    const before = contentGeneration(doc);
+    const fragment = doc.getXmlFragment("default");
+    const atSwap: number[] = [];
+    const onTxn = (txn: Y.Transaction) => {
+      if (txn.changed.has(fragment)) atSwap.push(contentGeneration(doc));
+    };
+    doc.on("afterTransaction", onTxn);
+    try {
+      await reload(NEW);
+    } finally {
+      doc.off("afterTransaction", onTxn);
+    }
+    expect(contentGeneration(doc)).toBe(before + 1);
+    // Every transaction that touched the content already saw the new number:
+    // there is no window in which the content is new and the generation old.
+    expect(atSwap.length).toBeGreaterThan(0);
+    expect(atSwap.every((g) => g === before + 1)).toBe(true);
   });
 
   it("a record whose text was deleted does not jump to another copy outside the edit", async () => {

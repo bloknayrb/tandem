@@ -40,6 +40,7 @@ import { watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { flagExternalConflict, readPendingConflict } from "./conflict.js";
+import { bumpContentGeneration } from "./content-generation.js";
 import { isDirty, markClean } from "./dirty.js";
 import { writeImportLossReport } from "./populate.js";
 import { revokeOverwriteApproval } from "./read-only-file.js";
@@ -150,6 +151,9 @@ export async function reloadFromDisk(
       // While the OLD fragment is still live — after the swap its relRanges
       // resolve to nothing.
       const remapInput = captureRemapInput(doc, filePath);
+      // #2070: a parked local-model turn that captured the old generation sees
+      // the replacement through this, since the Y.Doc instance is unchanged.
+      bumpContentGeneration(doc);
 
       const awareness = doc.getMap(Y_MAP_AWARENESS);
       awareness.forEach((_, k) => awareness.delete(k));

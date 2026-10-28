@@ -41,9 +41,10 @@ export interface LoopMetrics {
    * per-turn `timeoutMs`. Neither is caller-initiated, and `aborted` is silent
    * by design, so bucketing either one there tells the user nothing at all.
    *
-   * `doc-swapped` means the run's captured Y.Doc is no longer the room's live
-   * instance — a Hocuspocus swap, or the document being untracked; the
-   * collaborator distinguishes the two before notifying.
+   * `doc-swapped` means the run's captured Y.Doc is no longer the document it
+   * reasoned about — a Hocuspocus swap, the document being untracked, or (since
+   * #2070) its content replaced in place by a reload; the collaborator
+   * distinguishes the three before notifying.
    */
   exit: "clean" | "max_turns" | "max_tool_calls" | "timeout" | "aborted" | "error" | "doc-swapped";
   errorMessage?: string;
@@ -134,8 +135,10 @@ export interface RunLoopOpts {
    *  M1.2). `hadToolCalls` lets a streaming sink discard a tool-call turn's
    *  preamble so the next turn's content replaces it instead of bleeding in. */
   onTurnEnd?: (info: { hadToolCalls: boolean }) => void;
-  /** Still the same Y.Doc instance this run captured? (#2039) Omitted ⇒ treated
-   *  as `true`, so every caller that does not thread it is unchanged. */
+  /** Still the same Y.Doc instance this run captured, with its content not
+   *  replaced since? (#2039, #2070) Omitted ⇒ treated as `true`, so every caller
+   *  that does not thread it is unchanged. Checked at each turn boundary and
+   *  forwarded to every tool dispatch. */
   isDocCurrent?: () => boolean;
 }
 
@@ -250,6 +253,12 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
           // #1123 M3: the byline identity is prebuilt on the config (one source,
           // no extra RunLoopOpts field, no per-dispatch allocation).
           agentIdentity: config.agentIdentity,
+          // #2070: per-dispatch re-check. Defence in depth — `dispatch` is
+          // synchronous and nothing awaits inside this tool-call loop, so the
+          // turn-boundary check above has already seen any reload that could
+          // land before these writes. It is here so a future await inside the
+          // loop cannot reopen the hole silently.
+          isDocCurrent: opts.isDocCurrent,
         });
         const eff = outcome.effect;
         if ((eff.kind === "comment" || eff.kind === "replacement") && !eff.ok) {

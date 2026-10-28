@@ -501,3 +501,49 @@ describe("dispatch — malformed input", () => {
     expect((out.result as { error?: string }).error).toBe("MALFORMED_ARGS");
   });
 });
+
+describe("dispatch — the document changed under the run (#2070)", () => {
+  const ARGS: Record<string, Record<string, unknown>> = {
+    comment_on_quote: { quoted_text: "The team agreed", comment: "c" },
+    propose_replacement: {
+      quoted_text: "The team agreed",
+      suggested_text: "Everyone agreed",
+      rationale: "r",
+    },
+    reply_to_annotation: { annotation_id: "ann_x", text: "t" },
+  };
+
+  it("covers every mutating tool", () => {
+    // A new write tool must join the refusal; this fails until it is listed.
+    expect(Object.keys(ARGS).sort()).toEqual([...MUTATING_TOOLS].sort());
+  });
+
+  for (const name of Object.keys(ARGS)) {
+    it(`${name} refuses with DOCUMENT_CHANGED and writes nothing`, () => {
+      doc = makeMarkdownDoc(FIXTURE);
+      let writes = 0;
+      doc.on("afterTransaction", () => writes++);
+      const out = dispatch(name, ARGS[name], { ydoc: doc, isDocCurrent: () => false });
+      expect((out.result as { error?: string }).error).toBe("DOCUMENT_CHANGED");
+      expect(out.effect).toMatchObject({ ok: false, errorCode: "DOCUMENT_CHANGED" });
+      expect(writes, "no Y.Doc transaction at all").toBe(0);
+      expect(getAnnotationsMap(doc).size).toBe(0);
+    });
+  }
+
+  it("still writes when the predicate says current", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("comment_on_quote", ARGS.comment_on_quote, {
+      ydoc: doc,
+      isDocCurrent: () => true,
+    });
+    expect(out.effect).toMatchObject({ kind: "comment", ok: true });
+  });
+
+  it("leaves the read tools open — they read the live document by construction", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("get_outline", {}, { ydoc: doc, isDocCurrent: () => false });
+    expect(out.effect).toEqual({ kind: "read" });
+    expect((out.result as { error?: string }).error).toBeUndefined();
+  });
+});

@@ -281,6 +281,10 @@ const FAN_IN = [
   "server/events/observers/ctrl-meta.ts -> server/documents/registry.ts (value) x1",
   "server/events/queue.ts -> server/documents/dirty.ts (value) x1",
   "server/index.ts -> server/documents/open.ts (value) x1",
+  // #2070: a parked local-model turn re-validates its captured Y.Doc against
+  // the content generation the reloads bump — identity alone cannot see a
+  // reload, which keeps the instance.
+  "server/local-model/collaborator.ts -> server/documents/content-generation.ts (value) x1",
   "server/local-model/collaborator.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/convert.ts -> server/documents/open.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/dirty.ts (value) x1",

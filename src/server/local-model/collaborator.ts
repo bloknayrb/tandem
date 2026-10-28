@@ -31,6 +31,7 @@ import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.
 import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
 import type { AgentIdentity } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import { contentGeneration } from "../documents/content-generation.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
 import { type SubscriberKind, subscribe, unsubscribe } from "../events/queue.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
@@ -344,8 +345,21 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     //
     // #2039 extracts the identity conjunct so the loop's per-turn check and
     // this gate cannot drift apart.
+    //
+    // #2070: identity is necessary and NOT sufficient. Every content-replacing
+    // reload (force-open, the source-view commit, the file-watcher reload,
+    // restore, the external-conflict Reload) keeps the SAME instance and swaps
+    // what is in it, so a turn whose prompt was built before the reload would
+    // dispatch its quotes against text it never read — and a quote that still
+    // occurs somewhere anchors and verifies perfectly. The content generation
+    // (`documents/content-generation.ts`) is bumped inside each of those
+    // transactions; captured here, before the prompt is built (it is built
+    // synchronously inside `runTurn`), it makes "the document I reasoned about"
+    // one predicate.
+    const startGeneration = contentGeneration(ydoc);
     const docUnchanged = () => requireDocument(req.docName)?.doc === ydoc;
-    const stillOwner = () => current?.token === token && !abort.signal.aborted && docUnchanged();
+    const docCurrent = () => docUnchanged() && contentGeneration(ydoc) === startGeneration;
+    const stillOwner = () => current?.token === token && !abort.signal.aborted && docCurrent();
 
     if (!stillOwner()) return;
     if (!cachedConfig) return;
@@ -378,9 +392,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         signal: abort.signal,
         onContentDelta: sink.push,
         onTurnEnd: sink.onTurnEnd,
-        // #2039: stop the loop at the next turn boundary once our captured
-        // instance is no longer the room's live one.
-        isDocCurrent: docUnchanged,
+        // #2039 / #2070: stop the loop at the next turn boundary once our
+        // captured instance is no longer the room's live one, or its content
+        // was replaced — and refuse each write dispatch on the same predicate.
+        isDocCurrent: docCurrent,
       });
 
       // #2039: the swap arm sits OUTSIDE the ownership gate, deliberately.
@@ -397,13 +412,32 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
       // Ownership-gated terminal actions. A superseded / closed-doc / aborted run
       // drops its output silently (its last streamed partial stays in place).
       if (result.metrics.exit === "doc-swapped") {
+        const live = requireDocument(req.docName);
         // A null lookup means the document is CLOSED, not swapped — that
         // inherits the existing silent-drop contract (#2069: a close never
         // arrives as an abort, because `document:closed` never fires). Telling
         // a user who just closed a tab that it "reconnected" names a remedy no
-        // retry can satisfy. The ABORT is unchanged on both paths; only the
-        // message is suppressed on close.
-        if (requireDocument(req.docName)) {
+        // retry can satisfy. The ABORT is unchanged on every path; only the
+        // message differs.
+        if (live?.doc === ydoc) {
+          // #2070: the SAME instance, so the content was replaced under the
+          // turn (force-open, a source-view commit, a reload from disk). Unlike
+          // the swap arm below this one does test the token: a superseded run
+          // would tell the user about a reload the newer run already started
+          // from, and the arm is not dead code with the test in place, because
+          // `stillOwner()` fails here on the generation, not the token.
+          if (current?.token === token) {
+            pushNotification({
+              id: generateMessageId(),
+              type: "general-error",
+              severity: "warning",
+              message:
+                "The local model stopped: this document's content was replaced mid-turn (reloaded or edited in source view), so it stopped early — any comments it already added were carried over where their text survived, but its reply was not delivered. Ask again to continue.",
+              documentId: req.docName,
+              timestamp: Date.now(),
+            });
+          }
+        } else if (live) {
           pushNotification({
             id: generateMessageId(),
             type: "general-error",
