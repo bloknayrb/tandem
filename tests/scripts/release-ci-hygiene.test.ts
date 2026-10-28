@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -329,5 +329,67 @@ describe("#1748 a prerelease tag reaches neither update channel", () => {
         false,
       );
     }
+  });
+});
+
+/**
+ * #1949 — the release jobs run the npm and cargo build with signing and
+ * publishing credentials in scope. That exposure is ACCEPTED with a bound in
+ * docs/security.md ("Accepted (bounded)"), not fixed, and the bound is only as
+ * good as the tracked pins it rests on. The `--ignore-scripts` pin is the
+ * #1832 block above; the SHA pins are `workflow-action-pin.test.ts`. This block
+ * pins the rest: the triggers (the whole parsed `on:`, so an added
+ * `workflow_dispatch` or branch trigger fails here rather than being an
+ * unnoticed void condition), the environments the OIDC subjects bind to, the
+ * lockfiles, and the register entry naming all three tests.
+ */
+describe("#1949 the accepted signing-job exposure keeps its tracked bound", () => {
+  type Triggered = { on?: unknown; jobs?: Record<string, { environment?: unknown }> };
+  const load = (file: string) =>
+    parse(readFileSync(path.join(WORKFLOW_DIR, file), "utf8")) as Triggered;
+
+  it("tauri-release.yml triggers on a pushed v* tag and nothing else", () => {
+    expect(load("tauri-release.yml").on).toEqual({ push: { tags: ["v*"] } });
+  });
+
+  it("publish.yml triggers on a published release plus its tag-resolved dispatch, and nothing else", () => {
+    const on = load("publish.yml").on as Record<string, unknown>;
+    expect(Object.keys(on).sort()).toEqual(["release", "workflow_dispatch"]);
+    expect(on.release).toEqual({ types: ["published"] });
+    const dispatch = on.workflow_dispatch as { inputs?: Record<string, unknown> };
+    expect(Object.keys(dispatch.inputs ?? {})).toEqual(["tag"]);
+    // The dispatch is bounded by resolving its input through the tag namespace
+    // and requiring a published release. Pin that the resolver still does both.
+    const resolve = stepByMarker(jobOf("publish.yml", "publish"), "git/ref/tags/");
+    expect(resolve.step.run).toContain("releases/tags/");
+  });
+
+  it("the secret-holding jobs keep their environments", () => {
+    expect(load("tauri-release.yml").jobs?.["build-tauri"]?.environment).toEqual({
+      name: "release",
+    });
+    expect(load("publish.yml").jobs?.publish?.environment).toBe("npm");
+  });
+
+  it("both lockfiles the bound relies on are committed", () => {
+    for (const lock of ["package-lock.json", "src-tauri/Cargo.lock"]) {
+      expect(existsSync(path.join(ROOT, lock)), lock).toBe(true);
+    }
+  });
+
+  it("the register entry names the three tests that carry its bound", () => {
+    const security = readFileSync(path.join(ROOT, "docs/security.md"), "utf8");
+    const start = security.indexOf("- **[#1949](");
+    if (start === -1) throw new Error("docs/security.md has no #1949 register entry");
+    const end = security.indexOf("\n- **", start + 1);
+    const entry = security.slice(start, end === -1 ? undefined : end);
+    for (const test of [
+      "release-ci-hygiene.test.ts",
+      "workflow-action-pin.test.ts",
+      "release-signing-gates.test.ts",
+    ]) {
+      expect(entry, test).toContain(test);
+    }
+    expect(entry).toContain("revisit by 2027-04-28");
   });
 });
