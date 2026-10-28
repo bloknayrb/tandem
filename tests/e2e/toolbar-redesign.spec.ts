@@ -255,6 +255,28 @@ test("a chat-panel scroll keeps the selection popup; an editor scroll dismisses 
   const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
   await expect(annotateBtn).toBeVisible({ timeout: 3_000 });
 
+  // Wait out the entrance before dispatching. Every new `selectionPosition`
+  // (the width clamp can move `left` while the popup unrolls) re-runs the
+  // listener's effect, which disarms the guard for one frame — a dispatch in
+  // that frame is ignored by the old code too, and this half would pass
+  // without testing anything. A box unchanged across two frames means the
+  // position has settled and the guard is armed.
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect
+    .poll(
+      () =>
+        toolbar.evaluate(async (el) => {
+          const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+          const a = el.getBoundingClientRect();
+          await frame();
+          await frame();
+          const b = el.getBoundingClientRect();
+          return a.left === b.left && a.top === b.top && a.width === b.width;
+        }),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+
   await page.locator("[data-testid='chat-panel']").evaluate((el) => {
     el.dispatchEvent(new Event("scroll"));
   });
@@ -263,9 +285,10 @@ test("a chat-panel scroll keeps the selection popup; an editor scroll dismisses 
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
   await expect(annotateBtn, "a chat-panel scroll dismissed the selection popup").toBeVisible();
 
-  // The other half: scrolling the editor moves the selection out from under a
+  // The other half: scrolling the editor's real scroller — an ancestor of
+  // `.tiptap`, not `.tiptap` itself — moves the selection out from under a
   // fixed-position popup, so that one must still dismiss.
-  await editor.evaluate((el) => {
+  await page.locator("[data-testid='editor-scroll-container']").evaluate((el) => {
     el.dispatchEvent(new Event("scroll"));
   });
   await expect(annotateBtn).toHaveCount(0, { timeout: 3_000 });

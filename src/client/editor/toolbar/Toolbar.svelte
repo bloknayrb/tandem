@@ -578,6 +578,10 @@ $effect(() => {
 $effect(() => {
   if (!editor || !selectionPosition) return;
   const ed = editor;
+  // Read once, not inside the scroll listener: a destroyed Editor's `view`
+  // throws on `.dom`, and a scroll can land between destroy and this teardown.
+  // A measured `selectionPosition` means the view is mounted here.
+  const editorDom = ed.view.dom;
   let frame = 0;
 
   function scheduleUpdate() {
@@ -607,7 +611,7 @@ $effect(() => {
       if (!scrollDismissArmed) return;
       // A sibling panel scrolling (the chat panel's auto-scroll) does not move
       // the selection, so it must not dismiss — see scrollMovesSelection().
-      if (!scrollMovesSelection(event.target, ed.view.dom)) return;
+      if (!scrollMovesSelection(event.target, editorDom)) return;
       // Don't dismiss while the user is working in the popup. This is the guard
       // the draft-loss bug ran through — see popupHasFocus().
       if (popupHasFocus()) return;
