@@ -12,7 +12,7 @@ this file in the same PR, or say what replaced it. Every status below carries th
 last checked. Re-check before relying on it, and use `gh issue view` rather than trusting a
 state recorded here.
 
-_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the correctness and anchor-gate lists dropped #2187, #2188 and #2219 (closed by PRs #2225, #2228 and #2271) and gained #2269 and #2294._
+_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the open-work lists and exit criteria dropped every issue named here that had closed (#2187, #2188, #2192, #2219, #2180, #2201, #1696 and #1734) and gained #2269, #2294 and #2286._
 
 ## Active — Toward v1.0
 
@@ -76,7 +76,7 @@ outcome is keep, replace or retire.
 
 ### Open work that bears on v1.0
 
-This is a selection, not the full open list: issues judged on 2026-09-28 (and, for those filed since, on 2026-10-20) to affect
+This is a selection, not the full open list: issues judged on 2026-09-28 (and, for those filed since, on 2026-10-20 or 2026-10-28) to affect
 correctness, security, install or a named gate. Not all of them block. Triage each group
 before the flip: fix it, mark it post-v1.0 below, or accept it in
 [security.md](security.md#open-findings). For everything else, run `gh issue list`.
@@ -84,12 +84,12 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Security findings:** #1884 (the channel permission relay serves its `description` to local callers; its LAN half is dark under ADR-056), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #2064, #2069, #2070, #1982, #1980, #1662, #1632, #2009, #1920, #2269 (re-anchoring across every content-replacing reload), #2294 (`tandem_checkInbox` loses items when its response is lost).
-- **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2180 (launcher action per setup), #2192, #2186 (a beta report's diagnosis tracker).
-- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245, #2231, #2201.
+- **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2186 (a beta report's diagnosis tracker), #2286 (an auto-launched Claude can't call Tandem tools when `claude -p` starts in `default` permission mode; needs human evidence).
+- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245, #2231.
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
-- **Tutorial gate:** #1696, #1725, #1711.
+- **Tutorial gate:** #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
-- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333, #1734.
+- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
 
@@ -136,7 +136,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 - **Claude Code CLI works zero-config:** loopback-exempt, and tools work unchanged. Checked at RC.
 - **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) needs a migration to the v2 SDK packages (`@modelcontextprotocol/server` and friends, per #1506's 2026-09-29 pass), so until it lands a modern-only Claude Code would break Tandem outright.
 - **Tauri update flow.** PARTIAL. Download → install → restart must work on all three platforms, with the sidecar restarting and no data loss. Observed on macOS once and on Windows three times, most recently v0.24.1→v0.25.0 (closing #1596). Linux has not been observed. The `MayHaveFailed` arm, which should show the banner, is untested. A successful update writes nothing to `tandem.log` at the release log level, so someone has to watch the window.
-- **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. The anchor regression test exists (`tests/design-system-impl/tutorial-anchor.test.ts`). Open: #1696, #1725, #1711.
+- **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. The anchor regression test exists (`tests/design-system-impl/tutorial-anchor.test.ts`). Open: #1725, #1711.
 - **Dark/light toggle** works on desktop and in the browser. No recorded run.
 - **First-run wizard and keychain.** UNMET. One-click Claude Code connect has to work on all three platforms (detect → connect → `/mcp` shows Tandem's tools). The OS keychain must also pass a store→read round-trip on Windows Credential Manager and macOS Keychain, which CI cannot do. The rows exist in the smoke checklist (§1–§2, #1761), but no run of them is recorded.
 - **Updater banner and dot.** PARTIAL. The dot was observed on the macOS update run, and the Windows runs recorded the in-app banner. The dot clearing, on opening settings or on install, was not recorded.
@@ -159,7 +159,7 @@ v0.26.0, v0.27.0 or v0.28.0.
   - an annotation create or accept reflected in the editor under 500 ms
   - no frame stall over 100 ms during a scripted scroll
 - **Run 3 (2026-09-11)** passed every condition on one Windows 11 workstation. macOS and Linux were never measured.
-- **Open:** #1333 (condition 3 uncharacterised on Windows) and #1734 (its last comment calls it closeable).
+- **Open:** #1333 (condition 3 uncharacterised on Windows).
 - **If a run fails, that is a finding to fix, not a reason to relax the numbers.** [perf-gate-results.md](perf-gate-results.md) relies on this rule.
 
 **Commercial readiness.** UNMET. This gates the license flip. If it is not ready at code-complete, the date floats and **the gate flag does not ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
