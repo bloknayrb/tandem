@@ -14,7 +14,11 @@ import {
 import { aiRefusal, aiRefusalFor } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
 import type { LicenseState } from "../../src/server/license/license-types.js";
-import { trialFilePath } from "../../src/server/license/paths.js";
+import {
+  licenseFilePath,
+  licenseGraceFilePath,
+  trialFilePath,
+} from "../../src/server/license/paths.js";
 import { appendClaudeChatMessage } from "../../src/server/mcp/awareness.js";
 import {
   closeMcpSession,
@@ -98,6 +102,22 @@ describe("aiRefusalFor (pure)", () => {
     const refusal = aiRefusalFor({ ...RESTRICTED, licenseUnverifiable: "UNKNOWN" });
     expect(refusal?.message).toMatch(/license is installed/);
   });
+
+  // #2231: the one non-licensed status that admits by design.
+  it.each(["BAD_SIGNATURE", "MALFORMED", "UNSUPPORTED_VERSION", "UNKNOWN"] as const)(
+    "admits the grace period (%s)",
+    (code) => {
+      expect(
+        aiRefusalFor({
+          gateActive: true,
+          status: "grace",
+          updateWindowCurrent: false,
+          licenseUnverifiable: code,
+          grace: { firstFailedAt: "", endsAt: "", daysRemaining: 3 },
+        }),
+      ).toBeNull();
+    },
+  );
 });
 
 describe("dark: every admission point admits (#1521)", () => {
@@ -115,6 +135,9 @@ describe("dark: every admission point admits (#1521)", () => {
       trialFilePath(dir),
       JSON.stringify({ version: 1, firstRunAt: new Date(Date.now() - 30 * DAY).toISOString() }),
     );
+    // And a licence file that fails its check (#2231): armed, this would start
+    // a grace record. Dark, nothing may read or write one.
+    fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: "not-a-license" }));
     process.env.TANDEM_APP_DATA_DIR = dir;
     port = await allocPort();
     httpServer = await startMcpServerHttp(port, "127.0.0.1");
@@ -132,6 +155,16 @@ describe("dark: every admission point admits (#1521)", () => {
   it("is actually dark", () => {
     expect(GATE_ENABLED).toBe(false);
     expect(aiRefusal()).toBeNull();
+  });
+
+  it("never reads or writes a grace record, even over a broken licence (#2231)", async () => {
+    expect(aiRefusal()).toBeNull();
+    // The status route resolves with `gateEnabled: true` on a dark build
+    // (`darkInstallInfo`); it must not start a grace clock either.
+    const res = await fetch(`http://127.0.0.1:${port}/api/license/status`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ gateActive: false, licenseInstalled: false });
+    expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(false);
   });
 
   it("POST /mcp initialize mints a session", async () => {
@@ -222,5 +255,11 @@ describe("dark: every admission point admits (#1521)", () => {
     const msg = await answer;
     await client.close();
     expect(msg.result).toBeDefined();
+  });
+
+  // Last on purpose: every admission point above has now run over the broken
+  // licence, and none of them may have started a grace clock (#2231).
+  it("left no grace record behind after every admission point ran", () => {
+    expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(false);
   });
 });

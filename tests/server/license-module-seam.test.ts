@@ -160,6 +160,9 @@ describe("licence module seam (#1521)", () => {
         "src/server/mcp/server.ts",
       ],
       "gate-flag": ["src/cli/license.ts", "src/server/index.ts"],
+      // #2231: the grace record. license-state.ts is its only importer, and
+      // importers inside src/server/license/ are not listed here.
+      grace: [],
       "kv-store": [],
       "license-state": [
         "src/cli/license.ts",

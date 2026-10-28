@@ -216,3 +216,45 @@ export function unverifiableLicenseMessage(code: LicenseUnverifiableCode): strin
       );
   }
 }
+
+/**
+ * A grace end date as the reader's own calendar date, `YYYY-MM-DD` (#2231).
+ * Local, not `iso.slice(0, 10)` (a UTC date), so the CLI, doctor and the
+ * editor print the same day on the same machine. `""` for an unparseable value.
+ */
+export function formatGraceEndDate(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * The full grace-period copy (#2231): Settings → License and `tandem license`.
+ * The code-specific remedy first, then the promise. **Never carries the
+ * purchase URL** (ADR-040 decision 8): this reader most likely paid. Every code
+ * ends up naming the support address — `UNSUPPORTED_VERSION`'s remedy ("update
+ * Tandem") is the one that does not on its own.
+ */
+export function licenseGraceMessage(code: LicenseUnverifiableCode, endsOn: string): string {
+  const support =
+    code === "UNSUPPORTED_VERSION" ? ` If that doesn't fix it, email ${TANDEM_SUPPORT_EMAIL}.` : "";
+  return (
+    `${unverifiableLicenseMessage(code)}${support} Tandem is keeping its AI features on until ` +
+    `${endsOn} while this is sorted out.`
+  );
+}
+
+/**
+ * The activity-tray notice for the grace period (#2231). A `warning`, which
+ * persists in the tray, so it follows that severity's tense convention: the
+ * observation in the past tense, the promise in the future. Short, because the
+ * full remedy is one click away in Settings → License. No purchase URL.
+ */
+export function licenseGraceNoticeMessage(endsOn: string): string {
+  return (
+    "Tandem couldn't verify the license installed on this device. Its AI features will " +
+    `stay on until ${endsOn} — email ${TANDEM_SUPPORT_EMAIL} to get it sorted. ` +
+    "Details are in Settings → License."
+  );
+}

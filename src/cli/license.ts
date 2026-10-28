@@ -25,11 +25,13 @@ import type { LicenseState, SignatureVerified } from "../server/license/license-
 import { resolveAppDataDir } from "../server/platform.js";
 import { API_LICENSE_ACTIVATE } from "../shared/api-paths.js";
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
-import { TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../shared/constants.js";
+import { LICENSE_GRACE_DAYS, TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../shared/constants.js";
 import { ERROR_CODE_BAD_ORIGIN } from "../shared/integrations/contract.js";
 import {
   activationErrorMessage,
+  formatGraceEndDate,
   LICENSE_SAVED_STATE_UNREADABLE,
+  licenseGraceMessage,
   unverifiableLicenseMessage,
 } from "../shared/license-copy.js";
 
@@ -91,6 +93,15 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
         ? ` (trial clock: ${state.trial.daysRemaining} of ${TRIAL_DAYS} days)`
         : "";
     lines.push(`  Status:        ${which} — nothing is enforced in this build${clock}`);
+  } else if (state.gateActive && state.status === "grace") {
+    // #2231: an installed licence failed its check, and its grace period is
+    // running. Explicit, because the final else would print "licensed". No
+    // purchase link: this reader most likely paid (ADR-040 decision 8).
+    const endsOn = formatGraceEndDate(state.grace.endsAt);
+    lines.push(
+      `  Status:        license not verified — AI features stay on until ${endsOn} ` +
+        `(${state.grace.daysRemaining} of ${LICENSE_GRACE_DAYS} days left)`,
+    );
   } else if (state.gateActive && state.status === "trial") {
     lines.push(
       `  Status:        trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`,
@@ -136,9 +147,16 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
   // they must never read as unlicensed or be offered a purchase; this paragraph
   // is their remedy. The message is chosen by the code, so it names the actual
   // remedy rather than hedging across three.
+  //
+  // In the grace period the paragraph is the grace copy instead, which carries
+  // the same remedy plus the date — one paragraph, not the remedy twice.
   if (state.gateActive && state.status !== "licensed" && state.licenseUnverifiable) {
+    const text =
+      state.status === "grace" && enforcementOn
+        ? licenseGraceMessage(state.licenseUnverifiable, formatGraceEndDate(state.grace.endsAt))
+        : unverifiableLicenseMessage(state.licenseUnverifiable);
     lines.push("");
-    for (const line of wrapForTerminal(unverifiableLicenseMessage(state.licenseUnverifiable))) {
+    for (const line of wrapForTerminal(text)) {
       lines.push(`  ${line}`);
     }
   }
@@ -157,6 +175,10 @@ export async function runLicenseStatus(): Promise<void> {
     appDataDir: resolveAppDataDir(),
     now: () => Date.now(),
     gateEnabled: true,
+    // Read the grace record only where it is enforced (#2231). On a dark
+    // build `tandem license` prints exactly what it printed before, and never
+    // reads `license-grace.json`. Never "record": the CLI only reports.
+    grace: GATE_ENABLED ? "read" : "off",
   });
   for (const line of formatLicenseStatus(state, GATE_ENABLED)) console.log(line);
 }

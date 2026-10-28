@@ -721,7 +721,10 @@ export interface TandemNotification {
     | "external-conflict"
     | "read-only-file"
     | "launcher"
-    | "documents-not-reopened";
+    | "documents-not-reopened"
+    // Client-originated from the licence status poll (#2231): the grace-period
+    // notice. Never sent over the notify stream, and never shown to Claude.
+    | "license";
   /** Also selects the notice's lifetime, and therefore its tense. Only `info`
    *  expires (`ACTIVITY_INFO_TTL_MS`); `warning` and `error` persist in the
    *  activity tray, which is a LOG. A present-tense observation at those two

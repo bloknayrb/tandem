@@ -18,7 +18,7 @@ import {
   resolveLicenseState,
   resolveLiveLicenseState,
 } from "../../license/license-state.js";
-import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
+import type { GraceInfo, LicenseState, LicenseStatus } from "../../license/license-types.js";
 import { npmCliSharesAppDataRoot, resolveAppDataDir } from "../../platform.js";
 
 /**
@@ -87,6 +87,7 @@ export function scrubForNonLoopback(s: LicenseState): {
   updateWindowCurrent: boolean;
   licenseUnverifiable?: LicenseUnverifiableCode;
   licenseInstalled?: boolean;
+  grace?: GraceInfo;
 } {
   if (!s.gateActive) {
     return {
@@ -107,6 +108,9 @@ export function scrubForNonLoopback(s: LicenseState): {
     // license content, name, id or email in it. The client needs it to avoid
     // telling a license holder that their trial ended.
     licenseUnverifiable: s.status === "licensed" ? undefined : s.licenseUnverifiable,
+    // Not PII either (#2231): two dates and a day count about this device's own
+    // licence file. The client's grace notice and doctor's row need it.
+    ...(s.status === "grace" ? { grace: s.grace } : {}),
   };
 }
 

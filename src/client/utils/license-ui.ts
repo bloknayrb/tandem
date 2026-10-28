@@ -16,7 +16,13 @@
  * this reads only fields present in BOTH shapes, plus the optional licensee email
  * (loopback only) used for the "Licensed to {email}" label.
  */
-import type { AiRefusalKind, LicenseUnverifiableCode } from "../../shared/license-copy";
+import {
+  type AiRefusalKind,
+  formatGraceEndDate,
+  type LicenseUnverifiableCode,
+  licenseGraceNoticeMessage,
+} from "../../shared/license-copy";
+import type { TandemNotification } from "../../shared/types";
 
 /** Why the AI features are off on this client. One union, shared with the server's refusal. */
 export type AiNotice = AiRefusalKind;
@@ -26,7 +32,7 @@ export const AI_OFF_TITLE = "AI features are off";
 
 export interface LicenseStatusResponse {
   gateActive: boolean;
-  status: "trial" | "licensed" | "restricted";
+  status: "trial" | "licensed" | "restricted" | "grace";
   /** Scrubbed (LAN) payload carries daysRemaining at top level. */
   daysRemaining?: number;
   /** Full (loopback) payload nests it under trial. */
@@ -41,6 +47,11 @@ export interface LicenseStatusResponse {
    * ended, which for a beta tester is a trial they never had.
    */
   licenseUnverifiable?: LicenseUnverifiableCode;
+  /**
+   * The grace period (#2231): present on the `grace` status only, on both the
+   * loopback and the LAN-scrubbed payload (two dates and a day count, no PII).
+   */
+  grace?: { firstFailedAt: string; endsAt: string; daysRemaining: number };
   /**
    * Dark-build only: a license IS installed and would verify once the gate is
    * on. `gateActive` stays false, so this must never drive gate-only chrome —
@@ -110,6 +121,24 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
     };
   }
 
+  // #2231: an installed licence failed its check and its grace period is
+  // running. The AI stays on (aiNotice null), there is no trial banner (this
+  // reader is a licence holder, not an evaluator), and the label never says
+  // "Licensed". Explicit, because the fallthrough below is the licensed arm.
+  if (state.status === "grace") {
+    const days = state.grace?.daysRemaining;
+    return {
+      aiNotice: null,
+      aiOff: false,
+      showTrialBanner: false,
+      trialDaysRemaining: null,
+      statusLabel:
+        days != null
+          ? `License not verified — AI on for ${days} more day${days === 1 ? "" : "s"}`
+          : "License not verified",
+    };
+  }
+
   if (state.status === "trial") {
     const days = trialDays(state);
     return {
@@ -161,4 +190,70 @@ export function aiOffCopy(kind: AiNotice): { short: string; sentence: string; re
       return _exhaustive;
     }
   }
+}
+
+/** The activity-tray identity of the grace-period notice (#2231). */
+export const LICENSE_GRACE_DEDUP_KEY = "license-grace";
+
+export interface LicenseGraceNoticePlan {
+  /** A notice to push now, or `null`. */
+  push: TandemNotification | null;
+  /** Tray rows to remove: every grace row, once the device is out of grace. */
+  dismissIds: string[];
+  /** The caller's "already handled on this page load" flag, to store for next time. */
+  handledThisLoad: boolean;
+}
+
+/**
+ * What the activity tray should do about the licence grace period (#2231),
+ * given the latest status poll. Pure, so the matrix is testable without
+ * mounting `App.svelte`.
+ *
+ * - **In grace:** push one warning per page load. Not at all when the tray —
+ *   rehydrated from localStorage — already holds a grace row, and not again on
+ *   later polls of the same load. Keyed on the dedupKey and a per-load flag,
+ *   never on a date-derived id: when the grace record cannot be written, its
+ *   start date is "now" on every poll, and a date-keyed guard would re-toast
+ *   every minute.
+ * - **Out of grace** (licensed, trial, restricted, or a dark build): remove any
+ *   grace row, so a stale notice never outlives the state it describes.
+ * - **No status** (first poll in flight, or a failed poll): do nothing. A
+ *   failed poll is not evidence the grace ended.
+ *
+ * A warning persists in the tray (`ACTIVITY_INFO_TTL_MS` expires info only),
+ * which is what makes the notice persistent. Best-effort: the tray's history
+ * cap can still evict it, and it comes back on the next page load.
+ */
+export function planLicenseGraceNotice(input: {
+  status: LicenseStatusResponse | null;
+  activity: readonly { id: string; dedupKey?: string }[];
+  handledThisLoad: boolean;
+  now: number;
+}): LicenseGraceNoticePlan {
+  const { status, activity, handledThisLoad, now } = input;
+  if (status == null) return { push: null, dismissIds: [], handledThisLoad };
+  const inGrace = status.gateActive && status.status === "grace";
+  if (!inGrace) {
+    return {
+      push: null,
+      dismissIds: activity.filter((a) => a.dedupKey === LICENSE_GRACE_DEDUP_KEY).map((a) => a.id),
+      handledThisLoad: false,
+    };
+  }
+  if (handledThisLoad || activity.some((a) => a.dedupKey === LICENSE_GRACE_DEDUP_KEY)) {
+    return { push: null, dismissIds: [], handledThisLoad: true };
+  }
+  const endsOn = status.grace ? formatGraceEndDate(status.grace.endsAt) : "";
+  return {
+    push: {
+      id: `license-grace-${now}`,
+      timestamp: now,
+      type: "license",
+      severity: "warning",
+      message: licenseGraceNoticeMessage(endsOn || "the end of the grace period"),
+      dedupKey: LICENSE_GRACE_DEDUP_KEY,
+    },
+    dismissIds: [],
+    handledThisLoad: true,
+  };
 }

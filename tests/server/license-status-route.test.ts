@@ -676,3 +676,36 @@ describe("cliActivateEffective on the wire", () => {
     expect(res.body).not.toHaveProperty("cliActivateEffective");
   });
 });
+
+describe("grace period on the wire (#2231)", () => {
+  const GRACE: LicenseState = {
+    gateActive: true,
+    status: "grace",
+    updateWindowCurrent: false,
+    licenseUnverifiable: "BAD_SIGNATURE",
+    grace: {
+      firstFailedAt: "2026-10-01T00:00:00.000Z",
+      endsAt: "2026-10-15T00:00:00.000Z",
+      daysRemaining: 3,
+    },
+  };
+
+  it("passes the grace arm through to a loopback caller verbatim", () => {
+    expect(toLicenseStatusWire(GRACE)).toEqual(GRACE);
+  });
+
+  it("keeps the grace dates and the code on the scrubbed wire, and nothing else new", () => {
+    expect(scrubForNonLoopback(GRACE)).toEqual({
+      gateActive: true,
+      status: "grace",
+      daysRemaining: undefined,
+      updateWindowCurrent: false,
+      licenseUnverifiable: "BAD_SIGNATURE",
+      grace: GRACE.status === "grace" ? GRACE.grace : undefined,
+    });
+  });
+
+  it("puts no grace field on any other arm", () => {
+    expect(scrubForNonLoopback(FULL)).not.toHaveProperty("grace");
+  });
+});

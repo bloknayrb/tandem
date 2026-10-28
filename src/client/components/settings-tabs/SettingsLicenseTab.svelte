@@ -1,6 +1,10 @@
 <script lang="ts">
 import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../../shared/constants";
-import { unverifiableLicenseMessage } from "../../../shared/license-copy";
+import {
+  formatGraceEndDate,
+  licenseGraceMessage,
+  unverifiableLicenseMessage,
+} from "../../../shared/license-copy";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import LicenseActivateForm from "../LicenseActivateForm.svelte";
@@ -57,6 +61,11 @@ const pillLabel = $derived(
 function onActivated(): void {
   ctx.notify("info", "License activated.");
 }
+
+// #2231: the grace period. The notice replaces the plain unverifiable warning
+// rather than repeating its remedy beneath it.
+const inGrace = $derived(status?.gateActive === true && status.status === "grace");
+const graceEndsOn = $derived(status?.grace ? formatGraceEndDate(status.grace.endsAt) : "");
 </script>
 
 <div data-testid="license-settings-section">
@@ -123,7 +132,13 @@ function onActivated(): void {
     {/if}
   </div>
 
-  {#if status?.licenseUnverifiable}
+  {#if inGrace && status?.licenseUnverifiable}
+    <!-- #2231: AI stays on until the grace period ends. Never a buy link (the
+         one below is hidden whenever `licenseUnverifiable` is set). -->
+    <div class="license-warning" data-testid="license-grace-notice" role="alert">
+      {licenseGraceMessage(status.licenseUnverifiable, graceEndsOn || "the end of the grace period")}
+    </div>
+  {:else if status?.licenseUnverifiable}
     <div class="license-warning" data-testid="license-unverifiable-warning" role="alert">
       {unverifiableLicenseMessage(status.licenseUnverifiable)}
     </div>

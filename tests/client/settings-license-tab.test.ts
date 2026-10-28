@@ -313,3 +313,48 @@ describe("Settings → License — no purchase link for an unverifiable licence 
     unmount();
   });
 });
+
+/**
+ * The grace period (#2231): the notice replaces the plain unverifiable warning
+ * (one remedy, not two), and there is still no purchase link.
+ */
+describe("Settings → License — the grace period (#2231)", () => {
+  const GRACE: LicenseStatusResponse = {
+    gateActive: true,
+    status: "grace",
+    updateWindowCurrent: false,
+    licenseUnverifiable: "BAD_SIGNATURE",
+    grace: {
+      firstFailedAt: new Date(2026, 9, 29, 12).toISOString(),
+      endsAt: new Date(2026, 10, 12, 12).toISOString(),
+      daysRemaining: 6,
+    },
+  };
+
+  it("shows the grace notice with its date, no plain warning, and no buy link", () => {
+    licenseStore.set(GRACE);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    const notice = byTestId(container, "license-grace-notice");
+    expect(notice).toBeTruthy();
+    expect(notice?.getAttribute("role")).toBe("alert");
+    expect(flat(notice)).toContain("until 2026-11-12");
+    expect(flat(notice)).toContain(TANDEM_SUPPORT_EMAIL);
+    expect(byTestId(container, "license-unverifiable-warning")).toBeNull();
+    expect(byTestId(container, "license-buy-link")).toBeNull();
+    expect(flat(byTestId(container, "license-status-pill"))).toBe(
+      "License not verified — AI on for 6 more days",
+    );
+  });
+
+  it("outside grace, an unverifiable licence keeps the plain warning (positive twin)", () => {
+    licenseStore.set({
+      gateActive: true,
+      status: "restricted",
+      updateWindowCurrent: false,
+      licenseUnverifiable: "BAD_SIGNATURE",
+    });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-grace-notice")).toBeNull();
+    expect(byTestId(container, "license-unverifiable-warning")).toBeTruthy();
+  });
+});
