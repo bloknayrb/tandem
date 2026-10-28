@@ -220,6 +220,8 @@ describe("runDeactivate (#1943)", () => {
     expect(fs.existsSync(graceFile())).toBe(false);
     expect(logs.join("\n")).toContain("✓ License removed from this device.");
     expect(logs.join("\n")).not.toContain("didn't take the request");
+    // The desktop app's store is not this one, so "removed" here says nothing about it.
+    expect(logs.join("\n")).toContain("changed only this command's own store");
     expect(exit).not.toHaveBeenCalled();
   });
 

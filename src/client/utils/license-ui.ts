@@ -217,8 +217,9 @@ export interface LicenseGraceNoticePlan {
  * mounting `App.svelte`.
  *
  * - **In grace:** push one warning per page load. Not at all when the tray —
- *   rehydrated from localStorage — already holds a grace row, and not again on
- *   later polls of the same load. Keyed on the dedupKey and a per-load flag,
+ *   rehydrated from localStorage — already holds a grace row naming the same
+ *   end date (a row with a stale date is replaced), and not again on later
+ *   polls of the same load. Keyed on the dedupKey and a per-load flag,
  *   never on a date-derived id: when the grace record cannot be written, its
  *   start date is "now" on every poll, and a date-keyed guard would re-toast
  *   every minute.
@@ -233,7 +234,7 @@ export interface LicenseGraceNoticePlan {
  */
 export function planLicenseGraceNotice(input: {
   status: LicenseStatusResponse | null;
-  activity: readonly { id: string; dedupKey?: string }[];
+  activity: readonly { id: string; dedupKey?: string; message?: string }[];
   handledThisLoad: boolean;
   now: number;
 }): LicenseGraceNoticePlan {
@@ -247,20 +248,31 @@ export function planLicenseGraceNotice(input: {
       handledThisLoad: false,
     };
   }
-  if (handledThisLoad || activity.some((a) => a.dedupKey === LICENSE_GRACE_DEDUP_KEY)) {
+  if (handledThisLoad) return { push: null, dismissIds: [], handledThisLoad: true };
+  const endsOn = status.grace ? formatGraceEndDate(status.grace.endsAt) : "";
+  const message = licenseGraceNoticeMessage(endsOn || "the end of the grace period");
+  const existing = activity.filter((a) => a.dedupKey === LICENSE_GRACE_DEDUP_KEY);
+  // A rehydrated row is kept only while it still names the current end date.
+  // The grace can move between loads without ever leaving it (another failing
+  // key, or a record that could not be written and restarted with the server),
+  // and a persisted "on until <old date>" would then be wrong. Once per load at
+  // most, so a moving date still never re-toasts on every poll.
+  if (
+    existing.length > 0 &&
+    existing.every((a) => a.message === undefined || a.message === message)
+  ) {
     return { push: null, dismissIds: [], handledThisLoad: true };
   }
-  const endsOn = status.grace ? formatGraceEndDate(status.grace.endsAt) : "";
   return {
     push: {
       id: `license-grace-${now}`,
       timestamp: now,
       type: "license",
       severity: "warning",
-      message: licenseGraceNoticeMessage(endsOn || "the end of the grace period"),
+      message,
       dedupKey: LICENSE_GRACE_DEDUP_KEY,
     },
-    dismissIds: [],
+    dismissIds: existing.map((a) => a.id),
     handledThisLoad: true,
   };
 }

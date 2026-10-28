@@ -718,7 +718,14 @@ export async function runDeactivate(): Promise<void> {
     extra.push(
       "  Tandem didn't confirm the removal, so it was done here as well. Check Settings → License in Tandem.",
     );
-  } else if (outcome.reason !== "unreachable" && outcome.reason !== "non-loopback-url") {
+  } else if (outcome.reason === "unreachable" || outcome.reason === "non-loopback-url") {
+    // No Tandem answered, so this changed only this command's own store. On an
+    // npm install that is Tandem's store too; the desktop app keeps its own, so
+    // a "removed" or "nothing installed" here says nothing about it.
+    extra.push(
+      "  Tandem isn't running, so this changed only this command's own store. The desktop app keeps its license separately: if it still shows one, use Settings → License there.",
+    );
+  } else {
     // A Tandem answered but did not take the request (an older version, say).
     // This removed the licence from this command's own store, which may not be
     // the one that Tandem reads (on desktop it is not).

@@ -252,6 +252,28 @@ describe("planLicenseGraceNotice (#2231)", () => {
     expect(plan.handledThisLoad).toBe(true);
   });
 
+  it("replaces a rehydrated grace row whose end date is stale, once per load", () => {
+    const stale = { ...row, message: "Tandem couldn't verify … stay on until 2026-01-01 — …" };
+    const plan = planLicenseGraceNotice({
+      status: GRACE_STATUS,
+      activity: [stale],
+      handledThisLoad: false,
+      now: NOW,
+    });
+    expect(plan.dismissIds).toEqual(["license-grace-1"]);
+    expect(plan.push?.message).toContain("until 2026-11-12");
+    expect(plan.handledThisLoad).toBe(true);
+    const current = { ...row, message: plan.push?.message };
+    expect(
+      planLicenseGraceNotice({
+        status: GRACE_STATUS,
+        activity: [current],
+        handledThisLoad: false,
+        now: NOW,
+      }),
+    ).toEqual({ push: null, dismissIds: [], handledThisLoad: true });
+  });
+
   it("keys on the dedupKey, not a date: a moving firstFailedAt never re-toasts", () => {
     const first = planLicenseGraceNotice({
       status: GRACE_STATUS,

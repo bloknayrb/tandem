@@ -221,9 +221,9 @@ export function resolveLicenseState(deps: {
   // not verify — a tester holding a pre-key-rotation license, a corrupted file,
   // or a license from a newer schema. An unverified license never unlocks for
   // good: it gets the bounded grace period below (#2231), then falls through
-  // to the trial clock. And the state has to say so: without it, every surface tells a person with a
-  // license sitting on disk that their *trial* ended — a trial they may never
-  // have had. It was previously swallowed by a bare `catch {}` with no log, no
+  // to the trial clock. And the state has to say so: without it, every surface
+  // tells a person with a license sitting on disk that their *trial* ended — a
+  // trial they may never have had. It was previously swallowed by a bare `catch {}` with no log, no
   // status and no UI.
   //
   // It carries the CODE, not a boolean. "Have it reissued", "the file is
@@ -252,7 +252,6 @@ export function resolveLicenseState(deps: {
   }
   const lf = lfRead.kind === "parsed" ? lfRead.value : null;
   if (lf?.blob) {
-    graceKey = graceKeyForBlob(lf.blob);
     try {
       const meta = verify(lf.blob);
       if (knownVersion(meta.version)) {
@@ -289,6 +288,9 @@ export function resolveLicenseState(deps: {
           "device as unlicensed. A license issued before a signing-key change must be reissued.",
       );
     }
+    // Keyed only on a failure: the licensed arm above returns first, so the
+    // per-dispatch hot path never pays for the hash.
+    graceKey = graceKeyForBlob(lf.blob);
   }
 
   // 1b. Grace (#2231, ADR-040 amendment 2026-10-28). An installed licence that

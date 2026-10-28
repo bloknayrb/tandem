@@ -324,7 +324,11 @@ $effect(() => {
       now: Date.now(),
     });
     licenseGraceHandled = plan.handledThisLoad;
-    for (const id of plan.dismissIds) notifications.dismissActivity(id);
+    for (const id of plan.dismissIds) {
+      notifications.dismissActivity(id);
+      // The pop too, so a grace warning never lingers beside "License activated".
+      notifications.dismiss(id);
+    }
     if (plan.push) notifications.push(plan.push);
   });
 });
