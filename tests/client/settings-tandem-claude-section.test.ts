@@ -300,7 +300,9 @@ describe("SettingsTandemClaudeSection", () => {
 
 describe("SettingsTandemClaudeSection — the launcher-absent hint (#1823)", () => {
   function statusIs(body: unknown): void {
-    const inner = fetchSpy.getMockImplementation();
+    const inner = fetchSpy.getMockImplementation() as
+      | ((url: RequestInfo | URL, init?: RequestInit) => Promise<Response>)
+      | undefined;
     fetchSpy.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) =>
       String(url) === `${API_BASE}${API_LAUNCHER_STATUS}` ? json(200, body) : inner?.(url, init),
     );
