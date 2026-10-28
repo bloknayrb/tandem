@@ -287,6 +287,23 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
    */
   const LIGHT_INSET_DELTA_L_FLOOR = 12;
 
+  /**
+   * Dark's floor, lower than light's on purpose (#1683). A black overlay
+   * saturates on dark's near-black sunk surface (0.45 measures 3.85, and even
+   * 0.75 only 5.68), so the dark press is carried by a white bottom-edge layer
+   * instead, measured at 9.17 for its 0.08 alpha. 8 is set so that the adopted
+   * value passes with margin while the two near misses fail: a black-only value
+   * (3.85) and a 0.06 white edge (6.94).
+   */
+  const DARK_INSET_DELTA_L_FLOOR = 8;
+
+  /** A shadow value's comma-separated layers (commas inside `rgba(…)` kept). */
+  const shadowLayers = (value: string | undefined) =>
+    (value ?? "")
+      .split(/,(?![^(]*\))/)
+      .map((layer) => layer.trim())
+      .filter(Boolean);
+
   /** `--tandem-shadow-inset`'s declared value inside a slice of index.html. */
   const INSET_RE = /--tandem-shadow-inset:\s*([^;]+);/;
   const insetIn = (css: string) => css.match(INSET_RE)?.[1]?.trim();
@@ -385,6 +402,38 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
     ).toBeGreaterThanOrEqual(LIGHT_INSET_DELTA_L_FLOOR);
   });
 
+  it("the dark inset makes a visible band over dark's sunk surface (#1683)", () => {
+    const { html, darkAt, dark } = insetValues();
+    const sunk = sunkOf(html.slice(darkAt));
+    const layers = shadowLayers(dark);
+    expect(layers.length, `could not split ${dark} into shadow layers`).toBeGreaterThan(0);
+    // Per layer, and the strongest one counts: the layers sit on different
+    // edges of the key, so each is its own band rather than a stacked overlay.
+    const delta = Math.max(...layers.map((layer) => insetDeltaL(sunk, layer)));
+    expect(
+      delta,
+      `the dark pressed band dropped to deltaL* ${delta.toFixed(2)}, under the ` +
+        `${DARK_INSET_DELTA_L_FLOOR} floor. A black inset alone cannot reach it on ` +
+        "dark's near-black sunk surface; the white bottom-edge layer is what does",
+    ).toBeGreaterThanOrEqual(DARK_INSET_DELTA_L_FLOOR);
+  });
+
+  it("the dark inset's lit layer is on the BOTTOM edge and is white", () => {
+    // Pins the physical model, not just the strength: a recess lit from above
+    // has its top wall in shadow and its bottom wall lit. A white layer moved
+    // to the top edge (`inset 0 1px`) would still clear the floor above and
+    // read as a raised key instead of a pressed one.
+    const { dark } = insetValues();
+    const lit = shadowLayers(dark).filter((layer) => {
+      const [r, g, b] = rgbaOf(layer);
+      return r === 255 && g === 255 && b === 255;
+    });
+    expect(lit.length, `the dark inset ${dark} has no white layer`).toBe(1);
+    expect(lit[0], `the dark inset's white layer is not a bottom-edge inset: ${lit[0]}`).toMatch(
+      /^inset\s+0\s+-\d/,
+    );
+  });
+
   it("warm inherits the light inset rather than overriding it", () => {
     // Deliberate, and it looks wrong at a glance: warm's --tandem-surface-sunk
     // is much darker than light's, which reads as needing more alpha. It does
@@ -415,7 +464,6 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
     // happens. CLAUDE.md points every future author at that file as the full
     // enumeration, and nothing else in tests/ reads it.
     const { light, dark } = insetValues();
-    const [lightAlpha, darkAlpha] = [alphaOf(light), alphaOf(dark)];
     const doc = readFileSync("docs/semantic-tokens.md", "utf-8");
 
     expect(
@@ -423,10 +471,14 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
       "docs/semantic-tokens.md never names --tandem-shadow-inset. Its Elevation " +
         "line is the enumeration CLAUDE.md treats as complete",
     ).toContain("--tandem-shadow-inset");
-    for (const [theme, alpha] of [
-      ["light", lightAlpha],
-      ["dark", darkAlpha],
-    ] as const) {
+    // Every layer's alpha, not just the first: dark is two layers since #1683,
+    // and retuning its white edge is as much drift as retuning the black one.
+    const alphas = [
+      ...shadowLayers(light).map((layer) => ["light", alphaOf(layer)] as const),
+      ...shadowLayers(dark).map((layer) => ["dark", alphaOf(layer)] as const),
+    ];
+    expect(alphas.filter(([theme]) => theme === "dark").length).toBeGreaterThanOrEqual(2);
+    for (const [theme, alpha] of alphas) {
       expect(Number.isNaN(alpha), `could not parse the ${theme} inset alpha`).toBe(false);
       expect(
         doc,
@@ -441,9 +493,9 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
     // black overlay saturates on a near-black base, so the light value measures
     // deltaL* 3.85 there against 13.69 on the light surface. Asserting the dark
     // block merely *mentions* the token is therefore not the check — re-declaring
-    // the identical value would pass while changing nothing. Dark deliberately
-    // has no deltaL* floor of its own; it cannot meet light's, and #1683 holds
-    // that decision.
+    // the identical value would pass while changing nothing. Dark's own floor
+    // (DARK_INSET_DELTA_L_FLOOR, #1683) is lower than light's because its base
+    // saturates, and is met by a white bottom-edge layer, not by more black.
     const { light, dark } = insetValues();
 
     expect(light, "--tandem-shadow-inset is not defined for the light theme").toBeTruthy();
