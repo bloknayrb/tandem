@@ -14,7 +14,7 @@ import fsSync from "node:fs";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
@@ -77,6 +77,7 @@ import {
   getStartupNotices,
   isStartupRestoreInProgress,
 } from "../../src/server/startup-notices.js";
+import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 
 const mockWatch = fsSync.watch as unknown as ReturnType<typeof vi.fn>;
@@ -101,6 +102,13 @@ afterEach(async () => {
   clearStartupNotices();
   await fs.rm(SESSION_DIR, { recursive: true, force: true }).catch(() => {});
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+});
+
+afterAll(async () => {
+  // The platform mock repoints TANDEM_APP_DATA_DIR at this file's directory and
+  // restore wires real annotation stores and autosave. RESTORE the variable and
+  // cancel pending writes through the helper, never by deleting it.
+  await teardownFileAppDataDir();
 });
 
 /** A real document on disk plus a current session record for it. */

@@ -46,9 +46,9 @@ function readCompleted(): boolean {
  *
  * Load-bearing: used by the step-1 advance effect. A tutorial-seeded annotation
  * must NOT trip this predicate even though the tutorial note and highlight carry
- * `author="user"` (ADR-027: notes are the user's; #1725: so are highlights). The
- * `TUTORIAL_ANNOTATION_PREFIX`
- * marker is the ONLY thing distinguishing a seed from a real user note —
+ * `author="user"` (ADR-027: notes are the user's; #1725: so are highlights).
+ * The `TUTORIAL_ANNOTATION_PREFIX` marker is the ONLY thing distinguishing a
+ * seed from a real user annotation —
  * renaming that constant without updating this predicate silently re-introduces
  * the step-1 auto-advance bug from PR #621 PR-A2b.
  */

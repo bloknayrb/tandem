@@ -217,6 +217,9 @@ describe("cleanupStaleTombstones — deterministic ids survive compaction (#2009
     expect(isDeterministicAnnotationId("tutorial-note-1")).toBe(true);
     expect(isDeterministicAnnotationId(generateAnnotationId())).toBe(false);
     expect(isDeterministicAnnotationId(generateReplyId())).toBe(false);
+    // The pre-#337 timestamped import id shares the prefix but was never
+    // re-minted, so its tombstone must stay compactable.
+    expect(isDeterministicAnnotationId("import-3-1713312000000")).toBe(false);
   });
 
   it("CHARACTERIZATION (#2009 open half): the orphan sweep still unlinks a whole stale envelope, exempt tombstones included", async () => {

@@ -536,9 +536,9 @@ export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 // SEEDS from "user-authored annotation" detection. The tutorial note and
 // highlight carry author="user" (ADR-027: notes are the user's; #1725: so are
 // highlights), so the prefix is the ONLY thing distinguishing a seed from a
-// real user annotation. Renaming
-// this constant without updating useTutorial.svelte.ts would silently
-// re-introduce the step-1 auto-advance bug from PR #621 PR-A2b.
+// real user annotation. Renaming this constant without updating
+// useTutorial.svelte.ts would silently re-introduce the step-1 auto-advance
+// bug from PR #621 PR-A2b.
 export const TUTORIAL_ANNOTATION_PREFIX = "tutorial-";
 /**
  * Prefix of the deterministic ids minted for imported Word comments and their

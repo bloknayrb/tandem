@@ -1232,10 +1232,16 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<{
  * (`import-<hash>` / `import-reply-<hash>`, re-created on every re-import).
  *
  * Random ids can never match: `generateId` always joins its prefix with an
- * underscore (`ann_…`, `rpl_…`), and both prefixes here end in a hyphen.
+ * underscore (`ann_…`, `rpl_…`), and both prefixes here end in a hyphen. An
+ * import id must also have the hash shape `importAnnotationId` and
+ * `importReplyId` mint (12 hex characters), because the pre-#337 format
+ * `import-{commentId}-{timestamp}` shares the prefix but was never
+ * re-created, so exempting its tombstones would keep them forever for nothing.
  */
+const IMPORT_HASH_ID_RE = new RegExp(`^${IMPORT_ANNOTATION_ID_PREFIX}(?:reply-)?[0-9a-f]{12}$`);
+
 export function isDeterministicAnnotationId(id: string): boolean {
-  return id.startsWith(TUTORIAL_ANNOTATION_PREFIX) || id.startsWith(IMPORT_ANNOTATION_ID_PREFIX);
+  return id.startsWith(TUTORIAL_ANNOTATION_PREFIX) || IMPORT_HASH_ID_RE.test(id);
 }
 
 /**

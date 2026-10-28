@@ -168,9 +168,9 @@ $effect(() => {
 // colour was asked to answer two questions and answered neither cleanly. A
 // Claude-authored highlight looked identical to a user-authored one — and the
 // tutorial seeded its highlight as `author: "claude"` (until #1725 made it the
-// user's), so that collision was on the first card every new user met. Meanwhile the margin leader lines pointing
-// AT these cards were already author-keyed (`leaderColorForAuthor`), so the
-// rail contradicted itself.
+// user's), so that collision was on the first card every new user met.
+// Meanwhile the margin leader lines pointing AT these cards were already
+// author-keyed (`leaderColorForAuthor`), so the rail contradicted itself.
 //
 // The highlight's picked colour is not lost — it moved to the type icon, which
 // is the one place it still means something.
