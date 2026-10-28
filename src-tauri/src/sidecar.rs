@@ -1867,22 +1867,13 @@ fn sidecar_env_pairs(app_data_dir: &str, release_build: bool) -> Vec<(&'static s
     pairs
 }
 
-/// Spawn the Node.js sidecar and wait for the health endpoint.
-/// Retries up to MAX_RESTARTS times with exponential backoff on crash.
-///
-/// **Returns `Ok(SpawnOutcome::Declined)` when the app is shutting down**
-/// (#1756), rather than the terminal `Err` after the retry loop: that `Err`
-/// reaches `restart_sidecar`'s failure arm (`report_pending_opens_with(.., true,
-/// ..)` plus an emitted `sidecar-restart-failed`) and the "Retry Server Start"
-/// dialog, i.e. a user-facing rejection raised while the app is quitting.
-/// `Declined` is neither, and every caller must match on it.
 /// The Linux sidecar command (#1988): `tandem-reaper --exec-with-pdeathsig
 /// <this pid> <node-sidecar> <server.js> --tauri-sidecar`, or plain
 /// `node-sidecar <server.js> --tauri-sidecar` when the bundled reaper cannot be
 /// the trampoline (missing, an empty stub, or too old — `trampoline_available`
-/// probes once and logs once). Both paths come from the plugin's own sidecar
-/// resolution, so the program the trampoline execs is byte-identical to the
-/// one a direct spawn would run.
+/// probes until it answers yes and logs the first no). Both paths come from the
+/// plugin's own sidecar resolution, so the program the trampoline execs is
+/// byte-identical to the one a direct spawn would run.
 #[cfg(target_os = "linux")]
 async fn linux_sidecar_command(
     handle: &tauri::AppHandle,
@@ -1918,6 +1909,15 @@ async fn linux_sidecar_command(
     Ok(trampoline)
 }
 
+/// Spawn the Node.js sidecar and wait for the health endpoint.
+/// Retries up to MAX_RESTARTS times with exponential backoff on crash.
+///
+/// **Returns `Ok(SpawnOutcome::Declined)` when the app is shutting down**
+/// (#1756), rather than the terminal `Err` after the retry loop: that `Err`
+/// reaches `restart_sidecar`'s failure arm (`report_pending_opens_with(.., true,
+/// ..)` plus an emitted `sidecar-restart-failed`) and the "Retry Server Start"
+/// dialog, i.e. a user-facing rejection raised while the app is quitting.
+/// `Declined` is neither, and every caller must match on it.
 pub(crate) async fn start_sidecar(
     handle: &tauri::AppHandle,
     client: &reqwest::Client,
@@ -2095,11 +2095,16 @@ pub(crate) async fn start_sidecar(
         let spawned = cmd.spawn().map_err(|e| e.to_string());
         // Linux (#1988): fork on the anchor thread, never on this tokio
         // worker — the parent-death signal follows the forking THREAD, and
-        // tokio retires threads. See `sidecar_anchor.rs`.
+        // tokio retires threads. See `sidecar_anchor.rs`. If the anchor thread
+        // never started, `cmd` is the direct command (the trampoline needs a
+        // probe the anchor ran) and is spawned here instead, so a missing
+        // anchor never leaves the sidecar unstartable.
         #[cfg(target_os = "linux")]
-        let spawned = sidecar_anchor::run_on_anchor(move || cmd.spawn().map_err(|e| e.to_string()))
-            .await
-            .and_then(|r| r);
+        let spawned = sidecar_anchor::run_on_anchor_or_inline(move || {
+            cmd.spawn().map_err(|e| e.to_string())
+        })
+        .await
+        .and_then(|r| r);
         let (rx, child) = spawned.map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
         // Windows-only (#987): bind this sidecar to the kill-on-job-close job

@@ -17,10 +17,11 @@ mod uninstall_scrub;
 // genuinely tricky logic — a process deadline that must bound the whole call, and
 // an in-flight guard replacing the serialization the main thread used to provide
 // for free — where they could not be unit-tested locally. `#[allow(dead_code)]`
-// on `bounded_command` covers non-Windows release builds, where nothing calls it
-// — scoped with `cfg_attr` (as `sidecar.rs`'s `PortHolder` is) so that on Windows, where the
-// module IS live, a genuinely unused helper added later still warns.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+// on `bounded_command` covers macOS release builds, where nothing calls it —
+// scoped with `cfg_attr` (as `sidecar.rs`'s `PortHolder` is) so that on Windows
+// (`firewall.rs`) and Linux (`sidecar_anchor.rs`'s reaper probe, #1988), where
+// the module IS live, a genuinely unused helper added later still warns.
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 mod bounded_command;
 mod single_flight;
 
