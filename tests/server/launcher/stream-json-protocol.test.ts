@@ -34,6 +34,7 @@ import {
   SUPERVISOR_NO_ARM_CLAUSE,
   SUPERVISOR_NO_UNASKED_WORK_CLAUSE,
   SUPERVISOR_WAKE_PROMPT,
+  TANDEM_MCP_ALLOW_RULES,
 } from "../../../src/shared/launcher/contract.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,7 @@ const ENV_KEYS = [
   "TANDEM_STUB_CLAUDE_TURN_DELAY_MS",
   "TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN",
   "TANDEM_STUB_CLAUDE_EXIT_DELAY_MS",
+  "TANDEM_STUB_CLAUDE_PERMISSION_DENIALS",
 ] as const;
 
 let tmpDir: string;
@@ -395,6 +397,16 @@ describe("launcher stream-json protocol — resumed spawn (#1267)", () => {
 
       expect(spawnRec.claudeArgs.slice(-2)).toEqual(["--resume", VALID_UUID]);
       expect(spawnRec.claudeArgs).not.toContain("--session-id");
+      // #2286: the resume arm carries the explicit permission posture too —
+      // whether a resumed `-p` session keeps its creation-time mode is not
+      // established, so it must not depend on it.
+      expect(spawnRec.claudeArgs).toEqual(
+        buildClaudeArgs({ sessionId: VALID_UUID, resuming: true }),
+      );
+      const mode = spawnRec.claudeArgs.indexOf("--permission-mode");
+      expect(spawnRec.claudeArgs[mode + 1]).toBe("auto");
+      const allow = spawnRec.claudeArgs.indexOf("--allowedTools");
+      expect(spawnRec.claudeArgs[allow + 1]?.split(",")).toEqual([...TANDEM_MCP_ALLOW_RULES]);
 
       // A resumed conversation already contains the bootstrap prompt; sending
       // it again would inject a duplicate turn. The stub records a turn the
@@ -404,6 +416,38 @@ describe("launcher stream-json protocol — resumed spawn (#1267)", () => {
       expect(recordsWithPrefix<TurnRecord>("turn-")).toHaveLength(0);
     } finally {
       await sup.stop();
+    }
+  });
+});
+
+describe("launcher stream-json protocol — permission denials (#2286)", () => {
+  it("logs a result envelope's permission_denials by tool name, never by input", async () => {
+    await writeClaudeIntegration();
+    process.env.TANDEM_STUB_CLAUDE_PERMISSION_DENIALS = JSON.stringify([
+      {
+        tool_name: "mcp__tandem__tandem_status",
+        tool_use_id: "toolu_1",
+        tool_input: { documentId: "PLANTED-TOOL-INPUT" },
+      },
+    ]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await sup.startFresh(spawnDir);
+      const line = await waitFor(
+        () =>
+          errSpy.mock.calls
+            .map((c) => c.map(String).join(" "))
+            .find((l) => l.includes("for want of permission")),
+        "the supervisor to log the denial",
+      );
+      expect(line).toContain("mcp__tandem__tandem_status");
+      expect(line).not.toContain("PLANTED-TOOL-INPUT");
+      const all = errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(all).not.toContain("PLANTED-TOOL-INPUT");
+    } finally {
+      await sup.stop();
+      errSpy.mockRestore();
     }
   });
 });

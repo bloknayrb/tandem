@@ -376,6 +376,33 @@ function isLaunchableClaudeCode(i: IntegrationConfig): i is ClaudeCodeIntegratio
   return i.kind === "claude-code" && i.apply !== "skip";
 }
 
+/** Most tool names one denial line names; the rest are counted, not listed. */
+const MAX_LOGGED_DENIALS = 5;
+
+/**
+ * One stderr line for a `result` envelope's `permission_denials` (#2286), or
+ * null when there is nothing to say.
+ *
+ * Only each denial's `tool_name` is read, through `sanitizeForLog`. NEVER
+ * `tool_input`: it can hold document text, a path, or a chat message, and
+ * stderr lands in `tandem.log`. Every field is `typeof`-guarded because the
+ * envelope is the child's untyped JSON, and a throw from `handleStdoutLine`
+ * would reach the process's fatal-error handler.
+ */
+export function describePermissionDenials(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const names: string[] = [];
+  for (const entry of value.slice(0, MAX_LOGGED_DENIALS)) {
+    const name =
+      entry !== null && typeof entry === "object"
+        ? (entry as { tool_name?: unknown }).tool_name
+        : undefined;
+    names.push(typeof name === "string" ? sanitizeForLog(name) : "(unnamed)");
+  }
+  const more = value.length > names.length ? ` and ${value.length - names.length} more` : "";
+  return `Claude Code refused ${value.length} tool call(s) in this turn for want of permission: ${names.join(", ")}${more}. A launched session has no one to approve a prompt (ADR-047 §4).`;
+}
+
 /** The last-resort working directory, canonicalized.
  *
  * `resolveCwd`'s other exit realpaths via `resolveSafeCwd`, and `plan.cwd` is
@@ -2255,6 +2282,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         is_error?: boolean;
         errors?: string[];
         result?: unknown;
+        permission_denials?: unknown;
       };
       try {
         parsed = JSON.parse(trimmed);
@@ -2306,6 +2334,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             (typeof parsed.subtype === "string" && parsed.subtype.startsWith("error"));
           if (!errored) spendGreeting();
         }
+
+        // A launched session has no approval surface (ADR-047 §4), so a tool
+        // call that would have prompted is refused silently. Say so on stderr
+        // (#2286) — the one place a user debugging "Claude did nothing" looks.
+        const denials = describePermissionDenials(parsed.permission_denials);
+        if (denials !== null) console.error(`[Launcher] ${denials}`);
 
         // A Claude Code that is not signed in answers every turn with this
         // refusal and never exits (#1780; see `NOT_SIGNED_IN_RESULT`). Stop:

@@ -425,6 +425,27 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
 // --- Claude CLI stream-json wire contract ---------------------------------
 
 /**
+ * The allow rules that pre-approve Tandem's own MCP tools in a launched
+ * session (#2286, ADR-047 §4 amendment 2026-10-28).
+ *
+ * Since Claude Code 2.1.299 an MCP allow rule matches a server's WHOLE
+ * normalized name only, never a prefix, so each spelling a user can have
+ * registered needs its own rule:
+ *
+ *   - `mcp__tandem__*` — the entry `tandem setup` writes (server name `tandem`,
+ *     whether it is the direct-HTTP entry or the stdio bridge).
+ *   - `mcp__plugin_tandem_tandem__*` — the plugin's server: `plugin.json` names
+ *     it `tandem`, and Claude Code normalizes `plugin:tandem:tandem`.
+ *
+ * The opt-in channel shim's server (`tandem-channel`) is deliberately absent:
+ * a supervised session never loads it (see `CLAUDE_STREAM_JSON_FLAGS`).
+ *
+ * An unmatched rule is a silent no-op, not an error, so a wrong spelling here
+ * fails toward "auto mode alone decides" rather than toward a crash.
+ */
+export const TANDEM_MCP_ALLOW_RULES = ["mcp__tandem__*", "mcp__plugin_tandem_tandem__*"] as const;
+
+/**
  * Flag prefix the supervisor passes to `claude`, ahead of the
  * session-selection flag (`--session-id` / `--resume`).
  *
@@ -438,6 +459,35 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
  * `--verbose` is NOT a readiness signal. The CLI emits nothing at all until it
  * has received a turn, so there is no handshake to wait for; see
  * `SUPERVISOR_INITIAL_PROMPT`.
+ *
+ * **`--permission-mode auto` and `--allowedTools` (#2286, ADR-047 §4
+ * amendment 2026-10-28).** A supervised session has no approval surface, so
+ * before this it could call Tandem's tools only when Claude Code happened to
+ * start a `-p` session in auto mode. Claude Code 2.1.302 changed that default
+ * to `default` (manual) for third-party providers, telemetry-off and fresh
+ * installs, and every `tandem_*` call from a launched session was then refused.
+ * The two flags make the posture explicit and are BOTH needed:
+ *
+ *   - `--permission-mode auto` restores what most launched sessions already got
+ *     before 2.1.302: Claude Code's classifier, not a person, decides risky
+ *     actions. It is a CLI flag, so it outranks a user's own
+ *     `permissions.defaultMode` for this session (managed policy still wins).
+ *     Where auto mode is unavailable (managed `disableAutoMode`, a model or plan
+ *     without it) the CLI degrades to `default` rather than refusing to start —
+ *     measured on 2.1.312 — and then:
+ *   - `--allowedTools` keeps Tandem's own tools working regardless of mode. The
+ *     rules pre-approve EVERY Tandem tool, so those calls skip the auto-mode
+ *     classifier too; see ADR-047 §4's amendment and `docs/security.md` for
+ *     what that means for `tandem_open` / `tandem_save`.
+ *
+ * The allow list is ONE comma-joined token, so the CLI's variadic
+ * `<tools...>` parser cannot swallow a following argument. No shell is involved
+ * on any OS (POSIX execs `claude` through the reaper; Windows resolves only a
+ * `.exe`), so the `*` is never globbed. Both pairs sit in this shared prefix so
+ * the `--session-id` AND `--resume` arms carry them — whether a resumed `-p`
+ * session keeps its creation-time mode is unestablished, and passing it on
+ * both arms avoids depending on it. `--permission-prompts none` was considered
+ * and not adopted: it names the posture but grants nothing.
  *
  * Lives here (not in `supervisor.ts`) because the spawn path and the stub-CLI
  * test harness must agree on it byte-for-byte; a drift between them would make
@@ -470,6 +520,10 @@ export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
   "--output-format",
   "stream-json",
   "--verbose",
+  "--permission-mode",
+  "auto",
+  "--allowedTools",
+  TANDEM_MCP_ALLOW_RULES.join(","),
 ];
 
 /**

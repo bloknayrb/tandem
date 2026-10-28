@@ -1942,6 +1942,27 @@ So the keep-the-channel decision now stands on (3) alone. Whether that reopens m
 
 Worth stating because it is currently incidental rather than designed. `buildClaudeArgs` passes no `--permission-mode`, no `--allowedTools`, and no skip flag; under `-p` the dev-channels flag is not parsed; the channel permission callbacks are wired only on the interactive path; and there is no TTY. A supervised session therefore has no way to ask for tool approval and no way to be answered. The flag deletion is the moment this becomes documented instead of accidental. If an approval surface is ever wanted there, it needs designing — not restoring the flag.
 
+> **Amendment (2026-10-28, #2286) — the posture is now designed, not incidental.** "No `--permission-mode`" meant the launched session ran in whatever mode Claude Code picked for a `-p` session. Claude Code 2.1.302 made that `default` (manual) for third-party providers, telemetry-off and fresh installs, and with no approval surface every `tandem_*` call was then refused. `CLAUDE_STREAM_JSON_FLAGS` now carries, on both the `--session-id` and `--resume` arms:
+>
+> - **`--permission-mode auto`.** Claude Code's classifier, not a person, approves risky actions (Bash, Edit, writes outside the cwd) in the launched session. Most launched sessions already ran this way before 2.1.302; it is now Tandem's explicit choice. Because a CLI flag outranks settings, **Tandem overrides a user-configured `permissions.defaultMode`** (`default`/`manual`, `plan`) for its launched session, and says nothing about it; a managed-policy lock still wins. Where auto mode is unavailable the CLI degrades rather than refusing to start: with `disableAutoMode` set, init reports `permissionMode: "default"`.
+> - **`--allowedTools mcp__tandem__*,mcp__plugin_tandem_tandem__*`** (`TANDEM_MCP_ALLOW_RULES`). This is what keeps Tandem's own tools working in that degraded case, and on the `tandem setup` entry (`tandem`) and the plugin's server (`plugin:tandem:tandem`) alike, since 2.1.299 matches only a server's whole normalized name. The opt-in channel shim's server is not pre-approved.
+>
+> **What the grant means.** An allow rule is decided before the auto-mode classifier, so *every* Tandem tool bypasses the classifier in the launched session — `tandem_open`, `tandem_edit` and `tandem_save` included. With #1666 accepted (`tandem_open` has no root containment), that makes `tandem_open` → `tandem_edit` → `tandem_save` on any existing `.md` the user can write — a `CLAUDE.md`, say — a chain the classifier never screens, where the same write through Edit or Bash would be screened. The launched session reads third-party text (opened documents, imported comments, chat) with nobody watching, so #1654's "every step is loud" bound assumes an observer who may not be there. Neither acceptance's void condition fires, and **this amendment records no new acceptance** — whether the full `*` grant stands, or narrows to the read/annotate/reply tools with open/save/rename/convert/export left to the classifier, is Bryan's call, owed on #2286. Nothing else is pre-approved, and there is still no approval surface: anything else that would prompt is refused, and the supervisor now logs each `result` envelope's `permission_denials` by tool name (never `tool_input`) to stderr.
+>
+> **Evidence** (2026-10-28, Claude Code 2.1.312, Linux container, Tandem dev server on spare ports, `DISABLE_TELEMETRY=1`, one run per cell, calling `tandem_status`):
+>
+> | Mode | Allow rules | Server | Result |
+> |---|---|---|---|
+> | `default` | none | `tandem` over HTTP | denied (`permission_denials` lists it) |
+> | `default` | both | `tandem` over HTTP | allowed |
+> | `default` | none | `tandem` over the stdio bridge | denied |
+> | `default` | both | `tandem` over the stdio bridge | allowed |
+> | `default` | none | `plugin:tandem:tandem` (`--plugin-dir` stub) | denied |
+> | `default` | both | `plugin:tandem:tandem` (`--plugin-dir` stub) | allowed |
+> | `auto` + `disableAutoMode` | both | — | starts; init `permissionMode: "default"` |
+>
+> The allow rule is measured working **alone**, with auto mode not in play. Still owed, and the reason #2286 keeps `needs-human-evidence`: what a real fresh install does on a desktop machine with the flags, and whether a resumed session honours `--permission-mode` (passed on both arms so nothing depends on it).
+
 ### 5. Open direction (not decided here)
 
 Two facts argue for revisiting the `plugin:` spelling, which was previously dismissed:
