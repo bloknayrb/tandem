@@ -12,7 +12,7 @@ this file in the same PR, or say what replaced it. Every status below carries th
 last checked. Re-check before relying on it, and use `gh issue view` rather than trusting a
 state recorded here.
 
-_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided._
+_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the correctness and anchor-gate lists dropped #2187, #2188 and #2219 (closed by PRs #2225, #2228 and #2271) and gained #2269 and #2294._
 
 ## Active — Toward v1.0
 
@@ -83,7 +83,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 
 - **Security findings:** #1884 (the channel permission relay serves its `description` to local callers; its LAN half is dark under ADR-056), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
-- **Correctness:** #2001, #2064, #2069, #2070, #1982, #1980, #1662, #1632, #2009, #1920, #2187 (`tandem_checkInbox` misses a comment on a non-active document), #2188, #2219 (a scratchpad's source-view commit drops its notes).
+- **Correctness:** #2001, #2064, #2069, #2070, #1982, #1980, #1662, #1632, #2009, #1920, #2269 (re-anchoring across every content-replacing reload), #2294 (`tandem_checkInbox` loses items when its response is lost).
 - **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2180 (launcher action per setup), #2192, #2186 (a beta report's diagnosis tracker).
 - **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245, #2231, #2201.
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
@@ -178,7 +178,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** UNMET. #2001, #1632, #2070 and #2188 are open.
+- **Zero open position- or anchor-related bugs.** UNMET. #2001, #1632, #2070 and #2269 are open.
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**
