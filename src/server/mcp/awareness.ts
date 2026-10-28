@@ -622,8 +622,9 @@ function teeLegacyCommit(
  * reader's own view of one document, answered from the shared registry.
  *
  * `get(base)` is the newest `editedAt` among the versions of `base` this reader
- * has been handed — so `edited: true`, `hasUnaccountedEdit` and the #1770
- * status dimension all keep their meaning PER READER — plus this pass's own
+ * has seen (`seenBy` — handed, or passed by its mark; `carryHeld`'s PASSED arm
+ * is where the two differ) — so `edited: true`, `hasUnaccountedEdit` and the
+ * #1770 status dimension all keep their meaning PER READER — plus this pass's own
  * writes, mirroring {@link StagedInboxLedger}'s read-your-writes. `set`
  * registers the version (assigning a seq the first time any poll returns it)
  * and records it as delivered in this pass. Assigning is not acknowledging, so
@@ -726,28 +727,40 @@ function logInboxDrop(
  *    not the state vector: a delete advances no clock, so a state-vector
  *    comparison misses a deleted reply or a deletion that changes what a record
  *    resolves to. A swapped or reopened document is a new instance, so a miss;
- *  - the mode is the same, so the Solo hold decides every record as before;
+ *  - the mode reads the same, so the Solo hold decides every record as it did on
+ *    the recorded pass. That is a comparison of two snapshots, nothing more: the
+ *    mode lives in CTRL_ROOM, so it can go Solo → Tandem → Solo without moving
+ *    this document's counter, and whatever another poll did in between is
+ *    invisible to it. Each contract below closes that gap its own way;
  *  - what the reader has been handed can only have GROWN, so an entry can only
  *    remove an item from a pass, never add one. The two contracts say this
  *    differently, so each keeps its own record:
  *    - `legacy` (cursor-less polls): the shared ledger was not reset
  *      (`ledgerGeneration`), and between resets it only ever gains entries —
- *      named polls of this document included.
- *    - `cursor` (#2064, #2294): the registry epoch is the same, and the reader's
- *      mark for this document is at least the mark of the reader whose pass was
- *      recorded, with nothing held. That pass produced and held nothing, so
- *      every version that qualifies had a seq at or below the recorded mark —
- *      and is seen by any reader at or above it with nothing held. No NEW seq
- *      can appear in this document meanwhile: a seq is assigned only when a
- *      qualifying, never-returned version is returned, and there is none (a
- *      cursor-less poll can only return versions already assigned, in the same
- *      mode, so not held either). A version another reader's pass RETIRES
- *      (`carryHeld`) did not qualify on the recorded pass either, so with the
- *      document unchanged it can be returned again only to a reader whose own
- *      ledger dropped it — one that was already handed it, at or below the
- *      mark: skipping that reader misses a duplicate, never an item. A FRESH
- *      reader (null mark) is never skipped: what it has seen moves with other
- *      readers' acknowledgements.
+ *      named polls of this document included. A skipped legacy pass commits
+ *      nothing, so an item a skip passes over is still owed on the next pass
+ *      that is not skipped; an interval in another mode cannot lose anything.
+ *    - `cursor` (#2064, #2294): the registry epoch is the same; NO entry has
+ *      been registered in this document since the recorded pass began
+ *      (`maxSeq(id)` is still at most the registry `counter` read before it —
+ *      `assign` only ever hands out a seq above the counter, so any new entry,
+ *      a retired version registered again included, fails this); and the
+ *      reader's mark for this document is at least the mark of the reader whose
+ *      pass was recorded, with nothing held. That pass produced and held
+ *      nothing, so every version that qualified had an entry seen by that
+ *      reader — at or below its mark, not held — and so is seen by this reader
+ *      too, and every version that did not qualify still does not. The registry
+ *      test is the one that carries the mode gap: unlike a legacy skip, a cursor
+ *      skip MOVES the reader's mark for this document to the counter, so a seq
+ *      registered meanwhile would be passed unhanded and, in Solo, unheld. That
+ *      happens: in a Tandem interval a cursor-less poll, a named poll of this
+ *      document, or any poll while it is active can register a version the
+ *      recorded Solo pass hid — and a reader that then skips in Solo would read
+ *      it as delivered for good. An entry RETIRED since (`carryHeld`) only
+ *      re-owes: if its item qualifies it is handed again (a duplicate for this
+ *      reader, which had seen it), so skipping misses a duplicate, never an
+ *      item. A FRESH reader (null mark) is never skipped: what it has seen moves
+ *      with other readers' acknowledgements.
  * Everything else the pass reads is in that Y.Doc (annotations, replies), and
  * `admit` is a pure schema check. So the pass would produce nothing again, and
  * write nothing. Never cached: the active document (it supplies `activity`) and
@@ -767,7 +780,11 @@ interface QuietDocState {
   /** The last quiet fixed point each contract's default poll committed, if any. */
   quiet: {
     legacy: (QuietRecord & { ledgerGeneration: number }) | null;
-    cursor: (QuietRecord & { registryEpoch: string; mark: number }) | null;
+    /**
+     * `counter` is the registry counter read before the recorded pass ran:
+     * every entry in this document then had a seq at or below it.
+     */
+    cursor: (QuietRecord & { registryEpoch: string; mark: number; counter: number }) | null;
   };
 }
 
@@ -792,7 +809,12 @@ function quietDocState(ydoc: Y.Doc): QuietDocState {
 }
 
 /** `view` is the reader's position in this document, or null for a cursor-less poll. */
-function isQuietSkip(state: QuietDocState, modeState: ModeState, view: ScopeView | null): boolean {
+function isQuietSkip(
+  documentId: string,
+  state: QuietDocState,
+  modeState: ModeState,
+  view: ScopeView | null,
+): boolean {
   if (view === null) {
     const quiet = state.quiet.legacy;
     return (
@@ -808,6 +830,10 @@ function isQuietSkip(state: QuietDocState, modeState: ModeState, view: ScopeView
     quiet.epoch === state.epoch &&
     quiet.mode === modeState &&
     quiet.registryEpoch === deliveryRegistry.epoch &&
+    // Nothing registered in this document since the recorded pass — see the
+    // `cursor` arm of the soundness argument above for why the mode alone
+    // cannot stand in for this.
+    deliveryRegistry.maxSeq(documentId) <= quiet.counter &&
     view.mark !== null &&
     view.mark >= quiet.mark &&
     view.held.size === 0
@@ -937,8 +963,17 @@ function collectDocumentInbox(
  *    refusal. A reader shown nothing in Solo would otherwise lose, for good,
  *    an item another reader was shown before Solo began.
  *  - PASSED for good, when the record has moved on to another `editedAt`: the
- *    new version is a new key, and the reader's ledger reading the old one is
- *    what keeps `edited` and the #1770 status dimension meaningful.
+ *    new version is a new key, and a ledger reading the old one is what keeps
+ *    `edited` and the #1770 status dimension meaningful for a reader that WAS
+ *    handed it — which is why the entry is not retired. Known limit: for THIS
+ *    reader, which was not, the entry is now seen by its mark, so
+ *    `CursorInboxLedger.get` counts it, and a later version of the record is
+ *    returned to it with `edited: true` though it never saw the earlier one
+ *    (reached when the later version is withheld from it on this pass — the
+ *    Solo hold — so nothing is handed in its place). Only the flag is wrong:
+ *    the later version has a higher `editedAt`, so it is still owed.
+ *    Exactness would mean holding the seq in this cursor for good, the
+ *    held-list growth `DeliveryRegistry.retire` explains away.
  *  - RETIRED from the registry, in every other case: the record is deleted,
  *    is a Claude record whose status moved (its key carries the status), is no
  *    longer Claude-facing, or did not pass the gate (a resolved user comment).
@@ -1189,12 +1224,15 @@ function collectInboxDocuments(
         // reads and the cache key.
         const ydoc = getOrCreateDocument(id);
         const state = quietDocState(ydoc);
-        if (isQuietSkip(state, modeState, view)) {
+        if (isQuietSkip(id, state, modeState, view)) {
           // Sound only with nothing held (see `isQuietSkip`), so nothing to carry.
           if (view) pass.readDocuments.set(id, new Set());
           continue;
         }
         const epochBefore = state.epoch;
+        // Read BEFORE the pass: an entry the pass itself registers then also
+        // fails the skip test, rather than being covered by the record.
+        const counterBefore = deliveryRegistry.counter;
         const outsideTransaction = ydoc._transaction === null;
         inbox = collectDocumentInbox(store, modeState, false, admit, ledgers);
         const produced =
@@ -1230,6 +1268,7 @@ function collectInboxDocuments(
                   mode: modeState,
                   registryEpoch: deliveryRegistry.epoch,
                   mark: view.mark,
+                  counter: counterBefore,
                 }
               : null;
           commitQuiet = () => {
@@ -1616,7 +1655,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Return what the user did that you have not yet acknowledged — comments, chat, replies and accept/dismiss decisions on your annotations — plus the collaboration `mode` and `activity`. Pass back the `cursor` your previous poll returned (`\"start\"` on your first): each item repeats on every poll until you pass a cursor from a response that held it, so a lost response loses nothing and another session's polls never hide an item from you. Chat is marked read when you acknowledge it, and a chat message you answered with tandem_reply `replyTo` is not repeated. Never invent or edit a cursor. Without one, each item is returned once, shared by every caller that omits it. Call it with no `documentId` to cover every open document: each item carries its `documentId`, so pass that id when acting on it: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one. A malformed stored record is left out, counted in `summary` and retried. `activity` describes only the active document (`activity.documentId`); `chatMessages` spans every document. Works with no document open. This is the authoritative delivery path: a push cannot be confirmed to have reached you, so nothing here is suppressed on its strength, and `alreadyPushed: true` describes the server's side only. Never returns user notes or other private records. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. If the text at that selection has changed since it was recorded (e.g. you edited a document no editor is showing), `selectedText` and `selectionAt` are null.",
+        "Return what the user did that you have not yet acknowledged — comments, chat, replies and accept/dismiss decisions on your annotations — plus the collaboration `mode` and `activity`. Pass back the `cursor` your previous poll returned (`\"start\"` on your first): each item repeats on every poll until you pass a cursor from a response that held it, so a lost response loses nothing, and once a poll of yours has read a document, another session's polls never hide its items from you (\"start\" skips what another session acknowledged). Chat is marked read when you acknowledge it, and a chat message you answered with tandem_reply `replyTo` is not repeated. Never invent or edit a cursor. Without one, each item is returned once, shared by every caller that omits it. Omit `documentId` to cover every open document: each item carries its `documentId`, so pass that id when acting on it: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one. A malformed stored record is left out, counted in `summary` and retried. `activity` describes only the active document (`activity.documentId`); `chatMessages` spans every document. Works with no document open. This is the authoritative delivery path: a push cannot be confirmed to have reached you, so nothing here is suppressed on its strength; `alreadyPushed: true` describes the server's side only. Never returns user notes or other private records. In solo mode the user's comments and replies are held until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one (it is not cleared when focus leaves the editor), and `activity.selectionAt` is when the user made it. If the text at that selection has changed since (e.g. you edited a document no editor is showing), both are null.",
       inputSchema: {
         documentId: z
           .string()
@@ -1632,9 +1671,11 @@ export function registerAwarenessTools(server: McpServer): void {
           ),
       },
       outputSchema: checkInboxOutputShape,
-      // #2294: with a cursor, a repeat returns the same items and acknowledges
-      // nothing new, and its range repairs converge. Without one, a retry after
-      // a lost response is at-most-once — exactly as without a retry.
+      // #2294: with a cursor, a repeat writes nothing the first call did not
+      // (every write follows from the cursor passed in) and returns what that
+      // cursor is still owed. Without one the call is not idempotent, but a
+      // retry after a lost response loses nothing the lost response had not
+      // already lost. See `tool-annotations.ts`.
       annotations: IDEMPOTENT_WRITE_TOOL,
     },
     withStructuredErrors(

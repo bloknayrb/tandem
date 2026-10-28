@@ -9,13 +9,21 @@
  * twice, or lets a client auto-approve a write. Unannotated is the safe default
  * for anything not proven repeatable.
  *
- * `tandem_checkInbox` is idempotent since its caller-held cursor (#2294): with
- * a cursor, a repeat returns the same items and acknowledges nothing new (the
- * acknowledgement is the cursor passed IN, and stamping chat read twice writes
- * nothing the second time), and its range repairs converge like
- * `tandem_getAnnotations`'. A cursor-less retry is at-most-once — each item is
- * returned once to whichever cursor-less call polls first — which is exactly
- * what it is without a retry, so the hint makes nothing worse.
+ * `tandem_checkInbox` is idempotent WITH a cursor (#2294), and what is
+ * idempotent is its writes, not its response. Every write follows from the
+ * cursor passed IN: the acknowledgement it applies (chat stamped read — a
+ * second stamp writes nothing — and registry entries marked acknowledged), the
+ * seqs it assigns to items it returns (a repeat looks the same versions up),
+ * the entries it retires (gone after the first call), and range repairs that
+ * converge like `tandem_getAnnotations`'. Its response is what that cursor is
+ * owed at the time: everything the lost response held, plus anything newer,
+ * less anything that stopped qualifying.
+ *
+ * WITHOUT a cursor it is not idempotent — it stamps what it returns into the
+ * shared ledger, so a repeat returns none of it — and the hint is still safe:
+ * a client retries only a call whose response it lost, those items were
+ * already stamped by that first call and are gone with or without the retry,
+ * and the retry adds neither a loss nor a duplicate, only what arrived since.
  *
  * `tests/server/mcp-tool-annotations.test.ts` holds one row per tool, with the
  * reason, against the production `tools/list`.

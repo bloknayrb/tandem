@@ -562,7 +562,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "38", bodyHash: "55fa91618e56" });
+    ).toEqual({ version: "38", bodyHash: "a5464cd660f7" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

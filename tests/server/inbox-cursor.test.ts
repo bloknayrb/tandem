@@ -608,6 +608,64 @@ describe("the quiet-document skip, per reader", () => {
     expect(reads("cur-quiet-bg")).toBe(1);
     expect(b.userActions.map((a) => a.id)).toEqual(["u_quiet"]);
   });
+
+  // Re-review of #2064: the mode lives in CTRL_ROOM, so Solo → Tandem → Solo
+  // leaves a background document's change counter alone, and comparing the
+  // recorded mode with the current one cannot see the Tandem interval. In it,
+  // another caller is handed X, registering a seq in the document. A cursor
+  // skip in the second Solo interval moved A's mark past that seq unhanded and
+  // unheld, so A read X as delivered and never got it.
+  describe.each([
+    ["no other caller polls in the Tandem interval (control)", null],
+    ["a cursor-less caller is handed it", "cursor-less"],
+    ["a reader naming the document is handed it", "named"],
+    ["a reader is handed it while the document is active", "active"],
+  ] as const)("across Solo → Tandem → Solo: %s", (_label, between) => {
+    it("the item reaches a reader that was quiet-skipped in the second Solo interval", async () => {
+      const suffix = between ?? "control";
+      const fg = `cur-aba-fg-${suffix}`;
+      const bgId = `cur-aba-bg-${suffix}`;
+      openDoc(fg, { active: true });
+      const bg = openDoc(bgId);
+      const a = (await poll({ cursor: "start" })).cursor;
+      const r = (await poll({ cursor: "start" })).cursor;
+
+      // 1. Tandem: the user comments on the background document; nobody polls.
+      userComment(bg, "u_aba");
+      // 2. Solo: R polls twice — the second pass is a quiet fixed point, and is
+      //    recorded at R's mark.
+      setCtrlMode("solo");
+      const r1 = await poll({ cursor: r });
+      expect(r1.userActions).toEqual([]);
+      expect((await poll({ cursor: r1.cursor })).userActions).toEqual([]);
+      // 3. Tandem: another caller is handed X, which leaves the document's
+      //    change counter where it was.
+      setCtrlMode("tandem");
+      if (between === "cursor-less") {
+        expect((await poll()).userActions.map((x) => x.id)).toEqual(["u_aba"]);
+      } else if (between === "named") {
+        const named = await poll({ cursor: "start", documentId: bgId });
+        expect(named.userActions.map((x) => x.id)).toEqual(["u_aba"]);
+      } else if (between === "active") {
+        setActiveDocId(bgId);
+        expect((await poll({ cursor: "start" })).userActions.map((x) => x.id)).toEqual(["u_aba"]);
+        setActiveDocId(fg);
+      }
+      // 4. Solo again: A (mark at or above R's, nothing held) polls.
+      setCtrlMode("solo");
+      const reads = countReads();
+      const a1 = await poll({ cursor: a });
+      expect(a1.userActions).toEqual([]);
+      const bgReadsInSolo = reads(bgId);
+      // 5. Tandem: A is handed X.
+      setCtrlMode("tandem");
+      expect((await poll({ cursor: a1.cursor })).userActions.map((x) => x.id)).toEqual(["u_aba"]);
+      // And the fix is not "never skip": with nothing registered meanwhile the
+      // skip still fires; once something was, the document is read, so the seq
+      // is held for A.
+      expect(bgReadsInSolo).toBe(between === null ? 0 : 1);
+    });
+  });
 });
 
 // ── The codec, directly ─────────────────────────────────────────────────────

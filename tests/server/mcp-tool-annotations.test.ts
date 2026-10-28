@@ -71,7 +71,7 @@ const TABLE: Record<string, Row> = {
   },
   tandem_checkInbox: {
     annotations: IDEMPOTENT_WRITE_TOOL,
-    why: "with a cursor a repeat returns the same items and acknowledges nothing new, and its range repairs converge; without one a retry is at-most-once, as without a retry (#2294)",
+    why: "with a cursor every write follows from the cursor passed in, so a repeat writes nothing new and returns what that cursor is still owed; without one it is not idempotent, but a retry of a lost response loses nothing that response had not already lost (#2294)",
   },
   tandem_exportAnnotations: {
     annotations: IDEMPOTENT_OVERWRITE_TOOL,

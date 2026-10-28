@@ -35,10 +35,15 @@
  * ({@link DeliveryRegistry.retire}), so the item gets a new seq if it ever
  * qualifies again.
  *
- * Every overflow and every unreadable input resolves toward DUPLICATES, never
- * loss: an oversize held list lowers the mark below what it drops, a cursor
- * that does not fit the size budget is folded into a lower mark, and a cursor
- * that cannot be read is treated as fresh.
+ * Every overflow resolves toward DUPLICATES, never loss: an oversize held list
+ * lowers the mark below what it drops, and a cursor that does not fit the size
+ * budget is folded into a lower mark. A cursor that cannot be read is treated
+ * as fresh, which is loss-free only for one minted before a restart (the new
+ * registry is empty, so a fresh reader is owed everything). One that is
+ * malformed or altered within the same epoch — never one this server emitted
+ * — reads as fresh too, so its holder counts what other readers acknowledged
+ * as seen: that is the cost of a caller editing its cursor, which the tool
+ * description forbids.
  *
  * Content never enters this module: entries hold item keys and integers only,
  * and a key is created only for an item that passed every privacy gate and was
@@ -289,9 +294,11 @@ export function freshCursor(): ReaderCursor {
 
 /**
  * Read a caller's cursor. Anything this server cannot vouch for — malformed,
- * oversize, altered, or minted before a restart — reads as FRESH, which can
- * only re-deliver, never hide. `recognised` is false for every such input
- * except the literal `"start"`, so the summary can say why items repeated.
+ * oversize, altered, or minted before a restart — reads as FRESH. After a
+ * restart that hides nothing (the registry is empty); within one epoch it
+ * hides what other readers acknowledged from a caller that edited its cursor
+ * (see the module header). `recognised` is false for every such input except
+ * the literal `"start"`, so the summary can say why items repeated.
  */
 export function decodeCursor(
   raw: string,
@@ -420,7 +427,13 @@ export function encodeCursor(
     if (chat.held.size === 0) break;
     chat = { mark: foldedMark(chat), held: new Set() };
   }
-  // Unreachable in practice: a cursor with nothing listed and no held seqs is
-  // a few dozen bytes. Fresh is the safe answer.
-  return START_CURSOR;
+  // Unreachable: neither `break` can fire before the loop returns — `widest`
+  // is found whenever anything is listed, and a cursor with nothing listed and
+  // no held seqs is a few dozen bytes. Should it ever be reached, the answer is
+  // NOT `"start"`: a fresh reader counts whatever another reader acknowledged
+  // as seen, so it would hide those items from this one. Mark 0 everywhere
+  // owes every entry (duplicates, never loss) and always fits.
+  return serialize(
+    toWire({ m: 0, docs: new Map(), chat: { mark: 0, held: new Set() } }, registry.epoch),
+  );
 }
