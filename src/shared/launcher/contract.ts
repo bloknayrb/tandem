@@ -479,8 +479,11 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
 // --- Claude CLI stream-json wire contract ---------------------------------
 
 /** Pre-approved in a launched session (#2286): server-state reads, annotation
- * work and chat. None of them opens, writes, renames or exports a file, and
- * none changes document content (content edits reach disk through autosave). */
+ * work and chat. None of them opens, writes, renames or exports a file, none
+ * changes document content (content edits reach disk through autosave), and
+ * none destroys a record the user cannot get back. `tandem_diagnostics` does
+ * spawn one process — `runDoctor`'s static `npm ls -g` probe — but it takes no
+ * input, so the model cannot steer it. */
 export const TANDEM_PREAPPROVED_TOOLS = [
   "tandem_checkInbox",
   "tandem_reply",
@@ -500,12 +503,13 @@ export const TANDEM_PREAPPROVED_TOOLS = [
   "tandem_annotationReply",
   "tandem_editAnnotation",
   "tandem_resolveAnnotation",
-  "tandem_removeAnnotation",
 ] as const;
 
 /** Left to auto mode's classifier in a launched session (#2286): each can open
  * a caller-named path (#1666), change document content that autosave writes
- * back, or write, rename, export, restore or close a file-backed document. */
+ * back, write, rename, export, restore or close a file-backed document, or —
+ * `tandem_removeAnnotation` — permanently delete a user's shared comment and
+ * its whole reply thread, which has no undo. */
 export const TANDEM_CLASSIFIER_GATED_TOOLS = [
   "tandem_open",
   "tandem_edit",
@@ -518,6 +522,7 @@ export const TANDEM_CLASSIFIER_GATED_TOOLS = [
   "tandem_applyChanges",
   "tandem_exportAnnotations",
   "tandem_restoreBackup",
+  "tandem_removeAnnotation",
 ] as const;
 
 /**
