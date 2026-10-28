@@ -106,19 +106,17 @@ describe("formatEventContent", () => {
       { fileName: "README.md", format: "markdown" },
       "doc1",
     );
-    expect(formatEventContent(event)).toBe(
-      "User opened document: README.md (markdown) [doc: doc1]",
-    );
+    expect(formatEventContent(event)).toBe("Document opened: README.md (markdown) [doc: doc1]");
   });
 
   it("document:closed", () => {
     const event = makeEvent("document:closed", { fileName: "old.md" }, "doc1");
-    expect(formatEventContent(event)).toBe("User closed document: old.md [doc: doc1]");
+    expect(formatEventContent(event)).toBe("Document closed: old.md [doc: doc1]");
   });
 
   it("document:switched", () => {
     const event = makeEvent("document:switched", { fileName: "new.md" }, "doc1");
-    expect(formatEventContent(event)).toBe("User switched to document: new.md [doc: doc1]");
+    expect(formatEventContent(event)).toBe("Active document switched to: new.md [doc: doc1]");
   });
 
   it("omits doc suffix when documentId is absent", () => {

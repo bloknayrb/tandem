@@ -3,7 +3,8 @@
  *
  * Four test groups:
  *   1. ctrl-meta observer — document lifecycle events (document:opened, document:closed,
- *      document:switched) including the lastActiveDocId dedup guard.
+ *      document:switched) including the lastActiveDocId dedup guard, driven through the
+ *      `withInternal` origin production uses (#2069), plus the seeded attach.
  *   2. ctrl-meta observer — MCP_ORIGIN filter (transactions tagged MCP_ORIGIN are ignored).
  *   3. Selection buffer cross-doc isolation — buffering on doc-a does not leak into
  *      a chat:message sent for doc-b; doc-a's buffer survives.
@@ -18,6 +19,7 @@ import {
   attachObservers,
   detachObservers,
   getBufferedSelection,
+  reattachCtrlObservers,
   resetForTesting,
   setFileSyncContext,
   subscribe,
@@ -30,7 +32,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
-import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import { withBrowser, withInternal, withMcp, withReload } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 
 // ---------------------------------------------------------------------------
@@ -85,9 +87,23 @@ afterEach(() => {
 
 // ---------------------------------------------------------------------------
 // Test group 1 — ctrl-meta observer: document lifecycle events
+//
+// Every write goes through `withInternal`, because that is the ONLY origin
+// production writes these keys with (`broadcastOpenDocs`, registry.ts). Until
+// #2069 this group used bare `metaMap.set(...)` — origin `null`, which no
+// production writer produces — and passed for the wrong reason while the events
+// never fired in production at all.
 // ---------------------------------------------------------------------------
 
-describe("ctrl-meta observer — document lifecycle events", () => {
+/** Write CTRL_ROOM documentMeta keys the way `broadcastOpenDocs` does. */
+function broadcast(entries: Record<string, unknown>): void {
+  const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
+  withInternal(_ctrlTestDoc, () => {
+    for (const [key, value] of Object.entries(entries)) metaMap.set(key, value);
+  });
+}
+
+describe("ctrl-meta observer — document lifecycle events (internal origin, #2069)", () => {
   beforeEach(() => {
     _ctrlTestDoc = new Y.Doc();
     attachCtrlObservers();
@@ -105,8 +121,7 @@ describe("ctrl-meta observer — document lifecycle events", () => {
   it("emits document:opened when a doc appears in openDocuments", () => {
     const { events, cleanup } = collectEvents();
 
-    const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
-    metaMap.set("openDocuments", [{ id: "doc-abc", fileName: "notes.md" }]);
+    broadcast({ openDocuments: [{ id: "doc-abc", fileName: "notes.md" }] });
 
     const opened = events.filter((e) => e.type === "document:opened");
     expect(opened).toHaveLength(1);
@@ -119,16 +134,13 @@ describe("ctrl-meta observer — document lifecycle events", () => {
   it("emits document:closed when a doc is removed from openDocuments", () => {
     const { events, cleanup } = collectEvents();
 
-    const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
-
-    // Open two docs first
-    metaMap.set("openDocuments", [
-      { id: "doc-1", fileName: "one.md" },
-      { id: "doc-2", fileName: "two.md" },
-    ]);
-
-    // Remove doc-1
-    metaMap.set("openDocuments", [{ id: "doc-2", fileName: "two.md" }]);
+    broadcast({
+      openDocuments: [
+        { id: "doc-1", fileName: "one.md" },
+        { id: "doc-2", fileName: "two.md" },
+      ],
+    });
+    broadcast({ openDocuments: [{ id: "doc-2", fileName: "two.md" }] });
 
     const closed = events.filter((e) => e.type === "document:closed");
     expect(closed).toHaveLength(1);
@@ -140,8 +152,7 @@ describe("ctrl-meta observer — document lifecycle events", () => {
   it("emits document:switched when activeDocumentId changes", () => {
     const { events, cleanup } = collectEvents();
 
-    const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
-    metaMap.set("activeDocumentId", "doc-xyz");
+    broadcast({ activeDocumentId: "doc-xyz" });
 
     const switched = events.filter((e) => e.type === "document:switched");
     expect(switched).toHaveLength(1);
@@ -153,16 +164,80 @@ describe("ctrl-meta observer — document lifecycle events", () => {
   it("does NOT emit document:switched again when activeDocumentId is set to the same value (lastActiveDocId dedup guard)", () => {
     const { events, cleanup } = collectEvents();
 
+    broadcast({ activeDocumentId: "doc-same" });
+    expect(events.filter((e) => e.type === "document:switched")).toHaveLength(1);
+
+    broadcast({ activeDocumentId: "doc-same" });
+    expect(events.filter((e) => e.type === "document:switched")).toHaveLength(1);
+
+    cleanup();
+  });
+
+  it("emits for every non-mcp origin, the browser's included", () => {
+    const { events, cleanup } = collectEvents();
     const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
+    withBrowser(_ctrlTestDoc, () => metaMap.set("activeDocumentId", "doc-b"));
+    withReload(_ctrlTestDoc, () => metaMap.set("activeDocumentId", "doc-r"));
+    expect(events.filter((e) => e.type === "document:switched").map((e) => e.documentId)).toEqual([
+      "doc-b",
+      "doc-r",
+    ]);
+    cleanup();
+  });
+});
 
-    // First set — should emit
-    metaMap.set("activeDocumentId", "doc-same");
-    expect(events.filter((e) => e.type === "document:switched")).toHaveLength(1);
+// ---------------------------------------------------------------------------
+// Test group 1b — the observer is SEEDED from the map (#2069)
+// ---------------------------------------------------------------------------
 
-    // Second set to the same value — guard must suppress the duplicate
-    metaMap.set("activeDocumentId", "doc-same");
-    expect(events.filter((e) => e.type === "document:switched")).toHaveLength(1);
+describe("ctrl-meta observer — seeded attach emits no spurious burst (#2069)", () => {
+  beforeEach(() => {
+    _ctrlTestDoc = new Y.Doc();
+    setCtrlMode("tandem");
+  });
 
+  afterEach(() => {
+    _ctrlTestDoc.destroy();
+  });
+
+  const TABS = [
+    { id: "doc-1", fileName: "one.md" },
+    { id: "doc-2", fileName: "two.md" },
+  ];
+
+  it("an identical re-broadcast after attach emits nothing (startup restore ran first)", () => {
+    // Startup restore broadcasts the restored tabs BEFORE the observers attach.
+    broadcast({ openDocuments: TABS, activeDocumentId: "doc-2" });
+    attachCtrlObservers();
+    const { events, cleanup } = collectEvents();
+
+    // A content reload re-broadcasts the unchanged tab list.
+    broadcast({ openDocuments: TABS, activeDocumentId: "doc-2" });
+    expect(events.filter((e) => e.type.startsWith("document:"))).toEqual([]);
+
+    // Positive control: a real change after the seed still emits.
+    broadcast({ openDocuments: [TABS[1]], activeDocumentId: "doc-2" });
+    expect(events.filter((e) => e.type === "document:closed").map((e) => e.documentId)).toEqual([
+      "doc-1",
+    ]);
+    cleanup();
+  });
+
+  it("a re-attach after a CTRL_ROOM swap emits nothing", () => {
+    attachCtrlObservers();
+    broadcast({ openDocuments: TABS, activeDocumentId: "doc-1" });
+    const { events, cleanup } = collectEvents();
+
+    // Hocuspocus swaps the ctrl doc for one holding the merged state, and the
+    // observers are re-attached onto it.
+    const merged = new Y.Doc();
+    Y.applyUpdate(merged, Y.encodeStateAsUpdate(_ctrlTestDoc));
+    _ctrlTestDoc.destroy();
+    _ctrlTestDoc = merged;
+    reattachCtrlObservers();
+    broadcast({ openDocuments: TABS, activeDocumentId: "doc-1" });
+
+    expect(events.filter((e) => e.type.startsWith("document:"))).toEqual([]);
     cleanup();
   });
 });
@@ -189,10 +264,7 @@ describe("ctrl-meta observer — MCP_ORIGIN filter", () => {
     const { events, cleanup } = collectEvents();
 
     const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
-
-    _ctrlTestDoc.transact(() => {
-      metaMap.set("activeDocumentId", "doc-mcp-filtered");
-    }, MCP_ORIGIN);
+    withMcp(_ctrlTestDoc, () => metaMap.set("activeDocumentId", "doc-mcp-filtered"));
 
     expect(events.filter((e) => e.type === "document:switched")).toHaveLength(0);
 
@@ -203,16 +275,10 @@ describe("ctrl-meta observer — MCP_ORIGIN filter", () => {
     const { events, cleanup } = collectEvents();
 
     const metaMap = _ctrlTestDoc.getMap(Y_MAP_DOCUMENT_META);
-
-    // Open
-    _ctrlTestDoc.transact(() => {
-      metaMap.set("openDocuments", [{ id: "doc-mcp-open", fileName: "mcp.md" }]);
-    }, MCP_ORIGIN);
-
-    // Close
-    _ctrlTestDoc.transact(() => {
-      metaMap.set("openDocuments", []);
-    }, MCP_ORIGIN);
+    withMcp(_ctrlTestDoc, () =>
+      metaMap.set("openDocuments", [{ id: "doc-mcp-open", fileName: "mcp.md" }]),
+    );
+    withMcp(_ctrlTestDoc, () => metaMap.set("openDocuments", []));
 
     expect(events.filter((e) => e.type === "document:opened")).toHaveLength(0);
     expect(events.filter((e) => e.type === "document:closed")).toHaveLength(0);
@@ -444,15 +510,15 @@ describe("setFileSyncContext — duplicate registration disposes prior observer"
     );
 
     // Writing to the new doc must trigger the new store
-    doc2.transact(() => {
+    withMcp(doc2, () => {
       doc2.getMap("annotations").set("ann-new", { id: "ann-new", rev: 1 });
-    }, MCP_ORIGIN);
+    });
     expect(newQueueWriteSpy).toHaveBeenCalledTimes(1);
 
     // Writing to the old doc must NOT trigger the old store (observer disposed)
-    doc1.transact(() => {
+    withMcp(doc1, () => {
       doc1.getMap("annotations").set("ann-ghost", { id: "ann-ghost", rev: 1 });
-    }, MCP_ORIGIN);
+    });
     expect(oldQueueWriteSpy).not.toHaveBeenCalled();
 
     clearFileSyncContext(docName);

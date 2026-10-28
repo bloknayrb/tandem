@@ -2,10 +2,12 @@
  * Unit tests for the ctrl-meta observer's scratchpad-promote path (#827 review, Low).
  *
  * `notifyDocumentPromoted` is the ONLY thing that surfaces a promoted
- * scratchpad/upload doc to Claude on the channel: promote's `broadcastOpenDocs`
- * uses `withInternal`, which the channel skips, and the doc was added to the
- * observer's private `uploadDocIds` suppression set on open. The promote hook
- * clears that suppression and emits a synthetic `document:opened`.
+ * scratchpad/upload doc to Claude on the channel: promote keeps the same
+ * documentId, so its `broadcastOpenDocs` changes no id in the tab list (the
+ * observer emits on id changes, for every origin but `mcp` since #2069), and
+ * the doc was added to the observer's private `uploadDocIds` suppression set on
+ * open. The promote hook clears that suppression and emits a synthetic
+ * `document:opened`.
  *
  * Exercises `makeCtrlMetaObserver` directly (it takes `ctrlDoc` + `pushEvent`
  * deps) so we can drive a controllable `getOpenDocs` mock — the broad

@@ -53,7 +53,12 @@ write by its origin. See [ADR-031](decisions.md#adr-031-origin-tagged-transactio
 
 Who skips what: the durable-annotation sync observer skips `file-sync` and `internal`. The
 channel event queue skips `mcp`, `file-sync`, `internal`, `reload` and `mode-release` — so
-**only `browser` writes generate channel events.**
+**only `browser` writes generate channel events**, with one keyed exception: CTRL_ROOM
+`documentMeta`'s tab-list keys (`openDocuments`, `activeDocumentId`) derive `document:opened` /
+`closed` / `switched` for every origin except `mcp` (`shouldSkipDocumentLifecycle` in
+`origins.ts`, #2069). Their only writer is `broadcastOpenDocs`, under `withInternal`, so under the
+general rule those events never fired. The observer seeds its last-seen tab list from the map when
+it attaches, or every attach (startup, a CTRL_ROOM swap) would replay a burst of `document:opened`.
 
 **Client origins never cross the wire, and two shipped comments got this wrong (#1482).** Two
 independent reasons, either alone sufficient. Yjs never serializes the origin: `yjs.cjs:3389` emits

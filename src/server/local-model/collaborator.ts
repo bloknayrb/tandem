@@ -414,9 +414,11 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
       if (result.metrics.exit === "doc-swapped") {
         const live = requireDocument(req.docName);
         // A null lookup means the document is CLOSED, not swapped — that
-        // inherits the existing silent-drop contract (#2069: a close never
-        // arrives as an abort, because `document:closed` never fires). Telling
-        // a user who just closed a tab that it "reconnected" names a remedy no
+        // inherits the existing silent-drop contract. Since #2069 a close
+        // normally arrives as an abort (`document:closed`) and exits `aborted`
+        // before this; the null arm is the fallback for a close that lands
+        // between the loop's abort re-check and its identity check. Telling a
+        // user who just closed a tab that it "reconnected" names a remedy no
         // retry can satisfy. The ABORT is unchanged on every path; only the
         // message differs.
         if (live?.doc === ydoc) {

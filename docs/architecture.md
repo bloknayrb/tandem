@@ -530,7 +530,7 @@ User accepts annotation in browser
 
 ### Origin Tagging (Echo Prevention)
 
-All MCP-initiated Y.Map writes go through **`withMcp(doc, () => { ... })`** from `src/shared/origins.ts` — never a hand-written `doc.transact(…, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from [MCP-tagged](glossary.md#origin-tags) transactions, which prevents Claude from seeing its own tool calls echoed back as channel notifications. The wrapper is the contract, not a convenience: `withMcp` is one of six helpers (`withMcp`, `withFileSync`, `withInternal`, `withReload`, `withModeRelease`, `withBrowser`), each of which selects a different row in the skip-set matrix at the top of `origins.ts`, and only `browser` writes generate channel events. A raw `.transact(` anywhere in `src/` is a Critical Rule 2 violation — see ADR-031.
+All MCP-initiated Y.Map writes go through **`withMcp(doc, () => { ... })`** from `src/shared/origins.ts` — never a hand-written `doc.transact(…, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from [MCP-tagged](glossary.md#origin-tags) transactions, which prevents Claude from seeing its own tool calls echoed back as channel notifications. The wrapper is the contract, not a convenience: `withMcp` is one of six helpers (`withMcp`, `withFileSync`, `withInternal`, `withReload`, `withModeRelease`, `withBrowser`), each of which selects a different row in the skip-set matrix at the top of `origins.ts`, and only `browser` writes generate channel events — except CTRL_ROOM `documentMeta`'s tab-list keys, which derive `document:*` for every origin but `mcp` (#2069). A raw `.transact(` anywhere in `src/` is a Critical Rule 2 violation — see ADR-031.
 
 ### Event Types
 

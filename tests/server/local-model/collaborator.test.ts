@@ -756,9 +756,11 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
 
   it("notifies NOTHING when the document was CLOSED rather than swapped", async () => {
     // `requireDocument` returns null once the registry row is dropped, so
-    // `docUnchanged()` is false for a close too (#2069: a close never arrives
-    // as an abort). Telling that user the document "reconnected" names a remedy
-    // no retry can satisfy, so only the message is suppressed — not the abort.
+    // `docUnchanged()` is false for a close too. Since #2069 a real close also
+    // arrives as an abort (`document:closed`); this drops the row through the
+    // test seam, which broadcasts nothing, to pin the fallback arm on its own.
+    // Telling that user the document "reconnected" names a remedy no retry can
+    // satisfy, so only the message is suppressed — not the abort.
     setupDoc("doc-swap-closed", "Body");
     let release!: () => void;
     const gate = new Promise<void>((res) => {

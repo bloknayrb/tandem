@@ -147,9 +147,12 @@ export function toDocListEntry(d: OpenDoc) {
  * two rooms can skew within a call.
  *
  * `withInternal`, never `withBrowser`: this is server bookkeeping mirrored to
- * clients, and `browser` is the only channel-emitting origin (Critical Rule 2,
- * ADR-031). Tagging it as a browser write would push a channel payload at the
- * AI for every tab operation.
+ * clients. The CTRL_ROOM write still produces `document:opened` / `closed` /
+ * `switched` — the ctrl-meta observer special-cases these two keys and emits
+ * for every origin except `mcp` (#2069, `shouldSkipDocumentLifecycle`). A
+ * `withBrowser` tag would ALSO make the per-document rooms' writes below
+ * channel-eligible and the durable observer persist bookkeeping, so the helper
+ * choice stays `withInternal`.
  *
  * Exported for the one caller shape the composites below cannot express: a
  * document's *content* changed while the tab list did not (the reload path).
