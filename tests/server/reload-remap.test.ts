@@ -348,6 +348,52 @@ describe("applyRemap — records inside a changed region", () => {
   });
 });
 
+describe("applyRemap — moved text", () => {
+  // A line diff records a move as a deletion in one hunk and an insertion in
+  // another, so the moved copy is never in the record's own window.
+  it("follows a paragraph moved down", () => {
+    const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie\n");
+    seedOn(doc, "a", "alpha one");
+    reload(doc, "bravo two\n\nalpha one\n\ncharlie\n");
+    expect(textOf(doc, "a")).toBe("alpha one");
+    expect(annotationsOf(doc).get("a")?.range.from).toBe(extractText(doc).indexOf("alpha one"));
+    expect(kindOf(doc, "a")).toBe("ok");
+  });
+
+  it("follows a paragraph moved up past an edited one", () => {
+    const doc = makeMarkdownDoc("first\n\nmiddle\n\nlast words here\n");
+    seedOn(doc, "a", "words");
+    reload(doc, "last words here\n\nfirst, edited\n\nmiddle\n");
+    expect(textOf(doc, "a")).toBe("words");
+    expect(kindOf(doc, "a")).toBe("ok");
+  });
+
+  it("detaches moved text that also occurs anywhere else, rather than guess", () => {
+    const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie one\n");
+    seedOn(doc, "a", "one");
+    reload(doc, "bravo two\n\nalpha one\n\ncharlie one\n");
+    const ann = annotationsOf(doc).get("a");
+    expect(ann?.range.from).toBe(ann?.range.to);
+    expect(kindOf(doc, "a")).toBe("degraded");
+  });
+
+  it("relocates an untrusted record by its snapshot only, never minting from shifted offsets", () => {
+    const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie\n");
+    const flat = extractText(doc);
+    const at = flat.indexOf("alpha");
+    // Stored range over "alpha", snapshot claims "one": contradicts.
+    withMcp(doc, () =>
+      annotationsOf(doc).set(
+        "u",
+        makeAnnotation({ id: "u", range: r(at, at + 5), textSnapshot: "one" }),
+      ),
+    );
+    expect(kindOf(doc, "u")).toBe("degraded");
+    reload(doc, "bravo two\n\nalpha one\n\ncharlie\n");
+    expect(textOf(doc, "u"), "the snapshot's text, not the stored span").toBe("one");
+  });
+});
+
 describe("applyRemap — records refreshRange does not trust", () => {
   it("never mints an anchor for a contradicting snapshot outside every change", () => {
     const doc = makeMarkdownDoc("Edited here.\n\nalpha bravo charlie\n");

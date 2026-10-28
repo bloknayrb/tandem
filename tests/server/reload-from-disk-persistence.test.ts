@@ -155,7 +155,7 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
   it("Test B: reload is ONE RELOAD_ORIGIN transaction touching both the content and Y_MAP_ANNOTATIONS", async () => {
     const { doc, filePath, triggerReload } = await setupOpenedFile("Hello world foo bar");
 
-    // Seed an annotation on "foo" so the relocation pass has work to do.
+    // Seed an annotation on "foo" so the reload remap has work to do.
     const annId = seedAnnotationOnText(doc, "foo", "annotation on foo");
 
     // Move "foo" to a new offset on disk so textSnapshot-based relocation
@@ -219,7 +219,7 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
     annMap.observe(observer);
 
     try {
-      // Move "brown" to a new offset on disk so the relocation pass writes.
+      // Move "brown" to a new offset on disk so the reload remap writes.
       await fs.writeFile(filePath, "A long time ago, the brown fox jumped.\n", "utf-8");
       await triggerReload();
     } finally {

@@ -29,10 +29,20 @@
  *          editor would have done. A record whose every character was deleted
  *          maps to an empty range and collapses (below).
  *        - **An endpoint inside a replaced region** — the record is relocated by
- *          probing for its old text, but ONLY inside that hunk's new span
- *          (widened to the record's own mapped edges): a match outside it is
- *          provably a different copy, since everything outside the hunks is
- *          unchanged text that held no such edit.
+ *          probing for its old text inside that hunk's new span (widened to the
+ *          record's own mapped edges). A match in UNCHANGED text is never taken:
+ *          everything outside the hunks held no such edit, so a copy there is a
+ *          different copy.
+ *        - **Moved text** — a line diff records a move as a deletion in one hunk
+ *          and an insertion in ANOTHER, so the moved copy sits in that other
+ *          hunk's new span, which the steps above never search. When a record's
+ *          text was wholly deleted, or its own window holds no match, the probe
+ *          is looked for in every other hunk's new span, and taken only when it
+ *          occurs EXACTLY ONCE in the whole new text and that occurrence
+ *          overlaps such a span ({@link uniqueMovedMatch}). Text that also
+ *          occurs anywhere else is ambiguous and detaches instead — the
+ *          wrong-copy hazard a short probe carries is why the search is not
+ *          simply widened.
  *        - **No match** — the record collapses to a point at the hunk start with
  *          its relRange stripped, and gains a `textSnapshot` of its OLD text if
  *          it had none. `refreshRange`'s lazy-attach gate then answers
@@ -70,8 +80,10 @@
  *
  * ## What it never does
  *
- * Search the whole document. The watcher's old relocation pass did, which is
- * how a record whose text was deleted jumped onto another copy of it.
+ * Take a copy of the text found in unchanged regions, or one of several copies.
+ * The watcher's old relocation pass searched the whole document and took the
+ * nearest, which is how a record whose text was deleted jumped onto another
+ * copy of it.
  *
  * `surrogates: "ignore"` below is one of Critical Rule 4's stored/derived-offset
  * callers: every offset here is derived from a stored range or a diff, nothing is
@@ -277,8 +289,10 @@ export function mapEnd(p: number, hunks: readonly Hunk[]): number | null {
  * Map a whole range: each endpoint independently, or `null` when either sits
  * inside a replaced region. A point maps as a start (it stays with the text that
  * follows it, so a paragraph inserted above it does not capture it), falling
- * back to the end rule when it sits exactly at a replaced region's end — the
- * only place the two rules disagree for a point.
+ * back to the end rule when it sits exactly at a replaced region's START (where
+ * {@link mapStart} answers `null` and {@link mapEnd} does not) — so a point there
+ * stays before the replacement. That is the only place the two rules disagree
+ * for a point.
  */
 export function mapRange(range: DocumentRange, hunks: readonly Hunk[]): DocumentRange | null {
   if (range.from === range.to) {
@@ -565,11 +579,33 @@ function remapOne(
     return withRange(ann, anchored.range, anchored.fullyAnchored ? anchored.relRange : undefined);
   };
 
+  const truncated = !trusted && isSnapshotTruncated(ann);
+  const probe = trusted
+    ? remap.oldText.slice(oldRange.from, oldRange.to)
+    : snapshotSearchPrefix(ann);
+  const span = oldRange.to - oldRange.from;
+
+  // A truncated snapshot is a PREFIX (#1486): it places the start, and the
+  // span is carried — clamped to `limit`, which is where the edit ends.
+  const anchorFound = (at: number, limit: number): Annotation =>
+    anchorOrKeep(
+      at,
+      truncated ? Math.max(at + probe.length, Math.min(at + span, limit)) : at + probe.length,
+    );
+
+  // Last resort before detaching: the text moved (see the module header).
+  const movedOrCollapse = (at: number, own: readonly [number, number] | null): Annotation => {
+    const moved = uniqueMovedMatch(probe, newText, hunks, own);
+    return moved ? anchorFound(moved.at, moved.limit) : collapse(at);
+  };
+
   const mapped = mapRange(oldRange, hunks);
   if (mapped !== null) {
     // Every non-empty character of it was deleted (both endpoints fell into
-    // deletions and met).
-    if (mapped.from === mapped.to && oldRange.from < oldRange.to) return collapse(mapped.from);
+    // deletions and met) — or moved elsewhere.
+    if (mapped.from === mapped.to && oldRange.from < oldRange.to) {
+      return movedOrCollapse(mapped.from, null);
+    }
     // Both endpoints are outside every replaced region. An UNTRUSTED record
     // keeps its shifted stored range unanchored, so it reads `degraded` exactly
     // as it did before the reload rather than being pinned to text nobody
@@ -595,10 +631,6 @@ function remapOne(
   const windowTo =
     oldRange.to > last.oldTo ? (mapEnd(oldRange.to, hunks) ?? last.newTo) : last.newTo;
 
-  const truncated = !trusted && isSnapshotTruncated(ann);
-  const probe = trusted
-    ? remap.oldText.slice(oldRange.from, oldRange.to)
-    : snapshotSearchPrefix(ann);
   const expected =
     mapStart(oldRange.from, hunks) ?? first.newFrom + (oldRange.from - first.oldFrom);
 
@@ -612,13 +644,39 @@ function remapOne(
       if (best === -1 || Math.abs(i - expected) < Math.abs(best - expected)) best = i;
     }
   }
-  if (best === -1) return collapse(first.newFrom);
+  if (best === -1) {
+    return movedOrCollapse(first.newFrom, [hunks.indexOf(first), hunks.indexOf(last)]);
+  }
+  return anchorFound(best, windowTo);
+}
 
-  // A truncated snapshot is a PREFIX (#1486): it places the start, and the
-  // span is carried — clamped to the window, which is where the edit ends.
-  const span = oldRange.to - oldRange.from;
-  const to = truncated
-    ? Math.max(best + probe.length, Math.min(best + span, windowTo))
-    : best + probe.length;
-  return anchorOrKeep(best, to);
+/**
+ * Where a record's moved text landed, or `null`. `own` is the index span of the
+ * hunks the record itself touched, already searched and excluded here.
+ *
+ * Taken only when `probe` occurs exactly once in the whole new text and that
+ * occurrence overlaps the new span of some other hunk (which is where a line
+ * diff puts moved text). A probe that also occurs anywhere else cannot be told
+ * apart from the copy it would jump to, so it detaches; an occurrence wholly in
+ * unchanged text is a different copy by construction. `limit` is that hunk's
+ * new end, the clamp for a truncated snapshot's carried span.
+ */
+function uniqueMovedMatch(
+  probe: string,
+  newText: string,
+  hunks: readonly Hunk[],
+  own: readonly [number, number] | null,
+): { at: number; limit: number } | null {
+  if (probe.length === 0) return null;
+  const at = newText.indexOf(probe);
+  if (at === -1 || newText.indexOf(probe, at + 1) !== -1) return null;
+  const end = at + probe.length;
+  for (let i = 0; i < hunks.length; i++) {
+    if (own && i >= own[0] && i <= own[1]) continue;
+    const h = hunks[i];
+    if (h.newFrom < h.newTo && h.newFrom < end && h.newTo > at) {
+      return { at, limit: Math.max(h.newTo, end) };
+    }
+  }
+  return null;
 }

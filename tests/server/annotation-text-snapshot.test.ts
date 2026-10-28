@@ -118,7 +118,7 @@ describe("snapshot truncation", () => {
 
 describe("#1486: isSnapshotTruncated", () => {
   // The shared predicate both restore paths call — undo (client) and the reload
-  // relocation pass (server). It lives in one file precisely because the second
+  // remap (server, `documents/reload-remap.ts`). It lives in one file precisely because the second
   // consumer was missed on the first pass at this fix.
 
   // `SnapshotBearing` requires an `id` (unused by either predicate below —
@@ -270,8 +270,8 @@ describe("#1767: the cap never splits a surrogate pair", () => {
     expect(roundTripped).toBe(snap.text);
     expect(roundTripped).not.toMatch(LONE_SURROGATE);
     expect(roundTripped).not.toContain("\uFFFD");
-    // The consequence, not just the bytes: the watcher's relocation pass finds
-    // the annotation by `indexOf` on this string, and an unguarded cut makes
+    // The consequence, not just the bytes: the reload remap probes for an
+    // untrusted record by `indexOf` on this string, and an unguarded cut makes
     // that -1 forever — the RANGE_GONE in the issue title.
     expect(extractText(mirror).indexOf(roundTripped)).toBeGreaterThanOrEqual(0);
   });
