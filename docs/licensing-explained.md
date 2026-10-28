@@ -104,7 +104,7 @@ first ships in v0.29: v0.26 to v0.28 still carry the earlier wording in their
 own `LICENSE`. Releases
 before v0.11.0, and the v0.11.0 to v0.14.3 desktop builds whose package metadata
 said MIT, are MIT-licensed. None of it is enforced: the gate ships dark, so a
-beta build has no trial clock running at all and the three states below are
+beta build has no trial clock running at all and the states below are
 unreachable in it.
 
 At v1.0 the gate flips, and the 14-day trial starts on every install at its first
@@ -113,11 +113,14 @@ precedence over it. **Beta users are grandfathered with a free license, and they
 trial by activating it** — see the claiming instructions in the README, which matter because Tandem has no telemetry
 and therefore no list of beta users to work from.
 
-## The three states Tandem can be in
+## The states Tandem can be in
 
 1. **Trial** — 14 days from first launch. Everything works. A banner counts down.
 2. **Licensed** — you activated a key. Everything works, forever.
-3. **Restricted** — the trial ended and there's no license. **Your documents are
+3. **Grace** — a key is installed but stopped passing its check (see *If
+   something goes wrong*). Everything keeps working while it gets sorted out,
+   and Tandem tells you to email support (#2231).
+4. **Restricted** — the trial ended and there's no license. **Your documents are
    never held hostage:** Tandem stays a working editor. You can open, edit, save
    and export your documents. What a key adds is the AI features, such as Claude
    (or any other agent) over the [MCP server](glossary.md#mcp-server), the [chat](glossary.md#chat) panel and [local models](glossary.md#local-model-collaborator). The
@@ -125,7 +128,7 @@ and therefore no list of beta users to work from.
    a key, for personal use and individual self-hosting, provided the use does
    not include the AI features.
 
-That third one matters and is easy to get wrong, so to be blunt: **we do not
+That last one matters and is easy to get wrong, so to be blunt: **we do not
 lock you out of your own files.** They're plain files on your disk, and nothing
 stops you opening them anywhere else.
 
@@ -155,6 +158,21 @@ that were entirely our fault.
 One more, worth knowing about: if a license file is already installed but stops
 verifying, Tandem now says **that**, instead of telling you your trial ended —
 which was especially wrong for beta testers who never had a trial.
+
+And it does not cut you off for it (#2231). A key that fails its check keeps the
+AI features on for a grace period, counted from the first time this device saw it
+fail, while you email support@tandem.ink to get it fixed or reissued. The notice
+sits in the activity tray and in Settings → License, and `tandem license` and
+`tandem doctor` show the date it ends. Updates keep arriving during it, so a key
+that needs a newer Tandem can get one. Once the grace period runs out, the AI
+features turn off (the editor never does) until the key is fixed.
+
+**Removing a license.** Settings → License → Remove license, or `tandem
+deactivate`, deletes the license from this device (#1943). It is local only:
+nothing is sent and no seat is released anywhere. Activate the same key again any
+time from the email it came in, unless the key was already failing its check on
+this version, in which case activation refuses it too. Tandem says so before you
+confirm.
 
 ## The thing we most want to avoid
 
@@ -260,11 +278,21 @@ file read, at most one Ed25519 verify) is paid per dispatch instead.
 
 ```
 gate dark?                      -> { gateActive: false }              (today, always)
-license.json verifies?          -> licensed          (runs forever)
-   ...doesn't verify?           -> record WHY, fall through
+license.json verifies?          -> licensed          (runs forever; clears license-grace.json)
+   ...doesn't verify?           -> record WHY, then:
+      first failed < 14 days ago?  -> grace          (AI on, updates on; #2231)
 trial.json says < 14 days?      -> trial
 otherwise                       -> restricted
 ```
+
+The grace step reads `license-grace.json`, beside `trial.json`, which holds the
+first-failure date per licence file, keyed by the SHA-256 of the stored blob (of
+the raw bytes when the file does not parse, and a constant `read-error` key when
+it cannot be read). Only the live AI decision writes it; `tandem license` reads
+it on an armed build; nothing reads it on a dark build. Grace outranks a running
+trial so a licence holder is not framed as an evaluator. The full rules and their
+limits are the 2026-10-28 amendment to
+[ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).
 
 The result is a discriminated union, so illegal combinations are
 unrepresentable — you cannot construct a restricted state carrying a license.
@@ -272,9 +300,12 @@ unrepresentable — you cannot construct a restricted state carrying a license.
 `licenseUnverifiable` carries a **code**, not a boolean: "have it reissued",
 "the file is damaged" and "update Tandem" are three different user actions, and
 a boolean forced every surface to hedge across all three in one sentence. It
-deliberately is **not** a fourth `status` value, because the AI-surface
-decision (`aiRefusal()`) branches on `status === "restricted"` — a new status
-would **fail open** at every admission point until it was updated.
+is deliberately **not** a `status` value of its own: the AI-surface decision
+(`aiRefusal()`) branches on `status === "restricted"`, so any new status
+**fails open** at every admission point. That is exactly why `grace` (#2231)
+could be added as one: failing open is its purpose. `restricted` stays the only
+refusing literal, in `aiRefusalFor` and in the desktop updater's `update_route`,
+which is why updates keep flowing during grace with no Rust change.
 
 ## Enforcement: one decision, at the AI's admission points
 
@@ -283,7 +314,7 @@ The licence (since [#2174](https://github.com/bloknayrb/tandem/pull/2174)) and A
 AI features.* So enforcement refuses **the AI**, never the editor, and it does so in one place:
 
 ```
-aiRefusal()  ->  null                                     (dark build, trial, licensed)
+aiRefusal()  ->  null                                     (dark build, trial, grace, licensed)
              ->  { error: "LICENSE_REQUIRED",
                    kind: "unlicensed" | "unverifiable",
                    message }                              (restricted)
@@ -642,6 +673,12 @@ Worth stating plainly, because they look like bugs:
 
 - **The trial clock has no anti-rollback.** Deleting `trial.json` restarts it.
   The signed license is the only hard gate; the trial is a courtesy.
+- **The grace period is no stronger than the trial clock** (#2231). Deleting
+  `license.json` and restoring the same bytes keeps its date; deleting
+  `license-grace.json`, swapping in a different broken licence file, or an
+  app-data folder Tandem cannot write to re-grants it, just as deleting
+  `trial.json` re-grants a trial. A write failure fails open on purpose: it
+  must never refuse a paying customer.
 - **A refund does not stop the software running.** It can't — activation is
   air-gapped by design. Consumer law obliges returning money, not technical
   revocability. What a full refund or a chargeback stops is updates: the Worker tombstones that

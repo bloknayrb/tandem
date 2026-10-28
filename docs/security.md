@@ -139,6 +139,18 @@ the names promise more than they deliver (#1293):
   prove it is Tandem — the same trust class as `tandem rotate-token` sending its bearer token
   (`src/cli/rotate-token.ts`), and narrower.
 
+  `POST /api/license/deactivate` (#1943) takes the same two gates in the same order, with
+  the same `IfPresent` Origin rule for the Origin-less `tandem deactivate`, and requires a
+  parsed JSON body with `confirm: true` before anything is deleted: a `text/plain` simple
+  request leaves `req.body` undefined and gets a 400 with both files intact. As for
+  activate, that body proof does not cover DNS rebinding; `isHostAllowed` and the refusal of
+  the Origin the rebinding page's browser sends do. The CLI sends nothing secret (the body is
+  `{ confirm: true }`) and uses activate's transport, so it too contacts only a literal
+  `http://127.0.0.1:<port>` and never follows a redirect. What remains: a local process can
+  delete the user's own licence file, which it could do by editing the app-data directory
+  directly — the same trust class, and recoverable for a key that verifies by activating the
+  emailed key again.
+
 ### The `/api` invariant (#1320)
 
 Since #1320 the default is structural rather than per-handler. `enforceLoopbackMutation`

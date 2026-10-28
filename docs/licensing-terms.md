@@ -131,6 +131,13 @@ software's own licence doesn't grant is the worst version of this problem.
 - The clock is a local timestamp with **no anti-rollback**, deliberately
   (ADR-040 §3). Deleting `trial.json` restarts it. This is a soft gate; the
   signed licence is the only hard one.
+- Since #2231 (ADR-040, 2026-10-28) a licence file that is installed but fails
+  its check keeps the AI features on for a 14-day grace period from its first
+  failure, recorded in `license-grace.json` beside `trial.json`. It is
+  enforcement softness of the same kind as the trial clock, and no stronger:
+  deleting that file, or swapping in a different broken licence file, starts a
+  new one. It changes nothing in what [LICENSE](../LICENSE) grants; it is how
+  the product treats a paying customer whose key breaks, not a licence term.
 - The repository licence matches the clock. Since 2026-10-09,
   [LICENSE](../LICENSE) grants **14 days** of use for v1.0 and later "from the
   first launch of any such version on a given device, counted once across all
