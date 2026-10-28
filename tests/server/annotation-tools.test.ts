@@ -226,7 +226,8 @@ describe("tandem_getAnnotations tool logic", () => {
     // "always returns nothing" — but the code is narrower than its own prose:
     // `isClaudeFacing` admits a CLAUDE-authored outbound highlight, and
     // `read-audience-filter.test.ts` pins one being returned (#1710 row 2, the
-    // shape of the tutorial's first card). This row asserts the fixture's case,
+    // shape of the tutorial's first card before #1725 made it the user's). This
+    // row asserts the fixture's case,
     // not the description's absolute.
     const highlights = await getAnnotations({ type: "highlight" });
     expect(highlights.count).toBe(0);

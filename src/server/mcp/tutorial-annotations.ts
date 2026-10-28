@@ -13,6 +13,14 @@ import { extractText } from "./document-model.js";
 interface TutorialAnnotationDef {
   id: string;
   type: AnnotationType;
+  /**
+   * Who the seed is written as. Stated per seed, never derived from `type`:
+   * highlights and notes are the user's own marks (ADR-027; `tandem_highlight`
+   * is deprecated as "highlights are user-only"), so the highlight seed is the
+   * user's too (#1725). Only the two comments are Claude's, and they are the
+   * tutorial's review targets.
+   */
+  author: "user" | "claude";
   targetText: string;
   content: string;
   color?: HighlightColor;
@@ -23,6 +31,7 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}highlight-1`,
     type: "highlight",
+    author: "user",
     targetText: "highlight text and your AI sees it",
     content: "This is a highlight \u2014 it marks text for attention without suggesting changes.",
     color: "yellow",
@@ -30,12 +39,14 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}comment-1`,
     type: "comment",
+    author: "claude",
     targetText: "edit this document at the same time",
     content: "Comments let you or your AI leave notes on specific text passages.",
   },
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}suggest-1`,
     type: "comment",
+    author: "claude",
     targetText: "simplify onboarding",
     content: "More precise verb choice",
     suggestedText: "streamline onboarding",
@@ -43,6 +54,7 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}note-1`,
     type: "note",
+    author: "user",
     targetText: "accept or dismiss",
     content:
       "Notes are personal \u2014 your AI won\u2019t act on them unless you convert them to comments.",
@@ -116,33 +128,26 @@ export function injectTutorialAnnotations(
 
       const annotation = {
         id: def.id,
-        // Notes are user-private (ADR-027); Claude can't author user-private content.
-        // Comments and highlights are seeded as if Claude wrote them so the user
-        // sees the cross-author authorship indicator.
-        author: def.type === "note" ? ("user" as const) : ("claude" as const),
+        author: def.author,
         type: def.type,
-        // Stated, not derived — matching what `mintAnnotation` stamps on every
-        // Claude-authored annotation (`annotations/lifecycle.ts:751`). That was
-        // `createAnnotation` in `mcp/annotations.ts` when this comment was
-        // written; ADR-035 Unit 8b moved the minting and 8j-1 removed the last
-        // wrapper.
+        // Stated, not derived. A Claude seed is outbound, matching what
+        // `mintAnnotation` stamps on every Claude-authored annotation
+        // (`annotations/lifecycle.ts`): the comments are review targets
+        // (`isReviewTarget` is `author !== "user"`) the user is invited to
+        // accept or dismiss, and a stored audience is what `sanitize.ts` reads
+        // first, so the seed does not lean on a type-keyed default two modules
+        // away. A review target that read as private would have its accept or
+        // dismiss withheld from Claude: the user clicks, the card animates
+        // away, and Claude is never told.
         //
-        // Omitting it used to be harmless, because nothing on the channel read
-        // `audience`. Under ADR-035's narrow it is not: `sanitize.ts:79-87`
-        // derives `private` for a highlight with no stored audience, and these
-        // seeds ARE review targets (`isReviewTarget` is `author !== "user"`),
-        // so the highlight every new user meets on `sample/welcome.md` would
-        // have had its accept and dismiss silently withheld from Claude. The
-        // user clicks Dismiss, the card animates away, and Claude is never
-        // told — which reads as "Claude sometimes misses things", the worst
-        // kind of bug to be handed.
-        //
-        // A Claude-authored seed the user is invited to accept or dismiss is
-        // outbound by intent. Deciding that here, at the seed, is the point:
-        // it was previously an accident of a type-keyed default two modules
-        // away. Notes stay private via the `user` author above and sanitize's
-        // demote guard, both of which still apply.
-        audience: "outbound" as const,
+        // A user seed (the highlight and the note, #1725) is private: both are
+        // the user's own marks, and sanitize's demote guard would force a
+        // user-authored highlight or note to `private` on every read anyway
+        // (emitting `audience-conflict-resolved` each time). Storing it private
+        // here means the stored record and the read view agree. Being the
+        // user's, the highlight is no review target, so it carries no
+        // Accept/Dismiss and is withheld from Claude like any user highlight.
+        audience: def.author === "user" ? ("private" as const) : ("outbound" as const),
         range: result.range,
         // Only attach a CRDT-anchored relRange when fully resolved. Matches
         // the reloadFromDisk pattern (documents/watcher.ts) — a partial anchor

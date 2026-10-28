@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Ready for v1.0: `tandem activate` hands the key to a running Tandem, which restarts its Claude by itself (#2205).** With no Tandem running at `http://127.0.0.1:3479` (or whatever `TANDEM_URL` names, as long as it is `127.0.0.1`), it writes the key directly as before, and the next launch picks it up.
+- **The tutorial's highlight is now yours (#1725).** Highlights are your own marks, so the yellow highlight on the welcome document is now written as yours instead of your AI's: it shows in your colour and has no Accept or Dismiss. The welcome document has two annotations to review instead of three, and the tutorial's first step now asks you to accept or dismiss one of your AI's comments. Existing installs keep the old highlight until you replay the tutorial (Settings > Replay tutorial).
 
 ### Fixed
 

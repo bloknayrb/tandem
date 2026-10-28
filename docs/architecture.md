@@ -862,17 +862,18 @@ steps are a client component — and they have drifted apart before, so read the
 ```
 Server opens sample/welcome.md (first run, no restored sessions)
     → injectTutorialAnnotations() creates 4 pre-placed annotations
-      (TUTORIAL_ANNOTATIONS, src/server/mcp/tutorial-annotations.ts:20-47):
-        1. highlight — "highlight text and your AI sees it"      (author: claude)
+      (TUTORIAL_ANNOTATIONS, src/server/mcp/tutorial-annotations.ts):
+        1. highlight — "highlight text and your AI sees it"      (author: user)
         2. comment   — "edit this document at the same time"     (author: claude)
         3. comment with suggestedText — "simplify onboarding"    (author: claude)
         4. note      — "accept or dismiss"                       (author: user)
-    → The note is authored "user" deliberately: notes are user-private (ADR-027)
-      and Claude cannot author user-private content. The other three are
-      seeded as Claude-authored AND stamped audience: "outbound", because a
-      seed the user is invited to accept or dismiss is a review target, and a
-      highlight with no stored audience derives `private` in sanitize — which
-      would silently withhold that accept/dismiss from Claude.
+    → Each seed states its author and audience. The highlight and the note
+      are the user's own marks (ADR-027 for notes, #1725 for highlights) and
+      are stamped audience: "private", so they are no review target and carry
+      no Accept/Dismiss. The two comments are Claude-authored AND stamped
+      audience: "outbound", because a seed the user is invited to accept or
+      dismiss is a review target, and one that read as private would silently
+      withhold that accept/dismiss from Claude.
     → Injection is idempotent (skips any id already in the Y.Map) and each
       anchor goes through anchoredRange(), so a target string that has moved
       is skipped with a log line rather than mis-anchored.

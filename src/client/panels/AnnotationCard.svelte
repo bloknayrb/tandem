@@ -167,8 +167,8 @@ $effect(() => {
 // type for note/highlight/suggestion and by author for everything else, so one
 // colour was asked to answer two questions and answered neither cleanly. A
 // Claude-authored highlight looked identical to a user-authored one — and the
-// tutorial seeds highlights as `author: "claude"`, so that collision was on the
-// first card every new user meets. Meanwhile the margin leader lines pointing
+// tutorial seeded its highlight as `author: "claude"` (until #1725 made it the
+// user's), so that collision was on the first card every new user met. Meanwhile the margin leader lines pointing
 // AT these cards were already author-keyed (`leaderColorForAuthor`), so the
 // rail contradicted itself.
 //

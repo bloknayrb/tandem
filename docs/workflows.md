@@ -302,7 +302,7 @@ The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 
 A floating tutorial card appears at the bottom-left of the editor with three actionable steps, followed by a "You're ready!" completion card:
 
-**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or pressing `Ctrl+Enter` / `Ctrl+Shift+Enter`) completes this step.
+**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the two tutorial comments your AI left (the tutorial highlight and note are yours, so they have no Accept or Dismiss). Clicking Accept or Dismiss on any annotation card (or pressing `Ctrl+Enter` / `Ctrl+Shift+Enter`) completes this step.
 
 **Step 2: Ask a question.** The card prompts the user to select text and create a Comment (sent to the AI) or a Note (private to the user), or to ask in the Chat panel. Creating any annotation of their own, or sending a chat message during this step, completes it.
 

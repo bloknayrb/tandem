@@ -533,9 +533,10 @@ export const DELIVERY_STALL_MS = 2 * 60_000;
 // Onboarding tutorial
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 // Load-bearing: useTutorial.svelte.ts uses this prefix to exclude tutorial
-// SEEDS from "user-authored annotation" detection. Tutorial NOTES carry
-// author="user" (ADR-027: only the user can author notes), so the prefix
-// is the ONLY thing distinguishing a seed from a real user note. Renaming
+// SEEDS from "user-authored annotation" detection. The tutorial note and
+// highlight carry author="user" (ADR-027: notes are the user's; #1725: so are
+// highlights), so the prefix is the ONLY thing distinguishing a seed from a
+// real user annotation. Renaming
 // this constant without updating useTutorial.svelte.ts would silently
 // re-introduce the step-1 auto-advance bug from PR #621 PR-A2b.
 export const TUTORIAL_ANNOTATION_PREFIX = "tutorial-";

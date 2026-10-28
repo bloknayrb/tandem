@@ -694,7 +694,7 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment` — `highlight` never returns a user highlight: every user highlight is stamped `audience: "private"` (ADR-027). Claude has no highlight-creating tool, so the only highlight it can see is a Claude-authored one the server seeded, such as the tutorial highlight on `sample/welcome.md` |
+| `type` | enum | no | `highlight`, `comment` — `highlight` never returns a user highlight: every user highlight is stamped `audience: "private"` (ADR-027). Claude has no highlight-creating tool and nothing seeds one in its name (the tutorial highlight on `sample/welcome.md` is the user's since [#1725](https://github.com/bloknayrb/tandem/issues/1725)), so in practice this returns nothing; only a Claude-authored highlight from an older store could appear |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 

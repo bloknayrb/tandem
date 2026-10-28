@@ -34,7 +34,9 @@ import {
   injectTutorialAnnotations,
   TUTORIAL_ANNOTATIONS,
 } from "../../src/server/mcp/tutorial-annotations.js";
+import { type SanitizationEvent, sanitizeAnnotation } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { isPendingReviewTarget, isReviewTarget } from "../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -94,6 +96,68 @@ describe("tutorial-annotations tombstone guard (#1696)", () => {
       expect((map.get("tutorial-highlight-1") as Annotation).rev).toBe(1);
     } finally {
       doc.destroy();
+    }
+  });
+});
+
+describe("tutorial-annotations seed authorship (#1725)", () => {
+  /** Inject the seeds into a fresh snapshot doc and read them back by id. */
+  function injectSeeds(): { seeds: Map<string, Annotation>; destroy: () => void } {
+    const doc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
+    injectTutorialAnnotations(doc, freshWelcomePath());
+    const seeds = new Map<string, Annotation>();
+    for (const [id, value] of getAnnotationsMap(doc).entries()) {
+      seeds.set(id, value as Annotation);
+    }
+    return { seeds, destroy: () => doc.destroy() };
+  }
+
+  it("the highlight seed is the user's own: private, and no review target", () => {
+    const { seeds, destroy } = injectSeeds();
+    try {
+      const highlight = seeds.get("tutorial-highlight-1");
+      expect(highlight?.type).toBe("highlight");
+      expect(highlight?.author).toBe("user");
+      expect(highlight?.audience).toBe("private");
+      expect(isReviewTarget(highlight!)).toBe(false);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("the two comment seeds are Claude's outbound review targets; the note is the user's", () => {
+    const { seeds, destroy } = injectSeeds();
+    try {
+      for (const id of ["tutorial-comment-1", "tutorial-suggest-1"]) {
+        const seed = seeds.get(id);
+        expect(seed?.author, id).toBe("claude");
+        expect(seed?.audience, id).toBe("outbound");
+        expect(isReviewTarget(seed!), id).toBe(true);
+      }
+      const note = seeds.get("tutorial-note-1");
+      expect(note?.author).toBe("user");
+      expect(note?.audience).toBe("private");
+      // What the welcome document offers to accept or dismiss, which is
+      // what Accept All and the tutorial's step 0 count.
+      expect([...seeds.values()].filter(isPendingReviewTarget)).toHaveLength(2);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("every stored seed already reads as sanitize would derive it (no demotion on read)", () => {
+    const { seeds, destroy } = injectSeeds();
+    try {
+      expect(seeds.size).toBe(TUTORIAL_ANNOTATIONS.length);
+      for (const [id, seed] of seeds) {
+        const events: SanitizationEvent[] = [];
+        const read = sanitizeAnnotation(seed, (e) => events.push(e));
+        expect(read.author, id).toBe(seed.author);
+        expect(read.audience, id).toBe(seed.audience);
+        expect(events, id).toEqual([]);
+      }
+    } finally {
+      destroy();
     }
   });
 });

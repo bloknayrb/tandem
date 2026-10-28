@@ -41,10 +41,14 @@
  * identical was also wrong, because it treated that as a fact about
  * highlights when it was a fact about ONE record's missing field.
  *
- * `mcp/tutorial-annotations.ts` now states `audience: "outbound"` on its
+ * `mcp/tutorial-annotations.ts` then stated `audience: "outbound"` on its
  * Claude-authored seeds, as `mintAnnotation` always has (the name was
- * `createAnnotation` until ADR-035 Unit 8b) — so that highlight
- * projects again and the two predicates are genuinely distinguishable. The
+ * `createAnnotation` until ADR-035 Unit 8b) — so that highlight projected
+ * again and the two predicates became genuinely distinguishable. Since #1725
+ * the highlight seed is the user's own (`author: "user"`, `private`), so the
+ * outbound seeds are the two comments, and no current path creates a Claude
+ * highlight; the distinction survives for a Claude highlight already in a
+ * store from before that change. The
  * choice rests on where each rule belongs: type carries ADR-027, audience
  * carries privacy. Both branches are pinned in
  * `tests/server/events/channel-projection-characterization.test.ts` so this
