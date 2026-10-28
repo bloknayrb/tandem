@@ -80,6 +80,7 @@ import {
   stopAutoSave,
 } from "./session/manager.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
+import { installSidecarPipeGuard } from "./sidecar-pipe-guard.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
 import { startHocuspocus } from "./yjs/provider.js";
@@ -362,6 +363,13 @@ async function shutdown(signal: string) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+// The desktop shell died and took its pipe ends with it (#1988): see
+// `sidecar-pipe-guard.ts` for why an unhandled EPIPE here spins forever.
+if (isTauriSidecar()) {
+  installSidecarPipeGuard([process.stdout, process.stderr], () => {
+    void shutdown("shell pipe closed (EPIPE)");
+  });
+}
 
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);

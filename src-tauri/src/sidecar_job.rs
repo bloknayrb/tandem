@@ -29,12 +29,18 @@
 //!
 //! ## Non-Windows
 //!
-//! This module is Windows-only. On macOS/Linux the graceful
-//! `RunEvent::Exit => shutdown_sidecar_on_exit` path remains the primary
-//! mechanism; a native parent-death reaper for those platforms (Linux
-//! `PR_SET_PDEATHSIG` on a single-threaded reaper binary, macOS kqueue +
-//! `getppid` recheck) was the separate #800 spike that never landed and is tracked there. The Windows job
-//! object is the highest-value, lowest-risk slice and ships here.
+//! This module is Windows-only. The other two platforms (#1988, which replaced
+//! the stale "tracked in #800" — #800 is a merged PR and tracked nothing):
+//!
+//! - **Linux** has its own parent-death mechanism: the shell starts the sidecar
+//!   through `tandem-reaper --exec-with-pdeathsig`, which arms
+//!   `PR_SET_PDEATHSIG(SIGTERM)` and execs node-sidecar in place, from one
+//!   long-lived anchor thread. See `sidecar_anchor.rs`.
+//! - **macOS is accepted, not fixed.** It has no parent-death signal, so a
+//!   force-quit shell leaves node-sidecar alive until the next launch's
+//!   `freePort` reclaims 3478/3479; relaunch recovery is the bound
+//!   (`docs/release-smoke-checklist.md` §2). The graceful
+//!   `RunEvent::Exit => shutdown_sidecar_on_exit` path stays its only stop.
 
 #![cfg(target_os = "windows")]
 

@@ -55,6 +55,10 @@ mod win_app_mode;
 // even on ungraceful exit (taskkill / crash / dev-runner restart). See #987.
 #[cfg(target_os = "windows")]
 mod sidecar_job;
+// #1988: the Linux sidecar's parent-death trampoline and the one thread every
+// Linux sidecar spawn runs on.
+#[cfg(target_os = "linux")]
+mod sidecar_anchor;
 
 // Spike #477 PR 4: sidecar launcher validation. Test-only; not shipped.
 #[cfg(test)]

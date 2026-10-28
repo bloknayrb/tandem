@@ -1055,7 +1055,13 @@ What it does **not** cover:
 - **Windows logoff / shutdown.** `WM_ENDSESSION` is handled inside the wndproc,
   so the flush is best-effort and likely truncated near `HungAppTimeout` (≈5 s).
 - **Forced termination** — Task Manager "End task", `kill -9`, power loss. On
-  Windows the job object (#987) still reaps the sidecar; there is no flush.
+  Windows the job object (#987) still reaps the sidecar; there is no flush. On
+  Linux the sidecar was started through `tandem-reaper --exec-with-pdeathsig`
+  (`src-tauri/src/sidecar_anchor.rs`, #1988), so the shell's death sends it
+  SIGTERM and it runs its own shutdown, flush included; its broken log pipes are
+  handled by `src/server/sidecar-pipe-guard.ts` so that shutdown can finish. On
+  macOS the sidecar survives until the next launch's `freePort` reclaims its
+  ports — an accepted gap whose bound is relaunch recovery.
 
 ### Auto-Updater
 
