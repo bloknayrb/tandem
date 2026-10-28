@@ -57,7 +57,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_SENTRY_DSN` | unset | The **only** switch that turns crash reporting on. Set it to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) DSN you control and Tandem reports crashes to *your* endpoint, scrubbed of home-directory paths, secrets, and document payloads. Unset (the default), no crash-reporting code path is initialized at all. See [security.md](security.md#telemetry-none-by-default-crash-reporting-strictly-opt-in). |
+| `TANDEM_SENTRY_DSN` | unset | The **only** switch that turns crash reporting on. Set it to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) DSN you control and Tandem reports crashes to *your* endpoint. The report text is scrubbed of home-directory paths, secrets, and document payloads; a desktop native-crash report also carries an unscrubbed minidump, which on Linux includes the process environment and open document paths. Unset (the default), no crash-reporting code path is initialized at all. See [security.md](security.md#telemetry-none-by-default-crash-reporting-strictly-opt-in). |
 | `TANDEM_LICENSE_GATE` | unset | Set to `1` to force the licensing gate on in `tsx`/`vitest` runs, where the `__LICENSE_GATE_ENABLED__` build define is absent. Development and testing only — in shipped builds the gate is fixed at build time by `LICENSE_GATE_ENABLED` in `tsup.config.ts`, which stays off until v1.0. |
 
 ## LAN exposure
