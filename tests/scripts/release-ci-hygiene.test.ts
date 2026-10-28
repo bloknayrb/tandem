@@ -371,6 +371,17 @@ describe("#1949 the accepted signing-job exposure keeps its tracked bound", () =
     expect(load("publish.yml").jobs?.publish?.environment).toBe("npm");
   });
 
+  it("build-tauri's Rust cache shares no key with any other job (bound item 5)", () => {
+    // A `shared-key`, `key` or `prefix-key` is the only way this step could
+    // restore a cache a pull-request run wrote, which voids the acceptance.
+    // Pin the whole `with` so any added key input fails here.
+    const caches = (jobOf("tauri-release.yml", "build-tauri").steps ?? []).filter((step) =>
+      step.uses?.startsWith("Swatinem/rust-cache@"),
+    );
+    expect(caches).toHaveLength(1);
+    expect(caches[0]?.with).toEqual({ workspaces: "./src-tauri -> target" });
+  });
+
   it("both lockfiles the bound relies on are committed", () => {
     for (const lock of ["package-lock.json", "src-tauri/Cargo.lock"]) {
       expect(existsSync(path.join(ROOT, lock)), lock).toBe(true);
