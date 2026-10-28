@@ -493,6 +493,38 @@ describe("Settings → License — Remove license (#1943)", () => {
     expect(byTestId(container, "license-remove-error")).toBeNull();
   });
 
+  it("a removal whose re-poll fails says the status could not be refreshed", async () => {
+    licenseStore.set(LICENSED);
+    deactivateLicenseClient.mockResolvedValue({ ok: true, removed: true });
+    fetchLicenseStatus.mockRejectedValue(new Error("offline"));
+    const props = makeProps();
+    const { container } = render(SettingsLicenseTab, { props });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    byTestId(container, "license-remove-confirm-btn")?.click();
+    await flush();
+    await flush();
+    expect(props.notify).toHaveBeenCalledTimes(1);
+    const [, message] = props.notify.mock.calls[0] as [string, string];
+    expect(message).toContain("License removed.");
+    expect(message).toContain("Couldn't refresh the license status");
+  });
+
+  it("a poll that hides the section disarms an open confirm step", async () => {
+    licenseStore.set(LICENSED);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    expect(byTestId(container, "license-remove-confirm")).toBeTruthy();
+    licenseStore.set(TRIAL);
+    await flush();
+    expect(byTestId(container, "license-remove-section")).toBeNull();
+    licenseStore.set(LICENSED);
+    await flush();
+    expect(byTestId(container, "license-remove-section")).toBeTruthy();
+    expect(byTestId(container, "license-remove-confirm")).toBeNull();
+  });
+
   it("a failure is shown inline and the confirm stays open", async () => {
     licenseStore.set(LICENSED);
     deactivateLicenseClient.mockResolvedValue({ ok: false, error: "Tandem couldn't remove it." });

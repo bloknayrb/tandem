@@ -1,4 +1,5 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../../shared/constants";
 import {
   formatGraceEndDate,
@@ -95,6 +96,16 @@ let removeConfirming = $state(false);
 let removing = $state(false);
 let removeError = $state<string | null>(null);
 
+// A poll can hide the Remove section while its confirm step is open; reset it
+// so the section never reappears already armed.
+$effect(() => {
+  if (canRemove) return;
+  untrack(() => {
+    removeConfirming = false;
+    removeError = null;
+  });
+});
+
 async function confirmRemove(): Promise<void> {
   removing = true;
   removeError = null;
@@ -105,8 +116,13 @@ async function confirmRemove(): Promise<void> {
     return;
   }
   removeConfirming = false;
-  ctx.notify("info", result.removed ? "License removed." : "No license was installed.");
   await licenseStore.refresh();
+  // A failed refresh keeps the last status, so the tab would still show the
+  // licence beside a "removed" toast; say so instead of contradicting it.
+  const stale = licenseStore.statusUnavailable
+    ? " Couldn't refresh the license status — reopen Settings to see it."
+    : "";
+  ctx.notify("info", (result.removed ? "License removed." : "No license was installed.") + stale);
 }
 </script>
 
