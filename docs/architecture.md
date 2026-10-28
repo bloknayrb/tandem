@@ -560,20 +560,22 @@ only a reply on a thread Claude started does.
 
 ### Channel Shim Architecture
 
-The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claude Code as a stdio subprocess. It uses the low-level MCP `Server` class (not `McpServer`) as required by the Channels API. It declares `claude/channel` and `claude/channel/permission` capabilities.
+The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claude Code as a stdio subprocess. It uses the low-level MCP `Server` class (not `McpServer`) as required by the Channels API. It declares the `claude/channel` capability only; `claude/channel/permission` was withdrawn in #1885 (see Permission Relay below).
 
 Components:
-- **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
+- **`index.ts`** — MCP server setup, `tandem_reply` tool
 - **`event-bridge.ts`** — a thin adapter over `src/shared/sse-consumer.ts`, which owns the SSE client and its reconnection policy (exponential 2/4/8/16s, capped at 30s). Awareness posts are debounced here; there is **no** selection debouncing on this path at all — selections are buffered server-side in `events/queue.ts` and there is no selection event type on the wire.
 - **`run.ts`** — the runtime the CLI imports; `tandem_reply` HTTP calls and outbound timeouts
 
 The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously. This is not a split of the tool surface: every Tandem tool is registered on the HTTP server, `tandem_reply` included. The shim exists to carry channel push, and it re-exposes `tandem_reply` so a reply can be sent on the same transport that delivered the event.
 
-### Permission Relay
+### Permission Relay (withdrawn, #1885)
 
-When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server.
+The shim used to declare `claude/channel/permission`, which tells Claude Code to forward each tool-approval prompt to it as a `notifications/claude/channel/permission_request` notification. The shim posted the prompt to `POST /api/channel-permission`, and the server held it in a map that `GET /api/channel-permission` served.
 
-**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The capability was declared ahead of an implementation that never landed. `docs/mcp-tools.md` used to describe it as shipped API; #1794 corrected that, and the approval prompt's `input_preview` payload is neither sent by the shim nor stored, served or logged by the server (the served `description` summary line is what #1884 still tracks). This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
+**There was never a return leg.** Nothing in `src/client/` displayed a prompt, a notification cannot be answered, and `POST /api/channel-permission-verdict` only deleted the pending entry. The capability had been declared ahead of an implementation that never landed (#1794 corrected the docs that described it as shipped). The stored `description` lines were readable by any local caller (#1884).
+
+As of #1885 the capability is withdrawn, the shim registers no notification handler (the MCP SDK drops an unhandled notification), and the three routes and their two `NON_LOOPBACK_ALLOWED` entries are deleted. The withdrawal also removed rationale (1) for keeping the channel canonical, which [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 had already voided. Re-declaring the capability is a security change; ADR-047's 2026-10-28 update states what it would need.
 
 ## Plugin Monitor
 
@@ -654,7 +656,6 @@ The plugin monitor and channel shim both bound their outbound HTTP calls so a ha
 | Awareness POST (`/api/channel-awareness`) | `AbortSignal.timeout` | 5s |
 | Error report (`/api/channel-error`) | `AbortSignal.timeout` | 3s |
 | Reply POST (`/api/channel-reply`) | `AbortSignal.timeout` | 5s |
-| Permission relay (`/api/channel-permission`) | `AbortSignal.timeout` | 5s |
 
 `tandem_reply` deliberately re-throws `AbortError` / `TimeoutError` while parsing the response body. If the server returns headers but never finishes JSON, Claude receives a structured `isError: true` response such as `/api/channel-reply timed out after 5000ms` instead of a fake-success "Non-JSON response" payload.
 
@@ -1218,7 +1219,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 
 ### Channel Shim (`src/channel/`)
 
-- `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
+- `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares the `claude/channel` capability only (`claude/channel/permission` was withdrawn in #1885). Exposes `tandem_reply` tool.
 - `event-bridge.ts` -- Thin adapter over `src/shared/sse-consumer.ts`: connects to `GET /api/events`, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back. The reconnection policy lives in the shared consumer (exponential 2/4/8/16s, capped at 30s), not here.
 - `run.ts` -- The runtime the CLI's `channel` branch imports; owns the `tandem_reply` HTTP calls and the outbound `fetchWithTimeout` usage.
 
