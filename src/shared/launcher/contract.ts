@@ -591,15 +591,17 @@ export const TANDEM_MCP_ALLOW_RULES: readonly string[] = [
  *     Where auto mode is unavailable (managed `disableAutoMode`, a model or plan
  *     without it) the CLI degrades to `default` rather than refusing to start —
  *     measured on 2.1.312 — and then:
- *   - `--allowedTools` keeps Tandem's own tools working regardless of mode. The
- *     rules pre-approve EVERY Tandem tool, so those calls skip the auto-mode
- *     classifier too; see ADR-047 §4's amendment and `docs/security.md` for
- *     what that means for `tandem_open` / `tandem_save`.
+ *   - `--allowedTools` keeps Tandem's read, annotate and chat tools
+ *     (`TANDEM_PREAPPROVED_TOOLS`) working regardless of mode. Those calls skip
+ *     the auto-mode classifier too, which is why the grant is narrow: the
+ *     `TANDEM_CLASSIFIER_GATED_TOOLS` (`tandem_open`, `tandem_save`, …) are NOT
+ *     listed, stay with the classifier, and are refused where auto mode is
+ *     unavailable. See ADR-047 §4's amendment and `docs/security.md`.
  *
  * The allow list is ONE comma-joined token, so the CLI's variadic
  * `<tools...>` parser cannot swallow a following argument. No shell is involved
  * on any OS (POSIX execs `claude` through the reaper; Windows resolves only a
- * `.exe`), so the `*` is never globbed. Both pairs sit in this shared prefix so
+ * `.exe`), so no rule is ever shell-expanded. Both pairs sit in this shared prefix so
  * the `--session-id` AND `--resume` arms carry them — whether a resumed `-p`
  * session keeps its creation-time mode is unestablished, and passing it on
  * both arms avoids depending on it. `--permission-prompts none` was considered

@@ -543,6 +543,17 @@ describe("Tandem's one-time hello (#2227)", () => {
     );
   });
 
+  it("in a mixed batch the click opens the answer's document, not the hello's", () => {
+    const t = setup();
+    t.attention.push([
+      reply("a", { documentId: "doc-1", text: "Done." }),
+      hello({ documentId: "doc-2" }),
+    ]);
+    t.flush();
+    t.backend.notify.mock.calls[0][1]();
+    expect(t.openChat).toHaveBeenCalledWith("doc-1");
+  });
+
   it("an untagged reply that only LOOKS like a hello still reads 'replied' (no guessing from text)", () => {
     expect(
       buildNotificationText(

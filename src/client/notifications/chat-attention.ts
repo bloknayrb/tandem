@@ -184,8 +184,14 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
     // skipping it could leave a reply both silent and un-notified.
     chime(settings);
     if (!settings.chatNotifications) return;
+    // The click opens the document the notification names, so in a mixed batch
+    // it targets the newest real answer, never the hello (#2227) that
+    // `buildNotificationText` leaves out of the title.
+    const answers = remaining.filter((reply) => reply.greeting !== true);
+    const target =
+      answers.length > 0 ? answers[answers.length - 1] : remaining[remaining.length - 1];
     clickTarget = {
-      documentId: remaining[remaining.length - 1].documentId,
+      documentId: target.documentId,
       until: Number.POSITIVE_INFINITY,
     };
     deps.backend.notify(

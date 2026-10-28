@@ -1,6 +1,6 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
-import { API_LAUNCHER_STATUS, API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
+import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import {
   COWORK_ENABLED,
   SELECTION_DWELL_MAX_MS,
@@ -18,6 +18,7 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
   type WorkingDirectoryIgnored,
 } from "../../../shared/launcher/contract";
+import { fetchLauncherStatus } from "../../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import { disabledControlStyle } from "../../utils/colors";
@@ -178,11 +179,11 @@ void loadWorkingDirectory();
  * nothing. */
 async function loadWorkingDirectoryIgnored() {
   try {
-    const res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
-    if (!mounted || !res.ok) return;
-    const body = (await res.json()) as { workingDirectoryIgnored?: unknown };
-    if (!mounted) return;
-    const raw = body.workingDirectoryIgnored as Partial<WorkingDirectoryIgnored> | undefined;
+    const status = await fetchLauncherStatus();
+    if (!mounted || !status.ok) return;
+    const raw = (status.value as { workingDirectoryIgnored?: unknown }).workingDirectoryIgnored as
+      | Partial<WorkingDirectoryIgnored>
+      | undefined;
     wdIgnored =
       raw !== null &&
       typeof raw === "object" &&

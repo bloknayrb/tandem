@@ -1767,9 +1767,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const cwd = opts.homeOverride
       ? (resolveSafeCwd(opts.homeOverride) ?? opts.homeOverride)
       : homeCwd();
-    // Reported only for the saved `workingDirectory`: an OVERRIDE that failed
-    // is already reported by `persistRequestedCwd`, and one event gets one
-    // line. The launch never fails on this — it falls back to home, as an
+    // Reported only for the saved `workingDirectory`. An OVERRIDE that failed
+    // is reported by `persistRequestedCwd` when the request asked to persist
+    // it; a non-persisting one (relaunch-here) is not logged, which is
+    // tolerable only because every route home-confines its override first, so
+    // reaching here takes a rename or symlink swap between the two checks. The launch never fails on this — it falls back to home, as an
     // unresolvable directory always has. The log line is for triage; the
     // user's signal is `workingDirectoryIgnored`, which
     // `GET /api/launcher/status` carries (loopback only) to Settings.

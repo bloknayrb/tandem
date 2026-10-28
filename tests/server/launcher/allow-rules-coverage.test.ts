@@ -37,13 +37,23 @@ describe("launched-session allow rules cover every Tandem tool (#2286)", () => {
     expect([...preapproved, ...gated].filter((t) => !registered.has(t))).toEqual([]);
   });
 
-  it("keeps every file-reaching tool off the pre-approved list", () => {
+  // An independent copy of the gated set: moving a tool from the gated list to
+  // the pre-approved one keeps every test above green, so this is what makes
+  // that move a visible edit here.
+  it("keeps every file-reaching or destructive tool off the pre-approved list", () => {
     for (const tool of [
       "tandem_open",
-      "tandem_save",
       "tandem_edit",
+      "tandem_appendContent",
+      "tandem_editList",
+      "tandem_save",
       "tandem_rename",
+      "tandem_close",
+      "tandem_convertToMarkdown",
+      "tandem_applyChanges",
       "tandem_exportAnnotations",
+      "tandem_restoreBackup",
+      "tandem_removeAnnotation",
     ]) {
       expect(preapproved.has(tool)).toBe(false);
     }

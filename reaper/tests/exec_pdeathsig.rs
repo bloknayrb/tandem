@@ -47,7 +47,10 @@ fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "tandem-reaper-{tag}-{}-{}",
         std::process::id(),
-        Instant::now().elapsed().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     std::fs::create_dir_all(&dir).expect("temp dir");
     dir
