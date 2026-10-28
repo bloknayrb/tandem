@@ -14,7 +14,7 @@
  * records its constructor options and every `setNotificationHandler` call.
  */
 
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -43,7 +43,7 @@ vi.mock(import("../../src/channel/event-bridge.js"), () => ({
   startEventBridge: async () => {},
 }));
 
-const RUN_TS_PATH = fileURLToPath(new URL("../../src/channel/run.ts", import.meta.url));
+const CHANNEL_DIR = fileURLToPath(new URL("../../src/channel/", import.meta.url));
 
 /** run.ts with block and line comments removed, so the comment that explains
  *  the withdrawal can neither satisfy nor trip the sweep below. */
@@ -87,13 +87,24 @@ describe("channel shim declares no permission capability (#1885)", () => {
     expect(notificationHandlers).toHaveLength(0);
   });
 
-  it("run.ts code names neither the relay route nor the notification", async () => {
-    const code = stripComments(await readFile(RUN_TS_PATH, "utf8"));
+  it("no src/channel/ module names the relay route, the notification or a notification handler", async () => {
+    // The whole directory, not run.ts alone: the behavioural spec above mocks
+    // `event-bridge.ts` out, so a handler or relay POST added there would be
+    // invisible to it.
+    const files = (await readdir(CHANNEL_DIR)).filter((f) => f.endsWith(".ts")).sort();
+    expect(files).toContain("run.ts");
+    expect(files).toContain("event-bridge.ts");
+    for (const file of files) {
+      const code = stripComments(await readFile(`${CHANNEL_DIR}${file}`, "utf8"));
+      expect(code, file).not.toContain("channel-permission");
+      expect(code, file).not.toContain("API_CHANNEL_PERMISSION");
+      expect(code, file).not.toContain("permission_request");
+      expect(code, file).not.toContain("claude/channel/permission");
+      expect(code, file).not.toContain("setNotificationHandler");
+      expect(code, file).not.toContain("fallbackNotificationHandler");
+    }
     // Positive control: the strip must leave real code behind.
-    expect(code).toContain("claude/channel");
-    expect(code).not.toContain("channel-permission");
-    expect(code).not.toContain("API_CHANNEL_PERMISSION");
-    expect(code).not.toContain("permission_request");
-    expect(code).not.toContain("claude/channel/permission");
+    const run = stripComments(await readFile(`${CHANNEL_DIR}run.ts`, "utf8"));
+    expect(run).toContain("claude/channel");
   });
 });

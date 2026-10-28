@@ -563,9 +563,9 @@ only a reply on a thread Claude started does.
 The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claude Code as a stdio subprocess. It uses the low-level MCP `Server` class (not `McpServer`) as required by the Channels API. It declares the `claude/channel` capability only; `claude/channel/permission` was withdrawn in #1885 (see Permission Relay below).
 
 Components:
-- **`index.ts`** — MCP server setup, `tandem_reply` tool
+- **`index.ts`** — the standalone binary entry; it installs the crash handlers and calls `runChannel` from `run.ts`
 - **`event-bridge.ts`** — a thin adapter over `src/shared/sse-consumer.ts`, which owns the SSE client and its reconnection policy (exponential 2/4/8/16s, capped at 30s). Awareness posts are debounced here; there is **no** selection debouncing on this path at all — selections are buffered server-side in `events/queue.ts` and there is no selection event type on the wire.
-- **`run.ts`** — the runtime the CLI imports; `tandem_reply` HTTP calls and outbound timeouts
+- **`run.ts`** — the runtime the CLI imports: MCP server setup and capability declaration, the `tandem_reply` tool and its HTTP call, outbound timeouts
 
 The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously. This is not a split of the tool surface: every Tandem tool is registered on the HTTP server, `tandem_reply` included. The shim exists to carry channel push, and it re-exposes `tandem_reply` so a reply can be sent on the same transport that delivered the event.
 
@@ -1219,7 +1219,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 
 ### Channel Shim (`src/channel/`)
 
-- `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares the `claude/channel` capability only (`claude/channel/permission` was withdrawn in #1885). Exposes `tandem_reply` tool.
+- `index.ts` -- Standalone binary entry spawned by Claude Code as a channel subprocess; it calls `runChannel` from `run.ts`, which builds the stdio MCP server: low-level `Server` class (not `McpServer`), the `claude/channel` capability only (`claude/channel/permission` was withdrawn in #1885), and the `tandem_reply` tool.
 - `event-bridge.ts` -- Thin adapter over `src/shared/sse-consumer.ts`: connects to `GET /api/events`, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back. The reconnection policy lives in the shared consumer (exponential 2/4/8/16s, capped at 30s), not here.
 - `run.ts` -- The runtime the CLI's `channel` branch imports; owns the `tandem_reply` HTTP calls and the outbound `fetchWithTimeout` usage.
 

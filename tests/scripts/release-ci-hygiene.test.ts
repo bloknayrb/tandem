@@ -360,8 +360,24 @@ describe("#1949 the accepted signing-job exposure keeps its tracked bound", () =
     expect(Object.keys(dispatch.inputs ?? {})).toEqual(["tag"]);
     // The dispatch is bounded by resolving its input through the tag namespace
     // and requiring a published release. Pin that the resolver still does both.
-    const resolve = stepByMarker(jobOf("publish.yml", "publish"), "git/ref/tags/");
+    const publish = jobOf("publish.yml", "publish");
+    const resolve = stepByMarker(publish, "git/ref/tags/");
     expect(resolve.step.run).toContain("releases/tags/");
+    // `toContain` alone is satisfied by a disarmed resolver (see the header's
+    // ADR-051 rules), so pin what makes it refuse: it runs on every dispatch,
+    // fails the job on any error, has no exit-code mask, and exits on a draft.
+    expect(resolve.step.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(resolve.step["continue-on-error"]).toBeUndefined();
+    expect(publish["continue-on-error"]).toBeUndefined();
+    expect(resolve.step.run?.split("\n")[0]).toBe("set -euo pipefail");
+    expect(resolve.step.run).not.toMatch(/\|\|\s*true|\|\|\s*:/);
+    expect(resolve.step.run).toContain('if [ "$draft" != "false" ]; then');
+    // A dispatch checks out the resolved commit, never the dispatching ref.
+    const checkout = (publish.steps ?? []).filter((step) =>
+      step.uses?.startsWith("actions/checkout@"),
+    );
+    expect(checkout).toHaveLength(1);
+    expect(checkout[0]?.with?.ref).toBe("${{ steps.resolve.outputs.sha || github.ref }}");
   });
 
   it("the secret-holding jobs keep their environments", () => {

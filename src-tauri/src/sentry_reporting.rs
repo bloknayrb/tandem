@@ -186,8 +186,12 @@ fn base_options() -> sentry::ClientOptions {
 /// could see it.
 fn scrub_event(event: &mut sentry::protocol::Event<'static>) {
     event.server_name = None;
-    let Some(home) = home_dir_string() else { return };
-    scrub_event_with_home(event, &home);
+    match home_dir_string() {
+        Some(home) => scrub_event_with_home(event, &home),
+        // Image paths are cut to their file name whatever the home directory
+        // is, so a host with no resolvable home still sends none of them.
+        None => scrub_debug_meta(event),
+    }
 }
 
 /// The pure half of [`scrub_event`], taking the home directory as an argument
@@ -217,11 +221,23 @@ fn scrub_event_with_home(event: &mut sentry::protocol::Event<'static>, home: &st
         }
     }
 
-    // `debug_meta` arrives as `Cow::Borrowed` from the integration's static
-    // list, so it is only made owned (cloned) when something in it needs
-    // redacting — the common case on a system-wide install allocates nothing.
-    if debug_meta_mentions_home(&event.debug_meta, home) {
-        scrub_debug_images(event.debug_meta.to_mut(), home);
+    scrub_debug_meta(event);
+}
+
+/// Cut every debug image's paths to their final component (#2161).
+///
+/// Not a home-directory match: an image path can name the user in ways that
+/// match cannot see — a case variant (Windows paths are case-insensitive), a
+/// redirected or OneDrive profile, another drive, an 8.3 short name, or a host
+/// with no resolvable home. Symbolication keys on the debug/code id plus the
+/// file name, so the directory is never needed.
+///
+/// `debug_meta` arrives as `Cow::Borrowed` from the integration's static
+/// list, so it is only made owned (cloned) when an image still carries a
+/// directory.
+fn scrub_debug_meta(event: &mut sentry::protocol::Event<'static>) {
+    if debug_meta_has_directories(&event.debug_meta) {
+        scrub_debug_images(event.debug_meta.to_mut());
     }
 }
 
@@ -230,57 +246,66 @@ fn scrub_event_with_home(event: &mut sentry::protocol::Event<'static>, home: &st
 /// The match is exhaustive with no wildcard arm on purpose, here and in
 /// [`scrub_debug_images`]: `DebugImage` is not `#[non_exhaustive]`, so a new
 /// variant in a sentry bump fails to compile instead of egressing unscrubbed.
-fn debug_image_paths(image: &sentry::protocol::DebugImage) -> Vec<&str> {
+///
+/// Returns a fixed-size array rather than a `Vec`, so the pre-check runs on
+/// every event without a heap allocation per image.
+fn debug_image_paths(image: &sentry::protocol::DebugImage) -> impl Iterator<Item = &str> {
     use sentry::protocol::DebugImage;
-    match image {
-        DebugImage::Apple(img) => vec![img.name.as_str()],
-        DebugImage::Symbolic(img) => {
-            let mut paths = vec![img.name.as_str()];
-            paths.extend(img.debug_file.as_deref());
-            paths
-        }
-        DebugImage::Proguard(_) => Vec::new(),
-        DebugImage::Wasm(img) => {
-            let mut paths = vec![img.name.as_str(), img.code_file.as_str()];
-            paths.extend(img.debug_file.as_deref());
-            paths
-        }
-    }
+    let paths: [Option<&str>; 3] = match image {
+        DebugImage::Apple(img) => [Some(img.name.as_str()), None, None],
+        DebugImage::Symbolic(img) => [Some(img.name.as_str()), img.debug_file.as_deref(), None],
+        DebugImage::Proguard(_) => [None, None, None],
+        DebugImage::Wasm(img) => [
+            Some(img.name.as_str()),
+            Some(img.code_file.as_str()),
+            img.debug_file.as_deref(),
+        ],
+    };
+    paths.into_iter().flatten()
 }
 
-fn debug_meta_mentions_home(meta: &sentry::protocol::DebugMeta, home: &str) -> bool {
+const PATH_SEPARATORS: [char; 2] = ['/', '\\'];
+
+/// The final path component, splitting on either separator so a Windows path
+/// is cut correctly on any host.
+fn file_name(path: &str) -> &str {
+    path.rsplit(PATH_SEPARATORS).next().unwrap_or(path)
+}
+
+fn debug_meta_has_directories(meta: &sentry::protocol::DebugMeta) -> bool {
     meta.images
         .iter()
         .flat_map(debug_image_paths)
-        .any(|path| !matches!(redact_home(path, home), Cow::Borrowed(_)))
+        .any(|path| path.contains(PATH_SEPARATORS))
 }
 
-/// Redact the home directory out of every debug image's paths (#2161). On a
-/// `Symbolic` image `name` is the code file path; `Proguard` carries no path.
-fn scrub_debug_images(meta: &mut sentry::protocol::DebugMeta, home: &str) {
+/// Cut every debug image's paths to their file name (#2161). On a `Symbolic`
+/// image `name` is the code file path; `Proguard` carries no path.
+fn scrub_debug_images(meta: &mut sentry::protocol::DebugMeta) {
     use sentry::protocol::DebugImage;
-    fn redact_in_place(field: &mut String, home: &str) {
-        if let Cow::Owned(redacted) = redact_home(field, home) {
-            *field = redacted;
+    fn cut(field: &mut String) {
+        let name = file_name(field);
+        if name.len() != field.len() {
+            *field = name.to_string();
         }
     }
-    fn redact_opt_in_place(field: &mut Option<String>, home: &str) {
+    fn cut_opt(field: &mut Option<String>) {
         if let Some(value) = field.as_mut() {
-            redact_in_place(value, home);
+            cut(value);
         }
     }
     for image in meta.images.iter_mut() {
         match image {
-            DebugImage::Apple(img) => redact_in_place(&mut img.name, home),
+            DebugImage::Apple(img) => cut(&mut img.name),
             DebugImage::Symbolic(img) => {
-                redact_in_place(&mut img.name, home);
-                redact_opt_in_place(&mut img.debug_file, home);
+                cut(&mut img.name);
+                cut_opt(&mut img.debug_file);
             }
             DebugImage::Proguard(_) => {}
             DebugImage::Wasm(img) => {
-                redact_in_place(&mut img.name, home);
-                redact_in_place(&mut img.code_file, home);
-                redact_opt_in_place(&mut img.debug_file, home);
+                cut(&mut img.name);
+                cut(&mut img.code_file);
+                cut_opt(&mut img.debug_file);
             }
         }
     }
@@ -468,8 +493,8 @@ mod tests {
         let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
             panic!("variant changed");
         };
-        assert_eq!(img.name, "~/.local/share/tandem/tandem");
-        assert_eq!(img.debug_file.as_deref(), Some("~/.local/share/tandem/tandem.debug"));
+        assert_eq!(img.name, "tandem");
+        assert_eq!(img.debug_file.as_deref(), Some("tandem.debug"));
         // Non-path fields are untouched.
         assert_eq!(img.arch.as_deref(), Some("x86_64"));
         assert_eq!(img.image_addr, Addr(0x1000));
@@ -488,8 +513,24 @@ mod tests {
         let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
             panic!("variant changed");
         };
-        assert_eq!(img.name, r"~\AppData\Local\Tandem\tandem.exe");
-        assert_eq!(img.debug_file.as_deref(), Some(r"~\AppData\Local\Tandem\tandem.pdb"));
+        assert_eq!(img.name, "tandem.exe");
+        assert_eq!(img.debug_file.as_deref(), Some("tandem.pdb"));
+    }
+
+    /// The case a home-directory match misses: Windows paths are
+    /// case-insensitive, so a module path spelled differently from the
+    /// profile directory still names the user unless the directory goes.
+    #[test]
+    fn scrubs_a_windows_image_path_whose_case_differs_from_home() {
+        let mut event = event_with_images(vec![symbolic(
+            r"c:\users\bob\onedrive\tandem\tandem.exe",
+            None,
+        )]);
+        scrub_event_with_home(&mut event, r"C:\Users\Bob");
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem.exe");
     }
 
     #[test]
@@ -519,13 +560,13 @@ mod tests {
         let DebugImage::Apple(apple) = &images[0] else {
             panic!("variant changed");
         };
-        assert_eq!(apple.name, "~/Applications/Tandem.app/Contents/MacOS/tandem");
+        assert_eq!(apple.name, "tandem");
         let DebugImage::Wasm(wasm) = &images[1] else {
             panic!("variant changed");
         };
-        assert_eq!(wasm.name, "~/w/mod.wasm");
-        assert_eq!(wasm.code_file, "~/w/mod.wasm");
-        assert_eq!(wasm.debug_file.as_deref(), Some("~/w/mod.debug.wasm"));
+        assert_eq!(wasm.name, "mod.wasm");
+        assert_eq!(wasm.code_file, "mod.wasm");
+        assert_eq!(wasm.debug_file.as_deref(), Some("mod.debug.wasm"));
     }
 
     #[test]
@@ -539,18 +580,29 @@ mod tests {
         assert_eq!(event.debug_meta.images[0], proguard);
     }
 
-    /// Images outside the home directory are left alone, and a `debug_meta`
-    /// that arrived borrowed (as the integration's static list does) is not
-    /// cloned when nothing in it needs redacting.
+    /// Images outside the home directory lose their directory too.
     #[test]
-    fn images_outside_home_stay_borrowed_and_unchanged() {
+    fn images_outside_home_are_cut_as_well() {
+        let mut event = event_with_images(vec![symbolic(
+            "/usr/lib/libc.so.6",
+            Some("/usr/lib/debug/libc.so.6.debug"),
+        )]);
+        scrub_event_with_home(&mut event, "/home/alice");
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "libc.so.6");
+        assert_eq!(img.debug_file.as_deref(), Some("libc.so.6.debug"));
+    }
+
+    /// A `debug_meta` that arrived borrowed (as the integration's static list
+    /// does) is not cloned when no image carries a directory.
+    #[test]
+    fn bare_file_names_stay_borrowed() {
         static META: std::sync::OnceLock<DebugMeta> = std::sync::OnceLock::new();
         let meta = META.get_or_init(|| DebugMeta {
             sdk_info: None,
-            images: vec![symbolic(
-                "/usr/lib/libc.so.6",
-                Some("/usr/lib/debug/libc.so.6.debug"),
-            )],
+            images: vec![symbolic("libc.so.6", Some("libc.so.6.debug"))],
         });
         let mut event = sentry::protocol::Event {
             debug_meta: Cow::Borrowed(meta),
@@ -558,10 +610,6 @@ mod tests {
         };
         scrub_event_with_home(&mut event, "/home/alice");
         assert!(matches!(event.debug_meta, Cow::Borrowed(_)));
-        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
-            panic!("variant changed");
-        };
-        assert_eq!(img.name, "/usr/lib/libc.so.6");
     }
 
     /// The outer hook, with the real home directory, redacts an image built
@@ -575,8 +623,7 @@ mod tests {
         let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
             panic!("variant changed");
         };
-        assert!(!img.name.contains(&home), "{}", img.name);
-        assert!(img.name.starts_with('~'), "{}", img.name);
+        assert_eq!(img.name, "tandem");
     }
 
     /// The seam the scrub depends on: the debug-images integration fills
@@ -625,20 +672,8 @@ mod tests {
         let images = &event.debug_meta.images;
         assert!(!images.is_empty(), "the integration ran before before_send");
 
-        if let Some(home) = home_dir_string() {
-            let paths: Vec<&str> = images.iter().flat_map(debug_image_paths).collect();
-            for path in &paths {
-                assert!(!path.contains(home.as_str()), "unredacted image path: {path}");
-            }
-            // Bites only when the test binary itself runs from under $HOME
-            // (true on CI runners); vacuous otherwise.
-            let exe = std::env::current_exe().unwrap();
-            if exe.to_string_lossy().starts_with(home.as_str()) {
-                assert!(
-                    paths.iter().any(|p| p.starts_with('~')),
-                    "the test binary lives under home, so some image should read ~…"
-                );
-            }
+        for path in images.iter().flat_map(debug_image_paths) {
+            assert!(!path.contains(PATH_SEPARATORS), "image path kept its directory: {path}");
         }
     }
 }
