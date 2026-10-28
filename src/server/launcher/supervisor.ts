@@ -49,6 +49,7 @@ import {
   SUPERVISOR_WAKE_PROMPT,
   serializeUserTurn,
   type TandemClaudeAfterSetup,
+  type WorkingDirectoryIgnored,
 } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { subscribe, unsubscribe, wasForwardedExternally } from "../events/queue.js";
@@ -164,6 +165,17 @@ interface SupervisorOpts {
    * silent failure that no test can reach is itself unverified.
    */
   turnReceiptMs?: number;
+  /**
+   * Test-only stand-in for `os.homedir()` when confining the spawn cwd
+   * (#1822 item 4a). `index.ts` never passes it, and a source pin in
+   * `tests/server/launcher/other-ai-wiring.test.ts` keeps it that way: it
+   * REPLACES the confinement root, so a production caller passing it would
+   * silently move the boundary. It exists because vitest's temp dirs sit
+   * outside `$HOME` on ubuntu (`/tmp`) but inside it on Windows, so without the
+   * seam a fixture spawning in a temp dir would pass on one OS and fall back to
+   * home on the other. Mirrors `resolveRouteCwd`'s seam.
+   */
+  homeOverride?: string;
   /**
    * Override for the `--resume` confirmation window, so a superseded-spawn test
    * can wait out the safeguard in milliseconds rather than 30 seconds. Same
@@ -358,6 +370,12 @@ interface SpawnPlan {
    * that decided it (`resolveCwd`) rather than reconstructed by a second
    * resolution of the same string. */
   cwdFromOverride: boolean;
+  /** The saved `workingDirectory` was consulted and REJECTED, so `cwd` is
+   * home instead, and why (#1822 item 4a). Carried to `status()` so Settings
+   * can say the saved folder is not being honoured rather than display it as
+   * though it were. Undefined when the saved value was honoured, absent, or
+   * not consulted (an override was passed). */
+  workingDirectoryIgnored: WorkingDirectoryIgnored | undefined;
   sessionId: string;
   resuming: boolean;
   /** The resumed session was left owing a sign-in re-check (#1780) by an
@@ -621,9 +639,17 @@ export type SupervisorStatus =
       startsOnMessage?: true;
       /** The greeting is late (#2197) — see `LauncherStatus`. */
       greetingLate?: true;
+      /** The LAST spawn rejected the saved `workingDirectory` (#1822 item 4a)
+       * — see `LauncherStatus`. */
+      workingDirectoryIgnored?: WorkingDirectoryIgnored;
     }
   | {
       running: true;
+      /** The LAST spawn rejected the saved `workingDirectory` and ran in home
+       * (#1822 item 4a). Present only when it did. Deliberately not cleared on
+       * exit or stop: it describes the last launch, and the next spawn
+       * recomputes it. */
+      workingDirectoryIgnored?: WorkingDirectoryIgnored;
       /** PID of the reaper process. Claude's own PID is intentionally not
        * exposed — the reaper is the lifecycle owner. */
       reaperPid: number;
@@ -1040,6 +1066,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * child's MCP connection from a previous one resumed under the same UUID. */
   let currentSpawnedAt: number | undefined;
   let currentResuming = false;
+  /** See `SpawnPlan.workingDirectoryIgnored`. Set per spawn in `spawnOnce`. */
+  let lastSpawnIgnoredWorkingDirectory: WorkingDirectoryIgnored | undefined;
   let stopRequested = false;
   /**
    * True only while the most recent stop was the public `stop()` — the user
@@ -1596,14 +1624,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * rather than merely tolerating, a future change to `resolveCwd`'s fallback
    * order. `plan.cwd` is therefore byte-identical to what the spawn runs in.
    *
-   * Residual TOCTOU: a symlink swap between the route's `resolveRouteCwd`
-   * (which home-confines) and `buildPlan`'s `safeCwd` (which does not) lands
-   * the SPAWN outside home, and a `persistCwd` request then records that
-   * escaped path durably. Persisting `plan.cwd` does not close that — the
-   * durable write is still only as confined as the permissive resolver — it
-   * closes only the divergence between the persisted and the spawned value.
-   * Home-confining here would move an HTTP-boundary policy into a
-   * process-level API that has non-route callers.
+   * Residual TOCTOU: `resolveCwd` home-confines too since #1822 item 4a, so
+   * the route's check and the spawn's check agree — but both are a realpath
+   * taken BEFORE `spawn` `chdir`s by path string. A symlink swap after
+   * `buildPlan` still lands the spawn outside home, and a `persistCwd` request
+   * records `plan.cwd`, the pre-swap canonical path. That narrows the window;
+   * it does not close it. Persisting `plan.cwd` closes only the divergence
+   * between the persisted and the resolved value.
    *
    * Note the write lands BEFORE `spawnOnce`, so a spawn that then throws leaves
    * the setting already moved. Deliberate: the user asked to move, and the next
@@ -1633,20 +1660,57 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function resolveCwd(
     integration: ClaudeCodeIntegration,
     override?: string,
-  ): { cwd: string; fromOverride: boolean } {
+  ): {
+    cwd: string;
+    fromOverride: boolean;
+    workingDirectoryIgnored: WorkingDirectoryIgnored | undefined;
+  } {
     const candidate = override ?? (integration as { workingDirectory?: unknown }).workingDirectory;
+    let rejected: WorkingDirectoryIgnored["reason"] | undefined;
     if (typeof candidate === "string") {
-      const normalized = safeCwd(candidate);
+      // Home-confined, like the HTTP routes (#1822 item 4a). The saved
+      // `workingDirectory` is writable through `POST /api/integrations` and by
+      // hand, so the permissive resolver used here before let either point the
+      // next spawn at any directory on disk. ONE resolution decides both the
+      // cwd and, on refusal, which reason Settings shows — never a second
+      // realpath of the same string (see `persistRequestedCwd`). The check is a
+      // realpath taken before `spawn` `chdir`s by path string, so a symlink
+      // swap is narrowed, not closed.
+      const verdict = classifyRouteCwd(candidate, { homeOverride: opts.homeOverride });
       // `override !== undefined`, not truthiness: this must report which INPUT
       // was honored, and an empty-string override (rejected upstream by the
       // routes, but not by this function) would read as "no override".
-      if (normalized) return { cwd: normalized, fromOverride: override !== undefined };
+      if (verdict.ok) {
+        return {
+          cwd: verdict.cwd,
+          fromOverride: override !== undefined,
+          workingDirectoryIgnored: undefined,
+        };
+      }
+      rejected = verdict.reason;
     }
-    return { cwd: homeCwd(), fromOverride: false };
-  }
-
-  function safeCwd(candidate: string): string | null {
-    return resolveSafeCwd(candidate);
+    const cwd = opts.homeOverride
+      ? (resolveSafeCwd(opts.homeOverride) ?? opts.homeOverride)
+      : homeCwd();
+    // Reported only for the saved `workingDirectory`: an OVERRIDE that failed
+    // is already reported by `persistRequestedCwd`, and one event gets one
+    // line. The launch never fails on this — it falls back to home, as an
+    // unresolvable directory always has. The log line is for triage; the
+    // user's signal is `workingDirectoryIgnored`, which
+    // `GET /api/launcher/status` carries (loopback only) to Settings.
+    if (override === undefined && typeof candidate === "string" && rejected !== undefined) {
+      console.error(
+        `[Launcher] workingDirectory ${sanitizeForLog(candidate)} is ${
+          rejected === "outside-home" ? "not inside home" : "not a directory that resolves"
+        } — spawning in ${cwd}`,
+      );
+      return {
+        cwd,
+        fromOverride: false,
+        workingDirectoryIgnored: { reason: rejected, workingDirectory: candidate },
+      };
+    }
+    return { cwd, fromOverride: false, workingDirectoryIgnored: undefined };
   }
 
   function reaperPath(): string {
@@ -1729,7 +1793,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     configured = integration !== null;
     if (!integration) return null;
 
-    const { cwd, fromOverride } = resolveCwd(integration, cwdOverride);
+    const { cwd, fromOverride, workingDirectoryIgnored } = resolveCwd(integration, cwdOverride);
     const saved = readSavedSession();
 
     // The resume decision is made HERE, against the planned cwd, rather than at
@@ -1756,6 +1820,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       integration,
       cwd,
       cwdFromOverride: fromOverride,
+      workingDirectoryIgnored,
       sessionId,
       resuming,
       loginRecheckOwed: loginRecheck,
@@ -1856,6 +1921,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentSessionId = plan.sessionId;
     currentSpawnedAt = spawnedAt;
     currentResuming = plan.resuming;
+    lastSpawnIgnoredWorkingDirectory = plan.workingDirectoryIgnored;
 
     // Persist the session id on first successful spawn. We mark it as
     // "current" immediately; if Claude crashes during the resume window we'll
@@ -3255,6 +3321,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         busy: activeTurnDelivery !== null && activeTurnDelivery.isBusy(),
         spawnedAt: currentSpawnedAt,
         ...(greetingLate() ? { greetingLate: true as const } : {}),
+        ...(lastSpawnIgnoredWorkingDirectory
+          ? { workingDirectoryIgnored: lastSpawnIgnoredWorkingDirectory }
+          : {}),
       };
     }
     // A `cli-unusable` with no crash behind it (#2199) is a reading of the
@@ -3279,6 +3348,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // from standby (`respawn` runs while `standby` is still set, until the
     // spawn clears it), which the client shows as "Starting Claude…".
     if (greetingLate()) stopped.greetingLate = true;
+    if (lastSpawnIgnoredWorkingDirectory) {
+      stopped.workingDirectoryIgnored = lastSpawnIgnoredWorkingDirectory;
+    }
     if (standby !== undefined && lastError === undefined) {
       stopped.standby = standby;
       // The conditions the standby watch applies, so the chat panel can promise
@@ -3481,10 +3553,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
  * paths, and anything that does not canonicalize to a real directory.
  * Returns null on any rejection so callers can fall back to a safe default.
  *
- * This is the *permissive* resolver used by integration-file reads — a user
- * who edits `integrations.json` directly can point the launcher at any
- * canonical directory on disk. HTTP-driven mutations must use
- * `resolveRouteCwd()` below, which additionally home-confines. */
+ * This is the *permissive* half. Every cwd a spawn or a route acts on goes
+ * through `resolveRouteCwd()` / `classifyRouteCwd()` below, which additionally
+ * home-confine — the launcher's own `resolveCwd` included since #1822 item 4a,
+ * so a hand-edited `integrations.json` no longer widens the scope. */
 export function resolveSafeCwd(candidate: string): string | null {
   if (rejectedSyntactically(candidate)) return null;
   try {
@@ -3572,12 +3644,13 @@ function homeConfines(homeReal: string, candidate: string): boolean {
   return !(rel.startsWith("..") || path.isAbsolute(rel));
 }
 
-/** HTTP-surface variant of `resolveSafeCwd`. Adds: the canonical path must
+/** Home-confining variant of `resolveSafeCwd`. Adds: the canonical path must
  * be under `os.homedir()` (also canonicalized) so a malicious loopback page
  * can't pivot Claude into system directories via a junction/symlink the user
- * happens to have under their home tree. The integration-file path bypasses
- * this — advanced users who hand-edit `integrations.json` opt into wider
- * scope.
+ * happens to have under their home tree. The launcher's spawn path uses it
+ * too (#1822 item 4a), through `classifyRouteCwd`: a saved `workingDirectory`
+ * outside home falls back to home with a log line and a Settings warning
+ * rather than widening the scope.
  *
  * `opts.homeOverride` is a test-only seam: passing an explicit "home" lets
  * cross-platform unit tests stand up a tmpdir, treat it as $HOME, and
@@ -3589,15 +3662,34 @@ export function resolveRouteCwd(
   candidate: string,
   opts: { homeOverride?: string } = {},
 ): string | null {
+  const verdict = classifyRouteCwd(candidate, opts);
+  return verdict.ok ? verdict.cwd : null;
+}
+
+/**
+ * `resolveRouteCwd` with the refusal's reason (#1822 item 4a), from ONE
+ * resolution: `unresolvable` when `resolveSafeCwd` refuses (syntactically
+ * rejected, missing, not a directory) or home itself cannot be canonicalized;
+ * `outside-home` when it resolves to a directory home does not contain. The
+ * reason only chooses Settings' warning text, but deriving it from a second
+ * realpath would be the two-answers-must-agree shape `persistRequestedCwd`
+ * documents, so it is not.
+ */
+export function classifyRouteCwd(
+  candidate: string,
+  opts: { homeOverride?: string } = {},
+): { ok: true; cwd: string } | { ok: false; reason: WorkingDirectoryIgnored["reason"] } {
   const safe = resolveSafeCwd(candidate);
-  if (safe === null) return null;
+  if (safe === null) return { ok: false, reason: "unresolvable" };
   let homeReal: string;
   try {
     homeReal = fs.realpathSync(opts.homeOverride ?? os.homedir());
   } catch {
-    return null;
+    return { ok: false, reason: "unresolvable" };
   }
-  return homeConfines(homeReal, safe) ? safe : null;
+  return homeConfines(homeReal, safe)
+    ? { ok: true, cwd: safe }
+    : { ok: false, reason: "outside-home" };
 }
 
 /** Async twin of `resolveRouteCwd` — see `resolveSafeCwdAsync` for why the

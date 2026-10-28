@@ -1520,6 +1520,62 @@ describe("GET /api/launcher/status — standby (#2195)", () => {
     expect(lan.body).not.toHaveProperty("greetingLate");
   });
 
+  const IGNORED = { reason: "outside-home", workingDirectory: "/mnt/projects" } as const;
+  it.each([
+    [
+      "a running child",
+      {
+        running: true,
+        reaperPid: 1,
+        cwd: "/home/me",
+        sessionId: "s",
+        resuming: false,
+        busy: false,
+        spawnedAt: 1,
+        workingDirectoryIgnored: IGNORED,
+      },
+    ],
+    ["a stopped one", { running: false, workingDirectoryIgnored: IGNORED }],
+    [
+      "a restart under way",
+      { running: false, restartPending: true, workingDirectoryIgnored: IGNORED },
+    ],
+  ] as const)(
+    "passes workingDirectoryIgnored to loopback callers only, beside %s (#1822)",
+    async (_l, st) => {
+      const sup: Supervisor = { ...makeFakeSupervisor(), status: () => st as never };
+      const loop = await request(makeApp(baseDeps(sup)).app, "GET", "/api/launcher/status");
+      expect((loop.body as { workingDirectoryIgnored?: unknown }).workingDirectoryIgnored).toEqual(
+        IGNORED,
+      );
+      const lan = await request(
+        makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" }).app,
+        "GET",
+        "/api/launcher/status",
+      );
+      expect(lan.body).not.toHaveProperty("workingDirectoryIgnored");
+      expect(JSON.stringify(lan.body)).not.toContain("/mnt/projects");
+    },
+  );
+
+  it("omits workingDirectoryIgnored when the saved folder was honoured (#1822)", async () => {
+    const sup: Supervisor = {
+      ...makeFakeSupervisor(),
+      status: () =>
+        ({
+          running: true,
+          reaperPid: 1,
+          cwd: "/home/me/project",
+          sessionId: "s",
+          resuming: false,
+          busy: false,
+          spawnedAt: 1,
+        }) as never,
+    };
+    const loop = await request(makeApp(baseDeps(sup)).app, "GET", "/api/launcher/status");
+    expect(loop.body).not.toHaveProperty("workingDirectoryIgnored");
+  });
+
   it("withholds startsOnMessage from non-loopback callers (#2196)", async () => {
     const sup: Supervisor = {
       ...makeFakeSupervisor(),

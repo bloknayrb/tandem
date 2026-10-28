@@ -271,6 +271,10 @@ function makeSupervisor(extra: ExtraOpts = {}): {
     // host has installed.
     resolveClaudeCommand: () => process.execPath,
     restartBackoffsMs: [0],
+    // The spawn cwd is home-confined (#1822 item 4a), and the fixture's cwd is
+    // a temp dir: inside home on Windows, outside it (`/tmp`) on ubuntu.
+    // Treating the temp root as home keeps the fixture meaning the same on both.
+    homeOverride: fs.realpathSync(os.tmpdir()),
     ...extra,
     integrationsBase: baseDir,
     subscribeToEvents: (cb) => {
@@ -2797,6 +2801,7 @@ describe("#2196 — the standby watch's DEFAULT subscription, against the real q
       probeCliUsable: () => true,
       resolveClaudeCommand: () => process.execPath,
       restartBackoffsMs: [0],
+      homeOverride: fs.realpathSync(os.tmpdir()),
       integrationsBase: baseDir,
       subscribeToEvents: () => () => {},
       subscribeDuringGap: () => () => {},

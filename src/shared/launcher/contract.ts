@@ -59,6 +59,8 @@ export type LauncherStatus =
        * because the commonest reason the hello never comes — Claude Code not
        * signed in — stops the child. */
       greetingLate?: true;
+      /** Loopback-only (#1822 item 4a): see the running arm. */
+      workingDirectoryIgnored?: WorkingDirectoryIgnored;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     }
@@ -86,9 +88,35 @@ export type LauncherStatus =
        * panel shows how to fix it. Decided server-side, so neither a cleared
        * chat nor the client's clock can fake it. */
       greetingLate?: true;
+      /** Loopback-only (#1822 item 4a). The LAST spawn did not use the saved
+       * `workingDirectory` and ran in home instead. Absent when it did, when
+       * none is saved, and from an older server. See
+       * `WorkingDirectoryIgnored`. */
+      workingDirectoryIgnored?: WorkingDirectoryIgnored;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };
+
+/**
+ * The saved `workingDirectory` the last spawn refused, and why (#1822 item
+ * 4a). The launcher home-confines it like the HTTP routes do, and falls back
+ * to home rather than failing the launch.
+ *
+ * `workingDirectory` is the saved value exactly as `integrations.json` holds it,
+ * so Settings shows its warning only while the folder it has loaded IS that
+ * value. A bare "the last spawn ignored it" flag could not tell a stale verdict
+ * from a current one: after the user saved a valid folder, a remount re-read
+ * the flag and brought the warning back for a folder that was fine.
+ *
+ * Loopback-only, like `cwd`: it is a fact about the user's disk layout, and no
+ * more than `GET /api/integrations/existing` already returns there.
+ */
+export interface WorkingDirectoryIgnored {
+  /** `outside-home`: it resolves to a directory home does not contain.
+   * `unresolvable`: it is missing, not a directory, or rejected outright. */
+  reason: "outside-home" | "unresolvable";
+  workingDirectory: string;
+}
 
 /**
  * `deferred-autostart` (#1236): the desktop app was launched by the OS at
