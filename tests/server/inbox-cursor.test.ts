@@ -683,6 +683,32 @@ describe("the cursor codec", () => {
     return entries.filter((e) => !seenBy(view, e)).map((e) => e.seq);
   }
 
+  it("`unseenIn` answers exactly what `seenBy` does over the whole scope, retired entries excluded", () => {
+    const registry = registryWith(["doc-a", "doc-b"], 6);
+    const a = registry.entriesIn("doc-a");
+    registry.markAcked(a[0] as RegistryEntry);
+    registry.markAcked(a[2] as RegistryEntry);
+    registry.retire(a[3] as RegistryEntry);
+    const views: ScopeView[] = [
+      { mark: null, held: new Set() },
+      { mark: 0, held: new Set() },
+      { mark: 3, held: new Set([1, 2]) },
+      { mark: 5, held: new Set([4, 9]) }, // 4 retired, 9 is doc-b's
+      { mark: 12, held: new Set() },
+    ];
+    for (const view of views) {
+      const expected = owedSeqs(view, registry.entriesIn("doc-a")).sort((x, y) => x - y);
+      const actual = registry
+        .unseenIn("doc-a", view)
+        .map((e) => e.seq)
+        .sort((x, y) => x - y);
+      expect(actual, JSON.stringify({ ...view, held: [...view.held] })).toEqual(expected);
+    }
+    expect(registry.isLive("doc-a", 4)).toBe(false);
+    expect(registry.isLive("doc-a", 9)).toBe(false);
+    expect(registry.isLive("doc-b", 9)).toBe(true);
+  });
+
   it("round-trips a cursor", () => {
     const registry = registryWith(["doc-a", "doc-b"], 3);
     const cursor: ReaderCursor = {

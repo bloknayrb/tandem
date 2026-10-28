@@ -996,9 +996,7 @@ function carryHeld(
   refused: ReadonlySet<RegistryEntry>,
   modeState: ModeState,
 ): Set<number> {
-  const owed = deliveryRegistry
-    .entriesIn(documentId)
-    .filter((entry) => !delivered.has(entry) && !seenBy(view, entry));
+  const owed = deliveryRegistry.unseenIn(documentId, view).filter((entry) => !delivered.has(entry));
   const held = new Set<number>();
   if (owed.length === 0) return held;
   let annotations: Map<string, Annotation> | undefined;
@@ -1028,7 +1026,6 @@ function carryHeld(
       else retire.push(entry);
     }
   }
-  // After the loop: `entriesIn` hands back the live list this mutates.
   for (const entry of retire) deliveryRegistry.retire(entry);
   return held;
 }
@@ -1326,9 +1323,10 @@ function viewOf(reader: ReaderCursor, documentId: string): ScopeView {
  *    mark, plus its held seqs.
  *  - A document it did NOT read keeps its old position — a named poll of
  *    another document, a document whose pass threw, a closed document. Its
- *    held list is kept WHATEVER else is true: a held seq is at or below the
+ *    held list is kept whatever the mark does: a held seq is at or below the
  *    mark by construction, so "nothing new above the mark" is no reason to drop
- *    it. On a default poll the shared mark moves to the counter, so an unread
+ *    it. Only a held seq whose entry has been retired is dropped (on a default
+ *    poll), since it names nothing any more. On a default poll the shared mark moves to the counter, so an unread
  *    document is listed with its old mark unless nothing was registered in it
  *    above that mark (then the new shared mark loses nothing).
  */
@@ -1353,9 +1351,13 @@ function nextCursor(
     }
     const stillOwed =
       old.mark === null
-        ? deliveryRegistry.entriesIn(id).some((entry) => !seenBy(old, entry))
+        ? deliveryRegistry.unseenIn(id, old).length > 0
         : deliveryRegistry.maxSeq(id) > old.mark;
-    docs.set(id, { mark: stillOwed ? old.mark : m, held: old.held });
+    // A held seq whose entry was retired names nothing: if its item qualifies
+    // again it gets a new seq, owed above every mark. Kept, it would list a
+    // closed document in this cursor for good.
+    const held = new Set([...old.held].filter((seq) => deliveryRegistry.isLive(id, seq)));
+    docs.set(id, { mark: stillOwed ? old.mark : m, held });
   }
   return { m, docs, chat: { mark: counter, held: chatHeld } };
 }
@@ -1379,6 +1381,46 @@ interface UnreadChat {
 }
 
 /**
+ * A stored user chat message as the inbox returns it, admitted against the
+ * SDK's own chat schema — or null (logged) when the record is malformed. Shared
+ * by both chat collectors so the two contracts return one shape.
+ */
+function admitChatItem(msg: Partial<ChatMessage>): InboxChatMessage | null {
+  const item = {
+    id: msg.id,
+    text: msg.text,
+    timestamp: msg.timestamp,
+    ...(msg.documentId ? { documentId: msg.documentId } : {}),
+    ...(msg.anchor ? { anchor: msg.anchor } : {}),
+    ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+  };
+  const checked = inboxChatMessageSchema.safeParse(item);
+  if (checked.success) return item as InboxChatMessage;
+  logInboxDrop("chat", "chat message", item, checked.error.issues);
+  return null;
+}
+
+/**
+ * Stamp `read: true` on each of `keys` in ONE `withMcp` transaction, each
+ * against the LIVE value: re-read rather than spread from a copy collected
+ * earlier, so the stamp writes back exactly what is stored now, and only while
+ * it is still an unread user message. No keys opens no transaction.
+ */
+function stampUserChatRead(keys: readonly string[]): void {
+  if (keys.length === 0) return;
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  withMcp(ctrlDoc, () => {
+    for (const key of keys) {
+      const live = chatMap.get(key);
+      if (typeof live !== "object" || live === null) continue;
+      const msg = live as ChatMessage;
+      if (msg.author === "user" && !msg.read) chatMap.set(key, { ...msg, read: true });
+    }
+  });
+}
+
+/**
  * Collect the unread user chat from CTRL_ROOM WITHOUT stamping it (PR #2225
  * review): the stamp waits until the whole response validates.
  *
@@ -1390,8 +1432,7 @@ interface UnreadChat {
  * summary counts it.
  */
 function collectUnreadChat(): UnreadChat {
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
   const messages: InboxChatMessage[] = [];
   const keys: string[] = [];
   let dropped = 0;
@@ -1400,21 +1441,12 @@ function collectUnreadChat(): UnreadChat {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || msg.read) return;
-    const item = {
-      id: msg.id,
-      text: msg.text,
-      timestamp: msg.timestamp,
-      ...(msg.documentId ? { documentId: msg.documentId } : {}),
-      ...(msg.anchor ? { anchor: msg.anchor } : {}),
-      ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
-    };
-    const checked = inboxChatMessageSchema.safeParse(item);
-    if (!checked.success) {
-      logInboxDrop("chat", "chat message", item, checked.error.issues);
+    const item = admitChatItem(msg);
+    if (!item) {
       dropped += 1;
       return;
     }
-    messages.push(item as InboxChatMessage);
+    messages.push(item);
     keys.push(key);
   });
 
@@ -1430,18 +1462,7 @@ function collectUnreadChat(): UnreadChat {
       for (const key of keys) {
         deliveryRegistry.markAcked(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0));
       }
-      // ONE transaction for every stamp, each against the LIVE value: re-read
-      // rather than spread from the copy collected above, so the stamp writes
-      // back exactly what is stored now, and only while it is still an unread
-      // user message.
-      withMcp(ctrlDoc, () => {
-        for (const key of keys) {
-          const live = chatMap.get(key);
-          if (typeof live !== "object" || live === null) continue;
-          const msg = live as ChatMessage;
-          if (msg.author === "user" && !msg.read) chatMap.set(key, { ...msg, read: true });
-        }
-      });
+      stampUserChatRead(keys);
     },
   };
 }
@@ -1495,22 +1516,13 @@ function collectCursorChat(view: ScopeView): UnreadChat {
         : !seenBy(view, entry)
       : !msg.read;
     if (!owed) return;
-    const item = {
-      id: msg.id,
-      text: msg.text,
-      timestamp: msg.timestamp,
-      ...(msg.documentId ? { documentId: msg.documentId } : {}),
-      ...(msg.anchor ? { anchor: msg.anchor } : {}),
-      ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
-    };
-    const checked = inboxChatMessageSchema.safeParse(item);
-    if (!checked.success) {
-      logInboxDrop("chat", "chat message", item, checked.error.issues);
+    const item = admitChatItem(msg);
+    if (!item) {
       dropped += 1;
       if (entry) held.add(entry.seq);
       return;
     }
-    messages.push(item as InboxChatMessage);
+    messages.push(item);
     deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
   });
 
@@ -1534,8 +1546,7 @@ function acknowledgeCursor(reader: ReaderCursor): void {
   }
   const view = reader.chat;
   if (view.mark === null) return;
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
   const keys: string[] = [];
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
@@ -1546,15 +1557,7 @@ function acknowledgeCursor(reader: ReaderCursor): void {
     deliveryRegistry.markAcked(entry);
     if (!msg.read) keys.push(key);
   });
-  if (keys.length === 0) return;
-  withMcp(ctrlDoc, () => {
-    for (const key of keys) {
-      const live = chatMap.get(key);
-      if (typeof live !== "object" || live === null) continue;
-      const msg = live as ChatMessage;
-      if (msg.author === "user" && !msg.read) chatMap.set(key, { ...msg, read: true });
-    }
-  });
+  stampUserChatRead(keys);
 }
 
 /**

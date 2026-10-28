@@ -98,6 +98,7 @@ export class DeliveryRegistry {
   #generation = 0;
   #counter = 0;
   readonly #byVersion = new Map<string, RegistryEntry>();
+  readonly #bySeq = new Map<number, RegistryEntry>();
   readonly #byBase = new Map<string, RegistryEntry[]>();
   readonly #byScope = new Map<string, RegistryEntry[]>();
   readonly #unacked = new Map<string, Set<RegistryEntry>>();
@@ -121,6 +122,7 @@ export class DeliveryRegistry {
     this.#epoch = `${randomUUID().slice(0, 8)}-${this.#generation}`;
     this.#counter = 0;
     this.#byVersion.clear();
+    this.#bySeq.clear();
     this.#byBase.clear();
     this.#byScope.clear();
     this.#unacked.clear();
@@ -138,6 +140,7 @@ export class DeliveryRegistry {
     this.#counter += 1;
     const entry: RegistryEntry = { seq: this.#counter, kind, scope, base, editedAt, acked: false };
     this.#byVersion.set(id, entry);
+    this.#bySeq.set(entry.seq, entry);
     push(this.#byBase, baseId(kind, base), entry);
     push(this.#byScope, scope, entry);
     let unacked = this.#unacked.get(scope);
@@ -157,6 +160,42 @@ export class DeliveryRegistry {
   /** Every live (unretired) entry in a scope, in seq order. */
   entriesIn(scope: string): readonly RegistryEntry[] {
     return this.#byScope.get(scope) ?? [];
+  }
+
+  /** Whether `seq` still names a live (unretired) entry in `scope`. */
+  isLive(scope: string, seq: number): boolean {
+    return this.#bySeq.get(seq)?.scope === scope;
+  }
+
+  /**
+   * Every live entry in `scope` the reader at `view` has not seen (`seenBy`
+   * false), without walking the scope's whole history: a fresh reader's are
+   * the unacknowledged ones, a numeric mark's are those above it (a binary
+   * search, the list being in seq order), plus the held seqs either way.
+   */
+  unseenIn(scope: string, view: ScopeView): RegistryEntry[] {
+    const out: RegistryEntry[] = [];
+    for (const seq of view.held) {
+      const entry = this.#bySeq.get(seq);
+      // A held seq above a numeric mark is collected by the range below.
+      if (entry?.scope === scope && (view.mark === null || seq <= view.mark)) out.push(entry);
+    }
+    if (view.mark === null) {
+      for (const entry of this.#unacked.get(scope) ?? []) {
+        if (!view.held.has(entry.seq)) out.push(entry);
+      }
+      return out;
+    }
+    const entries = this.#byScope.get(scope) ?? [];
+    let lo = 0;
+    let hi = entries.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((entries[mid] as RegistryEntry).seq <= view.mark) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < entries.length; i++) out.push(entries[i] as RegistryEntry);
+    return out;
   }
 
   /**
@@ -183,6 +222,7 @@ export class DeliveryRegistry {
     const id = versionId(entry.kind, entry.base, entry.editedAt);
     if (this.#byVersion.get(id) !== entry) return;
     this.#byVersion.delete(id);
+    this.#bySeq.delete(entry.seq);
     remove(this.#byBase, baseId(entry.kind, entry.base), entry);
     remove(this.#byScope, entry.scope, entry);
     this.#unacked.get(entry.scope)?.delete(entry);
