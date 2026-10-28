@@ -85,7 +85,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #2064, #2069, #2070, #1982, #1980, #1662, #1632, #2009, #1920, #2187 (`tandem_checkInbox` misses a comment on a non-active document), #2188, #2219 (a scratchpad's source-view commit drops its notes).
 - **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2180 (launcher action per setup), #2192, #2186 (a beta report's diagnosis tracker).
-- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245, #2231, #2201.
+- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31), #2231, #2201.
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
