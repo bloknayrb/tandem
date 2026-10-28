@@ -31,6 +31,18 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
+import {
+  CHAT_SCOPE,
+  type DeliveryRegistry,
+  decodeCursor,
+  deliveryRegistry,
+  encodeCursor,
+  type ReaderCursor,
+  type RegistryEntry,
+  type ScopeView,
+  START_CURSOR,
+  seenBy,
+} from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
 import {
   checkInboxOutputShape,
@@ -47,12 +59,14 @@ import {
   withErrorBoundary,
   withStructuredErrors,
 } from "./response.js";
-import { READ_ONLY_TOOL } from "./tool-annotations.js";
+import { IDEMPOTENT_WRITE_TOOL, READ_ONLY_TOOL } from "./tool-annotations.js";
 import { withTypingPresence } from "./typing-presence.js";
 
 /**
- * Which annotations have been surfaced to Claude via checkInbox.
- * Value = lastSurfacedEditedAt (0 for unedited), so an edit re-surfaces.
+ * Which annotations have been surfaced to Claude via a CURSOR-LESS checkInbox
+ * (the legacy contract; a cursor reader's position lives in its cursor, see
+ * `inbox-cursor.ts`). Value = lastSurfacedEditedAt (0 for unedited), so an edit
+ * re-surfaces.
  *
  * Keys are `${documentId}:${annotationId}` — DOCUMENT-SCOPED, and that is
  * load-bearing rather than defensive. Imported Word annotation ids are
@@ -208,10 +222,14 @@ function isSettledUserComment(ann: Annotation, lastSurfacedEditedAt: number | un
  */
 let ledgerGeneration = 0;
 
-/** Reset surfaced IDs (exported for testing) */
+/**
+ * Reset surfaced IDs and the cursor registry (exported for testing). A new
+ * registry epoch makes every outstanding cursor read as fresh.
+ */
 export function resetInbox(): void {
   surfacedIds.clear();
   replySurfacedIds.clear();
+  deliveryRegistry.reset();
   ledgerGeneration += 1;
 }
 
@@ -551,6 +569,10 @@ class StagedInboxLedger implements InboxLedger {
   commit(): void {
     for (const [key, value] of this.#staged) this.#ledger.set(key, value);
   }
+  /** This pass's writes, so a commit can also register them (see `teeLegacyCommit`). */
+  staged(): ReadonlyMap<string, number> {
+    return this.#staged;
+  }
 }
 
 /** {@link StagedInboxLedger} for the reply ledger. */
@@ -568,6 +590,91 @@ class StagedReplyLedger implements ReplyLedger {
   }
   commit(): void {
     for (const key of this.#staged) this.#ledger.add(key);
+  }
+  /** This pass's writes, so a commit can also register them (see `teeLegacyCommit`). */
+  staged(): ReadonlySet<string> {
+    return this.#staged;
+  }
+}
+
+/**
+ * A cursor-less poll's commit, mirrored into the cursor registry: each item it
+ * returned is registered (so a cursor reader whose mark is below it is still
+ * handed it — a cursor-less drain hides nothing from a cursor reader) and
+ * acknowledged at once (so a FRESH reader does not repeat it: the legacy
+ * contract treats returning as delivering).
+ */
+function teeLegacyCommit(
+  documentId: string,
+  surfaced: StagedInboxLedger,
+  replySurfaced: StagedReplyLedger,
+): void {
+  for (const [base, editedAt] of surfaced.staged()) {
+    deliveryRegistry.markAcked(deliveryRegistry.assign("a", documentId, base, editedAt));
+  }
+  for (const base of replySurfaced.staged()) {
+    deliveryRegistry.markAcked(deliveryRegistry.assign("r", documentId, base, 0));
+  }
+}
+
+/**
+ * The {@link InboxLedger} a CURSOR reader's pass uses (#2064, #2294): the
+ * reader's own view of one document, answered from the shared registry.
+ *
+ * `get(base)` is the newest `editedAt` among the versions of `base` this reader
+ * has been handed — so `edited: true`, `hasUnaccountedEdit` and the #1770
+ * status dimension all keep their meaning PER READER — plus this pass's own
+ * writes, mirroring {@link StagedInboxLedger}'s read-your-writes. `set`
+ * registers the version (assigning a seq the first time any poll returns it)
+ * and records it as delivered in this pass. Assigning is not acknowledging, so
+ * nothing here needs staging: the reader acknowledges by passing the next
+ * cursor back.
+ */
+class CursorInboxLedger implements InboxLedger {
+  readonly #staged = new Map<string, number>();
+  constructor(
+    private readonly registry: DeliveryRegistry,
+    private readonly scope: string,
+    private readonly view: ScopeView,
+    private readonly delivered: Set<RegistryEntry>,
+  ) {}
+  get(key: string): number | undefined {
+    if (this.#staged.has(key)) return this.#staged.get(key);
+    let newest: number | undefined;
+    for (const entry of this.registry.versionsOf("a", key)) {
+      if (seenBy(this.view, entry) && (newest === undefined || entry.editedAt > newest)) {
+        newest = entry.editedAt;
+      }
+    }
+    return newest;
+  }
+  set(key: string, value: number): void {
+    this.#staged.set(key, value);
+    this.delivered.add(this.registry.assign("a", this.scope, key, value));
+  }
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
+  }
+}
+
+/** {@link CursorInboxLedger} for user replies (one version per reply id). */
+class CursorReplyLedger implements ReplyLedger {
+  readonly #staged = new Set<string>();
+  constructor(
+    private readonly registry: DeliveryRegistry,
+    private readonly scope: string,
+    private readonly view: ScopeView,
+    private readonly delivered: Set<RegistryEntry>,
+  ) {}
+  has(key: string): boolean {
+    return (
+      this.#staged.has(key) ||
+      this.registry.versionsOf("r", key).some((entry) => seenBy(this.view, entry))
+    );
+  }
+  add(key: string): void {
+    this.#staged.add(key);
+    this.delivered.add(this.registry.assign("r", this.scope, key, 0));
   }
 }
 
@@ -620,9 +727,22 @@ function logInboxDrop(
  *    comparison misses a deleted reply or a deletion that changes what a record
  *    resolves to. A swapped or reopened document is a new instance, so a miss;
  *  - the mode is the same, so the Solo hold decides every record as before;
- *  - the ledger was not reset (`ledgerGeneration`). Between resets it only ever
- *    GAINS entries — named polls of this document included — and an entry can
- *    only remove an item from a pass, never add one.
+ *  - what the reader has been handed can only have GROWN, so an entry can only
+ *    remove an item from a pass, never add one. The two contracts say this
+ *    differently, so each keeps its own record:
+ *    - `legacy` (cursor-less polls): the shared ledger was not reset
+ *      (`ledgerGeneration`), and between resets it only ever gains entries —
+ *      named polls of this document included.
+ *    - `cursor` (#2064, #2294): the registry epoch is the same, and the reader's
+ *      mark for this document is at least the mark of the reader whose pass was
+ *      recorded, with nothing held. That pass produced and held nothing, so
+ *      every version that qualifies had a seq at or below the recorded mark —
+ *      and is seen by any reader at or above it with nothing held. No NEW seq
+ *      can appear in this document meanwhile: a seq is assigned only when a
+ *      qualifying, never-returned version is returned, and there is none (a
+ *      cursor-less poll can only return versions already assigned, in the same
+ *      mode, so not held either). A FRESH reader (null mark) is never skipped:
+ *      what it has seen moves with other readers' acknowledgements.
  * Everything else the pass reads is in that Y.Doc (annotations, replies), and
  * `admit` is a pure schema check. So the pass would produce nothing again, and
  * write nothing. Never cached: the active document (it supplies `activity`) and
@@ -634,14 +754,16 @@ function logInboxDrop(
 interface QuietRecord {
   epoch: number;
   mode: ModeState;
-  ledgerGeneration: number;
 }
 
 interface QuietDocState {
   /** Transactions that changed this Y.Doc instance since the listener attached. */
   epoch: number;
-  /** The last quiet fixed point a default poll committed, if any. */
-  quiet: QuietRecord | null;
+  /** The last quiet fixed point each contract's default poll committed, if any. */
+  quiet: {
+    legacy: (QuietRecord & { ledgerGeneration: number }) | null;
+    cursor: (QuietRecord & { registryEpoch: string; mark: number }) | null;
+  };
 }
 
 const quietDocs = new WeakMap<Y.Doc, QuietDocState>();
@@ -656,7 +778,7 @@ const quietDocs = new WeakMap<Y.Doc, QuietDocState>();
 function quietDocState(ydoc: Y.Doc): QuietDocState {
   const known = quietDocs.get(ydoc);
   if (known) return known;
-  const state: QuietDocState = { epoch: 0, quiet: null };
+  const state: QuietDocState = { epoch: 0, quiet: { legacy: null, cursor: null } };
   ydoc.on("afterTransaction", (tr: Y.Transaction) => {
     if (tr.changed.size > 0 || tr.deleteSet.clients.size > 0) state.epoch += 1;
   });
@@ -664,14 +786,50 @@ function quietDocState(ydoc: Y.Doc): QuietDocState {
   return state;
 }
 
-function isQuietSkip(state: QuietDocState, modeState: ModeState): boolean {
-  const quiet = state.quiet;
+/** `view` is the reader's position in this document, or null for a cursor-less poll. */
+function isQuietSkip(state: QuietDocState, modeState: ModeState, view: ScopeView | null): boolean {
+  if (view === null) {
+    const quiet = state.quiet.legacy;
+    return (
+      quiet !== null &&
+      quiet.epoch === state.epoch &&
+      quiet.mode === modeState &&
+      quiet.ledgerGeneration === ledgerGeneration
+    );
+  }
+  const quiet = state.quiet.cursor;
   return (
     quiet !== null &&
     quiet.epoch === state.epoch &&
     quiet.mode === modeState &&
-    quiet.ledgerGeneration === ledgerGeneration
+    quiet.registryEpoch === deliveryRegistry.epoch &&
+    view.mark !== null &&
+    view.mark >= quiet.mark &&
+    view.held.size === 0
   );
+}
+
+/** The two ledgers one document's pass reads and writes, and how to commit them. */
+interface DocumentLedgers {
+  surfaced: InboxLedger;
+  replySurfaced: ReplyLedger;
+  /** Make the pass's writes durable. Call only once the whole response validated. */
+  commit: () => void;
+}
+
+/** A cursor-less pass: the shared ledgers, staged, mirrored into the registry on commit. */
+function legacyLedgers(documentId: string): DocumentLedgers {
+  const surfaced = new StagedInboxLedger(surfacedIds);
+  const replySurfaced = new StagedReplyLedger(replySurfacedIds);
+  return {
+    surfaced,
+    replySurfaced,
+    commit: () => {
+      surfaced.commit();
+      replySurfaced.commit();
+      teeLegacyCommit(documentId, surfaced, replySurfaced);
+    },
+  };
 }
 
 /**
@@ -684,22 +842,18 @@ function isQuietSkip(state: QuietDocState, modeState: ModeState): boolean {
  * (#2187): only the active document's activity is returned. `admit` is the last
  * gate on every item (see `InboxPollContext.admit`).
  *
- * Ledger writes are staged; the caller applies them with `commitLedgers` once
- * the whole response has validated, so a throw anywhere stamps nothing.
+ * The ledgers decide what counts as already returned: the shared, staged ones
+ * for a cursor-less poll (`ledgers.commit` applies them once the whole response
+ * has validated, so a throw anywhere stamps nothing), or the reader's own view
+ * for a cursor poll. `allAnnotations` is handed back for the held carry-forward.
  */
 function collectDocumentInbox(
   store: DocumentStore,
   modeState: ModeState,
   withActivity: boolean,
   admit: InboxPollContext["admit"],
-): DocumentInbox & { commitLedgers: () => void } {
-  const surfaced = new StagedInboxLedger(surfacedIds);
-  const replySurfaced = new StagedReplyLedger(replySurfacedIds);
-  const commitLedgers = (): void => {
-    surfaced.commit();
-    replySurfaced.commit();
-  };
-
+  ledgers: DocumentLedgers,
+): DocumentInbox & { allAnnotations: Annotation[] } {
   const allAnnotations = store.listAnnotations();
   // Nothing to surface and no activity wanted: skip the full-text walk. A
   // default poll reaches every open document, most of them quiet.
@@ -709,7 +863,7 @@ function collectDocumentInbox(
       userResponses: [],
       userReplies: [],
       activity: emptyActivity(),
-      commitLedgers,
+      allAnnotations,
     };
   }
   const fullText = store.getText();
@@ -741,7 +895,7 @@ function collectDocumentInbox(
   const { userActions, userResponses } = processInboxAnnotations(
     allAnnotations,
     fullText,
-    surfaced,
+    ledgers.surfaced,
     (anns) => store.refreshAnnotations(anns),
     pollCtx,
   );
@@ -753,7 +907,7 @@ function collectDocumentInbox(
     allAnnotations,
     fullText,
     (id) => store.listReplies(id),
-    replySurfaced,
+    ledgers.replySurfaced,
     pollCtx,
   );
 
@@ -762,8 +916,64 @@ function collectDocumentInbox(
     userResponses,
     userReplies,
     activity: withActivity ? readActivity(store, fullText) : emptyActivity(),
-    commitLedgers,
+    allAnnotations,
   };
+}
+
+/**
+ * The seqs a cursor reader must keep owed in one document after this pass: the
+ * entries it was owed (above its old mark, held, or — for a fresh reader —
+ * unacknowledged) that this pass did NOT hand it, whose item is still at that
+ * version and was withheld only for now: the Solo hold (`hideFromAI`) or an
+ * `admit` refusal. The new mark passes every one of them, so without this a
+ * reader shown nothing in Solo would lose, for good, an item another reader
+ * was shown before Solo began.
+ *
+ * Deliberately NOT held, and so passed for good by the mark: a version the
+ * record has moved on from (the new version is a new key), a deleted record,
+ * a resolved user comment's (as on the legacy path, #1826), and a record or
+ * reply withheld for audience — made private, or a reply whose parent stopped
+ * being Claude-facing. A record healed back to outbound at the SAME `editedAt`
+ * is not handed again to a reader whose mark passed it while it was private;
+ * the legacy ledger has the same limit across readers.
+ */
+function carryHeld(
+  documentId: string,
+  store: DocumentStore,
+  allAnnotations: Annotation[],
+  view: ScopeView,
+  delivered: ReadonlySet<RegistryEntry>,
+  refused: ReadonlySet<RegistryEntry>,
+  modeState: ModeState,
+): Set<number> {
+  const owed = deliveryRegistry
+    .entriesIn(documentId)
+    .filter((entry) => !delivered.has(entry) && !seenBy(view, entry));
+  const held = new Set<number>();
+  if (owed.length === 0) return held;
+  let annotations: Map<string, Annotation> | undefined;
+  let replies: Map<string, AnnotationReply> | undefined;
+  for (const entry of owed) {
+    if (entry.kind === "a") {
+      annotations ??= new Map(allAnnotations.map((a) => [inboxLedgerKey(documentId, a), a]));
+      const ann = annotations.get(entry.base);
+      if (!ann || (ann.editedAt ?? 0) !== entry.editedAt || !isClaudeFacing(ann)) continue;
+      if (hideFromAI(ann, modeState) || refused.has(entry)) held.add(entry.seq);
+    } else if (entry.kind === "r") {
+      if (!replies) {
+        replies = new Map();
+        for (const ann of allAnnotations) {
+          for (const reply of channelVisibleReplies(ann, (id) => store.listReplies(id))) {
+            replies.set(ledgerKey(documentId, reply.id), reply);
+          }
+        }
+      }
+      const reply = replies.get(entry.base);
+      if (!reply) continue;
+      if (hideFromAI(reply, modeState) || refused.has(entry)) held.add(entry.seq);
+    }
+  }
+  return held;
 }
 
 /** A finite number, or null. `Number.isFinite`, not `typeof`: NaN is a number. */
@@ -847,6 +1057,11 @@ interface InboxDocumentsPass extends DocumentInbox {
   /** Per document, how many items `admit` refused (PR #2225 review). */
   dropped: Map<string, number>;
   /**
+   * Cursor polls only: every document this pass read (or soundly skipped as
+   * quiet), with the seqs the reader must keep owed there (`carryHeld`).
+   */
+  readDocuments: Map<string, Set<number>>;
+  /**
    * Apply every read document's staged ledger writes and quiet-skip records.
    * Call only once the whole response has validated.
    */
@@ -868,11 +1083,13 @@ interface InboxDocumentsPass extends DocumentInbox {
  * goes to stderr alone: it can carry record text, notes included (ADR-027). A
  * named poll rethrows to the error boundary, as before.
  *
- * Nothing here is durable until the caller runs `commit()`.
+ * `reader` is the caller's cursor, or null for a cursor-less poll. Nothing here
+ * is durable until the caller runs `commit()`.
  */
 function collectInboxDocuments(
   requestedId: string | undefined,
   modeState: ModeState,
+  reader: ReaderCursor | null,
 ): InboxDocumentsPass {
   // `getCurrentDoc` resolves only an OPEN document, so this is open or null.
   const activityDocumentId = requestedId ?? getCurrentDoc()?.id ?? null;
@@ -894,12 +1111,19 @@ function collectInboxDocuments(
     readAnyDocument: false,
     unreadable: [],
     dropped: new Map(),
+    readDocuments: new Map(),
     commit: () => {
       for (const commit of commits) commit();
     },
   };
   for (const id of order) {
     const isActivityDocument = id === activityDocumentId;
+    // This reader's position in this document; null on a cursor-less poll.
+    const view = reader ? viewOf(reader, id) : null;
+    // Cursor polls: which registry entries this pass handed over, and which
+    // ones `admit` refused (they stay owed — see `carryHeld`).
+    const delivered = new Set<RegistryEntry>();
+    const refusedEntries = new Set<RegistryEntry>();
     // Refusals are merged into the pass only if this document's pass returns:
     // one that throws is reported as unreadable, whole.
     let refused = 0;
@@ -908,8 +1132,29 @@ function collectInboxDocuments(
       if (checked.success) return true;
       logInboxDrop(`document ${id}`, `${bucket} item`, item, checked.error.issues);
       refused += 1;
+      if (view) {
+        const entry =
+          bucket === "userReplies"
+            ? deliveryRegistry.lookup("r", ledgerKey(id, String(item.id)), 0)
+            : deliveryRegistry.lookup(
+                "a",
+                inboxLedgerKey(id, item as InboxUserAction),
+                (item as InboxUserAction).editedAt ?? 0,
+              );
+        if (entry) refusedEntries.add(entry);
+      }
       return false;
     };
+    const ledgers: DocumentLedgers =
+      view === null
+        ? legacyLedgers(id)
+        : {
+            surfaced: new CursorInboxLedger(deliveryRegistry, id, view, delivered),
+            replySurfaced: new CursorReplyLedger(deliveryRegistry, id, view, delivered),
+            // A cursor poll stages nothing: the reader acknowledges by passing
+            // the next cursor back.
+            commit: () => {},
+          };
     let inbox: ReturnType<typeof collectDocumentInbox>;
     let commitQuiet: (() => void) | undefined;
     try {
@@ -922,10 +1167,14 @@ function collectInboxDocuments(
         // reads and the cache key.
         const ydoc = getOrCreateDocument(id);
         const state = quietDocState(ydoc);
-        if (isQuietSkip(state, modeState)) continue;
+        if (isQuietSkip(state, modeState, view)) {
+          // Sound only with nothing held (see `isQuietSkip`), so nothing to carry.
+          if (view) pass.readDocuments.set(id, new Set());
+          continue;
+        }
         const epochBefore = state.epoch;
         const outsideTransaction = ydoc._transaction === null;
-        inbox = collectDocumentInbox(store, modeState, false, admit);
+        inbox = collectDocumentInbox(store, modeState, false, admit, ledgers);
         const produced =
           inbox.userActions.length + inbox.userResponses.length + inbox.userReplies.length;
         // A fixed point: nothing changed the document while the pass ran. Never
@@ -935,28 +1184,59 @@ function collectInboxDocuments(
         // rather than left to that coincidence.)
         const fixedPoint =
           outsideTransaction && ydoc._transaction === null && state.epoch === epochBefore;
-        const record: QuietRecord | null =
-          fixedPoint && produced === 0 && refused === 0
-            ? { epoch: epochBefore, mode: modeState, ledgerGeneration }
-            : null;
-        commitQuiet = () => {
-          state.quiet = record;
-        };
+        const quiet = fixedPoint && produced === 0 && refused === 0;
+        if (view === null) {
+          const record = quiet ? { epoch: epochBefore, mode: modeState, ledgerGeneration } : null;
+          commitQuiet = () => {
+            state.quiet.legacy = record;
+          };
+        } else {
+          const held = carryHeld(
+            id,
+            store,
+            inbox.allAnnotations,
+            view,
+            delivered,
+            refusedEntries,
+            modeState,
+          );
+          pass.readDocuments.set(id, held);
+          const record =
+            quiet && held.size === 0 && view.mark !== null
+              ? {
+                  epoch: epochBefore,
+                  mode: modeState,
+                  registryEpoch: deliveryRegistry.epoch,
+                  mark: view.mark,
+                }
+              : null;
+          commitQuiet = () => {
+            state.quiet.cursor = record;
+          };
+        }
       } else {
-        inbox = collectDocumentInbox(store, modeState, isActivityDocument, admit);
+        inbox = collectDocumentInbox(store, modeState, isActivityDocument, admit, ledgers);
+        if (view) {
+          pass.readDocuments.set(
+            id,
+            carryHeld(id, store, inbox.allAnnotations, view, delivered, refusedEntries, modeState),
+          );
+        }
       }
     } catch (err) {
       if (requestedId !== undefined) throw err;
       console.error(`[Tandem] tandem_checkInbox could not read document ${id}:`, err);
       pass.unreadable.push(id);
+      // Its position stays where it was (`nextCursor`), so whatever the pass
+      // had registered is owed again.
+      pass.readDocuments.delete(id);
       // Still the document `activity` describes — empty because it could not
       // be read, not because none is active.
       if (isActivityDocument) pass.activity = { ...emptyActivity(), documentId: id };
       continue;
     }
-    const { commitLedgers } = inbox;
     commits.push(() => {
-      commitLedgers();
+      ledgers.commit();
       commitQuiet?.();
     });
     pass.userActions.push(...inbox.userActions);
@@ -970,16 +1250,71 @@ function collectInboxDocuments(
   return pass;
 }
 
+/** A reader's position in one document: its listed view, or the shared mark. */
+function viewOf(reader: ReaderCursor, documentId: string): ScopeView {
+  return reader.docs.get(documentId) ?? { mark: reader.m, held: new Set() };
+}
+
+/**
+ * The cursor this poll hands back: the reader's old position, moved forward
+ * over exactly what this poll covered.
+ *
+ *  - Chat is read on every poll, so its mark becomes the counter, keeping held
+ *    only what `admit` refused.
+ *  - A document this poll read (or soundly skipped) gets the counter as its
+ *    mark, plus its held seqs.
+ *  - A document it did NOT read keeps its old position — a named poll of
+ *    another document, a document whose pass threw, a closed document. Its
+ *    held list is kept WHATEVER else is true: a held seq is at or below the
+ *    mark by construction, so "nothing new above the mark" is no reason to drop
+ *    it. On a default poll the shared mark moves to the counter, so an unread
+ *    document is listed with its old mark unless nothing was registered in it
+ *    above that mark (then the new shared mark loses nothing).
+ */
+function nextCursor(
+  reader: ReaderCursor,
+  pass: InboxDocumentsPass,
+  chatHeld: Set<number>,
+  defaultPoll: boolean,
+): ReaderCursor {
+  const counter = deliveryRegistry.counter;
+  const m = defaultPoll ? counter : reader.m;
+  const docs = new Map<string, ScopeView>();
+  for (const [id, held] of pass.readDocuments) docs.set(id, { mark: counter, held });
+  const unread = new Set(reader.docs.keys());
+  if (defaultPoll) for (const id of deliveryRegistry.documentScopes()) unread.add(id);
+  for (const id of unread) {
+    if (docs.has(id)) continue;
+    const old = viewOf(reader, id);
+    if (!defaultPoll) {
+      docs.set(id, old);
+      continue;
+    }
+    const stillOwed =
+      old.mark === null
+        ? deliveryRegistry.entriesIn(id).some((entry) => !seenBy(old, entry))
+        : deliveryRegistry.maxSeq(id) > old.mark;
+    docs.set(id, { mark: stillOwed ? old.mark : m, held: old.held });
+  }
+  return { m, docs, chat: { mark: counter, held: chatHeld } };
+}
+
 /** A user chat message as `tandem_checkInbox` returns it. */
 type InboxChatMessage = Omit<ChatMessage, "read" | "author">;
 
-/** The unread user chat one poll returns, and how to mark it read once committed. */
+/** The user chat one poll returns, and how to mark it read once committed. */
 interface UnreadChat {
   messages: InboxChatMessage[];
   /** Messages refused as malformed: not returned, not marked read. */
   dropped: number;
-  /** Stamp the returned messages read. Call only once the response validated. */
+  /**
+   * Cursor-less polls: stamp the returned messages read. Call only once the
+   * response validated. A no-op on a cursor poll, which stamps read only on
+   * acknowledgement (`acknowledgeCursor`).
+   */
   markRead: () => void;
+  /** Cursor polls: chat seqs the reader must keep owed (refused by `admit`). */
+  held: Set<number>;
 }
 
 /**
@@ -1025,8 +1360,15 @@ function collectUnreadChat(): UnreadChat {
   return {
     messages,
     dropped,
+    held: new Set(),
     markRead: () => {
       if (keys.length === 0) return;
+      // Registered as returned and acknowledged, like the document items a
+      // cursor-less poll commits (`teeLegacyCommit`): a cursor reader whose
+      // mark is below them is still handed them.
+      for (const key of keys) {
+        deliveryRegistry.markAcked(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0));
+      }
       // ONE transaction for every stamp, each against the LIVE value: re-read
       // rather than spread from the copy collected above, so the stamp writes
       // back exactly what is stored now, and only while it is still an unread
@@ -1041,6 +1383,117 @@ function collectUnreadChat(): UnreadChat {
       });
     },
   };
+}
+
+/**
+ * The ids of user chat messages real Claude has already answered with a
+ * `tandem_reply` naming them in `replyTo`. A row carrying `agentIdentity` is
+ * the local-model collaborator's, not Claude's, and answers nothing here —
+ * consistent with `markUserChatRead`, which it never calls.
+ */
+function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
+  const answered = new Set<string>();
+  chatMap.forEach((value) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author === "claude" && !msg.agentIdentity && typeof msg.replyTo === "string") {
+      answered.add(msg.replyTo);
+    }
+  });
+  return answered;
+}
+
+/**
+ * A cursor poll's chat (#2064, #2294): every user message this reader is owed
+ * and nobody has answered yet — whether or not it is stamped read.
+ *
+ * Owed means: never returned to anybody and unread; or returned (to anybody)
+ * above this reader's chat mark; or held for it. A fresh reader is owed what is
+ * still unread. A message another reader acknowledged is read, but still owed
+ * to a reader whose mark is below it — B's acknowledgement hides nothing from
+ * A. A message real Claude answered (`replyTo`) is skipped for every reader,
+ * which keeps chat answered once across concurrent sessions.
+ *
+ * Nothing is stamped here: `read: true` moves behind the acknowledgement.
+ */
+function collectCursorChat(view: ScopeView): UnreadChat {
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const answered = answeredChatIds(chatMap);
+  const messages: InboxChatMessage[] = [];
+  const held = new Set<number>();
+  let dropped = 0;
+
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user" || answered.has(key)) return;
+    const entry = deliveryRegistry.lookup("c", key, 0);
+    const owed = entry
+      ? view.mark === null
+        ? !msg.read || view.held.has(entry.seq)
+        : !seenBy(view, entry)
+      : !msg.read;
+    if (!owed) return;
+    const item = {
+      id: msg.id,
+      text: msg.text,
+      timestamp: msg.timestamp,
+      ...(msg.documentId ? { documentId: msg.documentId } : {}),
+      ...(msg.anchor ? { anchor: msg.anchor } : {}),
+      ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+    };
+    const checked = inboxChatMessageSchema.safeParse(item);
+    if (!checked.success) {
+      logInboxDrop("chat", "chat message", item, checked.error.issues);
+      dropped += 1;
+      if (entry) held.add(entry.seq);
+      return;
+    }
+    messages.push(item as InboxChatMessage);
+    deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+  });
+
+  return { messages, dropped, held, markRead: () => {} };
+}
+
+/**
+ * Apply a cursor reader's acknowledgement — everything its cursor says reached
+ * it — before collecting:
+ *  - chat: stamp `read: true` on each unread user message it acknowledges, in
+ *    ONE `withMcp` transaction, each against the LIVE value (as the cursor-less
+ *    stamp does). Nothing to stamp opens no transaction at all, so a repeat
+ *    with the same cursor writes nothing.
+ *  - documents: record the acknowledgement in the registry, which only moves
+ *    what a FRESH reader is owed (see `inbox-cursor.ts`).
+ * A fresh cursor acknowledges nothing.
+ */
+function acknowledgeCursor(reader: ReaderCursor): void {
+  for (const scope of deliveryRegistry.documentScopes()) {
+    deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
+  }
+  const view = reader.chat;
+  if (view.mark === null) return;
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const keys: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user") return;
+    const entry = deliveryRegistry.lookup("c", key, 0);
+    if (!entry || !seenBy(view, entry)) return;
+    deliveryRegistry.markAcked(entry);
+    if (!msg.read) keys.push(key);
+  });
+  if (keys.length === 0) return;
+  withMcp(ctrlDoc, () => {
+    for (const key of keys) {
+      const live = chatMap.get(key);
+      if (typeof live !== "object" || live === null) continue;
+      const msg = live as ChatMessage;
+      if (msg.author === "user" && !msg.read) chatMap.set(key, { ...msg, read: true });
+    }
+  });
 }
 
 /**
@@ -1141,19 +1594,29 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Call it with no `documentId` to cover every open document: each comment, response and reply carries its `documentId` (the same imported comment open in two files arrives twice, told apart by it), so pass that id when acting on an item: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one, and a range from one document applied to another lands on the wrong text. Passing a `documentId` limits comments, replies and accept/dismiss responses to that document. An item whose stored record is malformed is left out, counted in `summary` and retried on the next poll. `activity` describes only the active document (`activity.documentId`). `chatMessages` holds every unread user chat message across all documents (with its documentId when it was sent from a document), and returning them marks them read. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server's side only. Does not return user notes or any other record the user has kept private — user highlights never appear here at all. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. If the text at that selection has changed since it was recorded (e.g. you edited a document no editor is showing), `selectedText` and `selectionAt` are null.",
+        "Return what the user did that you have not yet acknowledged — comments, chat, replies and accept/dismiss decisions on your annotations — plus the collaboration `mode` and `activity`. Pass back the `cursor` your previous poll returned (`\"start\"` on your first): each item repeats on every poll until you pass a cursor from a response that held it, so a lost response loses nothing and another session's polls never hide an item from you. Chat is marked read when you acknowledge it, and a chat message you answered with tandem_reply `replyTo` is not repeated. Never invent or edit a cursor. Without one, each item is returned once, shared by every caller that omits it. Call it with no `documentId` to cover every open document: each item carries its `documentId`, so pass that id when acting on it: the id-keyed tools (tandem_resolveAnnotation, tandem_editAnnotation, tandem_removeAnnotation, tandem_annotationReply) find the item's document themselves, but the range-keyed ones (tandem_comment, tandem_edit) target the active document when called without one. A malformed stored record is left out, counted in `summary` and retried. `activity` describes only the active document (`activity.documentId`); `chatMessages` spans every document. Works with no document open. This is the authoritative delivery path: a push cannot be confirmed to have reached you, so nothing here is suppressed on its strength, and `alreadyPushed: true` describes the server's side only. Never returns user notes or other private records. In solo mode the user's comments and replies are held back until the mode returns to tandem. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. If the text at that selection has changed since it was recorded (e.g. you edited a document no editor is showing), `selectedText` and `selectionAt` are null.",
       inputSchema: {
         documentId: z
           .string()
           .optional()
           .describe(
-            "Limit the poll to one document. Omit it to poll every open document — the usual call",
+            "Limit comments, replies and accept/dismiss responses to one document. Omit it to poll every open document — the usual call",
+          ),
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            'The `cursor` your previous tandem_checkInbox returned, passed back unchanged; "start" on your first poll. It acknowledges what that poll returned. Omitted, each item is returned once, shared by every caller that omits it',
           ),
       },
       outputSchema: checkInboxOutputShape,
+      // #2294: with a cursor, a repeat returns the same items and acknowledges
+      // nothing new, and its range repairs converge. Without one, a retry after
+      // a lost response is at-most-once — exactly as without a retry.
+      annotations: IDEMPOTENT_WRITE_TOOL,
     },
     withStructuredErrors(
-      withErrorBoundary("tandem_checkInbox", async ({ documentId }) => {
+      withErrorBoundary("tandem_checkInbox", async ({ documentId, cursor }) => {
         // Stamped BEFORE the document check, deliberately. The fact being
         // recorded is "a model reached for the inbox" — the only signal in the
         // server written by a model rather than by a transport — and that is
@@ -1177,13 +1640,27 @@ export function registerAwarenessTools(server: McpServer): void {
         // value can never disagree within a single poll.
         const modeState = readModeState();
 
+        // #2064 / #2294: the delivery contract. With a `cursor`, what this
+        // reader has been handed lives in the cursor alone (`inbox-cursor.ts`):
+        // its acknowledgement is applied first — chat stamped read, nothing
+        // else written — then everything it is still owed is returned with the
+        // next cursor. Without one (`""` is treated as omitted), the legacy
+        // contract: shared ledgers, each item returned once to whichever
+        // cursor-less caller polls first, chat stamped read on return.
+        const decoded = cursor ? decodeCursor(cursor) : null;
+        const reader = decoded?.cursor ?? null;
+        if (reader) acknowledgeCursor(reader);
+
         // PR #2225 review: NOTHING durable happens until the whole response
         // has validated. The documents' ledgers are staged, the chat is
         // collected unstamped, the response is built and checked against the
         // output schema the SDK enforces, and only then are the ledgers
         // committed, the chat marked read and the delivery round resolved. A
         // response the SDK would reject used to be rejected AFTER every item in
-        // it was stamped delivered — so the next poll skipped them all.
+        // it was stamped delivered — so the next poll skipped them all. (A
+        // cursor poll's registry seqs are assigned during the pass; assigning
+        // is not acknowledging, so a rejected response loses nothing there
+        // either: the reader still holds its old cursor.)
         //
         // This section MUST stay synchronous — `safeParse`, never
         // `safeParseAsync`, and no `await` anywhere from here to the commit. An
@@ -1194,12 +1671,16 @@ export function registerAwarenessTools(server: McpServer): void {
         // `activity` — comes from `collectDocumentInbox`, whose per-record
         // filters (notes, private records, the Solo hold) are the same for
         // every document it reads.
-        const docs = collectInboxDocuments(requestedId, modeState);
+        const docs = collectInboxDocuments(requestedId, modeState, reader);
         const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
 
-        // Bucket 3: unread chat messages from CTRL_ROOM, not yet marked read.
-        const chat = collectUnreadChat();
+        // Bucket 3: user chat from CTRL_ROOM — on a cursor-less poll the unread
+        // messages, not yet marked read; on a cursor poll what this reader is owed.
+        const chat = reader ? collectCursorChat(reader.chat) : collectUnreadChat();
         const chatMessages = chat.messages;
+        const nextCursorString = reader
+          ? encodeCursor(nextCursor(reader, docs, chat.held, requestedId === undefined))
+          : START_CURSOR;
 
         // Reported mode is the two-state view of the same live read used for
         // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
@@ -1268,6 +1749,12 @@ export function registerAwarenessTools(server: McpServer): void {
         if (chat.dropped > 0) {
           actions += ` ${chat.dropped} chat ${chat.dropped === 1 ? "message" : "messages"} could not be returned (malformed record; details in Tandem's log).`;
         }
+        // Never a count of anything withheld: a held item's existence is
+        // exactly what the Solo hold keeps from Claude.
+        if (decoded && !decoded.recognised) {
+          actions +=
+            " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything not yet acknowledged.";
+        }
         // Leads, so a model reading only the summary knows why the document
         // buckets are empty. Not counted in `hasNew`: it is a state, not an ask.
         const summary = docs.readAnyDocument
@@ -1294,6 +1781,7 @@ export function registerAwarenessTools(server: McpServer): void {
           userReplies,
           chatMessages,
           activity,
+          cursor: nextCursorString,
         };
 
         // The backstop. With every client-written value admitted or narrowed

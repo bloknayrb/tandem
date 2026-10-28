@@ -251,7 +251,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 // Sees all annotations from all agents
 ```
 
-Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow — the surfaced-item ledger is process-global, and the same poll marks chat messages read, so a sub-agent's poll would durably drop Opus's own view of both.
+Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow. Since #2064 a sub-agent's poll no longer hides items from Opus — each caller's `cursor` is its own — but the sub-agent would be handed the same comments and chat, act on or answer them a second time, and its acknowledgement stamps the user's chat read.
 
 ## Reviewing Annotations from the Keyboard
 

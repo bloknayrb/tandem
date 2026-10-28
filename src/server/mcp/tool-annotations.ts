@@ -9,9 +9,13 @@
  * twice, or lets a client auto-approve a write. Unannotated is the safe default
  * for anything not proven repeatable.
  *
- * `tandem_checkInbox` is deliberately unannotated: it commits its dedup ledgers
- * and marks chat read before the response is delivered, so a retry after a lost
- * response answers "No new actions" and the items are gone (#2294).
+ * `tandem_checkInbox` is idempotent since its caller-held cursor (#2294): with
+ * a cursor, a repeat returns the same items and acknowledges nothing new (the
+ * acknowledgement is the cursor passed IN, and stamping chat read twice writes
+ * nothing the second time), and its range repairs converge like
+ * `tandem_getAnnotations`'. A cursor-less retry is at-most-once — each item is
+ * returned once to whichever cursor-less call polls first — which is exactly
+ * what it is without a retry, so the hint makes nothing worse.
  *
  * `tests/server/mcp-tool-annotations.test.ts` holds one row per tool, with the
  * reason, against the production `tools/list`.

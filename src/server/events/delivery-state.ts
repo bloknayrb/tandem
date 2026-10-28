@@ -200,6 +200,15 @@ export function isUnansweredAsk(event: TandemEvent): boolean {
  * `{state: "polled", latencyMs: 240}` — "push delivered in a quarter second" —
  * for a message the model never received, which is the comforting-and-wrong
  * shape this module exists to eliminate.
+ *
+ * Under the caller-held cursor (#2064, #2294) "committed" means "returned in a
+ * validated response": a cursor poll stages nothing and stamps chat read only
+ * when the NEXT poll acknowledges it. So a response lost in transit leaves the
+ * round reading `polled` one round early — optimistic for one round — while
+ * the item itself is re-delivered to that reader. Closing the round on the
+ * acknowledgement instead was rejected: it would add Claude's work time to
+ * `latencyMs` and fire the delivery-stall thresholds while Claude is working on
+ * the item it already has.
  */
 export function recordInboxPoll(now: number = Date.now()): void {
   lastPollAt = now;
@@ -209,9 +218,11 @@ export function recordInboxPoll(now: number = Date.now()): void {
 /**
  * The inbox poll actually collected. Closes any outstanding forward.
  *
- * Call only once the poll has committed what it returned — the chat bucket's
- * `read: true` writes and the `surfacedIds` ledger updates. See
- * {@link recordInboxPoll} for why the split exists.
+ * Call only once the poll has committed what it returned — on a cursor-less
+ * poll the chat bucket's `read: true` writes and the `surfacedIds` ledger
+ * updates; on a cursor poll, once its response (and next cursor) validated.
+ * See {@link recordInboxPoll} for why the split exists, and for why a cursor
+ * poll does not wait for the acknowledgement.
  *
  * `undelivered` (PR #2225 review) names what the poll could not hand over. When
  * it covers an item this round is waiting on, the round stays OPEN — the
