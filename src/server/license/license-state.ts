@@ -2,7 +2,7 @@ import fs from "fs";
 import type { LicenseUnverifiableCode } from "../../shared/license-copy.js";
 import { atomicWriteConfigFile } from "../integrations/storage.js";
 import { resolveAppDataDir } from "../platform.js";
-import { LicenseActivationError } from "./activation.js";
+import { LicenseActivationError, LicenseRemovalError } from "./activation.js";
 import { GATE_ENABLED } from "./gate-flag.js";
 import {
   clearGraceRecords,
@@ -417,6 +417,66 @@ export function resolveLiveLicenseState(): LicenseState {
     // it never reads or writes `license-grace.json`.
     grace: "record",
   });
+}
+
+/**
+ * Remove this device's licence (#1943): delete `license.json`, then the grace
+ * record. LOCAL ONLY — no seat is released anywhere and nothing is sent; the
+ * same key activates again from the email it came in, because activation is
+ * idempotent from the signed blob — except a key that already fails
+ * `BAD_SIGNATURE` or `UNSUPPORTED_VERSION` on this build, which activation
+ * refuses too (`wasUnverifiable` names it). `trial.json` is never touched, so a device
+ * past its trial lands in `restricted` (AI off; the editor is unaffected).
+ *
+ * `removed: false` when there was no licence file. Any other failure to
+ * delete it throws `LicenseRemovalError` and leaves the grace record alone,
+ * so a half-removal never restarts a grace clock. A failure to delete the
+ * grace record after the licence is gone is logged and not reported: the
+ * record is keyed by the removed file's contents, so it can only shorten a
+ * grace for those same bytes if they are put back by hand.
+ *
+ * Does not stop a Claude that is already running (as at trial expiry,
+ * ADR-040 D1): its next admission is decided by the live state.
+ */
+export async function deactivateLicense(
+  appDataDir: string,
+  verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
+): Promise<{ removed: boolean; wasUnverifiable?: LicenseUnverifiableCode }> {
+  // What is being removed, read before it goes: a key that fails BAD_SIGNATURE
+  // or UNSUPPORTED_VERSION is refused by activation too, so the caller must not
+  // promise it can be activated again. Grace off: this only reads.
+  let wasUnverifiable: LicenseUnverifiableCode | undefined;
+  try {
+    const before = resolveLicenseState({
+      appDataDir,
+      now: () => Date.now(),
+      gateEnabled: true,
+      verify,
+    });
+    if (before.gateActive && before.status !== "licensed") {
+      wasUnverifiable = before.licenseUnverifiable;
+    }
+  } catch {
+    // A corrupt trial.json can make resolving throw; it says nothing about the key.
+  }
+  let removed = true;
+  try {
+    await fs.promises.unlink(licenseFilePath(appDataDir));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw new LicenseRemovalError(`Could not remove the license from ${appDataDir}`, {
+        cause: err,
+      });
+    }
+    removed = false;
+  }
+  if (!clearGraceRecords(appDataDir)) {
+    console.error(
+      "[license] The license was removed, but license-grace.json could not be deleted; " +
+        "it is left in place.",
+    );
+  }
+  return removed && wasUnverifiable !== undefined ? { removed, wasUnverifiable } : { removed };
 }
 
 /**

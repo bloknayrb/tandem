@@ -258,3 +258,76 @@ export function licenseGraceNoticeMessage(endsOn: string): string {
     "Details are in Settings → License."
   );
 }
+
+/** The deactivate route's error code when `license.json` could not be deleted (#1943). */
+export const LICENSE_REMOVE_FAILED = "LICENSE_REMOVE_FAILED";
+export const LICENSE_REMOVE_FAILED_MESSAGE =
+  "Tandem couldn't remove the license file. Try again — if it keeps failing, close anything " +
+  "that may have it open (a sync client or antivirus scan) and check that you can write to " +
+  "Tandem's application data folder.";
+
+/**
+ * Can the key behind this state be activated again on this build, from the
+ * email it came in? Activation re-runs the same signature and schema checks,
+ * so a key installed but failing `BAD_SIGNATURE` or `UNSUPPORTED_VERSION` is
+ * refused again (#1943 review): removing it is not reversible here. A damaged
+ * file (`MALFORMED`) or an unreadable one (`UNKNOWN`) says nothing about the
+ * key itself, so the emailed copy still activates.
+ */
+export function licenseKeyReactivatable(code: LicenseUnverifiableCode | undefined): boolean {
+  return code !== "BAD_SIGNATURE" && code !== "UNSUPPORTED_VERSION";
+}
+
+/**
+ * What removing this device's licence will do (#1943), for Settings' confirm
+ * step. Branches on the two facts that change the answer: whether the gate is
+ * on in this build, and whether the installed key could be activated again.
+ * Never carries the purchase URL.
+ */
+export function licenseRemovalConsequence(input: {
+  gateActive: boolean;
+  licenseUnverifiable?: LicenseUnverifiableCode;
+}): string {
+  if (!input.gateActive) {
+    return (
+      "Licensing isn't enforced in this version, so nothing changes now — but this key will " +
+      "be needed at v1.0. Keep the email it came in so you can activate it again."
+    );
+  }
+  if (!licenseKeyReactivatable(input.licenseUnverifiable)) {
+    const why =
+      input.licenseUnverifiable === "UNSUPPORTED_VERSION"
+        ? "This key can't be activated again until Tandem is updated"
+        : "This key can't be activated again on this version of Tandem";
+    return (
+      `${why}, so removing it turns Tandem's AI features off now unless your trial is still ` +
+      `running. The editor is unaffected. If you're not sure, email ${TANDEM_SUPPORT_EMAIL} first.`
+    );
+  }
+  return (
+    "Tandem's AI features will turn off unless your trial is still running. The editor is " +
+    "unaffected. You can activate the same key again any time from the email it came in."
+  );
+}
+
+/**
+ * The line `tandem deactivate` prints after removing a licence (#1943), chosen
+ * by what the removed file was. Past tense: the removal has happened.
+ */
+export function licenseRemovedMessage(
+  wasUnverifiable: LicenseUnverifiableCode | undefined,
+): string {
+  if (wasUnverifiable === "UNSUPPORTED_VERSION") {
+    return (
+      "The removed key needs a newer version of Tandem, so it can be activated again only " +
+      `after Tandem is updated. Email ${TANDEM_SUPPORT_EMAIL} if you need a hand.`
+    );
+  }
+  if (wasUnverifiable === "BAD_SIGNATURE") {
+    return (
+      "The removed key failed its check on this version of Tandem, so activating it again " +
+      `will be refused here. Email ${TANDEM_SUPPORT_EMAIL} to have it reissued.`
+    );
+  }
+  return "Activate the same key again any time (keep the email it came in).";
+}

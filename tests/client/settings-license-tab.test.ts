@@ -29,9 +29,12 @@ vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal)
 });
 
 const fetchLicenseStatus = vi.fn<() => Promise<LicenseStatusResponse>>();
+const deactivateLicenseClient =
+  vi.fn<() => Promise<{ ok: true; removed: boolean } | { ok: false; error: string }>>();
 vi.mock(import("../../src/client/hooks/useLicense"), () => ({
   fetchLicenseStatus: () => fetchLicenseStatus(),
   activateLicenseClient: vi.fn(),
+  deactivateLicenseClient: () => deactivateLicenseClient(),
 }));
 
 const { licenseStore } = await import("../../src/client/hooks/useLicense.svelte");
@@ -75,6 +78,7 @@ async function flush(): Promise<void> {
 
 beforeEach(() => {
   fetchLicenseStatus.mockReset();
+  deactivateLicenseClient.mockReset();
   licenseStore.stop();
 });
 
@@ -356,5 +360,131 @@ describe("Settings → License — the grace period (#2231)", () => {
     const { container } = render(SettingsLicenseTab, { props: makeProps() });
     expect(byTestId(container, "license-grace-notice")).toBeNull();
     expect(byTestId(container, "license-unverifiable-warning")).toBeTruthy();
+  });
+});
+
+/** "Remove license" (#1943): local only, behind an inline confirm. */
+describe("Settings → License — Remove license (#1943)", () => {
+  const LICENSED: LicenseStatusResponse = {
+    gateActive: true,
+    status: "licensed",
+    updateWindowCurrent: true,
+    license: { email: "paying@example.com", type: "personal" },
+  };
+
+  it.each([
+    ["licensed (armed)", LICENSED, true],
+    [
+      "a dark build with a licence installed",
+      { ...LICENSED, gateActive: false, licenseInstalled: true },
+      true,
+    ],
+    [
+      "grace",
+      {
+        gateActive: true,
+        status: "grace",
+        updateWindowCurrent: false,
+        licenseUnverifiable: "MALFORMED",
+        grace: { firstFailedAt: "x", endsAt: "y", daysRemaining: 2 },
+      },
+      true,
+    ],
+    [
+      "restricted + unverifiable",
+      {
+        gateActive: true,
+        status: "restricted",
+        updateWindowCurrent: false,
+        licenseUnverifiable: "UNKNOWN",
+      },
+      true,
+    ],
+    ["a plain trial (no licence file)", TRIAL, false],
+    [
+      "a dark build with nothing installed",
+      { ...LICENSED, gateActive: false, licenseInstalled: false },
+      false,
+    ],
+  ] as const)("%s ⇒ section shown: %s", (_label, state, shown) => {
+    licenseStore.set(state as LicenseStatusResponse);
+    const { container, unmount } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-remove-section") !== null).toBe(shown);
+    unmount();
+  });
+
+  it("asks first; Cancel deletes nothing", async () => {
+    licenseStore.set(LICENSED);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-remove-confirm")).toBeNull();
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const confirm = byTestId(container, "license-remove-confirm");
+    expect(confirm).toBeTruthy();
+    expect(flat(confirm)).toContain("activate the same key again any time");
+    byTestId(container, "license-remove-cancel")?.click();
+    await flush();
+    expect(byTestId(container, "license-remove-confirm")).toBeNull();
+    expect(deactivateLicenseClient).not.toHaveBeenCalled();
+  });
+
+  it("a key that fails its check is NOT promised a reactivation", async () => {
+    licenseStore.set({
+      gateActive: true,
+      status: "grace",
+      updateWindowCurrent: false,
+      licenseUnverifiable: "BAD_SIGNATURE",
+      grace: { firstFailedAt: "x", endsAt: "y", daysRemaining: 2 },
+    });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const text = flat(byTestId(container, "license-remove-confirm"));
+    expect(text).toContain("can't be activated again");
+    expect(text).not.toContain("activate the same key again any time");
+  });
+
+  it("on a dark build, says nothing changes now and the key is needed at v1.0", async () => {
+    licenseStore.set({ ...LICENSED, gateActive: false, licenseInstalled: true });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const text = flat(byTestId(container, "license-remove-confirm"));
+    expect(text).toContain("nothing changes now");
+    expect(text).not.toContain("AI features will turn off");
+  });
+
+  it("confirming removes, notifies and re-polls", async () => {
+    licenseStore.set(LICENSED);
+    deactivateLicenseClient.mockResolvedValue({ ok: true, removed: true });
+    fetchLicenseStatus.mockResolvedValue({ ...TRIAL });
+    const props = makeProps();
+    const { container } = render(SettingsLicenseTab, { props });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    byTestId(container, "license-remove-confirm-btn")?.click();
+    await flush();
+    await flush();
+    expect(deactivateLicenseClient).toHaveBeenCalledTimes(1);
+    expect(props.notify).toHaveBeenCalledWith("info", "License removed.");
+    expect(fetchLicenseStatus).toHaveBeenCalled();
+    expect(byTestId(container, "license-remove-error")).toBeNull();
+  });
+
+  it("a failure is shown inline and the confirm stays open", async () => {
+    licenseStore.set(LICENSED);
+    deactivateLicenseClient.mockResolvedValue({ ok: false, error: "Tandem couldn't remove it." });
+    const props = makeProps();
+    const { container } = render(SettingsLicenseTab, { props });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    byTestId(container, "license-remove-confirm-btn")?.click();
+    await flush();
+    await flush();
+    const err = byTestId(container, "license-remove-error");
+    expect(err?.getAttribute("role")).toBe("alert");
+    expect(flat(err)).toBe("Tandem couldn't remove it.");
+    expect(byTestId(container, "license-remove-confirm")).toBeTruthy();
+    expect(props.notify).not.toHaveBeenCalled();
   });
 });

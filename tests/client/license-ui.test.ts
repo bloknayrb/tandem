@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { deactivateLicenseClient } from "../../src/client/hooks/useLicense.js";
 import {
   aiOffCopy,
   deriveLicenseUi,
@@ -290,5 +291,47 @@ describe("planLicenseGraceNotice (#2231)", () => {
     expect(
       planLicenseGraceNotice({ status: null, activity: [row], handledThisLoad: true, now: NOW }),
     ).toEqual({ push: null, dismissIds: [], handledThisLoad: true });
+  });
+});
+
+describe("deactivateLicenseClient (#1943)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs { confirm: true } and reports whether a licence was removed", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ removed: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(deactivateLicenseClient()).resolves.toEqual({ ok: true, removed: true });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/api\/license\/deactivate$/);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ confirm: true });
+  });
+
+  it("passes the server's message through on a refusal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "LICENSE_REMOVE_FAILED", message: "locked" }), {
+            status: 500,
+          }),
+      ),
+    );
+    await expect(deactivateLicenseClient()).resolves.toEqual({ ok: false, error: "locked" });
+  });
+
+  it("never throws on a transport failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(deactivateLicenseClient()).resolves.toEqual({
+      ok: false,
+      error: "Server unavailable.",
+    });
   });
 });

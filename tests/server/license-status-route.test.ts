@@ -11,11 +11,14 @@ import { canonicalize } from "../../src/server/license/verifier.js";
 import {
   handleGetLicenseStatus,
   makeActivateLicenseHandler,
+  makeDeactivateLicenseHandler,
   scrubForNonLoopback,
   toLicenseStatusWire,
 } from "../../src/server/mcp/routes/license.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import {
+  LICENSE_REMOVE_FAILED,
+  LICENSE_REMOVE_FAILED_MESSAGE,
   LICENSE_SAVED_STATE_UNREADABLE,
   LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
 } from "../../src/shared/license-copy.js";
@@ -707,5 +710,196 @@ describe("grace period on the wire (#2231)", () => {
 
   it("puts no grace field on any other arm", () => {
     expect(scrubForNonLoopback(FULL)).not.toHaveProperty("grace");
+  });
+});
+
+/**
+ * POST /api/license/deactivate (#1943). Run against the handler directly with a
+ * real app-data dir; this suite is dark, so the answer's wire is the dark
+ * sentinel. The gates are activate's, in activate's order.
+ */
+describe("handleDeactivateLicense (#1943)", () => {
+  let dir: string;
+  let saved: string | undefined;
+  const handler = makeDeactivateLicenseHandler();
+
+  function deactivateReq(opts: {
+    origin?: string | null;
+    body?: unknown;
+    remoteAddress?: string;
+  }): Request {
+    return {
+      headers: opts.origin === undefined || opts.origin === null ? {} : { origin: opts.origin },
+      socket: { remoteAddress: opts.remoteAddress ?? "127.0.0.1" },
+      body: opts.body,
+    } as unknown as Request;
+  }
+
+  function seed(): void {
+    fs.writeFileSync(path.join(dir, "license.json"), JSON.stringify({ version: 1, blob: "b" }));
+    fs.writeFileSync(
+      path.join(dir, "license-grace.json"),
+      JSON.stringify({ version: 1, entries: { k: new Date().toISOString() } }),
+    );
+  }
+
+  const licenseFile = () => path.join(dir, "license.json");
+  const graceFile = () => path.join(dir, "license-grace.json");
+
+  beforeEach(() => {
+    saved = process.env.TANDEM_APP_DATA_DIR;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-deactivate-"));
+    process.env.TANDEM_APP_DATA_DIR = dir;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["a non-allowlisted Origin", "https://evil.example"],
+    ['Origin: "null"', "null"],
+    ["an empty Origin", ""],
+  ])("refuses %s with 403 before deleting anything", async (_name, origin) => {
+    seed();
+    const res = fakeRes();
+    await handler(deactivateReq({ origin, body: { confirm: true } }), res);
+    expect(res.statusCode).toBe(403);
+    expect(fs.existsSync(licenseFile())).toBe(true);
+    expect(fs.existsSync(graceFile())).toBe(true);
+  });
+
+  it("refuses a non-loopback caller, Origin or not", async () => {
+    seed();
+    const res = fakeRes();
+    await handler(deactivateReq({ remoteAddress: "203.0.113.5", body: { confirm: true } }), res);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: "FORBIDDEN" });
+    expect((res.body as { message: string }).message).toMatch(/only be removed on the computer/);
+    expect(fs.existsSync(licenseFile())).toBe(true);
+  });
+
+  it.each([
+    ["no parsed body (a text/plain simple request)", undefined],
+    ["no confirm field", {}],
+    ["a confirm that is not literally true", { confirm: "true" }],
+  ])("answers %s 400 BAD_REQUEST with both files intact", async (_name, body) => {
+    seed();
+    const res = fakeRes();
+    await handler(deactivateReq({ body }), res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: "BAD_REQUEST" });
+    expect(fs.existsSync(licenseFile())).toBe(true);
+    expect(fs.existsSync(graceFile())).toBe(true);
+  });
+
+  it("an Origin-less loopback caller (the CLI) removes both files and gets the wire back", async () => {
+    seed();
+    fs.writeFileSync(path.join(dir, "trial.json"), JSON.stringify({ version: 1, firstRunAt: "x" }));
+    const res = fakeRes();
+    await handler(deactivateReq({ body: { confirm: true } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      removed: true,
+      gateActive: false,
+      licenseInstalled: false,
+      cliActivateEffective: false,
+    });
+    expect(fs.existsSync(licenseFile())).toBe(false);
+    expect(fs.existsSync(graceFile())).toBe(false);
+    // Never the trial clock.
+    expect(fs.existsSync(path.join(dir, "trial.json"))).toBe(true);
+  });
+
+  it("an allowlisted browser Origin is admitted", async () => {
+    seed();
+    const res = fakeRes();
+    await handler(
+      deactivateReq({ origin: "http://tauri.localhost", body: { confirm: true } }),
+      res,
+    );
+    expect(res.body).toMatchObject({ removed: true });
+  });
+
+  it("answers removed: false when no licence was installed", async () => {
+    const res = fakeRes();
+    await handler(deactivateReq({ body: { confirm: true } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ removed: false });
+  });
+
+  it("answers 500 LICENSE_REMOVE_FAILED when license.json cannot be deleted, keeping the grace record", async () => {
+    fs.mkdirSync(path.join(licenseFile(), "inner"), { recursive: true });
+    fs.writeFileSync(graceFile(), JSON.stringify({ version: 1, entries: {} }));
+    const res = fakeRes();
+    await handler(deactivateReq({ body: { confirm: true } }), res);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({
+      error: LICENSE_REMOVE_FAILED,
+      message: LICENSE_REMOVE_FAILED_MESSAGE,
+    });
+    expect(fs.existsSync(graceFile())).toBe(true);
+  });
+
+  it("is reversible: the same good key activates again afterwards", async () => {
+    vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(
+      () =>
+        ({
+          id: "lic-1",
+          email: "jane@example.com",
+          type: "personal",
+          createdAt: new Date(0).toISOString(),
+          expiresAt: null,
+          version: "1.0",
+          keyId: "0123456789abcdef",
+        }) as ReturnType<typeof verifier.verifyLicenseSignature>,
+    );
+    const activate = makeActivateLicenseHandler();
+    const first = fakeRes();
+    await activate(activateReq({ body: { license: "the-emailed-key" } }), first);
+    expect(first.statusCode).toBe(200);
+    const removed = fakeRes();
+    await handler(deactivateReq({ body: { confirm: true } }), removed);
+    expect(removed.body).toMatchObject({ removed: true });
+    expect(removed.body).not.toHaveProperty("wasUnverifiable");
+    const again = fakeRes();
+    await activate(activateReq({ body: { license: "the-emailed-key" } }), again);
+    expect(again.statusCode).toBe(200);
+    expect(again.body).toMatchObject({ licenseInstalled: true });
+  });
+
+  /**
+   * The review's blocking case: a key installed but failing BAD_SIGNATURE (the
+   * grace period's main population) is refused by activation too, so removing
+   * it is NOT reversible here. The answer says so, for the CLI's copy.
+   */
+  it("names a BAD_SIGNATURE removal, and activation then refuses the same blob (400)", async () => {
+    vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(() => {
+      throw new verifier.LicenseVerifyError("BAD_SIGNATURE", "bad signature");
+    });
+    fs.writeFileSync(licenseFile(), JSON.stringify({ version: 1, blob: "a-retired-key" }));
+    const removed = fakeRes();
+    await handler(deactivateReq({ body: { confirm: true } }), removed);
+    expect(removed.body).toMatchObject({ removed: true, wasUnverifiable: "BAD_SIGNATURE" });
+    const again = fakeRes();
+    await makeActivateLicenseHandler()(activateReq({ body: { license: "a-retired-key" } }), again);
+    expect(again.statusCode).toBe(400);
+    expect(again.body).toMatchObject({ error: "INVALID_LICENSE" });
+    expect(fs.existsSync(licenseFile())).toBe(false);
+  });
+
+  it("still answers the removal when re-reading the state throws", async () => {
+    seed();
+    vi.spyOn(licenseState, "resolveLiveLicenseState").mockImplementation(() => {
+      throw new Error("corrupt trial.json");
+    });
+    const res = fakeRes();
+    await handler(deactivateReq({ body: { confirm: true } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ removed: true });
+    expect(res.body).not.toHaveProperty("gateActive");
   });
 });

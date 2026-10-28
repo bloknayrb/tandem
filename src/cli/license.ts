@@ -11,27 +11,36 @@
  * server re-resolves license state per dispatch (no cache), so that write takes
  * effect on a running server's next tool call / reconnect.
  *
+ * `tandem deactivate` (#1943) is the inverse, over the same transport: it asks
+ * a running Tandem to remove its licence (`POST /api/license/deactivate`), and
+ * falls back to removing it from this CLI's own store.
+ *
  * `tandem license` stays local-only: it reads this CLI's app-data store.
  */
 import fs from "fs";
-import { LicenseActivationError } from "../server/license/activation.js";
+import { LicenseActivationError, LicenseRemovalError } from "../server/license/activation.js";
 import { GATE_ENABLED } from "../server/license/gate-flag.js";
 import {
   activateLicense,
+  deactivateLicense,
   resolveLicenseState,
   verifyActivationBlob,
 } from "../server/license/license-state.js";
 import type { LicenseState, SignatureVerified } from "../server/license/license-types.js";
 import { resolveAppDataDir } from "../server/platform.js";
-import { API_LICENSE_ACTIVATE } from "../shared/api-paths.js";
+import { API_LICENSE_ACTIVATE, API_LICENSE_DEACTIVATE } from "../shared/api-paths.js";
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
 import { LICENSE_GRACE_DAYS, TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../shared/constants.js";
 import { ERROR_CODE_BAD_ORIGIN } from "../shared/integrations/contract.js";
 import {
   activationErrorMessage,
   formatGraceEndDate,
+  LICENSE_REMOVE_FAILED,
+  LICENSE_REMOVE_FAILED_MESSAGE,
   LICENSE_SAVED_STATE_UNREADABLE,
+  type LicenseUnverifiableCode,
   licenseGraceMessage,
+  licenseRemovedMessage,
   unverifiableLicenseMessage,
 } from "../shared/license-copy.js";
 
@@ -400,8 +409,14 @@ async function readCappedBody(res: Response): Promise<string | null> {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
+type LoopbackPostResult =
+  | { kind: "answered"; status: number; body: unknown }
+  | { kind: "unavailable"; reason: "non-loopback-url" | "unreachable" | "timeout" | "not-tandem" };
+
 /**
- * POST a verified blob to a running Tandem's `/api/license/activate` (#2205).
+ * POST a JSON body to a running Tandem's loopback `/api` route — the transport
+ * `tandem activate` (#2205) and `tandem deactivate` (#1943) share, so both
+ * carry the same guards.
  *
  * Only a literal `http://127.0.0.1:<port>` URL is ever contacted:
  * - the route refuses a non-loopback caller anyway, and the server binds
@@ -415,16 +430,17 @@ async function readCappedBody(res: Response): Promise<string | null> {
  * The request URL is built from the PARSED URL's origin, so the host checked is
  * provably the host fetched, and any userinfo, path, query or fragment in
  * `TANDEM_URL` is dropped. No `Origin` and no `Authorization` are sent: the
- * route admits an absent Origin, and loopback bypasses `authMiddleware`.
+ * routes admit an absent Origin, and loopback bypasses `authMiddleware`.
  *
- * Anything that is not recognisably Tandem's answer maps to `unavailable`, so
- * the caller falls back to the direct write: a redirect, a 2xx without the
- * licence wire, any status or body outside the route's closed vocabulary.
+ * A redirect is never followed and is `not-tandem`; so is a body over
+ * {@link MAX_RESPONSE_BYTES}. A body that does not parse as JSON answers with
+ * `body: undefined`, for the caller to reject.
  */
-export async function activateViaRunningServer(
-  blob: string,
+async function postToLoopbackTandem(
+  apiPath: string,
+  payload: unknown,
   opts: { url: string; fetchImpl?: typeof fetch; timeoutMs?: number },
-): Promise<ServerActivateOutcome> {
+): Promise<LoopbackPostResult> {
   const { fetchImpl = fetch, timeoutMs = 30_000 } = opts;
   let target: URL;
   try {
@@ -432,21 +448,19 @@ export async function activateViaRunningServer(
     if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
       return { kind: "unavailable", reason: "non-loopback-url" };
     }
-    target = new URL(API_LICENSE_ACTIVATE, parsed.origin);
+    target = new URL(apiPath, parsed.origin);
   } catch {
     return { kind: "unavailable", reason: "non-loopback-url" };
   }
 
-  let res: Response;
-  let body: unknown;
   try {
-    res = await fetchImpl(target.href, {
+    const res = await fetchImpl(target.href, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ license: blob }),
-      // Node/undici defaults to `follow`, which re-POSTs this body — the
-      // buyer's signed key and email — to a 307/308 `Location`, wherever it
-      // points. Never follow; a redirect is not Tandem's answer.
+      body: JSON.stringify(payload),
+      // Node/undici defaults to `follow`, which re-POSTs this body — for
+      // activate, the buyer's signed key and email — to a 307/308 `Location`,
+      // wherever it points. Never follow; a redirect is not Tandem's answer.
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -460,11 +474,13 @@ export async function activateViaRunningServer(
     }
     const text = await readCappedBody(res);
     if (text === null) return { kind: "unavailable", reason: "not-tandem" };
+    let body: unknown;
     try {
       body = JSON.parse(text);
     } catch {
       body = undefined;
     }
+    return { kind: "answered", status: res.status, body };
   } catch (err) {
     const name = err instanceof Error || err instanceof DOMException ? err.name : "";
     if (name === "TimeoutError" || name === "AbortError") {
@@ -472,8 +488,25 @@ export async function activateViaRunningServer(
     }
     return { kind: "unavailable", reason: "unreachable" };
   }
+}
 
-  if (res.status >= 200 && res.status < 300) {
+/**
+ * POST a verified blob to a running Tandem's `/api/license/activate` (#2205),
+ * through {@link postToLoopbackTandem}.
+ *
+ * Anything that is not recognisably Tandem's answer maps to `unavailable`, so
+ * the caller falls back to the direct write: a redirect, a 2xx without the
+ * licence wire, any status or body outside the route's closed vocabulary.
+ */
+export async function activateViaRunningServer(
+  blob: string,
+  opts: { url: string; fetchImpl?: typeof fetch; timeoutMs?: number },
+): Promise<ServerActivateOutcome> {
+  const posted = await postToLoopbackTandem(API_LICENSE_ACTIVATE, { license: blob }, opts);
+  if (posted.kind === "unavailable") return posted;
+  const { status, body } = posted;
+
+  if (status >= 200 && status < 300) {
     // The real wire always carries more than `gateActive`: a dark build answers
     // the `status: "licensed"` sentinel plus `licenseInstalled`, an armed one
     // `status: "licensed"` after a good activation.
@@ -489,7 +522,7 @@ export async function activateViaRunningServer(
     return { kind: "unavailable", reason: "not-tandem" };
   }
 
-  if (res.status === 403) {
+  if (status === 403) {
     // A pre-#2205 Tandem refuses an Origin-less caller with this code. So do
     // both loopback refusals (`assertLoopbackForMutation`,
     // `enforceLoopbackMutation`) — which a 127.0.0.1 socket cannot reach today,
@@ -502,7 +535,7 @@ export async function activateViaRunningServer(
   }
 
   if (
-    res.status === 500 &&
+    status === 500 &&
     isPlainObject(body) &&
     body.error === LICENSE_SAVED_STATE_UNREADABLE &&
     typeof body.message === "string"
@@ -511,14 +544,189 @@ export async function activateViaRunningServer(
   }
 
   if (
-    TANDEM_REFUSAL_STATUSES.has(res.status) &&
+    TANDEM_REFUSAL_STATUSES.has(status) &&
     isPlainObject(body) &&
     typeof body.error === "string" &&
     TANDEM_ACTIVATE_ERRORS.has(body.error) &&
     typeof body.message === "string"
   ) {
-    return { kind: "refused", status: res.status, message: sanitizeServerMessage(body.message) };
+    return { kind: "refused", status, message: sanitizeServerMessage(body.message) };
   }
 
   return { kind: "unavailable", reason: "not-tandem" };
+}
+
+// ── tandem deactivate (#1943) ─────────────────────────────────────────
+
+/** The unverifiable codes a deactivate answer may name; anything else is dropped. */
+const UNVERIFIABLE_CODES: ReadonlySet<string> = new Set<LicenseUnverifiableCode>([
+  "TOO_LONG",
+  "MALFORMED",
+  "BAD_SIGNATURE",
+  "UNSUPPORTED_VERSION",
+  "WRITE_FAILED",
+  "UNKNOWN",
+]);
+
+interface ServerDeactivateAnswer {
+  cliSharesRoot?: boolean;
+  wasUnverifiable?: LicenseUnverifiableCode;
+}
+
+export type ServerDeactivateOutcome =
+  | ({ kind: "removed" } & ServerDeactivateAnswer)
+  | ({ kind: "not-installed" } & ServerDeactivateAnswer)
+  | { kind: "refused"; status: number; message: string }
+  | {
+      kind: "unavailable";
+      reason: "non-loopback-url" | "unreachable" | "timeout" | "not-tandem" | "origin-refused";
+    };
+
+/**
+ * The deactivate route's closed error vocabulary: `LICENSE_REMOVE_FAILED`
+ * (500), its `confirm: true is required` 400 (BAD_REQUEST), and the body-parser
+ * error mapper in `src/server/mcp/server.ts` (BAD_REQUEST, PAYLOAD_TOO_LARGE).
+ */
+const TANDEM_DEACTIVATE_ERRORS = new Set([
+  "BAD_REQUEST",
+  LICENSE_REMOVE_FAILED,
+  "PAYLOAD_TOO_LARGE",
+]);
+
+/**
+ * Ask a running Tandem to remove its licence through
+ * `POST /api/license/deactivate` (#1943), with the same transport guards as
+ * `activateViaRunningServer`. On desktop that is the only way to reach the
+ * Tauri app-data root this CLI does not share.
+ *
+ * Anything that is not recognisably Tandem's answer — including the 404 of a
+ * Tandem older than the route — is `unavailable`, and the caller falls back to
+ * removing the licence from this CLI's own store.
+ */
+export async function deactivateViaRunningServer(opts: {
+  url: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}): Promise<ServerDeactivateOutcome> {
+  const posted = await postToLoopbackTandem(API_LICENSE_DEACTIVATE, { confirm: true }, opts);
+  if (posted.kind === "unavailable") return posted;
+  const { status, body } = posted;
+
+  if (status >= 200 && status < 300) {
+    if (isPlainObject(body) && typeof body.removed === "boolean") {
+      const answer: ServerDeactivateAnswer = {};
+      if (typeof body.cliActivateEffective === "boolean") {
+        answer.cliSharesRoot = body.cliActivateEffective;
+      }
+      if (
+        typeof body.wasUnverifiable === "string" &&
+        UNVERIFIABLE_CODES.has(body.wasUnverifiable)
+      ) {
+        answer.wasUnverifiable = body.wasUnverifiable as LicenseUnverifiableCode;
+      }
+      return { kind: body.removed ? "removed" : "not-installed", ...answer };
+    }
+    return { kind: "unavailable", reason: "not-tandem" };
+  }
+
+  if (status === 403) {
+    if (isPlainObject(body) && body.code === ERROR_CODE_BAD_ORIGIN) {
+      return { kind: "unavailable", reason: "origin-refused" };
+    }
+    return { kind: "unavailable", reason: "not-tandem" };
+  }
+
+  if (
+    TANDEM_REFUSAL_STATUSES.has(status) &&
+    isPlainObject(body) &&
+    typeof body.error === "string" &&
+    TANDEM_DEACTIVATE_ERRORS.has(body.error) &&
+    typeof body.message === "string"
+  ) {
+    return { kind: "refused", status, message: sanitizeServerMessage(body.message) };
+  }
+
+  return { kind: "unavailable", reason: "not-tandem" };
+}
+
+/**
+ * The lines `tandem deactivate` prints, one `console.log` call per element.
+ * Pure, so the copy is testable without a server or a disk.
+ */
+export function formatDeactivationResult(
+  removed: boolean,
+  wasUnverifiable: LicenseUnverifiableCode | undefined,
+  extra: string[] = [],
+): string[] {
+  if (!removed) return ["\nNo license was installed on this device.", ...extra, ""];
+  return [
+    "\n✓ License removed from this device.",
+    ...wrapForTerminal(licenseRemovedMessage(wasUnverifiable)).map((l) => `  ${l}`),
+    ...extra,
+    "",
+  ];
+}
+
+/**
+ * `tandem deactivate` (#1943) — remove this device's licence. Local only: no
+ * seat is released and nothing is sent anywhere but the local Tandem. No
+ * interactive prompt, matching `tandem activate`; Settings → License carries
+ * the confirm step.
+ *
+ * A running Tandem removes it from its own app-data root; otherwise this
+ * removes it from this CLI's store, which is the same root on an npm install.
+ */
+export async function runDeactivate(): Promise<void> {
+  const outcome = await deactivateViaRunningServer({ url: resolveTandemUrl() });
+
+  if (outcome.kind === "removed" || outcome.kind === "not-installed") {
+    const extra: string[] = [];
+    if (outcome.cliSharesRoot === false) {
+      extra.push(
+        "  `tandem license` here reads a separate store; Settings → License in Tandem shows the change.",
+      );
+    }
+    const lines = formatDeactivationResult(
+      outcome.kind === "removed",
+      outcome.wasUnverifiable,
+      extra,
+    );
+    for (const line of lines) console.log(line);
+    return;
+  }
+
+  if (outcome.kind === "refused") {
+    console.error(`\n[Tandem] Could not remove the license.\n${outcome.message}\n`);
+    process.exit(1);
+    // Required under a non-throwing `exit` spy: no local removal on top.
+    return;
+  }
+
+  // No Tandem took it — remove from this CLI's own store.
+  let result: Awaited<ReturnType<typeof deactivateLicense>>;
+  try {
+    result = await deactivateLicense(resolveAppDataDir());
+  } catch (err) {
+    const message =
+      err instanceof LicenseRemovalError ? LICENSE_REMOVE_FAILED_MESSAGE : String(err);
+    console.error(`\n[Tandem] Could not remove the license.\n${message}\n`);
+    process.exit(1);
+    return;
+  }
+  const extra: string[] = [];
+  if (outcome.reason === "timeout") {
+    extra.push(
+      "  Tandem didn't confirm the removal, so it was done here as well. Check Settings → License in Tandem.",
+    );
+  } else if (outcome.reason !== "unreachable" && outcome.reason !== "non-loopback-url") {
+    // A Tandem answered but did not take the request (an older version, say).
+    // This removed the licence from this command's own store, which may not be
+    // the one that Tandem reads (on desktop it is not).
+    extra.push(
+      "  The running Tandem didn't take the request (it may be an older version), so this changed only this command's own store. If Tandem still shows a license, use Settings → License there.",
+    );
+  }
+  for (const line of formatDeactivationResult(result.removed, result.wasUnverifiable, extra)) {
+    console.log(line);
+  }
 }

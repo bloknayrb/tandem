@@ -1,5 +1,6 @@
 /**
- * The licence grace period (#2231, ADR-040 amendment 2026-10-28).
+ * The licence grace period (#2231, ADR-040 amendment 2026-10-28) and local
+ * deactivation (#1943).
  *
  * Two halves: the grace record module (`grace.ts`) on its own, and the grace
  * arm of `resolveLicenseState` over real files. Everything here passes
@@ -13,6 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LicenseActivationError,
+  LicenseRemovalError,
+} from "../../src/server/license/activation.js";
+import {
   _resetGraceMemoForTests,
   clearGraceRecords,
   GRACE_KEY_READ_ERROR,
@@ -24,6 +29,8 @@ import {
 } from "../../src/server/license/grace.js";
 import {
   _resetLicenseWarningsForTests,
+  activateLicense,
+  deactivateLicense,
   resolveLicenseState,
 } from "../../src/server/license/license-state.js";
 import type {
@@ -445,5 +452,64 @@ describe("resolveLicenseState — grace period (#2231)", () => {
       resolveLicenseState({ appDataDir: dir, now: () => T0, gateEnabled: false, grace: "record" }),
     ).toEqual({ gateActive: false });
     expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(false);
+  });
+});
+
+// ── deactivateLicense (#1943) ───────────────────────────────────────────────
+
+describe("deactivateLicense (#1943)", () => {
+  it("removes license.json and the grace record, never trial.json", async () => {
+    const dir = tmp();
+    writeLicense(dir, signBlob(meta()));
+    writeTrial(dir, T0);
+    writeGraceEntries(dir, { k: new Date(T0).toISOString() });
+    await expect(deactivateLicense(dir, verify)).resolves.toEqual({ removed: true });
+    expect(fs.existsSync(licenseFilePath(dir))).toBe(false);
+    expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(false);
+    expect(fs.existsSync(trialFilePath(dir))).toBe(true);
+  });
+
+  it("no licence file ⇒ removed: false", async () => {
+    await expect(deactivateLicense(tmp(), verify)).resolves.toEqual({ removed: false });
+  });
+
+  it("reports what the removed file was, when it failed its check", async () => {
+    const dir = tmp();
+    writeLicense(dir, foreignBlob());
+    await expect(deactivateLicense(dir, verify)).resolves.toEqual({
+      removed: true,
+      wasUnverifiable: "UNKNOWN",
+    });
+  });
+
+  it("a licence file that cannot be deleted throws LicenseRemovalError and keeps the grace record", async () => {
+    const dir = tmp();
+    // A non-empty directory at license.json: unlink refuses it (EISDIR / EPERM).
+    fs.mkdirSync(path.join(licenseFilePath(dir), "inner"), { recursive: true });
+    writeGraceEntries(dir, { k: new Date(T0).toISOString() });
+    await expect(deactivateLicense(dir, verify)).rejects.toBeInstanceOf(LicenseRemovalError);
+    expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(true);
+  });
+
+  it("is reversible from the same good key", async () => {
+    const dir = tmp();
+    const blob = signBlob(meta());
+    await activateLicense(dir, blob, verify);
+    await deactivateLicense(dir, verify);
+    expect(resolve(dir, Date.now(), "off").status).not.toBe("licensed");
+    const back = await activateLicense(dir, blob, verify);
+    expect(back.gateActive && back.status).toBe("licensed");
+  });
+
+  it("is NOT reversible for a key that fails its check: activation refuses the same blob", async () => {
+    const dir = tmp();
+    const blob = foreignBlob();
+    writeLicense(dir, blob);
+    writeTrial(dir, Date.now() - 30 * DAY);
+    expect(resolve(dir, Date.now()).status).toBe("grace");
+    await deactivateLicense(dir, verify);
+    // The grace ended with the file: the AI is refused now.
+    expect(resolve(dir, Date.now()).status).toBe("restricted");
+    await expect(activateLicense(dir, blob, verify)).rejects.toBeInstanceOf(LicenseActivationError);
   });
 });

@@ -306,6 +306,12 @@ license-buy-link
 license-dark-installed-hint
 license-gate-dark-hint
 license-grace-notice
+license-remove-button
+license-remove-cancel
+license-remove-confirm
+license-remove-confirm-btn
+license-remove-error
+license-remove-section
 license-settings-section
 license-status-live-region
 license-status-pill
