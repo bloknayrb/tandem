@@ -66,8 +66,8 @@ Usage:
   tandem doctor --json              Same checks, emit a single JSON report on stdout
   tandem rotate-token               Rotate the auth token with a 60-second grace window
   tandem activate <license|path>    Activate a signed license (string or file path)
-  tandem deactivate                 Remove this device's license (local only; activate
-                                    the same key again any time)
+  tandem deactivate                 Remove this device's license (local only; nothing
+                                    is sent, no seat released)
   tandem license                    Show the current license / trial status
   tandem --uninstall-scrub          Remove Tandem's MCP entries, skill, and Cowork
                                     registration from Claude configs. Run it

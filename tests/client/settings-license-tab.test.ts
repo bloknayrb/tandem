@@ -307,11 +307,28 @@ describe("Settings → License — no purchase link for an unverifiable licence 
     ["trial + unverifiable", { ...TRIAL, licenseUnverifiable: "MALFORMED" }, false],
     ["restricted + unlicensed", RESTRICTED, true],
     ["a plain trial", TRIAL, true],
+    // #1943: a dark build carries no reason code, only `licenseFileUnverifiable`,
+    // and the Remove section says the file fails its check — so no buy link.
+    [
+      "a dark build with a licence file that would not verify",
+      {
+        gateActive: false,
+        updateWindowCurrent: false,
+        licenseInstalled: false,
+        licenseFileUnverifiable: true,
+      },
+      false,
+    ],
+    [
+      "a dark build with nothing installed",
+      { gateActive: false, updateWindowCurrent: false, licenseInstalled: false },
+      true,
+    ],
   ] as const)("%s ⇒ buy link shown: %s", (_label, state, buy) => {
     licenseStore.set(state as LicenseStatusResponse);
     const { container, unmount } = render(SettingsLicenseTab, { props: makeProps() });
     expect(byTestId(container, "license-buy-link") !== null).toBe(buy);
-    // The support mailto renders in all four.
+    // The support mailto renders in every case.
     expect(container.querySelector(`a[href='mailto:${TANDEM_SUPPORT_EMAIL}']`)).toBeTruthy();
     expect(flat(container)).toContain("Trouble activating?");
     unmount();

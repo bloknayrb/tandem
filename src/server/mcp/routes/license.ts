@@ -165,10 +165,13 @@ function loopbackLicenseWire(state: LicenseState): Record<string, unknown> {
 /**
  * GET /api/license/status — current on-device license state, recomputed fresh.
  * Loopback callers get the full state (incl. licensee email + licenseId for the
- * updater); non-loopback callers get the scrubbed subset. This is a read-only
- * route, so it checks `isLoopback` directly rather than going through the
- * mutation-gating helper (`assertLoopbackForMutation`), which is for handlers
- * that write state.
+ * updater); non-loopback callers get the scrubbed subset. It checks
+ * `isLoopback` directly rather than going through the mutation-gating helper
+ * (`assertLoopbackForMutation`), because it is a GET and changes nothing the
+ * caller chose. It is NOT side-effect free on an armed build: the live state
+ * resolver runs in `grace: "record"` mode, so the first poll that sees a
+ * failing licence file writes `license-grace.json` and starts its grace clock
+ * (#2231). A dark build reads and writes nothing here.
  */
 export function handleGetLicenseStatus(req: Request, res: Response): void {
   const state = resolveLiveLicenseState();

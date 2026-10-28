@@ -228,9 +228,12 @@ async function confirmRemove(): Promise<void> {
   <!-- The buy link hides from anyone holding an unverifiable licence file, a
        trial included (#1521, ADR-040 decision 8). `ui.aiNotice` is null during
        a trial by design, so this keys on the reason code directly: that reader
-       most likely already paid. -->
+       most likely already paid. A dark build carries no reason code, only the
+       additive `licenseFileUnverifiable` flag (#1943), and the Remove section
+       beside this then says the file fails its check, so that flag hides it
+       too. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
-    {#if !status?.licenseUnverifiable}
+    {#if !(status?.licenseUnverifiable || status?.licenseFileUnverifiable)}
       Don't have one yet?
       <a
         data-testid="license-buy-link"

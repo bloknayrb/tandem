@@ -191,9 +191,10 @@ export function resolveLicenseState(deps: {
    * with `gateEnabled: true` on a DARK build (`darkInstallInfo`,
    * `activateLicense`) touches exactly the files it touched before.
    *
-   * - `"record"`: the live AI decision (`resolveLiveLicenseState`) — reads the
-   *   record, writes the first failure, and clears the record when a licence
-   *   verifies.
+   * - `"record"`: the live state resolver (`resolveLiveLicenseState`), used by
+   *   every AI admission AND every `GET /api/license/status` (plus the
+   *   activate/deactivate responses) — reads the record, writes the first
+   *   failure, and clears the record when a licence verifies.
    * - `"read"`: `tandem license` on an armed build — reports, never writes.
    */
   grace?: "off" | "read" | "record";
@@ -414,7 +415,8 @@ export function resolveLiveLicenseState(): LicenseState {
     appDataDir: resolveAppDataDir(),
     now: () => Date.now(),
     gateEnabled: GATE_ENABLED,
-    // The live decision is the one place the grace record is written (#2231).
+    // The live resolver is the one place the grace record is written (#2231):
+    // AI admissions and the status route both come through here.
     // A DARK build returns `{ gateActive: false }` before reading anything, so
     // it never reads or writes `license-grace.json`.
     grace: "record",

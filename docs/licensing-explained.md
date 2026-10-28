@@ -119,7 +119,8 @@ and therefore no list of beta users to work from.
 2. **Licensed** — you activated a key. Everything works, forever.
 3. **Grace** — a key is installed but stopped passing its check (see *If
    something goes wrong*). Everything keeps working while it gets sorted out,
-   and Tandem tells you to email support (#2231).
+   for 14 days from its first failure, and Tandem tells you to email support
+   (#2231).
 4. **Restricted** — the trial ended and there's no license. **Your documents are
    never held hostage:** Tandem stays a working editor. You can open, edit, save
    and export your documents. What a key adds is the AI features, such as Claude
@@ -160,22 +161,24 @@ verifying, Tandem now says **that**, instead of telling you your trial ended —
 which was especially wrong for beta testers who never had a trial.
 
 And it does not cut you off for it (#2231). A key that fails its check keeps the
-AI features on for a grace period, counted from the first time this device saw it
-fail, while you email support@tandem.ink to get it fixed or reissued. The notice
-sits in the activity tray and in Settings → License, and `tandem license` and
+AI features on for a 14-day grace period, counted from the first time this device
+saw it fail, while you email support@tandem.ink to get it fixed or reissued. The
+notice sits in the activity tray and in Settings → License, and `tandem license` and
 `tandem doctor` show the date it ends. Updates keep arriving during it, so a key
 that needs a newer Tandem can get one. Once the grace period runs out, the AI
-features turn off (the editor never does) until the key is fixed.
+features turn off, unless the trial is still running (the editor never does),
+until the key is fixed.
 
 **Removing a license.** Settings → License → Remove license, or `tandem
 deactivate`, deletes the license from this device (#1943). It is local only:
 nothing is sent and no seat is released anywhere. Activate the same key again any
-time from the email it came in, unless the key was already failing its check on
-this version, in which case activation refuses it too. Tandem says so before you
-confirm. Settings offers it for a license file that fails its check as well,
-including before v1.0 while licensing is not enforced (a beta key from before
-the 2026-10-20 key change, say), so the desktop app, which has no
-`tandem deactivate`, can remove one without deleting it by hand.
+time from the email it came in, unless the key itself was rejected on this
+version (wrongly signed, or needing a newer Tandem), in which case activation
+refuses it too. Tandem says so before you confirm. Settings offers it for a
+license file that fails its check as well, including before v1.0 while
+licensing is not enforced (a beta key from before the 2026-10-20 key change,
+say), so the desktop app, which has no `tandem deactivate`, can remove one
+without deleting it by hand.
 
 ## The thing we most want to avoid
 
@@ -291,9 +294,11 @@ otherwise                       -> restricted
 The grace step reads `license-grace.json`, beside `trial.json`, which holds the
 first-failure date per licence file, keyed by the SHA-256 of the stored blob (of
 the raw bytes when the file does not parse, and a constant `read-error` key when
-it cannot be read). Only the live AI decision writes it; `tandem license` reads
-it on an armed build; nothing reads it on a dark build. Grace outranks a running
-trial so a licence holder is not framed as an evaluator. The full rules and their
+it cannot be read). The live state resolver writes it: every AI admission and
+every `GET /api/license/status` (so on an armed build the grace clock starts at
+the first of either, a Settings status poll included); `tandem license` only
+reads it, on an armed build; nothing reads it on a dark build. Grace outranks a
+running trial so a licence holder is not framed as an evaluator. The full rules and their
 limits are the 2026-10-28 amendment to
 [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).
 

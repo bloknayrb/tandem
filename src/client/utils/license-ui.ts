@@ -64,7 +64,8 @@ export interface LicenseStatusResponse {
   /**
    * Dark-build only, loopback only (#1943 review): a licence file is on disk
    * but would not verify once the gate is on. Like `licenseInstalled`, never a
-   * gate signal; it only lets Settings offer Remove license for that file.
+   * gate signal; it only lets Settings offer Remove license for that file
+   * (and hide the buy link beside it, since the reader most likely paid).
    */
   licenseFileUnverifiable?: boolean;
   /**
