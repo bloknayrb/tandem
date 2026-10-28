@@ -449,6 +449,19 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(text).toMatch(/PowerShell/i);
   });
 
+  // #2302: Claude Code 2.1.310 added the Monitor tool and plugin monitors on
+  // Bedrock, Vertex and Foundry and with telemetry or nonessential traffic off,
+  // so for that population upgrading IS what adds it. The per-account claim is
+  // narrowed, not withdrawn (asserted above); the version floor joins it.
+  it.each([
+    ["shipped skill", readShippedSkill()],
+    ["README", readRepoText("README.md")],
+    ["troubleshooting guide", readRepoText("docs/troubleshooting.md")],
+  ])("%s names the 2.1.310 floor and never says upgrading cannot add Monitor", (_s, text) => {
+    expect(text).not.toMatch(/upgrading (?:will not|won't|may not) add it/i);
+    expect(text).toMatch(/Bedrock, Vertex or Foundry[^.]*2\.1\.310/);
+  });
+
   it.each([
     ["README", readRepoText("README.md")],
     ["troubleshooting guide", readRepoText("docs/troubleshooting.md")],
@@ -549,7 +562,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "38", bodyHash: "b0f9450cfc0e" });
+    ).toEqual({ version: "38", bodyHash: "55fa91618e56" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

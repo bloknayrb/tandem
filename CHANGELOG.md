@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Setup advice no longer says upgrading Claude Code cannot add its Monitor tool (#2302).** Claude Code 2.1.310 added the Monitor tool, and the plugin's monitor, for sessions on Bedrock, Vertex or Foundry and for sessions with telemetry or nonessential traffic turned off. If you use one of those setups, upgrading to 2.1.310 or later is what turns on real-time updates without the channel shim. For everyone else the tool is still switched on per account. `tandem doctor`, `tandem setup`, the setup wizard, the README, the troubleshooting guide and the bundled skill now say so.
 - **Ready for v1.0: `tandem activate` hands the key to a running Tandem, which restarts its Claude by itself (#2205).** With no Tandem running at `http://127.0.0.1:3479` (or whatever `TANDEM_URL` names, as long as it is `127.0.0.1`), it writes the key directly as before, and the next launch picks it up.
 
 ### Fixed

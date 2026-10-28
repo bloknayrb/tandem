@@ -169,15 +169,16 @@ Tandem's skill arms the watch automatically on the first Tandem response that ca
 wake-stream address: `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status`. Claude
 Code ends a watch after at most 30 minutes, and the skill re-arms it.
 
-It works only where Claude Code offers a Monitor tool. That tool is enabled per account, not per
-version, and on Windows it also needs Git Bash; the stream answers only on this computer. Where
+It works only where Claude Code offers a Monitor tool. That tool is enabled per account, and on
+Bedrock, Vertex or Foundry, or with telemetry or nonessential traffic turned off, it also needs
+Claude Code 2.1.310 or later; on Windows it also needs Git Bash; the stream answers only on this computer. Where
 Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the fallback.
 
 ## Plugin monitor
 
 A watcher shipped in Tandem's Claude Code plugin. It starts the first time Claude uses Tandem's
 skill in a session, not before, so ask for Tandem by name. It shares the wake watch's per-account
-Monitor gate but does not need Git Bash on Windows. It needs Claude Code 2.1.212 or newer; on an
+Monitor gate (and its 2.1.310 floor on those setups) but does not need Git Bash on Windows. It needs Claude Code 2.1.212 or newer; on an
 older version the plugin installs but the monitor never runs. Start `claude` from a terminal so it
 can find Node. Where Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the
 fallback. See [Plugin install](../README.md#plugin-install) and

@@ -3101,10 +3101,12 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
         "for updates — it can arm a watch on Tandem's wake stream itself, with nothing " +
         "to install and no flag (the bundled skill tells it how; `tandem_status` reports " +
         "the address). That one needs a Monitor tool, which not every Claude Code has — it " +
-        "is enabled per account rather than per version, so upgrading will not add it, and " +
+        "is enabled per account, and on Bedrock, Vertex or Foundry, or with telemetry or " +
+        "nonessential traffic turned off, it also needs Claude Code 2.1.310 or later; " +
         "on Windows it also needs Git Bash. If Claude says it has none, the channel shim " +
         "below is the option that always avoids Monitor. The plugin monitor shares that " +
-        "per-account feature gate, so it will not help if the gate is off; however, the " +
+        "per-account feature gate (and the same version floor on those setups), so it will " +
+        "not help if the gate is off; however, the " +
         "plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, " +
         "so it can help when Git Bash is the missing precondition. You can install the " +
         "Tandem plugin, which registers a monitor " +

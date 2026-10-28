@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runSetup } from "../../src/cli/setup.js";
+import { printPushStatus, runSetup } from "../../src/cli/setup.js";
 import { SKILL_CONTENT } from "../../src/cli/skill-content.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
 // the back-compat re-export from src/cli/setup.ts was dropped in PR 3c-ii-c.
@@ -1095,6 +1095,23 @@ describe("installSkill", () => {
     expect(content).toContain("Collaboration Mode");
     expect(content).toContain("Error Recovery");
     expect(content).toContain("Session Handoff");
+  });
+});
+
+describe("printPushStatus — the Monitor preconditions (#2302)", () => {
+  it("names the account gate and the 2.1.310 floor, and never says upgrading cannot add it", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      printPushStatus([]);
+      const text = errSpy.mock.calls.map((args) => args.map(String).join(" ")).join("\n");
+      const flat = text.replace(/\s+/g, " ");
+      expect(flat).toMatch(/enabled per account/i);
+      expect(flat).toMatch(/Bedrock, Vertex or Foundry[^.]*2\.1\.310/);
+      expect(flat).toMatch(/per-account gate \(and the same version floor on those setups\)/);
+      expect(flat).not.toMatch(/upgrading (?:will not|won't|may not) add it/i);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 
