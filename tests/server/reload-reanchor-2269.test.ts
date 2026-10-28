@@ -70,6 +70,7 @@ import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
+import { asChangedKey } from "../helpers/yjs-transactions.js";
 
 useTmpAnnotationsEnvWithFlag("tandem-reanchor-2269-");
 
@@ -313,7 +314,7 @@ describe.each(Object.keys(PATHS))("%s carries annotations onto the new content",
     const fragment = doc.getXmlFragment("default");
     const atSwap: number[] = [];
     const onTxn = (txn: Y.Transaction) => {
-      if (txn.changed.has(fragment)) atSwap.push(contentGeneration(doc));
+      if (txn.changed.has(asChangedKey(fragment))) atSwap.push(contentGeneration(doc));
     };
     doc.on("afterTransaction", onTxn);
     try {
