@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
+  scrollMovesSelection,
 } from "../../src/client/editor/toolbar/selection-toolbar";
 
 describe("selection toolbar position", () => {
@@ -172,5 +173,44 @@ describe("selection toolbar listener", () => {
 
     expect(off).toHaveBeenCalledTimes(1);
     expect(off).toHaveBeenCalledWith("selectionUpdate", handler);
+  });
+});
+
+describe("scrollMovesSelection", () => {
+  // Layout under test: shell > (scroller > editor > codeBlock) + (rail > chat).
+  function layout() {
+    const shell = document.createElement("div");
+    const scroller = document.createElement("div");
+    const editor = document.createElement("div");
+    const codeBlock = document.createElement("pre");
+    const rail = document.createElement("div");
+    const chat = document.createElement("div");
+    editor.append(codeBlock);
+    scroller.append(editor);
+    rail.append(chat);
+    shell.append(scroller, rail);
+    document.body.append(shell);
+    return { shell, scroller, editor, codeBlock, rail, chat };
+  }
+
+  it("dismisses for the document, an ancestor scroller, and a scroller inside the editor", () => {
+    const { shell, scroller, editor, codeBlock } = layout();
+    expect(scrollMovesSelection(document, editor)).toBe(true);
+    expect(scrollMovesSelection(shell, editor)).toBe(true);
+    expect(scrollMovesSelection(scroller, editor)).toBe(true);
+    expect(scrollMovesSelection(editor, editor)).toBe(true);
+    expect(scrollMovesSelection(codeBlock, editor)).toBe(true);
+  });
+
+  it("ignores a sibling panel scrolling (the chat panel and the rail around it)", () => {
+    const { editor, rail, chat } = layout();
+    expect(scrollMovesSelection(rail, editor)).toBe(false);
+    expect(scrollMovesSelection(chat, editor)).toBe(false);
+  });
+
+  it("falls back to dismissing for a target it cannot place", () => {
+    const { editor } = layout();
+    expect(scrollMovesSelection(null, editor)).toBe(true);
+    expect(scrollMovesSelection(window, editor)).toBe(true);
   });
 });

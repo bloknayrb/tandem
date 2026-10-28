@@ -177,3 +177,31 @@ export function attachSelectionToolbarListener(
   editor.on("selectionUpdate", onSelectionUpdate);
   return () => editor.off("selectionUpdate", onSelectionUpdate);
 }
+
+/**
+ * Does a scroll on `target` move the text the selection popup is anchored to?
+ *
+ * The popup is `position: fixed` at viewport coordinates measured from the
+ * selection, so a scroll that carries the editor makes it float over the wrong
+ * text — that is the only reason a scroll dismisses it. Only three targets can
+ * do that: the document (viewport scroll), a scroller that CONTAINS the editor,
+ * and a scroller INSIDE it (a wide code block or table the selection sits in).
+ *
+ * Everything else is a sibling panel, and dismissing on it was a real bug: the
+ * chat panel smooth-scrolls itself to the bottom whenever a message arrives or
+ * its pickup row changes, and that `scrollIntoView` also scrolls the right
+ * rail. A reply from the AI landing while the user had text selected therefore
+ * unmounted the popup, leaving the selection painted with nothing attached to
+ * it — and nothing re-arms the popup until the selection itself changes. That
+ * was the intermittent `openAnnotatePopup` failure in toolbar-redesign.spec.ts,
+ * where an earlier spec's unanswered chat messages kept the chat panel
+ * scrolling through the dwell.
+ *
+ * A target that is not a `Node` answers true, so an unrecognized scroll falls
+ * back to the old dismiss-on-any-scroll behaviour rather than leaving a
+ * misplaced popup on screen.
+ */
+export function scrollMovesSelection(target: EventTarget | null, editorDom: Node): boolean {
+  if (!(target instanceof Node)) return true;
+  return target.contains(editorDom) || editorDom.contains(target);
+}

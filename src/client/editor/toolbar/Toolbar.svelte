@@ -43,6 +43,7 @@ import {
   computeSelectionToolbarPosition,
   SELECTION_POPUP_HEIGHT_RESERVE,
   type SelectionToolbarPlacement,
+  scrollMovesSelection,
 } from "./selection-toolbar";
 // A26 morph (#798): shared timing tokens + reduced-motion token-zeroing.
 import "../../panels/morphTiming.css";
@@ -602,8 +603,11 @@ $effect(() => {
   const unsubscribeOutsideScroll = onOutsideEvent(
     () => toolbarEl,
     ["scroll"],
-    () => {
+    (event) => {
       if (!scrollDismissArmed) return;
+      // A sibling panel scrolling (the chat panel's auto-scroll) does not move
+      // the selection, so it must not dismiss — see scrollMovesSelection().
+      if (!scrollMovesSelection(event.target, ed.view.dom)) return;
       // Don't dismiss while the user is working in the popup. This is the guard
       // the draft-loss bug ran through — see popupHasFocus().
       if (popupHasFocus()) return;
