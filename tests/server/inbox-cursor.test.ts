@@ -19,6 +19,8 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type * as Y from "yjs";
 import { z } from "zod";
+import { showClaudeCodeOffer } from "../../src/client/panels/chat-claude-code-offer.js";
+import { chatPickup, isPickupStalled } from "../../src/client/panels/chat-pickup.js";
 import { isStoreReadOnly } from "../../src/server/annotations/store.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { resetForTesting as resetEventQueue } from "../../src/server/events/queue.js";
@@ -46,6 +48,7 @@ import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
+  DELIVERY_STALL_MS,
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
@@ -133,10 +136,10 @@ function chatMap() {
   return getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
 }
 
-function userChat(id: string) {
+function userChat(id: string, timestamp = 3) {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () =>
-    chatMap().set(id, { id, author: "user", text: "hello", timestamp: 3, read: false }),
+    chatMap().set(id, { id, author: "user", text: "hello", timestamp, read: false }),
   );
 }
 
@@ -291,6 +294,166 @@ describe("chat read moves behind the acknowledgement", () => {
       }).ok,
     ).toBe(true);
     expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_local"]);
+  });
+});
+
+describe("the editor's pickup row counts a handed-out message as picked up", () => {
+  /** What ChatPanel derives from the live chat map. */
+  function livePickup(now: number) {
+    return chatPickup(
+      [...chatMap().values()].map((v) => v as ChatMessage),
+      now,
+    );
+  }
+
+  it("a message a cursor poll returned reads `received` while Claude works past the stall threshold without polling", async () => {
+    userChat("msg_working");
+    const handed = await poll({ cursor: "start" });
+    expect(handed.chatMessages.map((m) => m.id)).toEqual(["msg_working"]);
+    const live = chatMap().get("msg_working") as ChatMessage;
+    // Re-delivery semantics are unchanged: still unacknowledged, so still unread.
+    expect(live.read).toBe(false);
+    expect(live.delivered).toBe(true);
+
+    // Claude works for longer than DELIVERY_STALL_MS without polling again.
+    const now = live.timestamp + DELIVERY_STALL_MS + 30_000;
+    const pickup = livePickup(now);
+    expect(pickup).toEqual({ kind: "received" });
+    expect(isPickupStalled(pickup)).toBe(false);
+    expect(showClaudeCodeOffer(true, chatMap().size, pickup)).toBe(false);
+
+    // A lost response still loses nothing: the same cursor re-delivers it.
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual([
+      "msg_working",
+    ]);
+  });
+
+  it("a message no poll has returned still reads `waiting`, and one whose response failed validation is not stamped", async () => {
+    captureStderr();
+    userChat("msg_unpolled");
+    const at = (chatMap().get("msg_unpolled") as ChatMessage).timestamp;
+    expect(livePickup(at + DELIVERY_STALL_MS)).toEqual({
+      kind: "waiting",
+      waitedMs: DELIVERY_STALL_MS,
+    });
+    vi.mocked(isStoreReadOnly).mockReturnValueOnce("no" as unknown as boolean);
+    expect(parseResult(await pollRaw({ cursor: "start" })).error).toBe(true);
+    expect((chatMap().get("msg_unpolled") as ChatMessage).delivered).toBeUndefined();
+  });
+
+  it("a repeat hand-out writes nothing", async () => {
+    userChat("msg_repeat");
+    const first = await poll({ cursor: "start" });
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    let transactions = 0;
+    const count = () => {
+      transactions += 1;
+    };
+    ctrl.on("afterTransaction", count);
+    onTestFinished(() => ctrl.off("afterTransaction", count));
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual(["msg_repeat"]);
+    expect(transactions).toBe(0);
+    expect(first.chatMessages.map((m) => m.id)).toEqual(["msg_repeat"]);
+  });
+});
+
+describe("a reply to the latest message of a batch answers the rest of it", () => {
+  it("another session is not handed the earlier message again, and it is stamped read", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_b1", 10);
+    userChat("msg_b2", 11);
+    const a = await poll({ cursor: "start" });
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_b1", "msg_b2"]);
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "both done", replyTo: "msg_b2" },
+    });
+    // A never polls again. B is not handed msg_b1 to answer a second time.
+    expect((await poll({ cursor: b0 })).chatMessages).toEqual([]);
+    expect((await poll({ cursor: "start" })).chatMessages).toEqual([]);
+    expect((chatMap().get("msg_b1") as ChatMessage).read).toBe(true);
+    // …nor a cursor-less caller.
+    expect((await poll()).chatMessages).toEqual([]);
+  });
+
+  it("never answers a message no reader had been handed", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_c2", 20);
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual(["msg_c2"]);
+    // Sent after that hand-out with an OLDER timestamp (another browser's
+    // clock), and returned to nobody before the reply.
+    userChat("msg_c0", 5);
+    await client.callTool({ name: "tandem_reply", arguments: { text: "done", replyTo: "msg_c2" } });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_c0"]);
+    expect((chatMap().get("msg_c0") as ChatMessage).read).toBe(false);
+  });
+
+  it("never answers a message whose only hand-out failed validation", async () => {
+    captureStderr();
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_g1", 60);
+    userChat("msg_g2", 61);
+    // The poll assigns both a seq, then fails its output check: nobody has them.
+    vi.mocked(isStoreReadOnly).mockReturnValueOnce("no" as unknown as boolean);
+    expect(parseResult(await pollRaw({ cursor: "start" })).error).toBe(true);
+    // msg_g2 is answered from a push alone.
+    await client.callTool({ name: "tandem_reply", arguments: { text: "done", replyTo: "msg_g2" } });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_g1"]);
+  });
+
+  it("never answers a message handed out after the target, though older", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_e2", 40);
+    const a = await poll({ cursor: "start" });
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_e2"]);
+    userChat("msg_e1", 35);
+    expect((await poll({ cursor: a.cursor })).chatMessages.map((m) => m.id)).toEqual(["msg_e1"]);
+    await client.callTool({ name: "tandem_reply", arguments: { text: "done", replyTo: "msg_e2" } });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_e1"]);
+  });
+
+  it("never answers a message newer than the target, even in the same hand-out", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_f1", 50);
+    userChat("msg_f2", 51);
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual([
+      "msg_f1",
+      "msg_f2",
+    ]);
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "first", replyTo: "msg_f1" },
+    });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_f2"]);
+  });
+
+  it("never answers a message stamped newer than the target, though handed out before it", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_h_new", 80);
+    const a = await poll({ cursor: "start" });
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_h_new"]);
+    // A second browser whose clock runs behind.
+    userChat("msg_h_old", 70);
+    expect((await poll({ cursor: a.cursor })).chatMessages.map((m) => m.id)).toEqual(["msg_h_old"]);
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "done", replyTo: "msg_h_old" },
+    });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_h_new"]);
+  });
+
+  it("a reply naming a message no poll returned answers only that message", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_d1", 30);
+    const a = await poll({ cursor: "start" });
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_d1"]);
+    // Pushed (never polled), and answered from the push alone.
+    userChat("msg_d2", 31);
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "answered from the push", replyTo: "msg_d2" },
+    });
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_d1"]);
   });
 });
 

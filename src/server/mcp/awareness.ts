@@ -324,6 +324,13 @@ export function appendClaudeChatMessage(
  * replies to every chat in Tandem mode: stamping on its behalf would hide every
  * message from Claude's inbox the moment `BYO_MODELS_ENABLED` flips.
  *
+ * The reply also settles the earlier messages of the same batch that some reader
+ * had already been handed ({@link answeredBy}): `CHAT_ACK_DIRECTIVE` tells Claude
+ * to reply only to the latest, and without this the rest stayed unread — repeated
+ * to every cursor-less or fresh reader — whenever the answering session never
+ * polled again to acknowledge them. All of it is stamped in ONE `withMcp`
+ * transaction.
+ *
  * Only an unread USER message is touched; an unknown id, a Claude row or an
  * already-read one writes nothing.
  *
@@ -336,7 +343,7 @@ export function markUserChatRead(messageId: string): boolean {
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
   const target = chatMap.get(messageId) as ChatMessage | undefined;
   if (target?.author !== "user") return false;
-  if (!target.read) withMcp(ctrlDoc, () => chatMap.set(messageId, { ...target, read: true }));
+  stampUserChat(answeredBy(chatMap, messageId, handedOutChat(chatMap)), "read");
   return true;
 }
 
@@ -1365,17 +1372,20 @@ function nextCursor(
 /** A user chat message as `tandem_checkInbox` returns it. */
 type InboxChatMessage = Omit<ChatMessage, "read" | "author">;
 
-/** The user chat one poll returns, and how to mark it read once committed. */
+/** The user chat one poll returns, and what to stamp on it once committed. */
 interface UnreadChat {
   messages: InboxChatMessage[];
-  /** Messages refused as malformed: not returned, not marked read. */
+  /** Messages refused as malformed: not returned, not stamped. */
   dropped: number;
   /**
-   * Cursor-less polls: stamp the returned messages read. Call only once the
-   * response validated. A no-op on a cursor poll, which stamps read only on
-   * acknowledgement (`acknowledgeCursor`).
+   * Stamp the returned messages. Call only once the response validated.
+   * Cursor-less polls stamp them `read`; a cursor poll stamps them
+   * `delivered` only, since `read` waits for the acknowledgement
+   * (`acknowledgeCursor`) — and `delivered` is what the editor's pickup row
+   * reads as "your AI has it", so a Claude that works on a message for minutes
+   * before polling again is not reported as never having picked it up.
    */
-  markRead: () => void;
+  commit: () => void;
   /** Cursor polls: chat seqs the reader must keep owed (refused by `admit`). */
   held: Set<number>;
 }
@@ -1401,23 +1411,39 @@ function admitChatItem(msg: Partial<ChatMessage>): InboxChatMessage | null {
 }
 
 /**
- * Stamp `read: true` on each of `keys` in ONE `withMcp` transaction, each
- * against the LIVE value: re-read rather than spread from a copy collected
- * earlier, so the stamp writes back exactly what is stored now, and only while
- * it is still an unread user message. No keys opens no transaction.
+ * Stamp `read: true` (or `delivered: true`) on each of `keys` in ONE `withMcp`
+ * transaction, each against the LIVE value: re-read rather than spread from a
+ * copy collected earlier, so the stamp writes back exactly what is stored now,
+ * and only while it is still an unread user message (not already carrying a
+ * `delivered` stamp, for that one). Nothing to stamp opens no transaction, so a
+ * repeat poll writes nothing.
  */
-function stampUserChatRead(keys: readonly string[]): void {
+function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): void {
   if (keys.length === 0) return;
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const due = keys.filter((key) => {
+    const live = chatMap.get(key);
+    if (typeof live !== "object" || live === null) return false;
+    const msg = live as ChatMessage;
+    return msg.author === "user" && !msg.read && (stamp === "read" || msg.delivered !== true);
+  });
+  if (due.length === 0) return;
   withMcp(ctrlDoc, () => {
-    for (const key of keys) {
-      const live = chatMap.get(key);
-      if (typeof live !== "object" || live === null) continue;
-      const msg = live as ChatMessage;
-      if (msg.author === "user" && !msg.read) chatMap.set(key, { ...msg, read: true });
+    for (const key of due) {
+      const msg = chatMap.get(key) as ChatMessage;
+      chatMap.set(key, stamp === "read" ? { ...msg, read: true } : { ...msg, delivered: true });
     }
   });
+}
+
+/** Chat keys in hand-out order: oldest message first, ties by id. */
+function inTimestampOrder(chatMap: Y.Map<unknown>, keys: readonly string[]): string[] {
+  const at = (key: string) => {
+    const ts = (chatMap.get(key) as Partial<ChatMessage> | undefined)?.timestamp;
+    return typeof ts === "number" ? ts : 0;
+  };
+  return [...keys].sort((a, b) => at(a) - at(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**
@@ -1454,34 +1480,91 @@ function collectUnreadChat(): UnreadChat {
     messages,
     dropped,
     held: new Set(),
-    markRead: () => {
+    commit: () => {
       if (keys.length === 0) return;
       // Registered as returned and acknowledged, like the document items a
       // cursor-less poll commits (`teeLegacyCommit`): a cursor reader whose
-      // mark is below them is still handed them.
-      for (const key of keys) {
+      // mark is below them is still handed them. Oldest first, so seq order
+      // is hand-out order (`answeredChatIds` relies on it).
+      for (const key of inTimestampOrder(chatMap, keys)) {
         deliveryRegistry.markAcked(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0));
       }
-      stampUserChatRead(keys);
+      stampUserChat(keys, "read");
     },
   };
 }
 
+/** A user chat message some reader has been handed, with its place in the hand-out order. */
+interface HandedOutChat {
+  key: string;
+  seq: number;
+  timestamp: number;
+}
+
+/**
+ * User chat already handed to some reader in a validated response — `read`
+ * (cursor-less return, acknowledgement, or a direct `replyTo`) or `delivered`
+ * (a cursor poll) — that still has a live registry entry, so it has a place in
+ * the hand-out order. A message whose seq was assigned by a poll that then
+ * failed validation carries neither stamp, so it is not here.
+ */
+function handedOutChat(chatMap: Y.Map<unknown>): HandedOutChat[] {
+  const out: HandedOutChat[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user" || !(msg.read || msg.delivered === true)) return;
+    if (typeof msg.timestamp !== "number") return;
+    const entry = deliveryRegistry.lookup("c", key, 0);
+    if (entry) out.push({ key, seq: entry.seq, timestamp: msg.timestamp });
+  });
+  return out;
+}
+
+/**
+ * Every user chat message a real-Claude reply naming `target` answers: the
+ * target itself, plus — because `CHAT_ACK_DIRECTIVE` tells Claude to reply only
+ * to the LATEST of a batch — every user message handed out at or before the
+ * target's own hand-out (seq at or below its seq; seqs are assigned oldest
+ * first within a poll) that is no newer than it. Never one no reader has been
+ * handed (`handedOutChat`), so a reply can only settle what some session had in
+ * hand. A target with no registry entry (pushed, never polled) answers only
+ * itself. After a restart the registry is empty, so only the target counts.
+ */
+function answeredBy(
+  chatMap: Y.Map<unknown>,
+  target: string,
+  handed: readonly HandedOutChat[],
+): string[] {
+  const entry = deliveryRegistry.lookup("c", target, 0);
+  const ts = (chatMap.get(target) as Partial<ChatMessage> | undefined)?.timestamp;
+  if (!entry || typeof ts !== "number") return [target];
+  const batch = handed.filter((h) => h.seq <= entry.seq && h.timestamp <= ts).map((h) => h.key);
+  return [target, ...batch];
+}
+
 /**
  * The ids of user chat messages real Claude has already answered with a
- * `tandem_reply` naming them in `replyTo`. A row carrying `agentIdentity` is
+ * `tandem_reply` (or channel reply) naming them, or a later message of the same
+ * batch, in `replyTo` ({@link answeredBy}). A row carrying `agentIdentity` is
  * the local-model collaborator's, not Claude's, and answers nothing here —
  * consistent with `markUserChatRead`, which it never calls.
  */
 function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
-  const answered = new Set<string>();
+  const targets = new Set<string>();
   chatMap.forEach((value) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author === "claude" && !msg.agentIdentity && typeof msg.replyTo === "string") {
-      answered.add(msg.replyTo);
+      targets.add(msg.replyTo);
     }
   });
+  const answered = new Set<string>();
+  if (targets.size === 0) return answered;
+  const handed = handedOutChat(chatMap);
+  for (const target of targets) {
+    for (const key of answeredBy(chatMap, target, handed)) answered.add(key);
+  }
   return answered;
 }
 
@@ -1496,14 +1579,13 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
  * A. A message real Claude answered (`replyTo`) is skipped for every reader,
  * which keeps chat answered once across concurrent sessions.
  *
- * Nothing is stamped here: `read: true` moves behind the acknowledgement.
+ * Nothing is stamped here: `read: true` moves behind the acknowledgement, and
+ * `delivered: true` waits for `commit`, once the response has validated.
  */
 function collectCursorChat(view: ScopeView): UnreadChat {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
   const answered = answeredChatIds(chatMap);
-  const messages: InboxChatMessage[] = [];
-  const held = new Set<number>();
-  let dropped = 0;
+  const owedKeys: string[] = [];
 
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
@@ -1515,18 +1597,29 @@ function collectCursorChat(view: ScopeView): UnreadChat {
         ? !msg.read || view.held.has(entry.seq)
         : !seenBy(view, entry)
       : !msg.read;
-    if (!owed) return;
-    const item = admitChatItem(msg);
-    if (!item) {
-      dropped += 1;
-      if (entry) held.add(entry.seq);
-      return;
-    }
-    messages.push(item);
-    deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+    if (owed) owedKeys.push(key);
   });
 
-  return { messages, dropped, held, markRead: () => {} };
+  // Oldest first, so a batch's seqs follow its messages' order and a reply to
+  // the latest answers the rest (`answeredBy`).
+  const messages: InboxChatMessage[] = [];
+  const keys: string[] = [];
+  const held = new Set<number>();
+  let dropped = 0;
+  for (const key of inTimestampOrder(chatMap, owedKeys)) {
+    const item = admitChatItem(chatMap.get(key) as Partial<ChatMessage>);
+    if (!item) {
+      dropped += 1;
+      const entry = deliveryRegistry.lookup("c", key, 0);
+      if (entry) held.add(entry.seq);
+      continue;
+    }
+    messages.push(item);
+    keys.push(key);
+    deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+  }
+
+  return { messages, dropped, held, commit: () => stampUserChat(keys, "delivered") };
 }
 
 /**
@@ -1557,7 +1650,7 @@ function acknowledgeCursor(reader: ReaderCursor): void {
     deliveryRegistry.markAcked(entry);
     if (!msg.read) keys.push(key);
   });
-  stampUserChatRead(keys);
+  stampUserChat(keys, "read");
 }
 
 /**
@@ -1721,9 +1814,9 @@ export function registerAwarenessTools(server: McpServer): void {
         // has validated. The documents' ledgers are staged, the chat is
         // collected unstamped, the response is built and checked against the
         // output schema the SDK enforces, and only then are the ledgers
-        // committed, the chat marked read and the delivery round resolved. A
-        // response the SDK would reject used to be rejected AFTER every item in
-        // it was stamped delivered — so the next poll skipped them all. (A
+        // committed, the chat stamped (`read`, or `delivered` on a cursor poll)
+        // and the delivery round resolved. A response the SDK would reject used
+        // to be rejected AFTER every item in it was stamped delivered — so the next poll skipped them all. (A
         // cursor poll's registry seqs are assigned during the pass; assigning
         // is not acknowledging, so a rejected response loses nothing there
         // either: the reader still holds its old cursor.)
@@ -1870,7 +1963,7 @@ export function registerAwarenessTools(server: McpServer): void {
         }
 
         docs.commit();
-        chat.markRead();
+        chat.commit();
         // The join closes only now, once what was returned is committed — a
         // claim about the USER's message, kept apart from the poll stamp above.
         // It stays OPEN while a document the round is waiting on could not be
