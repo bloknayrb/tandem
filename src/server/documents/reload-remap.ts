@@ -137,6 +137,28 @@ export interface Hunk {
 const MAX_EDIT_LINES = 2000;
 
 /**
+ * Work budget for one diff, in line comparisons. Myers costs about
+ * `(N + M) * D`, so a fixed `D` cap alone still lets a long file rewritten from
+ * outside freeze the event loop for seconds inside the transaction. The edit
+ * budget therefore shrinks as the documents grow — deterministic, unlike a
+ * wall-clock `timeout`, so the remap never depends on machine speed; past it the
+ * coarse one-hunk fallback above applies.
+ */
+const MAX_DIFF_WORK = 20_000_000;
+
+/** The edit budget for texts of these sizes (at least 1, at most {@link MAX_EDIT_LINES}). */
+export function editBudgetFor(oldText: string, newText: string): number {
+  const lines = countLines(oldText) + countLines(newText);
+  return Math.max(1, Math.min(MAX_EDIT_LINES, Math.floor(MAX_DIFF_WORK / lines)));
+}
+
+function countLines(text: string): number {
+  let n = 1;
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
+  return n;
+}
+
+/**
  * The changed regions between two flat texts, ascending and disjoint, each
  * narrowed to its first and last differing code unit.
  *
@@ -149,12 +171,10 @@ const MAX_EDIT_LINES = 2000;
 export function lineHunks(oldText: string, newText: string): Hunk[] {
   if (oldText === newText) return [];
   const whole: Hunk = { oldFrom: 0, oldTo: oldText.length, newFrom: 0, newTo: newText.length };
-  const changes = diffLines(`${oldText}\n`, `${newText}\n`, { maxEditLength: MAX_EDIT_LINES });
+  const budget = editBudgetFor(oldText, newText);
+  const changes = diffLines(`${oldText}\n`, `${newText}\n`, { maxEditLength: budget });
   if (changes === undefined) {
-    console.error(
-      "[reload-remap] line diff exceeded %d edits; remapping through one hunk",
-      MAX_EDIT_LINES,
-    );
+    console.error("[reload-remap] line diff exceeded %d edits; remapping through one hunk", budget);
     const narrowed = narrowHunk(oldText, newText, whole);
     return narrowed ? [narrowed] : [];
   }
@@ -357,7 +377,8 @@ export interface ReloadRemap {
   oldText: string;
   oldBreaks: FlatBreak[];
   newText: string;
-  hunks: Hunk[];
+  /** `oldText` → `newText`; `null` when {@link applyRemap} had no record to remap. */
+  hunks: Hunk[] | null;
   entries: Map<string, RemapEntry>;
   filePath: string;
 }
@@ -466,18 +487,33 @@ const surrogates = "ignore" as const;
  * transaction as the content swap, after it.
  *
  * A record whose map value is no longer the captured object was rewritten by
- * the content swap itself — the `.docx` adapter re-imports Word comments and
- * updates a drifted one in place — so it is already anchored to the new
- * fragment and is left alone.
+ * the content swap itself — the `.docx` adapter re-imports Word comments. When
+ * that rewrite gave it a NEW anchor (the drift path re-anchors in place) it is
+ * already anchored to the new fragment and is left alone. When it kept the
+ * captured range and relRange (the legacy-shape migration and the #1068
+ * commentId backfill spread the existing record), those still describe the
+ * OLD text, so the rewritten record is remapped like any other.
+ *
+ * With no annotations there is nothing to remap, so the line diff is skipped
+ * (`hunks: null`); {@link remapEnvelopeWins} computes it if it turns out to
+ * need it.
  */
 export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
   const newText = extractText(ydoc);
+  if (input.entries.size === 0) return { ...input, newText, hunks: null };
   const hunks = lineHunks(input.oldText, newText);
   const remap: ReloadRemap = { ...input, newText, hunks };
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   for (const entry of input.entries.values()) {
-    if (map.get(entry.id) !== entry.raw) continue;
-    map.set(entry.id, remapOne(ydoc, entry, remap, hunks, newText));
+    const current = map.get(entry.id);
+    if (current === entry.raw) {
+      map.set(entry.id, remapOne(ydoc, entry, remap, hunks, newText));
+      continue;
+    }
+    if (current === undefined || !sameAnchor(current, entry.raw)) continue;
+    const ann = sanitizeFor(current, input.filePath);
+    if (!ann || ann.id !== entry.id) continue;
+    map.set(entry.id, remapOne(ydoc, { ...entry, raw: current, ann }, remap, hunks, newText));
   }
   return remap;
 }
@@ -502,7 +538,10 @@ export function remapEnvelopeWins(
 ): boolean {
   if (!remap || ids.size === 0) return false;
   const newText = extractText(ydoc);
-  const hunks = newText === remap.newText ? remap.hunks : lineHunks(remap.oldText, newText);
+  const hunks =
+    remap.hunks !== null && newText === remap.newText
+      ? remap.hunks
+      : lineHunks(remap.oldText, newText);
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   let wrote = false;
   for (const id of ids) {
@@ -626,6 +665,13 @@ function remapOne(
   const touched = touchedHunks(oldRange, hunks);
   if (!touched) return withRange(ann, clampRange(oldRange, newText.length), undefined);
   const [first, last] = touched;
+
+  // A trusted POINT strictly inside a replaced region covers no text, so there
+  // is nothing to probe for and nothing to detach: it moves to the edit point,
+  // as a CRDT anchor to a deleted position would. `collapse` would instead log
+  // a spurious "detached" line and stamp a `textSnapshot: ""` the record never
+  // had, which `refreshRange` then reads as matching and re-attaches anyway.
+  if (trusted && oldRange.from === oldRange.to) return anchorOrKeep(first.newFrom, first.newFrom);
 
   // The window: the touched hunks' new span, widened to the record's own
   // mapped edges where those lie outside the hunks.

@@ -786,7 +786,7 @@ describe("validateRange — bounds, integrality, emptiness and surrogates", () =
         // discriminates the throttle from both alternatives — asserting 1-in-9
         // did not, since `n !== 1` also passes it.
         //
-        // The tag must be one of the five `HoistTag` literals (the union exists
+        // The tag must be one of the four `HoistTag` literals (the union exists
         // so the module-global counter cannot grow unboundedly). The count
         // starts at zero because of the `beforeEach` reset above, not because
         // this literal happens to be unique in the file.

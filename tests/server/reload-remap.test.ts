@@ -13,6 +13,7 @@ import * as Y from "yjs";
 import {
   applyRemap,
   captureRemapInput,
+  editBudgetFor,
   type Hunk,
   lineHunks,
   mapRange,
@@ -554,6 +555,44 @@ describe("applyRemap — what it leaves alone", () => {
     expect(annotationsOf(doc).get("a")).toEqual(rewritten);
   });
 
+  it("remaps a record the swap rewrote but left on its captured anchor (the .docx migration/backfill spread)", () => {
+    const doc = makeMarkdownDoc("alpha\n\nbravo\n");
+    const seeded = seedOn(doc, "a", "bravo");
+    withReload(doc, () => {
+      const input = captureRemapInput(doc, FILE);
+      loadMarkdown(doc, "new\n\nalpha\n\nbravo\n");
+      // Same range and (now dead) relRange, other fields changed — what the
+      // import's migration and #1068 backfill branches write.
+      annotationsOf(doc).set("a", { ...seeded, content: "migrated", rev: (seeded.rev ?? 0) + 1 });
+      applyRemap(doc, input);
+    });
+    expect(textOf(doc, "a")).toBe("bravo");
+    expect(annotationsOf(doc).get("a")?.content).toBe("migrated");
+    expect(kindOf(doc, "a")).toBe("ok");
+  });
+
+  it("moves a point inside a replaced region to the edit point without stamping a snapshot", () => {
+    const doc = makeMarkdownDoc("hello world\n");
+    const point = anchoredRange(doc, toFlatOffset(3), toFlatOffset(3), undefined, {
+      allowEmpty: true,
+    });
+    if (!point.ok) throw new Error("point anchor failed");
+    withMcp(doc, () =>
+      annotationsOf(doc).set(
+        "p",
+        makeAnnotation({
+          id: "p",
+          range: point.range,
+          ...(point.fullyAnchored ? { relRange: point.relRange } : {}),
+        }),
+      ),
+    );
+    reload(doc, "heXXo world\n");
+    const ann = annotationsOf(doc).get("p");
+    expect(ann?.range).toEqual(r(2, 2));
+    expect(ann?.textSnapshot).toBeUndefined();
+  });
+
   it("keeps everything but range and relRange, and the replies map", () => {
     const doc = makeMarkdownDoc("alpha\n\nbravo\n");
     const seeded = seedOn(doc, "a", "bravo", 0, {
@@ -605,5 +644,32 @@ describe("remapEnvelopeWins", () => {
   it("does nothing without a remap or ids", () => {
     const doc = new Y.Doc();
     expect(remapEnvelopeWins(doc, undefined, new Set(["a"]))).toBe(false);
+  });
+});
+
+describe("editBudgetFor — deterministic diff work bound", () => {
+  it("keeps the full 2000-edit budget for ordinary documents", () => {
+    const doc = "line\n".repeat(500);
+    expect(editBudgetFor(doc, doc)).toBe(2000);
+  });
+
+  it("shrinks the budget for very long documents so (N+M)*D stays bounded", () => {
+    const doc = "line\n".repeat(50_000);
+    const budget = editBudgetFor(doc, doc);
+    expect(budget).toBeLessThan(2000);
+    expect(budget * 100_002).toBeLessThanOrEqual(20_000_000);
+  });
+
+  it("never drops below one edit", () => {
+    const doc = "x\n".repeat(30_000_000);
+    expect(editBudgetFor(doc, "")).toBe(1);
+  });
+
+  // No wall-clock assertion (#2147): the bound is the edit budget, and a rewrite
+  // past it takes the coarse one-hunk fallback.
+  it("a huge rewrite past the shrunken budget falls back to one coarse hunk", () => {
+    const oldText = Array.from({ length: 60_000 }, (_, i) => `old ${i}`).join("\n");
+    const newText = Array.from({ length: 60_000 }, (_, i) => `new ${i}`).join("\n");
+    expect(lineHunks(oldText, newText)).toHaveLength(1);
   });
 });
