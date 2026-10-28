@@ -2232,6 +2232,7 @@ Instances:
 | `check`'s vitest file anchor | `tests/scripts/vitest-file-anchor-wiring.test.ts` |
 | Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 | `check`'s doc-link and vault-reachability step | `tests/scripts/check-links-wiring.test.ts` |
+| `reaper-build`'s `cargo test` (the Linux sidecar trampoline, #1988) | `tests/scripts/reaper-test-wiring.test.ts` |
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
