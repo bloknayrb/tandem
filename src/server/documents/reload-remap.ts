@@ -41,7 +41,9 @@
  *          the record's whole enclosing old line(s) must reappear verbatim, as
  *          whole lines, WHOLLY inside one other hunk's new span, with the record
  *          at the same offset in them — and the record's text must occur
- *          EXACTLY ONCE in the whole new text. That is what a line-diff move
+ *          EXACTLY ONCE in the whole old text AND in the whole new text (two
+ *          old copies surviving as one new copy cannot be told apart). That is
+ *          what a line-diff move
  *          is; a probe that merely overlaps some other edit (a narrowed hunk is
  *          often one character) is a different copy, and so is text that also
  *          occurs anywhere else. A record whose own window held no match was
@@ -686,6 +688,10 @@ function uniqueMovedMatch(
   const { from, to } = oldRange;
   if (from >= to) return null;
   const probe = oldText.slice(from, to);
+  // Unique in the OLD text too: when two old copies both fall outside the line
+  // diff's common subsequence, each would otherwise pass every test below and
+  // land on the one new copy, and nothing can say which old copy it was.
+  if (oldText.indexOf(probe) !== from || oldText.indexOf(probe, from + 1) !== -1) return null;
   const at = newText.indexOf(probe);
   if (at === -1 || newText.indexOf(probe, at + 1) !== -1) return null;
   const end = at + probe.length;

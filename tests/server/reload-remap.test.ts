@@ -456,6 +456,24 @@ describe("applyRemap — moved text", () => {
     expectDetached(doc, "a");
   });
 
+  it("detaches both records when a duplicated old line survives as one moved copy", () => {
+    // Both old "Sign here" lines are deletions and the single new copy is an
+    // insertion, so each record would otherwise pass the new-text tests.
+    const doc = makeMarkdownDoc("Sign here: ____\n\nA\n\nB\n\nC\n\nD\n\nSign here: ____\n");
+    seedOn(doc, "a", "Sign here: ____", 0, { suggestedText: "Signed" });
+    seedOn(doc, "b", "Sign here: ____", 1);
+    reload(doc, "A\n\nB\n\nSign here: ____\n\nC\n\nD\n");
+    expectDetached(doc, "a");
+    expectDetached(doc, "b");
+  });
+
+  it("detaches a short probe whose text occurred twice in the old document", () => {
+    const doc = makeMarkdownDoc("the cat\n\nA\n\nB\n\nC\n\nD\n\nthe cat\n");
+    seedOn(doc, "a", "cat");
+    reload(doc, "A\n\nB\n\nthe cat\n\nC\n\nD\n");
+    expectDetached(doc, "a");
+  });
+
   it("never resurrects a prior collapse point from its snapshot", () => {
     const doc = makeMarkdownDoc("alpha one\n\nbravo two\n\ncharlie\n");
     const at = extractText(doc).indexOf("two") + 1;
