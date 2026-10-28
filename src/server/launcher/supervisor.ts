@@ -248,6 +248,29 @@ interface SupervisorOpts {
    */
   subscribeTandemReply?: (cb: (sessionId: string | undefined) => void) => () => void;
   /**
+   * Seam onto `mcp/greeting-reply.ts` (#2227): the supervisor registers the
+   * classifier that tells `tandem_reply` whether a reply is the one-time hello,
+   * so the chat row can be tagged and announced as "Tandem's Claude is ready"
+   * rather than "Claude replied". `index.ts` wires `setGreetingReplyClassifier`;
+   * the default registers nothing, so every reply stays untagged.
+   */
+  registerGreetingReplyClassifier?: (
+    fn: (query: {
+      sessionId: string | undefined;
+      replyTo: string | undefined;
+      inProgress: boolean | undefined;
+    }) => boolean,
+  ) => () => void;
+  /**
+   * The user's chat right now (#2227; `snapshotUserChat` in
+   * `mcp/greeting-reply.ts`): message ids and whether any is unread. Read when
+   * the greeting turn is written and again when a reply is classified, so a
+   * hello written while the user had chat waiting, or after a message arrived
+   * during the turn, is not tagged — that reply may be an answer. Absent, or a
+   * throw, means "unknown", which never tags.
+   */
+  userChatSnapshot?: () => { ids: ReadonlySet<string>; unread: boolean };
+  /**
    * True while the user's mode is Solo, or cannot be read (#2197; Bryan,
    * 2026-10-14): the hello is unasked, and Solo means Claude speaks only when
    * spoken to, so a spawn in Solo sends its ordinary first turn and the
@@ -1218,7 +1241,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * Solo (`greetingHeldBySolo`): that spawn's first turn is the ordinary one,
    * and the greeting stays owed.
    */
-  let greeting: { phase: "pending" | "answered" | "unanswered"; sentAt: number } | null = null;
+  let greeting: {
+    phase: "pending" | "answered" | "unanswered";
+    sentAt: number;
+    /** The user's chat when the turn was written (#2227), or null when it
+     * could not be read — which never tags a reply as the greeting. */
+    userChatAtStart: { ids: ReadonlySet<string>; unread: boolean } | null;
+  } | null = null;
   let greetedThisProcess = false;
   /** A greeting turn's child crashed before the turn ended: no further greeting
    * in this process, so a crash loop cannot re-send it on every restart. The
@@ -1243,6 +1272,52 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     unsubscribeTandemReply();
     spendGreeting();
   });
+
+  /** `opts.userChatSnapshot`, with a throw or an absent seam read as null. */
+  function readUserChat(): { ids: ReadonlySet<string>; unread: boolean } | null {
+    try {
+      return opts.userChatSnapshot?.() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Is this reply the one-time hello (#2227)? A pure read, asked by
+   * `tandem_reply` synchronously right before it appends, so the answer can
+   * tag the chat row. True only when ALL hold:
+   *
+   * - This process's greeting turn is in flight (`pending`). The first reply
+   *   flips it to `answered` (through `subscribeTandemReply`, in the same
+   *   synchronous stretch as the append), and the turn's `result` to
+   *   `unanswered`, so at most the FIRST reply is ever tagged.
+   * - The reply is the supervisor's own child's. One with no session id counts,
+   *   as it does for `answered` above: the direct-HTTP entry `tandem setup`
+   *   writes sends no `X-Claude-Session-Id`, so requiring one would make this
+   *   do nothing for most users. A hand-launched Claude replying with no id
+   *   during the greeting turn would read "ready" — wording only.
+   * - It answers nothing: no `replyTo`, not an `inProgress` ack.
+   * - No user chat was waiting when the turn was written, and none arrived
+   *   since. Either way the reply may be an answer, which must still read
+   *   "Claude replied".
+   */
+  function classifyGreetingReply(query: {
+    sessionId: string | undefined;
+    replyTo: string | undefined;
+    inProgress: boolean | undefined;
+  }): boolean {
+    if (greeting === null || greeting.phase !== "pending") return false;
+    if (query.sessionId !== undefined && !isOwnChildSession(query.sessionId)) return false;
+    if (query.replyTo !== undefined || query.inProgress === true) return false;
+    const atStart = greeting.userChatAtStart;
+    if (atStart === null || atStart.unread) return false;
+    const now = readUserChat();
+    if (now === null) return false;
+    for (const id of now.ids) if (!atStart.ids.has(id)) return false;
+    return true;
+  }
+  // Registered for the supervisor's lifetime, like the reply subscription above.
+  opts.registerGreetingReplyClassifier?.(classifyGreetingReply);
 
   /** `opts.walkthroughPending`, read at boot; a throw reads as not owed. */
   function walkthroughOwedAtBoot(): boolean {
@@ -2291,7 +2366,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!greetNow) greeting = null;
     const writeGreeting = (): void => {
       if (!sendTurn(SUPERVISOR_GREETING_PROMPT)) return;
-      greeting = { phase: "pending", sentAt: Date.now() };
+      greeting = { phase: "pending", sentAt: Date.now(), userChatAtStart: readUserChat() };
       awaitingGreetingResult = true;
       wakeOwedAcrossSpawns = false;
     };

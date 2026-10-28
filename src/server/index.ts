@@ -49,6 +49,7 @@ import {
   docCount,
   getOpenDocs,
 } from "./mcp/document-service.js";
+import { setGreetingReplyClassifier, snapshotUserChat } from "./mcp/greeting-reply.js";
 import { shutdownSearchWorker } from "./mcp/search-worker.js";
 import {
   APP_VERSION,
@@ -171,6 +172,10 @@ async function startLauncherSupervisor(): Promise<void> {
         markDone: () => markGreeted(appData, APP_VERSION),
       },
       subscribeTandemReply: onTandemReply,
+      // The hello is announced as "Tandem's Claude is ready", not "replied"
+      // (#2227): the supervisor decides which reply is it.
+      registerGreetingReplyClassifier: setGreetingReplyClassifier,
+      userChatSnapshot: snapshotUserChat,
       // Solo, or an unreadable mode, holds the hello for a Tandem-mode start.
       greetingHeldBySolo: () => readModeState() !== "tandem",
       // The v1.0 setup walkthrough holds the boot start until it is done

@@ -3401,6 +3401,153 @@ describe("#2197 — the one-time greeting", () => {
   });
 });
 
+// --- #2227 ----------------------------------------------------------------------
+
+describe("#2227 — which reply is the hello: the greeting classifier", () => {
+  type Query = {
+    sessionId: string | undefined;
+    replyTo: string | undefined;
+    inProgress: boolean | undefined;
+  };
+  const PLAIN: Query = { sessionId: undefined, replyTo: undefined, inProgress: undefined };
+
+  function harness(opts: { owed?: boolean; snapshot?: "none" | "throws" } = {}) {
+    const state = { owed: opts.owed ?? true };
+    const replyCbs = new Set<(sessionId: string | undefined) => void>();
+    let classifier: ((q: Query) => boolean) | null = null;
+    const chat = { ids: new Set<string>(), unread: false };
+    const extra: ExtraOpts = {
+      greeting: {
+        isOwed: () => state.owed,
+        markDone: async () => {
+          state.owed = false;
+        },
+      },
+      subscribeTandemReply: (cb) => {
+        replyCbs.add(cb);
+        return () => replyCbs.delete(cb);
+      },
+      registerGreetingReplyClassifier: (fn) => {
+        classifier = fn;
+        return () => {
+          classifier = null;
+        };
+      },
+      ...(opts.snapshot === "none"
+        ? {}
+        : {
+            userChatSnapshot: () => {
+              if (opts.snapshot === "throws") throw new Error("ctrl doc gone");
+              return { ids: new Set(chat.ids), unread: chat.unread };
+            },
+          }),
+    };
+    /** What `tandem_reply` does: classify, then (after the append) notify. */
+    const reply = (q: Partial<Query> = {}): boolean => {
+      const query = { ...PLAIN, ...q };
+      const tagged = classifier?.(query) ?? false;
+      for (const cb of [...replyCbs]) cb(query.sessionId);
+      return tagged;
+    };
+    const classify = (q: Partial<Query> = {}): boolean => classifier?.({ ...PLAIN, ...q }) ?? false;
+    return { state, extra, chat, reply, classify };
+  }
+
+  const ownSessionId = (): string =>
+    (
+      JSON.parse(fs.readFileSync(path.join(baseDir, "launcher-session.json"), "utf8")) as {
+        sessionId: string;
+      }
+    ).sessionId;
+
+  it("tags the greeting turn's first plain reply with no session id", async () => {
+    const h = harness();
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
+    expect(h.reply()).toBe(true);
+  });
+
+  it("tags its own child's reply, matched case-insensitively", async () => {
+    const h = harness();
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(h.reply({ sessionId: ownSessionId().toUpperCase() })).toBe(true);
+  });
+
+  it("only the FIRST reply: a second one in the same turn reads as a reply", async () => {
+    const h = harness();
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(h.reply()).toBe(true);
+    expect(h.reply()).toBe(false);
+  });
+
+  it.each([
+    ["another session's id", { sessionId: "someone-else" }],
+    ["a replyTo (it answers something)", { replyTo: "msg_1" }],
+    ["an inProgress ack", { inProgress: true }],
+  ] as const)("does not tag a reply carrying %s", async (_label, q) => {
+    const h = harness();
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(h.classify(q)).toBe(false);
+  });
+
+  it("does not tag when user chat was waiting as the turn was written", async () => {
+    const h = harness();
+    h.chat.ids.add("u1");
+    h.chat.unread = true;
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(h.classify()).toBe(false);
+  });
+
+  it("tags when the user's chat was all read as the turn was written", async () => {
+    const h = harness();
+    h.chat.ids.add("u1");
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(h.classify()).toBe(true);
+  });
+
+  it("does not tag once a user message arrived during the turn, even if read since", async () => {
+    const h = harness();
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    h.chat.ids.add("u-new");
+    expect(h.classify()).toBe(false);
+  });
+
+  it("does not tag after the greeting turn's result", async () => {
+    const h = harness();
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(h.classify()).toBe(false);
+  });
+
+  it("does not tag on a spawn that did not greet", async () => {
+    const h = harness({ owed: false });
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    expect(h.classify()).toBe(false);
+  });
+
+  it.each([
+    ["throws", "throws"],
+    ["is not wired", "none"],
+  ] as const)("never tags when the chat snapshot %s", async (_label, snapshot) => {
+    const h = harness({ snapshot });
+    const { sup } = makeSupervisor(h.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
+    expect(h.classify()).toBe(false);
+  });
+});
+
 // --- #2199 ----------------------------------------------------------------------
 
 describe("#2199 — no Claude Code to start: nothing is spawned, and nothing is broken", () => {

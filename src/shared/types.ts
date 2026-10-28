@@ -700,6 +700,15 @@ export interface ChatMessage {
    */
   inProgress?: true;
   /**
+   * Set only server-side, on Tandem's one-time hello (#2227): the greeting
+   * turn's first reply from the launcher's own child, answering nothing, with no
+   * user chat waiting (`mcp/greeting-reply.ts`). The client reads it only to
+   * word the reply notification "Tandem's Claude is ready" instead of "Claude
+   * replied"; it never changes what is shown in chat. Only ever `true` or
+   * absent, so every other row stays byte-identical.
+   */
+  greeting?: true;
+  /**
    * The specific AI agent that authored this message (#1123 M3). Set only by the
    * local-model collaborator's streamed reply; absent on user messages and real
    * Claude (`tandem_reply`). Chat is read raw from the Y.Map (NOT allowlist-

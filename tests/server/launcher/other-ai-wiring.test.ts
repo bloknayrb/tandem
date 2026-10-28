@@ -41,6 +41,18 @@ describe("index.ts wires the one-time greeting (#2197)", () => {
     expect(call).toMatch(/greetingHeldBySolo: \(\) => readModeState\(\) !== "tandem",/);
   });
 
+  // #2227: both default to "never tag", so without this wiring every
+  // behavioural test still passes while production announces the hello as
+  // "Claude replied" again.
+  it("passes the greeting-reply classifier seam and the chat snapshot into createSupervisor", () => {
+    const call = (INDEX.match(/createSupervisor\(\{[\s\S]*?\}\);/g) ?? [])[0] ?? "";
+    expect(call).toMatch(/registerGreetingReplyClassifier: setGreetingReplyClassifier,/);
+    expect(call).toMatch(/userChatSnapshot: snapshotUserChat,/);
+    expect(INDEX).toMatch(
+      /import \{[^}]*\bsetGreetingReplyClassifier\b[^}]*\bsnapshotUserChat\b[^}]*\} from "\.\/mcp\/greeting-reply\.js";/,
+    );
+  });
+
   it("arms the greeting at boot from the version check, before the launcher starts", () => {
     const arm = INDEX.indexOf("await armFirstRunGreeting(resolveAppDataDir(), {");
     expect(arm).toBeGreaterThan(-1);

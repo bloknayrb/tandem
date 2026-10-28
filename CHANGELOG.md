@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tandem's own Claude's one-time hello is announced as "Tandem's Claude is ready" (#2227).** When you are in another app, its notification used to say "Claude replied in …" for a message that answered nothing you sent. It still chimes and flashes, but now says Claude is ready and names no document. A reply that answers you, even one sent while Claude was saying hello, still says "Claude replied".
 - **Ready for v1.0: `tandem activate` hands the key to a running Tandem, which restarts its Claude by itself (#2205).** With no Tandem running at `http://127.0.0.1:3479` (or whatever `TANDEM_URL` names, as long as it is `127.0.0.1`), it writes the key directly as before, and the next launch picks it up.
 
 ### Fixed

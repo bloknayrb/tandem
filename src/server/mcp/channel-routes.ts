@@ -24,6 +24,7 @@ import {
   notifyTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
 } from "./awareness.js";
+import { isGreetingReply } from "./greeting-reply.js";
 import { isLoopbackRequest } from "./routes/_shared.js";
 
 const pendingPermissions = new Map<
@@ -164,12 +165,21 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       res.status(400).json({ error: "BAD_REQUEST", message: "inProgress must be a boolean" });
       return;
     }
+    // The shim forwards its session id (`withClaudeSessionHeader`). Read once:
+    // the greeting classifier (#2227) and the notify below must agree on it.
+    const sessionId = normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
+    const greeting = isGreetingReply({
+      sessionId,
+      replyTo: typeof replyTo === "string" ? replyTo : undefined,
+      inProgress: inProgress === true,
+    });
     // Narrow the untrusted body fields, then route through the shared Claude-chat
     // write path that `tandem_reply` and the local-model collaborator also use.
     const appended = appendClaudeChatMessage(text, {
       ...(typeof documentId === "string" ? { documentId } : {}),
       ...(typeof replyTo === "string" ? { replyTo } : {}),
       ...(inProgress === true ? { inProgress: true } : {}),
+      ...(greeting ? { greeting: true } : {}),
     });
     // Licence (#1521): `appendClaudeChatMessage` refuses before touching the
     // Y.Doc, and this answers before `markUserChatRead`, so a refused reply
@@ -179,9 +189,8 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       return;
     }
     // The shim's `tandem_reply` is a Claude Code session's reply like the MCP
-    // tool's, so it can be Tandem's own Claude saying hello (#2197). The shim
-    // forwards its session id (`withClaudeSessionHeader`).
-    notifyTandemReply(normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]));
+    // tool's, so it can be Tandem's own Claude saying hello (#2197).
+    notifyTandemReply(sessionId);
     const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);
     res.json({
       sent: true,
