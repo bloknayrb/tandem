@@ -423,34 +423,79 @@ describe("the remap lands with the content — no window, no loss", () => {
     }
     expect(onDisk?.range).toEqual(expected);
   });
+});
 
-  it("an envelope copy that wins the merge is remapped too (force-open)", async () => {
-    const { filePath, doc } = await openFile(OLD);
-    seedMcp(doc, "mcp", "target sentence");
-    await settleEnvelope(filePath);
-    // Another writer bumped the durable copy past the map's (same old
-    // coordinates, newer rev), so the post-reload merge takes the FILE copy.
-    const envPath = envelopePath(docHash(filePath));
-    const env = JSON.parse(await fs.readFile(envPath, "utf-8")) as {
-      annotations: Array<Record<string, unknown>>;
-    };
-    const rec = env.annotations.find((a) => a.id === "mcp");
-    if (!rec) throw new Error("mcp not in the envelope");
-    rec.rev = 99;
-    rec.content = "edited on disk";
-    await fs.writeFile(envPath, JSON.stringify(env), "utf-8");
-    // Drop the store's in-memory pending state so the reload's flush has
-    // nothing queued that would overwrite the edit above.
-    resetForTesting();
-
+// Both file-backed `clearAndReload` callers re-wire the durable store with
+// `afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids)`. Only an envelope
+// copy that WINS the post-reload merge reaches that hook, so each caller needs
+// a spec that makes one win — without it the hook is wired but never runs.
+const ENVELOPE_WIN_PATHS: Record<string, (id: string, filePath: string) => Promise<void>> = {
+  "force-open": async (_id, filePath) => {
     await fs.writeFile(filePath, NEW, "utf-8");
     await openFromDisk(filePath, { force: true });
+  },
+  "source-view commit (file)": (id) => reloadDocumentFromMarkdown(id, NEW),
+};
 
-    const after = annMap(doc).get("mcp");
-    expect(after?.content).toBe("edited on disk");
-    expect(textOf(doc, "mcp")).toBe("target sentence");
-  });
-});
+describe.each(Object.keys(ENVELOPE_WIN_PATHS))(
+  "%s: an envelope copy that wins the merge is remapped too",
+  (name) => {
+    const reload = ENVELOPE_WIN_PATHS[name];
+
+    it("the winning copy keeps its own fields, lands on its text with a live anchor, and is persisted there", async () => {
+      const { filePath, id, doc } = await openFile(OLD);
+      seedMcp(doc, "mcp", "target sentence");
+      await settleEnvelope(filePath);
+      const preReloadRange = annMap(doc).get("mcp")?.range;
+      if (!preReloadRange) throw new Error("mcp not seeded");
+      // Another writer bumped the durable copy past the map's (same old
+      // coordinates, newer rev), so the post-reload merge takes the FILE copy.
+      const envPath = envelopePath(docHash(filePath));
+      const env = JSON.parse(await fs.readFile(envPath, "utf-8")) as {
+        annotations: Array<Record<string, unknown>>;
+      };
+      const rec = env.annotations.find((a) => a.id === "mcp");
+      if (!rec) throw new Error("mcp not in the envelope");
+      rec.rev = 99;
+      rec.content = "edited on disk";
+      await fs.writeFile(envPath, JSON.stringify(env), "utf-8");
+      // Drop the store's in-memory pending state so the reload's flush has
+      // nothing queued that would overwrite the edit above.
+      resetForTesting();
+
+      await reload(id, filePath);
+
+      const after = annMap(doc).get("mcp");
+      // The FILE copy won (its content and rev, not the map's)…
+      expect(after?.content).toBe("edited on disk");
+      expect(after?.rev).toBe(99);
+      // …and was remapped: the paragraph before it was deleted, so its
+      // pre-reload offsets now cover other text. Left unremapped, the record
+      // would sit on that text with a dead relRange.
+      expect(extractText(doc).slice(preReloadRange.from, preReloadRange.to)).not.toBe(
+        "target sentence",
+      );
+      expect(after?.range).not.toEqual(preReloadRange);
+      expect(textOf(doc, "mcp")).toBe("target sentence");
+      expect(kindOf(doc, "mcp"), "a fresh live anchor, not a degraded fallback").toBe("ok");
+
+      // The hook reported a write, so the merge queued the durable snapshot:
+      // the remapped range reaches the envelope rather than the stale one.
+      const expected = after?.range;
+      let onDisk: Record<string, unknown> | undefined;
+      for (let i = 0; i < 40 && !onDisk; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+        const latest = JSON.parse(await fs.readFile(envPath, "utf-8")) as {
+          annotations: Array<Record<string, unknown>>;
+        };
+        const found = latest.annotations.find((a) => a.id === "mcp");
+        if (JSON.stringify(found?.range) === JSON.stringify(expected)) onDisk = found;
+      }
+      expect(onDisk?.range).toEqual(expected);
+      expect(onDisk?.content).toBe("edited on disk");
+    });
+  },
+);
 
 describe("Solo: the reload's own writes stamp nothing", () => {
   it("an unstamped user comment stays unstamped across a reload; a browser edit is the positive control", async () => {

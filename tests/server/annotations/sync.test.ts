@@ -1027,6 +1027,28 @@ describe("loadAndMerge — afterMerge hook (#2269)", () => {
     cleanup("close");
   });
 
+  it("an unreadable map value under a file id is replaced by the file copy and named as a file win", async () => {
+    await seedFile([annRecord({ id: "ann_1", rev: 1, content: "disk" })]);
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Not a record at all, so it cannot be normalized and `pickWinner` never
+    // runs: the file copy replaces it outright. It is still a value the merge
+    // took FROM the file, so the hook must hear about it — a remap that skipped
+    // it would leave the file copy at its pre-reload coordinates.
+    annMap.set("ann_1", "garbage");
+
+    const afterMerge = vi.fn((_ids: ReadonlySet<string>) => false);
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), { afterMerge });
+
+    expect(afterMerge).toHaveBeenCalledTimes(1);
+    expect([...(afterMerge.mock.calls[0]?.[0] ?? [])]).toEqual(["ann_1"]);
+    const merged = annMap.get("ann_1") as AnnotationRecordV1;
+    expect(merged.content).toBe("disk");
+    expect(merged.rev).toBe(1);
+    cleanup("close");
+  });
+
   it("a hook that wrote forces the post-merge durable write", async () => {
     await seedFile([annRecord({ id: "ann_1", rev: 5 })]);
     const ydoc = new Y.Doc();
@@ -1047,6 +1069,22 @@ describe("loadAndMerge — afterMerge hook (#2269)", () => {
     await store.flush();
     const onDisk = await store.load();
     expect(onDisk.annotations[0].range).toEqual({ from: 1, to: 2 });
+    cleanup("close");
+  });
+
+  it("NEGATIVE CONTROL: the same merge with a hook that wrote nothing queues no write", async () => {
+    // Pins that the write above comes from the hook's `true`, not from the
+    // merge: identical inputs, a hook answering `false`, no durable write.
+    await seedFile([annRecord({ id: "ann_1", rev: 5 })]);
+    const ydoc = new Y.Doc();
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set("ann_1", annRecord({ id: "ann_1", rev: 2 }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const afterMerge = vi.fn(() => false);
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), { afterMerge });
+    expect(afterMerge).toHaveBeenCalledTimes(1);
+    expect(queueSpy).not.toHaveBeenCalled();
     cleanup("close");
   });
 
