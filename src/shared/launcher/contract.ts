@@ -478,18 +478,69 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
 
 // --- Claude CLI stream-json wire contract ---------------------------------
 
+/** Pre-approved in a launched session (#2286): server-state reads, annotation
+ * work and chat. None of them opens, writes, renames or exports a file, and
+ * none changes document content (content edits reach disk through autosave). */
+export const TANDEM_PREAPPROVED_TOOLS = [
+  "tandem_checkInbox",
+  "tandem_reply",
+  "tandem_status",
+  "tandem_listDocuments",
+  "tandem_switchDocument",
+  "tandem_scratchpad",
+  "tandem_getTextContent",
+  "tandem_getOutline",
+  "tandem_getContext",
+  "tandem_getAnnotations",
+  "tandem_getActivity",
+  "tandem_search",
+  "tandem_resolveRange",
+  "tandem_diagnostics",
+  "tandem_comment",
+  "tandem_annotationReply",
+  "tandem_editAnnotation",
+  "tandem_resolveAnnotation",
+  "tandem_removeAnnotation",
+] as const;
+
+/** Left to auto mode's classifier in a launched session (#2286): each can open
+ * a caller-named path (#1666), change document content that autosave writes
+ * back, or write, rename, export, restore or close a file-backed document. */
+export const TANDEM_CLASSIFIER_GATED_TOOLS = [
+  "tandem_open",
+  "tandem_edit",
+  "tandem_appendContent",
+  "tandem_editList",
+  "tandem_save",
+  "tandem_rename",
+  "tandem_close",
+  "tandem_convertToMarkdown",
+  "tandem_applyChanges",
+  "tandem_exportAnnotations",
+  "tandem_restoreBackup",
+] as const;
+
 /**
- * The allow rules that pre-approve Tandem's own MCP tools in a launched
+ * The allow rules that pre-approve SOME of Tandem's MCP tools in a launched
  * session (#2286, ADR-047 §4 amendment 2026-10-28).
  *
- * Since Claude Code 2.1.299 an MCP allow rule matches a server's WHOLE
- * normalized name only, never a prefix, so each spelling a user can have
- * registered needs its own rule:
+ * Only `TANDEM_PREAPPROVED_TOOLS` are listed. A matched allow rule is decided
+ * before auto mode's classifier, and the launched session reads third-party
+ * text (opened documents, imported comments, chat) with nobody watching, so a
+ * tool that can reach a file the user owns stays with the classifier — see
+ * `TANDEM_CLASSIFIER_GATED_TOOLS`. Bryan chose this narrow grant over the full
+ * `*` grant on 2026-10-28. `tests/server/launcher/allow-rules-coverage.test.ts`
+ * fails on a registered tool that is in neither list, so whoever adds a tool
+ * decides which side it sits on.
  *
- *   - `mcp__tandem__*` — the entry `tandem setup` writes (server name `tandem`,
- *     whether it is the direct-HTTP entry or the stdio bridge).
- *   - `mcp__plugin_tandem_tandem__*` — the plugin's server: `plugin.json` names
- *     it `tandem`, and Claude Code normalizes `plugin:tandem:tandem`.
+ * Since Claude Code 2.1.299 an MCP allow rule matches a server's WHOLE
+ * normalized name only, never a prefix, so each tool gets one rule per
+ * spelling a user can have registered:
+ *
+ *   - `mcp__tandem__<tool>` — the entry `tandem setup` writes (server name
+ *     `tandem`, whether it is the direct-HTTP entry or the stdio bridge).
+ *   - `mcp__plugin_tandem_tandem__<tool>` — the plugin's server: `plugin.json`
+ *     names it `tandem`, and Claude Code normalizes `plugin:tandem:tandem`.
  *
  * The opt-in channel shim's server (`tandem-channel`) is deliberately absent:
  * a supervised session never loads it (see `CLAUDE_STREAM_JSON_FLAGS`).
@@ -497,13 +548,13 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
  * An unmatched rule is a silent no-op, not an error, so a wrong spelling here
  * fails toward "auto mode alone decides" rather than toward a crash.
  *
- * **A matched rule skips auto mode's classifier** for every Tandem tool,
- * `tandem_open` → `tandem_edit` → `tandem_save` included. That bypass is not
- * yet in `docs/security.md`'s register; narrowing this list is one of the two
- * ways to settle it (see the `docs/security.md` bullet on auto-launched
- * sessions).
+ * An unlisted Tandem tool is screened by the classifier as any other tool is;
+ * where auto mode is disabled it is refused (there is no approval surface).
  */
-export const TANDEM_MCP_ALLOW_RULES = ["mcp__tandem__*", "mcp__plugin_tandem_tandem__*"] as const;
+export const TANDEM_MCP_ALLOW_RULES: readonly string[] = [
+  "mcp__tandem__",
+  "mcp__plugin_tandem_tandem__",
+].flatMap((prefix) => TANDEM_PREAPPROVED_TOOLS.map((tool) => `${prefix}${tool}`));
 
 /**
  * Flag prefix the supervisor passes to `claude`, ahead of the

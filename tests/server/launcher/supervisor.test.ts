@@ -31,7 +31,9 @@ import {
   REAPER_NOT_FOUND_MARKER,
   SUPERVISOR_INITIAL_PROMPT,
   serializeUserTurn,
+  TANDEM_CLASSIFIER_GATED_TOOLS,
   TANDEM_MCP_ALLOW_RULES,
+  TANDEM_PREAPPROVED_TOOLS,
 } from "../../../src/shared/launcher/contract.js";
 import { NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
 
@@ -669,7 +671,7 @@ describe("buildClaudeArgs — explicit permission posture (#2286)", () => {
       expect(valueAfter(args, "--permission-mode")).toBe("auto");
     });
 
-    it(`pre-approves exactly Tandem's two server spellings on the ${label} arm, as ONE token`, () => {
+    it(`pre-approves the narrow Tandem list under both server spellings on the ${label} arm, as ONE token`, () => {
       const args = buildClaudeArgs({ sessionId: SESSION, resuming });
       expect(args.filter((a) => a === "--allowedTools")).toHaveLength(1);
       const value = valueAfter(args, "--allowedTools");
@@ -680,8 +682,16 @@ describe("buildClaudeArgs — explicit permission posture (#2286)", () => {
     });
   }
 
-  it("pins the two whole-name rules (2.1.299 matches a server's whole name only)", () => {
-    expect([...TANDEM_MCP_ALLOW_RULES]).toEqual(["mcp__tandem__*", "mcp__plugin_tandem_tandem__*"]);
+  it("pins per-tool rules under both whole server names, and no wildcard (#2286 narrow grant)", () => {
+    expect(TANDEM_MCP_ALLOW_RULES).toHaveLength(TANDEM_PREAPPROVED_TOOLS.length * 2);
+    for (const tool of TANDEM_PREAPPROVED_TOOLS) {
+      expect(TANDEM_MCP_ALLOW_RULES).toContain(`mcp__tandem__${tool}`);
+      expect(TANDEM_MCP_ALLOW_RULES).toContain(`mcp__plugin_tandem_tandem__${tool}`);
+    }
+    for (const rule of TANDEM_MCP_ALLOW_RULES) expect(rule).not.toContain("*");
+    for (const tool of TANDEM_CLASSIFIER_GATED_TOOLS) {
+      expect(TANDEM_MCP_ALLOW_RULES.some((r) => r.endsWith(`__${tool}`))).toBe(false);
+    }
   });
 
   it("never escalates past auto: no bypass, no prompt tool, no prompt routing", () => {
