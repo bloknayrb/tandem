@@ -741,8 +741,13 @@ function logInboxDrop(
  *      can appear in this document meanwhile: a seq is assigned only when a
  *      qualifying, never-returned version is returned, and there is none (a
  *      cursor-less poll can only return versions already assigned, in the same
- *      mode, so not held either). A FRESH reader (null mark) is never skipped:
- *      what it has seen moves with other readers' acknowledgements.
+ *      mode, so not held either). A version another reader's pass RETIRES
+ *      (`carryHeld`) did not qualify on the recorded pass either, so with the
+ *      document unchanged it can be returned again only to a reader whose own
+ *      ledger dropped it — one that was already handed it, at or below the
+ *      mark: skipping that reader misses a duplicate, never an item. A FRESH
+ *      reader (null mark) is never skipped: what it has seen moves with other
+ *      readers' acknowledgements.
  * Everything else the pass reads is in that Y.Doc (annotations, replies), and
  * `admit` is a pure schema check. So the pass would produce nothing again, and
  * write nothing. Never cached: the active document (it supplies `activity`) and
@@ -921,21 +926,31 @@ function collectDocumentInbox(
 }
 
 /**
- * The seqs a cursor reader must keep owed in one document after this pass: the
- * entries it was owed (above its old mark, held, or — for a fresh reader —
- * unacknowledged) that this pass did NOT hand it, whose item is still at that
- * version and was withheld only for now: the Solo hold (`hideFromAI`) or an
- * `admit` refusal. The new mark passes every one of them, so without this a
- * reader shown nothing in Solo would lose, for good, an item another reader
- * was shown before Solo began.
+ * The seqs a cursor reader must keep owed in one document after this pass, and
+ * the entries no reader may go on counting as delivered.
  *
- * Deliberately NOT held, and so passed for good by the mark: a version the
- * record has moved on from (the new version is a new key), a deleted record,
- * a resolved user comment's (as on the legacy path, #1826), and a record or
- * reply withheld for audience — made private, or a reply whose parent stopped
- * being Claude-facing. A record healed back to outbound at the SAME `editedAt`
- * is not handed again to a reader whose mark passed it while it was private;
- * the legacy ledger has the same limit across readers.
+ * Every entry the reader was owed (above its old mark, held, or — for a fresh
+ * reader — unacknowledged) that this pass did NOT hand it is passed by the new
+ * mark, so each one is settled here, one of three ways:
+ *  - HELD in the cursor, when the item is still at that version and was
+ *    withheld only for now: the Solo hold (`hideFromAI`) or an `admit`
+ *    refusal. A reader shown nothing in Solo would otherwise lose, for good,
+ *    an item another reader was shown before Solo began.
+ *  - PASSED for good, when the record has moved on to another `editedAt`: the
+ *    new version is a new key, and the reader's ledger reading the old one is
+ *    what keeps `edited` and the #1770 status dimension meaningful.
+ *  - RETIRED from the registry, in every other case: the record is deleted,
+ *    is a Claude record whose status moved (its key carries the status), is no
+ *    longer Claude-facing, or did not pass the gate (a resolved user comment).
+ *    Each of those can come back at the SAME version — the user's Undo, a
+ *    restore, a record healed to outbound — and a reader whose mark passed it
+ *    unhanded would then read it as delivered and never get it. Retiring gives
+ *    the returning item a new seq, owed to every reader; the reader that WAS
+ *    handed the old one gets a duplicate (see `DeliveryRegistry.retire`). A
+ *    single reader is unaffected: what it was handed is never owed to it.
+ *
+ * Retiring takes effect before the response validates. That is safe because it
+ * only ever re-owes: a lower ledger reading admits more, never less.
  */
 function carryHeld(
   documentId: string,
@@ -953,12 +968,17 @@ function carryHeld(
   if (owed.length === 0) return held;
   let annotations: Map<string, Annotation> | undefined;
   let replies: Map<string, AnnotationReply> | undefined;
+  const retire: RegistryEntry[] = [];
   for (const entry of owed) {
     if (entry.kind === "a") {
       annotations ??= new Map(allAnnotations.map((a) => [inboxLedgerKey(documentId, a), a]));
       const ann = annotations.get(entry.base);
-      if (!ann || (ann.editedAt ?? 0) !== entry.editedAt || !isClaudeFacing(ann)) continue;
-      if (hideFromAI(ann, modeState) || refused.has(entry)) held.add(entry.seq);
+      if (ann && (ann.editedAt ?? 0) !== entry.editedAt) continue;
+      if (ann && isClaudeFacing(ann) && (hideFromAI(ann, modeState) || refused.has(entry))) {
+        held.add(entry.seq);
+      } else {
+        retire.push(entry);
+      }
     } else if (entry.kind === "r") {
       if (!replies) {
         replies = new Map();
@@ -969,10 +989,12 @@ function carryHeld(
         }
       }
       const reply = replies.get(entry.base);
-      if (!reply) continue;
-      if (hideFromAI(reply, modeState) || refused.has(entry)) held.add(entry.seq);
+      if (reply && (hideFromAI(reply, modeState) || refused.has(entry))) held.add(entry.seq);
+      else retire.push(entry);
     }
   }
+  // After the loop: `entriesIn` hands back the live list this mutates.
+  for (const entry of retire) deliveryRegistry.retire(entry);
   return held;
 }
 
@@ -1749,8 +1771,12 @@ export function registerAwarenessTools(server: McpServer): void {
         if (chat.dropped > 0) {
           actions += ` ${chat.dropped} chat ${chat.dropped === 1 ? "message" : "messages"} could not be returned (malformed record; details in Tandem's log).`;
         }
-        // Never a count of anything withheld: a held item's existence is
-        // exactly what the Solo hold keeps from Claude.
+        // The summary never counts anything withheld. That is not a guarantee
+        // Claude cannot learn a held item exists: the cursor is plain encoded
+        // JSON, and once another reader has been handed an item the Solo hold
+        // then withholds, the cursor lists its number (and the document it is
+        // in) as held. Only items some reader was already given get a number,
+        // so notes and private records never appear there.
         if (decoded && !decoded.recognised) {
           actions +=
             " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything not yet acknowledged.";

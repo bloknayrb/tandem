@@ -324,6 +324,109 @@ describe("per-reader ledger semantics", () => {
   });
 });
 
+describe("an item another reader was handed is not lost when this reader's mark passes it while it does not qualify", () => {
+  // Readers A and B both poll before the item exists; B is handed it first,
+  // then it stops qualifying, A's mark passes it, and it qualifies again at the
+  // SAME version. A must still be handed it. B is handed it again: the registry
+  // cannot tell B from A without per-reader state, so this resolves toward a
+  // duplicate, never a loss.
+  async function twoReaders(docId: string) {
+    const doc = openDoc(docId, { active: true });
+    const a0 = (await poll({ cursor: "start" })).cursor;
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    return { doc, a0, b0 };
+  }
+
+  it("a user comment dismissed and then undone", async () => {
+    const { doc, a0, b0 } = await twoReaders("cur-pass-undo");
+    userComment(doc, "u_c");
+    const b1 = await poll({ cursor: b0 });
+    expect(ids(b1).userActions).toEqual(["u_c"]);
+    userComment(doc, "u_c", { status: "dismissed" });
+    const a1 = await poll({ cursor: a0 });
+    expect(ids(a1).userActions).toEqual([]);
+    userComment(doc, "u_c", { status: "pending" });
+    expect(ids(await poll({ cursor: a1.cursor })).userActions).toEqual(["u_c"]);
+    expect(ids(await poll({ cursor: b1.cursor })).userActions).toEqual(["u_c"]);
+  });
+
+  it("a Claude annotation accepted, undone, and accepted again (#1770 across readers)", async () => {
+    const { doc, a0, b0 } = await twoReaders("cur-pass-reaccept");
+    claudeComment(doc, "c_x");
+    claudeComment(doc, "c_x", { status: "accepted" });
+    const b1 = await poll({ cursor: b0 });
+    expect(ids(b1).userResponses).toEqual(["c_x:accepted"]);
+    claudeComment(doc, "c_x", { status: "pending" });
+    const a1 = await poll({ cursor: a0 });
+    expect(ids(a1).userResponses).toEqual([]);
+    claudeComment(doc, "c_x", { status: "accepted" });
+    expect(ids(await poll({ cursor: a1.cursor })).userResponses).toEqual(["c_x:accepted"]);
+  });
+
+  it("a record deleted and restored verbatim", async () => {
+    const { doc, a0, b0 } = await twoReaders("cur-pass-restore");
+    userComment(doc, "u_r");
+    expect(ids(await poll({ cursor: b0 })).userActions).toEqual(["u_r"]);
+    withInternal(doc, () => doc.getMap(Y_MAP_ANNOTATIONS).delete("u_r"));
+    const a1 = await poll({ cursor: a0 });
+    expect(ids(a1).userActions).toEqual([]);
+    userComment(doc, "u_r");
+    expect(ids(await poll({ cursor: a1.cursor })).userActions).toEqual(["u_r"]);
+  });
+
+  it("a user reply deleted and restored verbatim", async () => {
+    const { doc, a0, b0 } = await twoReaders("cur-pass-reply");
+    claudeComment(doc, "c_parent");
+    userReply(doc, "r_back", "c_parent");
+    expect(ids(await poll({ cursor: b0 })).userReplies).toEqual(["r_back"]);
+    withInternal(doc, () => doc.getMap(Y_MAP_ANNOTATION_REPLIES).delete("r_back"));
+    const a1 = await poll({ cursor: a0 });
+    expect(ids(a1).userReplies).toEqual([]);
+    userReply(doc, "r_back", "c_parent");
+    expect(ids(await poll({ cursor: a1.cursor })).userReplies).toEqual(["r_back"]);
+  });
+
+  it("the same, when the item was drained by a cursor-less poll", async () => {
+    const doc = openDoc("cur-pass-legacy", { active: true });
+    const a0 = (await poll({ cursor: "start" })).cursor;
+    userComment(doc, "u_l");
+    expect(ids(await poll()).userActions).toEqual(["u_l"]);
+    userComment(doc, "u_l", { status: "dismissed" });
+    const a1 = await poll({ cursor: a0 });
+    expect(ids(a1).userActions).toEqual([]);
+    userComment(doc, "u_l", { status: "pending" });
+    expect(ids(await poll({ cursor: a1.cursor })).userActions).toEqual(["u_l"]);
+    // The cursor-less reader keeps its own ledger: it had the comment already.
+    expect(ids(await poll()).userActions).toEqual([]);
+  });
+
+  it("a reader that already holds a newer version does not re-owe an older one to others", async () => {
+    const { doc, a0, b0 } = await twoReaders("cur-pass-regress");
+    userComment(doc, "u_v", { editedAt: 5 });
+    const a1 = await poll({ cursor: a0 });
+    expect(ids(a1).userActions).toEqual(["u_v"]);
+    // `editedAt` goes backwards (clock skew, a forged write): B is handed it.
+    userComment(doc, "u_v", { editedAt: 3 });
+    const b1 = await poll({ cursor: b0 });
+    expect(ids(b1).userActions).toEqual(["u_v"]);
+    // A's own ledger dedups it, and its pass retires B's version. B's mark
+    // also covers the newer version (a lower seq), so B is not handed it again.
+    await poll({ cursor: a1.cursor });
+    expect(ids(await poll({ cursor: b1.cursor })).userActions).toEqual([]);
+  });
+
+  it("a single reader that was handed the item sees no change from the legacy contract", async () => {
+    const doc = openDoc("cur-pass-single", { active: true });
+    userComment(doc, "u_s");
+    const a1 = await poll({ cursor: "start" });
+    expect(ids(a1).userActions).toEqual(["u_s"]);
+    userComment(doc, "u_s", { status: "dismissed" });
+    const a2 = await poll({ cursor: a1.cursor });
+    userComment(doc, "u_s", { status: "pending" });
+    expect(ids(await poll({ cursor: a2.cursor })).userActions).toEqual([]);
+  });
+});
+
 describe("documents a poll does not read keep their position", () => {
   it("a named poll does not advance another document's mark", async () => {
     const one = openDoc("cur-named-1", { active: true });

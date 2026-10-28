@@ -30,6 +30,11 @@
  *    when its mark passed them (Solo hold, or a record `admit` refused), so a
  *    mark that moved past them does not lose them.
  *
+ * Any OTHER entry a reader's mark passes without handing it over — the item
+ * did not qualify at that moment — is retired from the registry
+ * ({@link DeliveryRegistry.retire}), so the item gets a new seq if it ever
+ * qualifies again.
+ *
  * Every overflow and every unreadable input resolves toward DUPLICATES, never
  * loss: an oversize held list lowers the mark below what it drops, a cursor
  * that does not fit the size budget is folded into a lower mark, and a cursor
@@ -37,7 +42,10 @@
  *
  * Content never enters this module: entries hold item keys and integers only,
  * and a key is created only for an item that passed every privacy gate and was
- * returned, so notes, private records and Solo-held items never get one.
+ * returned, so notes and private records never get one, and an item the Solo
+ * hold withholds has one only if some reader was handed it before the hold.
+ * The cursor is encoded, not encrypted: it can name such an item's number and
+ * document, though never its content.
  */
 
 import { randomUUID } from "node:crypto";
@@ -47,7 +55,7 @@ import { CTRL_ROOM } from "../../shared/constants.js";
 /** Which kind of item an entry versions: annotation, user reply, or chat message. */
 export type EntryKind = "a" | "r" | "c";
 
-/** One returned item version. Never removed until {@link DeliveryRegistry.reset}. */
+/** One returned item version. Removed only by {@link DeliveryRegistry.retire} or `reset`. */
 export interface RegistryEntry {
   readonly seq: number;
   readonly kind: EntryKind;
@@ -136,14 +144,43 @@ export class DeliveryRegistry {
     return entry;
   }
 
-  /** Every assigned version of one item, oldest seq first. */
+  /** Every live (unretired) version of one item, oldest seq first. */
   versionsOf(kind: EntryKind, base: string): readonly RegistryEntry[] {
     return this.#byBase.get(baseId(kind, base)) ?? [];
   }
 
-  /** Every entry in a scope, in seq order. */
+  /** Every live (unretired) entry in a scope, in seq order. */
   entriesIn(scope: string): readonly RegistryEntry[] {
     return this.#byScope.get(scope) ?? [];
+  }
+
+  /**
+   * Forget that this version was ever returned, for EVERY reader: it leaves
+   * `lookup`, `versionsOf` and `entriesIn`, so if the item qualifies again at
+   * the same version, `assign` gives it a NEW seq — above every outstanding
+   * mark, so every reader is owed it again.
+   *
+   * Why this exists: a reader whose mark passes an entry it was never handed,
+   * because the item did not qualify at that moment (a resolved user comment,
+   * a Claude record whose status moved, a deleted record, one made private),
+   * would otherwise count it as delivered when the item qualifies again at the
+   * same version — the user's Undo, a restore — and never be handed it. The
+   * registry cannot tell that reader from one that WAS handed it (both cursors
+   * say only "my mark is past it"), so retiring re-owes it to both: the reader
+   * that had it gets a duplicate. Holding the seq in the passing reader's
+   * cursor instead would be exact, but those held lists grow with every item
+   * another session settles first, and an overflowing held list lowers the
+   * mark — re-delivering everything above it on every poll.
+   *
+   * Only ever re-owes: a reader's ledger reading lower can only admit more.
+   */
+  retire(entry: RegistryEntry): void {
+    const id = versionId(entry.kind, entry.base, entry.editedAt);
+    if (this.#byVersion.get(id) !== entry) return;
+    this.#byVersion.delete(id);
+    remove(this.#byBase, baseId(entry.kind, entry.base), entry);
+    remove(this.#byScope, entry.scope, entry);
+    this.#unacked.get(entry.scope)?.delete(entry);
   }
 
   /** The highest seq in a scope, or 0. */
@@ -189,6 +226,14 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   const list = map.get(key);
   if (list) list.push(value);
   else map.set(key, [value]);
+}
+
+function remove<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (!list) return;
+  const index = list.indexOf(value);
+  if (index !== -1) list.splice(index, 1);
+  if (list.length === 0) map.delete(key);
 }
 
 /** The process-wide registry `tandem_checkInbox` uses. */
