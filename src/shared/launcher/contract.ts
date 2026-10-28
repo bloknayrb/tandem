@@ -136,9 +136,19 @@ export interface WorkingDirectoryIgnored {
  * clears when the user completes setup: the wizard's Apply re-reads the
  * integration and, when the start mode allows, starts Claude
  * (`Supervisor.startAfterSetup`, #2197).
+ *
+ * `server-starting` (#1823): HTTP mode, in the window between the server
+ * answering and `startLauncherSupervisor()` creating the supervisor (or
+ * failing to, which reads `spawn-failed`). Before this the window read
+ * `stdio-mode`, which is a terminal "this runtime has no launcher" — Settings
+ * then called the launcher absent on an ordinary boot. It is transient for the
+ * UI (`isTransientlyUnavailable`) but is NOT promotable by
+ * `POST /api/launcher/start` (`isPromotableByStartRoute`): boot creates the
+ * supervisor itself, and the route has no business racing it.
  */
 export type LauncherUnavailableReason =
   | "stdio-mode"
+  | "server-starting"
   | "disabled-by-env"
   | "spawn-failed"
   | "deferred-autostart"
@@ -146,12 +156,14 @@ export type LauncherUnavailableReason =
 
 /**
  * True when `available: false` is a *transient phase* the launcher will leave on
- * its own, rather than a terminal explanation.
+ * its own, rather than a terminal explanation. **A UI predicate, and NOT an
+ * authorization gate** — `POST /api/launcher/start` asks
+ * `isPromotableByStartRoute` instead (#1823 split them).
  *
- * Only `deferred-autostart` resolves without the user changing anything.
- * `not-configured` is recoverable too, but only by the user setting Claude Code
- * up, so it is NOT transient: setup is exactly the CTA it needs. The rest mean
- * "this runtime will not have a launcher". The UI must
+ * `deferred-autostart` and `server-starting` resolve without the user changing
+ * anything. `not-configured` is recoverable too, but only by the user setting
+ * Claude Code up, so it is NOT transient: setup is exactly the CTA it needs.
+ * The rest mean "this runtime will not have a launcher". The UI must
  * not offer a fix-it CTA for a state that fixes itself — a fully-configured user
  * who booted hidden would otherwise be told to re-run the integration wizard.
  *
@@ -163,6 +175,20 @@ export type LauncherUnavailableReason =
  * a LAN viewer cannot act on the deferral, so treating it as terminal is right.
  */
 export function isTransientlyUnavailable(reason: LauncherUnavailableReason | undefined): boolean {
+  return reason === "deferred-autostart" || reason === "server-starting";
+}
+
+/**
+ * The ONE reason `POST /api/launcher/start` may promote to a live supervisor:
+ * `deferred-autostart` (#1236). Split from `isTransientlyUnavailable` (#1823)
+ * so the UI's notion of "this fixes itself" can grow without widening the
+ * route. ADR-046 §7's argument rests on this gate being exactly this narrow:
+ * `disabled-by-env` outranks the deferral in `resolveInitialLauncherReason`,
+ * so the route can never become an HTTP bypass of the operator kill switch.
+ * `server-starting` is refused because boot is about to create the supervisor
+ * itself.
+ */
+export function isPromotableByStartRoute(reason: LauncherUnavailableReason | undefined): boolean {
   return reason === "deferred-autostart";
 }
 

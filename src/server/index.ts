@@ -125,7 +125,7 @@ const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT)
 let httpServer: Server | null = null;
 let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
 let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
-  resolveInitialLauncherReason(process.env);
+  resolveInitialLauncherReason(process.env, transportMode);
 
 /**
  * Single-flight guard for `startLauncherSupervisor`. Set SYNCHRONOUSLY before

@@ -404,8 +404,14 @@ Normal launch:
   user opens app  ──▶  setup(): show_main_window() as the FIRST statement
                      ──▶  LAUNCHER_DEFERRED stays false
                      ──▶  sidecar spawns without TANDEM_DEFER_LAUNCHER
+                     ──▶  Node: resolveInitialLauncherReason()
+                            = "server-starting"  [HTTP mode, #1823]
                      ──▶  supervisor starts inline, as before
+                            (status reads the supervisor; a failed
+                             creation reads "spawn-failed")
 ```
+
+`resolveInitialLauncherReason(env, transport)` answers `stdio-mode` only for a stdio (or unknown) transport, which never starts a launcher. In HTTP mode the boot window reads `server-starting`, which the UI treats as transient (`booting`, no connect chip) and `POST /api/launcher/start` does not promote (ADR-046 §7's amendment).
 
 Three details are load-bearing:
 

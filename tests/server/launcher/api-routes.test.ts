@@ -1027,8 +1027,23 @@ describe("POST /api/launcher/start — autostart deferral (#1236)", () => {
     expect(deps.calls()).toBe(0);
   });
 
-  it("rejects every non-deferred reason", async () => {
-    for (const reason of ["stdio-mode", "spawn-failed", "disabled-by-env"] as const) {
+  it("rejects every non-deferred reason, server-starting included (#1823)", async () => {
+    // Derived from a Record over the whole enum, so a new reason fails to
+    // compile here until someone decides whether the route may promote it —
+    // the ADR-046 §7 kill-switch argument rests on this gate staying narrow.
+    const PROMOTABLE: Record<LauncherUnavailableReason, boolean> = {
+      "stdio-mode": false,
+      "server-starting": false,
+      "disabled-by-env": false,
+      "spawn-failed": false,
+      "deferred-autostart": true,
+      "not-configured": false,
+    };
+    for (const [reason, promotable] of Object.entries(PROMOTABLE) as [
+      LauncherUnavailableReason,
+      boolean,
+    ][]) {
+      if (promotable) continue;
       const deps = deferredDeps({ unavailableReason: () => reason });
       const { app } = makeApp(deps);
       const res = await postStart(app);
@@ -1139,6 +1154,7 @@ describe("GET /api/launcher/status — reason redaction (#1236)", () => {
   it("omits reason off-loopback for every reason, not just the deferred one", async () => {
     for (const reason of [
       "stdio-mode",
+      "server-starting",
       "disabled-by-env",
       "spawn-failed",
       "deferred-autostart",
@@ -1153,6 +1169,12 @@ describe("GET /api/launcher/status — reason redaction (#1236)", () => {
     const { app } = makeApp(baseDeps(null, "deferred-autostart"));
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.body).toEqual({ available: false, reason: "deferred-autostart" });
+  });
+
+  it("surfaces the HTTP boot window as server-starting to loopback callers (#1823)", async () => {
+    const { app } = makeApp(baseDeps(null, "server-starting"));
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: false, reason: "server-starting" });
   });
 });
 

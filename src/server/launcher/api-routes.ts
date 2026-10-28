@@ -62,7 +62,7 @@ import {
 } from "../../shared/api-paths.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
 import {
-  isTransientlyUnavailable,
+  isPromotableByStartRoute,
   LAUNCHER_CWD_MAX_LENGTH,
   LAUNCHER_ERROR_CLI_UNUSABLE,
   LAUNCHER_ERROR_IN_PROGRESS,
@@ -754,7 +754,7 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     }
 
     const reason = deps.unavailableReason();
-    if (!isTransientlyUnavailable(reason)) {
+    if (!isPromotableByStartRoute(reason)) {
       sendNotAvailable(res, reason, "Auto-launcher is not in a deferred state");
       return;
     }
