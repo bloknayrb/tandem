@@ -65,8 +65,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { TandemNotification } from "../shared/types.js";
 import { generateNotificationId } from "../shared/utils.js";
 import { pushNotification } from "./notifications.js";
+import {
+  addStartupNotice,
+  isStartupRestoreInProgress,
+  removeStartupNotice,
+} from "./startup-notices.js";
 
 /** How long a suppressed count stays live before expiring. */
 const SUPPRESS_TTL_MS = 2000;
@@ -157,9 +163,14 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
     // directory throws nothing at `fs.watch` and arrives here as `EPERM`. The
     // identity check above stays first, so a stale handle's error is silent.
     notifyNotWatching(filePath);
-    unwatchFile(filePath);
+    dropWatch(filePath);
   });
   return handle;
+}
+
+/** The one `dedupKey` every "not watching" notice for `filePath` carries. */
+function watchLostKey(filePath: string): string {
+  return `watch-lost:${filePath}`;
 }
 
 /**
@@ -178,16 +189,27 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
  *
  * One `dedupKey` for all three, keyed by path: they are the same fact about
  * the same file, and a user who hits more than one wants one line about it.
+ *
+ * **During boot-time session restore the live push reaches nobody (#1662).**
+ * `restoreOpenDocuments` runs before the server binds, so no notify stream
+ * exists yet. Inside that window the notice is also registered as a startup
+ * notice, which `handleNotifyStream` replays to every stream that connects
+ * later. It is withdrawn when the condition stops being true for this
+ * process: a later `watchFile` of the same path succeeds, or the document is
+ * closed (`unwatchFile`). Outside the window the live push alone is right —
+ * the tab that caused the open is connected to receive it.
  */
 function notifyNotWatching(filePath: string): void {
-  pushNotification({
+  const notice: TandemNotification = {
     id: generateNotificationId(),
     type: "general-error",
     severity: "warning",
     message: `Tandem is not watching ${path.basename(filePath)}; external edits will not be detected until the file is reopened.`,
-    dedupKey: `watch-lost:${filePath}`,
+    dedupKey: watchLostKey(filePath),
     timestamp: Date.now(),
-  });
+  };
+  pushNotification(notice);
+  if (isStartupRestoreInProgress()) addStartupNotice(notice);
 }
 
 /**
@@ -196,7 +218,7 @@ function notifyNotWatching(filePath: string): void {
  * early-returns on an existing entry).
  *
  * There is deliberately no "already notified" latch. The last act here is
- * `unwatchFile`, which deletes the map entry, so no later delivery for this
+ * `dropWatch`, which deletes the map entry, so no later delivery for this
  * path can reach a notify site at all — the only route back is `watchFile`,
  * and a second lost watch after a reopen genuinely is a second event worth
  * reporting. `dedupKey` coalesces it client-side.
@@ -211,7 +233,7 @@ function notifyNotWatching(filePath: string): void {
 function notifyWatchLost(filePath: string, err: unknown): void {
   console.error("[FileWatcher] Lost watch on %s (re-arm failed):", filePath, err);
   notifyNotWatching(filePath);
-  unwatchFile(filePath);
+  dropWatch(filePath);
 }
 
 /**
@@ -410,7 +432,7 @@ export function watchFile(
   try {
     watcher = attachWatcher(filePath, cb);
   } catch (err) {
-    // No `unwatchFile` here, unlike `notifyWatchLost`: nothing was ever stored,
+    // No `dropWatch` here, unlike `notifyWatchLost`: nothing was ever stored,
     // so there is no entry to drop — and calling it would be a no-op that reads
     // as if one existed.
     console.error("[FileWatcher] Failed to watch %s:", filePath, err);
@@ -426,6 +448,9 @@ export function watchFile(
     suppressed: null,
     selfWrite: null,
   });
+  // The path is watched now, so a boot-time "not watching" notice for it
+  // (#1662) would tell every tab that connects from here on something false.
+  removeStartupNotice(watchLostKey(filePath));
   console.error("[FileWatcher] Watching %s", filePath);
   return true;
 }
@@ -565,9 +590,22 @@ async function isSelfWriteEcho(filePath: string): Promise<boolean> {
 }
 
 /**
- * Stop watching a specific file. No-op if not watched.
+ * Stop watching a specific file (the document was closed, or saved-as away
+ * from this path). No-op on the handle if not watched.
+ *
+ * Also withdraws any boot-time "not watching" startup notice for the path
+ * (#1662), and does so even when no handle exists — a path whose initial arm
+ * failed never had one — because a closed document is not being watched for a
+ * reason no tab needs telling about. The module's own lost-watch paths call
+ * `dropWatch` instead, so they never withdraw the notice they just raised.
  */
 export function unwatchFile(filePath: string): void {
+  removeStartupNotice(watchLostKey(filePath));
+  dropWatch(filePath);
+}
+
+/** Close and forget `filePath`'s handle. No-op if not watched. */
+function dropWatch(filePath: string): void {
   const entry = watched.get(filePath);
   if (!entry) return;
 
