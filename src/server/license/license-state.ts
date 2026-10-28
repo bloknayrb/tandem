@@ -303,11 +303,13 @@ export function resolveLicenseState(deps: {
   if (licenseUnverifiable !== undefined && graceKey !== undefined && graceMode !== "off") {
     const recorded = readGraceRecord(appDataDir, graceKey, nowMs);
     const start = recorded.startMs ?? nowMs;
-    // Write when the file lacks it — the first failure, or a date this process
-    // remembers but the file lost (deleted by hand, or a write that never
-    // landed). `recordGraceStart` stops retrying after one failed write.
+    // Write when the file lacks a usable date — the first failure, or a date
+    // this process remembers but the file lost (deleted by hand, or a write
+    // that never landed). `recordGraceStart` stops retrying after one failed
+    // write, and never replaces a plausible date that is only ahead of a clock
+    // running behind (it keeps the date in memory instead).
     if (graceMode === "record" && !recorded.onDisk) {
-      recordGraceStart(appDataDir, graceKey, start, nowMs);
+      recordGraceStart(appDataDir, graceKey, start);
     }
     const endsAtMs = start + GRACE_MS;
     if (nowMs < endsAtMs) {

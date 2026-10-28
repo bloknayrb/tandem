@@ -8,13 +8,15 @@
  * that first failure.
  *
  * **It is no stronger than the trial clock, and is not meant to be.** All of
- * its state is local and the source is public. Deleting `license-grace.json`,
- * cycling distinct junk licence files (each hashes to a new key), or an
- * app-data directory the record cannot be written to each re-grant a grace,
- * exactly as deleting `trial.json` re-grants a trial. What it does hold
- * against is the casual reset: deleting `license.json` and putting the same
- * bytes back keeps the original date, because the record lives in its own file
- * keyed by the licence's contents, not inside the licence file.
+ * its state is local and the source is public. #2231 asked that deleting
+ * Tandem's own state file must not reset the first-failure date; this design
+ * deliberately does NOT meet that (ADR-040 amendment 2026-10-28 says why).
+ * Deleting `license-grace.json`, cycling distinct junk licence files (each
+ * hashes to a new key), a clock set behind the recorded date, or an app-data
+ * directory the record cannot be written to each re-grant a grace, exactly as
+ * deleting `trial.json` re-grants a trial. The one reset it does hold against
+ * is deleting `license.json` and putting the same bytes back, because the
+ * record lives in its own file keyed by the licence's contents.
  *
  * Imported by `license-state.ts` alone.
  *
@@ -88,17 +90,33 @@ function readEntries(appDataDir: string): Record<string, string> {
 }
 
 /**
- * Can this stored value run a clock? A string that `Date.parse` reads, on or
- * after 2020 and not more than a day ahead of now: a dead RTC writes 1970 or
- * 2015-2016 and must not END a grace on first read, and a far-future value
- * must not EXTEND one forever. `Date.parse` on a string only — `new Date(0)`
- * is a finite 1970.
+ * Is this stored value a real first-failure date? A string that `Date.parse`
+ * reads, on or after 2020: a dead RTC writes 1970 or 2015-2016, and such a
+ * value is junk that a later write may replace. `Date.parse` on a string only
+ * — `new Date(0)` is a finite 1970. Says nothing about NOW: a plausible date
+ * can still be ahead of a clock that is running behind.
  */
-function usableStart(value: unknown, nowMs: number): number | null {
+function plausibleStart(value: unknown): number | null {
   if (typeof value !== "string") return null;
   const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) return null;
-  if (ms < GRACE_EPOCH_FLOOR_MS || ms > nowMs + GRACE_FUTURE_SLACK_MS) return null;
+  if (!Number.isFinite(ms) || ms < GRACE_EPOCH_FLOOR_MS) return null;
+  return ms;
+}
+
+/**
+ * Can this stored value run a clock NOW? A plausible date not more than a day
+ * ahead of now: a dead-RTC date must not END a grace on first read, and a
+ * far-future value must not EXTEND one.
+ *
+ * A plausible date that is merely ahead of now is not used, but it is never
+ * overwritten either (`recordGraceStart`): the likelier cause is a clock that
+ * has fallen behind (a CMOS reset to a firmware date), and replacing the real
+ * date with the behind-clock "now" would end a paying customer's grace the
+ * moment the clock is corrected.
+ */
+function usableStart(value: unknown, nowMs: number): number | null {
+  const ms = plausibleStart(value);
+  if (ms === null || ms > nowMs + GRACE_FUTURE_SLACK_MS) return null;
   return ms;
 }
 
@@ -134,7 +152,14 @@ export function _resetGraceMemoForTests(): void {
 /**
  * The epoch ms this key first failed, or `null` when nothing usable is
  * remembered (the caller reads that as "now" — day 0, as for `trial.json`).
- * The earlier of the record on disk and this process's memory wins.
+ * A usable date on disk wins; this process's memory stands in only when the
+ * disk has none (an unwritable record, a record deleted mid-process, or a
+ * stored date ahead of a clock that is running behind). The memory must not
+ * win over a usable disk date: during a behind clock it holds that clock's
+ * "now", which is EARLIER than the real first failure, and preferring it once
+ * the clock is corrected would end the grace at once. Where the two disagree
+ * otherwise (the record deleted and re-created by another process), the disk's
+ * later date fails toward the user.
  */
 export function readGraceStart(appDataDir: string, key: string, nowMs: number): number | null {
   return readGraceRecord(appDataDir, key, nowMs).startMs;
@@ -154,14 +179,14 @@ export function readGraceRecord(
   const fromMemo = memo.get(memoKey(appDataDir, key));
   const fromMemoUsable = fromMemo !== undefined && Number.isFinite(fromMemo) ? fromMemo : null;
   const onDisk = fromFile !== null;
-  if (fromFile === null) return { startMs: fromMemoUsable, onDisk };
-  if (fromMemoUsable === null) return { startMs: fromFile, onDisk };
-  return { startMs: Math.min(fromFile, fromMemoUsable), onDisk };
+  return { startMs: fromFile ?? fromMemoUsable, onDisk };
 }
 
 /**
  * Remember `startMs` as this key's first failure, unless the record on disk
- * already holds a usable date for it. Never throws.
+ * already holds a plausible date for it (on or after 2020 — even one ahead of
+ * now, see `usableStart`). Only an absent, unparseable or pre-2020 entry is
+ * written. Never throws.
  *
  * The write is a temp file plus a rename, synchronous, owner-only (`0o600`):
  * the stdio and HTTP servers both resolve licence state, and a torn
@@ -169,19 +194,14 @@ export function readGraceRecord(
  * Two processes racing still lose one entry at worst, which fails toward the
  * user like everything else here.
  */
-export function recordGraceStart(
-  appDataDir: string,
-  key: string,
-  startMs: number,
-  nowMs: number,
-): void {
+export function recordGraceStart(appDataDir: string, key: string, startMs: number): void {
   const mk = memoKey(appDataDir, key);
   const prior = memo.get(mk);
   if (prior === undefined || startMs < prior) memo.set(mk, startMs);
   if (writeFailed.has(mk)) return;
 
   const entries = readEntries(appDataDir);
-  if (usableStart(entries[key], nowMs) !== null) return;
+  if (plausibleStart(entries[key]) !== null) return;
 
   // Cap: the key being written, plus the newest others by date.
   const others = Object.entries(entries)
@@ -189,6 +209,7 @@ export function recordGraceStart(
     .sort(([, a], [, b]) => (Date.parse(a) || 0) - (Date.parse(b) || 0))
     .slice(-(GRACE_MAX_ENTRIES - 1));
 
+  sweepOrphanedTemps(appDataDir);
   const filePath = licenseGraceFilePath(appDataDir);
   const tmp = path.join(
     appDataDir,
@@ -220,6 +241,41 @@ export function recordGraceStart(
 }
 
 /**
+ * Exactly the temp names `recordGraceStart` writes, and nothing else: this
+ * regex is the sweep's safety boundary, since it runs in the app-data root.
+ */
+const ORPHAN_TEMP_RE = /^\.license-grace\.\d+\.[0-9a-f]{8}\.tmp$/;
+/** Old enough that no live write can still own it (a write is one sync call). */
+const ORPHAN_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Remove `.license-grace.*.tmp` files a crash between write and rename left
+ * behind. The boot reaper sweeps `annotations/` and `sessions/` only, so this
+ * module cleans up after itself, best-effort, whenever it writes or clears the
+ * record. The age gate keeps it off another process's in-flight temp file.
+ * Never throws.
+ */
+function sweepOrphanedTemps(appDataDir: string): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(appDataDir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - ORPHAN_TEMP_MIN_AGE_MS;
+  for (const name of names) {
+    if (!ORPHAN_TEMP_RE.test(name)) continue;
+    const p = path.join(appDataDir, name);
+    try {
+      const st = fs.lstatSync(p);
+      if (st.isFile() && st.mtimeMs < cutoff) fs.unlinkSync(p);
+    } catch {
+      // Gone already, or not ours to remove.
+    }
+  }
+}
+
+/**
  * Forget every grace record for this app-data dir: on disk and in memory.
  * Called when a licence verifies (so a later, unrelated failure starts a fresh
  * grace rather than inheriting a stale date) and by deactivation. Never
@@ -227,6 +283,7 @@ export function recordGraceStart(
  */
 export function clearGraceRecords(appDataDir: string): boolean {
   forgetDir(appDataDir);
+  sweepOrphanedTemps(appDataDir);
   try {
     fs.unlinkSync(licenseGraceFilePath(appDataDir));
     return true;

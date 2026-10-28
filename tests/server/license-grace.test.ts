@@ -187,7 +187,7 @@ describe("grace record storage", () => {
   it("absent ⇒ null; record ⇒ read back; clear ⇒ gone", () => {
     const dir = tmp();
     expect(readGraceStart(dir, "k", T0)).toBeNull();
-    recordGraceStart(dir, "k", T0, T0);
+    recordGraceStart(dir, "k", T0);
     _resetGraceMemoForTests(); // prove it is on disk, not only in memory
     expect(readGraceStart(dir, "k", T0 + DAY)).toBe(T0);
     expect(clearGraceRecords(dir)).toBe(true);
@@ -199,14 +199,27 @@ describe("grace record storage", () => {
 
   it("never overwrites a usable first-failure date", () => {
     const dir = tmp();
-    recordGraceStart(dir, "k", T0, T0);
+    recordGraceStart(dir, "k", T0);
     _resetGraceMemoForTests();
-    recordGraceStart(dir, "k", T0 + 5 * DAY, T0 + 5 * DAY);
+    recordGraceStart(dir, "k", T0 + 5 * DAY);
     expect(readGraceFile(dir).entries.k).toBe(new Date(T0).toISOString());
   });
 
+  it("never overwrites a plausible date that is only ahead of a clock running behind", () => {
+    const dir = tmp();
+    const real = new Date(T0 + 2 * DAY).toISOString();
+    writeGraceEntries(dir, { k: real });
+    // Unusable NOW: the clock is behind it…
+    expect(readGraceStart(dir, "k", T0)).toBeNull();
+    // …but it is not junk, so a record from the behind clock leaves it alone.
+    recordGraceStart(dir, "k", T0);
+    expect(readGraceFile(dir).entries.k).toBe(real);
+    // The behind clock's "now" is remembered in memory, yet once the clock is
+    // right the disk's date wins over that earlier memory.
+    expect(readGraceStart(dir, "k", T0 + 3 * DAY)).toBe(T0 + 2 * DAY);
+  });
+
   it.each([
-    ["more than a day in the future", new Date(T0 + 2 * DAY).toISOString()],
     ["before 2020 (a dead RTC)", "2016-01-01T00:00:00.000Z"],
     ["unparseable", "not a date"],
   ])("ignores a stored date that is %s", (_name, value) => {
@@ -214,7 +227,7 @@ describe("grace record storage", () => {
     writeGraceEntries(dir, { k: value });
     expect(readGraceStart(dir, "k", T0)).toBeNull();
     // …and repairs it on the next record.
-    recordGraceStart(dir, "k", T0, T0);
+    recordGraceStart(dir, "k", T0);
     expect(readGraceFile(dir).entries.k).toBe(new Date(T0).toISOString());
   });
 
@@ -236,7 +249,7 @@ describe("grace record storage", () => {
       entries[`k${i}`] = new Date(T0 - (GRACE_MAX_ENTRIES - i) * DAY).toISOString();
     }
     writeGraceEntries(dir, entries);
-    recordGraceStart(dir, "new", T0, T0);
+    recordGraceStart(dir, "new", T0);
     const kept = Object.keys(readGraceFile(dir).entries);
     expect(kept).toHaveLength(GRACE_MAX_ENTRIES);
     expect(kept).toContain("new");
@@ -245,22 +258,42 @@ describe("grace record storage", () => {
 
   it.skipIf(process.platform === "win32")("writes the record owner-only (0o600)", () => {
     const dir = tmp();
-    recordGraceStart(dir, "k", T0, T0);
+    recordGraceStart(dir, "k", T0);
     expect(fs.statSync(licenseGraceFilePath(dir)).mode & 0o777).toBe(0o600);
     // No temp file left behind.
     expect(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("sweeps its own orphaned temp files over an hour old, and nothing else", () => {
+    const dir = tmp();
+    const old = path.join(dir, ".license-grace.123.deadbeef.tmp");
+    const fresh = path.join(dir, ".license-grace.456.cafef00d.tmp");
+    const foreign = path.join(dir, ".license-grace.notours.tmp");
+    for (const f of [old, fresh, foreign]) fs.writeFileSync(f, "{}");
+    const hourAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(old, hourAgo, hourAgo);
+    fs.utimesSync(foreign, hourAgo, hourAgo);
+    recordGraceStart(dir, "k", T0);
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(foreign)).toBe(true);
+    // Clearing the record sweeps too.
+    fs.writeFileSync(old, "{}");
+    fs.utimesSync(old, hourAgo, hourAgo);
+    clearGraceRecords(dir);
+    expect(fs.existsSync(old)).toBe(false);
   });
 
   it("never throws when the record cannot be written, and remembers the date in memory", () => {
     const parent = tmp();
     const notADir = path.join(parent, "file");
     fs.writeFileSync(notADir, "");
-    expect(() => recordGraceStart(notADir, "k", T0, T0)).not.toThrow();
+    expect(() => recordGraceStart(notADir, "k", T0)).not.toThrow();
     // Bounded for the life of the process even though nothing landed.
     expect(readGraceStart(notADir, "k", T0 + DAY)).toBe(T0);
     expect(errSpy).toHaveBeenCalledTimes(1);
     // One failed write: never retried per call.
-    recordGraceStart(notADir, "k", T0, T0);
+    recordGraceStart(notADir, "k", T0);
     expect(errSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -268,7 +301,7 @@ describe("grace record storage", () => {
     const dir = tmp();
     fs.mkdirSync(path.join(licenseGraceFilePath(dir), "inner"), { recursive: true });
     expect(readGraceStart(dir, "k", T0)).toBeNull();
-    expect(() => recordGraceStart(dir, "k", T0, T0)).not.toThrow();
+    expect(() => recordGraceStart(dir, "k", T0)).not.toThrow();
     expect(() => clearGraceRecords(dir)).not.toThrow();
     expect(clearGraceRecords(dir)).toBe(false);
   });
@@ -372,6 +405,30 @@ describe("resolveLicenseState — grace period (#2231)", () => {
     const back = resolve(dir, T0 + 10 * DAY);
     expect(back.status === "grace" && back.grace.firstFailedAt).toBe(new Date(T0).toISOString());
     expect(back.status === "grace" && back.grace.daysRemaining).toBe(4);
+  });
+
+  it("a clock reset behind the first failure, then corrected, keeps the original date (fresh process)", () => {
+    const { dir, blob } = failingExpired();
+    const key = graceKeyForBlob(blob);
+    resolve(dir, T0);
+    expect(readGraceFile(dir).entries[key]).toBe(new Date(T0).toISOString());
+    // A restart on a clock reset to a firmware date long before the failure.
+    _resetGraceMemoForTests();
+    const behind = Date.UTC(2025, 5, 1);
+    expect(resolve(dir, behind).status).toBe("grace");
+    expect(readGraceFile(dir).entries[key]).toBe(new Date(T0).toISOString());
+    // The clock is corrected in the same process: the stored date governs.
+    const corrected = resolve(dir, T0 + 5 * DAY);
+    expect(corrected.status === "grace" && corrected.grace.firstFailedAt).toBe(
+      new Date(T0).toISOString(),
+    );
+    expect(corrected.status === "grace" && corrected.grace.daysRemaining).toBe(
+      LICENSE_GRACE_DAYS - 5,
+    );
+    // …and in a fresh one.
+    _resetGraceMemoForTests();
+    const later = resolve(dir, T0 + 6 * DAY);
+    expect(later.status === "grace" && later.grace.firstFailedAt).toBe(new Date(T0).toISOString());
   });
 
   it("a different failing licence gets its own entry (no stronger than the trial clock)", () => {
