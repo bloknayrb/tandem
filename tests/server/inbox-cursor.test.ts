@@ -996,6 +996,22 @@ describe("the cursor codec", () => {
     expect(registry.recordHandOut([e1.seq, e2.seq])).not.toBe(token);
   });
 
+  it("a guessed neighbouring token confirms nothing (tokens are random, not sequential)", () => {
+    const registry = new DeliveryRegistry();
+    const mine = registry.assign("c", CHAT_SCOPE, "mine", 0);
+    const theirs = registry.assign("c", CHAT_SCOPE, "theirs", 0);
+    const myToken = registry.recordHandOut([mine.seq]) as number;
+    const theirToken = registry.recordHandOut([theirs.seq]) as number;
+    expect(Math.abs(theirToken - myToken)).not.toBe(1);
+    // An edited cursor trying the values around its own token proves nothing.
+    for (const guess of [myToken - 1, myToken + 1, myToken + 2]) {
+      if (guess !== theirToken) registry.confirmHandOut(guess);
+    }
+    expect(theirs.received).toBe(false);
+    registry.confirmHandOut(theirToken);
+    expect(theirs.received).toBe(true);
+  });
+
   it("folds a maximal cursor to fit, losing nothing that was owed", () => {
     // 300 documents with 23-character ids, each holding 300 seqs: far past
     // both the size budget and the entry caps.

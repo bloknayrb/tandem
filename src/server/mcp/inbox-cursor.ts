@@ -60,7 +60,7 @@
  * document, though never its content.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { CTRL_ROOM } from "../../shared/constants.js";
 
@@ -91,6 +91,9 @@ export interface RegistryEntry {
 /** How many chat hand-out tokens the registry keeps unspent. */
 export const MAX_HAND_OUT_TOKENS = 4096;
 
+/** Exclusive upper bound of a random hand-out token (2^48, `randomInt`'s limit). */
+const HAND_OUT_TOKEN_SPACE = 2 ** 48;
+
 /** The scope chat entries live in. Not a document id: it never appears in a cursor's `d`. */
 export const CHAT_SCOPE = "\u0000chat";
 
@@ -120,7 +123,6 @@ export class DeliveryRegistry {
   readonly #byBase = new Map<string, RegistryEntry[]>();
   readonly #byScope = new Map<string, RegistryEntry[]>();
   readonly #unacked = new Map<string, Set<RegistryEntry>>();
-  #handOutCounter = 0;
   /** Chat hand-out token → the seqs that one response handed out. */
   readonly #handOuts = new Map<number, readonly number[]>();
   /** The same, keyed by the seq list, so an identical hand-out reuses its token. */
@@ -149,7 +151,6 @@ export class DeliveryRegistry {
     this.#byBase.clear();
     this.#byScope.clear();
     this.#unacked.clear();
-    this.#handOutCounter = 0;
     this.#handOuts.clear();
     this.#handOutTokens.clear();
   }
@@ -170,14 +171,18 @@ export class DeliveryRegistry {
     const key = seqs.join(",");
     const known = this.#handOutTokens.get(key);
     if (known !== undefined) return known;
-    this.#handOutCounter += 1;
-    this.#handOuts.set(this.#handOutCounter, [...seqs]);
-    this.#handOutTokens.set(key, this.#handOutCounter);
+    // Random, not sequential: a token is the one proof of receipt, so a caller
+    // that edits its cursor must not be able to guess another reader's unspent
+    // token by trying a neighbour (2^48 values, at most MAX_HAND_OUT_TOKENS live).
+    let token = randomInt(1, HAND_OUT_TOKEN_SPACE);
+    while (this.#handOuts.has(token)) token = randomInt(1, HAND_OUT_TOKEN_SPACE);
+    this.#handOuts.set(token, [...seqs]);
+    this.#handOutTokens.set(key, token);
     if (this.#handOuts.size > MAX_HAND_OUT_TOKENS) {
       const oldest = this.#handOuts.keys().next().value;
       if (oldest !== undefined) this.#spend(oldest);
     }
-    return this.#handOutCounter;
+    return token;
   }
 
   #spend(token: number): readonly number[] | undefined {
