@@ -567,8 +567,8 @@ export const CHANNEL_MAX_RETRIES = 5;
 export const CHANNEL_RETRY_DELAY_MS = 2_000;
 
 // Channel shim per-request timeouts. Mirror the monitor pattern (#364) so a
-// half-open Tandem server can't wedge `tandem_reply`
-// or the event-bridge SSE handshake / awareness / mode / error-report POSTs.
+// half-open Tandem server can't wedge `tandem_reply` or the event-bridge SSE
+// handshake / awareness / mode / error-report POSTs.
 // Intentionally separate constants per endpoint so a slow endpoint doesn't
 // hold up a faster one — and so log lines name a meaningful threshold.
 export const CHANNEL_CONNECT_FETCH_TIMEOUT_MS = 10_000; // /api/events handshake
