@@ -172,7 +172,10 @@ deactivate`, deletes the license from this device (#1943). It is local only:
 nothing is sent and no seat is released anywhere. Activate the same key again any
 time from the email it came in, unless the key was already failing its check on
 this version, in which case activation refuses it too. Tandem says so before you
-confirm.
+confirm. Settings offers it for a license file that fails its check as well,
+including before v1.0 while licensing is not enforced (a beta key from before
+the 2026-10-20 key change, say), so the desktop app, which has no
+`tandem deactivate`, can remove one without deleting it by hand.
 
 ## The thing we most want to avoid
 
@@ -675,10 +678,14 @@ Worth stating plainly, because they look like bugs:
   The signed license is the only hard gate; the trial is a courtesy.
 - **The grace period is no stronger than the trial clock** (#2231). Deleting
   `license.json` and restoring the same bytes keeps its date; deleting
-  `license-grace.json`, swapping in a different broken licence file, or an
-  app-data folder Tandem cannot write to re-grants it, just as deleting
-  `trial.json` re-grants a trial. A write failure fails open on purpose: it
-  must never refuse a paying customer.
+  `license-grace.json`, swapping in a different broken licence file, a clock
+  set behind the recorded date, or an app-data folder Tandem cannot write to
+  re-grants it, just as deleting `trial.json` re-grants a trial. #2231 asked
+  that deleting Tandem's own state file must not reset the first-failure
+  date; that requirement is deliberately not met (ADR-040's 2026-10-28
+  amendment says why). A write failure fails open on purpose: it must never
+  refuse a paying customer, and neither may a clock running behind, so a
+  recorded date ahead of the clock is never overwritten.
 - **A refund does not stop the software running.** It can't — activation is
   air-gapped by design. Consumer law obliges returning money, not technical
   revocability. What a full refund or a chargeback stops is updates: the Worker tombstones that
