@@ -36,6 +36,7 @@ import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awarene
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
+import { describeIssues } from "../../src/server/mcp/inbox-log-format.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -282,7 +283,8 @@ describe("C: a malformed record is left out, not the whole poll", () => {
   it("logs no record content and no unprintable id", async () => {
     const stderr = captureStderr();
     const doc = openDoc("hard-c-log", "Log document text", { active: true });
-    // An enum mismatch: zod's MESSAGE for it quotes the received value.
+    // An enum mismatch, end to end. zod 4's message for it does not quote the
+    // value, so the not-logged-message half is pinned by the next test.
     userComment(doc, "id with <spaces>", { status: "SECRET-STATUS-TEXT" });
 
     const data = await poll();
@@ -290,10 +292,22 @@ describe("C: a malformed record is left out, not the whole poll", () => {
     const line = stderr().find((l) => l.includes("left out a malformed"));
     expect(line).toBeDefined();
     expect(line).toContain("(unprintable)");
-    expect(line).toContain("status invalid_enum_value");
+    expect(line).toContain("status invalid_value");
     expect(line).not.toContain("SECRET-STATUS-TEXT");
     expect(line).not.toContain("<spaces>");
     expect(JSON.stringify(data)).not.toContain("SECRET-STATUS-TEXT");
+  });
+
+  it("describes issues by path and code only, never the message or an unprintable segment", () => {
+    const line = describeIssues([
+      {
+        code: "custom",
+        path: ["content", "SECRET <path>", Symbol("SECRET-SYMBOL"), 3],
+        message: "received SECRET-MESSAGE-TEXT",
+        input: "SECRET-INPUT",
+      },
+    ]);
+    expect(line).toBe("content.?.?.3 custom");
   });
 
   it("logs a still-malformed record again once it is edited", async () => {

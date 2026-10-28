@@ -1,8 +1,8 @@
 /**
  * Strip the JSON Schema dialect declaration from `tools/list` (#1564).
  *
- * The MCP SDK converts every `inputSchema` and `outputSchema` with
- * `zod-to-json-schema` at its **default target**, which stamps
+ * The MCP SDK converts every `inputSchema` and `outputSchema` with zod 4's
+ * `toJSONSchema` at its **default target** (draft-07), which stamps
  * `"$schema": "http://json-schema.org/draft-07/schema#"` on the root of each
  * one. Claude Code's MCP client validates advertised output schemas as JSON
  * Schema **2020-12 only** and rejects a tool that declares any other dialect —
@@ -40,7 +40,8 @@
  * every emitted schema and fails on the keywords whose meaning actually moved
  * between draft-07 and 2020-12 (array-form `items`, `additionalItems`,
  * `dependencies`, and a `$ref` with validation siblings). Today there are none:
- * the 19 `$ref`s we emit are bare same-document pointers.
+ * zod 4 inlines a reused schema rather than pointing at it, so the `$ref`s
+ * zod 3 emitted are gone.
  *
  * ## Why input schemas too, when only output schemas were rejected
  *
@@ -55,7 +56,7 @@
  * The conversion happens inside the SDK's own `tools/list` handler, from zod
  * shapes it holds privately, at list time — there is no seam before it, and no
  * public option reaches it: `toJsonSchemaCompat` accepts a `target`, but
- * `mcp.js` never passes one and the zod-v3 branch ignores it anyway. The
+ * `mcp.js` never passes one. The
  * handler map is the one place the finished result can be intercepted without
  * reimplementing the listing (and thereby silently dropping `title`,
  * `annotations`, `execution`, `_meta`, or the `enabled` filter on the next SDK
@@ -88,8 +89,8 @@ const LIST_TOOLS_METHOD: string = ListToolsRequestSchema.shape.method.value;
 /**
  * Recursively remove every `$schema` key.
  *
- * Recursive rather than root-only: `zod-to-json-schema` emits it at the root
- * today, but its `definitions` bucket is a plausible second home, and a nested
+ * Recursive rather than root-only: the converter emits it at the root today,
+ * but its `definitions` bucket is a plausible second home, and a nested
  * declaration would be rejected by the same validator for the same reason.
  * Nothing in a `tools/list` result is user data — it is schemas and strings —
  * so there is no value-shaped `$schema` to preserve.

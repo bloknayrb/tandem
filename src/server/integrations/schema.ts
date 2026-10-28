@@ -180,7 +180,7 @@ export const IntegrationConfigSchema = z
     if (val.kind === "other-mcp" && val.transport === "http") {
       if (val.url === undefined || val.url.length === 0) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["url"],
           message: "url is required when transport is http",
         });

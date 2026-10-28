@@ -38,10 +38,19 @@ const FlatRangeSchema = z.object({
   to: z.number().describe("Flat text offset (exclusive)"),
 });
 
-/** CRDT-anchored range. The rel positions are opaque serialized Y.js values. */
+/**
+ * CRDT-anchored range. The rel positions are opaque serialized Y.js values.
+ *
+ * `.optional()` is explicit because zod 4 no longer treats a bare `z.unknown()`
+ * as key-optional: without it both keys land in the advertised `required`. The
+ * server-side `safeParse` would reject a MISSING key too, but it accepts a key
+ * present as `undefined`, which `JSON.stringify` then drops, so a record the
+ * inbox's malformed-record filter lets through would fail the whole tool call
+ * in the client. zod 3 left them out of `required`; this keeps that contract.
+ */
 const RelativeRangeSchema = z.object({
-  fromRel: z.unknown().describe("Opaque serialized Y.js RelativePosition"),
-  toRel: z.unknown().describe("Opaque serialized Y.js RelativePosition"),
+  fromRel: z.unknown().optional().describe("Opaque serialized Y.js RelativePosition"),
+  toRel: z.unknown().optional().describe("Opaque serialized Y.js RelativePosition"),
 });
 
 /** Annotation types that may ever reach Claude-facing payloads (ADR-027: never "note"). */

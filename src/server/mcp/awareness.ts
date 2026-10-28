@@ -31,6 +31,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
+import { describeIssues, printableId } from "./inbox-log-format.js";
 import {
   checkInboxOutputShape,
   inboxChatMessageSchema,
@@ -581,33 +582,6 @@ const INBOX_BUCKET_SCHEMAS = {
 const checkInboxOutputSchema = z.object(checkInboxOutputShape);
 
 /**
- * What an id or a zod path segment must look like to be printed. Anything else
- * prints as a placeholder: a record id is client-written, and a log line is no
- * place for whatever a client chose to put in one.
- */
-const PRINTABLE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
-
-function printableId(id: unknown): string {
-  return typeof id === "string" && PRINTABLE_ID.test(id) ? JSON.stringify(id) : "(unprintable)";
-}
-
-/**
- * Zod issues as `path code` pairs ONLY (PR #2225 review). Never `issue.message`,
- * `.format()` or the value: a message can quote the received value, and the
- * record can be a user's text.
- */
-function describeIssues(issues: readonly z.ZodIssue[]): string {
-  return issues
-    .map((issue) => {
-      const path = issue.path
-        .map((seg) => (typeof seg === "number" || PRINTABLE_ID.test(seg) ? String(seg) : "?"))
-        .join(".");
-      return `${path || "(root)"} ${issue.code}`;
-    })
-    .join(", ");
-}
-
-/**
  * Drop log lines already written, keyed `(scope, id, editedAt)`, so a record
  * that stays malformed is logged once per process rather than on every poll —
  * an edit re-logs it. Bounded: past the cap it starts over, which costs a
@@ -620,7 +594,7 @@ function logInboxDrop(
   scope: string,
   what: string,
   item: { id?: unknown; editedAt?: unknown },
-  issues: readonly z.ZodIssue[],
+  issues: readonly z.core.$ZodIssue[],
 ): void {
   const key = `${scope}\u0000${String(item.id)}\u0000${String(item.editedAt)}`;
   if (loggedInboxDrops.has(key)) return;

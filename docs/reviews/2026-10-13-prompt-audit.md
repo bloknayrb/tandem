@@ -155,7 +155,7 @@ Also on the way through: the channel shim F3 (`annotation:edited`) and F4 (autho
 - **Tests:**
   - `tests/docs/tool-count-drift.test.ts`: drop `DEPRECATED_STUBS` and its test. The sentence becomes "All 30 MCP tools (28 active, 2 shipped dark)" in source, with 28 exposed.
   - `tests/server/mcp-schema-dialect.test.ts:191`: `toBe(33)` becomes `toBe(30)`.
-  - `tests/server/mcp-tool-integration.test.ts`: delete the stub `it.each` (~690-718). **Convert, do not delete,** the `directedAt` case (~720-733) into "an extra `directedAt` is ignored and the comment is created". That keeps the zod strip-unknown behaviour pinned: SDK 1.31 with zod 3.25, and no `.strict()` in `src/server/mcp`. A future switch to strict then fails CI, not just the manual check.
+  - `tests/server/mcp-tool-integration.test.ts`: delete the stub `it.each` (~690-718). **Convert, do not delete,** the `directedAt` case (~720-733) into "an extra `directedAt` is ignored and the comment is created". That keeps the zod strip-unknown behaviour pinned: SDK 1.31 with zod 3.25, and no `.strict()` in `src/server/mcp`. (Later note: still strip-unknown after the move to zod 4 with #2098.) A future switch to strict then fails CI, not just the manual check.
   - `tests/e2e/activity-tray.spec.ts:89-102`: change the fixture message "Your AI tried a deprecated tool." to something neutral. The test does not depend on it, but the message implies the path still exists.
   - `tests/server/edit-annotation.test.ts`: delete the `directedAt` case (~290-302) and fix the comment at ~306-307.
   - `tests/server/license-gate-coverage.test.ts` has **no** stub rows any more; nothing to do there.
