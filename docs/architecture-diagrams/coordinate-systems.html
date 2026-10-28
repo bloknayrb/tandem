@@ -5127,15 +5127,15 @@
           <text data-detail="context" x="745" y="165" class="t-muted" font-size="7" text-anchor="middle">Y.Doc broadcast</text>
         </g>
 
-        <g id="node-reanchor" data-node-id="reanchor" data-node-label="reanchorAnnotations()" tabindex="0" role="button" aria-label="Focus reanchorAnnotations(), on load/reload, 04 / CRDT Sync + Reload" aria-pressed="false" data-node-kind="backend" data-node-sublabel="on load/reload" data-node-context="04 / CRDT Sync + Reload">
-          <title>reanchorAnnotations() · on load/reload · 04 / CRDT Sync + Reload</title>
+        <g id="node-reanchor" data-node-id="reanchor" data-node-label="applyRemap()" tabindex="0" role="button" aria-label="Focus applyRemap(), on reload, 04 / CRDT Sync + Reload" aria-pressed="false" data-node-kind="backend" data-node-sublabel="on reload" data-node-context="04 / CRDT Sync + Reload">
+          <title>applyRemap() · on reload · 04 / CRDT Sync + Reload</title>
           <rect x="660" y="242" width="170" height="58" rx="6" class="c-mask"/>
           <rect x="660" y="242" width="170" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(666 248) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">reanchorAnnotations()</text>
-          <text data-detail="context" x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">on load/reload</text>
+          <text data-node-label="" data-detail-anchor="" x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">applyRemap()</text>
+          <text data-detail="context" x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">on reload</text>
         </g>
 
         <g id="node-getAnnotations" data-node-id="getAnnotations" data-node-label="tandem_getAnnotations" tabindex="0" role="button" aria-label="Focus tandem_getAnnotations, resolved | degraded | failed, 05 / Read-back" aria-pressed="false" data-node-kind="external" data-node-sublabel="resolved | degraded | failed" data-node-context="05 / Read-back">
@@ -5453,7 +5453,7 @@
           <h3>Re-anchoring On Reload</h3>
         </div>
         <ul>
-          <li>&bull; reanchorAnnotations() resolves each RelativePosition after Y.Doc load/reload</li>
+          <li>&bull; applyRemap() carries every annotation across a content-replacing reload by line diff, inside the same transaction (#2269)</li>
           <li>&bull; The editor reads annotations straight from the synced Y.Map; tandem_getAnnotations is the AI&#39;s read path, not the client&#39;s</li>
           <li>&bull; A stale or unresolvable RelativePosition cannot be resolved back to an offset</li>
           <li>&bull; tandem_getAnnotations surfaces that outcome as anchor: &quot;degraded&quot; (or &quot;failed&quot; for an inverted CRDT range)</li>

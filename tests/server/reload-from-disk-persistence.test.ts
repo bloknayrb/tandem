@@ -152,7 +152,7 @@ function seedAnnotationOnText(doc: Y.Doc, snapshot: string, content: string): st
 }
 
 describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
-  it("Test B: reload runs ≥2 RELOAD_ORIGIN transactions; ≥1 touches Y_MAP_ANNOTATIONS", async () => {
+  it("Test B: reload is ONE RELOAD_ORIGIN transaction touching both the content and Y_MAP_ANNOTATIONS", async () => {
     const { doc, filePath, triggerReload } = await setupOpenedFile("Hello world foo bar");
 
     // Seed an annotation on "foo" so the relocation pass has work to do.
@@ -171,21 +171,18 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
       detach();
     }
 
-    const reloadRecords = records;
-    expect(reloadRecords.length).toBeGreaterThanOrEqual(2);
+    const reloadRecords = records.filter((r) => r.origin === RELOAD_ORIGIN);
 
-    // First transaction: RELOAD_ORIGIN — content + awareness clear (ADR-031).
-    const first = reloadRecords[0];
-    expect(first.origin).toBe(RELOAD_ORIGIN);
-
-    // At least one RELOAD_ORIGIN transact must mutate the annotations Y.Map
-    // (the relocation pass). Using ref-equality on the map instance, NOT
-    // constructor.name (all YMap variants share name).
+    // #2269: the annotation remap runs INSIDE the content swap's transaction,
+    // so there is exactly one RELOAD_ORIGIN transaction (ADR-031), and it
+    // writes the fragment and the annotations map together. Ref-equality on the
+    // types, NOT constructor.name (all YMap variants share a name).
+    expect(reloadRecords).toHaveLength(1);
     const annMapRef = doc.getMap(Y_MAP_ANNOTATIONS);
-    const reloadAnnotationWrites = reloadRecords.filter(
-      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(asChangedKey(annMapRef)),
+    expect(reloadRecords[0].changedTypes.has(asChangedKey(annMapRef))).toBe(true);
+    expect(reloadRecords[0].changedTypes.has(asChangedKey(doc.getXmlFragment("default")))).toBe(
+      true,
     );
-    expect(reloadAnnotationWrites.length).toBeGreaterThanOrEqual(1);
 
     // Sanity: the seeded annotation still exists post-reload, and its range
     // is refreshable (proves the annotation Y.Map entry survived).
@@ -234,11 +231,10 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
   });
 
   it("Test C (#622): exactly ONE RELOAD_ORIGIN transaction writes to Y_MAP_ANNOTATIONS during reload", async () => {
-    // Closes the two-write crash window: refreshAllRanges + textSnapshot
-    // relocation are merged into a single transact via `skipTransact: true`,
-    // both wrapped in `withReload` (ADR-031). A process kill between the
-    // two passes can no longer leave annotations durably stored at
-    // partially-refreshed ranges.
+    // Closes the two-write crash window: every annotation write of the reload
+    // is one transact under `withReload` (ADR-031). Since #2269 that transact is
+    // the content swap itself, so no window exists between the new content and
+    // the remapped annotations either.
     const { doc, filePath, triggerReload } = await setupOpenedFile("Hello world foo bar baz");
 
     // Seed an annotation on "foo" so both passes have work to do (refresh +
@@ -261,12 +257,10 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
     );
 
     expect(reloadAnnotationWrites).toHaveLength(1);
-
-    // The reload's content-clearing transact also runs under RELOAD_ORIGIN
-    // (touches the XmlFragment but not Y_MAP_ANNOTATIONS) — so at least
-    // two RELOAD_ORIGIN transacts fire.
-    const reloadTxns = records.filter((r) => r.origin === RELOAD_ORIGIN);
-    expect(reloadTxns.length).toBeGreaterThanOrEqual(2);
+    // And it is the same transaction that replaced the content.
+    expect(
+      reloadAnnotationWrites[0].changedTypes.has(asChangedKey(doc.getXmlFragment("default"))),
+    ).toBe(true);
   });
 });
 
