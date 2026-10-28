@@ -13,7 +13,7 @@ import {
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
-import type { ExternalConflictState, SessionData } from "../../shared/types.js";
+import type { ChatMessage, ExternalConflictState, SessionData } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
@@ -907,6 +907,30 @@ export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   const state = Buffer.from(base64State, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
   foldChatStream(doc);
+  clearChatDelivered(doc);
+}
+
+/**
+ * Drop every chat row's `delivered` stamp on restore (#2064). It says "a cursor
+ * poll handed this out in THIS process", and the editor's pickup row reads it as
+ * "your AI has your message". Restored, it would claim that of a message no
+ * running model has — the delivery registry it described is gone — so the row
+ * would never say "waiting" and the Claude Code offer would never show. `read`
+ * is kept: it is the inbox's own durable state.
+ */
+function clearChatDelivered(doc: Y.Doc): void {
+  const chatMap = doc.getMap(Y_MAP_CHAT);
+  const stale: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value === "object" && value !== null && "delivered" in value) stale.push(key);
+  });
+  if (stale.length === 0) return;
+  withInternal(doc, () => {
+    for (const key of stale) {
+      const { delivered: _delivered, ...rest } = chatMap.get(key) as ChatMessage;
+      chatMap.set(key, rest);
+    }
+  });
 }
 
 /**

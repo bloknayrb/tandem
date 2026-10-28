@@ -358,7 +358,7 @@ describe("the editor's pickup row counts a handed-out message as picked up", () 
 });
 
 describe("a reply to the latest message of a batch answers the rest of it", () => {
-  it("another session is not handed the earlier message again, and it is stamped read", async () => {
+  it("another session is not handed an earlier message the answering session acknowledged", async () => {
     const b0 = (await poll({ cursor: "start" })).cursor;
     userChat("msg_b1", 10);
     userChat("msg_b2", 11);
@@ -368,12 +368,71 @@ describe("a reply to the latest message of a batch answers the rest of it", () =
       name: "tandem_reply",
       arguments: { text: "both done", replyTo: "msg_b2" },
     });
-    // A never polls again. B is not handed msg_b1 to answer a second time.
+    // A acknowledges, then stops polling. B is not handed msg_b1 to answer again.
+    expect((await poll({ cursor: a.cursor })).chatMessages).toEqual([]);
     expect((await poll({ cursor: b0 })).chatMessages).toEqual([]);
-    expect((await poll({ cursor: "start" })).chatMessages).toEqual([]);
-    expect((chatMap().get("msg_b1") as ChatMessage).read).toBe(true);
-    // …nor a cursor-less caller.
-    expect((await poll()).chatMessages).toEqual([]);
+  });
+
+  it("an earlier message nobody acknowledged is re-delivered — a duplicate, not a loss", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_k1", 12);
+    userChat("msg_k2", 13);
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual([
+      "msg_k1",
+      "msg_k2",
+    ]);
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "re k2", replyTo: "msg_k2" },
+    });
+    // A never polls again.
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_k1"]);
+    expect((chatMap().get("msg_k1") as ChatMessage).read).toBe(false);
+  });
+
+  it("a response lost in transit loses nothing to a batch reply from a session that saw only the latest", async () => {
+    // B is caught up; the user sends two messages.
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_l1", 14);
+    userChat("msg_l2", 15);
+    // B's poll validates (both stamped `delivered`) but the response is lost.
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual([
+      "msg_l1",
+      "msg_l2",
+    ]);
+    expect((chatMap().get("msg_l1") as ChatMessage).delivered).toBe(true);
+    // A got only msg_l2, by push, and answers it.
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "re l2", replyTo: "msg_l2" },
+    });
+    // No model ever had msg_l1: B's retry, a cursor-less caller and a fresh one all get it.
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_l1"]);
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual(["msg_l1"]);
+    expect((chatMap().get("msg_l1") as ChatMessage).read).toBe(false);
+    expect((await poll()).chatMessages.map((m) => m.id)).toEqual(["msg_l1"]);
+  });
+
+  it("the same across a restart: a `delivered` stamp from before it answers nothing", async () => {
+    userChat("msg_m1", 16);
+    userChat("msg_m2", 17);
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual([
+      "msg_m1",
+      "msg_m2",
+    ]);
+    // Restart without the restore sweep: the stamps survive, the registry does not.
+    resetInbox();
+    expect((chatMap().get("msg_m1") as ChatMessage).delivered).toBe(true);
+    // A fresh session's response is lost, and A answers msg_m2 from a push.
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual([
+      "msg_m1",
+      "msg_m2",
+    ]);
+    await client.callTool({
+      name: "tandem_reply",
+      arguments: { text: "re m2", replyTo: "msg_m2" },
+    });
+    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual(["msg_m1"]);
   });
 
   it("never answers a message no reader had been handed", async () => {
@@ -407,7 +466,10 @@ describe("a reply to the latest message of a batch answers the rest of it", () =
     const a = await poll({ cursor: "start" });
     expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_e2"]);
     userChat("msg_e1", 35);
-    expect((await poll({ cursor: a.cursor })).chatMessages.map((m) => m.id)).toEqual(["msg_e1"]);
+    const a2 = await poll({ cursor: a.cursor });
+    expect(a2.chatMessages.map((m) => m.id)).toEqual(["msg_e1"]);
+    // A acknowledges both, so only the hand-out order keeps msg_e1 out.
+    await poll({ cursor: a2.cursor });
     await client.callTool({ name: "tandem_reply", arguments: { text: "done", replyTo: "msg_e2" } });
     expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_e1"]);
   });
@@ -416,10 +478,9 @@ describe("a reply to the latest message of a batch answers the rest of it", () =
     const b0 = (await poll({ cursor: "start" })).cursor;
     userChat("msg_f1", 50);
     userChat("msg_f2", 51);
-    expect((await poll({ cursor: "start" })).chatMessages.map((m) => m.id)).toEqual([
-      "msg_f1",
-      "msg_f2",
-    ]);
+    const a = await poll({ cursor: "start" });
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_f1", "msg_f2"]);
+    await poll({ cursor: a.cursor }); // A acknowledges both.
     await client.callTool({
       name: "tandem_reply",
       arguments: { text: "first", replyTo: "msg_f1" },

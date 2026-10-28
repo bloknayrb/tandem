@@ -702,8 +702,10 @@ export interface ChatMessage {
    * Set (by the server, `withMcp`) on a user message the moment a cursor poll
    * hands it out in a validated response — before any acknowledgement. Means
    * "some reader has it", which is what the pickup row and the Claude Code
-   * offer ask. Never consulted for re-delivery: that is `read` and the cursor.
-   * Only ever `true` or absent.
+   * offer ask. Never consulted for re-delivery (that is `read` and the cursor)
+   * nor for which messages a reply answers (that needs an acknowledgement: a
+   * response can validate and still be lost). Dropped when the CTRL session is
+   * restored (`restoreCtrlDoc`). Only ever `true` or absent.
    */
   delivered?: true;
   /**

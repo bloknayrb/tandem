@@ -324,12 +324,9 @@ export function appendClaudeChatMessage(
  * replies to every chat in Tandem mode: stamping on its behalf would hide every
  * message from Claude's inbox the moment `BYO_MODELS_ENABLED` flips.
  *
- * The reply also settles the earlier messages of the same batch that some reader
- * had already been handed ({@link answeredBy}): `CHAT_ACK_DIRECTIVE` tells Claude
- * to reply only to the latest, and without this the rest stayed unread — repeated
- * to every cursor-less or fresh reader — whenever the answering session never
- * polled again to acknowledge them. All of it is stamped in ONE `withMcp`
- * transaction.
+ * Only the named message is stamped. The earlier messages of its batch that a
+ * reply also answers ({@link answeredBy}) are, by that rule, ones some reader
+ * already acknowledged, and an acknowledgement stamps `read` itself.
  *
  * Only an unread USER message is touched; an unknown id, a Claude row or an
  * already-read one writes nothing.
@@ -343,7 +340,7 @@ export function markUserChatRead(messageId: string): boolean {
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
   const target = chatMap.get(messageId) as ChatMessage | undefined;
   if (target?.author !== "user") return false;
-  stampUserChat(answeredBy(chatMap, messageId, handedOutChat(chatMap)), "read");
+  stampUserChat([messageId], "read");
   return true;
 }
 
@@ -1494,29 +1491,31 @@ function collectUnreadChat(): UnreadChat {
   };
 }
 
-/** A user chat message some reader has been handed, with its place in the hand-out order. */
-interface HandedOutChat {
+/** A user chat message some reader acknowledged, with its place in the hand-out order. */
+interface AcknowledgedChat {
   key: string;
   seq: number;
   timestamp: number;
 }
 
 /**
- * User chat already handed to some reader in a validated response — `read`
- * (cursor-less return, acknowledgement, or a direct `replyTo`) or `delivered`
- * (a cursor poll) — that still has a live registry entry, so it has a place in
- * the hand-out order. A message whose seq was assigned by a poll that then
- * failed validation carries neither stamp, so it is not here.
+ * User chat some reader ACKNOWLEDGED — its registry entry is `acked`: a cursor
+ * poll that passed it back, or a cursor-less poll's return — so some model
+ * demonstrably had it. NOT `delivered`, which is stamped when a response
+ * validates, not when it arrives: a response lost in transit leaves its
+ * messages `delivered`, and counting those would let a reply to the batch's
+ * latest message, from a session that got only that one by push, settle an
+ * earlier message no model ever had. Nor a persisted stamp: after a restart
+ * the registry is empty, so nothing here.
  */
-function handedOutChat(chatMap: Y.Map<unknown>): HandedOutChat[] {
-  const out: HandedOutChat[] = [];
+function acknowledgedChat(chatMap: Y.Map<unknown>): AcknowledgedChat[] {
+  const out: AcknowledgedChat[] = [];
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
-    if (msg.author !== "user" || !(msg.read || msg.delivered === true)) return;
-    if (typeof msg.timestamp !== "number") return;
+    if (msg.author !== "user" || typeof msg.timestamp !== "number") return;
     const entry = deliveryRegistry.lookup("c", key, 0);
-    if (entry) out.push({ key, seq: entry.seq, timestamp: msg.timestamp });
+    if (entry?.acked) out.push({ key, seq: entry.seq, timestamp: msg.timestamp });
   });
   return out;
 }
@@ -1526,20 +1525,23 @@ function handedOutChat(chatMap: Y.Map<unknown>): HandedOutChat[] {
  * target itself, plus — because `CHAT_ACK_DIRECTIVE` tells Claude to reply only
  * to the LATEST of a batch — every user message handed out at or before the
  * target's own hand-out (seq at or below its seq; seqs are assigned oldest
- * first within a poll) that is no newer than it. Never one no reader has been
- * handed (`handedOutChat`), so a reply can only settle what some session had in
- * hand. A target with no registry entry (pushed, never polled) answers only
- * itself. After a restart the registry is empty, so only the target counts.
+ * first within a poll), no newer than it, that some reader has acknowledged
+ * (`acknowledgedChat`). An earlier message nobody acknowledged stays owed: if
+ * the answering session never polls again it is re-delivered — a duplicate,
+ * never a loss. A target with no registry entry (pushed, never polled) answers
+ * only itself.
  */
 function answeredBy(
   chatMap: Y.Map<unknown>,
   target: string,
-  handed: readonly HandedOutChat[],
+  acknowledged: readonly AcknowledgedChat[],
 ): string[] {
   const entry = deliveryRegistry.lookup("c", target, 0);
   const ts = (chatMap.get(target) as Partial<ChatMessage> | undefined)?.timestamp;
   if (!entry || typeof ts !== "number") return [target];
-  const batch = handed.filter((h) => h.seq <= entry.seq && h.timestamp <= ts).map((h) => h.key);
+  const batch = acknowledged
+    .filter((h) => h.seq <= entry.seq && h.timestamp <= ts)
+    .map((h) => h.key);
   return [target, ...batch];
 }
 
@@ -1561,9 +1563,9 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
   });
   const answered = new Set<string>();
   if (targets.size === 0) return answered;
-  const handed = handedOutChat(chatMap);
+  const acknowledged = acknowledgedChat(chatMap);
   for (const target of targets) {
-    for (const key of answeredBy(chatMap, target, handed)) answered.add(key);
+    for (const key of answeredBy(chatMap, target, acknowledged)) answered.add(key);
   }
   return answered;
 }

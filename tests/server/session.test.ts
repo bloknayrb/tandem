@@ -537,6 +537,42 @@ describe("Session persistence", () => {
       expect(restoredMeta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH)).toBeUndefined();
     });
 
+    it("drops a chat row's `delivered` stamp on restore and keeps `read` (#2064)", async () => {
+      const ctrlDoc = new Y.Doc();
+      const chat = ctrlDoc.getMap(Y_MAP_CHAT);
+      chat.set("msg_d", {
+        id: "msg_d",
+        author: "user",
+        text: "handed out before the restart",
+        timestamp: 12345,
+        read: false,
+        delivered: true,
+      });
+      chat.set("msg_r", {
+        id: "msg_r",
+        author: "user",
+        text: "acked",
+        timestamp: 12346,
+        read: true,
+      });
+
+      await saveCtrlSession(ctrlDoc);
+      const restored = new Y.Doc();
+      const savedState = await loadCtrlSession();
+      expect(savedState).not.toBeNull();
+      restoreCtrlDoc(restored, savedState!);
+
+      const restoredChat = restored.getMap(Y_MAP_CHAT);
+      expect(restoredChat.get("msg_d")).toEqual({
+        id: "msg_d",
+        author: "user",
+        text: "handed out before the restart",
+        timestamp: 12345,
+        read: false,
+      });
+      expect((restoredChat.get("msg_r") as { read: boolean }).read).toBe(true);
+    });
+
     it("round-trips ctrl doc with only chat (no stale metadata)", async () => {
       const ctrlDoc = new Y.Doc();
       const chat = ctrlDoc.getMap(Y_MAP_CHAT);
