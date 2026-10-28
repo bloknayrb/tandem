@@ -163,7 +163,13 @@ describe("dark: every admission point admits (#1521)", () => {
     // (`darkInstallInfo`); it must not start a grace clock either.
     const res = await fetch(`http://127.0.0.1:${port}/api/license/status`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ gateActive: false, licenseInstalled: false });
+    // …and says the file is there but would not verify, so Settings can offer
+    // Remove license for it (#1943 review).
+    expect(await res.json()).toMatchObject({
+      gateActive: false,
+      licenseInstalled: false,
+      licenseFileUnverifiable: true,
+    });
     expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(false);
   });
 

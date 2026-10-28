@@ -614,6 +614,11 @@ describe("dark-build wire shape", () => {
       licenseeEmail: "jane@example.com",
     });
     expect(installed).toMatchObject({ licenseInstalled: true, licenseeEmail: "jane@example.com" });
+    expect(installed).not.toHaveProperty("licenseFileUnverifiable");
+
+    // A file that would not verify (#1943 review): flagged, loopback only.
+    const failing = toLicenseStatusWire(dark, { installed: false, licenseFileUnverifiable: true });
+    expect(failing).toMatchObject({ licenseInstalled: false, licenseFileUnverifiable: true });
   });
 
   it("keeps the back-compat sentinel so the updater and client are unchanged", () => {
@@ -627,6 +632,7 @@ describe("dark-build wire shape", () => {
   it("never puts the licensee email on the LAN-scrubbed path", () => {
     const scrubbed = scrubForNonLoopback({ gateActive: false });
     expect(scrubbed).not.toHaveProperty("licenseeEmail");
+    expect(scrubbed).not.toHaveProperty("licenseFileUnverifiable");
     expect(typeof scrubbed.licenseInstalled).toBe("boolean");
   });
 });

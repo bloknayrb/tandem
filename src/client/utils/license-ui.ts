@@ -62,6 +62,12 @@ export interface LicenseStatusResponse {
   /** Dark-build only, loopback only. Email from the installed license (it carries no name). */
   licenseeEmail?: string;
   /**
+   * Dark-build only, loopback only (#1943 review): a licence file is on disk
+   * but would not verify once the gate is on. Like `licenseInstalled`, never a
+   * gate signal; it only lets Settings offer Remove license for that file.
+   */
+  licenseFileUnverifiable?: boolean;
+  /**
    * Loopback only. Would an npm-installed `tandem activate` write where the
    * server that answered this actually reads? Gates the Settings → License CLI
    * hint (#1789). Absent on the LAN-scrubbed payload and on any server too old

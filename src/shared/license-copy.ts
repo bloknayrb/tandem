@@ -287,7 +287,17 @@ export function licenseKeyReactivatable(code: LicenseUnverifiableCode | undefine
 export function licenseRemovalConsequence(input: {
   gateActive: boolean;
   licenseUnverifiable?: LicenseUnverifiableCode;
+  /** Dark build only: the file on disk would not verify once the gate is on. */
+  darkFileUnverifiable?: boolean;
 }): string {
+  if (!input.gateActive && input.darkFileUnverifiable) {
+    // No purchase URL: the reader most likely paid (decision 8).
+    return (
+      "Licensing isn't enforced in this version, so nothing changes now. This license file " +
+      "doesn't pass Tandem's check, so it wouldn't work at v1.0 as it is. If you were sent a " +
+      `newer key, activate that one; otherwise email ${TANDEM_SUPPORT_EMAIL}.`
+    );
+  }
   if (!input.gateActive) {
     return (
       "Licensing isn't enforced in this version, so nothing changes now — but this key will " +

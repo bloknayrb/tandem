@@ -18,7 +18,7 @@ import { render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
-import { TANDEM_SUPPORT_EMAIL } from "../../src/shared/constants";
+import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../src/shared/constants";
 
 // Set BEFORE mount — the tab captures it once at init, which is the point of
 // the fix (the runtime never changes under a live component).
@@ -406,6 +406,11 @@ describe("Settings → License — Remove license (#1943)", () => {
       { ...LICENSED, gateActive: false, licenseInstalled: false },
       false,
     ],
+    [
+      "a dark build with a licence file that would not verify",
+      { ...LICENSED, gateActive: false, licenseInstalled: false, licenseFileUnverifiable: true },
+      true,
+    ],
   ] as const)("%s ⇒ section shown: %s", (_label, state, shown) => {
     licenseStore.set(state as LicenseStatusResponse);
     const { container, unmount } = render(SettingsLicenseTab, { props: makeProps() });
@@ -452,6 +457,23 @@ describe("Settings → License — Remove license (#1943)", () => {
     const text = flat(byTestId(container, "license-remove-confirm"));
     expect(text).toContain("nothing changes now");
     expect(text).not.toContain("AI features will turn off");
+  });
+
+  it("on a dark build with a failing file, promises neither v1.0 use nor a purchase", async () => {
+    licenseStore.set({
+      ...LICENSED,
+      gateActive: false,
+      licenseInstalled: false,
+      licenseFileUnverifiable: true,
+    });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const text = flat(byTestId(container, "license-remove-confirm"));
+    expect(text).toContain("nothing changes now");
+    expect(text).toContain("wouldn't work at v1.0");
+    expect(text).not.toContain("will be needed at v1.0");
+    expect(text).not.toContain(TANDEM_PURCHASE_URL);
   });
 
   it("confirming removes, notifies and re-polls", async () => {

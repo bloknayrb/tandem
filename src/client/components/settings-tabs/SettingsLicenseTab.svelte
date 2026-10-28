@@ -70,11 +70,14 @@ const inGrace = $derived(status?.gateActive === true && status.status === "grace
 const graceEndsOn = $derived(status?.grace ? formatGraceEndDate(status.grace.endsAt) : "");
 
 // #1943: "Remove license". Shown whenever there is a licence file to remove:
-// a dark build says so with `licenseInstalled`; an armed one with the licensed
-// status or an unverifiable code (grace included).
+// a dark build says so with `licenseInstalled` (it verifies) or
+// `licenseFileUnverifiable` (it does not — desktop has no `tandem deactivate`,
+// so this button is the only route short of deleting it by hand); an armed one
+// with the licensed status or an unverifiable code (grace included).
 const canRemove = $derived(
   status != null &&
     (status.licenseInstalled === true ||
+      (gateDark && status.licenseFileUnverifiable === true) ||
       (status.gateActive &&
         (status.status === "licensed" || status.licenseUnverifiable !== undefined))),
 );
@@ -85,6 +88,7 @@ const removeConsequence = $derived(
   licenseRemovalConsequence({
     gateActive: status?.gateActive === true,
     licenseUnverifiable: status?.licenseUnverifiable,
+    darkFileUnverifiable: gateDark && status?.licenseFileUnverifiable === true,
   }),
 );
 let removeConfirming = $state(false);

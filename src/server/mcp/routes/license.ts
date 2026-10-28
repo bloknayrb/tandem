@@ -39,7 +39,7 @@ export function toLicenseStatusWire(
    * Resolved separately (see `darkInstallInfo`) because the dark arm returns
    * before touching disk.
    */
-  darkInstall?: { installed: boolean; licenseeEmail?: string },
+  darkInstall?: DarkInstallInfo,
 ): Record<string, unknown> {
   if (!state.gateActive) {
     return {
@@ -53,9 +53,26 @@ export function toLicenseStatusWire(
       // did. The README sends every beta user down exactly that path.
       licenseInstalled: darkInstall?.installed ?? false,
       ...(darkInstall?.licenseeEmail ? { licenseeEmail: darkInstall.licenseeEmail } : {}),
+      // Loopback only, like the email: the one caller that can act on it is
+      // Settings → License's Remove button, and removal is loopback-only too.
+      ...(darkInstall?.licenseFileUnverifiable ? { licenseFileUnverifiable: true } : {}),
     };
   }
   return state;
+}
+
+/** What a dark build can say about the licence file on disk. */
+export interface DarkInstallInfo {
+  /** A licence is installed and would verify once the gate is on. */
+  installed: boolean;
+  licenseeEmail?: string;
+  /**
+   * A licence file IS on disk but would NOT verify (#1943 review): a beta
+   * tester's key from before the 2026-10-20 key rotation, or a damaged file.
+   * Not a gate signal; it lets Settings offer Remove license for it, since a
+   * desktop install has no `tandem deactivate`.
+   */
+  licenseFileUnverifiable?: true;
 }
 
 /**
@@ -66,7 +83,9 @@ export function toLicenseStatusWire(
  * called on the dark path, where the client polls once and then rests, so the
  * extra file read + Ed25519 verify is not on any hot path.
  */
-export function darkInstallInfo(): { installed: boolean; licenseeEmail?: string } {
+export function darkInstallInfo(): DarkInstallInfo {
+  // `grace` stays at its default "off": a dark build never reads or writes
+  // license-grace.json.
   const full = resolveLicenseState({
     appDataDir: resolveAppDataDir(),
     now: () => Date.now(),
@@ -74,6 +93,9 @@ export function darkInstallInfo(): { installed: boolean; licenseeEmail?: string 
   });
   if (full.gateActive && full.status === "licensed") {
     return { installed: true, licenseeEmail: full.license.email };
+  }
+  if (full.gateActive && full.licenseUnverifiable !== undefined) {
+    return { installed: false, licenseFileUnverifiable: true };
   }
   return { installed: false };
 }
