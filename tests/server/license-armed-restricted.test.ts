@@ -65,8 +65,13 @@ import { unwatchAll } from "../../src/server/file-watcher.js";
 import { defaultSubscribeDuringGap } from "../../src/server/launcher/supervisor.js";
 import { aiRefusal } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
+import { graceKeyForBlob } from "../../src/server/license/grace.js";
 import { resolveLiveLicenseState } from "../../src/server/license/license-state.js";
-import { licenseFilePath, trialFilePath } from "../../src/server/license/paths.js";
+import {
+  licenseFilePath,
+  licenseGraceFilePath,
+  trialFilePath,
+} from "../../src/server/license/paths.js";
 import { appendClaudeChatMessage } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import {
@@ -122,10 +127,33 @@ function useTrial(daysAgo: number): string {
 const useExpired = () => useTrial(30);
 const useFreshTrial = () => useTrial(1);
 
-/** Expired trial PLUS a `license.json` that fails to verify — the paying-customer refusal. */
-function useUnverifiable(): void {
+const UNVERIFIABLE_BLOB = "not-a-license";
+
+/**
+ * Expired trial PLUS a `license.json` that fails to verify, whose grace period
+ * (#2231) has also ended — the paying-customer refusal. The grace record is
+ * seeded 30 days old, keyed exactly as `resolveLicenseState` keys it.
+ */
+function useUnverifiable(): string {
   const dir = useExpired();
-  fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: "not-a-license" }));
+  fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: UNVERIFIABLE_BLOB }));
+  fs.writeFileSync(
+    licenseGraceFilePath(dir),
+    JSON.stringify({
+      version: 1,
+      entries: {
+        [graceKeyForBlob(UNVERIFIABLE_BLOB)]: new Date(Date.now() - 30 * DAY).toISOString(),
+      },
+    }),
+  );
+  return dir;
+}
+
+/** The same broken licence on an expired trial, with no grace record yet: day 0 of grace. */
+function useFreshGrace(): string {
+  const dir = useExpired();
+  fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: UNVERIFIABLE_BLOB }));
+  return dir;
 }
 
 let savedAppDataDir: string | undefined;
@@ -250,6 +278,19 @@ describe("armed and keyless (#1521)", () => {
       useFreshTrial();
       expect(aiRefusal()).toBeNull();
     });
+
+    it("admits an unverifiable licence inside its grace period, and records the first failure (#2231)", () => {
+      const dir = useFreshGrace();
+      expect(fs.existsSync(licenseGraceFilePath(dir))).toBe(false);
+      expect(aiRefusal()).toBeNull();
+      expect(resolveLiveLicenseState()).toMatchObject({
+        gateActive: true,
+        status: "grace",
+        grace: { daysRemaining: 14 },
+      });
+      const record = JSON.parse(fs.readFileSync(licenseGraceFilePath(dir), "utf-8"));
+      expect(Object.keys(record.entries)).toEqual([graceKeyForBlob(UNVERIFIABLE_BLOB)]);
+    });
   });
 
   describe("POST /mcp", () => {
@@ -269,6 +310,15 @@ describe("armed and keyless (#1521)", () => {
         purchaseUrl: TANDEM_PURCHASE_URL,
       });
       expect(hasAnyMcpSession()).toBe(false);
+    });
+
+    it("admits initialize for an unverifiable licence inside its grace period (#2231)", async () => {
+      useFreshGrace();
+      const res = await postMcp(initBody());
+      expect(res.status).toBe(200);
+      expect(res.sessionId).toBeTruthy();
+      expect(res.text).not.toContain(LICENSE_REQUIRED);
+      await closeMcpSession();
     });
 
     it("refuses an unverifiable install with no purchase URL anywhere", async () => {

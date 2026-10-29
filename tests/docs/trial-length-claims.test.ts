@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { TRIAL_DAYS } from "../../src/shared/constants.js";
+import { LICENSE_GRACE_DAYS, TRIAL_DAYS } from "../../src/shared/constants.js";
 
 /**
  * Drift guard: every human-readable statement of the trial length must equal
@@ -54,22 +54,56 @@ const TRIAL_CONTEXT = /trial|evaluat|first\s+launch/i;
 /** `14 days`, `14-day`, `14 day` — the shapes prose actually uses. */
 const DAY_COUNT = /(\d+)[\s-]+day/gi;
 
-type Claim = { file: string; days: number; excerpt: string };
+/**
+ * The licence grace period (#2231) is a second day count that shares
+ * paragraphs with the trial ("Trial — 14 days … Grace — …", the resolution
+ * flowchart), and today both are 14, so a paragraph-scoped trial check would
+ * pass on grace prose by coincidence and fail on it the day either length
+ * changes alone. A day count is a GRACE claim when its own line names the grace
+ * and not the trial; those are checked against `LICENSE_GRACE_DAYS` below
+ * instead. A line naming both stays a trial claim, the conservative reading.
+ */
+const GRACE_CONTEXT = /grace|first[\s-]+fail/i;
 
-function collectClaims(file: string): Claim[] {
+/** Files that state the grace length to a human. */
+const GRACE_CLAIM_FILES = ["docs/licensing-explained.md", "docs/licensing-terms.md"] as const;
+
+type Claim = { file: string; days: number; excerpt: string; kind: "trial" | "grace" };
+
+/** The line of `text` holding `index`. */
+function lineAt(text: string, index: number): string {
+  const start = text.lastIndexOf("\n", index) + 1;
+  const end = text.indexOf("\n", index);
+  return text.slice(start, end === -1 ? undefined : end);
+}
+
+function collectAllClaims(file: string): Claim[] {
   const text = readFileSync(path.join(ROOT, file), "utf8");
   const claims: Claim[] = [];
   for (const paragraph of text.split(/\n\s*\n/)) {
-    if (!TRIAL_CONTEXT.test(paragraph)) continue;
+    const trialParagraph = TRIAL_CONTEXT.test(paragraph);
+    if (!trialParagraph && !GRACE_CONTEXT.test(paragraph)) continue;
     for (const match of paragraph.matchAll(DAY_COUNT)) {
+      const line = lineAt(paragraph, match.index ?? 0);
+      const grace = GRACE_CONTEXT.test(line) && !TRIAL_CONTEXT.test(line);
+      if (!grace && !trialParagraph) continue;
       claims.push({
         file,
         days: Number(match[1]),
         excerpt: paragraph.replace(/\s+/g, " ").trim().slice(0, 120),
+        kind: grace ? "grace" : "trial",
       });
     }
   }
   return claims;
+}
+
+function collectClaims(file: string): Claim[] {
+  return collectAllClaims(file).filter((c) => c.kind === "trial");
+}
+
+function collectGraceClaims(file: string): Claim[] {
+  return collectAllClaims(file).filter((c) => c.kind === "grace");
 }
 
 describe("trial-length claims track TRIAL_DAYS", () => {
@@ -96,5 +130,26 @@ describe("trial-length claims track TRIAL_DAYS", () => {
     // the README makes on the licence's behalf, so the two cannot part ways.
     expect(license).toMatch(/one-time purchase/i);
     expect(license).toMatch(/before version 1\.0\.0/i);
+  });
+});
+
+describe("grace-length claims track LICENSE_GRACE_DAYS (#2231)", () => {
+  it.each(GRACE_CLAIM_FILES)("%s states the grace length at least once", (file) => {
+    expect(
+      collectGraceClaims(file).length,
+      `${file} no longer states a grace length on a line naming the grace period. ` +
+        `If that is deliberate, remove it from GRACE_CLAIM_FILES in this test and say why.`,
+    ).toBeGreaterThan(0);
+  });
+
+  it("every stated grace length equals LICENSE_GRACE_DAYS", () => {
+    const wrong = GRACE_CLAIM_FILES.flatMap(collectGraceClaims).filter(
+      (c) => c.days !== LICENSE_GRACE_DAYS,
+    );
+    expect(
+      wrong,
+      `These say a grace length that is not LICENSE_GRACE_DAYS (${LICENSE_GRACE_DAYS}):\n` +
+        wrong.map((c) => `  ${c.file}: "${c.days} day..." in "${c.excerpt}"`).join("\n"),
+    ).toEqual([]);
   });
 });

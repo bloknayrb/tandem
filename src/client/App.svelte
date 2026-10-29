@@ -159,6 +159,7 @@ import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
 import { createLaunchLatch } from "./utils/launch-latch.svelte";
+import { planLicenseGraceNotice } from "./utils/license-ui";
 import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
@@ -306,6 +307,32 @@ setSettingsWriteRefusedHandler(() => {
     dedupKey: "settings-readonly",
   });
 });
+// #2231: the licence grace-period notice in the activity tray. Tracks ONLY
+// `licenseStore.status`; the tray is read and written inside `untrack`, so a
+// tray change never re-runs this (and the push cannot loop back into it). An
+// `$effect` over a store, not a Tiptap handler, so the coalescing-tick rule
+// does not apply. The decision is `planLicenseGraceNotice`'s, unit-tested.
+// Client-only: nothing here reaches Claude.
+let licenseGraceHandled = false;
+$effect(() => {
+  const status = licenseStore.status;
+  untrack(() => {
+    const plan = planLicenseGraceNotice({
+      status,
+      activity: notifications.activity,
+      handledThisLoad: licenseGraceHandled,
+      now: Date.now(),
+    });
+    licenseGraceHandled = plan.handledThisLoad;
+    for (const id of plan.dismissIds) {
+      notifications.dismissActivity(id);
+      // The pop too, so a grace warning never lingers beside "License activated".
+      notifications.dismiss(id);
+    }
+    if (plan.push) notifications.push(plan.push);
+  });
+});
+
 let activityOpen = $state(false);
 const fileDrop = createFileDrop(notifications.push);
 initTauriFileDrop(notifications.push);

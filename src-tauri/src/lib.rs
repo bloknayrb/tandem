@@ -4152,6 +4152,17 @@ mod update_route_tests {
         assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
     }
 
+    /// #2231: a licence that fails its check is in a grace period, during which
+    /// the AI stays on and updates keep flowing -- including the update that
+    /// UNSUPPORTED_VERSION's own copy asks for. `grace` carries no licence id,
+    /// so it must land on the public manifest exactly as a trial does; a deny
+    /// added for it here would strand every device in grace.
+    #[test]
+    fn grace_keeps_the_public_manifest() {
+        let p = probe(true, None, false, Some("grace"));
+        assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
+    }
+
     #[test]
     fn restricted_serves_no_manifest() {
         let p = probe(true, None, false, Some("restricted"));

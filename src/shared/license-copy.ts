@@ -216,3 +216,128 @@ export function unverifiableLicenseMessage(code: LicenseUnverifiableCode): strin
       );
   }
 }
+
+/**
+ * A grace end date as the reader's own calendar date, `YYYY-MM-DD` (#2231).
+ * Local, not `iso.slice(0, 10)` (a UTC date), so the CLI, doctor and the
+ * editor print the same day on the same machine. `""` for an unparseable value.
+ */
+export function formatGraceEndDate(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * The full grace-period copy (#2231): Settings → License and `tandem license`.
+ * The code-specific remedy first, then the promise. **Never carries the
+ * purchase URL** (ADR-040 decision 8): this reader most likely paid. Every code
+ * ends up naming the support address — `UNSUPPORTED_VERSION`'s remedy ("update
+ * Tandem") is the one that does not on its own.
+ */
+export function licenseGraceMessage(code: LicenseUnverifiableCode, endsOn: string): string {
+  const support =
+    code === "UNSUPPORTED_VERSION" ? ` If that doesn't fix it, email ${TANDEM_SUPPORT_EMAIL}.` : "";
+  return (
+    `${unverifiableLicenseMessage(code)}${support} Tandem is keeping its AI features on until ` +
+    `${endsOn} while this is sorted out.`
+  );
+}
+
+/**
+ * The activity-tray notice for the grace period (#2231). A `warning`, which
+ * persists in the tray, so it follows that severity's tense convention: the
+ * observation in the past tense, the promise in the future. Short, because the
+ * full remedy is one click away in Settings → License. No purchase URL.
+ */
+export function licenseGraceNoticeMessage(endsOn: string): string {
+  return (
+    "Tandem couldn't verify the license installed on this device. Its AI features will " +
+    `stay on until ${endsOn} — email ${TANDEM_SUPPORT_EMAIL} to get it sorted. ` +
+    "Details are in Settings → License."
+  );
+}
+
+/** The deactivate route's error code when `license.json` could not be deleted (#1943). */
+export const LICENSE_REMOVE_FAILED = "LICENSE_REMOVE_FAILED";
+export const LICENSE_REMOVE_FAILED_MESSAGE =
+  "Tandem couldn't remove the license file. Try again — if it keeps failing, close anything " +
+  "that may have it open (a sync client or antivirus scan) and check that you can write to " +
+  "Tandem's application data folder.";
+
+/**
+ * Can the key behind this state be activated again on this build, from the
+ * email it came in? Activation re-runs the same signature and schema checks,
+ * so a key installed but failing `BAD_SIGNATURE` or `UNSUPPORTED_VERSION` is
+ * refused again (#1943 review): removing it is not reversible here. A damaged
+ * file (`MALFORMED`) or an unreadable one (`UNKNOWN`) says nothing about the
+ * key itself, so the emailed copy still activates.
+ */
+export function licenseKeyReactivatable(code: LicenseUnverifiableCode | undefined): boolean {
+  return code !== "BAD_SIGNATURE" && code !== "UNSUPPORTED_VERSION";
+}
+
+/**
+ * What removing this device's licence will do (#1943), for Settings' confirm
+ * step. Branches on the two facts that change the answer: whether the gate is
+ * on in this build, and whether the installed key could be activated again.
+ * Never carries the purchase URL.
+ */
+export function licenseRemovalConsequence(input: {
+  gateActive: boolean;
+  licenseUnverifiable?: LicenseUnverifiableCode;
+  /** Dark build only: the file on disk would not verify once the gate is on. */
+  darkFileUnverifiable?: boolean;
+}): string {
+  if (!input.gateActive && input.darkFileUnverifiable) {
+    // No purchase URL: the reader most likely paid (decision 8).
+    return (
+      "Licensing isn't enforced in this version, so nothing changes now. This license file " +
+      "doesn't pass Tandem's check, so it wouldn't work at v1.0 as it is. If you were sent a " +
+      `newer key, activate that one; otherwise email ${TANDEM_SUPPORT_EMAIL}.`
+    );
+  }
+  if (!input.gateActive) {
+    return (
+      "Licensing isn't enforced in this version, so nothing changes now — but this key will " +
+      "be needed at v1.0. Keep the email it came in so you can activate it again."
+    );
+  }
+  if (!licenseKeyReactivatable(input.licenseUnverifiable)) {
+    const why =
+      input.licenseUnverifiable === "UNSUPPORTED_VERSION"
+        ? "This key can't be activated again until Tandem is updated"
+        : "This key can't be activated again on this version of Tandem";
+    return (
+      `${why}, so removing it turns Tandem's AI features off now unless your trial is still ` +
+      `running. The editor is unaffected. If you're not sure, email ${TANDEM_SUPPORT_EMAIL} first.`
+    );
+  }
+  return (
+    "Tandem's AI features will turn off unless your trial is still running. The editor is " +
+    "unaffected. You can activate the same key again any time from the email it came in."
+  );
+}
+
+/**
+ * The line `tandem deactivate` prints after removing a licence (#1943), chosen
+ * by what the removed file was. Past tense: the removal has happened.
+ */
+export function licenseRemovedMessage(
+  wasUnverifiable: LicenseUnverifiableCode | undefined,
+): string {
+  if (wasUnverifiable === "UNSUPPORTED_VERSION") {
+    return (
+      "The removed key needs a newer version of Tandem, so it can be activated again only " +
+      `after Tandem is updated. Email ${TANDEM_SUPPORT_EMAIL} if you need a hand.`
+    );
+  }
+  if (wasUnverifiable === "BAD_SIGNATURE") {
+    return (
+      "The removed key failed its check on this version of Tandem, so activating it again " +
+      `will be refused here. Email ${TANDEM_SUPPORT_EMAIL} to have it reissued.`
+    );
+  }
+  return "Activate the same key again any time (keep the email it came in).";
+}

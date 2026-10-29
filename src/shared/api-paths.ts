@@ -84,6 +84,8 @@ export const API_SHUTDOWN = "/api/shutdown";
 // allowlist + loopback inside the handler.
 export const API_LICENSE_STATUS = "/api/license/status";
 export const API_LICENSE_ACTIVATE = "/api/license/activate";
+/** Remove this device's licence (#1943): local only, no seat release. */
+export const API_LICENSE_DEACTIVATE = "/api/license/deactivate";
 
 // --- Auth -------------------------------------------------------------------
 // NOTE: the legacy `/api/setup` route was removed in #477 PR 3c-ii-c; setup is

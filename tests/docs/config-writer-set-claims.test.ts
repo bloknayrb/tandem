@@ -282,6 +282,10 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // through `atomicWriteConfigFile`, in the same app-data root.
   "src/server/launcher/greeting.ts": 1,
   "src/server/launcher/supervisor.ts": 1,
+  // #2231: `license-grace.json` (the licence grace period's first-failure
+  // record), a temp-file write plus a rename, in Tandem's own app-data root —
+  // never a Claude config file, so the accepted #1599 scope is unchanged.
+  "src/server/license/grace.ts": 2,
   "src/server/license/license-state.ts": 2,
   "src/server/mcp/annotations.ts": 1,
   "src/server/mcp/convert.ts": 1,
