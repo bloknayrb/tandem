@@ -9,7 +9,11 @@ import * as crypto from "node:crypto";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import {
+  IMPORT_ANNOTATION_ID_PREFIX,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+} from "../../shared/constants.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
@@ -190,7 +194,7 @@ export function importAnnotationId(
     .update(annotationPreImage(commentId, from, to, bodyText))
     .digest("hex")
     .slice(0, 12);
-  return `import-${hash}`;
+  return `${IMPORT_ANNOTATION_ID_PREFIX}${hash}`;
 }
 
 /**
@@ -218,7 +222,7 @@ export function importReplyId(
     .update(replyPreImage(rootCommentId, replyCommentId, bodyText))
     .digest("hex")
     .slice(0, 12);
-  return `import-reply-${hash}`;
+  return `${IMPORT_ANNOTATION_ID_PREFIX}reply-${hash}`;
 }
 
 // ---------------------------------------------------------------------------

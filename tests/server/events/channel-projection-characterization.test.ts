@@ -24,9 +24,10 @@
  * observed that the seed is a REVIEW TARGET (`isReviewTarget` is
  * `author !== "user"`), so what the delta actually did was silently drop a
  * first-run user's Dismiss. Stating `audience: "outbound"` at the seed, which
- * is what `createAnnotation` always did, removes the delta instead of
+ * is what `createAnnotation` always did, removed the delta instead of
  * accepting it. Measuring a delta correctly is not the same as understanding
- * what it costs.
+ * what it costs. (Since #1725 the highlight seed is the user's own, private and
+ * no review target, so no path creates a Claude highlight at all any more.)
  *
  * The five that remain assert the NEW behaviour, and each keeps the record of
  * what it asserted before, because a delta with no before is just an
@@ -206,18 +207,20 @@ describe("channel projection — claude accept and dismiss", () => {
     // That looked like a cosmetic first-run difference until the silent-
     // failure review pointed out `isReviewTarget` is `author !== "user"` —
     // the seed is IN the review queue, so a new user's Dismiss was being
-    // dropped with no signal. `mcp/tutorial-annotations.ts` now states
+    // dropped with no signal. `mcp/tutorial-annotations.ts` then stated
     // `audience: "outbound"` on its Claude seeds, matching what
-    // `createAnnotation` always stamped, so the delta is gone rather than
-    // accepted. This test stays because the derivation it exercises is real
-    // and still governs any highlight that reaches here without the field.
+    // `createAnnotation` always stamped, so the delta was gone rather than
+    // accepted; since #1725 the highlight seed is the user's own and private,
+    // so it never reaches this shape at all. This test stays because the
+    // derivation it exercises is real and still governs any highlight that
+    // reaches here without the field (a legacy store's Claude highlight).
     //
     // **The no-audience half of the title is load-bearing, and an earlier
     // version of this test got it wrong.** It claimed sanitize derives
     // "private" for ANY highlight regardless of author. It does not:
     // `sanitize.ts:79-87` short-circuits on a stored `audience` and only
     // derives when there is none. This fixture omits `audience`, so it
-    // exercises the tutorial seed and nothing else — the classic
+    // exercised the pre-fix tutorial seed and nothing else — the classic
     // build-your-own-input blind spot, caught by two independent reviewers.
     // The companion test below pins the branch this one cannot see.
     const h = harness();
@@ -235,8 +238,9 @@ describe("channel projection — claude accept and dismiss", () => {
     // the test above reads like it covers all Claude highlights and does not.
     //
     // No product path creates this record today: Claude has no
-    // highlight-creating tool and nothing else passes "highlight" to a
-    // creator. So the accepted delta really is scoped to the tutorial seed. If a Claude-highlight creator is
+    // highlight-creating tool, nothing else passes "highlight" to a creator,
+    // and since #1725 the tutorial's highlight seed is the user's. Only a
+    // legacy store can hold one. If a Claude-highlight creator is
     // ever reintroduced, this test is what says its events still flow, and the
     // decision to withhold highlights would then need making for real.
     const h = harness();

@@ -183,16 +183,23 @@ describe("AnnotationBody — the shapes a clamped card has to survive", () => {
 
 describe("AnnotationBody — the tutorial is not accidentally reformatted", () => {
   it("renders every tutorial annotation's content as its literal prose", () => {
-    // Tutorial annotations ship with `author: "claude"`, so they now take the
-    // markdown branch. Their copy is prose — but it is the first thing a new
-    // user sees, and a stray `*` or `#` added to it later would render as
-    // formatting instead of as the character someone typed. This is the guard
-    // on that, and it fails at the point the copy changes rather than in a
-    // screenshot review.
+    // The two comment seeds ship with `author: "claude"`, so they take the
+    // markdown branch; the highlight and note are the user's (#1725). Their
+    // copy is prose — but it is the first thing a new user sees, and a stray
+    // `*` or `#` added to it later would render as formatting instead of as the
+    // character someone typed. Each seed is rendered as its real author, and
+    // also through the markdown branch, so moving a seed between authors can
+    // never let markdown-shaped copy slip past. It fails at the point the copy
+    // changes rather than in a screenshot review.
     for (const def of TUTORIAL_ANNOTATIONS) {
-      const c = body({ text: def.content, author: "claude" });
-      expect(c.textContent, def.id).toBe(def.content);
-      expect(c.querySelector("strong, em, h1, h2, h3, code, pre, li, a"), def.id).toBeNull();
+      for (const author of new Set([def.author, "claude" as const])) {
+        const c = body({ text: def.content, author });
+        expect(c.textContent, `${def.id} as ${author}`).toBe(def.content);
+        expect(
+          c.querySelector("strong, em, h1, h2, h3, code, pre, li, a"),
+          `${def.id} as ${author}`,
+        ).toBeNull();
+      }
     }
   });
 });

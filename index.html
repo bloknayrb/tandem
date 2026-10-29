@@ -284,7 +284,8 @@
 
              light 0.16 -> 13.69   (was 0.12 -> 10.22)
              warm  0.16 -> 13.07   inherits this line, deliberately: see below
-             dark  0.45 ->  3.85   overridden below, and see the ceiling note
+             dark  0.45 black top + 0.08 white bottom -> 9.17 (lit band),
+                   overridden below, and see the ceiling note there
 
            WARM INHERITS ON PURPOSE — do not "fix" it. Warm's sunk surface is
            much darker (oklch 0.920 vs light's 0.960), which looks like it
@@ -722,20 +723,23 @@
         --tandem-page-bg: #2a2a2a;
         --tandem-page-paper: #1a1a1a;
         --tandem-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-        /* A black inset SATURATES on a near-black base, so this is the weakest
-           press of the three themes and raising the alpha cannot rescue it:
-           measured deltaL* on dark's `--tandem-surface-sunk` is 3.85 at 0.45,
-           4.48 at 0.55 and still only 5.68 at 0.75 — against light's 13.69.
-           Do not chase it with opacity. What DOES reach parity is an inset
-           WHITE highlight (0.08 alpha measures deltaL* 9.17) on the BOTTOM
-           inner edge — a recess lit from above has its top wall in shadow and
-           its bottom wall lit, which is exactly why light's dark-at-top inset
-           reads as pressed; on a near-black base only the lit half has room to
-           move. Nothing structural is in the way: this token is a full shadow
-           value per theme, not a per-theme alpha, so dark could declare that
-           today. It is a design decision, not a tuning one, so it is Bryan's
-           call and is tracked in #1683 rather than made here. */
-        --tandem-shadow-inset: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+        /* A black inset SATURATES on a near-black base, so raising its alpha
+           cannot rescue the press: measured deltaL* on dark's
+           `--tandem-surface-sunk` is 3.85 at 0.45, 4.48 at 0.55 and still only
+           5.68 at 0.75 — against light's 13.69. Do not chase it with opacity.
+
+           What reaches parity is a WHITE highlight on the BOTTOM inner edge
+           (#1683): a recess lit from above has its top wall in shadow and its
+           bottom wall lit, which is exactly why light's dark-at-top inset reads
+           as pressed — and on a near-black base only the lit half has room to
+           move. The 0.08 white layer measures deltaL* 9.17 (0.06 would be 6.94,
+           0.10 is 11.36). The black top layer is kept rather than swapped for
+           the highlight: it is the shadowed wall of the same recess, so the two
+           layers together are one physical model, not two effects.
+           `tests/design-system-impl/pressed-toggle-state.test.ts` holds the
+           dark floor (8) and pins the lit edge to the bottom. */
+        --tandem-shadow-inset: inset 0 1px 3px rgba(0, 0, 0, 0.45),
+          inset 0 -1px 2px rgba(255, 255, 255, 0.08);
         --tandem-rail-shadow-left: 4px 0 14px -4px rgba(0, 0, 0, 0.58),
           1px 0 1px rgba(0, 0, 0, 0.28);
         --tandem-rail-shadow-right: -4px 0 14px -4px rgba(0, 0, 0, 0.58),
