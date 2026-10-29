@@ -690,7 +690,24 @@ export interface ChatMessage {
   documentId?: string;
   anchor?: CapturedAnchor;
   replyTo?: string;
+  /**
+   * AI inbox state: once set, `tandem_checkInbox` stops handing the user message
+   * to cursor-less and fresh readers. A cursor poll sets it only when the NEXT
+   * poll acknowledges the message (#2064, #2294), so it can lag the hand-out by
+   * a whole task; the editor's pickup row reads `read || delivered`, never
+   * `read` alone.
+   */
   read: boolean;
+  /**
+   * Set (by the server, `withMcp`) on a user message the moment a cursor poll
+   * hands it out in a validated response — before any acknowledgement. Means
+   * "some reader has it", which is what the pickup row and the Claude Code
+   * offer ask. Never consulted for re-delivery (that is `read` and the cursor)
+   * nor for which messages a reply answers (that needs an acknowledgement: a
+   * response can validate and still be lost). Dropped when the CTRL session is
+   * restored (`restoreCtrlDoc`). Only ever `true` or absent.
+   */
+  delivered?: true;
   /**
    * Set on a Claude reply that acknowledges work it is about to do (`tandem_reply`
    * with `inProgress: true`). The editor's pickup row reads "working on it" from

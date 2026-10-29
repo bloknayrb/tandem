@@ -7,9 +7,11 @@ import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
  * Guards the "ask Claude to watch for updates" claim against the form it shipped
  * in on 2026-08-08 and had to be corrected on 2026-08-09.
  *
- * The self-armed wake (ADR-049) has two preconditions Tandem cannot observe:
- * the host must expose a `Monitor` tool — gated remotely, per account, not per
- * version — and on Windows that tool additionally requires Git Bash. Track F
+ * The self-armed wake (ADR-049) has preconditions Tandem cannot observe: the
+ * host must expose a `Monitor` tool — gated remotely, per account, and on
+ * Bedrock, Vertex or Foundry or with telemetry or nonessential traffic off also
+ * needing Claude Code 2.1.310 or later (#2302) — and on Windows that tool
+ * additionally requires Git Bash. Track F
  * shipped the path as "nothing to install, no flag" on five surfaces and led
  * with it on four, because every measurement anyone had taken was taken on the
  * one account where it works.

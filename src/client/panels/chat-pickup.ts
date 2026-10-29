@@ -5,14 +5,19 @@ import type { ChatMessage } from "../../shared/types";
  * What has happened to the user's latest chat message, derived from the chat map
  * alone.
  *
- * Every state is something the server or Claude actually recorded: `read` is
- * `tandem_checkInbox`'s stamp (or a `tandem_reply` that named the message), and
- * `working` is an ack Claude sent with `inProgress: true`. Nothing here reads
- * `claudeActive` or `claudeWorking`: the first is set by `tandem_status` and stays
- * true for up to five minutes after Claude's last presence-wrapped tool call, and the
- * second is set only around a few wrapped tool calls (30 s cap), so neither says
- * "Claude is working on this message", and a row built on them was the stale
- * "thinking…" this replaces.
+ * Every state is something the server or Claude actually recorded: `received`
+ * is `read` (a cursor-less `tandem_checkInbox`'s stamp, a cursor poll's
+ * acknowledgement, or a `tandem_reply` that named the message) OR `delivered`
+ * (a cursor poll handed it out). `read` alone is not enough: under the cursor
+ * (#2064) it waits for Claude's NEXT poll, so a Claude working on the message
+ * for minutes without polling would read "still waiting" and raise the Claude
+ * Code offer. `working` is an ack Claude sent with `inProgress: true`.
+ *
+ * Nothing here reads `claudeActive` or `claudeWorking`: the first is set by
+ * `tandem_status` and stays true for up to five minutes after Claude's last
+ * presence-wrapped tool call, and the second is set only around a few wrapped
+ * tool calls (30 s cap), so neither says "Claude is working on this message",
+ * and a row built on them was the stale "thinking…" this replaces.
  */
 export type ChatPickup =
   | { kind: "waiting"; waitedMs: number }
@@ -57,7 +62,9 @@ export function chatPickup(messages: readonly ChatMessage[], now: number): ChatP
   const userIds = new Set(messages.filter((m) => m.author === "user").map((m) => m.id));
   if (after.some((m) => m.replyTo === undefined || !userIds.has(m.replyTo))) return null;
 
-  return latest.read ? { kind: "received" } : { kind: "waiting", waitedMs: now - latest.timestamp };
+  return latest.read || latest.delivered === true
+    ? { kind: "received" }
+    : { kind: "waiting", waitedMs: now - latest.timestamp };
 }
 
 /** One line per state; the visible row and the screen-reader announcement both
