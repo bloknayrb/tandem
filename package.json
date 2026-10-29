@@ -110,7 +110,7 @@
       "esbuild": "^0.28.1"
     },
     "ws": "^8.21.0",
-    "@hono/node-server": "^2.0.12",
+    "@hono/node-server": "^2.1.5",
     "postcss": "^8.5.23",
     "@tiptap/y-tiptap": "^3.0.9",
     "prosemirror-model": "^1.25.11",
