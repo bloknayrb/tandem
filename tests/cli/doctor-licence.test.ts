@@ -120,6 +120,37 @@ describe("evaluateLicence", () => {
     expect(evaluateLicence(licence)?.message).toMatch(/license not verified/);
   });
 
+  // #2231: AI on, on a clock. A warning (so it is not lost among the passes),
+  // never a purchase link, and never "AI off" — the session rows still run.
+  it("warns about a grace period without turning the AI off", () => {
+    const endsAt = new Date(2026, 10, 12, 12).toISOString();
+    const licence = parseDoctorLicence({
+      status: 200,
+      data: {
+        gateActive: true,
+        status: "grace",
+        licenseUnverifiable: "BAD_SIGNATURE",
+        grace: { firstFailedAt: "x", endsAt, daysRemaining: 6 },
+        license: { email: "jane@example.com" },
+      },
+    } as never);
+    expect(licence).toEqual({
+      gateActive: true,
+      status: "grace",
+      licenseUnverifiable: "BAD_SIGNATURE",
+      graceEndsAt: endsAt,
+    });
+    expect(licenceOffLabel(licence)).toBeNull();
+    const row = evaluateLicence(licence);
+    expect(row?.status).toBe("warn");
+    expect(row?.message).toBe(
+      "AI features on — license not verified (grace period ends 2026-11-12)",
+    );
+    expect(row?.fix).toContain("support@tandem.ink");
+    // No purchase link (the support address is the only tandem.ink it names), no PII.
+    expect(JSON.stringify(row)).not.toMatch(/https?:\/\/|jane@example\.com/);
+  });
+
   it("passes on a trial (positive twin)", () => {
     const row = evaluateLicence({ gateActive: true, status: "trial", licenseUnverifiable: null });
     expect(row?.status).toBe("pass");

@@ -1,7 +1,14 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../../shared/constants";
-import { unverifiableLicenseMessage } from "../../../shared/license-copy";
+import {
+  formatGraceEndDate,
+  licenseGraceMessage,
+  licenseRemovalConsequence,
+  unverifiableLicenseMessage,
+} from "../../../shared/license-copy";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
+import { deactivateLicenseClient } from "../../hooks/useLicense";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import LicenseActivateForm from "../LicenseActivateForm.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
@@ -56,6 +63,66 @@ const pillLabel = $derived(
 
 function onActivated(): void {
   ctx.notify("info", "License activated.");
+}
+
+// #2231: the grace period. The notice replaces the plain unverifiable warning
+// rather than repeating its remedy beneath it.
+const inGrace = $derived(status?.gateActive === true && status.status === "grace");
+const graceEndsOn = $derived(status?.grace ? formatGraceEndDate(status.grace.endsAt) : "");
+
+// #1943: "Remove license". Shown whenever there is a licence file to remove:
+// a dark build says so with `licenseInstalled` (it verifies) or
+// `licenseFileUnverifiable` (it does not — desktop has no `tandem deactivate`,
+// so this button is the only route short of deleting it by hand); an armed one
+// with the licensed status or an unverifiable code (grace included).
+const canRemove = $derived(
+  status != null &&
+    (status.licenseInstalled === true ||
+      (gateDark && status.licenseFileUnverifiable === true) ||
+      (status.gateActive &&
+        (status.status === "licensed" || status.licenseUnverifiable !== undefined))),
+);
+// What removing will do. Branches on the gate and on whether the key could be
+// activated again here: a key failing BAD_SIGNATURE or UNSUPPORTED_VERSION is
+// refused by activation too, so the copy must not promise otherwise.
+const removeConsequence = $derived(
+  licenseRemovalConsequence({
+    gateActive: status?.gateActive === true,
+    licenseUnverifiable: status?.licenseUnverifiable,
+    darkFileUnverifiable: gateDark && status?.licenseFileUnverifiable === true,
+  }),
+);
+let removeConfirming = $state(false);
+let removing = $state(false);
+let removeError = $state<string | null>(null);
+
+// A poll can hide the Remove section while its confirm step is open; reset it
+// so the section never reappears already armed.
+$effect(() => {
+  if (canRemove) return;
+  untrack(() => {
+    removeConfirming = false;
+    removeError = null;
+  });
+});
+
+async function confirmRemove(): Promise<void> {
+  removing = true;
+  removeError = null;
+  const result = await deactivateLicenseClient();
+  removing = false;
+  if (!result.ok) {
+    removeError = result.error;
+    return;
+  }
+  removeConfirming = false;
+  await licenseStore.refresh();
+  // A failed refresh keeps the last status, so the tab would still show the
+  // licence beside a "removed" toast; say so instead of contradicting it.
+  const stale = licenseStore.statusUnavailable
+    ? " Couldn't refresh the license status — reopen Settings to see it."
+    : "";
+  ctx.notify("info", (result.removed ? "License removed." : "No license was installed.") + stale);
 }
 </script>
 
@@ -123,7 +190,13 @@ function onActivated(): void {
     {/if}
   </div>
 
-  {#if status?.licenseUnverifiable}
+  {#if inGrace && status?.licenseUnverifiable}
+    <!-- #2231: AI stays on until the grace period ends. Never a buy link (the
+         one below is hidden whenever `licenseUnverifiable` is set). -->
+    <div class="license-warning" data-testid="license-grace-notice" role="alert">
+      {licenseGraceMessage(status.licenseUnverifiable, graceEndsOn || "the end of the grace period")}
+    </div>
+  {:else if status?.licenseUnverifiable}
     <div class="license-warning" data-testid="license-unverifiable-warning" role="alert">
       {unverifiableLicenseMessage(status.licenseUnverifiable)}
     </div>
@@ -155,9 +228,12 @@ function onActivated(): void {
   <!-- The buy link hides from anyone holding an unverifiable licence file, a
        trial included (#1521, ADR-040 decision 8). `ui.aiNotice` is null during
        a trial by design, so this keys on the reason code directly: that reader
-       most likely already paid. -->
+       most likely already paid. A dark build carries no reason code, only the
+       additive `licenseFileUnverifiable` flag (#1943), and the Remove section
+       beside this then says the file fails its check, so that flag hides it
+       too. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
-    {#if !status?.licenseUnverifiable}
+    {#if !(status?.licenseUnverifiable || status?.licenseFileUnverifiable)}
       Don't have one yet?
       <a
         data-testid="license-buy-link"
@@ -170,6 +246,59 @@ function onActivated(): void {
     <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> — please don't post your
     license key publicly, it contains your email address.
   </div>
+
+  {#if canRemove}
+    <!-- #1943: local only — deletes this device's license file and grace
+         record, releases no seat. Inline two-step confirm (the Models tab's
+         pattern), never `window.confirm`. -->
+    <div data-testid="license-remove-section">
+      <div class="settings-section-label" style="margin-top: var(--tandem-space-4);">
+        Remove license
+      </div>
+      {#if removeConfirming}
+        <div class="license-warning" data-testid="license-remove-confirm">
+          Remove the license from this device? {removeConsequence}
+        </div>
+        <div class="license-remove-actions">
+          <button
+            type="button"
+            class="license-remove-danger"
+            data-testid="license-remove-confirm-btn"
+            disabled={removing}
+            onclick={confirmRemove}>{removing ? "Removing…" : "Remove license"}</button
+          >
+          <button
+            type="button"
+            class="license-remove-cancel"
+            data-testid="license-remove-cancel"
+            disabled={removing}
+            onclick={() => {
+              removeConfirming = false;
+              removeError = null;
+            }}>Cancel</button
+          >
+        </div>
+      {:else}
+        <div class="settings-hint">
+          Deletes the license from this device only. It is not released anywhere, and nothing is
+          sent.
+        </div>
+        <div class="license-remove-actions">
+          <button
+            type="button"
+            class="license-remove-danger"
+            data-testid="license-remove-button"
+            onclick={() => (removeConfirming = true)}>Remove license…</button
+          >
+        </div>
+      {/if}
+      {#if removeError}
+        <div class="license-warning" data-testid="license-remove-error" role="alert">
+          {removeError}
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -182,6 +311,31 @@ function onActivated(): void {
   background: var(--tandem-warning-bg);
   border: 1px solid var(--tandem-warning-border);
   border-radius: var(--tandem-r-2);
+}
+.license-remove-actions {
+  display: flex;
+  gap: var(--tandem-space-2);
+  margin-top: var(--tandem-space-2);
+}
+.license-remove-actions button {
+  padding: var(--tandem-space-1) var(--tandem-space-3);
+  font-size: var(--tandem-text-sm);
+  border-radius: var(--tandem-r-2);
+  cursor: pointer;
+}
+.license-remove-actions button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.license-remove-danger {
+  color: var(--tandem-error-fg-strong);
+  background: var(--tandem-error-bg);
+  border: 1px solid var(--tandem-error-border);
+}
+.license-remove-cancel {
+  color: var(--tandem-fg-muted);
+  background: var(--tandem-surface);
+  border: 1px solid var(--tandem-border-strong);
 }
 .license-pill {
   display: inline-block;

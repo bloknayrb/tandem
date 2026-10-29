@@ -1275,7 +1275,8 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `GET /api/diagnostics` | `tandem doctor` report + host info. | loopback-only by hand (403) |
 | `GET /api/notify-stream` | SSE stream of server notifications. | — |
 | `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. `POST /api/mode/release` no longer writes the mode key: it answers 409 `MODE_NOT_TANDEM` when the room does not read Tandem, and releases nothing (#1769). | origin + loopback |
-| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | activate: loopback; origin when present (the CLI sends none, #2205), plus a required JSON `license` field. Status: scrubbed for non-loopback |
+| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | activate: loopback; origin when present (the CLI sends none, #2205), plus a required JSON `license` field. Status: scrubbed for non-loopback (the grace period's dates and code survive the scrub, #2231) |
+| `POST /api/license/deactivate` | Remove this device's license and grace record (#1943). Local only: no seat release. Answers `{ removed, wasUnverifiable?, ...status }`, or 500 `LICENSE_REMOVE_FAILED`. | loopback; origin when present (the CLI sends none), plus a required JSON `confirm: true` |
 | `POST /api/open` | Open a file by absolute path. | **one layer** |
 | `POST /api/close` | Close a document by id. | **one layer** |
 | `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |

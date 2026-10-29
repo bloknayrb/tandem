@@ -35,9 +35,11 @@ export interface AiRefusal {
  * Pure decision over a resolved state. `null` admits.
  *
  * `restricted` is the only refusing status (the literal is not renamed —
- * ADR-040 decision 5). `kind: "unverifiable"` when a licence file is present
- * but fails to verify; its message never carries the purchase URL. (The same
- * kind also covers `aiRefusal()`'s fail-closed catch, with licence-neutral copy.)
+ * ADR-040 decision 5). `grace` (#2231) admits by design: a licence that fails
+ * its check keeps the AI on for its grace period, and nothing here changes.
+ * `kind: "unverifiable"` when a licence file is present but fails to verify;
+ * its message never carries the purchase URL. (The same kind also covers
+ * `aiRefusal()`'s fail-closed catch, with licence-neutral copy.)
  */
 export function aiRefusalFor(state: LicenseState): AiRefusal | null {
   if (!state.gateActive) return null;

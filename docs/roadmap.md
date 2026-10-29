@@ -49,7 +49,7 @@ commercial setup, hardware verification, and two flag flips.
 |---|---|---|
 | **Whether an accountant is wanted before taking money.** The price itself is decided: $45, with a $25 student discount (so $20), recorded in ADR-040's 2026-10-17 amendment and confirmed for the README on 2026-10-22. ADR-040 §6's LLC requirement was withdrawn on 2026-10-09 (no company will be formed); the accountant question was not decided then and stays here. | ADR-040 §6 | Nothing else tracks it |
 | **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
-| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether it joins the commercial gate |
+| **Whether resale law requires more than `tandem deactivate`.** #1943 is built (local only: deletes the file, releases no seat, the key stays activatable from its email); open is only whether resale law requires more than that. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether anything more joins the commercial gate |
 | **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
 
 **"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision

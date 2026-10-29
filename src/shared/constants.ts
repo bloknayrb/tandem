@@ -16,6 +16,16 @@ export const DEFAULT_MCP_PORT = 3479;
  */
 export const TRIAL_DAYS = 14;
 
+/**
+ * Licence grace period in days (#2231, ADR-040 amendment 2026-10-28): how long
+ * the AI features stay on after an installed licence first fails its check.
+ * Deliberately a separate constant from `TRIAL_DAYS`: the two are equal today
+ * by choice, not by definition, and changing one must not move the other.
+ * Shared for the same reason as `TRIAL_DAYS` — the "N of 14 days" copy in the
+ * client and the CLI is generated from the number the server clock uses.
+ */
+export const LICENSE_GRACE_DAYS = 14;
+
 export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 

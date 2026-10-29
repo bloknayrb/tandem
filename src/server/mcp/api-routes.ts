@@ -18,6 +18,7 @@ import {
   API_EXTERNAL_CONFLICT_RESOLVE,
   API_INFO,
   API_LICENSE_ACTIVATE,
+  API_LICENSE_DEACTIVATE,
   API_LICENSE_STATUS,
   API_MODE,
   API_MODE_RELEASE,
@@ -54,6 +55,7 @@ import {
   type ActivateLicenseDeps,
   handleGetLicenseStatus,
   makeActivateLicenseHandler,
+  makeDeactivateLicenseHandler,
 } from "./routes/license.js";
 import { handleMode } from "./routes/mode.js";
 import { handleModeRelease } from "./routes/mode-release.js";
@@ -437,6 +439,14 @@ export function registerApiRoutes(
     largeBody,
     makeActivateLicenseHandler(licenseDeps),
   );
+
+  // License deactivate (#1943): local delete of the licence file and grace
+  // record. Same in-handler gates as activate (origin allowlist when present,
+  // then loopback), plus a required `{ confirm: true }` JSON body as the
+  // preflight proof for the Origin-less CLI. Parsed by the pre-parse router
+  // (`small`); the `largeBody` here is the usual backstop that skips it.
+  app.options(API_LICENSE_DEACTIVATE, mw);
+  app.post(API_LICENSE_DEACTIVATE, mw, largeBody, makeDeactivateLicenseHandler());
 
   app.options(API_OPEN, mw);
   app.post(API_OPEN, mw, largeBody, handleOpen);

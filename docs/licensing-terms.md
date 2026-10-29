@@ -131,6 +131,13 @@ software's own licence doesn't grant is the worst version of this problem.
 - The clock is a local timestamp with **no anti-rollback**, deliberately
   (ADR-040 §3). Deleting `trial.json` restarts it. This is a soft gate; the
   signed licence is the only hard one.
+- Since #2231 (ADR-040, 2026-10-28) a licence file that is installed but fails
+  its check keeps the AI features on for a 14-day grace period from its first
+  failure, recorded in `license-grace.json` beside `trial.json`. It is
+  enforcement softness of the same kind as the trial clock, and no stronger:
+  deleting that file, or swapping in a different broken licence file, starts a
+  new one. It changes nothing in what [LICENSE](../LICENSE) grants; it is how
+  the product treats a paying customer whose key breaks, not a licence term.
 - The repository licence matches the clock. Since 2026-10-09,
   [LICENSE](../LICENSE) grants **14 days** of use for v1.0 and later "from the
   first launch of any such version on a given device, counted once across all
@@ -145,12 +152,13 @@ software's own licence doesn't grant is the worst version of this problem.
   (#1521: #2194, #2202), still dark, follows it: past the trial with no key the
   editor stays fully editable and Tandem refuses its AI surfaces at their
   admission points (ADR-040's third amendment; its accepted residuals are in
-  `licensing-explained.md`). One difference runs the other way: past the trial,
-  a holder whose key fails to verify is refused the AI although `LICENSE` grants
-  it to anyone holding a key the Licensor issued. The product cannot tell a
-  damaged or wrongly signed key from a forged one, and a key that needs a newer
-  Tandem cannot be read until they update. They get fix-or-reissue copy, never
-  "buy".
+  `licensing-explained.md`). One difference runs the other way: once the
+  14-day grace period has run out
+  (and the trial, if it is still running), a holder whose key fails to verify
+  is refused the AI although `LICENSE` grants it to anyone holding a key the
+  Licensor issued. The product cannot tell a damaged or wrongly signed key from
+  a forged one, and a key that needs a newer Tandem cannot be read until they
+  update. They get fix-or-reissue copy, never "buy".
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
   the releases that shipped under an earlier wording, so someone can keep
@@ -233,8 +241,9 @@ Roughly in priority order:
 6. **EU exhaustion / resale** (*UsedSoft*). If a lawful resale requires the
    buyer to be able to make their own copy unusable, that makes copy-key and a remove-licence path
    *required mechanisms*, not conveniences. Transfer itself is no longer a
-   question: the terms leave it unrestricted (A2), so this item is only about
-   whether the remove-licence path (#1943) is required.
+   question: the terms leave it unrestricted (A2). #1943 is built (local only:
+   deletes the file, releases no seat, the key stays activatable from its
+   email); open is only whether resale law requires more than that.
 7. **BUSL Change Date** ([LICENSE](../LICENSE)) — *decided 2026-10-09 (A6):*
    four years from the date each version is first made publicly available, and
    a version is a release on the repository's Releases page, so that release's
