@@ -55,6 +55,24 @@ vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   watchFile: watcherMocks.watchFile,
 }));
 
+// Pass-through by default; a test sets `captureThrows` to make the remap's
+// capture step fail and so drive the catch that keeps the reload alive.
+const remapMocks = vi.hoisted(() => ({ captureThrows: null as Error | null, applyCalls: 0 }));
+vi.mock(import("../../src/server/documents/reload-remap"), async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/documents/reload-remap")>();
+  return {
+    ...original,
+    captureRemapInput: (...args: Parameters<typeof original.captureRemapInput>) => {
+      if (remapMocks.captureThrows) throw remapMocks.captureThrows;
+      return original.captureRemapInput(...args);
+    },
+    applyRemap: (...args: Parameters<typeof original.applyRemap>) => {
+      remapMocks.applyCalls++;
+      return original.applyRemap(...args);
+    },
+  };
+});
+
 vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
@@ -316,6 +334,36 @@ describe("reloadFromDisk — legacy annotations are sanitized under THIS documen
     // The rewrite the log is a receipt for actually reached the Y.Map, so the
     // line is evidence of a migration rather than of a discarded copy.
     expect((doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).get(id) as Annotation).type).toBe("note");
+  });
+});
+
+describe("reloadFromDisk — an annotation capture that throws", () => {
+  it("still lands the new content, reports the failure and skips the remap", async () => {
+    // The capture reads every annotation's live range inside the content-swap
+    // transaction. Without its own catch a throw there aborts that transaction,
+    // and the external edit never loads.
+    const { filePath, doc, triggerReload } = await setupOpenedFile("Alpha beta gamma\n");
+    seedAnnotationOnText(doc, "beta", "note on beta");
+    await fs.writeFile(filePath, "Alpha delta beta gamma\n", "utf-8");
+
+    const boom = new Error("capture exploded");
+    remapMocks.captureThrows = boom;
+    remapMocks.applyCalls = 0;
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await triggerReload();
+      const reported = spy.mock.calls.find(
+        (args) => args[0] === "[FileWatcher] reloadFromDisk: annotation capture failed for %s:",
+      );
+      expect(reported, "the failure is reported, not swallowed silently").toBeDefined();
+      expect(reported?.[2]).toBe(boom);
+    } finally {
+      spy.mockRestore();
+      remapMocks.captureThrows = null;
+    }
+
+    expect(extractText(doc)).toContain("Alpha delta beta gamma");
+    expect(remapMocks.applyCalls, "no remap runs without a captured input").toBe(0);
   });
 });
 
