@@ -578,9 +578,11 @@ $effect(() => {
 $effect(() => {
   if (!editor || !selectionPosition) return;
   const ed = editor;
-  // Read once, not inside the scroll listener: a destroyed Editor's `view`
-  // throws on `.dom`, and a scroll can land between destroy and this teardown.
-  // A measured `selectionPosition` means the view is mounted here.
+  // Read once, not inside the scroll listener. A destroyed Editor's `view`
+  // throws on `.dom`; no known path reaches that today (Editor.svelte hands
+  // off `null` before `destroy()`, so this effect tears down first), and
+  // reading it here keeps the listener independent of that ordering. A
+  // measured `selectionPosition` means the view is mounted at this point.
   const editorDom = ed.view.dom;
   let frame = 0;
 

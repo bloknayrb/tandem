@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
@@ -177,6 +177,12 @@ describe("selection toolbar listener", () => {
 });
 
 describe("scrollMovesSelection", () => {
+  // Attached to the body so `document.contains(editor)` holds; removed after
+  // each case so the shells do not accumulate across the file.
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
   // Layout under test: shell > (scroller > editor > codeBlock) + (rail > chat).
   function layout() {
     const shell = document.createElement("div");

@@ -186,6 +186,10 @@ export function attachSelectionToolbarListener(
  * text — that is the only reason a scroll dismisses it. Only three targets can
  * do that: the document (viewport scroll), a scroller that CONTAINS the editor,
  * and a scroller INSIDE it (a wide code block or table the selection sits in).
+ * The last arm is deliberately coarse: any scroller inside the editor answers
+ * true, including one the selection is NOT in, so horizontally scrolling an
+ * unrelated code block still dismisses. That over-dismisses rather than leave a
+ * misplaced popup, and avoids reading the editor view on every scroll event.
  *
  * Everything else is a sibling panel, and dismissing on it was a real bug: the
  * chat panel smooth-scrolls itself to the bottom whenever a message arrives or
