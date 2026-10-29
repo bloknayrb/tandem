@@ -9,6 +9,7 @@ import { GREETING_LATE_TEXT, type GreetingAction } from "../../src/client/panels
 import type { ChatResume } from "../../src/client/panels/chat-resume";
 import type { ChatMessage } from "../../src/shared/types";
 import { reactiveCell } from "../helpers/reactive-cell.svelte";
+import { spyChatAutoScroll } from "./chat-auto-scroll";
 
 function renderChat(messages: ChatMessage[]) {
   return render(ChatPanel, {
@@ -266,6 +267,61 @@ describe("ChatPanel — AI off by licence", () => {
   });
 });
 
+describe("ChatPanel — auto-scroll moves the messages list, never its ancestors", () => {
+  // `scrollIntoView` on an end sentinel also scrolled App's `overflow: hidden`
+  // `.rail-full-right`, by a distance the user could not scroll back (#2329).
+  // `tests/e2e/chat-autoscroll.spec.ts` measures the rail in a real layout.
+  async function withSpy(run: (spy: ReturnType<typeof spyChatAutoScroll>) => Promise<void>) {
+    const spy = spyChatAutoScroll();
+    try {
+      await run(spy);
+    } finally {
+      spy.restore();
+    }
+  }
+  function list(container: HTMLElement): HTMLElement {
+    const el = container.querySelector<HTMLElement>("[data-testid='chat-messages']");
+    if (!el) throw new Error("no messages list");
+    // happy-dom lays nothing out; a distinct height proves where `top` comes from.
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 1234 });
+    return el;
+  }
+
+  it("a new message scrolls the list to its own bottom, and never calls scrollIntoView", () =>
+    withSpy(async ({ scrolls, intoView }) => {
+      const { container, rerender } = renderChat([claudeMsg()]);
+      list(container);
+      await tick();
+      scrolls.mockClear();
+      await rerender({ messages: [claudeMsg(), claudeMsg({ id: "m2", text: "next" })] });
+      await tick();
+      expect(scrolls).toHaveBeenCalledWith({ top: 1234, behavior: "smooth" });
+      expect(intoView).not.toHaveBeenCalled();
+    }));
+
+  it("jumps instead of animating under reduced motion", () =>
+    withSpy(async ({ scrolls }) => {
+      const { container, rerender } = renderChat([claudeMsg()]);
+      list(container);
+      await rerender({ reduceMotion: true, messages: [claudeMsg(), claudeMsg({ id: "m2" })] });
+      await tick();
+      expect(scrolls).toHaveBeenLastCalledWith({ top: 1234, behavior: "auto" });
+    }));
+
+  it("showing the panel scrolls the list, and never calls scrollIntoView", () =>
+    withSpy(async ({ scrolls, intoView }) => {
+      const { container, rerender } = renderChat([claudeMsg()]);
+      list(container);
+      await rerender({ visible: false });
+      await tick();
+      scrolls.mockClear();
+      await rerender({ visible: true });
+      await tick();
+      expect(scrolls).toHaveBeenCalledWith({ top: 1234, behavior: "smooth" });
+      expect(intoView).not.toHaveBeenCalled();
+    }));
+});
+
 describe("ChatPanel — the resume row (#2196)", () => {
   function renderWithResume(
     resume: ChatResume | null | { value: ChatResume | null },
@@ -322,9 +378,7 @@ describe("ChatPanel — the resume row (#2196)", () => {
   });
 
   it("scrolls when resuming turns into the failed row, so its remedy is in view", async () => {
-    const spy = vi.fn();
-    const orig = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = spy;
+    const { scrolls: spy, restore } = spyChatAutoScroll();
     try {
       const { rerender } = renderWithResume({ kind: "resuming", verb: "starting" });
       await tick();
@@ -333,14 +387,12 @@ describe("ChatPanel — the resume row (#2196)", () => {
       await tick();
       expect(spy).toHaveBeenCalled();
     } finally {
-      Element.prototype.scrollIntoView = orig;
+      restore();
     }
   });
 
   it("does not scroll again when the row is recomputed with nothing changed", async () => {
-    const spy = vi.fn();
-    const orig = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = spy;
+    const { scrolls: spy, restore } = spyChatAutoScroll();
     try {
       // Only this prop changes, as in App: `rerender` would re-set every prop.
       const cell = reactiveCell<ChatResume | null>({ kind: "resuming", verb: "starting" });
@@ -356,7 +408,7 @@ describe("ChatPanel — the resume row (#2196)", () => {
       await tick();
       expect(spy).toHaveBeenCalled();
     } finally {
-      Element.prototype.scrollIntoView = orig;
+      restore();
     }
   });
 

@@ -142,7 +142,7 @@ let actionError = $state<string | null>(null);
 let clearing = $state(false);
 let exporting = $state(false);
 
-let messagesEndEl: HTMLDivElement | undefined = $state();
+let messagesEl: HTMLDivElement | undefined = $state();
 let internalInputEl: HTMLTextAreaElement | undefined = $state();
 let composerMultiline = $state(false);
 
@@ -189,6 +189,15 @@ $effect(() => {
   return () => clearInterval(timer);
 });
 
+// Scroll the messages list itself. Not `scrollIntoView` on an end sentinel: that
+// scrolls every scrollable ancestor too, including App's `.rail-full-right`,
+// which is `overflow: hidden` (the user cannot scroll it back) but still
+// script-scrollable — its tabs row shifted, and every document-level scroll
+// listener saw a scroll event per frame of the smooth scroll (#2329).
+function scrollToEnd(behavior: ScrollBehavior) {
+  messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior });
+}
+
 // Auto-scroll to bottom on new messages or when the pickup row appears or changes
 // state — but not when the row going away is the ONLY change, which would yank a
 // reader who scrolled up. The result reply usually clears the row in the same
@@ -208,7 +217,7 @@ $effect(() => {
   const sb = untrack(() => scrollBehavior);
   const messagesChanged = messages !== prevMessages;
   prevMessages = messages;
-  if (messagesChanged || kind !== null) messagesEndEl?.scrollIntoView({ behavior: sb });
+  if (messagesChanged || kind !== null) scrollToEnd(sb);
 });
 
 // Scroll to bottom when panel becomes visible
@@ -216,7 +225,7 @@ $effect(() => {
   const vis = visible;
   const sb = untrack(() => scrollBehavior);
   if (vis) {
-    messagesEndEl?.scrollIntoView({ behavior: sb });
+    scrollToEnd(sb);
   }
 });
 
@@ -428,9 +437,11 @@ async function exportChat() {
 
   <!-- Messages -->
   <div
+    bind:this={messagesEl}
     class="tandem-scroll-fade-y"
+    data-testid="chat-messages"
     use:scrollFade={"y"}
-    style="flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;"
+    style="position: relative; flex: 1; overflow: auto; padding: var(--tandem-space-3); min-height: 0;"
   >
     {#if messages.length === 0}
       <div
@@ -645,7 +656,6 @@ async function exportChat() {
             : chatPickupAnnouncement(pickupKind)}
       data-testid="chat-pickup-live"
     />
-    <div bind:this={messagesEndEl}></div>
   </div>
 
   <!-- Anchor indicator -->

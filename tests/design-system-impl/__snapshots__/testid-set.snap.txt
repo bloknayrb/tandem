@@ -53,6 +53,7 @@ chat-claude-code-offer-setup
 chat-composer-input
 chat-greeting-late
 chat-greeting-late-action
+chat-messages
 chat-panel
 chat-pickup-live
 chat-pickup-status

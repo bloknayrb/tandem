@@ -245,6 +245,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Chat panel
 - `chat-panel`, `chat-composer-input`, `chat-send-btn`, `clear-chat-btn`
+- `chat-messages` — the scrolling message list; auto-scroll scrolls this element
+  and no ancestor (`.rail-full-right` must stay at `scrollTop` 0)
 - Per message: `chat-author-{*}`, `chat-anchor-quote-{*}` (the quoted anchor;
   clicking scrolls the editor to it)
 - `chat-pickup-status` (the visible "waiting / picked up" row, `data-pickup`
