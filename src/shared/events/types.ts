@@ -195,17 +195,20 @@ export function formatEventContent(event: TandemEvent): string {
           : "";
       return `User says${reply}: ${text}${sel}${doc}`;
     }
+    // Neutral, not "User opened …" (#2069): these are derived from the server's
+    // own tab-list broadcast, which Claude's `tandem_open` and tab switches go
+    // through too, so the actor is not known here.
     case "document:opened": {
       const { fileName, format } = event.payload;
-      return `User opened document: ${fileName} (${format})${doc}`;
+      return `Document opened: ${fileName} (${format})${doc}`;
     }
     case "document:closed": {
       const { fileName } = event.payload;
-      return `User closed document: ${fileName}${doc}`;
+      return `Document closed: ${fileName}${doc}`;
     }
     case "document:switched": {
       const { fileName } = event.payload;
-      return `User switched to document: ${fileName}${doc}`;
+      return `Active document switched to: ${fileName}${doc}`;
     }
     default: {
       const _exhaustive: never = event;

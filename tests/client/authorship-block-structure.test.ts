@@ -412,14 +412,14 @@ describe("attribution survives a block-structure change", () => {
     // Mutation-tested — removing the reuse branch and re-minting both endpoints
     // fails nothing here, because a fresh mint at a live offset reproduces the
     // same anchor byte for byte. That was checked at the offset where it is
-    // most likely to diverge, immediately after a hardBreak, where
-    // `flatOffsetToRelPos` takes its assoc-directed retry: still identical,
-    // because the stored anchor came from that same retry.
+    // most likely to diverge, beside a hardBreak, where `flatOffsetToRelPos`
+    // used to take its assoc-directed retry (removed in #2001): still
+    // identical, because the stored anchor came from that same mint.
     //
     // The reuse stays anyway. It is what `splitCoveringEntries` and
     // `coalesceIntoPrevious` both do, for a reason those comments spell out,
     // and it cannot be wrong where the stored anchor was right — whereas a
-    // re-mint inherits whatever the retry does in future. The `toRel` half
+    // re-mint inherits whatever the mint does in future. The `toRel` half
     // below does discriminate: it fails against a repair that leaves the dead
     // endpoint alone.
     const { editor, entries } = boundEditor("seed\n");

@@ -560,10 +560,11 @@ export function printPushStatus(shimRegisteredFor: string[]): void {
       // installing and nothing about the one that does not.
       "  Simplest first: ask Claude to watch for updates. It can arm a watch on\n" +
       "  Tandem's wake stream itself — nothing to install, no flag — where Claude\n" +
-      "  Code offers a Monitor tool. That tool is enabled per account rather than\n" +
-      "  per version, so upgrading may not add it, and on Windows it also needs Git\n" +
-      "  Bash. If Claude says it has none, the channel shim below is the option that\n" +
-      "  never needs it.\n\n" +
+      "  Code offers a Monitor tool. That tool is enabled per account, and on\n" +
+      "  Bedrock, Vertex or Foundry, or with telemetry or nonessential traffic\n" +
+      "  turned off, it also needs Claude Code 2.1.310 or later; on Windows it also\n" +
+      "  needs Git Bash. If Claude says it has none, the channel shim below is the\n" +
+      "  option that never needs it.\n\n" +
       status +
       "  A Tandem plugin is also published (skill + MCP + a real-time monitor that\n" +
       "  needs no flag on Claude Code 2.1.212+ interactive sessions). The monitor\n" +
@@ -571,7 +572,8 @@ export function printPushStatus(shimRegisteredFor: string[]): void {
       "  start — so ask for Tandem by name rather than expecting it to be listening.\n" +
       "  It also needs Node on the PATH Claude Code itself started with (start\n" +
       "  `claude` from a terminal), and it shares the built-in Monitor tool's\n" +
-      "  per-account gate — so it cannot stand in when that gate is off.\n" +
+      "  per-account gate (and the same version floor on those setups) — so it\n" +
+      "  cannot stand in when that gate is off.\n" +
       "  Use one or the other — both active in one session deliver every event twice:\n\n" +
       CLAUDE_PLUGIN_INSTALL_COMMANDS.map((cmd) => `    ${cmd}\n`).join("") +
       "\n" +

@@ -2,6 +2,7 @@ import type { ChatMessage } from "../../shared/types";
 import type { ChatNotificationContent, ChatSound } from "../hooks/useTandemSettings";
 import {
   cleanNotificationText,
+  GREETING_NOTIFICATION_TITLE,
   NOTIFICATION_BODY_MAX_CHARS,
   NOTIFICATION_TITLE_MAX_CHARS,
   sliceCodeUnitsSafe,
@@ -183,8 +184,14 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
     // skipping it could leave a reply both silent and un-notified.
     chime(settings);
     if (!settings.chatNotifications) return;
+    // The click opens the document the notification names, so in a mixed batch
+    // it targets the newest real answer, never the hello (#2227) that
+    // `buildNotificationText` leaves out of the title.
+    const answers = remaining.filter((reply) => reply.greeting !== true);
+    const target =
+      answers.length > 0 ? answers[answers.length - 1] : remaining[remaining.length - 1];
     clickTarget = {
-      documentId: remaining[remaining.length - 1].documentId,
+      documentId: target.documentId,
       until: Number.POSITIVE_INFINITY,
     };
     deps.backend.notify(
@@ -287,15 +294,32 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
  * browser posts this text as-is, so this is where a file name's U+202E or a
  * reply's zero-width characters are dropped and the caps applied. The desktop
  * path cleans again in Rust, which changes nothing.
+ *
+ * **Tandem's one-time hello (#2227)** is announced, chime and all, but not as
+ * a reply: it answers nothing the user sent. A batch of nothing but the hello
+ * reads `GREETING_NOTIFICATION_TITLE`, never naming a document (the hello is
+ * about no file); `preview` still shows its start. In a mixed batch the hello
+ * is left out of the count, the name and the preview, so a real answer still
+ * reads "Claude replied …". The marker is the server's `greeting: true`
+ * (`ChatMessage.greeting`); nothing here guesses from the text.
  */
 export function buildNotificationText(
   replies: readonly ChatMessage[],
   content: ChatNotificationContent,
   documentName: (documentId: string) => string | null,
 ): NotificationText {
-  const count = replies.length;
-  const last = replies[count - 1];
-  const documentIds = new Set(replies.map((reply) => reply.documentId ?? ""));
+  const answers = replies.filter((reply) => reply.greeting !== true);
+  if (answers.length === 0) {
+    const hello = replies[replies.length - 1];
+    const body = content === "preview" && hello ? previewText(hello.text) : "";
+    return {
+      title: cleanNotificationText(GREETING_NOTIFICATION_TITLE, NOTIFICATION_TITLE_MAX_CHARS),
+      body: cleanNotificationText(body, NOTIFICATION_BODY_MAX_CHARS),
+    };
+  }
+  const count = answers.length;
+  const last = answers[count - 1];
+  const documentIds = new Set(answers.map((reply) => reply.documentId ?? ""));
   const name =
     content !== "generic" && documentIds.size === 1 && last.documentId
       ? documentName(last.documentId)

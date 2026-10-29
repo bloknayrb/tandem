@@ -1,9 +1,9 @@
 /**
  * Drive a real route handler without Express: register routes onto a recorder
  * app, then call the last handler for a key (the route's own body, past any
- * middleware). The shape `channel-permission-relay.test.ts` and
- * `channel-error-log-sanitization.test.ts` each grew locally; new specs import
- * this one instead of adding a copy.
+ * middleware). The shape `channel-permission-relay.test.ts` (deleted with the
+ * relay in #1885) and `channel-error-log-sanitization.test.ts` each grew
+ * locally; new specs import this one instead of adding a copy.
  */
 
 type Handler = (req: unknown, res: unknown, next?: unknown) => void;

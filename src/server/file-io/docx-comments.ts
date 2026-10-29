@@ -9,7 +9,11 @@ import * as crypto from "node:crypto";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import {
+  IMPORT_ANNOTATION_ID_PREFIX,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+} from "../../shared/constants.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
@@ -190,7 +194,7 @@ export function importAnnotationId(
     .update(annotationPreImage(commentId, from, to, bodyText))
     .digest("hex")
     .slice(0, 12);
-  return `import-${hash}`;
+  return `${IMPORT_ANNOTATION_ID_PREFIX}${hash}`;
 }
 
 /**
@@ -218,7 +222,7 @@ export function importReplyId(
     .update(replyPreImage(rootCommentId, replyCommentId, bodyText))
     .digest("hex")
     .slice(0, 12);
-  return `import-reply-${hash}`;
+  return `${IMPORT_ANNOTATION_ID_PREFIX}reply-${hash}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -994,8 +998,8 @@ export function injectCommentsAsAnnotations(
           // record would carry a fresh flat range glued to a dead CRDT anchor,
           // which refreshRange can resolve to garbage offsets (#1150 C1). Strip a
           // stale `textSnapshot` for the same reason and by the same symmetry —
-          // it's a pre-reload anchor the reload's relocation pass would chase
-          // against the old text. Import notes don't carry one today, so this is
+          // it's a pre-reload anchor the reload remap (`documents/reload-remap.ts`)
+          // would probe for against the old text. Import notes don't carry one today, so this is
           // defense-in-depth against a future writer.
           effectiveKey = drift.key;
           // `textSnapshotTruncated` and `textSnapshotBreaks` both DESCRIBE the

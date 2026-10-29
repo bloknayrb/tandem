@@ -305,6 +305,13 @@ license-banner-live
 license-buy-link
 license-dark-installed-hint
 license-gate-dark-hint
+license-grace-notice
+license-remove-button
+license-remove-cancel
+license-remove-confirm
+license-remove-confirm-btn
+license-remove-error
+license-remove-section
 license-settings-section
 license-status-live-region
 license-status-pill
@@ -484,6 +491,7 @@ settings-modal-view-changelog-btn
 settings-modal-view-documentation-btn
 settings-modal-view-license-btn
 settings-modal-working-directory
+settings-modal-working-directory-ignored
 settings-modal-working-directory-input
 settings-modal-working-directory-load-error
 settings-modal-working-directory-pick

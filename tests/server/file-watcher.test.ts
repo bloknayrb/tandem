@@ -10,6 +10,12 @@ import {
   watchFile,
 } from "../../src/server/file-watcher.js";
 import { getBuffer, resetForTesting } from "../../src/server/notifications.js";
+import {
+  beginStartupRestore,
+  clearStartupNotices,
+  endStartupRestore,
+  getStartupNotices,
+} from "../../src/server/startup-notices.js";
 
 /**
  * Per-CALL deferred queue for the delivery `stat`, not a per-test flag (#1749).
@@ -566,6 +572,104 @@ describe("the INITIAL arm reports its own failure", () => {
     expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
     expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
     expect(mockWatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("boot-time restore window (#1662)", () => {
+  // Session restore runs before the server binds, so a live push from there
+  // reaches no notify stream. Inside the window the notice is also kept as a
+  // startup notice, which `handleNotifyStream` replays to later streams.
+  const file = "/tmp/restore-window.md";
+  const other = "/tmp/restore-window-other.md";
+  const startupLost = (p: string) =>
+    getStartupNotices().filter((n) => n.dedupKey === `watch-lost:${p}`);
+
+  afterEach(() => {
+    clearStartupNotices();
+  });
+
+  it("a failed arm inside the window registers a startup notice as well as the live push", () => {
+    beginStartupRestore();
+    mockWatch.mockImplementationOnce(() => {
+      throw emfile();
+    });
+
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(false);
+    expect(mockWatch).toHaveBeenCalledTimes(1);
+    expect(startupLost(file)).toHaveLength(1);
+    expect(startupLost(file)[0]?.severity).toBe("warning");
+    expect(lostWatchNotifications(file)).toHaveLength(1);
+  });
+
+  it("the same failure outside the window registers no startup notice", () => {
+    mockWatch.mockImplementationOnce(() => {
+      throw emfile();
+    });
+
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(false);
+    expect(lostWatchNotifications(file)).toHaveLength(1);
+    expect(getStartupNotices()).toHaveLength(0);
+  });
+
+  it("two failures for one path inside the window keep ONE startup notice", () => {
+    beginStartupRestore();
+    mockWatch.mockImplementation(() => {
+      throw emfile();
+    });
+
+    watchFile(file, vi.fn().mockResolvedValue(undefined));
+    watchFile(file, vi.fn().mockResolvedValue(undefined));
+    expect(mockWatch).toHaveBeenCalledTimes(2);
+    expect(startupLost(file)).toHaveLength(1);
+  });
+
+  it("a later successful watchFile withdraws that path's notice and no other", () => {
+    beginStartupRestore();
+    mockWatch.mockImplementation(() => {
+      throw emfile();
+    });
+    watchFile(file, vi.fn().mockResolvedValue(undefined));
+    watchFile(other, vi.fn().mockResolvedValue(undefined));
+    endStartupRestore();
+    expect(getStartupNotices()).toHaveLength(2);
+
+    freshWatcherPerCall();
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
+    expect(startupLost(file)).toHaveLength(0);
+    expect(startupLost(other)).toHaveLength(1);
+  });
+
+  it("closing the document withdraws the notice, though no handle was ever stored", () => {
+    beginStartupRestore();
+    mockWatch.mockImplementationOnce(() => {
+      throw emfile();
+    });
+    watchFile(file, vi.fn().mockResolvedValue(undefined));
+    endStartupRestore();
+    expect(watchedCount()).toBe(0);
+
+    unwatchFile(file);
+    expect(startupLost(file)).toHaveLength(0);
+  });
+
+  it("paired direction: a successful arm inside the window registers nothing", () => {
+    beginStartupRestore();
+    freshWatcherPerCall();
+
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
+    expect(getStartupNotices()).toHaveLength(0);
+  });
+
+  it("a live handle's error inside the window keeps the notice it raised", () => {
+    // The error path drops the entry itself. It must not withdraw the notice
+    // it just registered — only a close or a later successful arm does.
+    const handles = freshWatcherPerCall();
+    beginStartupRestore();
+    watchFile(file, vi.fn().mockResolvedValue(undefined));
+
+    handles[0]?.errorHandler?.(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+    expect(watchedCount()).toBe(0);
+    expect(startupLost(file)).toHaveLength(1);
   });
 });
 

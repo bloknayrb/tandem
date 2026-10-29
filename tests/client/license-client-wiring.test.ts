@@ -40,6 +40,26 @@ describe("App.svelte — the licence wall and Surface-A rebuild are gone (#1521)
   });
 });
 
+/**
+ * #2231: the grace-period tray notice. The decision is `planLicenseGraceNotice`
+ * (unit-tested); this pins that App actually runs it, from an `$effect` over
+ * the licence status, with the tray read and written under `untrack` — without
+ * it the effect would depend on `notifications.activity`, and its own push
+ * would re-run it.
+ */
+describe("App.svelte — the grace notice reaches the activity tray (#2231)", () => {
+  it("runs the planner on licence status changes and applies its plan untracked", () => {
+    const start = APP.indexOf("const status = licenseStore.status;");
+    expect(start, "the grace $effect is gone").toBeGreaterThan(-1);
+    const block = APP.slice(APP.lastIndexOf("$effect(() => {", start), start + 600);
+    expect(block).toContain("untrack(() => {");
+    expect(block).toContain("planLicenseGraceNotice({");
+    expect(block).toContain("activity: notifications.activity");
+    expect(block).toContain("notifications.dismissActivity(id)");
+    expect(block).toContain("notifications.push(plan.push)");
+  });
+});
+
 describe("aiNotice reaches the readiness hook", () => {
   it("App passes it to createAiReadiness", () => {
     const call = APP.slice(APP.indexOf("createAiReadiness({"));

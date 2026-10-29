@@ -17,10 +17,11 @@ mod uninstall_scrub;
 // genuinely tricky logic — a process deadline that must bound the whole call, and
 // an in-flight guard replacing the serialization the main thread used to provide
 // for free — where they could not be unit-tested locally. `#[allow(dead_code)]`
-// on `bounded_command` covers non-Windows release builds, where nothing calls it
-// — scoped with `cfg_attr` (as `sidecar.rs`'s `PortHolder` is) so that on Windows, where the
-// module IS live, a genuinely unused helper added later still warns.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+// on `bounded_command` covers macOS release builds, where nothing calls it —
+// scoped with `cfg_attr` (as `sidecar.rs`'s `PortHolder` is) so that on Windows
+// (`firewall.rs`) and Linux (`sidecar_anchor.rs`'s reaper probe, #1988), where
+// the module IS live, a genuinely unused helper added later still warns.
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 mod bounded_command;
 mod single_flight;
 
@@ -55,6 +56,10 @@ mod win_app_mode;
 // even on ungraceful exit (taskkill / crash / dev-runner restart). See #987.
 #[cfg(target_os = "windows")]
 mod sidecar_job;
+// #1988: the Linux sidecar's parent-death trampoline and the one thread every
+// Linux sidecar spawn runs on.
+#[cfg(target_os = "linux")]
+mod sidecar_anchor;
 
 // Spike #477 PR 4: sidecar launcher validation. Test-only; not shipped.
 #[cfg(test)]
@@ -4144,6 +4149,17 @@ mod update_route_tests {
     #[test]
     fn trial_keeps_the_public_manifest() {
         let p = probe(true, None, false, Some("trial"));
+        assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
+    }
+
+    /// #2231: a licence that fails its check is in a grace period, during which
+    /// the AI stays on and updates keep flowing -- including the update that
+    /// UNSUPPORTED_VERSION's own copy asks for. `grace` carries no licence id,
+    /// so it must land on the public manifest exactly as a trial does; a deny
+    /// added for it here would strand every device in grace.
+    #[test]
+    fn grace_keeps_the_public_manifest() {
+        let p = probe(true, None, false, Some("grace"));
         assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
     }
 

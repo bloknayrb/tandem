@@ -37,6 +37,12 @@ const NUMBER_WORDS = [
   "Seven",
   "Eight",
   "Nine",
+  "Ten",
+  "Eleven",
+  "Twelve",
+  "Thirteen",
+  "Fourteen",
+  "Fifteen",
 ];
 
 /**
@@ -133,8 +139,9 @@ function acceptedSubsection(): string {
 
 /** The single CLAUDE.md bullet that carries the count and the enumeration. */
 function claimBullet(): string {
-  // Singular too: under ADR-056 one finding is open, and "One security
-  // findings are open" would be the price of a plural-only anchor.
+  // Singular too: "One security finding is open" has happened (2026-10-05,
+  // 2026-10-28), and "No security finding is open" is the empty form, so a
+  // plural-only anchor would be the wrong price.
   const start = CLAUDE_MD.search(/security findings? (?:are|is) open/);
   expect(start, "CLAUDE.md no longer states an open-findings count").toBeGreaterThan(-1);
   const lineStart = CLAUDE_MD.lastIndexOf("\n", start) + 1;
@@ -173,13 +180,30 @@ function segments(): { open: string; notCounted: string } {
 }
 
 describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => {
-  it("CLAUDE.md's count word matches the findings it actually enumerates", () => {
-    const open = issueRefsAtTopLevel(segments().open);
+  it("the issue-ref parser finds what it should (positive control)", () => {
+    // A parser that returned nothing would satisfy every set assertion in this
+    // file by finding no counterexample. This used to be controlled by
+    // requiring the open set to be non-empty, which made "no finding is open"
+    // unwritable. The control is now on the parser itself, with a fixture,
+    // plus the real bullet's not-counted segment, which always cites findings.
+    expect(issueRefsAtTopLevel("— open: #1 (cites #2), #3 (`x(`) and #4.")).toEqual([1, 3, 4]);
+    expect(
+      issueRefsAtTopLevel(segments().notCounted).length,
+      "derived no not-counted findings from the real bullet — the parser found nothing",
+    ).toBeGreaterThan(0);
+  });
 
-    // Positive control. A parser that returned nothing would satisfy every
-    // set assertion below by finding no counterexample, so the enumeration
-    // being non-empty is the thing that makes the rest evidence.
-    expect(open.length, "derived no open findings — the parser found nothing").toBeGreaterThan(0);
+  it("CLAUDE.md's count word matches the findings it actually enumerates", () => {
+    const { open: openSegment } = segments();
+    const open = issueRefsAtTopLevel(openSegment);
+
+    if (open.length === 0) {
+      // The empty form must SAY it is empty, so a parser that silently found
+      // nothing in a non-empty enumeration still fails here.
+      expect(claimBullet()).toContain("**No security finding is open");
+      expect(openSegment).toMatch(/^— open: none\b/);
+      return;
+    }
 
     const word = NUMBER_WORDS[open.length];
     expect(word, `no number word for ${open.length} findings`).toBeTruthy();
@@ -295,7 +319,7 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
  * every spec here stayed green.
  *
  * Keyed on the ISSUE REF, not on a status word. The register has no uniform status token —
- * #1609, #1884 and #1292 carry none, and #1420 reads "not open" — so a "contains the word open"
+ * #1609 and #1292 carry none, and #1420 reads "not open" — so a "contains the word open"
  * predicate is wrong in both directions. It is also why "every entry appears in CLAUDE.md or
  * carries a not-counted marker" is unbuildable here: the `## Open findings` section holds ~27
  * top-level bullets of which only ~10 are entries, the rest being unindented PROSE bullets
@@ -317,6 +341,10 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
   {
     issue: 2144,
     why: "FIXED for planted reparse points, NARROWED for the swap race and not counted (Bryan, 2026-10-06)",
+  },
+  {
+    issue: 1884,
+    why: "FIXED at the source: the shim's permission capability was withdrawn and the relay routes deleted (#1885); entry kept for the mechanism",
   },
   {
     issue: 2266,

@@ -216,4 +216,41 @@ describe("solo-mode event filtering", () => {
 
     expect(stdoutSpy).not.toHaveBeenCalled();
   });
+
+  // #2069: `document:*` now fires on every tab click, open and close. The shared
+  // consumer's awareness side effect runs AFTER `onEvent`, independent of the
+  // monitor's emit gate, so without its own gate each tab click would post
+  // "processing: document:switched" and show Claude busy on a document it was
+  // never asked about.
+  async function awarenessPostsFor(type: string, payload: Record<string, unknown>) {
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    const promise = connectAndStream(
+      undefined,
+      () => {},
+      () => {},
+    );
+    stream.push(sseFrame({ id: "e1", type, timestamp: 1, documentId: "doc-1", payload }, "e1"));
+    // Past the 500 ms debounce, with the stream still open so the flush runs.
+    await vi.advanceTimersByTimeAsync(1_000);
+    stream.end();
+    await promise.catch(() => {});
+    // The harness's handlers are first-match, so read the recorded calls
+    // rather than registering a second awareness handler.
+    return stub.calls
+      .filter((c) => c.url.includes("/api/channel-awareness"))
+      .map((c) => JSON.parse(String(c.init?.body ?? "{}")) as { status: string; active: boolean })
+      .filter((p) => p.active);
+  }
+
+  it("posts no 'processing' awareness for document:* (#2069)", async () => {
+    expect(await awarenessPostsFor("document:switched", { fileName: "a.md" })).toEqual([]);
+  });
+
+  it("control: an annotation event does post 'processing' awareness", async () => {
+    const posts = await awarenessPostsFor("annotation:created", {
+      annotationId: "a1",
+      fileName: "a.md",
+    });
+    expect(posts.map((p) => p.status)).toEqual(["processing: annotation:created"]);
+  });
 });

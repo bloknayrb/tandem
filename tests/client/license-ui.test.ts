@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { aiOffCopy, deriveLicenseUi } from "../../src/client/utils/license-ui.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { deactivateLicenseClient } from "../../src/client/hooks/useLicense.js";
+import {
+  aiOffCopy,
+  deriveLicenseUi,
+  LICENSE_GRACE_DEDUP_KEY,
+  type LicenseStatusResponse,
+  planLicenseGraceNotice,
+} from "../../src/client/utils/license-ui.js";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 /**
@@ -164,5 +171,189 @@ describe("aiOffCopy", () => {
       expect(text).not.toContain("Activate a license");
       expect(text).not.toContain(TANDEM_PURCHASE_URL);
     }
+  });
+});
+
+// ── #2231: the grace period ─────────────────────────────────────────────────
+
+const GRACE_STATUS: LicenseStatusResponse = {
+  gateActive: true,
+  status: "grace",
+  updateWindowCurrent: false,
+  licenseUnverifiable: "BAD_SIGNATURE",
+  grace: {
+    firstFailedAt: new Date(2026, 9, 29, 12).toISOString(),
+    endsAt: new Date(2026, 10, 12, 12).toISOString(),
+    daysRemaining: 1,
+  },
+};
+
+describe("deriveLicenseUi — grace (#2231)", () => {
+  it("keeps the AI on, shows no trial banner, and never says 'Licensed'", () => {
+    const ui = deriveLicenseUi(GRACE_STATUS);
+    expect(ui).toEqual({
+      aiNotice: null,
+      aiOff: false,
+      showTrialBanner: false,
+      trialDaysRemaining: null,
+      statusLabel: "License not verified — AI on for 1 more day",
+    });
+  });
+
+  it("degrades to a dateless label when the payload carries no grace object", () => {
+    const { grace: _drop, ...noGrace } = GRACE_STATUS;
+    expect(deriveLicenseUi(noGrace).statusLabel).toBe("License not verified");
+  });
+});
+
+describe("planLicenseGraceNotice (#2231)", () => {
+  const NOW = 1_800_000_000_000;
+  const row = { id: "license-grace-1", dedupKey: LICENSE_GRACE_DEDUP_KEY };
+
+  it("pushes one persistent warning on entering grace, with the date and no purchase URL", () => {
+    const plan = planLicenseGraceNotice({
+      status: GRACE_STATUS,
+      activity: [],
+      handledThisLoad: false,
+      now: NOW,
+    });
+    expect(plan.handledThisLoad).toBe(true);
+    expect(plan.dismissIds).toEqual([]);
+    expect(plan.push).toMatchObject({
+      type: "license",
+      severity: "warning",
+      dedupKey: LICENSE_GRACE_DEDUP_KEY,
+      timestamp: NOW,
+    });
+    expect(plan.push?.message).toContain("until 2026-11-12");
+    expect(plan.push?.message).toContain("support@tandem.ink");
+    expect(plan.push?.message).not.toContain(TANDEM_PURCHASE_URL);
+  });
+
+  it("does not push again on a later poll of the same page load", () => {
+    expect(
+      planLicenseGraceNotice({
+        status: GRACE_STATUS,
+        activity: [],
+        handledThisLoad: true,
+        now: NOW,
+      }).push,
+    ).toBeNull();
+  });
+
+  it("does not push when the rehydrated tray already holds a grace row", () => {
+    const plan = planLicenseGraceNotice({
+      status: GRACE_STATUS,
+      activity: [row],
+      handledThisLoad: false,
+      now: NOW,
+    });
+    expect(plan.push).toBeNull();
+    expect(plan.handledThisLoad).toBe(true);
+  });
+
+  it("replaces a rehydrated grace row whose end date is stale, once per load", () => {
+    const stale = { ...row, message: "Tandem couldn't verify … stay on until 2026-01-01 — …" };
+    const plan = planLicenseGraceNotice({
+      status: GRACE_STATUS,
+      activity: [stale],
+      handledThisLoad: false,
+      now: NOW,
+    });
+    expect(plan.dismissIds).toEqual(["license-grace-1"]);
+    expect(plan.push?.message).toContain("until 2026-11-12");
+    expect(plan.handledThisLoad).toBe(true);
+    const current = { ...row, message: plan.push?.message };
+    expect(
+      planLicenseGraceNotice({
+        status: GRACE_STATUS,
+        activity: [current],
+        handledThisLoad: false,
+        now: NOW,
+      }),
+    ).toEqual({ push: null, dismissIds: [], handledThisLoad: true });
+  });
+
+  it("keys on the dedupKey, not a date: a moving firstFailedAt never re-toasts", () => {
+    const first = planLicenseGraceNotice({
+      status: GRACE_STATUS,
+      activity: [],
+      handledThisLoad: false,
+      now: NOW,
+    });
+    const moved: LicenseStatusResponse = {
+      ...GRACE_STATUS,
+      grace: { firstFailedAt: new Date(NOW).toISOString(), endsAt: "z", daysRemaining: 14 },
+    };
+    expect(
+      planLicenseGraceNotice({
+        status: moved,
+        activity: [],
+        handledThisLoad: first.handledThisLoad,
+        now: NOW + 60_000,
+      }).push,
+    ).toBeNull();
+  });
+
+  it.each([
+    ["licensed", { gateActive: true, status: "licensed", updateWindowCurrent: true }],
+    ["restricted", { gateActive: true, status: "restricted", updateWindowCurrent: false }],
+    ["a dark build", { gateActive: false, status: "licensed", updateWindowCurrent: true }],
+  ] as const)("leaving grace (%s) dismisses every grace row and resets the flag", (_l, status) => {
+    const plan = planLicenseGraceNotice({
+      status: status as LicenseStatusResponse,
+      activity: [row, { id: "other", dedupKey: "settings-readonly" }],
+      handledThisLoad: true,
+      now: NOW,
+    });
+    expect(plan).toEqual({ push: null, dismissIds: ["license-grace-1"], handledThisLoad: false });
+  });
+
+  it("no status (a failed poll) is not evidence the grace ended: nothing happens", () => {
+    expect(
+      planLicenseGraceNotice({ status: null, activity: [row], handledThisLoad: true, now: NOW }),
+    ).toEqual({ push: null, dismissIds: [], handledThisLoad: true });
+  });
+});
+
+describe("deactivateLicenseClient (#1943)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs { confirm: true } and reports whether a licence was removed", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ removed: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(deactivateLicenseClient()).resolves.toEqual({ ok: true, removed: true });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/api\/license\/deactivate$/);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ confirm: true });
+  });
+
+  it("passes the server's message through on a refusal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "LICENSE_REMOVE_FAILED", message: "locked" }), {
+            status: 500,
+          }),
+      ),
+    );
+    await expect(deactivateLicenseClient()).resolves.toEqual({ ok: false, error: "locked" });
+  });
+
+  it("never throws on a transport failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await expect(deactivateLicenseClient()).resolves.toEqual({
+      ok: false,
+      error: "Server unavailable.",
+    });
   });
 });

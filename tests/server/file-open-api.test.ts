@@ -220,22 +220,33 @@ describe("openFromDisk", () => {
     spy.mockRestore();
   });
 
-  it("force=true clears Y_MAP_ANNOTATIONS", async () => {
+  it("force=true keeps Y_MAP_ANNOTATIONS, remapped onto the reloaded content (#2269)", async () => {
     const dir = await makeTmpDir();
     const filePath = path.join(dir, "test.md");
-    await fs.writeFile(filePath, "# Hello");
+    await fs.writeFile(filePath, "# Hello\n\nworld\n");
 
     const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
 
-    // Inject a fake annotation
+    // A note on "world", which the external edit below pushes down a paragraph.
     const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-    annotations.set("fake-annotation-1", { text: "test" });
-    expect(annotations.size).toBe(1);
+    const from = extractText(doc).indexOf("world");
+    annotations.set("note-1", {
+      id: "note-1",
+      author: "user",
+      type: "note",
+      audience: "private",
+      range: { from, to: from + 5 },
+      content: "mine",
+      status: "pending",
+      timestamp: 1,
+    });
 
-    // Force-reload should clear it
+    await fs.writeFile(filePath, "# Hello\n\nnew paragraph\n\nworld\n");
     await openFromDisk(filePath, { force: true });
-    expect(annotations.size).toBe(0);
+    const kept = annotations.get("note-1") as { range: { from: number; to: number } } | undefined;
+    expect(kept, "a reload no longer clears the annotation map").toBeDefined();
+    expect(extractText(doc).slice(kept?.range.from, kept?.range.to)).toBe("world");
   });
 
   it("force=true clears Y_MAP_AWARENESS", async () => {

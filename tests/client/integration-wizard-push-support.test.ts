@@ -415,6 +415,10 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
       // user told to use it without being told it may not be there reads a
       // missing tool as Tandem being broken.
       expect(text).toMatch(/per account/i);
+      // …and, on Bedrock/Vertex/Foundry or with telemetry off, a version floor
+      // (#2302): there, upgrading is what adds it.
+      expect(text).toMatch(/2\.1\.310/);
+      expect(text).not.toMatch(/upgrading (?:will not|won't|may not) add it/i);
     });
 
     it(`offers the plugin install commands when the ${branch}`, async () => {

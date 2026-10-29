@@ -32,18 +32,18 @@ unambiguously to a single position.
 
 ## Anchors
 
-| Anchor ID                  | Type        | `targetText` substring                       | welcome.md section | Author seeded as |
-| -------------------------- | ----------- | -------------------------------------------- | ------------------ | ---------------- |
-| `__tutorial__highlight-1`  | `highlight` | `highlight text and your AI sees it`         | opening paragraph (under the title) | `claude` |
-| `__tutorial__comment-1`    | `comment`   | `edit this document at the same time`        | Getting Started    | `claude`         |
-| `__tutorial__suggest-1`    | `comment` (with `suggestedText: "streamline onboarding"`) | `simplify onboarding` | Sample Content | `claude` |
-| `__tutorial__note-1`       | `note`      | `accept or dismiss`                          | Try These (step 1, "Respond to a suggestion") | `user` |
+| Anchor ID                | Type        | `targetText` substring                       | welcome.md section | Author seeded as |
+| ------------------------ | ----------- | -------------------------------------------- | ------------------ | ---------------- |
+| `tutorial-highlight-1`   | `highlight` | `highlight text and your AI sees it`         | opening paragraph (under the title) | `user` |
+| `tutorial-comment-1`     | `comment`   | `edit this document at the same time`        | Getting Started    | `claude`         |
+| `tutorial-suggest-1`     | `comment` (with `suggestedText: "streamline onboarding"`) | `simplify onboarding` | Sample Content | `claude` |
+| `tutorial-note-1`        | `note`      | `accept or dismiss`                          | Try These (step 1, "Respond to a suggestion") | `user` |
 
 The section column is for orientation only; find an anchor by searching for
 its substring. The gate checks presence and uniqueness, not position, so no
 line number is kept here (an earlier line column drifted out of date).
 
-The `__tutorial__` prefix is `TUTORIAL_ANNOTATION_PREFIX` from
+The `tutorial-` prefix is `TUTORIAL_ANNOTATION_PREFIX` from
 `src/shared/constants.ts`. The `injectTutorialAnnotations` function is
 idempotent — re-injection skips entries whose IDs already exist in the
 Y.Map, and also skips a seed the user deleted: an id tombstoned in the
@@ -51,10 +51,14 @@ ledger for that file is not re-created (#1696). The exception is an explicit
 replay request (Settings → Replay tutorial), which re-creates tombstoned
 seeds at a `rev` above their tombstone; the function returns how many it
 re-created, and a caller that gets a non-zero count must persist a snapshot
-for the replay to outlive the session. Every seed is written with
-`audience: "outbound"` — a Claude-authored seed the user is invited to accept
-or dismiss is outbound by intent — and the [note](../glossary.md#note) stays private through its
-`user` author and sanitize's demote guard.
+for the replay to outlive the session. Each seed states its author and
+audience: the two `claude` comments are written `audience: "outbound"` — a
+Claude-authored seed the user is invited to accept or dismiss is outbound by
+intent — and the two `user` seeds, the highlight and the
+[note](../glossary.md#note), are written `audience: "private"`, matching what
+sanitize's demote guard would force on read. Highlights are the user's own
+marks (#1725), so the highlight seed carries no Accept or Dismiss and the
+welcome document has two review targets.
 
 ## Contract
 

@@ -92,6 +92,11 @@ const ROUTE_GATES: RouteGate[] = [
     why: "refusing this would make the refusal unescapable: an unlicensed user could never install the licence that lifts it",
   },
   {
+    constant: "API_LICENSE_DEACTIVATE",
+    gate: "open",
+    why: "removes the user's own licence file (#1943): not an AI surface, and like activate it must work in every licence state — refusing it while unlicensed would be meaningless",
+  },
+  {
     constant: "API_STORE_RECLAIM_LOCK",
     gate: "open",
     why: "lockfile housekeeping, not a write",
@@ -128,16 +133,6 @@ const ROUTE_GATES: RouteGate[] = [
     constant: "API_CHANNEL_REPLY",
     gate: "refused",
     why: "Claude's chat write via the channel shim, an AI surface; `appendClaudeChatMessage` refuses and the handler answers before `markUserChatRead`",
-  },
-  {
-    constant: "API_CHANNEL_PERMISSION",
-    gate: "refused",
-    why: "relays Claude Code's tool-approval prompt, an AI surface",
-  },
-  {
-    constant: "API_CHANNEL_PERMISSION_VERDICT",
-    gate: "refused",
-    why: "the verdict half of the same AI approval relay",
   },
   {
     constant: "API_CHAT",

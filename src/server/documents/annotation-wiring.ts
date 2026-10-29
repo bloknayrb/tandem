@@ -29,10 +29,10 @@ import { pushNotification } from "../notifications.js";
  * the clone is byte-exact. Byte-exactness expires at the first edit, so the
  * repair cannot wait for whoever calls `refreshAllRanges` next: nothing on
  * the NORMAL open path calls it (every other server caller is downstream of a
- * later action and the client never writes back — the force-reload arm's
- * `reanchorAnnotations` is a different arm and never reaches the fallback
- * restore), while `loadAndMerge` snapshots the dead relRange into the durable
- * envelope on this very open.
+ * later action and the client never writes back — the reload remap
+ * (`reload-remap.ts`) runs only on a content-replacing reload and never reaches
+ * the fallback restore), while `loadAndMerge` snapshots the dead relRange into
+ * the durable envelope on this very open.
  *
  * `map` is a PARAMETER, not `doc.getMap(Y_MAP_ANNOTATIONS)` computed here:
  * this module has no `shared/constants.ts` edge and computing it here would
@@ -133,7 +133,12 @@ export async function wireAnnotationStore(
   id: string,
   doc: Y.Doc,
   filePath: string,
-  opts?: { allowRecovery?: boolean; migrateTombstonesFrom?: string },
+  opts?: {
+    allowRecovery?: boolean;
+    migrateTombstonesFrom?: string;
+    /** Passed through to `loadAndMerge` — see its docblock (#2269). */
+    afterMerge?: (fileWonIds: ReadonlySet<string>) => boolean;
+  },
 ): Promise<{ wired: boolean }> {
   try {
     const hash = docHash(filePath);
@@ -170,7 +175,7 @@ export async function wireAnnotationStore(
         docHash: hash,
         meta: { filePath },
       },
-      { migrateTombstonesFrom: opts?.migrateTombstonesFrom },
+      { migrateTombstonesFrom: opts?.migrateTombstonesFrom, afterMerge: opts?.afterMerge },
     );
     setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
     return { wired: true };

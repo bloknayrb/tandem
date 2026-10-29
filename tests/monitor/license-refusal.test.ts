@@ -135,8 +135,9 @@ describe("SSE consumer: licence refusal", () => {
 });
 
 /**
- * The body-only refusal reader the channel shim's permission relay shares with
- * the SSE consumer (#1521). Total: anything but a 403 carrying
+ * The body-only refusal reader the SSE consumer uses (#1521); the channel
+ * shim's permission relay shared it until #1885 deleted the relay. Total:
+ * anything but a 403 carrying
  * `LICENSE_REQUIRED` is `null`, never a throw.
  */
 describe("licenseRefusalMessage", () => {

@@ -79,7 +79,7 @@ import {
   stopAutoSave,
   touchSession,
 } from "../session/manager.js";
-import { addStartupNotice } from "../startup-notices.js";
+import { addStartupNotice, beginStartupRestore, endStartupRestore } from "../startup-notices.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
@@ -2189,6 +2189,23 @@ export async function restoreOpenDocuments(
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
+  // No notify stream exists yet, so a document that fails to arm its file
+  // watcher here also leaves a startup notice for the tabs that connect later
+  // (#1662). The `finally` is what keeps a throw from leaving that window
+  // open for the life of the process.
+  beginStartupRestore();
+  try {
+    return await restoreSessions(sessions, previousActiveDocId, options);
+  } finally {
+    endStartupRestore();
+  }
+}
+
+async function restoreSessions(
+  sessions: SessionFileEntry[],
+  previousActiveDocId: string | null,
+  options: { dropDarkDocx?: boolean },
+): Promise<number> {
   // Partition over EVERY session, `.docx` included, so the window the others
   // are measured against is the same one they had before `.docx` went dark.
   const partition = partitionByRestoreWindow(sessions);

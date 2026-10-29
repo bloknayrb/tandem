@@ -7,7 +7,6 @@ import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
-import { SNAPSHOT_CAP } from "../../shared/snapshot.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
@@ -27,7 +26,7 @@ import { isClaudeFacing } from "../annotations/projection.js";
 import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
-import { splitsSurrogatePair } from "../positions.js";
+import { captureSnapshotFromText } from "../positions.js";
 import type { FlatBreak } from "./document-model.js";
 import { extractTextWithBreaks } from "./document-model.js";
 import { getDocumentStore, resolveAnnotationStore, type YDocStore } from "./document-store.js";
@@ -187,7 +186,8 @@ function notifyRangeFailure(
 
 /**
  * Capture a text snapshot from the document at the given range, capped at
- * {@link SNAPSHOT_CAP} chars.
+ * `SNAPSHOT_CAP` chars. The work is `captureSnapshotFromText` (`positions.ts`),
+ * which a caller holding an already-extracted text uses directly.
  *
  * Reports `truncated` out of band rather than marking the cut with a trailing
  * `"..."` (#1486). Undo restores this string verbatim into the document, so a
@@ -208,8 +208,8 @@ function notifyRangeFailure(
  * surrogate pair (#1767). A lone surrogate survives in process and survives the
  * JSON envelope on disk, but Yjs re-encodes it as U+FFFD on the first
  * `encodeStateAsUpdate` — session persist, doc swap, any client sync — after
- * which the snapshot occurs nowhere in the document: the watcher's relocation
- * pass answers `RANGE_GONE` forever and `snapshotContradicts` flips true, so
+ * which the snapshot occurs nowhere in the document: a relocation probe built
+ * from it finds nothing, forever, and `snapshotContradicts` flips true, so
  * Accept refuses the suggestion. It looks fine until a restart.
  *
  * The back-off SHORTENS to 199 rather than extending to 201, because the cap is
@@ -218,7 +218,7 @@ function notifyRangeFailure(
  * the record is a prefix either way, and `isSnapshotTruncated`'s legacy branch
  * wants `length === SNAPSHOT_CAP` AND a trailing ellipsis, so a 199-unit
  * snapshot does not become undetectable. The predicate is
- * {@link splitsSurrogatePair}, the PAIRED form — a one-sided "is the unit at the
+ * `splitsSurrogatePair`, the PAIRED form — a one-sided "is the unit at the
  * cap a surrogate" test also fires at the legal boundary between two adjacent
  * astral characters and would shorten a snapshot that splits nothing.
  *
@@ -234,18 +234,8 @@ export function captureSnapshot(
   from: number,
   to: number,
 ): { text: string; truncated: boolean; breaks: FlatBreak[] } {
-  const { text: fullText, breaks: allBreaks } = extractTextWithBreaks(ydoc);
-  const text = fullText.slice(from, to);
-  const capped = text.length > SNAPSHOT_CAP;
-  const cap = splitsSurrogatePair(text, SNAPSHOT_CAP) ? SNAPSHOT_CAP - 1 : SNAPSHOT_CAP;
-  const kept = capped ? text.slice(0, cap) : text;
-  // `at < from + kept.length`, not `<= to`: a break AT the range's end is the
-  // separator to whatever comes NEXT and is not part of this range. Bounding on
-  // the kept text also drops anything past the cap in one step.
-  const breaks = allBreaks
-    .filter((b) => b.at >= from && b.at < from + kept.length)
-    .map((b) => ({ at: b.at - from, kind: b.kind }));
-  return { text: kept, truncated: capped, breaks };
+  const { text, breaks } = extractTextWithBreaks(ydoc);
+  return captureSnapshotFromText(text, breaks, from, to);
 }
 
 export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
@@ -376,7 +366,7 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       annotations: IDEMPOTENT_WRITE_TOOL,
       description:
-        'Read the annotations on a document, optionally filtered by author/type/status, each comment with its visible replies. Only records shared with you are returned. User notes are private and excluded, counted in notesExcluded (including imported comments awaiting user promotion; promoted ones surface as user comments). Every other record the user has not shared is excluded too and counted in privateExcluded — user highlights are always private, so type: "highlight" returns only a highlight Claude authored (such as the tutorial seed). In solo mode the user\'s own annotations and replies are also held back. A record whose anchor no longer matches its text carries anchor: "degraded" or "failed". For only what is new since your last poll, use tandem_checkInbox.',
+        'Read the annotations on a document, optionally filtered by author/type/status, each comment with its visible replies. Only records shared with you are returned. User notes are private and excluded, counted in notesExcluded (including imported comments awaiting user promotion; promoted ones surface as user comments). Every other record the user has not shared is excluded too and counted in privateExcluded — user highlights are always private, so type: "highlight" returns only a highlight Claude authored, which no current tool or seed creates (a store from an older version may still hold the old tutorial highlight). In solo mode the user\'s own annotations and replies are also held back. A record whose anchor no longer matches its text carries anchor: "degraded" or "failed". For only what is new since your last poll, use tandem_checkInbox.',
       inputSchema: {
         author: AuthorSchema.optional().describe("Filter by author"),
         type: z

@@ -24,7 +24,7 @@ On first run, Tandem opens `sample/welcome.md` automatically. Four tutorial anno
 
 A floating tutorial card appears at the bottom-left of the editor with three steps:
 
-1. **Review an annotation** — Accept or dismiss one of the tutorial annotations from the side panel, or turn on the margin view to see them beside the text.
+1. **Review an annotation** — Accept or dismiss one of your AI's two tutorial comments from the side panel (the highlight and the note are yours, so they have no Accept or Dismiss), or turn on the margin view to see them beside the text.
 2. **Ask a question** — Select text, click Annotate, and send your question to your AI assistant. Or type in the Chat panel.
 3. **Make an edit** — Click in the document and type something.
 

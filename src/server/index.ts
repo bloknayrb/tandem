@@ -49,6 +49,7 @@ import {
   docCount,
   getOpenDocs,
 } from "./mcp/document-service.js";
+import { setGreetingReplyClassifier, snapshotUserChat } from "./mcp/greeting-reply.js";
 import { shutdownSearchWorker } from "./mcp/search-worker.js";
 import {
   APP_VERSION,
@@ -79,6 +80,7 @@ import {
   stopAutoSave,
 } from "./session/manager.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
+import { installSidecarPipeGuard } from "./sidecar-pipe-guard.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
 import { startHocuspocus } from "./yjs/provider.js";
@@ -125,7 +127,7 @@ const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT)
 let httpServer: Server | null = null;
 let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
 let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
-  resolveInitialLauncherReason(process.env);
+  resolveInitialLauncherReason(process.env, transportMode);
 
 /**
  * Single-flight guard for `startLauncherSupervisor`. Set SYNCHRONOUSLY before
@@ -171,6 +173,10 @@ async function startLauncherSupervisor(): Promise<void> {
         markDone: () => markGreeted(appData, APP_VERSION),
       },
       subscribeTandemReply: onTandemReply,
+      // The hello is announced as "Tandem's Claude is ready", not "replied"
+      // (#2227): the supervisor decides which reply is it.
+      registerGreetingReplyClassifier: setGreetingReplyClassifier,
+      userChatSnapshot: snapshotUserChat,
       // Solo, or an unreadable mode, holds the hello for a Tandem-mode start.
       greetingHeldBySolo: () => readModeState() !== "tandem",
       // The v1.0 setup walkthrough holds the boot start until it is done
@@ -357,6 +363,13 @@ async function shutdown(signal: string) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+// The desktop shell died and took its pipe ends with it (#1988): see
+// `sidecar-pipe-guard.ts` for why an unhandled EPIPE here spins forever.
+if (isTauriSidecar()) {
+  installSidecarPipeGuard([process.stdout, process.stderr], () => {
+    void shutdown("shell pipe closed (EPIPE)");
+  });
+}
 
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);

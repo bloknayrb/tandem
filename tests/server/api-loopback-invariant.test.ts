@@ -10,8 +10,6 @@ import {
   API_APPLY_CHANGES,
   API_CHANNEL_AWARENESS,
   API_CHANNEL_ERROR,
-  API_CHANNEL_PERMISSION,
-  API_CHANNEL_PERMISSION_VERDICT,
   API_CHANNEL_REPLY,
   API_CHAT,
   API_CLOSE,
@@ -46,9 +44,19 @@ const CARVE_OUTS = [
   { method: "POST", path: API_CHANNEL_AWARENESS },
   { method: "POST", path: API_CHANNEL_ERROR },
   { method: "POST", path: API_CHANNEL_REPLY },
-  { method: "POST", path: API_CHANNEL_PERMISSION },
-  { method: "POST", path: API_CHANNEL_PERMISSION_VERDICT },
   { method: "DELETE", path: API_CHAT },
+] as const;
+
+/**
+ * The two permission-relay POSTs were carve-outs until #1885 deleted their
+ * routes. Spelled as literals because their `API_*` constants went with them.
+ * Stub handlers are registered at both, so a 403 here can only be the gate:
+ * removing them from `NON_LOOPBACK_ALLOWED` is pinned by behaviour, and a
+ * re-added entry would turn these back into 200s.
+ */
+const WITHDRAWN_CARVE_OUTS = [
+  "/api/channel-permission",
+  "/api/channel-permission-verdict",
 ] as const;
 
 /**
@@ -113,6 +121,9 @@ beforeAll(async () => {
       app.post(path, record(`POST ${path}`));
     }
   }
+  for (const path of WITHDRAWN_CARVE_OUTS) {
+    app.post(path, record(`POST ${path}`));
+  }
   app.get(API_INFO, record(`GET ${API_INFO}`));
   app.options(API_OPEN, (_req: Request, res: Response) => res.sendStatus(204));
 
@@ -167,6 +178,16 @@ describe("#1320 /api loopback invariant", () => {
       const { status } = await call(method, path, LAN);
       expect(status, `${method} ${path} is the Cowork transport`).toBe(200);
       expect(reached).toEqual([`${method} ${path}`]);
+    }
+  });
+
+  it("no longer carves out the withdrawn permission-relay paths (#1885)", async () => {
+    for (const path of WITHDRAWN_CARVE_OUTS) {
+      reached.length = 0;
+      const { status, body } = await call("POST", path, LAN);
+      expect(status, `POST ${path} left NON_LOOPBACK_ALLOWED with its route`).toBe(403);
+      expect(body).toMatchObject({ error: "FORBIDDEN", code: "BAD_ORIGIN" });
+      expect(reached).toEqual([]);
     }
   });
 

@@ -464,6 +464,9 @@ export function pickWinner(
  * compare normalized copies and let the winner replace. After the pass,
  * `needsWrite` is true if the Y.Map carries ids the file doesn't (minus
  * `ymapOnlyIgnoreIds`) — caller queues a post-merge write so those land.
+ * `fileWon` names every id the pass wrote FROM the file (inserted or replaced),
+ * so a caller can fix up records whose file copy predates something the live
+ * map already reflects (#2269's post-reload remap).
  */
 function mergeMap<T extends { rev: number; editedAt?: number }>(
   ymap: Y.Map<unknown>,
@@ -473,24 +476,28 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
     shouldSkipInsert?: (id: string, fileRec: T) => boolean;
     ymapOnlyIgnoreIds?: Set<string>;
   } = {},
-): { needsWrite: boolean } {
+): { needsWrite: boolean; fileWon: Set<string> } {
   let needsWrite = false;
+  const fileWon = new Set<string>();
 
   for (const [id, fileRec] of fileRecs) {
     const ymapRaw = ymap.get(id);
     if (ymapRaw === undefined) {
       if (opts.shouldSkipInsert?.(id, fileRec)) continue;
       ymap.set(id, fileRec);
+      fileWon.add(id);
       continue;
     }
     const ymapRec = normalize(ymapRaw);
     if (!ymapRec) {
       ymap.set(id, fileRec);
+      fileWon.add(id);
       continue;
     }
     const winner = pickWinner(fileRec, ymapRec);
     if (winner === "file") {
       ymap.set(id, fileRec);
+      fileWon.add(id);
     } else {
       needsWrite = true;
     }
@@ -503,7 +510,7 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
     break;
   }
 
-  return { needsWrite };
+  return { needsWrite, fileWon };
 }
 
 // ---------------------------------------------------------------------------
@@ -548,10 +555,22 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
  *
  *   5. Register the observer AFTER merge completes. Returns the observer
  *      cleanup so the caller can unregister on doc close.
+ *
+ * `opts.afterMerge` runs INSIDE the merge transaction with the ids of every
+ * annotation the merge took from the file (inserted, or replacing the map's
+ * copy), and only when there is at least one. The content-replacing reloads
+ * pass it (#2269): their map was remapped onto the new content before this
+ * merge, so a record whose envelope copy wins comes back in pre-reload
+ * coordinates and has to be remapped too. Returning `true` (it wrote) queues
+ * the post-merge durable write. Not called on the fast paths, which take
+ * nothing from the file.
  */
 export async function loadAndMerge(
   ctx: SyncContext,
-  opts?: { migrateTombstonesFrom?: string },
+  opts?: {
+    migrateTombstonesFrom?: string;
+    afterMerge?: (fileWonIds: ReadonlySet<string>) => boolean;
+  },
 ): Promise<ObserverCleanup> {
   const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
@@ -668,6 +687,9 @@ export async function loadAndMerge(
       ymapOnlyIgnoreIds: tombstoneIds,
     });
     if (annResult.needsWrite) needsWrite = true;
+    if (opts?.afterMerge && annResult.fileWon.size > 0 && opts.afterMerge(annResult.fileWon)) {
+      needsWrite = true;
+    }
 
     const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
     const repResult = mergeMap(repMap, fileReplies, normalizeReply);

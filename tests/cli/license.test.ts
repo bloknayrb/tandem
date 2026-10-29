@@ -58,6 +58,35 @@ describe("formatLicenseStatus", () => {
     licenseId: "lic-1",
   };
 
+  // #2231. Built from local-time parts so the expected date is the same local
+  // calendar day `formatGraceEndDate` prints, in any TZ the suite runs in.
+  const graceEnds = new Date(2026, 10, 12, 12, 0, 0).toISOString();
+  const grace: LicenseState = {
+    gateActive: true,
+    status: "grace",
+    updateWindowCurrent: false,
+    licenseUnverifiable: "BAD_SIGNATURE",
+    grace: { firstFailedAt: "2026-10-29T12:00:00.000Z", endsAt: graceEnds, daysRemaining: 6 },
+  };
+
+  it("an armed grace period: the date, the day count, the remedy, never 'licensed' or a buy link (#2231)", () => {
+    const out = formatLicenseStatus(grace, true).join("\n");
+    expect(out).toContain(
+      "Status:        license not verified — AI features stay on until 2026-11-12 (6 of 14 days left)",
+    );
+    expect(out).toContain("support@tandem.ink");
+    expect(out).not.toContain(TANDEM_PURCHASE_URL);
+    expect(out).not.toMatch(/Status:\s+licensed/);
+    // One paragraph: the grace copy carries the remedy, so it is not repeated.
+    expect(out.match(/signing-key change/g)).toHaveLength(1);
+  });
+
+  it("the same state on a dark build keeps the dark wording (ADR-040 D7)", () => {
+    const out = formatLicenseStatus(grace, false).join("\n");
+    expect(out).toContain("license not verified — nothing is enforced in this build");
+    expect(out).not.toContain("stay on until");
+  });
+
   it("shows trial days remaining", () => {
     const out = formatLicenseStatus(trial, true).join("\n");
     // "of 14" states the trial length: the LICENSE file's Additional Use Grant

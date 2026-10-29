@@ -8,13 +8,13 @@
  * terminal: an ESC/OSC-0 sequence retitles the window, a bare LF forges a whole
  * log line, and an unbounded string floods the scrollback.
  *
- * These specs pin `sanitizeForLog` at all five interpolation sites — both
- * fields of the UNKNOWN_CODE arm, `message` on the valid-code arm,
- * `toolName`/`requestId` on the permission POST, and `requestId` on the verdict
- * POST — rather than at the one site the finding happened to quote.
+ * These specs pin `sanitizeForLog` at all three interpolation sites — both
+ * fields of the UNKNOWN_CODE arm and `message` on the valid-code arm — rather
+ * than at the one site the finding happened to quote. (The permission and
+ * verdict POSTs held two more until #1885 deleted the relay routes.)
  *
- * Handlers are driven through `makeRecorderApp()` (the shape
- * `channel-permission-relay.test.ts` uses) so the REAL handler bodies run.
+ * Handlers are driven through `makeRecorderApp()` so the REAL handler bodies
+ * run.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -156,22 +156,8 @@ describe("#1822 item 1 — channel route logs are sanitized before they reach th
       expect(logged()).not.toContain(OVER);
     });
 
-    it("`toolName` and `requestId` on /api/channel-permission", () => {
-      call("POST /api/channel-permission", {
-        requestId: HUGE,
-        toolName: HUGE,
-        description: "",
-      });
-      expect(logged()).not.toContain(OVER);
-    });
-
-    it("`requestId` on /api/channel-permission-verdict", () => {
-      call("POST /api/channel-permission-verdict", { requestId: HUGE, approved: true });
-      expect(logged()).not.toContain(OVER);
-    });
-
     it("LOG_FIELD_MAX is under the 300-character probe these specs use", () => {
-      // If someone raises the clamp above 300 the four specs above go quietly
+      // If someone raises the clamp above 300 the two specs above go quietly
       // green for the wrong reason; this is what turns that into a failure.
       expect(LOG_FIELD_MAX).toBeLessThan(300);
     });
