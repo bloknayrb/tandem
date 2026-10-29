@@ -16,7 +16,9 @@ import {
   LAUNCHER_ERROR_NO_INTEGRATION,
   LAUNCHER_ERROR_NOT_AVAILABLE,
   LAUNCHER_ERROR_PATH_REJECTED,
+  type WorkingDirectoryIgnored,
 } from "../../../shared/launcher/contract";
+import { fetchLauncherStatus } from "../../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import { disabledControlStyle } from "../../utils/colors";
@@ -79,6 +81,35 @@ let hasIntegration = $state(false);
  * no claude-code integration was returned" — both pre-existing states.
  */
 let lastLoadError = $state<string | null>(null);
+/**
+ * #1822 item 4a: the launcher home-confines the saved `workingDirectory` and
+ * falls back to home when it cannot use it. Without a signal the input below
+ * kept showing the saved folder while Claude ran in home. Read from
+ * `GET /api/launcher/status` (a loopback-only field), so it describes the LAST
+ * spawn.
+ *
+ * The warning shows only while the folder loaded here IS the one that spawn
+ * refused (`showWdIgnored`). A bare "the last spawn ignored it" flag could not
+ * tell a stale verdict from a current one: after a valid folder was saved, a
+ * remount re-read the flag and showed the warning again for a folder that was
+ * fine. Comparing against the saved value holds whoever wrote the file — this
+ * tab, the wizard, `POST /api/integrations`, or a hand edit. A successful
+ * save or reset also clears it locally.
+ */
+let wdIgnored = $state<WorkingDirectoryIgnored | null>(null);
+const showWdIgnored = $derived(
+  wdIgnored !== null &&
+    workingDirectory !== null &&
+    wdIgnored.workingDirectory === workingDirectory,
+);
+/** Fixed strings per reason: never interpolate the path (see
+ * `workingDirErrorForCode`). */
+const WD_IGNORED_COPY: Record<WorkingDirectoryIgnored["reason"], string> = {
+  "outside-home":
+    "This folder is not inside your home directory, so Claude last launched in your home directory instead. Choose a folder inside home, or reset to default.",
+  unresolvable:
+    "Claude couldn't use this folder when it last launched (it may have been moved or deleted), so it started in your home directory instead. Choose another folder, or reset to default.",
+};
 
 /**
  * #1022 discoverability: a user with Claude credentials but no configured
@@ -126,6 +157,7 @@ async function loadWorkingDirectory() {
     if (entry) {
       hasIntegration = true;
       workingDirectory = entry.workingDirectory ?? null;
+      if (workingDirectory !== null) void loadWorkingDirectoryIgnored();
     }
   } catch (err) {
     if (!mounted) return;
@@ -140,6 +172,29 @@ async function loadWorkingDirectory() {
 }
 
 void loadWorkingDirectory();
+
+/** Best-effort: a failed or unparseable status read leaves the warning hidden,
+ * which is the pre-#1822 display rather than a new claim. The shape is checked
+ * field by field, so an older server (no field) or a foreign body shows
+ * nothing. */
+async function loadWorkingDirectoryIgnored() {
+  try {
+    const status = await fetchLauncherStatus();
+    if (!mounted || !status.ok) return;
+    const raw = (status.value as { workingDirectoryIgnored?: unknown }).workingDirectoryIgnored as
+      | Partial<WorkingDirectoryIgnored>
+      | undefined;
+    wdIgnored =
+      raw !== null &&
+      typeof raw === "object" &&
+      (raw.reason === "outside-home" || raw.reason === "unresolvable") &&
+      typeof raw.workingDirectory === "string"
+        ? { reason: raw.reason, workingDirectory: raw.workingDirectory }
+        : null;
+  } catch (err) {
+    console.warn("[Settings] Failed to read launcher status:", err);
+  }
+}
 
 /**
  * #1432: is the channel shim already registered for Claude Code?
@@ -200,6 +255,7 @@ async function persistWorkingDirectory(value: string | null) {
     const body = (await res.json()) as { workingDirectory?: string | null };
     if (!mounted) return;
     workingDirectory = body.workingDirectory ?? null;
+    wdIgnored = null;
     // Fixed-string success toast (E5). Never include `err.message` or the
     // resolved path — the toast surface is shared with other warnings and
     // path leakage isn't appropriate there.
@@ -419,6 +475,16 @@ function handleReset() {
         style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); cursor: pointer;"
       >Reset to default</button>
     </div>
+    {#if showWdIgnored && wdIgnored !== null}
+      <div
+        role="status"
+        class="tandem-warning-box"
+        data-testid="settings-modal-working-directory-ignored"
+        style="font-size: 11px;"
+      >
+        {WD_IGNORED_COPY[wdIgnored.reason]}
+      </div>
+    {/if}
     {#if wdError}
       <div role="alert" style="font-size: 11px; color: var(--tandem-error-fg-strong);">
         {wdError}

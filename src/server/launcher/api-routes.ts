@@ -62,7 +62,7 @@ import {
 } from "../../shared/api-paths.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
 import {
-  isTransientlyUnavailable,
+  isPromotableByStartRoute,
   LAUNCHER_CWD_MAX_LENGTH,
   LAUNCHER_ERROR_CLI_UNUSABLE,
   LAUNCHER_ERROR_IN_PROGRESS,
@@ -288,6 +288,17 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       res.json(body);
       return;
     }
+    // Loopback-only, like `cwd` (#1822 item 4a): it names a folder on the
+    // user's disk. An explicit copy of the two fields, never the object itself,
+    // for the same reason the running body below lists its fields.
+    const ignored = raw.workingDirectoryIgnored
+      ? {
+          workingDirectoryIgnored: {
+            reason: raw.workingDirectoryIgnored.reason,
+            workingDirectory: raw.workingDirectoryIgnored.workingDirectory,
+          },
+        }
+      : {};
     // Loopback-only, beside both stopped shapes below (#2195, #2196, #2197).
     const standbyFields = raw.running
       ? {}
@@ -322,6 +333,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         busy: raw.busy,
         attached,
         ...(raw.greetingLate ? { greetingLate: true as const } : {}),
+        ...ignored,
         skillRefresh,
       };
       res.json(body);
@@ -338,6 +350,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
             restartPending: true,
             // A Start from standby in progress (#2195): "Starting", not "Restarting".
             ...standbyFields,
+            ...ignored,
             skillRefresh,
           }
         : { available: true, running: false };
@@ -366,6 +379,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
           running: false,
           lastError: raw.lastError,
           ...standbyFields,
+          ...ignored,
           skillRefresh,
         }
       : { available: true, running: false };
@@ -740,7 +754,7 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     }
 
     const reason = deps.unavailableReason();
-    if (!isTransientlyUnavailable(reason)) {
+    if (!isPromotableByStartRoute(reason)) {
       sendNotAvailable(res, reason, "Auto-launcher is not in a deferred state");
       return;
     }

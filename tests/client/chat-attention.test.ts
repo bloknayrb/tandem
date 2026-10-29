@@ -480,6 +480,91 @@ describe("createChatAttention (#2168)", () => {
   });
 });
 
+/**
+ * #2227 (Bryan, 2026-10-28): Tandem's one-time hello still announces, chime
+ * included, but as "Tandem's Claude is ready" — it answers nothing the user
+ * sent. Pinned here so a later change to either feature cannot flip it.
+ */
+describe("Tandem's one-time hello (#2227)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const hello = (extra: Partial<ChatMessage> = {}) =>
+    reply("hello", {
+      documentId: "doc-1",
+      text: "Hi! I'm Tandem's Claude.",
+      greeting: true,
+      ...extra,
+    });
+
+  it("an away window announces it as ready, with the chime, flash and count", () => {
+    const t = setup();
+    t.attention.push([hello()]);
+    t.flush();
+    expect(t.backend.notify).toHaveBeenCalledWith(
+      { title: "Tandem's Claude is ready", body: "" },
+      expect.any(Function),
+    );
+    expect(t.playChime).toHaveBeenCalledTimes(1);
+    expect(t.backend.attention).toHaveBeenCalledWith(1);
+  });
+
+  it("an active window only chimes", () => {
+    const t = setup({ active: true });
+    t.attention.push([hello()]);
+    t.flush();
+    expect(t.playChime).toHaveBeenCalledTimes(1);
+    expect(t.backend.notify).not.toHaveBeenCalled();
+  });
+
+  it.each(["generic", "document", "preview"] as const)(
+    "the %s setting never names a document for it",
+    (content) => {
+      const { title, body } = buildNotificationText([hello()], content, () => "report.md");
+      expect(title).toBe("Tandem's Claude is ready");
+      expect(body).toBe(content === "preview" ? "Hi! I'm Tandem's Claude." : "");
+    },
+  );
+
+  it("a real answer in the same batch still reads 'replied', and the hello is not counted", () => {
+    const answer = reply("a", { documentId: "doc-1", text: "Done." });
+    expect(buildNotificationText([hello(), answer], "preview", () => "report.md")).toEqual({
+      title: "Claude replied in report.md",
+      body: "Done.",
+    });
+    // The answer is the batch's last, and also when it comes first.
+    expect(buildNotificationText([answer, hello()], "document", () => "report.md").title).toBe(
+      "Claude replied in report.md",
+    );
+  });
+
+  it("in a mixed batch the click opens the answer's document, not the hello's", () => {
+    const t = setup();
+    t.attention.push([
+      reply("a", { documentId: "doc-1", text: "Done." }),
+      hello({ documentId: "doc-2" }),
+    ]);
+    t.flush();
+    t.backend.notify.mock.calls[0][1]();
+    expect(t.openChat).toHaveBeenCalledWith("doc-1");
+  });
+
+  it("an untagged reply that only LOOKS like a hello still reads 'replied' (no guessing from text)", () => {
+    expect(
+      buildNotificationText(
+        [reply("x", { documentId: "doc-1", text: "Hi! I'm Tandem's Claude." })],
+        "document",
+        () => "report.md",
+      ).title,
+    ).toBe("Claude replied in report.md");
+  });
+});
+
 describe("buildNotificationText", () => {
   const name = (id: string) => (id === "doc-1" ? "report.md" : null);
 

@@ -43,6 +43,14 @@ export const TEST_NOTIFICATION_TEXT = {
   body: "This is a test notification from Tandem.",
 } as const;
 
+/**
+ * The title of the notification for Tandem's one-time hello (#2227), in place
+ * of "Claude replied …": the hello answers nothing the user sent. Fixed text;
+ * it never names a document. Chosen by `buildNotificationText` from the
+ * server's `greeting` marker, never from the reply's text.
+ */
+export const GREETING_NOTIFICATION_TITLE = "Tandem's Claude is ready";
+
 function isInvisibleFormat(cp: number): boolean {
   return INVISIBLE_FORMAT_RANGES.some(([lo, hi]) => cp >= lo && cp <= hi);
 }

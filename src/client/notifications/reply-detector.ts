@@ -88,6 +88,9 @@ export function createReplyDetector(
         // pickup row already shows. The answer that follows is the one to
         // announce.
         if (message.inProgress === true) continue;
+        // Tandem's one-time hello (`greeting: true`, #2227) is NOT skipped like
+        // an ack: it is announced, as "Tandem's Claude is ready" rather than
+        // "Claude replied" — `buildNotificationText` words it.
         if (message.timestamp < cutoff) continue;
         fresh.push(message);
       }

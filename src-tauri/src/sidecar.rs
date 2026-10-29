@@ -69,6 +69,8 @@ use crate::{
 use crate::{sentry_reporting, token_store};
 #[cfg(target_os = "windows")]
 use crate::sidecar_job;
+#[cfg(target_os = "linux")]
+use crate::sidecar_anchor;
 
 /// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479).
 /// Must use 127.0.0.1, not `localhost` — `isHostAllowed` (api-routes.ts) narrowed
@@ -1865,6 +1867,48 @@ fn sidecar_env_pairs(app_data_dir: &str, release_build: bool) -> Vec<(&'static s
     pairs
 }
 
+/// The Linux sidecar command (#1988): `tandem-reaper --exec-with-pdeathsig
+/// <this pid> <node-sidecar> <server.js> --tauri-sidecar`, or plain
+/// `node-sidecar <server.js> --tauri-sidecar` when the bundled reaper cannot be
+/// the trampoline (missing, an empty stub, or too old — `trampoline_available`
+/// probes until it answers yes and logs the first no). Both paths come from the
+/// plugin's own sidecar resolution, so the program the trampoline execs is
+/// byte-identical to the one a direct spawn would run.
+#[cfg(target_os = "linux")]
+async fn linux_sidecar_command(
+    handle: &tauri::AppHandle,
+    server_js: &str,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    let sidecar = || {
+        handle
+            .shell()
+            .sidecar(SIDECAR_BIN_NAME)
+            .map_err(|e| format!("Failed to create sidecar command: {e}"))
+    };
+    let direct = sidecar()?.args([server_js, "--tauri-sidecar"]);
+    let reaper_path = match handle.shell().sidecar(sidecar_anchor::REAPER_BIN_NAME) {
+        Ok(c) => std::path::PathBuf::from(std::process::Command::from(c).get_program()),
+        Err(e) => {
+            log::warn!("tandem-reaper unresolved ({e}) — starting the sidecar directly (#1988)");
+            return Ok(direct);
+        }
+    };
+    if !sidecar_anchor::trampoline_available(&reaper_path).await {
+        return Ok(direct);
+    }
+    let node_path = std::process::Command::from(sidecar()?).get_program().to_owned();
+    let trampoline = handle
+        .shell()
+        .sidecar(sidecar_anchor::REAPER_BIN_NAME)
+        .map_err(|e| format!("Failed to create the reaper command: {e}"))?
+        .args(sidecar_anchor::pdeathsig_exec_args(
+            std::process::id(),
+            &node_path,
+            server_js,
+        ));
+    Ok(trampoline)
+}
+
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
 ///
@@ -1977,17 +2021,27 @@ pub(crate) async fn start_sidecar(
             tokio::time::sleep(backoff).await;
         }
 
+        // `--tauri-sidecar` is the provenance discriminant the server reads
+        // (#1758, #1787). It is argv rather than an env var deliberately:
+        // `TANDEM_TAURI_SIDECAR` below is inherited by every DESCENDANT of
+        // this child, so an npm `tandem` run from an auto-launched Claude
+        // Code session's own shell would otherwise claim the sidecar's
+        // carve-outs. Argv is not inherited by grandchildren.
+        #[cfg(not(target_os = "linux"))]
         let mut cmd = handle
             .shell()
             .sidecar(SIDECAR_BIN_NAME)
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
-            // `--tauri-sidecar` is the provenance discriminant the server reads
-            // (#1758, #1787). It is argv rather than an env var deliberately:
-            // `TANDEM_TAURI_SIDECAR` below is inherited by every DESCENDANT of
-            // this child, so an npm `tandem` run from an auto-launched Claude
-            // Code session's own shell would otherwise claim the sidecar's
-            // carve-outs. Argv is not inherited by grandchildren.
             .args([server_js_str.as_str(), "--tauri-sidecar"]);
+        // Linux (#1988): the same node-sidecar argv, behind the reaper's
+        // exec-in-place trampoline, so the sidecar dies with this shell. See
+        // `sidecar_anchor.rs`. The env chain below applies unchanged: the
+        // trampoline passes its environment straight through `execv`. Windows
+        // has its job object (below). macOS has neither: a force-quit shell
+        // leaves this child alive until the next launch's `freePort`, an
+        // accepted gap whose bound is relaunch recovery (#1988).
+        #[cfg(target_os = "linux")]
+        let mut cmd = linux_sidecar_command(handle, server_js_str.as_str()).await?;
         let release_build = !cfg!(debug_assertions);
         for (key, value) in sidecar_env_pairs(app_data_dir_str.as_str(), release_build) {
             cmd = cmd.env(key, value);
@@ -2037,9 +2091,21 @@ pub(crate) async fn start_sidecar(
             }
         }
 
-        let (rx, child) = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
+        #[cfg(not(target_os = "linux"))]
+        let spawned = cmd.spawn().map_err(|e| e.to_string());
+        // Linux (#1988): fork on the anchor thread, never on this tokio
+        // worker — the parent-death signal follows the forking THREAD, and
+        // tokio retires threads. See `sidecar_anchor.rs`. If the anchor thread
+        // never started, `cmd` is the direct command (the trampoline needs a
+        // probe the anchor ran) and is spawned here instead, so a missing
+        // anchor never leaves the sidecar unstartable.
+        #[cfg(target_os = "linux")]
+        let spawned = sidecar_anchor::run_on_anchor_or_inline(move || {
+            cmd.spawn().map_err(|e| e.to_string())
+        })
+        .await
+        .and_then(|r| r);
+        let (rx, child) = spawned.map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
         // Windows-only (#987): bind this sidecar to the kill-on-job-close job
         // object so it dies with the shell even on an ungraceful parent exit

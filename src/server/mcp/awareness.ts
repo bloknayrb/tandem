@@ -31,6 +31,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
+import { isGreetingReply } from "./greeting-reply.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
 import {
   checkInboxOutputShape,
@@ -269,6 +270,8 @@ export function appendClaudeChatMessage(
     replyTo?: string;
     agentIdentity?: AgentIdentity;
     inProgress?: boolean;
+    /** The one-time hello (#2227; `greeting-reply.ts`). Notification wording only. */
+    greeting?: boolean;
   } = {},
 ): ClaudeChatAppend {
   const refusal = aiRefusal();
@@ -290,6 +293,7 @@ export function appendClaudeChatMessage(
     // fold carries it into the final re-set.
     ...(opts.agentIdentity ? { agentIdentity: opts.agentIdentity } : {}),
     ...(opts.inProgress === true ? { inProgress: true as const } : {}),
+    ...(opts.greeting === true ? { greeting: true as const } : {}),
     read: true,
   };
   withMcp(ctrlDoc, () => chatMap.set(id, msg));
@@ -1362,10 +1366,16 @@ export function registerAwarenessTools(server: McpServer): void {
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         const current = getCurrentDoc(documentId);
         const docId = documentId ?? current?.id ?? undefined;
+        // Asked BEFORE the append, in the same synchronous stretch as the
+        // notify below, which is what ends the greeting turn's "pending" — so
+        // at most one reply is ever tagged (#2227).
+        const sessionId = getCurrentSessionId();
+        const greeting = isGreetingReply({ sessionId, replyTo, inProgress });
         const appended = appendClaudeChatMessage(text, {
           documentId: docId,
           replyTo,
           inProgress,
+          greeting,
         });
         // Unreachable while the `/mcp` handshake refuses first; kept as defence.
         if (!appended.ok) {
@@ -1373,7 +1383,7 @@ export function registerAwarenessTools(server: McpServer): void {
             kind: appended.refusal.kind,
           });
         }
-        notifyTandemReply(getCurrentSessionId());
+        notifyTandemReply(sessionId);
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({
           sent: true,
