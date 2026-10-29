@@ -37,9 +37,13 @@ const WORKFLOW_DIR = path.join(ROOT, ".github/workflows");
  *     steps. #1832 added `--ignore-scripts` to every `npm ci` (pinned by
  *     `release-ci-hygiene.test.ts`), which closes the install-time
  *     entrypoint only: the build that follows runs the same dependency tree
- *     with the same privileges, as do `cargo build.rs`, `cargo install
- *     tauri-driver` and the Windows job's `dotnet tool install`. Compromising
- *     one transitive dependency is still a cheaper attack than moving a tag.
+ *     with the same privileges, as do `cargo build.rs` and the Windows job's
+ *     `dotnet tool install`. (`cargo install tauri-driver` runs in
+ *     `tauri-webdriver.yml`, which holds no secrets.) Compromising one
+ *     transitive dependency is still a cheaper attack than moving a tag. That
+ *     exposure is accepted with a bound, not fixed: see the #1949 entry under
+ *     "Accepted (bounded)" in docs/security.md, which names this test as one
+ *     of the three that carry its bound.
  *
  * Following the existing wiring tests: parse YAML rather than substring-match
  * the file, pin SETS rather than validating whatever members happen to be there

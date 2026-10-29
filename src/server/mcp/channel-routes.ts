@@ -2,8 +2,6 @@ import type { Express, Request, Response } from "express";
 import {
   API_CHANNEL_AWARENESS,
   API_CHANNEL_ERROR,
-  API_CHANNEL_PERMISSION,
-  API_CHANNEL_PERMISSION_VERDICT,
   API_CHANNEL_REPLY,
   API_CHAT,
   API_EVENTS,
@@ -24,44 +22,13 @@ import {
   notifyTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
 } from "./awareness.js";
-import { isLoopbackRequest } from "./routes/_shared.js";
-
-const pendingPermissions = new Map<
-  string,
-  {
-    requestId: string;
-    toolName: string;
-    description: string;
-    createdAt: number;
-  }
->();
-const PERMISSION_TTL_MS = 30_000; // Stale after 30s (terminal answer already won)
 
 /**
- * Evict pending entries older than the TTL.
- *
- * Called from BOTH channel-permission routes, and the POST is the load-bearing
- * one. The sweep used to live only inside the GET, which reads well until you
- * pair it with #1794's own finding that NO client polls that route: with no
- * reader and no timer, nothing ever ran it, so every request an armed shim
- * forwarded stayed resident — with its `description` — for the life of the
- * server process, and the map grew without bound. The POST is the only thing
- * that grows the map, so sweeping there is what makes "held for 30 seconds"
- * true. Nothing sweeps on a timer, deliberately: an idle server has nothing to
- * sweep, and a timer would be a second thing to reason about at shutdown.
- */
-function sweepStalePermissions(): void {
-  const now = Date.now();
-  for (const [id, perm] of pendingPermissions) {
-    if (now - perm.createdAt > PERMISSION_TTL_MS) pendingPermissions.delete(id);
-  }
-}
-
-/**
- * Licence admission for the AI-facing channel routes (#1521): answer 403 with
+ * Licence admission for the AI-facing channel route (#1521): answer 403 with
  * the refusal envelope and report that the caller must stop. Checked before the
- * route touches any state. The shim's diagnostics (`channel-awareness`,
- * `channel-error`) stay open — they carry no AI content.
+ * route touches any state. `channel-reply` is the one caller since the
+ * permission relay routes were deleted (#1885). The shim's diagnostics
+ * (`channel-awareness`, `channel-error`) stay open — they carry no AI content.
  */
 function refuseIfUnlicensed(res: Response): boolean {
   const refusal = aiRefusal();
@@ -190,74 +157,12 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     });
   });
 
-  // Channel permission relay: the shim forwards Claude Code's tool approval
-  // prompt. There is no return leg — see docs/architecture.md and ADR-047 §3.
-  // The prompt's `input_preview` (file bodies, command lines) is discarded on
-  // arrival — the shim no longer sends it either (#1884) — while `description`,
-  // the tool-level summary line, IS stored, and served by the GET below to
-  // loopback callers only (#1884). It
-  // stays resident until a later request's sweep evicts it: `PERMISSION_TTL_MS`
-  // is the age at which a sweep evicts, not a residency bound, because nothing
-  // sweeps on a timer (see `sweepStalePermissions`).
-  app.options(API_CHANNEL_PERMISSION, apiMiddleware);
-  app.post(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
-    if (refuseIfUnlicensed(res)) return;
-    const { requestId, toolName, description } = (req.body ?? {}) as Record<string, unknown>;
-    if (typeof requestId !== "string" || typeof toolName !== "string") {
-      res.status(400).json({ error: "BAD_REQUEST", message: "requestId and toolName required" });
-      return;
-    }
-    // Before the insert, so the map holds one TTL window rather than the whole
-    // session — see `sweepStalePermissions`.
-    sweepStalePermissions();
-    pendingPermissions.set(requestId, {
-      requestId,
-      toolName,
-      description: typeof description === "string" ? description : "",
-      createdAt: Date.now(),
-    });
-    // `toolName`/`requestId` are `typeof … === "string"`-guarded above, so the
-    // residue here is control characters and unbounded length only — which is
-    // exactly what `sanitizeForLog` is for.
-    console.error(
-      `[Channel] Permission request: ${sanitizeForLog(toolName)} (id: ${sanitizeForLog(requestId)})`,
-    );
-    res.json({ ok: true });
-  });
-
-  // Loopback-only read of pending requests (#1884). No client polls this. A
-  // non-loopback peer would learn which tool Claude Code is asking to run and
-  // when (an activity trace, like launcher/status's `busy`), plus the
-  // `requestId`s the verdict carve-out deletes by, so it is refused, not
-  // scrubbed. The refusal runs before the sweep, so a refused caller evicts
-  // nothing. Peer address only, never Host.
-  app.get(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
-    if (!isLoopbackRequest(req)) {
-      res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
-      return;
-    }
-    sweepStalePermissions();
-    res.json({ pending: Array.from(pendingPermissions.values()) });
-  });
-
-  // Browser submits verdict
-  app.options(API_CHANNEL_PERMISSION_VERDICT, apiMiddleware);
-  app.post(API_CHANNEL_PERMISSION_VERDICT, apiMiddleware, (req: Request, res: Response) => {
-    if (refuseIfUnlicensed(res)) return;
-    const { requestId, approved } = (req.body ?? {}) as Record<string, unknown>;
-    if (typeof requestId !== "string") {
-      res.status(400).json({ error: "BAD_REQUEST", message: "requestId is required" });
-      return;
-    }
-    pendingPermissions.delete(requestId);
-    // Deletion is the only effect: no return leg — see docs/architecture.md and
-    // ADR-047 §3. The verdict is echoed to the browser that submitted it and
-    // never reaches Claude Code.
-    console.error(
-      `[Channel] Permission verdict: ${sanitizeForLog(requestId)} → ${approved ? "allow" : "deny"}`,
-    );
-    res.json({ ok: true, requestId, behavior: approved ? "allow" : "deny" });
-  });
+  // The channel permission relay (`/api/channel-permission` and
+  // `/api/channel-permission-verdict`) lived here until #1885. It had no return
+  // leg — nothing could answer Claude Code's approval prompt — and its holding
+  // map served each prompt's `description` to any local caller (#1884). The
+  // shim no longer declares `claude/channel/permission`, so the routes were
+  // deleted rather than hardened. See ADR-047's 2026-10-28 update.
 
   // Clear chat history
   app.options(API_CHAT, apiMiddleware);
