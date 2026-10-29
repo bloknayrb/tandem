@@ -457,19 +457,20 @@ export function flatOffsetToRelPos(
   if (!(node instanceof Y.XmlElement)) return null;
 
   let found = findXmlTextAtOffset(node, resolved.textOffset);
-  // If the offset lands exactly on an intra-element separator (between nested block children),
-  // fall back based on assoc: -1 (stick left) → try offset-1; 0 (stick right) → try offset+1.
-  if (!found && assoc === -1 && resolved.textOffset > 0) {
-    found = findXmlTextAtOffset(node, resolved.textOffset - 1);
-    if (found) {
-      // Advance offsetInXmlText to end of this XmlText to stick to the left boundary
-      found = { xmlText: found.xmlText, offsetInXmlText: found.xmlText.length };
-    }
-  } else if (!found && assoc === 0) {
-    const nodeLen = getElementTextLength(node);
-    if (resolved.textOffset + 1 <= nodeLen) {
-      found = findXmlTextAtOffset(node, resolved.textOffset + 1);
-    }
+  // The offset lands exactly on an intra-element separator — a hardBreak, or the
+  // gap between nested block children — which no Y.XmlText stores. Both assocs
+  // anchor at the END of the XmlText that precedes it (#2001): if offset k finds
+  // nothing and k-1 lies inside an XmlText, that XmlText ends exactly at k, so
+  // the anchor resolves back to k. This is the rule a top-level separator already
+  // follows (`resolveToElement` hands it over as end-of-block). The old assoc-0
+  // arm retried at k+1 instead, minting an anchor one character to the right
+  // that a no-edit `refreshRange` then reported — and persisted — as `updated`.
+  // Where k-1 is not inside an XmlText either (the separator after an empty
+  // block, a hardBreak at block start, two hardBreaks in a row) both assocs
+  // refuse, so the caller keeps the exact flat offset rather than a shifted one.
+  if (!found && resolved.textOffset > 0) {
+    const before = findXmlTextAtOffset(node, resolved.textOffset - 1);
+    if (before) found = { xmlText: before.xmlText, offsetInXmlText: before.xmlText.length };
   }
   if (!found) return null;
   const rpos = Y.createRelativePositionFromTypeIndex(found.xmlText, found.offsetInXmlText, assoc);
@@ -500,12 +501,13 @@ export function flatOffsetToRelPos(
  *
  * The first consumer is the client-side mint in #1471.
  *
- * All-or-nothing, and that is a real constraint rather than tidiness: the two
- * assocs refuse to mint in DIFFERENT places around an empty block — assoc 0 on
- * the leading separator, assoc -1 on the trailing one, each retrying into the
- * void. A range touching either offset therefore has to degrade as a whole; a
- * caller must never end up holding one anchored endpoint and one raw offset.
- * `tests/client/flat-offset-correspondence.test.ts` pins both refusal sets.
+ * All-or-nothing, and that is a real constraint rather than tidiness: an
+ * endpoint can refuse where its partner mints — a heading prefix, an empty
+ * block's separator, a hardBreak at block start (the two assocs refuse in the
+ * SAME places since #2001, but `from` and `to` are different offsets). A range
+ * touching any of them has to degrade as a whole; a caller must never end up
+ * holding one anchored endpoint and one raw offset.
+ * `tests/client/flat-offset-correspondence.test.ts` pins the refusal set.
  *
  * Never throws — a null return means the caller falls back to flat offsets.
  * The catch is defensive rather than load-bearing: `flatOffsetToRelPos` returns

@@ -6,7 +6,7 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_OPEN_DOCUMENTS,
 } from "../../../shared/constants.js";
-import { shouldSkipChannel } from "../../../shared/origins.js";
+import { shouldSkipDocumentLifecycle } from "../../../shared/origins.js";
 import { isUploadPath } from "../../../shared/paths.js";
 import { getOpenDocs } from "../../documents/registry.js";
 import type { DocumentOpenedPayload, TandemEvent } from "../types.js";
@@ -40,11 +40,37 @@ export function makeCtrlMetaObserver(deps: {
 }): () => void {
   const { ctrlDoc, pushEvent } = deps;
   const metaMap = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-  let lastActiveDocId: string | null = null;
-  let lastOpenDocIds = new Set<string>();
+  // SEEDED from the map as it stands, never from empty (#2069). The observer is
+  // attached after startup restore has already broadcast the restored tabs, and
+  // re-attached on every Hocuspocus CTRL_ROOM swap onto a doc that already holds
+  // the merged list. Starting empty would make the next broadcast — any tab
+  // operation, or a content reload's unchanged re-broadcast — emit a burst of
+  // `document:opened` for every tab that was already open.
+  const seededList =
+    (metaMap.get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; fileName?: string }> | undefined) ??
+    [];
+  let lastActiveDocId: string | null =
+    (metaMap.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined) ?? null;
+  let lastOpenDocIds = new Set<string>(seededList.map((d) => d.id));
+  // The name each open tab had, so `document:closed` can name the file: by the
+  // time the observer sees the close, the doc is gone from both the list and
+  // `getOpenDocs()`, and the bare id is a path hash that means nothing to Claude.
+  const fileNamesOf = (list: ReadonlyArray<{ id: string; fileName?: string }>) => {
+    const names = new Map<string, string>();
+    for (const d of list) {
+      const name = d.fileName ?? getOpenDocs().get(d.id)?.filePath?.split(/[/\\]/).pop();
+      if (name) names.set(d.id, name);
+    }
+    return names;
+  };
+  let lastFileNames = fileNamesOf(seededList);
   // Track upload/scratchpad doc IDs so we can suppress their close events
   // (the doc is already removed from getOpenDocs() by the time the observer fires).
   const uploadDocIds = new Set<string>();
+  for (const id of lastOpenDocIds) {
+    const filePath = getOpenDocs().get(id)?.filePath;
+    if (filePath && isUploadPath(filePath)) uploadDocIds.add(id);
+  }
 
   // Register the promote hook so document-service can flip a promoted upload
   // doc to Claude-visible. Clearing the ID from `uploadDocIds` ensures the
@@ -63,7 +89,11 @@ export function makeCtrlMetaObserver(deps: {
   };
 
   const metaObs = (event: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
-    if (shouldSkipChannel(txn.origin)) return;
+    // NOT `shouldSkipChannel`: the tab list's only writer is `broadcastOpenDocs`,
+    // under `withInternal`, which that predicate skips — so `document:*` never
+    // fired (#2069). See `shouldSkipDocumentLifecycle` for the exception's scope.
+    // This observer reads only the two tab-list keys below.
+    if (shouldSkipDocumentLifecycle(txn.origin)) return;
 
     // Check for activeDocumentId change (tab switch)
     if (event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)) {
@@ -133,13 +163,14 @@ export function makeCtrlMetaObserver(deps: {
             timestamp: Date.now(),
             documentId: oldId,
             payload: {
-              fileName: oldId,
+              fileName: lastFileNames.get(oldId) ?? oldId,
             },
           });
         }
       }
 
       lastOpenDocIds = currentIds;
+      lastFileNames = fileNamesOf(docList);
     }
   };
 

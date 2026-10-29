@@ -63,10 +63,10 @@ import { ensureAutoSave } from "./autosave.js";
 import { readPendingConflict } from "./conflict.js";
 import { clearAndReload } from "./populate.js";
 import { broadcastOpenDocs, getOpenDocs } from "./registry.js";
+import { remapEnvelopeWins } from "./reload-remap.js";
 import {
   acquireReloadGuard,
   isReloadInProgress,
-  reanchorAnnotations,
   releaseReloadGuard,
   reloadFromDisk,
 } from "./watcher.js";
@@ -77,11 +77,12 @@ import {
  *
  * Mirrors the force-reload lifecycle (`clearAndReload`) but sources content from
  * the passed string instead of disk, and leaves the doc DIRTY so the new content
- * is persisted to disk. For a file-backed document the in-memory annotation map
- * is cleared and then rebuilt from the surviving durable envelope and re-anchored
- * against the committed text (#1813) — same contract as `tandem_open force:true`.
- * A scratchpad has no envelope, so its annotation map is kept rather than cleared
- * and re-anchored in place (#2219).
+ * is persisted to disk. The annotation map is kept and every record remapped onto
+ * the committed text inside the content swap (#2269): a record follows its text,
+ * and one whose text was changed or deleted is detached (`degraded`). For a
+ * file-backed document the durable envelope is then re-merged, and any record
+ * whose envelope copy wins is remapped the same way — same contract as
+ * `tandem_open force:true`. A scratchpad has no envelope and needs nothing more.
  *
  * Throws coded errors the routes map to HTTP status:
  *  - NO_DOCUMENT        — not currently open
@@ -156,34 +157,21 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
     // dirty version past savedVersion, so any concurrent autosave's
     // markCleanIfUnchanged(snapshot) sees a newer version and won't clear-to-
     // clean against stale content (#851 mechanism).
-    //
-    // A scratchpad has no durable envelope to re-merge from, so it keeps its
-    // annotation map instead and re-anchors it in place (#2219). Snapshot-less
-    // (browser-created) records are not relocated by that pass; shared with the
-    // file route and tracked in #2269.
     const { filePath } = existing;
-    const hasEnvelope = existing.source === "file";
-    await clearAndReload(id, doc, filePath, "md", existing, committed, {
+    const remap = await clearAndReload(id, doc, filePath, "md", existing, committed, {
       markCleanAfter: false,
       conflictGuard: { raw: rawConflictBeforeCommit },
-      keepAnnotations: hasEnvelope
-        ? undefined
-        : { reanchor: (d) => reanchorAnnotations(d, filePath) },
     });
     // File-source docs re-wire the durable annotation store and persist the new
-    // markdown to disk immediately. The re-wire's `loadAndMerge` is what brings
-    // the surviving envelope back into the repopulated Y.Doc (#1813). Scratchpads
-    // have no durable store and no disk file — skip both.
-    if (hasEnvelope) {
-      await wireAnnotationStore(id, doc, filePath);
-      // `loadAndMerge` re-inserts each record VERBATIM — pre-commit flat range,
-      // relRange belonging to the XmlFragment `clearAndReload` just destroyed —
-      // and the durable observer then persists exactly that. So the re-merge
-      // alone would turn #1813's "notes survive a source-view commit" into
-      // "notes survive it pinned to whatever text now sits at their old
-      // offsets", durably. This is the pass that re-anchors them, and it runs
-      // AFTER the merge because it is the merged records it must fix.
-      reanchorAnnotations(doc, filePath);
+    // markdown to disk immediately. Scratchpads have no durable store and no
+    // disk file — skip both; their annotations were remapped in place above.
+    if (existing.source === "file") {
+      // The merge persists the remapped map. Where the envelope's copy of a
+      // record wins it instead, that copy holds pre-commit coordinates, and
+      // `afterMerge` remaps it inside the merge transaction (#2269).
+      await wireAnnotationStore(id, doc, filePath, {
+        afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids),
+      });
       // Persist the new content to disk now. The only transient skip reachable
       // here is the per-doc autosave lock (`savingDocs`) being held by a
       // concurrent 60s autosave at this instant — every other skip reason is

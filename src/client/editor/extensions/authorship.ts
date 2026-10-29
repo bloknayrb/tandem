@@ -226,10 +226,11 @@ interface InsertedSpan {
  * re-deriving them would push two known-good CRDT anchors back through the
  * PM↔Y model seam (the correspondence that drifted silently in #1450/#1459) for
  * no gain, and then overwrite the originals with the result. The all-or-nothing
- * guard would not catch a bad outcome either: `flatOffsetToRelPos` has an
- * assoc-directed ±1 retry whose whole purpose is to return a NON-null anchor at
- * a different offset than asked for. Only the interior boundaries are new, so
- * only they are minted.
+ * guard would not catch a bad outcome either: a mint that lands on the wrong
+ * character comes back non-null, and that has happened before — until #2001,
+ * `flatOffsetToRelPos` retried an assoc-0 separator offset at offset+1 and
+ * anchored one character right. Only the interior boundaries are new, so only
+ * they are minted.
  *
  * NOT THIS FUNCTION'S JOB, and it took a different mechanism: a block-structure
  * change (Enter, `splitListItem`, a backspace join, a heading toggle, a list or
@@ -342,9 +343,9 @@ function splitCoveringEntries(
  * plus the new stamp's `toRel`; the two interior anchors are dropped. Same
  * principle as the split's outer anchors, and for the same reason — re-deriving
  * a known-good CRDT anchor pushes it back through the PM-Y model seam that
- * drifted silently in #1450/#1459, and `flatOffsetToRelPos`'s assoc-directed
- * plus-or-minus-one retry means a bad outcome comes back non-null rather than
- * failing. The two endpoints need not share a `Y.XmlText`:
+ * drifted silently in #1450/#1459, and a mint that lands on the wrong character
+ * comes back non-null rather than failing (as the pre-#2001 separator retry
+ * did). The two endpoints need not share a `Y.XmlText`:
  * `createAbsolutePositionFromRelativePosition` derives the type from the
  * anchored item's own parent, so they resolve independently. Measured across a
  * hardBreak, where they genuinely differ.
@@ -355,8 +356,12 @@ function splitCoveringEntries(
  * dangerous: every block separator costs exactly one flat character, so two
  * stamps either side of a paragraph break differ by one and never merge; a
  * heading prefix is charged identically on both sides of the comparison and
- * cancels; and a hardBreak breaks the chain on its own, because the break's own
- * stamp cannot anchor at all.
+ * cancels; and a hardBreak typed at the END of a paragraph breaks the chain on
+ * its own, because that stamp's `to` (end of block, after the break) cannot
+ * anchor. A hardBreak inserted MID-text does anchor — since #2001 its stamp
+ * covers exactly the break — and chains like any adjacent same-author
+ * insertion; the merge takes the candidate's `fromRel` and the stamp's `toRel`,
+ * neither of which #2001 changed, so the merged run is what it was before.
  *
  * The `to` endpoint is `assoc: -1` (sticks left), which is what makes this work:
  * it does not move when the next character is typed at exactly that boundary.
@@ -365,7 +370,7 @@ function splitCoveringEntries(
  * landing strictly inside one almost impossible; long entries make
  * `splitCoveringEntries` routine. Its all-or-nothing decline leaves the entry
  * covering the other author's insertion — one character before this, a whole run
- * after. Runs stay bounded by block boundaries, hardBreaks, author changes,
+ * after. Runs stay bounded by block boundaries, end-of-block hardBreaks, author changes,
  * non-adjacency and multi-stamp transactions, and interior offsets inside one
  * paragraph mint reliably, so this is accepted rather than mitigated.
  */
@@ -580,9 +585,9 @@ function reanchorCaptured(
     if (spans.length === 0) continue;
 
     // Reuse an endpoint only when it BOTH survived and still bounds the piece.
-    // `flatOffsetToRelPos`'s assoc-directed retry returns a non-null anchor at a
-    // different offset rather than failing, so a re-mint of a known-good
-    // endpoint is how a silently-wrong anchor gets made. But an other-author
+    // A mint that lands on the wrong character returns non-null rather than
+    // failing (the pre-#2001 separator retry did exactly that), so a re-mint of
+    // a known-good endpoint is how a silently-wrong anchor gets made. But an other-author
     // insertion sitting exactly at `flat.from` drops the leading gap, and then
     // `spans[0]` no longer starts where the entry did — reusing there would
     // pin the surviving anchor to the wrong text.
