@@ -178,16 +178,25 @@ fn base_options() -> sentry::ClientOptions {
 /// sidecar's `scrubEvent` (`src/server/sentry.ts`).
 ///
 /// **The order here is the contract (#2023).** Clearing `server_name` is not a
-/// redaction and needs no home directory, so it happens BEFORE the
-/// [`home_dir_string`] lookup that the rest of the scrubbing early-returns on.
+/// redaction and needs no home directory, so it happens regardless of the
+/// [`home_dir_string`] lookup that the string and frame scrubbing depends on.
 /// Leaving it inside [`scrub_event_with_home`] alone would make hostname
 /// removal conditional on `dirs::home_dir()` succeeding — on a host where it
-/// yields `None` the hostname would still egress, and no inner-function test
-/// could see it.
+/// yields `None` the hostname would still egress. The same holds for the
+/// debug-image cut (#2161). [`scrub_event_with_optional_home`] takes the lookup
+/// result as an argument so a test can drive the `None` arm.
 fn scrub_event(event: &mut sentry::protocol::Event<'static>) {
+    scrub_event_with_optional_home(event, home_dir_string().as_deref());
+}
+
+/// [`scrub_event`] with the home-directory lookup injected.
+fn scrub_event_with_optional_home(
+    event: &mut sentry::protocol::Event<'static>,
+    home: Option<&str>,
+) {
     event.server_name = None;
-    match home_dir_string() {
-        Some(home) => scrub_event_with_home(event, &home),
+    match home {
+        Some(home) => scrub_event_with_home(event, home),
         // Image paths are cut to their file name whatever the home directory
         // is, so a host with no resolvable home still sends none of them.
         None => scrub_debug_meta(event),
@@ -438,17 +447,17 @@ mod tests {
         assert_eq!(event.message, None);
     }
 
-    /// The hoist: the outer hook clears the hostname BEFORE the home-directory
-    /// lookup it early-returns on, so a host where `dirs::home_dir()` yields
-    /// `None` still gets the hostname removed. Every spec above drives the
-    /// inner function and cannot see that return.
+    /// The hoist: the outer hook clears the hostname whatever the home-directory
+    /// lookup returns, so a host where `dirs::home_dir()` yields `None` still
+    /// gets the hostname removed. Every spec above drives the inner function
+    /// and cannot see that arm.
     #[test]
     fn scrub_event_clears_server_name_without_a_home_dir() {
         let mut event = sentry::protocol::Event {
             server_name: Some("build-box".into()),
             ..Default::default()
         };
-        scrub_event(&mut event);
+        scrub_event_with_optional_home(&mut event, None);
         assert_eq!(event.server_name, None);
     }
 
@@ -624,6 +633,22 @@ mod tests {
             panic!("variant changed");
         };
         assert_eq!(img.name, "tandem");
+    }
+
+    /// With no resolvable home directory, image paths are still cut: the cut
+    /// does not depend on the home match (#2161).
+    #[test]
+    fn scrub_event_cuts_image_paths_without_a_home_dir() {
+        let mut event = event_with_images(vec![symbolic(
+            r"C:\Users\bob\AppData\Local\Tandem\tandem.exe",
+            Some("/home/alice/tandem.debug"),
+        )]);
+        scrub_event_with_optional_home(&mut event, None);
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem.exe");
+        assert_eq!(img.debug_file.as_deref(), Some("tandem.debug"));
     }
 
     /// The seam the scrub depends on: the debug-images integration fills
