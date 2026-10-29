@@ -140,6 +140,15 @@ jobs:
       - name: Build reaper (compiles the host's reaping path)
         run: cargo build --release --manifest-path reaper/Cargo.toml
 
+      # #1988: the reaper's `--exec-with-pdeathsig` mode is the desktop shell's
+      # Linux sidecar trampoline, and `reaper/tests/exec_pdeathsig.rs` is its
+      # only proof (thread-death delivery, the parent re-check, no PATH search).
+      # The tests are `cfg(target_os = "linux")`, so the other legs compile
+      # them to nothing. This job is advisory; `tests/scripts/reaper-test-wiring.test.ts`
+      # inside `check` pins this step (ADR-051).
+      - name: Test reaper
+        run: cargo test --manifest-path reaper/Cargo.toml
+
   # #1529: the ONLY tests that spawn real `icacls` -- the #1299 proof that a
   # machine already poisoned by the old non-inheritable grant recovers by running
   # the fixed build -- had no runner anywhere. `check` is the only vitest job and

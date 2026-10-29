@@ -690,7 +690,24 @@ export interface ChatMessage {
   documentId?: string;
   anchor?: CapturedAnchor;
   replyTo?: string;
+  /**
+   * AI inbox state: once set, `tandem_checkInbox` stops handing the user message
+   * to cursor-less and fresh readers. A cursor poll sets it only when the NEXT
+   * poll acknowledges the message (#2064, #2294), so it can lag the hand-out by
+   * a whole task; the editor's pickup row reads `read || delivered`, never
+   * `read` alone.
+   */
   read: boolean;
+  /**
+   * Set (by the server, `withMcp`) on a user message the moment a cursor poll
+   * hands it out in a validated response — before any acknowledgement. Means
+   * "some reader has it", which is what the pickup row and the Claude Code
+   * offer ask. Never consulted for re-delivery (that is `read` and the cursor)
+   * nor for which messages a reply answers (that needs an acknowledgement: a
+   * response can validate and still be lost). Dropped when the CTRL session is
+   * restored (`restoreCtrlDoc`). Only ever `true` or absent.
+   */
+  delivered?: true;
   /**
    * Set on a Claude reply that acknowledges work it is about to do (`tandem_reply`
    * with `inProgress: true`). The editor's pickup row reads "working on it" from
@@ -699,6 +716,15 @@ export interface ChatMessage {
    * absent, so a row written without it stays byte-identical to the old shape.
    */
   inProgress?: true;
+  /**
+   * Set only server-side, on Tandem's one-time hello (#2227): the greeting
+   * turn's first reply from the launcher's own child, answering nothing, with no
+   * user chat waiting (`mcp/greeting-reply.ts`). The client reads it only to
+   * word the reply notification "Tandem's Claude is ready" instead of "Claude
+   * replied"; it never changes what is shown in chat. Only ever `true` or
+   * absent, so every other row stays byte-identical.
+   */
+  greeting?: true;
   /**
    * The specific AI agent that authored this message (#1123 M3). Set only by the
    * local-model collaborator's streamed reply; absent on user messages and real
@@ -721,7 +747,10 @@ export interface TandemNotification {
     | "external-conflict"
     | "read-only-file"
     | "launcher"
-    | "documents-not-reopened";
+    | "documents-not-reopened"
+    // Client-originated from the licence status poll (#2231): the grace-period
+    // notice. Never sent over the notify stream, and never shown to Claude.
+    | "license";
   /** Also selects the notice's lifetime, and therefore its tense. Only `info`
    *  expires (`ACTIVITY_INFO_TTL_MS`); `warning` and `error` persist in the
    *  activity tray, which is a LOG. A present-tense observation at those two

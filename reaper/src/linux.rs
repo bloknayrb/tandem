@@ -19,15 +19,85 @@
 //! to exit, silently dropping the signal. Pure libc/nix.
 
 use crate::common::{ReaperOpts, GRACE_PERIOD_SECS};
-use nix::sys::signal::{
-    self, kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal,
-};
+use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::{alarm, execvp, fork, getppid, ForkResult, Pid};
+use nix::unistd::{alarm, execv, execvp, fork, getppid, ForkResult, Pid};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 static CHILD_PID: AtomicI32 = AtomicI32::new(0);
+
+/// The `--exec-with-pdeathsig` mode (#1988): arm PDEATHSIG on THIS process,
+/// re-check the parent, then become `program` with `execv`. No fork, so the
+/// program keeps this pid and the pipes the caller handed us.
+///
+/// - **SIGTERM, not SIGKILL**, so the Node sidecar runs its own shutdown and
+///   flushes unsaved edits before it exits.
+/// - **The signal follows the parent THREAD.** Linux sends it when the thread
+///   that forked us exits, not when the parent process does, so the caller
+///   must fork from a thread that lives as long as it does
+///   (`src-tauri/src/sidecar_anchor.rs`).
+/// - **It survives `execve`** because the program is neither setuid/setgid nor
+///   carrying file capabilities (the kernel clears it for those).
+/// - **The `getppid()` re-check** closes the window where the parent died
+///   between our spawn and `prctl`: we would have been reparented, and the
+///   signal armed on the new parent. `getppid()` returns the parent's tgid,
+///   which is `std::process::id()` on the caller's side even when a non-main
+///   thread forked us.
+/// - **`execv`, never `execvp`, and an absolute path only.** A generic exec
+///   gadget in a bundled binary must not search `PATH`; the shell always
+///   passes the absolute path its sidecar resolution produced.
+pub fn exec_with_pdeathsig(parent_pid: u32, program: &str, args: &[String]) -> i32 {
+    if !std::path::Path::new(program).is_absolute() {
+        eprintln!("tandem-reaper: --exec-with-pdeathsig needs an absolute program path");
+        return 2;
+    }
+    let program_c = match CString::new(program) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("tandem-reaper: program path contains NUL byte");
+            return 2;
+        }
+    };
+    let mut argv: Vec<CString> = Vec::with_capacity(args.len() + 1);
+    argv.push(program_c.clone());
+    for arg in args {
+        match CString::new(arg.as_str()) {
+            Ok(c) => argv.push(c),
+            Err(_) => {
+                eprintln!("tandem-reaper: argument contains NUL byte");
+                return 2;
+            }
+        }
+    }
+
+    let prctl_result = unsafe {
+        libc::prctl(
+            libc::PR_SET_PDEATHSIG,
+            libc::SIGTERM as libc::c_ulong,
+            0,
+            0,
+            0,
+        )
+    };
+    if prctl_result != 0 {
+        eprintln!("tandem-reaper: prctl(PR_SET_PDEATHSIG) failed");
+        return 1;
+    }
+
+    let actual_ppid = getppid().as_raw() as u32;
+    if actual_ppid != parent_pid {
+        eprintln!(
+            "tandem-reaper: parent already died (expected ppid={parent_pid}, got {actual_ppid}) — not starting {program}"
+        );
+        return 3;
+    }
+
+    let _ = execv(&program_c, &argv);
+    // `execv` only returns on failure.
+    eprintln!("tandem-reaper: execv({program}) failed");
+    127
+}
 
 extern "C" fn forward_term(sig: i32) {
     let pid = CHILD_PID.load(Ordering::SeqCst);

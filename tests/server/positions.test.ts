@@ -462,49 +462,63 @@ describe("validateRange — space-class normalization (#1622)", () => {
  *
  * The spec above pins the OPTION in both directions, and the integration suite
  * pins the two opt-INs (`tandem_edit` and `YDocStore.anchorRange`) by driving a
- * tool whose call goes red when the flag is deleted. Nothing pinned the two
+ * tool whose call goes red when the flag is deleted. Nothing pinned the
  * opt-OUTs — and a review reproduced exactly that: adding `normalizeSpaceClass:
- * true` to BOTH watcher sites left the entire suite green (10913 passed), so a
- * forgotten opt-out is the one direction with no detector.
+ * true` to the then-watcher sites left the entire suite green (10913 passed),
+ * so a forgotten opt-out is the one direction with no detector.
  *
  * That asymmetry matters because #1622's own argument for default-off is that a
  * forgotten opt-IN merely reproduces today's visible `RANGE_GONE` while a
- * forgotten opt-OUT silently accepts a stale range: normalizing there makes the
- * watcher's probe answer `ok` while `snapshotContradicts` — still exact —
- * refuses the editor accept and the `.docx` apply. That is the #1631 divergence
- * shape, and it presents as "accept stopped working", not as an error.
+ * forgotten opt-OUT silently accepts a stale range: normalizing a STORED-text
+ * comparison makes it answer a match while `snapshotContradicts` — still exact
+ * — refuses the editor accept and the `.docx` apply. That is the #1631
+ * divergence shape, and it presents as "accept stopped working", not as an
+ * error.
  *
- * A textual pin rather than an AST one, in the idiom of
+ * Since #2269 the stored-text site is the reload remap
+ * (`documents/reload-remap.ts`), which replaced the watcher's relocation probe
+ * and anchor. A textual pin rather than an AST one, in the idiom of
  * `document-write-rearm.test.ts`'s "`forbidden` files contain no reference to
- * `rearmWatch` AT ALL": both watcher sites resolve their options through one
- * shared `relocOpts` binding, so an AST walk over the two call expressions would
- * miss a property added to that object — the same undercount Critical Rule 4
- * warns about for the shared `surrogates` binding. The rationale for the opt-out
- * belongs in `RangeValidationOpts.normalizeSpaceClass`'s docblock, which is
- * where a reader looks; this file deliberately owns none of the prose.
+ * `rearmWatch` AT ALL": the remap's calls share one options binding, so an AST
+ * walk over the call expressions would miss a property added to that object —
+ * the same undercount Critical Rule 4 warns about for the shared `surrogates`
+ * binding. The rationale for the opt-out belongs in
+ * `RangeValidationOpts.normalizeSpaceClass`'s docblock, which is where a reader
+ * looks; this file deliberately owns none of the prose.
  */
-describe("#1622 call-site pin — the watcher's STORED snapshots stay byte-exact", () => {
-  const WATCHER = "src/server/documents/watcher.ts";
+describe("#1622 call-site pin — the reload remap's STORED text stays byte-exact", () => {
+  const REMAP = "src/server/documents/reload-remap.ts";
 
-  it(`${WATCHER} does not mention normalizeSpaceClass at all`, async () => {
+  it(`${REMAP} does not mention normalizeSpaceClass at all`, async () => {
     const { readFile } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
     const path = await import("node:path");
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    const text = await readFile(path.join(repoRoot, WATCHER), "utf-8");
+    const text = await readFile(path.join(repoRoot, REMAP), "utf-8");
 
-    // The control: the file really is the one holding both relocation calls, so
-    // a rename or a move fails here instead of passing vacuously.
-    expect(text).toContain("watcher/relocation-probe");
-    expect(text).toContain("watcher/relocation-anchor");
+    // The control: the file really is the one holding the remap's anchoring
+    // calls, so a rename or a move fails here instead of passing vacuously.
+    expect(text).toContain('"reload/remap"');
 
     expect(
       text.includes("normalizeSpaceClass"),
-      `${WATCHER} passes STORED snapshots and must stay byte-exact (#1622) — ` +
-        "normalizing there makes the relocation probe answer `ok` while " +
+      `${REMAP} compares STORED text and must stay byte-exact (#1622) — ` +
+        "normalizing there makes a relocation match while " +
         "`snapshotContradicts` stays exact and then refuses the editor accept and " +
         "the .docx apply (the #1631 divergence shape).",
     ).toBe(false);
+  });
+
+  it("the watcher no longer anchors annotations itself", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const text = await readFile(path.join(repoRoot, "src/server/documents/watcher.ts"), "utf-8");
+    // A second relocation site growing back beside the remap is how the two
+    // would drift; the remap is the one place a reload moves annotations.
+    expect(text).not.toMatch(/anchoredRange|validateRange|normalizeSpaceClass/);
+    expect(text).toContain("applyRemap");
   });
 });
 
@@ -639,9 +653,9 @@ describe("validateRange — bounds, integrality, emptiness and surrogates", () =
     });
 
     it("staleness is answered before the upper bound, so a shortened document relocates", () => {
-      // The watcher's relocation probe passes stale offsets past the new end
-      // with a snapshot and relies on RANGE_MOVED. Bounds-first would return
-      // INVALID_RANGE and pin the annotation to dead offsets.
+      // `tandem_edit`'s retry path passes offsets read before the document
+      // shrank, with a snapshot, and relies on RANGE_MOVED. Bounds-first would
+      // return INVALID_RANGE for text that is right there.
       doc = makeDoc("aaaa target bbbb cccc dddd");
       const fragment = getFragment(doc);
       const el = fragment.get(0) as Y.XmlElement;
@@ -772,7 +786,7 @@ describe("validateRange — bounds, integrality, emptiness and surrogates", () =
         // discriminates the throttle from both alternatives — asserting 1-in-9
         // did not, since `n !== 1` also passes it.
         //
-        // The tag must be one of the five `HoistTag` literals (the union exists
+        // The tag must be one of the four `HoistTag` literals (the union exists
         // so the module-global counter cannot grow unboundedly). The count
         // starts at zero because of the `beforeEach` reset above, not because
         // this literal happens to be unique in the file.

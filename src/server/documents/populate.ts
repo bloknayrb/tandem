@@ -33,9 +33,11 @@ import { attachObservers, clearFileSyncContext, getFileSyncContext } from "../ev
 import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { deleteSession } from "../session/manager.js";
+import { bumpContentGeneration } from "./content-generation.js";
 import { markClean } from "./dirty.js";
 import { endReadOnlyFileEpisode } from "./read-only-file.js";
 import type { OpenDoc } from "./registry.js";
+import { applyRemap, captureRemapInput, type ReloadRemap } from "./reload-remap.js";
 
 /**
  * Context passed to populateDocFromContent for user-facing diagnostics —
@@ -303,8 +305,10 @@ export function evictPartialDocState(doc: Y.Doc, docId: string | undefined): voi
 /**
  * Clear the four document-state Y.Maps (annotations, replies, awareness,
  * user-awareness) in place — or only the two awareness maps when
- * `keepAnnotations` is set (#2219). Caller wraps with the appropriate origin helper
- * and is responsible for the XmlFragment if it also needs clearing.
+ * `keepAnnotations` is set, which is what every content-replacing reload passes
+ * (#2269: the annotation maps survive a reload and are remapped instead). Caller
+ * wraps with the appropriate origin helper and is responsible for the
+ * XmlFragment if it also needs clearing.
  *
  * NOT exhaustive by design: `documentMeta` keys owned by the docx adapter — the
  * fidelity report (Y_MAP_FIDELITY_REPORT) and footnote bodies
@@ -334,11 +338,29 @@ function clearDocMaps(doc: Y.Doc, keepAnnotations = false): void {
 export { evictPartialDocState as __testEvictPartialDocState, notifyIssue as __testNotifyIssue };
 
 /**
- * Clear all document state in-place and repopulate from a pre-read buffer.
- * Unlike the old forceCloseDocument, this preserves the Y.Doc instance, Hocuspocus
- * room, and client WebSocket connections. Content, awareness and (unless
- * `opts.keepAnnotations`) annotations are cleared and repopulated in a single Y.js
- * transaction so clients see one atomic update.
+ * Replace a document's content in place from a pre-read buffer, keeping its
+ * annotations. Unlike the old forceCloseDocument, this preserves the Y.Doc
+ * instance, Hocuspocus room, and client WebSocket connections. Awareness is
+ * cleared, the content replaced and every annotation REMAPPED onto the new
+ * content (`documents/reload-remap.ts`, #2269) in a single Y.js transaction, so
+ * clients see one atomic update and no read ever sees a record anchored into the
+ * destroyed fragment.
+ *
+ * The annotation maps are never cleared, for any format. Clearing them and
+ * re-merging the durable envelope afterwards (#1813) lost every record the
+ * envelope did not hold — a scratchpad's (no envelope), a failed flush's, an
+ * unwired or read-only store's, the tutorial seeds' — and came back with
+ * pre-reload offsets. A `.docx` re-import into the kept map is the same
+ * idempotent import `reloadFromDisk` has always run (offset-id dedupe plus the
+ * #1150 commentId drift path), and a record the import rewrites is skipped by
+ * the remap because it is already anchored to the new content.
+ *
+ * Returns the {@link ReloadRemap}. A file-backed caller re-wires the durable
+ * store next and must pass `afterMerge: (ids) => remapEnvelopeWins(doc, remap,
+ * ids)`: wherever the envelope's copy of a record wins that merge, it carries
+ * pre-reload coordinates and needs the same remap. `undefined` when the remap
+ * itself threw (logged; the content has landed and the records keep their dead
+ * relRanges, which `refreshRange` strips and reports `degraded`).
  *
  * The caller owns the disk read (passes `source`) so the `fs.readFile` sink
  * sits at the call site where the path has already flowed through
@@ -371,15 +393,6 @@ export { evictPartialDocState as __testEvictPartialDocState, notifyIssue as __te
  * genuinely new conflict that this unrelated repopulation must not silently
  * wipe. The wrapper object (rather than a bare `unknown`) distinguishes "no
  * guard requested" from "guard requested, captured value was undefined".
- *
- * `opts.keepAnnotations` (default absent, #2219): leave `Y_MAP_ANNOTATIONS` and
- * `Y_MAP_ANNOTATION_REPLIES` untouched instead of clearing them. For a document
- * with no durable envelope (a scratchpad), the #1813 re-merge has nothing to
- * bring back, so clearing would delete every record for good. The kept records
- * still hold pre-reload ranges and relRanges into the destroyed fragment, so the
- * option carries the re-anchor it requires, run before this function's first
- * post-transaction await. `.md` only (refused otherwise): `.docx` re-imports
- * Word comments and would double-insert them.
  */
 export async function clearAndReload(
   id: string,
@@ -392,26 +405,18 @@ export async function clearAndReload(
     markCleanAfter?: boolean;
     readOnly?: boolean;
     conflictGuard?: { raw: unknown };
-    keepAnnotations?: { reanchor: (doc: Y.Doc) => void };
   },
-): Promise<void> {
-  // Before any side effect (the flush below detaches the durable store). An
-  // adapter that injects its own annotations (`.docx` Word comments) would
-  // double-insert them beside the kept records.
-  if (opts?.keepAnnotations && format !== "md") {
-    throw new Error(`clearAndReload: keepAnnotations is .md-only (got ${format})`);
-  }
+): Promise<ReloadRemap | undefined> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
   // 0. Flush the pending durable-annotation write FIRST, then detach the
   //    observer, then cancel anything the flush's own await let through. The
   //    on-disk envelope is deliberately NOT unlinked (#1813, decision C): the
   //    caller re-wires the store immediately (`wireAnnotationStore` ->
-  //    `loadAndMerge`) and then re-anchors the merged records against the new
-  //    body (`reanchorAnnotations`), so the user's personal notes (ADR-027) come
-  //    back rather than being deleted by a reload they asked for to recover from
-  //    a bad state. Both halves are required of every caller: the merge alone
-  //    restores the records at their PRE-reload offsets and persists them there.
+  //    `loadAndMerge`), whose merge persists the remapped map and hands any
+  //    record the envelope's copy wins back to `remapEnvelopeWins`, so the
+  //    user's personal notes (ADR-027) survive a reload they asked for to
+  //    recover from a bad state.
   //
   //    The ORDER is the contract. `clearFileSyncContext` runs the `"close"`
   //    cleanup phase, which does `tombstonesByDoc.delete(docHash)`; the flushed
@@ -424,10 +429,10 @@ export async function clearAndReload(
   //    `flushOne` awaits real disk I/O with the annotation observer still
   //    attached, so a mutation landing inside that await arms a fresh
   //    DEBOUNCE_MS timer; `clearFileSyncContext` unobserves but never touches
-  //    `pending`, and the only canceller used to be the `store.clear()` this
-  //    fix removes. That timer would fire after `clearDocMaps` below — and
-  //    `prepareContent` is async parsing, so >100 ms is ordinary — snapshot the
-  //    emptied `Y.Map('annotations')` and clobber the envelope to zero.
+  //    `pending`, and the only canceller used to be the `store.clear()` #1813
+  //    removed. That timer would fire after the content swap below — and
+  //    `prepareContent` is async parsing, so >100 ms is ordinary — and snapshot
+  //    the map mid-reload, before the re-wire's merge has decided anything.
   //
   //    Failures here must not abort the reload — annotations are additive
   //    durability and we still want the content reload to land.
@@ -451,16 +456,37 @@ export async function clearAndReload(
   };
   const prepared = await prepareContent(format, source);
 
-  // 2. Single transaction: clear state (annotations kept under keepAnnotations)
-  //    + repopulate + rewrite metadata.
+  // 2. Single transaction: clear awareness + capture annotation ranges +
+  //    repopulate + remap annotations + rewrite metadata.
   //    Clients see one atomic Y.js update — no intermediate states. The
   //    try-catch is a diagnostic safety net for Y.js internal corruption; on
   //    throw we re-raise so the caller's force-reload reports the failure.
+  let remap: ReloadRemap | undefined;
   try {
     withInternal(doc, () => {
-      clearDocMaps(doc, opts?.keepAnnotations !== undefined);
+      // Read every annotation's range while the OLD fragment is still live —
+      // after the swap its relRanges resolve to nothing. Its own catch, like
+      // the apply below: an unreadable annotation must not fail the reload.
+      let remapInput: ReturnType<typeof captureRemapInput> | undefined;
+      try {
+        remapInput = captureRemapInput(doc, resolved);
+      } catch (err) {
+        console.error("[Tandem] clearAndReload: annotation capture failed for %s:", id, err);
+      }
+      // #2070: a parked local-model turn that captured the old generation sees
+      // the replacement through this, since the Y.Doc instance is unchanged.
+      bumpContentGeneration(doc);
+      clearDocMaps(doc, true);
       // Repopulate content via shared helper (idem with populateDocFromContent).
       applyPreparedContent(doc, prepared, ctx);
+      // Its own catch: a remap failure must not report the reload as failed —
+      // the content has landed. The records then keep dead relRanges, which
+      // `refreshRange` strips and reports `degraded`.
+      try {
+        if (remapInput) remap = applyRemap(doc, remapInput);
+      } catch (err) {
+        console.error("[Tandem] clearAndReload: annotation remap failed for %s:", id, err);
+      }
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.delete(Y_MAP_READ_ONLY);
@@ -497,21 +523,6 @@ export async function clearAndReload(
     //    A scratchpad never carries the annotation/reply channel observers (#2219).
     attachObservers(id, doc, { uploadDoc: existing.source !== "file" });
 
-    // Before the session-delete await, so no read in that window sees dead
-    // relRanges. Its own catch: the content has already landed, so a failure
-    // here must not report the reload as failed or skip the session delete.
-    if (opts?.keepAnnotations) {
-      try {
-        opts.keepAnnotations.reanchor(doc);
-      } catch (err) {
-        console.error(
-          "[Tandem] clearAndReload: re-anchoring kept annotations failed for %s:",
-          id,
-          err,
-        );
-      }
-    }
-
     // The body now mirrors disk content — clear the autosave dirty flag so the
     // reload itself doesn't trigger a redundant write-back (#851). Done after
     // attachObservers re-registers the body observer (which preserves the
@@ -541,4 +552,5 @@ export async function clearAndReload(
   });
 
   console.error("[Tandem] clearAndReload: complete for %s", id);
+  return remap;
 }

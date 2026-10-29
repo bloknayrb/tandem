@@ -521,69 +521,36 @@ describe("flattenPlaintextBreaks", () => {
     }
   });
 
-  it("minting a relPos at the break's own flat offset lands differently before vs. after (documented limitation)", () => {
-    // NOT a bug in flattenPlaintextBreaks, and not fixed here — found in review
-    // (#1498) and deliberately left as a documented gap in the shared
-    // `flatOffsetToRelPos` boundary tie-break rule rather than redesigned for
-    // every caller (out of scope for this fix; see plaintext-flatten.ts's
-    // safety comment). Offset 5 is the hardBreak itself, a zero-width element
-    // with no text position of its own, so assoc-0 resolution has to round to
-    // the nearest real character — and which character counts as "nearest"
-    // differs before and after the flatten:
-    //
-    //  - PRE-flatten, offset 5 has no element boundary to land on (the break
-    //    is a sibling element, not a paragraph edge), so the assoc-0 fallback
-    //    rounds forward to the START of "bravo charlie" — flat offset 6, one
-    //    character later than the input.
-    //  - POST-flatten, offset 5 IS a genuine paragraph boundary (end of the
-    //    "alpha" block), so it resolves directly and exactly to 5.
-    //
-    // Concretely: an annotation stored with `range.from = 5` (created, say, by
-    // a selection that started exactly on the break) round-trips to a
-    // DIFFERENT flat offset depending on when you ask — 6 if resolved from the
-    // pre-flatten structure, 5 if resolved from the post-flatten one — in
-    // addition to landing in a different XmlText node. This is a pre-existing
-    // property of boundary-offset resolution, not something the flatten
-    // introduces; the flatten just changes which of the two answers you get.
+  it("minting a relPos at the break's own flat offset lands on the same offset before and after", () => {
+    // Found in review (#1498) as a documented limitation and fixed by #2001.
+    // Offset 5 is the hardBreak itself, a zero-width element with no text
+    // position of its own. Pre-#2001 the assoc-0 fallback rounded FORWARD to the
+    // start of "bravo charlie" (offset 6) before the flatten, while after it the
+    // offset is a genuine paragraph edge and resolved exactly to 5 — so an
+    // annotation with `range.from = 5` round-tripped to a different offset
+    // depending on when it was asked. Both sides now anchor at the end of the
+    // text preceding the break, so both answer 5.
     const doc = new Y.Doc();
     try {
       build(doc, [{ parts: ["alpha", "break", "bravo charlie"] }]);
       const flat = extractText(doc);
       expect(flat).toBe("alpha\nbravo charlie");
 
-      // Offset 5 is the break itself — assoc 0 is the convention `refreshRange`
-      // uses for a range's `from` when re-anchoring.
+      // assoc 0 is the convention `refreshRange` uses for a range's `from`.
       const beforeRel = flatOffsetToRelPos(doc, 5 as FlatOffset, 0);
       expect(beforeRel).not.toBeNull();
       if (!beforeRel) return;
-      const beforeAbs = Y.createAbsolutePositionFromRelativePosition(
-        Y.createRelativePositionFromJSON(beforeRel),
-        doc,
-      );
-      expect(beforeAbs, "resolves before the flatten").not.toBeNull();
-      expect(relPosToFlatOffset(doc, beforeRel), "rounds forward to 'bravo'").toBe(6);
+      expect(relPosToFlatOffset(doc, beforeRel), "exact before the flatten").toBe(5);
 
       expect(flattenPlaintextBreaks(doc)).toBe(true);
       expect(extractText(doc), "byte-neutral").toBe(flat);
 
-      // `beforeRel`'s underlying CRDT item is deleted by the flatten (this is
-      // exactly why `refreshRange` has a "repaired" branch at all) — simulate
-      // it here by re-deriving relPos from the SAME stored flat offset, now
-      // against the post-flatten structure.
+      // Re-derive from the SAME stored flat offset against the post-flatten
+      // structure, as `refreshRange`'s repair arm would.
       const afterRel = flatOffsetToRelPos(doc, 5 as FlatOffset, 0);
       expect(afterRel).not.toBeNull();
       if (!afterRel) return;
-      const afterAbs = Y.createAbsolutePositionFromRelativePosition(
-        Y.createRelativePositionFromJSON(afterRel),
-        doc,
-      );
-      expect(afterAbs, "resolves after the flatten").not.toBeNull();
-      expect(relPosToFlatOffset(doc, afterRel), "now resolves exactly to 5").toBe(5);
-
-      // A different XmlText node than the one `beforeAbs` was rooted in
-      // (captured before the flatten mutated the doc) — not just a different
-      // offset, a different underlying anchor.
-      expect(afterAbs?.type, "anchor re-roots to a different node").not.toBe(beforeAbs?.type);
+      expect(relPosToFlatOffset(doc, afterRel), "exact after the flatten").toBe(5);
     } finally {
       doc.destroy();
     }

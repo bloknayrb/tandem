@@ -23,6 +23,7 @@ const fetchLicenseStatus = vi.fn<(signal?: AbortSignal) => Promise<LicenseStatus
 vi.mock(import("../../src/client/hooks/useLicense"), () => ({
   fetchLicenseStatus: (signal?: AbortSignal) => fetchLicenseStatus(signal),
   activateLicenseClient: vi.fn(),
+  deactivateLicenseClient: vi.fn(),
 }));
 
 const { licenseStore } = await import("../../src/client/hooks/useLicense.svelte");

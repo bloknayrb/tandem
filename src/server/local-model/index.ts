@@ -43,7 +43,8 @@ export interface RunTurnOpts {
   onContentDelta?: (delta: string) => void;
   /** Per turn boundary (after `chat()`), for the streaming sink (#1123 M1.2). */
   onTurnEnd?: (info: { hadToolCalls: boolean }) => void;
-  /** Still the same Y.Doc instance this run captured? (#2039) See `RunLoopOpts`. */
+  /** Still the same Y.Doc instance, content not replaced? (#2039, #2070) See
+   *  `RunLoopOpts`. */
   isDocCurrent?: () => boolean;
 }
 

@@ -143,7 +143,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
     const CHOKE_POINTS: Record<string, RegExp> = {
       // row 1: POST + GET /mcp and stdio server mode
       "src/server/mcp/server.ts": /\baiRefusal\(\)/,
-      // row 4: the chat write, and the shim's reply / approval relay
+      // row 4: the chat write, and the shim's reply (the approval relay was deleted in #1885)
       "src/server/mcp/awareness.ts": /\baiRefusal\(\)/,
       "src/server/mcp/channel-routes.ts": /\baiRefusal\(\)/,
       // row 5: fan-out, SSE, wake socket, launcher spawn

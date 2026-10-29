@@ -188,6 +188,17 @@ if (exitDelayRaw !== undefined) {
   });
 }
 
+// --- permission_denials on the result line (opt-in, default absent) --------
+//
+// #2286: the supervisor logs a non-empty `permission_denials` array from each
+// `result` envelope. The real CLI always carries the field (often `[]`); the
+// stub omits it unless the test sets this to a JSON array, so every other
+// case's result line stays byte-identical.
+const permissionDenials =
+  process.env.TANDEM_STUB_CLAUDE_PERMISSION_DENIALS !== undefined
+    ? { permission_denials: JSON.parse(process.env.TANDEM_STUB_CLAUDE_PERMISSION_DENIALS) }
+    : {};
+
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   stdinBuffer += chunk;
@@ -245,6 +256,7 @@ process.stdin.on("data", (chunk) => {
           subtype: problems.length === 0 ? "success" : "error_during_execution",
           is_error: problems.length > 0,
           result: problems.length === 0 ? "ok" : problems.join("; "),
+          ...permissionDenials,
         })}\n`,
       );
     }, turnDelayMs);

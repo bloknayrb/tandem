@@ -330,6 +330,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-margin-view-toggle`,
   `settings-modal-cowork-suspense-fallback`,
   `settings-modal-open-integration-wizard`,
+  `settings-modal-working-directory-ignored` (#1822 item 4a — the last launch
+  could not use the saved folder, outside home or no longer there, so it ran in
+  home; shown only while the loaded folder is the one refused, driven by the
+  loopback-only `workingDirectoryIgnored` on `GET /api/launcher/status`),
   `settings-modal-push-routes`, `settings-modal-push-routes-shim` (#1432 — the
   persistent "Real-time updates" section; the `-shim` paragraph is route three,
   whose two arms are the honesty-critical copy),
@@ -575,6 +579,8 @@ two `-dark-` hints are what the License tab shows in that state.
   `license-buy-link`, and the dark-gate hints `license-gate-dark-hint` /
   `license-dark-installed-hint`
 - `license-update-window-ended` (Settings → License warning for a lapsed update window) and `license-window-support-link` (its support mailto link)
+- `license-grace-notice` (Settings → License, #2231: the grace-period notice for an installed licence that failed its check; replaces `license-unverifiable-warning` while the grace period runs)
+- `license-remove-section`, `license-remove-button`, `license-remove-confirm`, `license-remove-confirm-btn`, `license-remove-cancel`, `license-remove-error` (Settings → License → Remove license, #1943: the inline two-step confirm and its inline error)
 - `license-renew-link` removed 2026-10-09, deliberately: every key now includes all future updates and there is no renewal product (ADR-040 decisions A5 and B6), so the lapsed-window warning links to support instead (`license-window-support-link`).
 
 ### Test harnesses (not user-facing, kept for vitest)

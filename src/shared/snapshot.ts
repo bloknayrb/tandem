@@ -7,11 +7,12 @@
  * the document. Two do it by writing text back:
  *
  *  - **undo** restores it verbatim, deleting everything past the cap;
- *  - **the reload relocation pass** (`documents/watcher.ts`) searches for it with
- *    `indexOf` and re-anchors the annotation to `match + snapshot.length`,
- *    silently shrinking a 900-character annotation to 200 — after which accept
- *    replaces the wrong span and the `.docx` apply guard, which compares the
- *    same slice, starts PASSING on the shrunken range instead of rejecting.
+ *  - **the reload relocation** (the file watcher's before #2269, the reload
+ *    remap in `documents/reload-remap.ts` since) searches for it with `indexOf`;
+ *    re-anchoring to `match + snapshot.length` would silently shrink a
+ *    900-character annotation to 200 — after which accept replaces the wrong
+ *    span and the `.docx` apply guard, which compares the same slice, starts
+ *    PASSING on the shrunken range instead of rejecting.
  *
  * A third reads it to REFUSE a write: {@link snapshotContradicts}, shared by the
  * `.docx` apply and the editor's accept.
@@ -119,15 +120,17 @@ export function snapshotSearchPrefix(ann: SnapshotBearing): string {
  * the LONE HIGH SURROGATE the unguarded `slice(0, 200)` stored; after one Yjs
  * `encodeStateAsUpdate` — session persist, doc swap, any client sync — lib0's
  * UTF-8 encode has replaced it with U+FFFD. Neither occurs in the document, so
- * `indexOf` misses and the annotation is `RANGE_GONE` forever.
+ * `indexOf` misses and the record's stored range reads as contradicting its
+ * snapshot forever.
  *
  * **Healing here rather than by rewriting the stored record is the decision.** A
  * migration would be a write from a read path, which is what #1764 has just
  * finished removing; and shortening a SEARCH PREFIX is free by construction — a
  * prefix of a prefix is still a prefix, so the cost of trimming a legitimate
- * trailing U+FFFD is one character of search specificity. One edit heals both
- * readers, because the relocation probe and `snapshotContradicts`' truncated
- * branch both come through `snapshotSearchPrefix`.
+ * trailing U+FFFD is one character of search specificity. One edit heals every
+ * reader, because the reload remap's probe (`documents/reload-remap.ts`) and
+ * `snapshotContradicts`' truncated branch both come through
+ * `snapshotSearchPrefix`.
  *
  * **Placement is load-bearing and the obvious phrasing gets it wrong.** Every
  * record this targets carries `textSnapshotTruncated: true` (`captureSnapshot`

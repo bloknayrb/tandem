@@ -34,13 +34,30 @@ export interface SignedLicense {
  */
 export type SignatureVerified = LicenseMetadata & { readonly __runGateChecked: "signature" };
 
-/** On-device license state, computed fresh on every read (no cache). */
-export type LicenseStatus = "trial" | "licensed" | "restricted";
+/**
+ * On-device license state, computed fresh on every read (no cache).
+ *
+ * `grace` (#2231) is the one non-licensed status that ADMITS by design: an
+ * installed licence failed its check less than `LICENSE_GRACE_DAYS` ago.
+ * `restricted` stays the only refusing literal, everywhere — `aiRefusalFor`,
+ * and the desktop updater's `update_route`, which withholds by that name only.
+ */
+export type LicenseStatus = "trial" | "licensed" | "restricted" | "grace";
 
 /** Trial-clock subset surfaced in `LicenseState` (trial arm) and the status wire. */
 export interface TrialInfo {
   firstRunAt: string;
   expiresAt: string;
+  daysRemaining: number;
+}
+
+/** The grace subset surfaced in `LicenseState` (grace arm) and the status wire (#2231). */
+export interface GraceInfo {
+  /** When this licence file first failed its check (ISO). */
+  firstFailedAt: string;
+  /** When the AI features turn off unless the licence is fixed (ISO). */
+  endsAt: string;
+  /** Whole days left, clamped to `[0, LICENSE_GRACE_DAYS]`. */
   daysRemaining: number;
 }
 
@@ -75,10 +92,19 @@ export interface LicenseFile {
  * is told their trial ended. Only ever set on the non-licensed arms; the
  * licensed arm is by construction verified.
  *
- * Deliberately NOT a fourth `status` value: `ai-refusal.ts` decides on
- * `status === "restricted"`, so a new status would fail OPEN at every AI
- * admission point until the decision was updated.
- * Diagnosis and entitlement are orthogonal axes.
+ * `licenseUnverifiable` is deliberately NOT a status of its own: diagnosis and
+ * entitlement are orthogonal axes. `ai-refusal.ts` decides on
+ * `status === "restricted"`, so any new status fails OPEN at every AI
+ * admission point — which is why a status is added only when admitting is the
+ * point.
+ *
+ *  - grace (#2231, ADR-040 amendment 2026-10-28) — the one status added that
+ *    way: a licence file is installed, fails its check, and first failed less
+ *    than `LICENSE_GRACE_DAYS` ago. The AI stays on, updates keep flowing
+ *    (`update_route` withholds by the name `restricted` only), and every
+ *    human-facing surface shows a notice to contact support. It always carries
+ *    `licenseUnverifiable` (required, not optional) and never a licence, and
+ *    `updateWindowCurrent` is `false` as on the other non-licensed arms.
  */
 export type LicenseState =
   | { gateActive: false }
@@ -94,6 +120,13 @@ export type LicenseState =
       status: "restricted";
       updateWindowCurrent: false;
       licenseUnverifiable?: LicenseUnverifiableCode;
+    }
+  | {
+      gateActive: true;
+      status: "grace";
+      grace: GraceInfo;
+      updateWindowCurrent: false;
+      licenseUnverifiable: LicenseUnverifiableCode;
     }
   | {
       gateActive: true;

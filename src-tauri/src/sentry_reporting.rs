@@ -27,16 +27,36 @@
 //! own the global `tracing` subscriber; Sentry coexists with whichever is
 //! active. See CLAUDE.md "devtools is mutually exclusive with tauri-plugin-log".
 //!
-//! ## PII scrubbing
+//! ## PII scrubbing, and how far it reaches
 //!
-//! A `before_send` hook scrubs events before they leave the process:
-//! - absolute home-directory paths are rewritten to `~/…`
+//! A `before_send` hook scrubs the **event** before it leaves the process:
+//! - absolute home-directory paths are rewritten to `~/…` in the message and
+//!   exception values
 //! - `event.server_name` — the machine's hostname — is cleared outright (#2023)
 //! - every exception stack frame's `filename` / `abs_path` is redacted (#2023)
+//! - every `debug_meta.images[]` path (`name`, `code_file`, `debug_file`) is
+//!   redacted (#2161). The debug-images integration records the full path of
+//!   every loaded module on every event, and a per-user Windows install lives
+//!   under `%LOCALAPPDATA%`, so those paths carry the username. The integration
+//!   runs before `before_send` (sentry-core `Client::prepare_event`), which is
+//!   what lets this hook see them; `tests::debug_images_reach_before_send` pins
+//!   that order against the real client.
 //! - the DSN is never logged
-//! Document content and annotation bodies never reach this layer — they live in
-//! the sidecar/WebView and are not attached to Rust panic events. The WebView
-//! side applies its own scrubbing in `src/client/sentry.ts`.
+//!
+//! **The minidump is not scrubbed.** A native crash of this shell process also
+//! sends a minidump attachment. Attachments are added to the envelope after
+//! `before_send` has run, and rewriting a binary dump in place is not
+//! attempted, so its bytes leave exactly as written. On Linux that dump
+//! carries the full command line, the process's whole inherited environment
+//! and the path of every open file, among other streams; `docs/security.md`
+//! ("Telemetry") lists what each platform's dump holds. It goes only to the
+//! operator's own DSN, and only after they opted in.
+//!
+//! Document content is not deliberately attached to events, but the shell
+//! process's minidump can carry document paths (argv, open files) and any of
+//! its memory that is on a thread stack. The sidecar and the WebView are
+//! separate processes and are not in this dump. The WebView side applies its
+//! own scrubbing in `src/client/sentry.ts`.
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,6 +121,38 @@ pub fn init() -> Option<SentryGuard> {
     // enabled, not the value.
     log::info!("[sentry] crash reporting enabled (DSN configured via {SENTRY_DSN_ENV})");
 
+    let mut options = base_options();
+
+    // Out-of-process native crash handler (minidumps). Since
+    // tauri-plugin-sentry 0.7 this is `sentry`'s own `minidump` integration
+    // (enabled through the plugin's default `minidump` feature), registered on
+    // the options rather than started after `sentry::init`. It must be added
+    // BEFORE `sentry::init`: the crash-reporter process re-executes this binary
+    // and diverges inside `sentry::init` (it never returns there), so
+    // everything before that call runs in both processes. The reporter's client
+    // is cloned from these options, so `before_send` scrubbing still applies to
+    // the minidump EVENT — but not to the dump bytes, which are attached after
+    // `before_send` runs and leave unscrubbed (#2161; see the module doc). The
+    // cfg matches the `sentry` re-export's own gate —
+    // the integration exists only on Linux, macOS and Windows.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        options =
+            options.add_integration(sentry::integrations::minidump::MinidumpIntegration::new());
+    }
+
+    let client = sentry::init((dsn, options));
+
+    SENTRY_ENABLED.store(true, Ordering::Release);
+    Some(SentryGuard { client })
+}
+
+/// The client options every enabled client starts from: release, no session
+/// tracking, the scrubbing `before_send`, and no default PII. Split out of
+/// [`init`] so a test can build a real client from the same options without
+/// reading the environment, flipping [`SENTRY_ENABLED`] or adding the
+/// minidump integration (which re-executes the current binary).
+fn base_options() -> sentry::ClientOptions {
     // sentry 0.49 marks `ClientOptions` `#[non_exhaustive]`, so the struct
     // literal no longer compiles from outside the crate — build via
     // `Default` and assign the same four fields as before.
@@ -117,27 +169,7 @@ pub fn init() -> Option<SentryGuard> {
     }));
     // Belt-and-braces: ask the SDK not to attach IP / identifying data.
     options.send_default_pii = false;
-
-    // Out-of-process native crash handler (minidumps). Since
-    // tauri-plugin-sentry 0.7 this is `sentry`'s own `minidump` integration
-    // (enabled through the plugin's default `minidump` feature), registered on
-    // the options rather than started after `sentry::init`. It must be added
-    // BEFORE `sentry::init`: the crash-reporter process re-executes this binary
-    // and diverges inside `sentry::init` (it never returns there), so
-    // everything before that call runs in both processes. The reporter's client
-    // is cloned from these options, so `before_send` scrubbing still applies to
-    // the minidump event. The cfg matches the `sentry` re-export's own gate —
-    // the integration exists only on Linux, macOS and Windows.
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    {
-        options =
-            options.add_integration(sentry::integrations::minidump::MinidumpIntegration::new());
-    }
-
-    let client = sentry::init((dsn, options));
-
-    SENTRY_ENABLED.store(true, Ordering::Release);
-    Some(SentryGuard { client })
+    options
 }
 
 /// Mutate an outgoing Sentry event in place to strip personally-identifying
@@ -146,16 +178,29 @@ pub fn init() -> Option<SentryGuard> {
 /// sidecar's `scrubEvent` (`src/server/sentry.ts`).
 ///
 /// **The order here is the contract (#2023).** Clearing `server_name` is not a
-/// redaction and needs no home directory, so it happens BEFORE the
-/// [`home_dir_string`] lookup that the rest of the scrubbing early-returns on.
+/// redaction and needs no home directory, so it happens regardless of the
+/// [`home_dir_string`] lookup that the string and frame scrubbing depends on.
 /// Leaving it inside [`scrub_event_with_home`] alone would make hostname
 /// removal conditional on `dirs::home_dir()` succeeding — on a host where it
-/// yields `None` the hostname would still egress, and no inner-function test
-/// could see it.
+/// yields `None` the hostname would still egress. The same holds for the
+/// debug-image cut (#2161). [`scrub_event_with_optional_home`] takes the lookup
+/// result as an argument so a test can drive the `None` arm.
 fn scrub_event(event: &mut sentry::protocol::Event<'static>) {
+    scrub_event_with_optional_home(event, home_dir_string().as_deref());
+}
+
+/// [`scrub_event`] with the home-directory lookup injected.
+fn scrub_event_with_optional_home(
+    event: &mut sentry::protocol::Event<'static>,
+    home: Option<&str>,
+) {
     event.server_name = None;
-    let Some(home) = home_dir_string() else { return };
-    scrub_event_with_home(event, &home);
+    match home {
+        Some(home) => scrub_event_with_home(event, home),
+        // Image paths are cut to their file name whatever the home directory
+        // is, so a host with no resolvable home still sends none of them.
+        None => scrub_debug_meta(event),
+    }
 }
 
 /// The pure half of [`scrub_event`], taking the home directory as an argument
@@ -182,6 +227,95 @@ fn scrub_event_with_home(event: &mut sentry::protocol::Event<'static>, home: &st
         }
         if let Some(stacktrace) = exception.stacktrace.as_mut() {
             scrub_frames(stacktrace, home);
+        }
+    }
+
+    scrub_debug_meta(event);
+}
+
+/// Cut every debug image's paths to their final component (#2161).
+///
+/// Not a home-directory match: an image path can name the user in ways that
+/// match cannot see — a case variant (Windows paths are case-insensitive), a
+/// redirected or OneDrive profile, another drive, an 8.3 short name, or a host
+/// with no resolvable home. Symbolication keys on the debug/code id plus the
+/// file name, so the directory is never needed.
+///
+/// `debug_meta` arrives as `Cow::Borrowed` from the integration's static
+/// list, so it is only made owned (cloned) when an image still carries a
+/// directory.
+fn scrub_debug_meta(event: &mut sentry::protocol::Event<'static>) {
+    if debug_meta_has_directories(&event.debug_meta) {
+        scrub_debug_images(event.debug_meta.to_mut());
+    }
+}
+
+/// Every path-bearing field of one debug image, for the cheap pre-check.
+///
+/// The match is exhaustive with no wildcard arm on purpose, here and in
+/// [`scrub_debug_images`]: `DebugImage` is not `#[non_exhaustive]`, so a new
+/// variant in a sentry bump fails to compile instead of egressing unscrubbed.
+///
+/// Returns a fixed-size array rather than a `Vec`, so the pre-check runs on
+/// every event without a heap allocation per image.
+fn debug_image_paths(image: &sentry::protocol::DebugImage) -> impl Iterator<Item = &str> {
+    use sentry::protocol::DebugImage;
+    let paths: [Option<&str>; 3] = match image {
+        DebugImage::Apple(img) => [Some(img.name.as_str()), None, None],
+        DebugImage::Symbolic(img) => [Some(img.name.as_str()), img.debug_file.as_deref(), None],
+        DebugImage::Proguard(_) => [None, None, None],
+        DebugImage::Wasm(img) => [
+            Some(img.name.as_str()),
+            Some(img.code_file.as_str()),
+            img.debug_file.as_deref(),
+        ],
+    };
+    paths.into_iter().flatten()
+}
+
+const PATH_SEPARATORS: [char; 2] = ['/', '\\'];
+
+/// The final path component, splitting on either separator so a Windows path
+/// is cut correctly on any host.
+fn file_name(path: &str) -> &str {
+    path.rsplit(PATH_SEPARATORS).next().unwrap_or(path)
+}
+
+fn debug_meta_has_directories(meta: &sentry::protocol::DebugMeta) -> bool {
+    meta.images
+        .iter()
+        .flat_map(debug_image_paths)
+        .any(|path| path.contains(PATH_SEPARATORS))
+}
+
+/// Cut every debug image's paths to their file name (#2161). On a `Symbolic`
+/// image `name` is the code file path; `Proguard` carries no path.
+fn scrub_debug_images(meta: &mut sentry::protocol::DebugMeta) {
+    use sentry::protocol::DebugImage;
+    fn cut(field: &mut String) {
+        let name = file_name(field);
+        if name.len() != field.len() {
+            *field = name.to_string();
+        }
+    }
+    fn cut_opt(field: &mut Option<String>) {
+        if let Some(value) = field.as_mut() {
+            cut(value);
+        }
+    }
+    for image in meta.images.iter_mut() {
+        match image {
+            DebugImage::Apple(img) => cut(&mut img.name),
+            DebugImage::Symbolic(img) => {
+                cut(&mut img.name);
+                cut_opt(&mut img.debug_file);
+            }
+            DebugImage::Proguard(_) => {}
+            DebugImage::Wasm(img) => {
+                cut(&mut img.name);
+                cut(&mut img.code_file);
+                cut_opt(&mut img.debug_file);
+            }
         }
     }
 }
@@ -313,17 +447,258 @@ mod tests {
         assert_eq!(event.message, None);
     }
 
-    /// The hoist: the outer hook clears the hostname BEFORE the home-directory
-    /// lookup it early-returns on, so a host where `dirs::home_dir()` yields
-    /// `None` still gets the hostname removed. Every spec above drives the
-    /// inner function and cannot see that return.
+    /// The hoist: the outer hook clears the hostname whatever the home-directory
+    /// lookup returns, so a host where `dirs::home_dir()` yields `None` still
+    /// gets the hostname removed. Every spec above drives the inner function
+    /// and cannot see that arm.
     #[test]
     fn scrub_event_clears_server_name_without_a_home_dir() {
         let mut event = sentry::protocol::Event {
             server_name: Some("build-box".into()),
             ..Default::default()
         };
-        scrub_event(&mut event);
+        scrub_event_with_optional_home(&mut event, None);
         assert_eq!(event.server_name, None);
+    }
+
+    // ---- #2161: debug_meta image paths ----
+
+    use sentry::protocol::{
+        Addr, AppleDebugImage, DebugImage, DebugMeta, ProguardDebugImage, SymbolicDebugImage,
+        WasmDebugImage,
+    };
+
+    fn symbolic(name: &str, debug_file: Option<&str>) -> DebugImage {
+        DebugImage::Symbolic(SymbolicDebugImage {
+            name: name.to_string(),
+            arch: Some("x86_64".into()),
+            image_addr: Addr(0x1000),
+            image_size: 4096,
+            image_vmaddr: Addr(0),
+            id: sentry::types::DebugId::default(),
+            code_id: None,
+            debug_file: debug_file.map(str::to_string),
+        })
+    }
+
+    fn event_with_images(images: Vec<DebugImage>) -> sentry::protocol::Event<'static> {
+        sentry::protocol::Event {
+            debug_meta: Cow::Owned(DebugMeta {
+                sdk_info: None,
+                images,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn scrubs_symbolic_image_paths_posix() {
+        let mut event = event_with_images(vec![symbolic(
+            "/home/alice/.local/share/tandem/tandem",
+            Some("/home/alice/.local/share/tandem/tandem.debug"),
+        )]);
+        scrub_event_with_home(&mut event, "/home/alice");
+
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem");
+        assert_eq!(img.debug_file.as_deref(), Some("tandem.debug"));
+        // Non-path fields are untouched.
+        assert_eq!(img.arch.as_deref(), Some("x86_64"));
+        assert_eq!(img.image_addr, Addr(0x1000));
+        assert_eq!(img.image_size, 4096);
+        assert_eq!(img.id, sentry::types::DebugId::default());
+    }
+
+    #[test]
+    fn scrubs_symbolic_image_paths_windows() {
+        let mut event = event_with_images(vec![symbolic(
+            r"C:\Users\bob\AppData\Local\Tandem\tandem.exe",
+            Some(r"C:\Users\bob\AppData\Local\Tandem\tandem.pdb"),
+        )]);
+        scrub_event_with_home(&mut event, r"C:\Users\bob");
+
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem.exe");
+        assert_eq!(img.debug_file.as_deref(), Some("tandem.pdb"));
+    }
+
+    /// The case a home-directory match misses: Windows paths are
+    /// case-insensitive, so a module path spelled differently from the
+    /// profile directory still names the user unless the directory goes.
+    #[test]
+    fn scrubs_a_windows_image_path_whose_case_differs_from_home() {
+        let mut event = event_with_images(vec![symbolic(
+            r"c:\users\bob\onedrive\tandem\tandem.exe",
+            None,
+        )]);
+        scrub_event_with_home(&mut event, r"C:\Users\Bob");
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem.exe");
+    }
+
+    #[test]
+    fn scrubs_apple_and_wasm_image_paths() {
+        let mut event = event_with_images(vec![
+            DebugImage::Apple(AppleDebugImage {
+                name: "/Users/carol/Applications/Tandem.app/Contents/MacOS/tandem".into(),
+                arch: None,
+                cpu_type: None,
+                cpu_subtype: None,
+                image_addr: Addr(0),
+                image_size: 0,
+                image_vmaddr: Addr(0),
+                uuid: sentry::protocol::Uuid::nil(),
+            }),
+            DebugImage::Wasm(WasmDebugImage {
+                name: "/Users/carol/w/mod.wasm".into(),
+                debug_id: sentry::protocol::Uuid::nil(),
+                debug_file: Some("/Users/carol/w/mod.debug.wasm".into()),
+                code_id: None,
+                code_file: "/Users/carol/w/mod.wasm".into(),
+            }),
+        ]);
+        scrub_event_with_home(&mut event, "/Users/carol");
+
+        let images = &event.debug_meta.images;
+        let DebugImage::Apple(apple) = &images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(apple.name, "tandem");
+        let DebugImage::Wasm(wasm) = &images[1] else {
+            panic!("variant changed");
+        };
+        assert_eq!(wasm.name, "mod.wasm");
+        assert_eq!(wasm.code_file, "mod.wasm");
+        assert_eq!(wasm.debug_file.as_deref(), Some("mod.debug.wasm"));
+    }
+
+    #[test]
+    fn proguard_image_survives_unchanged() {
+        let proguard = DebugImage::Proguard(ProguardDebugImage {
+            uuid: sentry::protocol::Uuid::nil(),
+        });
+        let mut event =
+            event_with_images(vec![proguard.clone(), symbolic("/home/alice/bin/tandem", None)]);
+        scrub_event_with_home(&mut event, "/home/alice");
+        assert_eq!(event.debug_meta.images[0], proguard);
+    }
+
+    /// Images outside the home directory lose their directory too.
+    #[test]
+    fn images_outside_home_are_cut_as_well() {
+        let mut event = event_with_images(vec![symbolic(
+            "/usr/lib/libc.so.6",
+            Some("/usr/lib/debug/libc.so.6.debug"),
+        )]);
+        scrub_event_with_home(&mut event, "/home/alice");
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "libc.so.6");
+        assert_eq!(img.debug_file.as_deref(), Some("libc.so.6.debug"));
+    }
+
+    /// A `debug_meta` that arrived borrowed (as the integration's static list
+    /// does) is not cloned when no image carries a directory.
+    #[test]
+    fn bare_file_names_stay_borrowed() {
+        static META: std::sync::OnceLock<DebugMeta> = std::sync::OnceLock::new();
+        let meta = META.get_or_init(|| DebugMeta {
+            sdk_info: None,
+            images: vec![symbolic("libc.so.6", Some("libc.so.6.debug"))],
+        });
+        let mut event = sentry::protocol::Event {
+            debug_meta: Cow::Borrowed(meta),
+            ..Default::default()
+        };
+        scrub_event_with_home(&mut event, "/home/alice");
+        assert!(matches!(event.debug_meta, Cow::Borrowed(_)));
+    }
+
+    /// The outer hook, with the real home directory, redacts an image built
+    /// under it.
+    #[test]
+    fn scrub_event_redacts_an_image_under_the_real_home() {
+        let home = home_dir_string().expect("the test host has a home directory");
+        let mut event =
+            event_with_images(vec![symbolic(&format!("{home}/tandem/bin/tandem"), None)]);
+        scrub_event(&mut event);
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem");
+    }
+
+    /// With no resolvable home directory, image paths are still cut: the cut
+    /// does not depend on the home match (#2161).
+    #[test]
+    fn scrub_event_cuts_image_paths_without_a_home_dir() {
+        let mut event = event_with_images(vec![symbolic(
+            r"C:\Users\bob\AppData\Local\Tandem\tandem.exe",
+            Some("/home/alice/tandem.debug"),
+        )]);
+        scrub_event_with_optional_home(&mut event, None);
+        let DebugImage::Symbolic(img) = &event.debug_meta.images[0] else {
+            panic!("variant changed");
+        };
+        assert_eq!(img.name, "tandem.exe");
+        assert_eq!(img.debug_file.as_deref(), Some("tandem.debug"));
+    }
+
+    /// The seam the scrub depends on: the debug-images integration fills
+    /// `debug_meta` BEFORE `before_send` runs, so the hook sees the images.
+    /// Built on a local `Client` with a capturing transport — never
+    /// `sentry::init` or [`init`], which would bind the global hub, read the
+    /// environment and (through the minidump integration) re-execute the test
+    /// binary as a crash reporter.
+    #[test]
+    fn debug_images_reach_before_send() {
+        use std::sync::Mutex;
+
+        struct Capture(Mutex<Vec<sentry::Envelope>>);
+        impl sentry::Transport for Capture {
+            fn send_envelope(&self, envelope: sentry::Envelope) {
+                self.0.lock().unwrap().push(envelope);
+            }
+        }
+
+        let capture = Arc::new(Capture(Mutex::new(Vec::new())));
+        let mut options = base_options();
+        options.dsn = Some("https://public@example.invalid/1".parse().unwrap());
+        options.default_integrations = false;
+        options.integrations = vec![Arc::new(
+            sentry::integrations::debug_images::DebugImagesIntegration::new(),
+        )];
+        options.transport = Some(Arc::new(capture.clone()));
+        let client = sentry::Client::with_options(options);
+        assert!(client.is_enabled());
+
+        client.capture_event(
+            sentry::protocol::Event {
+                message: Some("seam probe".into()),
+                level: sentry::Level::Info,
+                ..Default::default()
+            },
+            None,
+        );
+        client.close(Some(std::time::Duration::from_secs(2)));
+
+        let envelopes = capture.0.lock().unwrap();
+        let event = envelopes
+            .iter()
+            .find_map(|e| e.event())
+            .expect("the probe event was sent");
+        let images = &event.debug_meta.images;
+        assert!(!images.is_empty(), "the integration ran before before_send");
+
+        for path in images.iter().flat_map(debug_image_paths) {
+            assert!(!path.contains(PATH_SEPARATORS), "image path kept its directory: {path}");
+        }
     }
 }

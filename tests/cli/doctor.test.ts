@@ -1815,15 +1815,19 @@ describe("evaluatePushPath", () => {
     expect(out?.fix).not.toMatch(/use one of the others/i);
   });
 
-  it("does not blame the Claude Code version for a per-account feature", () => {
-    // `tengu_amber_sentinel` is a remote gate: two users on byte-identical builds
-    // differ. "not every Claude Code build exposes it" — the wording this fix
-    // shipped with for a few hours — sends the reader hunting for an upgrade
-    // that cannot help, and README's neighbouring plugin advice IS a real
-    // version requirement, which makes the misread easy.
+  it("names the account gate, and the version only where it is a precondition (#2302)", () => {
+    // `tengu_amber_sentinel` is a remote gate: two first-party users on
+    // byte-identical builds differ, so "not every Claude Code build exposes it"
+    // — the wording this fix once shipped with — sends the reader hunting for an
+    // upgrade that cannot help. But Claude Code 2.1.310 added the tool on
+    // Bedrock, Vertex and Foundry and with telemetry or nonessential traffic
+    // off, so for THAT population upgrading is exactly the fix; "upgrading will
+    // not add it" was false for them. The copy names both, scoped.
     const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
     expect(out?.fix).not.toMatch(/Claude Code build/i);
     expect(out?.fix).toMatch(/per account/i);
+    expect(out?.fix).toMatch(/Bedrock, Vertex or Foundry[^.]*2\.1\.310/);
+    expect(out?.fix).not.toMatch(/upgrading (?:will not|won't|may not) add it/i);
   });
 
   it("distinguishes the shared account gate from the Monitor-only Git Bash requirement", () => {

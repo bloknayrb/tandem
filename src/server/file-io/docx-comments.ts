@@ -998,8 +998,8 @@ export function injectCommentsAsAnnotations(
           // record would carry a fresh flat range glued to a dead CRDT anchor,
           // which refreshRange can resolve to garbage offsets (#1150 C1). Strip a
           // stale `textSnapshot` for the same reason and by the same symmetry —
-          // it's a pre-reload anchor the reload's relocation pass would chase
-          // against the old text. Import notes don't carry one today, so this is
+          // it's a pre-reload anchor the reload remap (`documents/reload-remap.ts`)
+          // would probe for against the old text. Import notes don't carry one today, so this is
           // defense-in-depth against a future writer.
           effectiveKey = drift.key;
           // `textSnapshotTruncated` and `textSnapshotBreaks` both DESCRIBE the

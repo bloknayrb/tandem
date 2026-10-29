@@ -3,6 +3,7 @@ import {
   chatPickup,
   chatPickupAnnouncement,
   chatPickupLabel,
+  isPickupStalled,
   PICKUP_MAX_AGE_MS,
 } from "../../src/client/panels/chat-pickup";
 import { DELIVERY_STALL_MS } from "../../src/shared/constants";
@@ -34,6 +35,13 @@ describe("chatPickup", () => {
 
   it("is received once the inbox stamps it read", () => {
     expect(chatPickup([user("a", 0, true)], T0 + 5_000)).toEqual({ kind: "received" });
+  });
+
+  it("is received once a cursor poll hands it out, though unacknowledged (#2064), past the stall threshold too", () => {
+    const delivered: ChatMessage = { ...user("a", 0), delivered: true };
+    const pickup = chatPickup([delivered], T0 + DELIVERY_STALL_MS + 30_000);
+    expect(pickup).toEqual({ kind: "received" });
+    expect(isPickupStalled(pickup)).toBe(false);
   });
 
   it("is working after an inProgress ack, and clears on the result", () => {

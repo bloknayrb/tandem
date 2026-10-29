@@ -339,6 +339,11 @@ export const checkInboxOutputShape = {
     .array(inboxUserReplySchema)
     .describe("New user replies on comment threads (held in Solo, released on flip to Tandem)"),
   chatMessages: z.array(inboxChatMessageSchema),
+  cursor: z
+    .string()
+    .describe(
+      'Pass this back unchanged as `cursor` on your next poll: it acknowledges this response. "start" when this poll passed no cursor',
+    ),
   activity: z.object({
     documentId: z
       .string()

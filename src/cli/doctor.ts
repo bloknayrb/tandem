@@ -39,7 +39,7 @@ import {
   isRecordedPathGone,
   probeNodeBinary,
 } from "../server/integrations/node-binary.js";
-import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
+import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT, TANDEM_SUPPORT_EMAIL } from "../shared/constants.js";
 import { isAppTranslocatedPath } from "../shared/integrations/app-translocation.js";
 import {
   claudeCodeConfigPath,
@@ -51,6 +51,7 @@ import {
 } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
+import { formatGraceEndDate } from "../shared/license-copy.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
 import {
   ANNOTATION_SCAN_MAX_FILE_BYTES,
@@ -2831,6 +2832,11 @@ export interface DoctorLicenceState {
   gateActive: true;
   status: DoctorLicenceStatus;
   licenseUnverifiable: string | null;
+  /**
+   * The grace period's end (#2231), ISO, or `null` when the answer carried
+   * none. Present on the `grace` status only.
+   */
+  graceEndsAt?: string | null;
 }
 
 /**
@@ -2848,7 +2854,7 @@ export interface DoctorLicenceUnreadable {
 export type DoctorLicenceResult = DoctorLicenceState | DoctorLicenceUnreadable | null;
 
 /** The licence states the server emits. Anything else is unreadable, never "on". */
-const KNOWN_LICENCE_STATUSES = ["trial", "licensed", "restricted"] as const;
+const KNOWN_LICENCE_STATUSES = ["trial", "licensed", "restricted", "grace"] as const;
 type DoctorLicenceStatus = (typeof KNOWN_LICENCE_STATUSES)[number];
 
 function isKnownLicenceStatus(s: unknown): s is DoctorLicenceStatus {
@@ -2886,14 +2892,23 @@ export function parseDoctorLicence(result: HttpGetResult | null): DoctorLicenceR
     gateActive?: unknown;
     status?: unknown;
     licenseUnverifiable?: unknown;
+    grace?: unknown;
   } | null;
   if (!d || typeof d !== "object") return unrecognised;
   if (d.gateActive === false) return null;
   if (d.gateActive !== true || !isKnownLicenceStatus(d.status)) return unrecognised;
+  const graceEndsAt =
+    d.status === "grace" &&
+    d.grace !== null &&
+    typeof d.grace === "object" &&
+    typeof (d.grace as { endsAt?: unknown }).endsAt === "string"
+      ? (d.grace as { endsAt: string }).endsAt
+      : null;
   return {
     gateActive: true,
     status: d.status,
     licenseUnverifiable: typeof d.licenseUnverifiable === "string" ? d.licenseUnverifiable : null,
+    ...(d.status === "grace" ? { graceEndsAt } : {}),
   };
 }
 
@@ -2925,7 +2940,19 @@ export function evaluateLicence(licence: DoctorLicenceResult): EvalOutcome | nul
     gateActive: licence.gateActive,
     status: licence.status,
     licenseUnverifiable: licence.licenseUnverifiable,
+    ...(licence.status === "grace" ? { graceEndsAt: licence.graceEndsAt ?? null } : {}),
   };
+  if (licence.status === "grace") {
+    // #2231: AI on, but on a clock — a warning so it is not lost among passes.
+    // Never a purchase URL: this reader most likely paid (ADR-040 decision 8).
+    const endsOn = licence.graceEndsAt ? formatGraceEndDate(licence.graceEndsAt) : "";
+    return {
+      status: "warn",
+      message: `AI features on — license not verified (grace period ends ${endsOn || "soon"})`,
+      fix: `Email ${TANDEM_SUPPORT_EMAIL}; Tandem's Settings → License says what went wrong.`,
+      data,
+    };
+  }
   const off = licenceOffLabel(licence);
   if (off) {
     return {
@@ -3101,10 +3128,12 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
         "for updates — it can arm a watch on Tandem's wake stream itself, with nothing " +
         "to install and no flag (the bundled skill tells it how; `tandem_status` reports " +
         "the address). That one needs a Monitor tool, which not every Claude Code has — it " +
-        "is enabled per account rather than per version, so upgrading will not add it, and " +
+        "is enabled per account, and on Bedrock, Vertex or Foundry, or with telemetry or " +
+        "nonessential traffic turned off, it also needs Claude Code 2.1.310 or later; " +
         "on Windows it also needs Git Bash. If Claude says it has none, the channel shim " +
         "below is the option that always avoids Monitor. The plugin monitor shares that " +
-        "per-account feature gate, so it will not help if the gate is off; however, the " +
+        "per-account feature gate (and the same version floor on those setups), so it will " +
+        "not help if the gate is off; however, the " +
         "plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, " +
         "so it can help when Git Bash is the missing precondition. You can install the " +
         "Tandem plugin, which registers a monitor " +

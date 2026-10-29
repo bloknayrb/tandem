@@ -46,6 +46,14 @@ export interface DispatchCtx {
    *  reply this dispatch writes so the client byline names the specific model.
    *  Undefined ⇒ no stamp (byte-identical to pre-M3 + the MCP path). */
   agentIdentity?: AgentIdentity;
+  /**
+   * Is `ydoc` still the document this run reasoned about — the room's live
+   * instance, with its content not replaced since the run started? (#2039,
+   * #2070) Omitted ⇒ treated as `true`. When it answers `false` every WRITE
+   * tool refuses with `DOCUMENT_CHANGED` and writes nothing; the read tools
+   * stay open, since they read the live document by construction.
+   */
+  isDocCurrent?: () => boolean;
 }
 
 export interface ToolOutcome {
@@ -292,6 +300,26 @@ function annotateFromQuote(
   };
 }
 
+/** The refusal an annotate tool returns when the document changed under the run (#2070). */
+function changedAnnotateOutcome(
+  kind: "comment" | "replacement",
+  args: Record<string, unknown>,
+  result: { error: string; message: string },
+): ToolOutcome {
+  return {
+    result,
+    effect: {
+      kind,
+      ok: false,
+      anchor: {
+        quoted_text: asString(args.quoted_text),
+        occurrence_index: asOccurrence(args.occurrence_index),
+      },
+      errorCode: "DOCUMENT_CHANGED",
+    },
+  };
+}
+
 export function dispatch(
   name: string,
   args: Record<string, unknown> | null,
@@ -312,6 +340,16 @@ export function dispatch(
     };
   }
 
+  // #2070: a write whose quote was chosen against content that has since been
+  // replaced would anchor on the NEW text wherever the quote still occurs, and
+  // verify perfectly. Refused before resolving anything.
+  const documentChanged = ctx.isDocCurrent !== undefined && !ctx.isDocCurrent();
+  const changedResult = {
+    error: "DOCUMENT_CHANGED",
+    message:
+      "The document was replaced since you read it (reloaded or reconnected). Nothing was written.",
+  };
+
   switch (name) {
     case "get_outline": {
       const outline = getOutline(ydoc.getXmlFragment("default"));
@@ -325,6 +363,7 @@ export function dispatch(
       };
     }
     case "comment_on_quote":
+      if (documentChanged) return changedAnnotateOutcome("comment", args, changedResult);
       return annotateFromQuote(
         "comment",
         ydoc,
@@ -335,6 +374,7 @@ export function dispatch(
         ctx.agentIdentity,
       );
     case "propose_replacement":
+      if (documentChanged) return changedAnnotateOutcome("replacement", args, changedResult);
       return annotateFromQuote(
         "replacement",
         ydoc,
@@ -346,6 +386,12 @@ export function dispatch(
       );
     case "reply_to_annotation": {
       const annotationId = asString(args.annotation_id);
+      if (documentChanged) {
+        return {
+          result: changedResult,
+          effect: { kind: "reply", ok: false, annotationId, errorCode: "DOCUMENT_CHANGED" },
+        };
+      }
       // ADR-035 Unit 8f: through the seam, so the ADR-027 guard covers the
       // local model exactly as it covers Claude. This previously called the
       // free `addReplyToAnnotation` with a literal "claude" — which is why

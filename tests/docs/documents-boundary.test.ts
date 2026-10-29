@@ -281,6 +281,10 @@ const FAN_IN = [
   "server/events/observers/ctrl-meta.ts -> server/documents/registry.ts (value) x1",
   "server/events/queue.ts -> server/documents/dirty.ts (value) x1",
   "server/index.ts -> server/documents/open.ts (value) x1",
+  // #2070: a parked local-model turn re-validates its captured Y.Doc against
+  // the content generation the reloads bump — identity alone cannot see a
+  // reload, which keeps the instance.
+  "server/local-model/collaborator.ts -> server/documents/content-generation.ts (value) x1",
   "server/local-model/collaborator.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/convert.ts -> server/documents/open.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/dirty.ts (value) x1",
@@ -455,37 +459,41 @@ const FAN_OUT = [
   "server/documents/open.ts -> shared/paths.ts (value) x1",
   "server/documents/open.ts -> shared/types.ts (type) x1",
   "server/documents/open.ts -> shared/windows-path-safety.ts (value) x1",
-  "server/documents/watcher.ts -> server/annotations/doc-hash.ts (value) x1",
-  "server/documents/watcher.ts -> server/annotations/migration-log.ts (value) x1",
   "server/documents/watcher.ts -> server/events/queue.ts (value) x1",
   "server/documents/watcher.ts -> server/file-io/index.ts (value) x1",
   "server/documents/watcher.ts -> server/file-watcher.ts (value) x1",
-  // One of SIX edges out of documents/ that point back at mcp/, and the
-  // reason this list is phrased as residue rather than as a contract:
-  // annotation sanitization has not been split out of the MCP layer yet.
-  //
-  // This said "the one edge" when it was written and was already wrong then —
-  // `open.ts -> mcp/document-model.ts`, `open.ts -> mcp/tutorial-annotations.ts`
-  // and `autosave.ts -> mcp/document-service.ts` all existed, making four.
-  // Unit 7c added a fifth (`reload-family.ts -> mcp/document-service.ts`) and
-  // corrected the count. Each has its own reason and they do not leave
-  // together. Count them from the rows below rather than trusting this number:
-  // review handed me "four" for the post-7c graph and the rows said five.
-  // #1752 added a sixth: the relocation pass now hoists one `extractText` for
-  // the whole per-annotation loop instead of letting `validateRange` rebuild
-  // the string per iteration, which is a read of the same flat projection
-  // `positions.ts` already imports from `mcp/document-model.ts`.
-  "server/documents/watcher.ts -> server/mcp/annotations.ts (value) x1",
-  "server/documents/watcher.ts -> server/mcp/document-model.ts (value) x1",
   "server/documents/watcher.ts -> server/notifications.ts (value) x1",
-  "server/documents/watcher.ts -> server/positions.ts (value) x1",
   "server/documents/watcher.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/watcher.ts -> shared/constants.ts (value) x1",
   "server/documents/watcher.ts -> shared/origins.ts (value) x1",
-  "server/documents/watcher.ts -> shared/positions/types.ts (value) x1",
-  "server/documents/watcher.ts -> shared/snapshot.ts (value) x1",
-  "server/documents/watcher.ts -> shared/types.ts (type) x1",
   "server/documents/watcher.ts -> shared/utils.ts (value) x1",
+  // #2269: the reload remap. It took over the watcher's annotation pass (the
+  // re-anchor and the snapshot relocation), and with it the watcher's edges to
+  // the annotation hash, the migration log and the position module. It reads
+  // `sanitizeAnnotation` from `shared/sanitize.ts` directly, so the watcher's
+  // old `-> mcp/annotations.ts` edge is gone rather than moved.
+  "server/documents/reload-remap.ts -> server/annotations/doc-hash.ts (value) x1",
+  "server/documents/reload-remap.ts -> server/annotations/migration-log.ts (value) x1",
+  // One of FIVE edges out of documents/ that point back at mcp/, and the
+  // reason this list is phrased as residue rather than as a contract. Count
+  // them from the rows rather than trusting this number — it has been wrong
+  // twice: `open.ts -> mcp/document-model.ts`, `open.ts ->
+  // mcp/tutorial-annotations.ts`, `autosave.ts -> mcp/document-service.ts`,
+  // `reload-family.ts -> mcp/document-service.ts` (Unit 7c) and this one. #1752
+  // added it on the watcher, which hoisted one `extractText` for its
+  // per-annotation loop; the remap inherited it, and also reads the old text's
+  // break list (`extractTextWithBreaks`) to snapshot a record it detaches. It
+  // is a read of the same flat projection `positions.ts` already imports from
+  // `mcp/document-model.ts`. #2269 retired the sixth, `watcher.ts ->
+  // mcp/annotations.ts` (annotation sanitization, which now comes from
+  // `shared/`).
+  "server/documents/reload-remap.ts -> server/mcp/document-model.ts (value) x1",
+  "server/documents/reload-remap.ts -> server/positions.ts (value) x1",
+  "server/documents/reload-remap.ts -> shared/constants.ts (value) x1",
+  "server/documents/reload-remap.ts -> shared/positions/types.ts (value) x1",
+  "server/documents/reload-remap.ts -> shared/sanitize.ts (value) x1",
+  "server/documents/reload-remap.ts -> shared/snapshot.ts (value) x1",
+  "server/documents/reload-remap.ts -> shared/types.ts (type) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",

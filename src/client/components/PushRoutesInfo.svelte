@@ -136,14 +136,16 @@ async function copyPluginCommands(): Promise<void> {
     <strong>The built-in Monitor watch</strong> installs nothing and needs no flag: on first
     Tandem use, Tandem's bundled skill reads the wake address from Claude's first
     <code class="pr-code-inline">tandem_status</code> and starts it for that session. It needs a
-    Claude Code that offers a built-in Monitor tool — that is granted per account rather than per
-    version, so upgrading will not add it, and on Windows it also needs Git Bash.
+    Claude Code that offers a built-in Monitor tool — that is granted per account, and on Bedrock,
+    Vertex or Foundry, or with telemetry or nonessential traffic turned off, it also needs Claude
+    Code 2.1.310 or later; on Windows it also needs Git Bash.
   </p>
   <p>
     <strong>The Tandem plugin</strong> needs no flag either. It starts watching the first time
     Claude uses Tandem's skill, so ask for Tandem by name rather than expecting it to be listening
     beforehand, and launch <code class="pr-code-inline">claude</code> from a terminal so it can
-    find Node. It reads the same per-account gate as the built-in Monitor, so it cannot cover for
+    find Node. It reads the same per-account gate as the built-in Monitor (and has the same version
+    floor on those setups), so it cannot cover for
     that gate being off — but it does not need Git Bash. It also needs Claude Code 2.1.212 or
     newer: on anything older the install succeeds and the monitor simply never runs, with nothing
     to tell you so.

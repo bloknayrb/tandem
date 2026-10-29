@@ -68,9 +68,15 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
  * `map.has` alone reads a merged-away deletion as absence and re-mints it.
  *
  * The tombstone check relies on bulk clears (`clearDocMaps` in
- * `documents/populate.ts`) running with the annotation observer detached, since
- * the observer tombstones deletes from every origin and would otherwise suppress
- * every seed a clear removed.
+ * `documents/populate.ts`, reached only by `evictPartialDocState` since #2269
+ * stopped the reloads clearing the annotation map) running with the annotation
+ * observer detached, since the observer tombstones deletes from every origin and
+ * would otherwise suppress every seed a clear removed.
+ *
+ * A seed still in the map survives a reload (it is remapped like any record),
+ * and on a file-backed document the post-reload merge then persists it as a
+ * map-only record — so it is durable from then on, despite the `withInternal`
+ * write below.
  *
  * `replay` is the explicit "bring the seeds back" request (Settings > Replay
  * tutorial, which opens welcome.md with `force: true`). It re-creates a

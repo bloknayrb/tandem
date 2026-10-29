@@ -57,9 +57,10 @@ describe("anchorFlatRange", () => {
   });
 
   it("returns null when only the to endpoint refuses", () => {
-    // The mirror case, which a from-only guard would let through. Empty blocks
-    // are where the two assocs disagree: assoc -1 refuses on the separator
-    // AFTER the empty element, assoc 0 on the one before it.
+    // The mirror case, which a from-only guard would let through. Since #2001
+    // both assocs refuse at the same offsets (the separator AFTER an empty
+    // element), but `from` and `to` are different offsets, so a range whose
+    // `to` lands there while its `from` mints must still degrade as a whole.
     const ydoc = docFor("- one\n-\n- three\n");
     const flat = extractText(ydoc);
     const refusesLeft = [...flat].findIndex(
