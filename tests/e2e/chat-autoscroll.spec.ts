@@ -71,6 +71,10 @@ test("a message arriving with chat open scrolls the list, never the rail", async
   await expect(list).toContainText("11: ");
   // Precondition: there is something to scroll, or the positive control below is vacuous.
   expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  // Let the history's own smooth scrolls finish before resetting, so none is
+  // still running when the list is moved to the top and the recorder starts.
+  const fromBottom = () => list.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
+  await expect.poll(fromBottom, { timeout: 5_000 }).toBeLessThanOrEqual(1);
 
   // Start from a known state: rail unscrolled, list away from the bottom, and a
   // recorder for scroll events on the rail itself (scroll does not bubble, so
@@ -89,15 +93,13 @@ test("a message arriving with chat open scrolls the list, never the rail", async
     [RAIL, MESSAGES] as const,
   );
 
+  // Precondition for the positive control: the reset really left the list at the top.
+  expect(await fromBottom()).toBeGreaterThan(1);
   await mcp.callTool("tandem_reply", { text: "the newest message" });
   await expect(list).toContainText("the newest message");
 
   // Positive control: auto-scroll still reaches the bottom of the list.
-  await expect
-    .poll(() => list.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), {
-      timeout: 5_000,
-    })
-    .toBeLessThanOrEqual(1);
+  await expect.poll(fromBottom, { timeout: 5_000 }).toBeLessThanOrEqual(1);
 
   const rail = await page
     .locator(RAIL)

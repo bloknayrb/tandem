@@ -193,7 +193,7 @@ $effect(() => {
 // scrolls every scrollable ancestor too, including App's `.rail-full-right`,
 // which is `overflow: hidden` (the user cannot scroll it back) but still
 // script-scrollable — its tabs row shifted, and every document-level scroll
-// listener saw a scroll event per frame of the smooth scroll (#2329).
+// listener saw a scroll event per frame of the smooth scroll (found in #2329).
 function scrollToEnd(behavior: ScrollBehavior) {
   messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior });
 }
@@ -435,7 +435,12 @@ async function exportChat() {
     </div>
   {/if}
 
-  <!-- Messages -->
+  <!-- Messages. `position: relative` is load-bearing: it makes this list the
+       containing block of the srOnly LiveRegion announcer below, so the
+       announcer's static position at the end of the history is clipped here
+       instead of extending `.rail-full-right`'s overflow, which gave the rail
+       something to scroll (tests/e2e/chat-autoscroll.spec.ts). An absolutely
+       positioned menu added inside a message is clipped by this list too. -->
   <div
     bind:this={messagesEl}
     class="tandem-scroll-fade-y"
