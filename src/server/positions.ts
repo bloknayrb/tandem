@@ -780,8 +780,9 @@ export function remapRangeAcrossReplacement(
  * Split out so a caller holding a flat text that is NOT the Y.Doc's current
  * content can capture from it: the reload remap (#2269) snapshots a collapsed
  * record from the PRE-reload text, after the fragment has been replaced. It
- * lives here rather than in `mcp/` so that caller gains no `documents/ -> mcp/`
- * edge, and here rather than in `src/shared/` because the cut uses
+ * lives here rather than in `mcp/annotations.ts` so that caller need not import
+ * the annotation tool module (it does import `mcp/document-model.js` for text
+ * extraction), and here rather than in `src/shared/` because the cut uses
  * {@link splitsSurrogatePair}, the one paired predicate (Critical Rule 4), which
  * `src/shared/` cannot import.
  */

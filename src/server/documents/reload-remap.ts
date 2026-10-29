@@ -446,10 +446,10 @@ function storedEntry(raw: unknown, ann: Annotation, oldText: string): RemapEntry
   };
 }
 
-function sanitizeFor(raw: unknown, filePath: string): Annotation | null {
+/** `hash` is `docHash(filePath)`, computed once per pass by the caller. */
+function sanitizeFor(raw: unknown, hash: string): Annotation | null {
   if (!hasRangeShape(raw)) return null;
   try {
-    const hash = docHash(filePath);
     return sanitizeAnnotation(raw as Annotation, (event) => relaySanitizationEvent(hash, event));
   } catch (err) {
     console.error(
@@ -467,8 +467,9 @@ function sanitizeFor(raw: unknown, filePath: string): Annotation | null {
 export function captureRemapInput(ydoc: Y.Doc, filePath: string): RemapInput {
   const { text: oldText, breaks: oldBreaks } = extractTextWithBreaks(ydoc);
   const entries = new Map<string, RemapEntry>();
+  const hash = docHash(filePath);
   ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((raw, key) => {
-    const ann = sanitizeFor(raw, filePath);
+    const ann = sanitizeFor(raw, hash);
     if (!ann || ann.id !== key) return;
     entries.set(key, entryFor(raw, ann, ydoc, oldText));
   });
@@ -504,6 +505,7 @@ export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
   const hunks = lineHunks(input.oldText, newText);
   const remap: ReloadRemap = { ...input, newText, hunks };
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  let hash: string | undefined;
   for (const entry of input.entries.values()) {
     const current = map.get(entry.id);
     if (current === entry.raw) {
@@ -511,7 +513,8 @@ export function applyRemap(ydoc: Y.Doc, input: RemapInput): ReloadRemap {
       continue;
     }
     if (current === undefined || !sameAnchor(current, entry.raw)) continue;
-    const ann = sanitizeFor(current, input.filePath);
+    hash ??= docHash(input.filePath);
+    const ann = sanitizeFor(current, hash);
     if (!ann || ann.id !== entry.id) continue;
     map.set(entry.id, remapOne(ydoc, { ...entry, raw: current, ann }, remap, hunks, newText));
   }
@@ -543,10 +546,11 @@ export function remapEnvelopeWins(
       ? remap.hunks
       : lineHunks(remap.oldText, newText);
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const hash = docHash(remap.filePath);
   let wrote = false;
   for (const id of ids) {
     const raw = map.get(id);
-    const ann = sanitizeFor(raw, remap.filePath);
+    const ann = sanitizeFor(raw, hash);
     if (!ann || ann.id !== id) continue;
     const captured = remap.entries.get(id);
     const entry: RemapEntry =
@@ -685,19 +689,24 @@ function remapOne(
   const expected =
     mapStart(oldRange.from, hunks) ?? first.newFrom + (oldRange.from - first.oldFrom);
 
+  // One match in the window is the record's text. Several are a guess — the
+  // module header's "never one of several copies" — unless one sits exactly
+  // where the record's own start maps, which is the text left in place.
   let best = -1;
+  let matches = 0;
   if (probe.length > 0) {
     for (
       let i = newText.indexOf(probe, windowFrom);
       i !== -1 && i + probe.length <= windowTo;
       i = newText.indexOf(probe, i + 1)
     ) {
+      matches++;
       if (best === -1 || Math.abs(i - expected) < Math.abs(best - expected)) best = i;
     }
   }
   // No moved-text search here: the record's own region was REWRITTEN, which
   // is an edit in place, and a copy of its text in some other hunk is not it.
-  if (best === -1) return collapse(first.newFrom);
+  if (best === -1 || (matches > 1 && best !== expected)) return collapse(first.newFrom);
   return anchorFound(best, windowTo);
 }
 

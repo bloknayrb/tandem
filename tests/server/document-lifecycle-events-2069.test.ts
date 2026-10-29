@@ -181,6 +181,15 @@ describe("document lifecycle events through the real registry (#2069)", () => {
     unsubscribe(internal.cb);
   });
 
+  it("document:closed names the file, not the path-hash id", () => {
+    setCtrlMode("tandem");
+    const internal = collect("internal");
+    tabSession();
+    const closed = internal.lifecycle().find((e) => e.type === "document:closed");
+    expect(closed?.type === "document:closed" && closed.payload.fileName).toBe("doc-b.md");
+    unsubscribe(internal.cb);
+  });
+
   it("a content reload's unchanged re-broadcast emits nothing", () => {
     setCtrlMode("tandem");
     openDocument(doc("doc-a"));

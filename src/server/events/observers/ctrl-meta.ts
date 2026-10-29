@@ -46,10 +46,24 @@ export function makeCtrlMetaObserver(deps: {
   // the merged list. Starting empty would make the next broadcast — any tab
   // operation, or a content reload's unchanged re-broadcast — emit a burst of
   // `document:opened` for every tab that was already open.
-  const seededList = (metaMap.get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string }> | undefined) ?? [];
+  const seededList =
+    (metaMap.get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; fileName?: string }> | undefined) ??
+    [];
   let lastActiveDocId: string | null =
     (metaMap.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined) ?? null;
   let lastOpenDocIds = new Set<string>(seededList.map((d) => d.id));
+  // The name each open tab had, so `document:closed` can name the file: by the
+  // time the observer sees the close, the doc is gone from both the list and
+  // `getOpenDocs()`, and the bare id is a path hash that means nothing to Claude.
+  const fileNamesOf = (list: ReadonlyArray<{ id: string; fileName?: string }>) => {
+    const names = new Map<string, string>();
+    for (const d of list) {
+      const name = d.fileName ?? getOpenDocs().get(d.id)?.filePath?.split(/[/\\]/).pop();
+      if (name) names.set(d.id, name);
+    }
+    return names;
+  };
+  let lastFileNames = fileNamesOf(seededList);
   // Track upload/scratchpad doc IDs so we can suppress their close events
   // (the doc is already removed from getOpenDocs() by the time the observer fires).
   const uploadDocIds = new Set<string>();
@@ -149,13 +163,14 @@ export function makeCtrlMetaObserver(deps: {
             timestamp: Date.now(),
             documentId: oldId,
             payload: {
-              fileName: oldId,
+              fileName: lastFileNames.get(oldId) ?? oldId,
             },
           });
         }
       }
 
       lastOpenDocIds = currentIds;
+      lastFileNames = fileNamesOf(docList);
     }
   };
 

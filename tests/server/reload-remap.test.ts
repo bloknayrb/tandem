@@ -311,6 +311,17 @@ describe("applyRemap — records inside a changed region", () => {
     expect(kindOf(doc, "a")).toBe("ok");
   });
 
+  it("collapses rather than guess between two copies inside its own rewritten region", () => {
+    // The whole line is one hunk ("f…z" → "b…r"), and the rewrite holds two
+    // copies of "bar", equidistant from where the record's start maps.
+    const doc = makeMarkdownDoc("foo bar baz\n");
+    seedOn(doc, "a", "bar");
+    reload(doc, "bar foo bar\n");
+    const ann = annotationsOf(doc).get("a");
+    expect(ann?.range.from).toBe(ann?.range.to);
+    expect(kindOf(doc, "a")).toBe("degraded");
+  });
+
   it("relocates a LIVE record by its current text, not its creation-time snapshot", () => {
     // Claude commented on "the big cat"; the user then changed "big" to "fat"
     // in the editor, inside the live anchor. A reload that rewrites the same

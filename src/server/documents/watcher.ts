@@ -149,8 +149,14 @@ export async function reloadFromDisk(
     //    reload semantics.
     withReload(doc, () => {
       // While the OLD fragment is still live — after the swap its relRanges
-      // resolve to nothing.
-      const remapInput = captureRemapInput(doc, filePath);
+      // resolve to nothing. Its own catch, like the apply below: an annotation
+      // the capture cannot read must not block the content from landing.
+      let remapInput: ReturnType<typeof captureRemapInput> | undefined;
+      try {
+        remapInput = captureRemapInput(doc, filePath);
+      } catch (err) {
+        console.error("[FileWatcher] reloadFromDisk: annotation capture failed for %s:", id, err);
+      }
       // #2070: a parked local-model turn that captured the old generation sees
       // the replacement through this, since the Y.Doc instance is unchanged.
       bumpContentGeneration(doc);
@@ -196,7 +202,7 @@ export async function reloadFromDisk(
       // the reload. The records then keep dead relRanges, which `refreshRange`
       // strips and reports `degraded`.
       try {
-        applyRemap(doc, remapInput);
+        if (remapInput) applyRemap(doc, remapInput);
       } catch (err) {
         console.error("[FileWatcher] reloadFromDisk: annotation remap failed for %s:", id, err);
       }

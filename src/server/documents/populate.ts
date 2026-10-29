@@ -465,8 +465,14 @@ export async function clearAndReload(
   try {
     withInternal(doc, () => {
       // Read every annotation's range while the OLD fragment is still live —
-      // after the swap its relRanges resolve to nothing.
-      const remapInput = captureRemapInput(doc, resolved);
+      // after the swap its relRanges resolve to nothing. Its own catch, like
+      // the apply below: an unreadable annotation must not fail the reload.
+      let remapInput: ReturnType<typeof captureRemapInput> | undefined;
+      try {
+        remapInput = captureRemapInput(doc, resolved);
+      } catch (err) {
+        console.error("[Tandem] clearAndReload: annotation capture failed for %s:", id, err);
+      }
       // #2070: a parked local-model turn that captured the old generation sees
       // the replacement through this, since the Y.Doc instance is unchanged.
       bumpContentGeneration(doc);
@@ -477,7 +483,7 @@ export async function clearAndReload(
       // the content has landed. The records then keep dead relRanges, which
       // `refreshRange` strips and reports `degraded`.
       try {
-        remap = applyRemap(doc, remapInput);
+        if (remapInput) remap = applyRemap(doc, remapInput);
       } catch (err) {
         console.error("[Tandem] clearAndReload: annotation remap failed for %s:", id, err);
       }
