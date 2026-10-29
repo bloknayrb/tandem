@@ -140,8 +140,10 @@ describe("the Claude-facing reads honour audience (#1619, #1710)", () => {
   });
 
   it("returns a CLAUDE-authored outbound highlight, so highlights are not dropped by type", async () => {
-    // #1710 row 2 — the tutorial's first card is exactly this shape, and a fix
-    // that filtered highlights by type would erase it from Claude's view.
+    // #1710 row 2 — the tutorial's first card was exactly this shape until
+    // #1725 made that seed the user's; a store from before then still holds
+    // one, and a fix that filtered highlights by type would erase it from
+    // Claude's view.
     withInternal(doc, () => {
       doc.getMap(Y_MAP_ANNOTATIONS).set("chl", {
         id: "chl",

@@ -69,15 +69,16 @@ const TABLE: Record<string, Row> = {
     annotations: IDEMPOTENT_WRITE_TOOL,
     why: "with `text` it overwrites Claude's status; a repeat refreshes only the timestamp",
   },
+  tandem_checkInbox: {
+    annotations: IDEMPOTENT_WRITE_TOOL,
+    why: "with a cursor every write follows from the cursor passed in, so a repeat writes nothing new and returns what that cursor is still owed; without one it is not idempotent, but a retry of a lost response loses nothing that response had not already lost (#2294)",
+  },
   tandem_exportAnnotations: {
     annotations: IDEMPOTENT_OVERWRITE_TOOL,
     why: "the same range repairs, and writeToDisk overwrites an existing sidecar with identical bytes on a repeat",
   },
 
   // ── Not safe to repeat ────────────────────────────────────────────────────
-  tandem_checkInbox: {
-    why: "commits its dedup ledgers and marks chat read before replying; a retry after a lost response loses the items (#2294)",
-  },
   tandem_switchDocument: {
     why: "advances the activation epoch; a retry can pull the user's focus back",
   },

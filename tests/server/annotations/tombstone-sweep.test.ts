@@ -17,8 +17,14 @@ vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) =
 import { docHash } from "../../../src/server/annotations/doc-hash.js";
 import { type AnnotationDocV1, SCHEMA_VERSION } from "../../../src/server/annotations/schema.js";
 import { resetForTesting as resetStoreForTesting } from "../../../src/server/annotations/store.js";
-import { cleanupStaleTombstones } from "../../../src/server/session/manager.js";
+import { importAnnotationId, importReplyId } from "../../../src/server/file-io/docx-comments.js";
+import {
+  cleanupOrphanedAnnotationFiles,
+  cleanupStaleTombstones,
+  isDeterministicAnnotationId,
+} from "../../../src/server/session/manager.js";
 import { SESSION_MAX_AGE } from "../../../src/shared/constants.js";
+import { generateAnnotationId, generateReplyId } from "../../../src/shared/utils.js";
 import { annRecord } from "../../helpers/annotation-fixtures.js";
 import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env.js";
 
@@ -146,5 +152,92 @@ describe("cleanupStaleTombstones — partially-readable envelope (#1791)", () =>
 
     expect(compacted).toBe(0);
     expect(await fs.readFile(target, "utf-8")).toBe(bytes);
+  });
+});
+
+describe("cleanupStaleTombstones — deterministic ids survive compaction (#2009)", () => {
+  const STALE = NOW - SESSION_MAX_AGE - 60_000;
+  const IMPORT_ID = importAnnotationId("1", 0, 5, "body");
+  const IMPORT_REPLY_ID = importReplyId("1", "2", "reply body");
+
+  it("keeps stale tutorial-/import- tombstones and still drops a stale random id", async () => {
+    await writeEnvelope(
+      envelopeWithTombstones(HASH, FILE, [
+        { id: "tutorial-comment-1", rev: 3, deletedAt: STALE },
+        { id: IMPORT_ID, rev: 4, deletedAt: STALE - 1 },
+        { id: IMPORT_REPLY_ID, rev: 5, deletedAt: STALE - 2 },
+        { id: "ann_x", rev: 2, deletedAt: STALE },
+      ]),
+    );
+
+    const compacted = await cleanupStaleTombstones(new Set());
+    expect(compacted).toBe(1);
+
+    const envelope = await readEnvelope(HASH);
+    expect(envelope?.tombstones).toEqual([
+      { id: "tutorial-comment-1", rev: 3, deletedAt: STALE },
+      { id: IMPORT_ID, rev: 4, deletedAt: STALE - 1 },
+      { id: IMPORT_REPLY_ID, rev: 5, deletedAt: STALE - 2 },
+    ]);
+  });
+
+  it("does not rewrite an envelope whose only stale tombstones are exempt", async () => {
+    await writeEnvelope(
+      envelopeWithTombstones(HASH, FILE, [
+        { id: "tutorial-highlight-1", rev: 2, deletedAt: STALE },
+        { id: IMPORT_ID, rev: 2, deletedAt: STALE },
+      ]),
+    );
+    const target = path.join(annotationsDir(), `${HASH}.json`);
+    const before = await fs.readFile(target, "utf-8");
+
+    expect(await cleanupStaleTombstones(new Set())).toBe(0);
+    expect(await fs.readFile(target, "utf-8")).toBe(before);
+  });
+
+  it("anchors on the prefix: an id merely containing one is still compacted", async () => {
+    await writeEnvelope(
+      envelopeWithTombstones(HASH, FILE, [
+        { id: "ann_tutorial-1", rev: 2, deletedAt: STALE },
+        { id: "xtutorial-1", rev: 2, deletedAt: STALE },
+        { id: "rpl_import-1", rev: 2, deletedAt: STALE },
+      ]),
+    );
+
+    expect(await cleanupStaleTombstones(new Set())).toBe(1);
+    expect((await readEnvelope(HASH))?.tombstones).toEqual([]);
+  });
+
+  it("matches the real deterministic generators and never a random one", () => {
+    // Pinned against the producers, so a prefix rename on either side fails
+    // here rather than silently making those tombstones compactable again —
+    // or making every random tombstone immortal.
+    expect(isDeterministicAnnotationId(IMPORT_ID)).toBe(true);
+    expect(isDeterministicAnnotationId(IMPORT_REPLY_ID)).toBe(true);
+    expect(isDeterministicAnnotationId("tutorial-note-1")).toBe(true);
+    expect(isDeterministicAnnotationId(generateAnnotationId())).toBe(false);
+    expect(isDeterministicAnnotationId(generateReplyId())).toBe(false);
+    // The pre-#337 timestamped import id shares the prefix but was never
+    // re-minted, so its tombstone must stay compactable.
+    expect(isDeterministicAnnotationId("import-3-1713312000000")).toBe(false);
+  });
+
+  it("CHARACTERIZATION (#2009 open half): the orphan sweep still unlinks a whole stale envelope, exempt tombstones included", async () => {
+    // The exemption above only holds while the envelope survives. An envelope
+    // nobody wrote for SESSION_MAX_AGE — the usual case for a welcome.md whose
+    // seeds were deleted once — is unlinked whole by the orphan sweep, which
+    // runs before compaction, and the tutorial seeds re-inject on the next
+    // open. Closing that needs a retention decision (#2009); flip this spec
+    // when it lands.
+    await writeEnvelope(
+      envelopeWithTombstones(HASH, FILE, [{ id: "tutorial-comment-1", rev: 2, deletedAt: STALE }]),
+    );
+    const target = path.join(annotationsDir(), `${HASH}.json`);
+    const old = new Date(STALE);
+    await fs.utimes(target, old, old);
+
+    const result = await cleanupOrphanedAnnotationFiles();
+    expect(result.cleaned).toBe(1);
+    expect(await readEnvelope(HASH)).toBeNull();
   });
 });

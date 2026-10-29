@@ -34,6 +34,16 @@ describe("isNonTutorialUserAnnotation (step-1 user-action predicate)", () => {
     expect(isNonTutorialUserAnnotation(real)).toBe(true);
   });
 
+  it("user-authored tutorial highlight seed does NOT count (#1725)", () => {
+    const tutorialHighlight = makeAnnotation({
+      id: `${TUTORIAL_ANNOTATION_PREFIX}highlight-1`,
+      author: "user",
+      type: "highlight",
+    });
+    expect(isNonTutorialUserAnnotation(tutorialHighlight)).toBe(false);
+  });
+
+  // Kept for a legacy envelope still holding the pre-#1725 Claude-authored seed.
   it("claude-authored tutorial annotation does NOT count", () => {
     const tutorialHighlight = makeAnnotation({
       id: `${TUTORIAL_ANNOTATION_PREFIX}highlight-1`,

@@ -39,7 +39,7 @@ const BASE_STEPS = [
   {
     id: "review",
     title: "Review an annotation",
-    text: "Open the side panel and accept or dismiss one of the highlighted annotations — or turn on the margin view to see them beside the text. Ctrl+Enter accepts the selected annotation; Ctrl+Shift+Enter dismisses it.",
+    text: "Open the side panel and accept or dismiss one of your AI's comments — or turn on the margin view to see them beside the text. Ctrl+Enter accepts the selected comment; Ctrl+Shift+Enter dismisses it.",
   },
   {
     id: "question",

@@ -251,7 +251,7 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 // Sees all annotations from all agents
 ```
 
-Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow — the surfaced-item ledger is process-global, and the same poll marks chat messages read, so a sub-agent's poll would durably drop Opus's own view of both.
+Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow. Since #2064 a sub-agent's poll no longer hides items from Opus — each caller's `cursor` is its own — but the sub-agent would be handed the same comments and chat, act on or answer them a second time, and its acknowledgement stamps the user's chat read.
 
 ## Reviewing Annotations from the Keyboard
 
@@ -302,7 +302,7 @@ The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 
 A floating tutorial card appears at the bottom-left of the editor with three actionable steps, followed by a "You're ready!" completion card:
 
-**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or pressing `Ctrl+Enter` / `Ctrl+Shift+Enter`) completes this step.
+**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the two tutorial comments your AI left (the tutorial highlight and note are yours, so they have no Accept or Dismiss). Accepting or dismissing either tutorial comment (from its card, or with `Ctrl+Enter` / `Ctrl+Shift+Enter` while it is selected) completes this step; reviewing any other annotation does not.
 
 **Step 2: Ask a question.** The card prompts the user to select text and create a Comment (sent to the AI) or a Note (private to the user), or to ask in the Chat panel. Creating any annotation of their own, or sending a chat message during this step, completes it.
 

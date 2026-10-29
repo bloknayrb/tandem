@@ -248,11 +248,15 @@ let idleReaper: ReturnType<typeof setInterval> | null = null;
  *
  * ADR-049 recorded this field's behaviour as UNVERIFIED because nothing sent one. Verified
  * 2026-08-11: a live session's context carries an "MCP Server Instructions" section rendering the
- * attached servers' strings verbatim. The channel shim already ships one (`src/channel/run.ts`).
+ * attached servers' strings verbatim. The channel shim already ships one (`src/channel/instructions.ts`).
  *
  * ## Constraints, each load-bearing
  *
- * - **Truncated at 2KB**, so the authority-of-checkInbox line comes first.
+ * - **Truncated at 2KB**, so the authority-of-checkInbox line comes first. That is Claude Code
+ *   2.1.84–2.1.295; from 2.1.296 server instructions are capped at 4KB, but 2KB stays the budget
+ *   for the older clients still installed (#2287). Tool descriptions share the same cap;
+ *   `tests/server/mcp-tool-description-length.test.ts` holds every one of them, this string and the
+ *   channel shim's to it.
  * - **No arm command.** `wake-advisory.ts` refuses to emit one so Tandem output never teaches Claude
  *   that its responses carry commands to run — an imported Word comment could imitate that. A second
  *   emitter would re-open the pattern even though this text is metadata rather than tool content.

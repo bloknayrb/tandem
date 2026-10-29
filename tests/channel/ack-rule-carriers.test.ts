@@ -4,26 +4,34 @@
  * silently turns off the editor's "working on it" state for that population.
  *
  * Source-level, like `run-timeouts.test.ts`: the shim builds its server inside
- * `runChannel` and exports neither the instructions nor the tool list.
+ * `runChannel` and does not export its tool list. The instructions live in
+ * `instructions.ts` (#2287, so their length can be measured) and are read from
+ * there.
  */
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const RUN_TS = fileURLToPath(new URL("../../src/channel/run.ts", import.meta.url));
+const INSTRUCTIONS_TS = fileURLToPath(
+  new URL("../../src/channel/instructions.ts", import.meta.url),
+);
 
 describe("channel shim — ack rule carriers", () => {
   it("puts CHAT_ACK_RULE in the instructions and the tandem_reply description", async () => {
     const src = await readFile(RUN_TS, "utf8");
-    const instructions = /instructions:\s*\[([\s\S]*?)\]\.join/.exec(src)?.[1] ?? "";
+    expect(src).toContain("instructions: CHANNEL_INSTRUCTIONS,");
+    const instructionsSrc = await readFile(INSTRUCTIONS_TS, "utf8");
+    const instructions =
+      /CHANNEL_INSTRUCTIONS = \[([\s\S]*?)\]\.join/.exec(instructionsSrc)?.[1] ?? "";
     expect(instructions, "shim instructions array").toContain("CHAT_ACK_RULE");
     expect(src).toMatch(/description:\s*`Reply to a chat message in Tandem\. \$\{CHAT_ACK_RULE\}`/);
   });
 
   // The event list was once typed by hand and silently dropped annotation:edited.
   it("names the event types from the shared list, not a hand-typed copy", async () => {
-    const src = await readFile(RUN_TS, "utf8");
-    const instructions = /instructions:\s*\[([\s\S]*?)\]\.join/.exec(src)?.[1] ?? "";
+    const src = await readFile(INSTRUCTIONS_TS, "utf8");
+    const instructions = /CHANNEL_INSTRUCTIONS = \[([\s\S]*?)\]\.join/.exec(src)?.[1] ?? "";
     expect(instructions).toContain("TANDEM_EVENT_TYPES.join");
     expect(instructions).toContain("LICENSE_REFUSED_EVENT_TYPE");
     expect(instructions).not.toMatch(/annotation:created/);
