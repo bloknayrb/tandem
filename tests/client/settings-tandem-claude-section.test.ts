@@ -297,3 +297,30 @@ describe("SettingsTandemClaudeSection", () => {
     expect(stored).toMatchObject({ startMode: "auto", lifetime: "idle" });
   });
 });
+
+describe("SettingsTandemClaudeSection — the launcher-absent hint (#1823)", () => {
+  function statusIs(body: unknown): void {
+    const inner = fetchSpy.getMockImplementation() as
+      | ((url: RequestInfo | URL, init?: RequestInit) => Promise<Response>)
+      | undefined;
+    fetchSpy.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) =>
+      String(url) === `${API_BASE}${API_LAUNCHER_STATUS}` ? json(200, body) : inner?.(url, init),
+    );
+  }
+
+  it.each([
+    ["stdio-mode", true],
+    ["disabled-by-env", true],
+    // The HTTP boot window: Settings used to call the launcher absent on an
+    // ordinary boot, because this window read `stdio-mode`.
+    ["server-starting", false],
+    ["deferred-autostart", false],
+  ] as const)("reason %s → absent hint shown: %s", async (reason, shown) => {
+    statusIs({ available: false, reason });
+    const { container } = render(SettingsTandemClaudeSection);
+    await flush();
+    expect(
+      container.querySelector("[data-testid='settings-modal-tandem-claude-absent']") !== null,
+    ).toBe(shown);
+  });
+});

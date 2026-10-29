@@ -5,9 +5,10 @@
  * is no exported `tandem_reply` function we can call in isolation. Rather
  * than ship a refactor solely for testability, we assert on the source that:
  *
- *   1. The three `authFetch`-shaped callsites (tandem_reply via
- *      /api/channel-reply, /api/channel-permission, plus the event-bridge
- *      proxies) all flow through `fetchWithTimeout`.
+ *   1. The `authFetch`-shaped callsites (tandem_reply via
+ *      /api/channel-reply, plus the event-bridge proxies) all flow through
+ *      `fetchWithTimeout`. The /api/channel-permission relay callsite was
+ *      deleted with the relay (#1885).
  *   2. The JSON-parse catch in `tandem_reply` re-throws AbortError /
  *      TimeoutError instead of swallowing them as fake-success "Non-JSON
  *      response" — this is the silent-failure pattern #364 closes.
@@ -44,15 +45,6 @@ describe("channel/run.ts timeout coverage", () => {
   it("wraps /api/channel-reply with fetchWithTimeout", async () => {
     const src = await readFile(RUN_TS_PATH, "utf8");
     expectFetchWithTimeoutEndpoint(src, "/api/channel-reply", "CHANNEL_REPLY_FETCH_TIMEOUT_MS");
-  });
-
-  it("wraps /api/channel-permission with fetchWithTimeout", async () => {
-    const src = await readFile(RUN_TS_PATH, "utf8");
-    expectFetchWithTimeoutEndpoint(
-      src,
-      "/api/channel-permission",
-      "CHANNEL_PERMISSION_FETCH_TIMEOUT_MS",
-    );
   });
 
   it("re-throws AbortError/TimeoutError from the JSON-parse catch", async () => {

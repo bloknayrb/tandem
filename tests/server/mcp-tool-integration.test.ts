@@ -35,6 +35,7 @@ import {
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
+import { setGreetingReplyClassifier } from "../../src/server/mcp/greeting-reply.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
@@ -2305,6 +2306,50 @@ describe("MCP tool integration — awareness tools", () => {
       off2();
       errSpy.mockRestore();
     }
+  });
+
+  it("tandem_reply tags the hello only when the greeting classifier says so (#2227)", async () => {
+    setupDoc("mcp-aw-greet-tag", "Hello world");
+    const chat = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const seen: Array<{ sessionId: string | undefined; replyTo?: string; inProgress?: boolean }> =
+      [];
+    let answer: boolean | "throw" = true;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const off = setGreetingReplyClassifier((q) => {
+      seen.push({ sessionId: q.sessionId, replyTo: q.replyTo, inProgress: q.inProgress });
+      if (answer === "throw") throw new Error("classifier bug");
+      return answer;
+    });
+    try {
+      const hello = parseResult(
+        await client.callTool({ name: "tandem_reply", arguments: { text: "Hi, I'm here." } }),
+      );
+      expect((chat.get(hello.data.messageId) as ChatMessage).greeting).toBe(true);
+      // Asked with what the handler holds: no session id over this transport.
+      expect(seen[0]).toEqual({ sessionId: undefined, replyTo: undefined, inProgress: undefined });
+
+      answer = false;
+      const plain = parseResult(
+        await client.callTool({ name: "tandem_reply", arguments: { text: "A real answer." } }),
+      );
+      // Absent, not `false`: every other row stays byte-identical.
+      expect(chat.get(plain.data.messageId) as ChatMessage).not.toHaveProperty("greeting");
+
+      answer = "throw";
+      const failed = parseResult(
+        await client.callTool({ name: "tandem_reply", arguments: { text: "Still sends." } }),
+      );
+      expect(failed.data.sent).toBe(true);
+      expect(chat.get(failed.data.messageId) as ChatMessage).not.toHaveProperty("greeting");
+    } finally {
+      off();
+      errSpy.mockRestore();
+    }
+    // Unregistered: untagged.
+    const after = parseResult(
+      await client.callTool({ name: "tandem_reply", arguments: { text: "Later." } }),
+    );
+    expect(chat.get(after.data.messageId) as ChatMessage).not.toHaveProperty("greeting");
   });
 
   it("tandem_checkInbox tells Claude to acknowledge chat, and only when chat is present", async () => {

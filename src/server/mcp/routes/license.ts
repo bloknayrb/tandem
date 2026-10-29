@@ -1,7 +1,9 @@
 import type { Request, Response } from "express";
-import { API_LICENSE_ACTIVATE } from "../../../shared/api-paths.js";
+import { API_LICENSE_ACTIVATE, API_LICENSE_DEACTIVATE } from "../../../shared/api-paths.js";
 import {
   activationErrorMessage,
+  LICENSE_REMOVE_FAILED,
+  LICENSE_REMOVE_FAILED_MESSAGE,
   LICENSE_SAVED_STATE_UNREADABLE,
   LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
   type LicenseUnverifiableCode,
@@ -12,13 +14,14 @@ import {
   assertOriginAllowlistedIfPresent,
 } from "../../integrations/api-routes.js";
 import type { Supervisor } from "../../launcher/supervisor.js";
-import { LicenseActivationError } from "../../license/activation.js";
+import { LicenseActivationError, LicenseRemovalError } from "../../license/activation.js";
 import {
   activateLicense,
+  deactivateLicense,
   resolveLicenseState,
   resolveLiveLicenseState,
 } from "../../license/license-state.js";
-import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
+import type { GraceInfo, LicenseState, LicenseStatus } from "../../license/license-types.js";
 import { npmCliSharesAppDataRoot, resolveAppDataDir } from "../../platform.js";
 
 /**
@@ -36,7 +39,7 @@ export function toLicenseStatusWire(
    * Resolved separately (see `darkInstallInfo`) because the dark arm returns
    * before touching disk.
    */
-  darkInstall?: { installed: boolean; licenseeEmail?: string },
+  darkInstall?: DarkInstallInfo,
 ): Record<string, unknown> {
   if (!state.gateActive) {
     return {
@@ -50,9 +53,26 @@ export function toLicenseStatusWire(
       // did. The README sends every beta user down exactly that path.
       licenseInstalled: darkInstall?.installed ?? false,
       ...(darkInstall?.licenseeEmail ? { licenseeEmail: darkInstall.licenseeEmail } : {}),
+      // Loopback only, like the email: the one caller that can act on it is
+      // Settings → License's Remove button, and removal is loopback-only too.
+      ...(darkInstall?.licenseFileUnverifiable ? { licenseFileUnverifiable: true } : {}),
     };
   }
   return state;
+}
+
+/** What a dark build can say about the licence file on disk. */
+export interface DarkInstallInfo {
+  /** A licence is installed and would verify once the gate is on. */
+  installed: boolean;
+  licenseeEmail?: string;
+  /**
+   * A licence file IS on disk but would NOT verify (#1943 review): a beta
+   * tester's key from before the 2026-10-20 key rotation, or a damaged file.
+   * Not a gate signal; it lets Settings offer Remove license for it, since a
+   * desktop install has no `tandem deactivate`.
+   */
+  licenseFileUnverifiable?: true;
 }
 
 /**
@@ -63,7 +83,9 @@ export function toLicenseStatusWire(
  * called on the dark path, where the client polls once and then rests, so the
  * extra file read + Ed25519 verify is not on any hot path.
  */
-export function darkInstallInfo(): { installed: boolean; licenseeEmail?: string } {
+export function darkInstallInfo(): DarkInstallInfo {
+  // `grace` stays at its default "off": a dark build never reads or writes
+  // license-grace.json.
   const full = resolveLicenseState({
     appDataDir: resolveAppDataDir(),
     now: () => Date.now(),
@@ -71,6 +93,9 @@ export function darkInstallInfo(): { installed: boolean; licenseeEmail?: string 
   });
   if (full.gateActive && full.status === "licensed") {
     return { installed: true, licenseeEmail: full.license.email };
+  }
+  if (full.gateActive && full.licenseUnverifiable !== undefined) {
+    return { installed: false, licenseFileUnverifiable: true };
   }
   return { installed: false };
 }
@@ -87,6 +112,7 @@ export function scrubForNonLoopback(s: LicenseState): {
   updateWindowCurrent: boolean;
   licenseUnverifiable?: LicenseUnverifiableCode;
   licenseInstalled?: boolean;
+  grace?: GraceInfo;
 } {
   if (!s.gateActive) {
     return {
@@ -107,6 +133,9 @@ export function scrubForNonLoopback(s: LicenseState): {
     // license content, name, id or email in it. The client needs it to avoid
     // telling a license holder that their trial ended.
     licenseUnverifiable: s.status === "licensed" ? undefined : s.licenseUnverifiable,
+    // Not PII either (#2231): two dates and a day count about this device's own
+    // licence file. The client's grace notice and doctor's row need it.
+    ...(s.status === "grace" ? { grace: s.grace } : {}),
   };
 }
 
@@ -136,10 +165,13 @@ function loopbackLicenseWire(state: LicenseState): Record<string, unknown> {
 /**
  * GET /api/license/status — current on-device license state, recomputed fresh.
  * Loopback callers get the full state (incl. licensee email + licenseId for the
- * updater); non-loopback callers get the scrubbed subset. This is a read-only
- * route, so it checks `isLoopback` directly rather than going through the
- * mutation-gating helper (`assertLoopbackForMutation`), which is for handlers
- * that write state.
+ * updater); non-loopback callers get the scrubbed subset. It checks
+ * `isLoopback` directly rather than going through the mutation-gating helper
+ * (`assertLoopbackForMutation`), because it is a GET and changes nothing the
+ * caller chose. It is NOT side-effect free on an armed build: the live state
+ * resolver runs in `grace: "record"` mode, so the first poll that sees a
+ * failing licence file writes `license-grace.json` and starts its grace clock
+ * (#2231). A dark build reads and writes nothing here.
  */
 export function handleGetLicenseStatus(req: Request, res: Response): void {
   const state = resolveLiveLicenseState();
@@ -256,6 +288,67 @@ export function makeActivateLicenseHandler(
         error: LICENSE_SAVED_STATE_UNREADABLE,
         message: LICENSE_SAVED_STATE_UNREADABLE_MESSAGE,
       });
+    }
+  };
+}
+
+/**
+ * POST /api/license/deactivate — remove this device's licence (#1943).
+ * Body: `{ confirm: true }`.
+ *
+ * LOCAL ONLY: deletes `license.json` and the grace record, releases no seat and
+ * sends nothing anywhere. Reversible by activating the same key again, except
+ * for a key that already fails its check on this build — the answer carries
+ * `wasUnverifiable` so the caller can say which. Works regardless of
+ * GATE_ENABLED, as activate does.
+ *
+ * Gates, in activate's order and for activate's reasons: the origin allowlist
+ * when an Origin is present (the `tandem deactivate` CLI sends none), then
+ * loopback. Then a parsed JSON body with `confirm === true`, which is the
+ * preflight proof for an Origin-less caller: a `text/plain` simple request
+ * leaves `req.body` undefined (every parser here is `express.json`) and gets a
+ * 400 before anything is deleted. That proof does not cover DNS rebinding —
+ * `isHostAllowed` and the Origin refusal do (docs/security.md).
+ *
+ * Does not touch the launcher: a running Claude is left alone, as at trial
+ * expiry (ADR-040 D1), and its next admission is decided by the live state.
+ */
+export function makeDeactivateLicenseHandler(): (req: Request, res: Response) => Promise<void> {
+  return async (req, res) => {
+    const LOCAL_ONLY =
+      "A license can only be removed on the computer running Tandem. Open Tandem on that " +
+      "computer and use Settings → License there" +
+      (npmCliSharesAppDataRoot() ? ", or run `tandem deactivate` on it." : ".");
+    if (assertOriginAllowlistedIfPresent(req, res, API_LICENSE_DEACTIVATE, LOCAL_ONLY)) return;
+    if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
+
+    // The preflight proof — keep it ahead of the unlink.
+    const { confirm } = (req.body ?? {}) as Record<string, unknown>;
+    if (confirm !== true) {
+      res.status(400).json({ error: "BAD_REQUEST", message: "confirm: true is required" });
+      return;
+    }
+
+    let result: Awaited<ReturnType<typeof deactivateLicense>>;
+    try {
+      result = await deactivateLicense(resolveAppDataDir());
+    } catch (err) {
+      if (!(err instanceof LicenseRemovalError)) {
+        console.error("[License] Removing the license failed unexpectedly:", err);
+      }
+      res
+        .status(500)
+        .json({ error: LICENSE_REMOVE_FAILED, message: LICENSE_REMOVE_FAILED_MESSAGE });
+      return;
+    }
+
+    // Same shaping as GET /api/license/status, so the client can `set()` it.
+    // A throw re-reading the state still answers the removal, which happened.
+    try {
+      res.json({ ...result, ...loopbackLicenseWire(resolveLiveLicenseState()) });
+    } catch (err) {
+      console.error("[License] Removed the license, but re-reading the license state failed:", err);
+      res.json(result);
     }
   };
 }

@@ -2,11 +2,27 @@ import fs from "fs";
 import type { LicenseUnverifiableCode } from "../../shared/license-copy.js";
 import { atomicWriteConfigFile } from "../integrations/storage.js";
 import { resolveAppDataDir } from "../platform.js";
-import { LicenseActivationError } from "./activation.js";
+import { LicenseActivationError, LicenseRemovalError } from "./activation.js";
 import { GATE_ENABLED } from "./gate-flag.js";
+import {
+  clearGraceRecords,
+  GRACE_KEY_READ_ERROR,
+  graceKeyForBlob,
+  graceKeyForRaw,
+  hasGraceRecords,
+  readGraceRecord,
+  recordGraceStart,
+} from "./grace.js";
 import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./license-types.js";
 import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
-import { licenseFilePath, TRIAL_DAYS, TRIAL_MS, trialFilePath } from "./paths.js";
+import {
+  GRACE_MS,
+  LICENSE_GRACE_DAYS,
+  licenseFilePath,
+  TRIAL_DAYS,
+  TRIAL_MS,
+  trialFilePath,
+} from "./paths.js";
 import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
 
 // Known license schema majors. The signed `version` field becomes load-bearing:
@@ -63,24 +79,24 @@ function readLicenseFile(
   filePath: string,
 ):
   | { kind: "absent" }
-  | { kind: "unreadable"; code: LicenseUnverifiableCode }
+  | { kind: "unreadable"; code: LicenseUnverifiableCode; graceKey: string }
   | { kind: "parsed"; value: LicenseFile } {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf-8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
-    return { kind: "unreadable", code: "UNKNOWN" };
+    return { kind: "unreadable", code: "UNKNOWN", graceKey: GRACE_KEY_READ_ERROR };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { kind: "unreadable", code: "MALFORMED" };
+    return { kind: "unreadable", code: "MALFORMED", graceKey: graceKeyForRaw(raw) };
   }
   const blob = (parsed as Partial<LicenseFile> | null)?.blob;
   if (typeof blob !== "string" || blob.length === 0) {
-    return { kind: "unreadable", code: "MALFORMED" };
+    return { kind: "unreadable", code: "MALFORMED", graceKey: graceKeyForRaw(raw) };
   }
   return { kind: "parsed", value: parsed as LicenseFile };
 }
@@ -169,8 +185,27 @@ export function resolveLicenseState(deps: {
   // `verifyLicense` can't be wired here (it would lock out paid users past their
   // update window). See SignatureVerified in license-types.ts.
   verify?: (blob: string) => SignatureVerified;
+  /**
+   * The licence grace period (#2231). Default `"off"`: no grace arm, and the
+   * grace record is neither read nor written — so every caller that resolves
+   * with `gateEnabled: true` on a DARK build (`darkInstallInfo`,
+   * `activateLicense`) touches exactly the files it touched before.
+   *
+   * - `"record"`: the live state resolver (`resolveLiveLicenseState`), used by
+   *   every AI admission AND every `GET /api/license/status` (plus the
+   *   activate/deactivate responses) — reads the record, writes the first
+   *   failure, and clears the record when a licence verifies.
+   * - `"read"`: `tandem license` on an armed build — reports, never writes.
+   */
+  grace?: "off" | "read" | "record";
 }): LicenseState {
-  const { appDataDir, now, gateEnabled, verify = verifyLicenseSignature } = deps;
+  const {
+    appDataDir,
+    now,
+    gateEnabled,
+    verify = verifyLicenseSignature,
+    grace: graceMode = "off",
+  } = deps;
 
   if (!gateEnabled) {
     return { gateActive: false };
@@ -184,27 +219,31 @@ export function resolveLicenseState(deps: {
   //
   // `licenseUnverifiable` records the case where a license file EXISTS but does
   // not verify — a tester holding a pre-key-rotation license, a corrupted file,
-  // or a license from a newer schema. Enforcement is unchanged (an unverified
-  // license must never unlock, so we still fall through to the trial clock),
-  // but the state has to say so: without it, every surface tells a person with a
-  // license sitting on disk that their *trial* ended — a trial they may never
-  // have had. It was previously swallowed by a bare `catch {}` with no log, no
+  // or a license from a newer schema. An unverified license never unlocks for
+  // good: it gets the bounded grace period below (#2231), then falls through
+  // to the trial clock. And the state has to say so: without it, every surface
+  // tells a person with a license sitting on disk that their *trial* ended — a
+  // trial they may never have had. It was previously swallowed by a bare `catch {}` with no log, no
   // status and no UI.
   //
   // It carries the CODE, not a boolean. "Have it reissued", "the file is
   // damaged" and "update Tandem" are three different user actions, and a
   // boolean forced every surface to hedge across all three in one sentence.
   let licenseUnverifiable: LicenseUnverifiableCode | undefined;
+  // The grace record's key for the licence file that failed (#2231): its
+  // blob's hash, its bytes' hash, or the constant read-error key.
+  let graceKey: string | undefined;
   const lfRead = readLicenseFile(licenseFilePath(appDataDir));
   // A licence file that EXISTS but cannot be used — a read error that is not
   // ENOENT (an AV or sync-client lock: EBUSY, EPERM), unparseable JSON, or a
   // body with no `blob` — is UNVERIFIABLE, not absent (#1521). Treating it as
   // absent told a paying user, mid-session, that Tandem was unlicensed and
-  // where to buy it. It still never unlocks anything: making the file
-  // unreadable cannot gain AI, because it falls through to the trial clock
-  // exactly like a licence that fails to verify.
+  // where to buy it. It never unlocks for good: making the file unreadable
+  // gains at most the same bounded grace period (#2231) as a licence that fails
+  // to verify — keyed by one constant, so it runs out — then the trial clock.
   if (lfRead.kind === "unreadable") {
     licenseUnverifiable = lfRead.code;
+    graceKey = lfRead.graceKey;
     warnOnce(
       `read:${lfRead.code}`,
       `[license] license.json exists but could not be used (${lfRead.code}) — treating this ` +
@@ -218,6 +257,14 @@ export function resolveLicenseState(deps: {
       if (knownVersion(meta.version)) {
         const updateWindowCurrent =
           meta.expiresAt === null || new Date(meta.expiresAt).getTime() > nowMs;
+        // A licence that verifies ends every grace on this device (#2231), so a
+        // later, unrelated failure — a transient lock months from now — starts
+        // a fresh grace instead of inheriting a stale date and refusing at once.
+        // One `existsSync` per licensed dispatch; the unlink only when there is
+        // something to remove. Total: `clearGraceRecords` never throws.
+        if (graceMode === "record" && hasGraceRecords(appDataDir)) {
+          clearGraceRecords(appDataDir);
+        }
         return {
           gateActive: true,
           status: "licensed",
@@ -241,6 +288,55 @@ export function resolveLicenseState(deps: {
           "device as unlicensed. A license issued before a signing-key change must be reissued.",
       );
     }
+    // Keyed only on a failure: the licensed arm above returns first, so the
+    // per-dispatch hot path never pays for the hash.
+    graceKey = graceKeyForBlob(lf.blob);
+  }
+
+  // 1b. Grace (#2231, ADR-040 amendment 2026-10-28). An installed licence that
+  // fails its check keeps the AI on for LICENSE_GRACE_DAYS from its FIRST
+  // failure. Ahead of the trial clock: a licence holder must not be framed as a
+  // trial user, and the grace clock should start the first time the failure is
+  // seen, trial or not. No record yet ⇒ day 0, like `trial.json`.
+  //
+  // Fails OPEN on every storage failure (an unwritable directory reads day 0
+  // again next process). That is the trial clock's softness, stated in the
+  // ADR, and the right direction: a write failure must never refuse a paying
+  // customer.
+  if (licenseUnverifiable !== undefined && graceKey !== undefined && graceMode !== "off") {
+    const recorded = readGraceRecord(appDataDir, graceKey, nowMs);
+    const start = recorded.startMs ?? nowMs;
+    // Write when the file lacks a usable date — the first failure, or a date
+    // this process remembers but the file lost (deleted by hand, or a write
+    // that never landed). `recordGraceStart` stops retrying after one failed
+    // write, and never replaces a plausible date that is only ahead of a clock
+    // running behind (it keeps the date in memory instead).
+    if (graceMode === "record" && !recorded.onDisk) {
+      recordGraceStart(appDataDir, graceKey, start);
+    }
+    const endsAtMs = start + GRACE_MS;
+    if (nowMs < endsAtMs) {
+      const daysRemaining = Math.min(
+        LICENSE_GRACE_DAYS,
+        Math.max(0, Math.ceil((endsAtMs - nowMs) / 86_400_000)),
+      );
+      return {
+        gateActive: true,
+        status: "grace",
+        updateWindowCurrent: false,
+        licenseUnverifiable,
+        grace: {
+          firstFailedAt: new Date(start).toISOString(),
+          endsAt: new Date(endsAtMs).toISOString(),
+          daysRemaining,
+        },
+      };
+    }
+    warnOnce(
+      `grace:ended:${licenseUnverifiable}`,
+      `[license] the ${LICENSE_GRACE_DAYS}-day grace period for the installed license ` +
+        `(${licenseUnverifiable}) has ended — AI features follow the trial clock from here.`,
+    );
   }
 
   // 2. Trial clock (soft by design — ADR-040 §3). Absent file ⇒ day 0.
@@ -321,7 +417,72 @@ export function resolveLiveLicenseState(): LicenseState {
     appDataDir: resolveAppDataDir(),
     now: () => Date.now(),
     gateEnabled: GATE_ENABLED,
+    // The live resolver is the one place the grace record is written (#2231):
+    // AI admissions and the status route both come through here.
+    // A DARK build returns `{ gateActive: false }` before reading anything, so
+    // it never reads or writes `license-grace.json`.
+    grace: "record",
   });
+}
+
+/**
+ * Remove this device's licence (#1943): delete `license.json`, then the grace
+ * record. LOCAL ONLY — no seat is released anywhere and nothing is sent; the
+ * same key activates again from the email it came in, because activation is
+ * idempotent from the signed blob — except a key that already fails
+ * `BAD_SIGNATURE` or `UNSUPPORTED_VERSION` on this build, which activation
+ * refuses too (`wasUnverifiable` names it). `trial.json` is never touched, so a device
+ * past its trial lands in `restricted` (AI off; the editor is unaffected).
+ *
+ * `removed: false` when there was no licence file. Any other failure to
+ * delete it throws `LicenseRemovalError` and leaves the grace record alone,
+ * so a half-removal never restarts a grace clock. A failure to delete the
+ * grace record after the licence is gone is logged and not reported: the
+ * record is keyed by the removed file's contents, so it can only shorten a
+ * grace for those same bytes if they are put back by hand.
+ *
+ * Does not stop a Claude that is already running (as at trial expiry,
+ * ADR-040 D1): its next admission is decided by the live state.
+ */
+export async function deactivateLicense(
+  appDataDir: string,
+  verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
+): Promise<{ removed: boolean; wasUnverifiable?: LicenseUnverifiableCode }> {
+  // What is being removed, read before it goes: a key that fails BAD_SIGNATURE
+  // or UNSUPPORTED_VERSION is refused by activation too, so the caller must not
+  // promise it can be activated again. Grace off: this only reads.
+  let wasUnverifiable: LicenseUnverifiableCode | undefined;
+  try {
+    const before = resolveLicenseState({
+      appDataDir,
+      now: () => Date.now(),
+      gateEnabled: true,
+      verify,
+    });
+    if (before.gateActive && before.status !== "licensed") {
+      wasUnverifiable = before.licenseUnverifiable;
+    }
+  } catch {
+    // A corrupt trial.json can make resolving throw; it says nothing about the key.
+  }
+  let removed = true;
+  try {
+    await fs.promises.unlink(licenseFilePath(appDataDir));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw new LicenseRemovalError(`Could not remove the license from ${appDataDir}`, {
+        cause: err,
+      });
+    }
+    removed = false;
+  }
+  if (!clearGraceRecords(appDataDir)) {
+    console.error(
+      "[license] The license was removed, but license-grace.json could not be deleted; " +
+        "it is left in place.",
+    );
+  }
+  return removed && wasUnverifiable !== undefined ? { removed, wasUnverifiable } : { removed };
 }
 
 /**

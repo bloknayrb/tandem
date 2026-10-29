@@ -91,6 +91,18 @@ describe("createReplyDetector (#2168)", () => {
     ).toEqual(["answer"]);
   });
 
+  it("returns Tandem's one-time hello like a reply, unlike an ack (#2227)", () => {
+    // It is announced — worded "Tandem's Claude is ready" by buildNotificationText —
+    // not skipped the way an inProgress ack is.
+    const detector = make();
+    expect(
+      observeIds(detector, {
+        doc: {},
+        messages: [msg("ack", { inProgress: true }), msg("hello", { greeting: true })],
+      }),
+    ).toEqual(["hello"]);
+  });
+
   it("announces a late reply on an already-seeded doc, however old its timestamp", () => {
     // A same-doc reconnect delivers only the delta: a reply that reaches
     // Tandem minutes late after a lost connection is still live news.

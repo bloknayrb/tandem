@@ -1,5 +1,5 @@
 /**
- * The activation error class.
+ * The activation and removal error classes.
  *
  * The codes and their user-facing copy live in `src/shared/license-copy.ts` —
  * the client needs them too, and `shared/` is the only tree all three surfaces
@@ -17,5 +17,19 @@ export class LicenseActivationError extends Error {
   ) {
     super(message, options);
     this.name = "LicenseActivationError";
+  }
+}
+
+/**
+ * Removing this device's licence failed (#1943): `license.json` is there but
+ * could not be deleted (a lock, or permissions). ENOENT is not this error —
+ * there was nothing to remove. The message names the directory, never file
+ * contents.
+ */
+export class LicenseRemovalError extends Error {
+  readonly code = "REMOVE_FAILED" as const;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "LicenseRemovalError";
   }
 }

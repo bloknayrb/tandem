@@ -120,9 +120,21 @@ tandem activate "eyJ...blob..."
 
 The desktop equivalent is Settings → License. Licensing [ships dark](glossary.md#licensing-gate) until v1.0; activating early is still worth doing, because an unactivated key is easy to lose.
 
+### `tandem deactivate`
+
+Removes this device's license (#1943). **Local only:** it deletes `license.json` and the grace-period record `license-grace.json` from the app-data directory, releases no seat and sends nothing to anyone. `trial.json` is left alone, so a device past its trial has the AI features off afterwards (the editor is unaffected). There is no confirmation prompt, matching `tandem activate`; Settings → License asks first.
+
+Like `tandem activate`, it asks a Tandem running at `TANDEM_URL` (a literal `http://127.0.0.1:<port>`) to do it, so it removes the license from that Tandem's own app-data directory (`POST /api/license/deactivate`); otherwise it removes it from the CLI's own store. If the running Tandem refuses (the file is locked, say), its reason is printed, the command exits `1`, and nothing is removed locally. A Claude that Tandem already started keeps running; its next request is decided by the new license state.
+
+Activate the same key again any time from the email it came in. The exception is a key that was already failing its check on this version (it was signed by a key this build doesn't trust, or it needs a newer Tandem): activation refuses it too, and the command says so.
+
+```bash
+tandem deactivate
+```
+
 ### `tandem license`
 
-Prints the current license or trial status: whether enforcement is on at all (it is off until v1.0), then either the licensee's email and license type plus what updates the key includes, or the days remaining on the trial. Every issued key includes all future updates, and the command says so; only a key hand-signed with a dated window shows one. An expired window is called out explicitly, because "Tandem keeps running but new releases are no longer offered" otherwise shows up only as the app saying you are up to date forever.
+Prints the current license or trial status: whether enforcement is on at all (it is off until v1.0), then either the licensee's email and license type plus what updates the key includes, or the days remaining on the trial. Every issued key includes all future updates, and the command says so; only a key hand-signed with a dated window shows one. An expired window is called out explicitly, because "Tandem keeps running but new releases are no longer offered" otherwise shows up only as the app saying you are up to date forever. On a build where licensing is enforced, an installed license that fails its check shows its grace period (#2231): the date the AI features stay on until, the days left, and what to do. On a build that ships the gate dark, the output is unchanged.
 
 ```bash
 tandem license

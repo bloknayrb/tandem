@@ -308,6 +308,19 @@ describe("createAiReadiness", () => {
     expect(h.get().chip).toBeNull();
   });
 
+  it("suppresses the connect CTA during the HTTP boot window (server-starting, #1823)", async () => {
+    // Between the server answering and the supervisor existing. It used to
+    // read `stdio-mode`, a terminal "no launcher here", on an ordinary boot.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: false, reason: "server-starting" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("booting");
+    expect(h.get().chip).toBeNull();
+  });
+
   it("still shows the connect CTA to a LAN viewer, who sees no reason field", async () => {
     // `reason` is loopback-only, so off-loopback the deferred state is
     // indistinguishable from any other unavailable state — and a LAN viewer

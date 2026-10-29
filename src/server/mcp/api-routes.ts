@@ -8,8 +8,6 @@ import {
   API_BACKUPS_RESTORE,
   API_CHANNEL_AWARENESS,
   API_CHANNEL_ERROR,
-  API_CHANNEL_PERMISSION,
-  API_CHANNEL_PERMISSION_VERDICT,
   API_CHANNEL_REPLY,
   API_CHAT,
   API_CLOSE,
@@ -20,6 +18,7 @@ import {
   API_EXTERNAL_CONFLICT_RESOLVE,
   API_INFO,
   API_LICENSE_ACTIVATE,
+  API_LICENSE_DEACTIVATE,
   API_LICENSE_STATUS,
   API_MODE,
   API_MODE_RELEASE,
@@ -56,6 +55,7 @@ import {
   type ActivateLicenseDeps,
   handleGetLicenseStatus,
   makeActivateLicenseHandler,
+  makeDeactivateLicenseHandler,
 } from "./routes/license.js";
 import { handleMode } from "./routes/mode.js";
 import { handleModeRelease } from "./routes/mode-release.js";
@@ -193,19 +193,22 @@ export const apiMiddleware: Handler = createApiMiddleware();
  * server listens on loopback only, so this carve-out is unreachable from
  * another machine; it stays for the re-enable.
  *
- * The whole `/api/channel-*` family is carved out rather than the subset with a
- * caller in the tree today. Two members (`channel-permission-verdict`, and
- * `DELETE /api/chat`, whose only caller builds a hardcoded `127.0.0.1` URL)
- * have no non-loopback caller right now, but picking them off would be an
- * untested tightening of a documented transport, and a family is something a
- * reviewer can check at a glance. Widening this set is the one hand-maintained
- * decision left in the invariant; treat an addition as a security change.
+ * The whole `/api/channel-*` family is carved out. Its three remaining members
+ * (`channel-awareness`, `channel-error`, `channel-reply`) all have a
+ * non-loopback caller in the shim or the monitor. One member of the set,
+ * `DELETE /api/chat`, whose only caller builds a hardcoded `127.0.0.1` URL, has
+ * no non-loopback caller right now, but picking it off would be an untested
+ * tightening of a documented transport. The two permission-relay POSTs were
+ * members until #1885 deleted their routes; they left the set with them, and
+ * `tests/server/api-loopback-invariant.test.ts` pins that a LAN POST to either
+ * path is refused. Widening this set is the one hand-maintained decision left
+ * in the invariant; treat an addition as a security change.
  *
  * **Keyed by METHOD AND PATH, not path alone.** Every doc and comment describes
  * the exemption as `DELETE /api/chat`, and a path-only set would not mean that —
  * it would exempt `POST /api/chat` too. That route does not exist today, but it
  * is the obvious next one on this path, and it would inherit LAN-write access
- * with nothing in the diff or the tests able to notice. For six paths, forgetting
+ * with nothing in the diff or the tests able to notice. For four paths, forgetting
  * would have failed OPEN — the precise failure this middleware exists to end.
  *
  * NOT here:
@@ -224,8 +227,6 @@ const NON_LOOPBACK_ALLOWED: ReadonlySet<string> = new Set(
       ["POST", API_CHANNEL_AWARENESS],
       ["POST", API_CHANNEL_ERROR],
       ["POST", API_CHANNEL_REPLY],
-      ["POST", API_CHANNEL_PERMISSION],
-      ["POST", API_CHANNEL_PERMISSION_VERDICT],
       ["DELETE", API_CHAT],
     ] as const
   ).map(([method, path]) => `${method} ${normalizeApiPath(path)}`),
@@ -257,11 +258,13 @@ function normalizeApiPath(path: string): string {
  * default is deny and the EXEMPTIONS are the enumerated thing, so forgetting to
  * touch this file fails closed.
  *
- * **Non-GET, not "mutating".** The distinction is load-bearing:
- * `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A
+ * **Non-GET, not "mutating".** The distinction is load-bearing: whether a
+ * handler mutates is a property of its body, not knowable at the mount, so a
  * rule phrased over mutation would require the same per-route inventory this
- * exists to abolish. Reads keep their existing per-route posture — `document/raw`,
- * `diagnostics` and `channel-permission` 403 by hand, while `info`, `sessions`, `backups`,
+ * exists to abolish. (The example that used to illustrate it,
+ * `GET /api/channel-permission` evicting expired entries, was deleted with the
+ * relay in #1885; the reason does not depend on it.) Reads keep their existing
+ * per-route posture — `document/raw` and `diagnostics` 403 by hand, while `info`, `sessions`, `backups`,
  * `launcher/status`, `models` and `integrations` scrub their payload for a
  * non-loopback caller instead of refusing. That scrubbing is what the LAN Host
  * accommodation (`createApiMiddleware`'s `extraHosts`) is for, and widening this
@@ -436,6 +439,14 @@ export function registerApiRoutes(
     largeBody,
     makeActivateLicenseHandler(licenseDeps),
   );
+
+  // License deactivate (#1943): local delete of the licence file and grace
+  // record. Same in-handler gates as activate (origin allowlist when present,
+  // then loopback), plus a required `{ confirm: true }` JSON body as the
+  // preflight proof for the Origin-less CLI. Parsed by the pre-parse router
+  // (`small`); the `largeBody` here is the usual backstop that skips it.
+  app.options(API_LICENSE_DEACTIVATE, mw);
+  app.post(API_LICENSE_DEACTIVATE, mw, largeBody, makeDeactivateLicenseHandler());
 
   app.options(API_OPEN, mw);
   app.post(API_OPEN, mw, largeBody, handleOpen);

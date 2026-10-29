@@ -17,6 +17,7 @@ import {
   createLineFramer,
   createSupervisor,
   DESKTOP_ONLY_ENV_KEYS,
+  describePermissionDenials,
   homeCwd,
   makeStdinGoneHandler,
   RESUME_CONFIRM_MS,
@@ -30,6 +31,9 @@ import {
   REAPER_NOT_FOUND_MARKER,
   SUPERVISOR_INITIAL_PROMPT,
   serializeUserTurn,
+  TANDEM_CLASSIFIER_GATED_TOOLS,
+  TANDEM_MCP_ALLOW_RULES,
+  TANDEM_PREAPPROVED_TOOLS,
 } from "../../../src/shared/launcher/contract.js";
 import { NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
 
@@ -645,6 +649,105 @@ describe("buildClaudeArgs — CLI argument vector (#1267)", () => {
     expect(buildClaudeArgs({ sessionId: SESSION, resuming: false })).not.toContain(
       "--dangerously-load-development-channels",
     );
+  });
+});
+
+describe("buildClaudeArgs — explicit permission posture (#2286)", () => {
+  const SESSION = "550e8400-e29b-41d4-a716-446655440000";
+  const arms = [
+    ["fresh", false],
+    ["resume", true],
+  ] as const;
+
+  function valueAfter(args: string[], flag: string): string | undefined {
+    const i = args.indexOf(flag);
+    return i === -1 ? undefined : args[i + 1];
+  }
+
+  for (const [label, resuming] of arms) {
+    it(`starts the ${label} arm in auto mode`, () => {
+      const args = buildClaudeArgs({ sessionId: SESSION, resuming });
+      expect(args.filter((a) => a === "--permission-mode")).toHaveLength(1);
+      expect(valueAfter(args, "--permission-mode")).toBe("auto");
+    });
+
+    it(`pre-approves the narrow Tandem list under both server spellings on the ${label} arm, as ONE token`, () => {
+      const args = buildClaudeArgs({ sessionId: SESSION, resuming });
+      expect(args.filter((a) => a === "--allowedTools")).toHaveLength(1);
+      const value = valueAfter(args, "--allowedTools");
+      expect(value?.split(",")).toEqual([...TANDEM_MCP_ALLOW_RULES]);
+      // The variadic parser must stop at the next `--` flag, so the session arm
+      // follows the allow list directly.
+      expect(args.indexOf("--allowedTools") + 2).toBe(args.length - 2);
+    });
+  }
+
+  it("pins per-tool rules under both whole server names, and no wildcard (#2286 narrow grant)", () => {
+    expect(TANDEM_MCP_ALLOW_RULES).toHaveLength(TANDEM_PREAPPROVED_TOOLS.length * 2);
+    for (const tool of TANDEM_PREAPPROVED_TOOLS) {
+      expect(TANDEM_MCP_ALLOW_RULES).toContain(`mcp__tandem__${tool}`);
+      expect(TANDEM_MCP_ALLOW_RULES).toContain(`mcp__plugin_tandem_tandem__${tool}`);
+    }
+    for (const rule of TANDEM_MCP_ALLOW_RULES) expect(rule).not.toContain("*");
+    for (const tool of TANDEM_CLASSIFIER_GATED_TOOLS) {
+      expect(TANDEM_MCP_ALLOW_RULES.some((r) => r.endsWith(`__${tool}`))).toBe(false);
+    }
+  });
+
+  it("never escalates past auto: no bypass, no prompt tool, no prompt routing", () => {
+    for (const resuming of [false, true]) {
+      const args = buildClaudeArgs({ sessionId: SESSION, resuming });
+      for (const banned of [
+        "--dangerously-skip-permissions",
+        "bypassPermissions",
+        "--permission-prompt-tool",
+        "--permission-prompts",
+        "--allow-dangerously-skip-permissions",
+      ]) {
+        expect(args).not.toContain(banned);
+      }
+    }
+  });
+});
+
+describe("describePermissionDenials — the result envelope's refusals (#2286)", () => {
+  it("is silent for an absent, empty or non-array field", () => {
+    expect(describePermissionDenials(undefined)).toBeNull();
+    expect(describePermissionDenials([])).toBeNull();
+    expect(describePermissionDenials("x")).toBeNull();
+    expect(describePermissionDenials({ tool_name: "x" })).toBeNull();
+  });
+
+  it("names the tools and never the tool input", () => {
+    const line = describePermissionDenials([
+      {
+        tool_name: "mcp__tandem__tandem_status",
+        tool_use_id: "t1",
+        tool_input: { text: "SECRET-DOCUMENT-TEXT" },
+      },
+    ]);
+    expect(line).toContain("mcp__tandem__tandem_status");
+    expect(line).toContain("1 tool call");
+    expect(line).not.toContain("SECRET-DOCUMENT-TEXT");
+  });
+
+  it("caps the list and counts the rest", () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({ tool_name: `tool_${i}` }));
+    const line = describePermissionDenials(many) ?? "";
+    expect(line).toContain("tool_4");
+    expect(line).not.toContain("tool_5");
+    expect(line).toContain("and 3 more");
+  });
+
+  it("cannot throw on hostile entries and sanitizes control characters", () => {
+    const line = describePermissionDenials([
+      null,
+      7,
+      { tool_name: 9 },
+      { tool_name: "a\u001b[31mb" },
+    ]);
+    expect(line).toContain("(unnamed)");
+    expect(line).not.toContain("\u001b");
   });
 });
 

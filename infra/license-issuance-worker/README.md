@@ -225,7 +225,7 @@ failure this check exists to catch both return a value:
 `expectRevoked()` / `expectLive()` in `tests/server/license-issuance-worker.test.ts`
 assert the same two shapes.
 
-**Proper fix (follow-up, not built here):** a Cloudflare Durable Object keyed
+**Proper fix (follow-up, not built here; tracked by #2245, whose race is accepted for launch in `docs/security.md`'s register with a revisit date of 2027-01-31):** a Cloudflare Durable Object keyed
 on the transaction id, using `blockConcurrencyWhile` (or a single serialized
 queue) to make the read-then-write in `issue()`/`revoke()` atomic per
 transaction. Outside the current design — it's a new binding + wrangler config +
