@@ -64,6 +64,7 @@ import {
 } from "./constants.js";
 import type { TandemEvent } from "./events/types.js";
 import { parseTandemEvent } from "./events/types.js";
+import { isWakeWorthy } from "./events/wake-scope.js";
 import { describeFetchError, fetchWithTimeout } from "./fetch-with-timeout.js";
 import { LICENSE_REQUIRED } from "./license-copy.js";
 import { type ChannelErrorCode, type TandemMode, TandemModeSchema } from "./types.js";
@@ -669,7 +670,13 @@ export async function connectAndStreamOnce(
         }
 
         if (eventId) cb.onEventId(eventId);
-        scheduleAwareness(event);
+        // The "Claude is processing" indicator, for the events that ask Claude
+        // for something — the same `isWakeWorthy` set every push path wakes on.
+        // `document:*` lifecycle (#2069) fires on every tab click, open and
+        // close, including Claude's own, and nothing processes it: posting
+        // `processing: document:switched` would show Claude busy on a document
+        // it was never asked about. The event is still delivered above.
+        if (isWakeWorthy(event)) scheduleAwareness(event);
       }
 
       // Checked AFTER the boundary loop, so `buffer` is exactly one unterminated

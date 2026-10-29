@@ -164,9 +164,9 @@ describe("an insertion inside a stamped range splits it", () => {
     // existing endpoints. Re-deriving them would push two known-good CRDT
     // anchors back through the PM↔Y model seam — the correspondence that
     // drifted silently in #1450/#1459 — and then overwrite the originals with
-    // the result. The all-or-nothing guard would not catch a bad outcome:
-    // `flatOffsetToRelPos` has an assoc-directed ±1 retry whose whole purpose
-    // is to return a NON-null anchor at a different offset than asked for.
+    // the result. The all-or-nothing guard would not catch a bad outcome: a
+    // mint that lands on the wrong character is non-null, as the pre-#2001
+    // separator retry (offset+1) showed.
     const { editor, entries } = boundEditor("seed\n");
     const { mid } = seedUserText(editor);
     const original = entries()[0];

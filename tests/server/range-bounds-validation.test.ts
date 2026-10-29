@@ -5,8 +5,8 @@
  * The unit-level rules live in `positions.test.ts`. This file pins the
  * BOUNDARY: the real MCP tool registrations, the two `.docx` resolvers that
  * carry STORED offsets (which are deliberately exempt from the surrogate rule),
- * the export resolver (which is deliberately NOT exempt — it writes a file), and
- * the file watcher's relocation pass.
+ * and the export resolver (which is deliberately NOT exempt — it writes a file).
+ * The reload remap, the third exempt caller, is covered in `reload-remap.test.ts`.
  *
  * Why tool-level and not just `validateRange`: a clamp planted at
  * `document-store.anchorRange` — the same `Math.min` shape this change

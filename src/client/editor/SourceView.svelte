@@ -102,17 +102,18 @@ $effect(() => {
 });
 
 /**
- * One source of truth for the annotation warning (they are kept, but may lose
- * their place — #2219, #2269), so the visible strip and the sr-only announcer
- * below it can never drift apart (#1431). Empty string when there is nothing to
- * say — the announcer stays mounted and silent.
+ * One source of truth for the annotation warning (they are kept and follow
+ * their text; one whose text is changed or deleted is detached — #2219,
+ * #2269), so the visible strip and the sr-only announcer below it can never
+ * drift apart (#1431). Empty string when there is nothing to say — the
+ * announcer stays mounted and silent.
  */
 const annotationWarning = $derived(
   annotationCount === 0
     ? ""
     : annotationCount === 1
-      ? "This document's 1 annotation is kept where possible, but editing the source can detach it or move it onto different text."
-      : `This document's ${annotationCount} annotations are kept where possible, but editing the source can detach some of them or move them onto different text.`,
+      ? "This document's 1 annotation stays with its text. If you change or delete the text it covers, it is detached."
+      : `This document's ${annotationCount} annotations stay with their text. Any whose text you change or delete are detached.`,
 );
 
 // Fetch the literal markdown source on mount / when the target doc changes.

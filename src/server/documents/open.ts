@@ -135,7 +135,8 @@ import {
   openDocument,
   openDocumentWhenReady,
 } from "./registry.js";
-import { reanchorAnnotations, wireFileWatcher } from "./watcher.js";
+import { remapEnvelopeWins } from "./reload-remap.js";
+import { wireFileWatcher } from "./watcher.js";
 
 /**
  * The flat JSON shape a successful open puts on the MCP and HTTP wire.
@@ -386,30 +387,36 @@ export async function openFromDisk(
       const doc = getDocument(existingId) ?? getOrCreateDocument(existingId);
       const reloadBuffer =
         format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-      await clearAndReload(existingId, doc, resolved, format, existing, reloadBuffer, {
-        readOnly,
-      });
+      const remap = await clearAndReload(
+        existingId,
+        doc,
+        resolved,
+        format,
+        existing,
+        reloadBuffer,
+        { readOnly },
+      );
       await openDocumentWhenReady(
         { id: existingId, filePath: resolved, format, readOnly, source: "file" },
         async () => {
-          await wireAnnotationStore(existingId, doc, resolved);
-          // Since #1813 the envelope survives a force-open, so `loadAndMerge`
-          // above has just re-inserted every record VERBATIM: its pre-reload
-          // flat range, and a relRange anchored into the XmlFragment
-          // `clearAndReload` destroyed. Disk content differing from the
+          // `clearAndReload` kept the annotation map and remapped every record
+          // onto the new content (#2269). Disk content differing from the
           // in-memory doc is the whole REASON to force, so "the text moved" is
-          // this path's normal case, not its edge one — without this pass the
-          // surviving notes come back pinned to stale offsets and the durable
-          // observer writes that state back. Re-anchor before returning.
-          reanchorAnnotations(doc, resolved);
+          // this path's normal case. The merge persists the remapped map; where
+          // the envelope's copy of a record wins instead, that copy holds
+          // pre-reload coordinates and `afterMerge` remaps it too.
+          await wireAnnotationStore(existingId, doc, resolved, {
+            afterMerge: (ids) => remapEnvelopeWins(doc, remap, ids),
+          });
         },
       );
-      // Settings > Replay tutorial force-opens welcome.md. The clear above took
-      // every seed the envelope did not hold (seeds are `withInternal`, never
-      // durable) and nothing else re-creates them, so replay here too, past
-      // any tombstone the user's deletions left (#1696). A re-created
-      // tombstoned seed is persisted, or the envelope's tombstone deletes it
-      // again on the first reopen that has no session file to carry it.
+      // Settings > Replay tutorial force-opens welcome.md. The reload keeps
+      // every seed still in the map (and the merge above then persists it, a
+      // map-only record), but a seed the user DELETED is gone and nothing else
+      // re-creates it, so replay here, past any tombstone those deletions left
+      // (#1696). A re-created tombstoned seed is persisted, or the envelope's
+      // tombstone deletes it again on the first reopen that has no session file
+      // to carry it.
       if (
         isWelcomeDoc(resolved) &&
         injectTutorialAnnotations(doc, resolved, { replay: true }) > 0

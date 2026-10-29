@@ -1,9 +1,10 @@
 /**
  * #1813 / decision C: force-open (`tandem_open force: true`) and the source-view
- * commit clear only the IN-MEMORY annotation map. The durable envelope
- * `<annotations-dir>/<docHash>.json` survives — `clearAndReload` flushes it
- * rather than unlinking it — and the caller's `wireAnnotationStore` ->
- * `loadAndMerge` brings every record back, re-anchored by `refreshRange`.
+ * commit keep the durable envelope `<annotations-dir>/<docHash>.json` —
+ * `clearAndReload` flushes it rather than unlinking it — and the caller's
+ * `wireAnnotationStore` -> `loadAndMerge` merges it back. Since #2269 the
+ * in-memory map is not cleared either: every record is remapped onto the new
+ * content inside the reload's own transaction.
  *
  * ISOLATION IS THE FIRST LINE OF THIS FILE. These specs write real envelopes
  * and, before the fix, unlinked them. `useTmpAnnotationsEnvWithFlag` gives each
@@ -231,11 +232,9 @@ describe("force-open keeps the durable annotation envelope (#1813)", () => {
     expect(text.slice(ann?.range.from ?? 0, ann?.range.to ?? 0)).toBe("brown fox");
   });
 
-  it("a record whose span is gone comes back degraded, with relRange stripped", async () => {
+  it("a record whose span is gone comes back degraded, collapsed at the edit, relRange stripped", async () => {
     const { filePath, id, doc } = await openDoc();
     const annId = seed(doc, "brown fox", "comment", "claude");
-    const stored = doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).get(annId);
-    const storedRange = { ...(stored?.range as { from: number; to: number }) };
     await settleEnvelope(filePath);
 
     await fs.writeFile(filePath, "# Title\n\nNothing like the original.\n", "utf-8");
@@ -246,9 +245,13 @@ describe("force-open keeps the durable annotation envelope (#1813)", () => {
     expect(ann).toBeDefined();
     const refreshed = refreshRange(ann as Annotation, live);
     expect(refreshed.kind).toBe("degraded");
-    // The flat range survives for relocation and undo...
-    expect(refreshed.annotation.range).toEqual(storedRange);
-    // ...but a dead RelativePosition is stripped, never preserved: a stale one
+    // #2269: the reload remap collapses a record whose text the edit rewrote to
+    // a point at the start of the changed region — it paints nothing rather
+    // than highlighting whatever now sits at its old offsets — and its snapshot
+    // is what keeps the lazy-attach gate answering `degraded`.
+    expect(refreshed.annotation.range.from).toBe(refreshed.annotation.range.to);
+    expect(refreshed.annotation.textSnapshot).toBe("brown fox");
+    // A dead RelativePosition is stripped, never preserved: a stale one
     // resolving to null blocks the lazy re-attachment recovery path. Asserting
     // "relRange intact" here would drive an implementer the wrong way.
     expect(refreshed.annotation.relRange).toBeUndefined();

@@ -377,6 +377,24 @@ describe("runLoop — mid-turn doc swap (#2039)", () => {
     expect(r.metrics.toolCalls).toBe(0);
   });
 
+  it("forwards isDocCurrent into each tool dispatch (#2070)", async () => {
+    // True at the turn boundary, false from the first dispatch on: only the
+    // per-dispatch forward can turn the write into a refusal. A real reload
+    // cannot land here (nothing awaits inside the tool-call loop), which is
+    // why the arm is defence in depth and this is the only way to reach it.
+    let calls = 0;
+    stubFetch(() =>
+      v1ToolCallArgs("comment_on_quote", { quoted_text: "body text here", comment: "x" }),
+    );
+    const opts = base({ isDocCurrent: () => calls++ === 0, maxToolCalls: 1, maxTurns: 9 });
+    const r = await runLoop(opts);
+
+    expect(r.metrics.toolCalls).toBe(1);
+    const outcome = r.steps[0]?.toolCalls[0]?.outcome;
+    expect(outcome).toMatchObject({ kind: "comment", ok: false, errorCode: "DOCUMENT_CHANGED" });
+    expect(getAnnotationsMap(opts.ydoc).size, "nothing written").toBe(0);
+  });
+
   it("runLocalModelTurn forwards isDocCurrent to the loop (production entry point)", async () => {
     // `runLocalModelTurn` hand-enumerates every forwarded field, so omitting
     // this one is silent — the option is optional and the direct-runLoop cases
