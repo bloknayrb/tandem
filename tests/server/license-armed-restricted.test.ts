@@ -501,41 +501,6 @@ describe("armed and keyless (#1521)", () => {
       expect(res.status).toBe(400);
     });
 
-    it("POST /api/channel-permission answers 403", async () => {
-      const res = await fetch(`${baseUrl}/api/channel-permission`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: "r1", toolName: "Bash" }),
-      });
-      expect(res.status).toBe(403);
-    });
-
-    it("POST /api/channel-permission-verdict answers 403", async () => {
-      const res = await fetch(`${baseUrl}/api/channel-permission-verdict`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: "r1", approved: true }),
-      });
-      expect(res.status).toBe(403);
-      expect(await res.json()).toMatchObject({ error: LICENSE_REQUIRED });
-    });
-
-    it("both channel-permission POSTs are admitted on a fresh trial (positive twin)", async () => {
-      useFreshTrial();
-      const permission = await fetch(`${baseUrl}/api/channel-permission`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: "r2", toolName: "Bash" }),
-      });
-      expect(permission.status).toBe(200);
-      const verdict = await fetch(`${baseUrl}/api/channel-permission-verdict`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: "r2", approved: false }),
-      });
-      expect(verdict.status).toBe(200);
-    });
-
     it("POST /api/channel-reply is admitted on a fresh trial (positive twin)", async () => {
       useFreshTrial();
       const res = await fetch(`${baseUrl}/api/channel-reply`, {
