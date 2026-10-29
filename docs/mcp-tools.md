@@ -1197,7 +1197,7 @@ Send a chat message to the user via the ChatPanel sidebar. Session-scoped (lives
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `text` | string | yes | Message text to send |
-| `replyTo` | string | no | `id` of the user message being answered (a channel event's `message_id`). An unread user message named here is also marked read, and a message answered this way is not returned by `tandem_checkInbox` again, to any reader — nor is any earlier message of the same batch that some reader has already acknowledged (see the cursor notes under `tandem_checkInbox`). |
+| `replyTo` | string | no | `id` of the user message being answered (a channel event's `message_id`). An unread user message named here is also marked read, and a message answered this way is not returned by `tandem_checkInbox` again, to any reader — nor is any earlier message of the same batch that some reader provably received (it passed back the cursor from the response that handed the message over; a cursor-less return does not count) (see the cursor notes under `tandem_checkInbox`). |
 | `inProgress` | boolean | no | `true` when the reply acknowledges work about to start. The editor shows "Your AI is working on it" under the user's message until a later reply without it arrives. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 

@@ -1539,19 +1539,37 @@ function receivedChat(chatMap: Y.Map<unknown>): ReceivedChat[] {
  * target's own hand-out (seq at or below its seq; seqs are assigned oldest
  * first within a poll), no newer than it, that some model provably received
  * (`receivedChat`). Any other earlier message stays owed: if the answering
- * session never polls again it is re-delivered — a duplicate, never a loss. A target with no registry entry (pushed, never polled) answers
- * only itself.
+ * session never polls again it is re-delivered — a duplicate, never a loss. A
+ * target with no registry entry (pushed, never polled) answers only itself.
+ *
+ * Takes every target at once: a received message is answered when SOME target
+ * is at or above it on both seq and timestamp, so one sweep in descending seq
+ * order, tracking the newest timestamp among the targets passed so far, answers
+ * all of them in O((targets + received) log) rather than targets × received.
  */
 function answeredBy(
   chatMap: Y.Map<unknown>,
-  target: string,
+  targets: ReadonlySet<string>,
   received: readonly ReceivedChat[],
-): string[] {
-  const entry = deliveryRegistry.lookup("c", target, 0);
-  const ts = (chatMap.get(target) as Partial<ChatMessage> | undefined)?.timestamp;
-  if (!entry || typeof ts !== "number") return [target];
-  const batch = received.filter((h) => h.seq <= entry.seq && h.timestamp <= ts).map((h) => h.key);
-  return [target, ...batch];
+): Set<string> {
+  const answered = new Set(targets);
+  const bounds: Array<{ seq: number; timestamp: number }> = [];
+  for (const target of targets) {
+    const entry = deliveryRegistry.lookup("c", target, 0);
+    const ts = (chatMap.get(target) as Partial<ChatMessage> | undefined)?.timestamp;
+    if (entry && typeof ts === "number") bounds.push({ seq: entry.seq, timestamp: ts });
+  }
+  if (bounds.length === 0) return answered;
+  bounds.sort((a, b) => b.seq - a.seq);
+  let next = 0;
+  let newest = Number.NEGATIVE_INFINITY;
+  for (const h of [...received].sort((a, b) => b.seq - a.seq)) {
+    for (let bound = bounds[next]; bound && bound.seq >= h.seq; bound = bounds[++next]) {
+      newest = Math.max(newest, bound.timestamp);
+    }
+    if (h.timestamp <= newest) answered.add(h.key);
+  }
+  return answered;
 }
 
 /**
@@ -1570,13 +1588,8 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
       targets.add(msg.replyTo);
     }
   });
-  const answered = new Set<string>();
-  if (targets.size === 0) return answered;
-  const received = receivedChat(chatMap);
-  for (const target of targets) {
-    for (const key of answeredBy(chatMap, target, received)) answered.add(key);
-  }
-  return answered;
+  if (targets.size === 0) return targets;
+  return answeredBy(chatMap, targets, receivedChat(chatMap));
 }
 
 /**
