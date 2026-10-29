@@ -220,6 +220,80 @@ test("the annotate composer never exceeds its placement reserve", async ({ page 
   expect(composerBox!.height).toBeLessThanOrEqual(SELECTION_POPUP_HEIGHT_RESERVE);
 });
 
+/**
+ * A sibling panel scrolling must not dismiss the selection popup; the editor
+ * scrolling still must.
+ *
+ * The scroll-dismiss guard used to fire on ANY scroll outside the popup. The
+ * chat panel smooth-scrolls itself (and, through `scrollIntoView`, the right
+ * rail) whenever a message lands or its pickup row changes, so an AI reply
+ * arriving while text was selected unmounted the popup and left the selection
+ * painted with nothing attached — and nothing re-arms the popup until the
+ * selection changes. That was the intermittent `openAnnotatePopup` timeout in
+ * "the annotate composer never exceeds its placement reserve": earlier specs
+ * leave unanswered chat messages behind, and the panel was still scrolling when
+ * the dwell mounted the popup (measured: mounted, then unmounted 4ms later by a
+ * scroll on `.rail-full-right`).
+ *
+ * Synthetic events, like the a8-fidelity draft test: the guard is a
+ * capture-phase listener on `document`, so a non-bubbling dispatch reaches it
+ * exactly as a real inner scroll does, without depending on the panel having
+ * enough content to overflow.
+ */
+test("a chat-panel scroll keeps the selection popup; an editor scroll dismisses it", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  await editor.click();
+  await selectTextStable(editor.locator("p").first());
+  const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
+  await expect(annotateBtn).toBeVisible({ timeout: 3_000 });
+
+  // Wait out the entrance before dispatching. Every new `selectionPosition`
+  // (the width clamp can move `left` while the popup unrolls) re-runs the
+  // listener's effect, which disarms the guard for one frame — a dispatch in
+  // that frame is ignored by the old code too, and this half would pass
+  // without testing anything. A box unchanged across two frames means the
+  // position has settled and the guard is armed.
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect
+    .poll(
+      () =>
+        toolbar.evaluate(async (el) => {
+          const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+          const a = el.getBoundingClientRect();
+          await frame();
+          await frame();
+          const b = el.getBoundingClientRect();
+          return a.left === b.left && a.top === b.top && a.width === b.width;
+        }),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+
+  await page.locator("[data-testid='chat-panel']").evaluate((el) => {
+    el.dispatchEvent(new Event("scroll"));
+  });
+  // Not a bare isVisible(): the dismiss is synchronous, but let a frame pass so
+  // a regression has the chance to unmount before this reads.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  await expect(annotateBtn, "a chat-panel scroll dismissed the selection popup").toBeVisible();
+
+  // The other half: scrolling the editor's real scroller — an ancestor of
+  // `.tiptap`, not `.tiptap` itself — moves the selection out from under a
+  // fixed-position popup, so that one must still dismiss.
+  await page.locator("[data-testid='editor-scroll-container']").evaluate((el) => {
+    el.dispatchEvent(new Event("scroll"));
+  });
+  await expect(annotateBtn).toHaveCount(0, { timeout: 3_000 });
+});
+
 test("floating selection toolbar exposes first-pass formatting actions", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
