@@ -166,3 +166,155 @@ describe("SettingsClaudeCodeTab — AI-off hint (#1521)", () => {
     unmount();
   });
 });
+
+/**
+ * #1822 item 4a: the launcher home-confines the saved workingDirectory and
+ * falls back to home when it cannot use it. The tab used to keep showing the
+ * saved folder as the working directory with no hint.
+ *
+ * The warning is keyed on the saved value, not on a bare flag: the held
+ * version read "the last spawn ignored it" and brought the warning back on a
+ * remount after a valid folder had been saved.
+ */
+describe("SettingsClaudeCodeTab — saved working directory not honoured (#1822)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const OUTSIDE = "D:\\code";
+
+  function routeFetch(opts: { saved: string | null; status: Record<string, unknown> }) {
+    let saved = opts.saved;
+    const fetchMock = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
+      if (url.includes("/api/launcher/status")) {
+        return { ok: true, json: async () => opts.status };
+      }
+      if (url.includes("/api/launcher/working-directory") && init?.method === "POST") {
+        const requested = (JSON.parse(init.body ?? "{}") as { workingDirectory?: string | null })
+          .workingDirectory;
+        saved = requested ?? null;
+        return { ok: true, json: async () => ({ ok: true, workingDirectory: saved }) };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          integrations: [
+            { kind: "claude-code", ...(saved !== null ? { workingDirectory: saved } : {}) },
+          ],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const statusCalled = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.some(([u]) => String(u).includes("/api/launcher/status"));
+
+  /** An absence is only evidence once the status body has been read AND
+   * applied: the call being made is not enough (one `tick()` after it left the
+   * stale-verdict case green with the comparison deleted). Drain the
+   * fetch → json → state chain with macrotask turns, then let Svelte flush. */
+  async function settle(fetchMock: ReturnType<typeof vi.fn>): Promise<void> {
+    await waitFor(() => expect(statusCalled(fetchMock)).toBe(true));
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    await tick();
+  }
+
+  it.each([
+    ["outside-home", "is not inside your home directory"],
+    ["unresolvable", "may have been moved or deleted"],
+  ] as const)(
+    "warns with the %s copy when the last launch refused the saved folder",
+    async (reason, phrase) => {
+      routeFetch({
+        saved: OUTSIDE,
+        status: {
+          available: true,
+          running: true,
+          workingDirectoryIgnored: { reason, workingDirectory: OUTSIDE },
+        },
+      });
+      const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
+      await waitFor(() => {
+        expect(byTestId(container, "settings-modal-working-directory-ignored")).toBeTruthy();
+      });
+      const text =
+        byTestId(container, "settings-modal-working-directory-ignored")?.textContent ?? "";
+      expect(text).toContain(phrase);
+      // Fixed string: the path never reaches the banner.
+      expect(text).not.toContain(OUTSIDE);
+    },
+  );
+
+  it("stays silent when the saved folder was honoured", async () => {
+    const fetchMock = routeFetch({
+      saved: "/home/me/project",
+      status: { available: true, running: true },
+    });
+    const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
+    await settle(fetchMock);
+    expect(byTestId(container, "settings-modal-working-directory-ignored")).toBeNull();
+  });
+
+  it("stays silent on a remount after a valid folder was saved (the stale verdict)", async () => {
+    // The last spawn refused OUTSIDE; the user has since saved a valid folder,
+    // and no spawn has run since, so the status still carries the old verdict.
+    const fetchMock = routeFetch({
+      saved: "/home/me/project",
+      status: {
+        available: true,
+        running: true,
+        workingDirectoryIgnored: { reason: "outside-home", workingDirectory: OUTSIDE },
+      },
+    });
+    const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
+    await settle(fetchMock);
+    expect(byTestId(container, "settings-modal-working-directory-ignored")).toBeNull();
+  });
+
+  it("ignores a malformed field (an older or foreign server)", async () => {
+    const fetchMock = routeFetch({
+      saved: OUTSIDE,
+      status: { available: true, running: true, workingDirectoryIgnored: true },
+    });
+    const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
+    await settle(fetchMock);
+    expect(byTestId(container, "settings-modal-working-directory-ignored")).toBeNull();
+  });
+
+  it.each([
+    ["saving a folder the route accepted", "save"],
+    ["resetting to default", "reset"],
+  ] as const)("clears the warning after %s", async (_label, action) => {
+    routeFetch({
+      saved: OUTSIDE,
+      status: {
+        available: true,
+        running: true,
+        workingDirectoryIgnored: { reason: "outside-home", workingDirectory: OUTSIDE },
+      },
+    });
+    const props = makeProps();
+    const { container } = render(SettingsClaudeCodeTab, { props });
+    await waitFor(() => {
+      expect(byTestId(container, "settings-modal-working-directory-ignored")).toBeTruthy();
+    });
+    if (action === "save") {
+      const input = byTestId(
+        container,
+        "settings-modal-working-directory-input",
+      ) as HTMLInputElement;
+      input.value = "/home/me/project";
+      input.closest("form")?.requestSubmit();
+    } else {
+      byTestId(container, "settings-modal-working-directory-reset")?.click();
+    }
+    await waitFor(() => {
+      expect(props.notify).toHaveBeenCalledWith("info", "Working directory saved.");
+    });
+    await tick();
+    expect(byTestId(container, "settings-modal-working-directory-ignored")).toBeNull();
+  });
+});

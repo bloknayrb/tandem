@@ -135,16 +135,6 @@ const ROUTE_GATES: RouteGate[] = [
     why: "Claude's chat write via the channel shim, an AI surface; `appendClaudeChatMessage` refuses and the handler answers before `markUserChatRead`",
   },
   {
-    constant: "API_CHANNEL_PERMISSION",
-    gate: "refused",
-    why: "relays Claude Code's tool-approval prompt, an AI surface",
-  },
-  {
-    constant: "API_CHANNEL_PERMISSION_VERDICT",
-    gate: "refused",
-    why: "the verdict half of the same AI approval relay",
-  },
-  {
     constant: "API_CHAT",
     gate: "open",
     why: "the user clearing their own chat history; not an AI action",

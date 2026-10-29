@@ -357,7 +357,6 @@ points**, each of which asks `aiRefusal()`:
 | MCP over HTTP | `POST /mcp` (top of the handler, above the `isInit` branch) and `GET /mcp` (before `dispatchToSession`) in `src/server/mcp/server.ts` | `initialize`: HTTP 200 + JSON-RPC error `-32003` with `data: { error, kind, purchaseUrl? }`, no session created. A request on a live session gets the same error and the session is closed. A bare notification: 202, dropped. `GET`: 403 with the envelope. `DELETE` is admitted, so teardown works. |
 | Stdio server mode (`TANDEM_TRANSPORT=stdio`, env-only) | `startMcpServerStdio` | Refused at start: every request is answered with the same error. Not re-checked mid-session. |
 | Claude's chat writes | `appendClaudeChatMessage()` in `src/server/mcp/awareness.ts` | Returns `{ ok: false, refusal }`; `tandem_reply` answers with the error, `POST /api/channel-reply` answers 403 before stamping anything read. |
-| The approval relay | `POST /api/channel-permission` and `POST /api/channel-permission-verdict` | 403 with the envelope. |
 | Push / wake fan-out | `pushEvent` in `src/server/events/queue.ts` | A refused event is not forwarded and **not recorded** as pushed or as an unanswered ask. External subscribers that supplied `onRevoke` are cut off. |
 | SSE `/api/events` | `sseHandler` | 403 before `writeHead`, so `Last-Event-ID` replays nothing; a live stream is ended by its revoke hook. |
 | WS `/api/wake` | `onUpgrade`, after the pure `verifyWakeUpgrade` | 403 with a JSON body; a live socket is closed `4403 LICENSE_REQUIRED`. |
@@ -401,8 +400,8 @@ logs one stderr line. The bridge's own replayed `initialize` draws the hint too,
 before latching: that host's session never failed.) The shared SSE consumer treats a
 `LICENSE_REQUIRED` 403 as a refusal, not an outage — no retry ladder, no `channel-error` report — and
 retries every 5 minutes; the plugin monitor prints the refusal once on stdout. The channel shim sends
-the model one channel notification (`event_type: license_refused`) per refused stretch, and logs a
-refused permission relay as a licence refusal rather than a plain 403. `/health`'s `delivery.state`
+the model one channel notification (`event_type: license_refused`) per refused stretch. (Its
+permission relay, which also logged a refusal, was deleted in #1885.) `/health`'s `delivery.state`
 reads `license-refused` while a forward is outstanding and Tandem refuses the AI, instead of
 `consumer-detached` or a climbing `awaiting-poll`. Doctor's session reading defers to its licence row
 while AI is refused, because a refused client has no session and a surviving one is closed at its

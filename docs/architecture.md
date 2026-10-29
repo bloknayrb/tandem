@@ -404,8 +404,14 @@ Normal launch:
   user opens app  ──▶  setup(): show_main_window() as the FIRST statement
                      ──▶  LAUNCHER_DEFERRED stays false
                      ──▶  sidecar spawns without TANDEM_DEFER_LAUNCHER
+                     ──▶  Node: resolveInitialLauncherReason()
+                            = "server-starting"  [HTTP mode, #1823]
                      ──▶  supervisor starts inline, as before
+                            (status reads the supervisor; a failed
+                             creation reads "spawn-failed")
 ```
+
+`resolveInitialLauncherReason(env, transport)` answers `stdio-mode` only for a stdio (or unknown) transport, which never starts a launcher. In HTTP mode the boot window reads `server-starting`, which the UI treats as transient (`booting`, no connect chip) and `POST /api/launcher/start` does not promote (ADR-046 §7's amendment).
 
 Three details are load-bearing:
 
@@ -465,6 +471,7 @@ While any standby is set, the supervisor holds a **standby watch** — the same 
 - **`startAfterSetup`** replaces `refreshConfigured` as the wizard Apply's hook (`onClaudeCodeApplied`, wired in `mcp/server.ts`). Under the op lock it refreshes `configured` and decides: no plan → `not-configured`; shutdown or the user's Off → `held`; running or a restart under way → `running` (an Apply never relaunches a working Claude); start mode not automatic, or any standby → `held` (on-click holds boot, and a first Apply is boot for a Claude that has never run); a tripped breaker or `stop-failed` → `held` (a diagnosis for the user, which an Apply does not clear the way their Start does); the licence refuses → `refused`, recorded like the boot path's refusal so `resumeAfterLicence` starts it once activated; another AI attached → `other-ai` (Claude Desktop excepted, #2199); no startable Claude Code program → `cli-unusable` (#2199). Otherwise `starting`, resolved to the route before the spawn, which then runs `respawn` inside the same locked body. The route waits at most `TANDEM_CLAUDE_DECISION_MS` (2 s) and answers `unknown` past that; the decision rides the apply response as `tandemClaude`, the done screen's first view, which readiness then refines.
 - **The greeting** is the one supervisor turn that asks for unasked work (`SUPERVISOR_GREETING_PROMPT`, still carrying `SUPERVISOR_NO_UNASKED_WORK_CLAUSE`). `first-run-greeting.json` (`launcher/greeting.ts`) holds `owed`/`done`: armed at HTTP boot on a first install (`checkVersionChange` → `first-install`) and, for everyone, on the first run of a v1.0 release (a prerelease does not count). The supervisor reads it synchronously at every spawn; the greeting replaces the bootstrap on a fresh spawn and the wake or sign-in re-check on a resumed one. **Never in Solo** (Bryan, 2026-10-14): while `readModeState()` is not `tandem` — Solo, or indeterminate, failing closed as the Solo hold does — the spawn sends its ordinary first turn and the greeting stays owed for the first spawn in Tandem mode.
 - **Done means it reached the chat**: `onTandemReply` (`mcp/awareness.ts`, wired in `index.ts`) tells the supervisor a `tandem_reply` landed while the greeting was pending, with the caller's `X-Claude-Session-Id`. A reply from a session the supervisor did not spawn is not the greeting (ids compare case-folded, as the MCP registry compares them); one with no id counts, because the header is optional. The channel shim's `tandem_reply` (`/api/channel-reply`, with the shim's forwarded session id) notifies too: the shim ships in the plugin, so Tandem's own Claude may hold it. The local-model collaborator, which also appends Claude chat, never notifies: it is not Tandem's Claude. **"Once" does not hang on seeing the reply**: the greeting turn's first `result` spends it (`done` on disk, never again in this process) whether or not a chat reply was seen, because a hello posted in a comment thread or a reply whose session id cannot be matched would otherwise be re-sent on every later spawn. Only an errored turn (an `is_error` result or an `error_*` subtype) — the sign-in refusal among them — leaves it owed for the start after the fix. A child that **crashes** before the turn ends ends greeting for the process (the turn may be what crashed it, the same reasoning as the crash carry), and the next launch tries again; a stop the supervisor asked for — the note's own Restart — may try again at once. An in-process latch stops a failed marker write from greeting twice within one process; the next launch, finding the marker still `owed`, greets again — bounded by a write failing in the directory the arm just wrote to.
+- **The hello is announced as "Tandem's Claude is ready", not "Claude replied" (#2227; Bryan, 2026-10-28).** It answers nothing the user sent, so its OS notification takes the fixed title `GREETING_NOTIFICATION_TITLE` (chime, flash and count unchanged; never naming a document). The client keys on the chat row's `greeting: true` and never on the text. Only the server sets it: the supervisor registers a classifier with `mcp/greeting-reply.ts` (`setGreetingReplyClassifier`, wired in `index.ts`), and `tandem_reply` / `/api/channel-reply` ask it synchronously right before they append — in the same stretch as the notify that ends `pending`, so at most the first reply is tagged. It answers true only while this process's greeting turn is `pending`, for a reply with the child's session id or none (the same rule as "done", because the direct-HTTP entry sends none), with no `replyTo` and no `inProgress`, when no user chat was unread as the turn was written and no user message has arrived since (`snapshotUserChat`, compared by id). A real answer therefore still reads "Claude replied". In a mixed batch the hello is left out of the count, name and preview. The tag rides the existing `withMcp` append; it adds no write, no `appendClaudeChatMessage` caller and no subscriber.
 - **`greetingLate`** (loopback-only, both status arms, so a sign-in stop still shows it) is set when the greeting turn ended unanswered or has been pending past `GREETING_REPLY_WINDOW_MS`, and never while a standby is set (Off or idle is the user's choice, not something to fix). A later reply from the child still clears it. The chat panel's note keys on it alone, never on the chat map.
 
 ### Claude Code for a Claude Desktop setup (#2199)
@@ -560,20 +567,22 @@ only a reply on a thread Claude started does.
 
 ### Channel Shim Architecture
 
-The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claude Code as a stdio subprocess. It uses the low-level MCP `Server` class (not `McpServer`) as required by the Channels API. It declares `claude/channel` and `claude/channel/permission` capabilities.
+The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claude Code as a stdio subprocess. It uses the low-level MCP `Server` class (not `McpServer`) as required by the Channels API. It declares the `claude/channel` capability only; `claude/channel/permission` was withdrawn in #1885 (see Permission Relay below).
 
 Components:
-- **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
+- **`index.ts`** — the standalone binary entry; it installs the crash handlers and calls `runChannel` from `run.ts`
 - **`event-bridge.ts`** — a thin adapter over `src/shared/sse-consumer.ts`, which owns the SSE client and its reconnection policy (exponential 2/4/8/16s, capped at 30s). Awareness posts are debounced here; there is **no** selection debouncing on this path at all — selections are buffered server-side in `events/queue.ts` and there is no selection event type on the wire.
-- **`run.ts`** — the runtime the CLI imports; `tandem_reply` HTTP calls and outbound timeouts
+- **`run.ts`** — the runtime the CLI imports: MCP server setup and capability declaration, the `tandem_reply` tool and its HTTP call, outbound timeouts
 
 The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously. This is not a split of the tool surface: every Tandem tool is registered on the HTTP server, `tandem_reply` included. The shim exists to carry channel push, and it re-exposes `tandem_reply` so a reply can be sent on the same transport that delivered the event.
 
-### Permission Relay
+### Permission Relay (withdrawn, #1885)
 
-When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server.
+The shim used to declare `claude/channel/permission`, which tells Claude Code to forward each tool-approval prompt to it as a `notifications/claude/channel/permission_request` notification. The shim posted the prompt to `POST /api/channel-permission`, and the server held it in a map that `GET /api/channel-permission` served.
 
-**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The capability was declared ahead of an implementation that never landed. `docs/mcp-tools.md` used to describe it as shipped API; #1794 corrected that, and the approval prompt's `input_preview` payload is neither sent by the shim nor stored, served or logged by the server (the served `description` summary line is what #1884 still tracks). This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
+**There was never a return leg.** Nothing in `src/client/` displayed a prompt, a notification cannot be answered, and `POST /api/channel-permission-verdict` only deleted the pending entry. The capability had been declared ahead of an implementation that never landed (#1794 corrected the docs that described it as shipped). The stored `description` lines were readable by any local caller (#1884).
+
+As of #1885 the capability is withdrawn, the shim registers no notification handler (the MCP SDK drops an unhandled notification), and the three routes and their two `NON_LOOPBACK_ALLOWED` entries are deleted. The withdrawal also removed rationale (1) for keeping the channel canonical, which [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 had already voided. Re-declaring the capability is a security change; ADR-047's 2026-10-28 update states what it would need.
 
 ## Plugin Monitor
 
@@ -654,7 +663,6 @@ The plugin monitor and channel shim both bound their outbound HTTP calls so a ha
 | Awareness POST (`/api/channel-awareness`) | `AbortSignal.timeout` | 5s |
 | Error report (`/api/channel-error`) | `AbortSignal.timeout` | 3s |
 | Reply POST (`/api/channel-reply`) | `AbortSignal.timeout` | 5s |
-| Permission relay (`/api/channel-permission`) | `AbortSignal.timeout` | 5s |
 
 `tandem_reply` deliberately re-throws `AbortError` / `TimeoutError` while parsing the response body. If the server returns headers but never finishes JSON, Claude receives a structured `isError: true` response such as `/api/channel-reply timed out after 5000ms` instead of a fake-success "Non-JSON response" payload.
 
@@ -1048,7 +1056,13 @@ What it does **not** cover:
 - **Windows logoff / shutdown.** `WM_ENDSESSION` is handled inside the wndproc,
   so the flush is best-effort and likely truncated near `HungAppTimeout` (≈5 s).
 - **Forced termination** — Task Manager "End task", `kill -9`, power loss. On
-  Windows the job object (#987) still reaps the sidecar; there is no flush.
+  Windows the job object (#987) still reaps the sidecar; there is no flush. On
+  Linux the sidecar was started through `tandem-reaper --exec-with-pdeathsig`
+  (`src-tauri/src/sidecar_anchor.rs`, #1988), so the shell's death sends it
+  SIGTERM and it runs its own shutdown, flush included; its broken log pipes are
+  handled by `src/server/sidecar-pipe-guard.ts` so that shutdown can finish. On
+  macOS the sidecar survives until the next launch's `freePort` reclaims its
+  ports — an accepted gap whose bound is relaunch recovery.
 
 ### Auto-Updater
 
@@ -1191,7 +1205,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `session/` -- Session persistence to `<app-data>/sessions` (`SESSION_DIR`; see Session Persistence above for how `<app-data>` resolves per OS); `listSessionFilePaths()` for startup auto-restore. A corrupt session is quarantined to `<name>.json.corrupt.<ts>` (never unlinked) with a `session-corrupt` toast, and the pre-#1750 migration-loser record is tried once before falling back to disk (#1800).
 - `models/` -- Server-authoritative Models registry (`models.json`, #1123 M1a/M2). `store.ts` (atomic read/write, backup-on-malformed, canonical `serializeModelsFile`, referential-integrity on read AND write), `registry.ts` (process-singleton cache + content-hash ETag via `getModelsEtag`/`hashModelsFile` + optimistic-concurrency single-flight `persistModelsFileIfMatch`), `api-routes.ts` (`GET /api/models` loopback-full / LAN-allowlist-scrubbed with a scrubbed-file ETag; `POST /api/models` origin+loopback-gated `.strict()` If-Match write), `schema.ts` (Zod `.strict()` versioned wrapper). Read by the local-model resolver (`local-model/config-source.ts`).
 
-- `launcher/` -- The auto-launcher that starts and supervises a Claude Code session (#477 PR 4, #1266, #1268). `supervisor.ts` subscribes to the event queue in-process and writes wake turns directly to the child's stdin, because a channel notification never becomes a turn under the launcher's `-p --input-format stream-json` flags; it registers as an **`"external"`** subscriber so the Solo gate applies. Also holds the crash-loop breaker, the trip-time CLI probe that distinguishes "missing" from "unstartable", and `api-routes.ts` for the `/api/launcher/*` surface.
+- `launcher/` -- The auto-launcher that starts and supervises a Claude Code session (#477 PR 4, #1266, #1268). `supervisor.ts` subscribes to the event queue in-process and writes wake turns directly to the child's stdin, because a channel notification never becomes a turn under the launcher's `-p --input-format stream-json` flags; it registers as an **`"external"`** subscriber so the Solo gate applies. The child runs with `--permission-mode auto` and Tandem's read, annotate and chat tools pre-approved (`--allowedTools` built from `TANDEM_PREAPPROVED_TOOLS`, #2286; file-reaching and destructive tools stay with the classifier), because a supervised session has no approval surface ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §4). Also holds the crash-loop breaker, the trip-time CLI probe that distinguishes "missing" from "unstartable", and `api-routes.ts` for the `/api/launcher/*` surface.
 - `license/` -- The licensing gate, which **ships dark** (ADR-040, #1116). `license-state.ts` re-reads `trial.json` + `license.json` on every call (no cache) and owns `deactivateLicense` (#1943), `grace.ts` keeps the grace-period record `license-grace.json` for a licence that fails its check (#2231, imported by `license-state.ts` alone), `gate-flag.ts` reads the build define, and `ai-refusal.ts` is the one decision every AI admission point consults (#1521): the `/mcp` handshake, Claude's chat writes, push/wake, the launcher's spawn and the local-model loop. The editor is never refused.
 - `local-model/` -- The local-model collaborator loop (ADR-039, #1123), also **dark**. `ollama-client.ts` (loopback-only, validate-at-use), `tools.ts`, `loop.ts`, `prompts.ts`, `config.ts`, and `collaborator.ts` — the only server importer of the engine, whose `subscribe()` call is gated behind `BYO_MODELS_ENABLED`.
 - `annotations/` -- `lifecycle.ts` (`AnnotationLifecycle` -- the guarded write seam for annotation mutations, ADR-035; `mintAnnotation` stamps `author`/`audience` on Claude-created records), `projection.ts` (the `ChannelEligible` narrow), and the durable annotation store: atomic per-document JSON, the `store.lock` cross-process guard, tombstone ledgers, and GC.
@@ -1218,7 +1232,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 
 ### Channel Shim (`src/channel/`)
 
-- `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
+- `index.ts` -- Standalone binary entry spawned by Claude Code as a channel subprocess; it calls `runChannel` from `run.ts`, which builds the stdio MCP server: low-level `Server` class (not `McpServer`), the `claude/channel` capability only (`claude/channel/permission` was withdrawn in #1885), and the `tandem_reply` tool.
 - `event-bridge.ts` -- Thin adapter over `src/shared/sse-consumer.ts`: connects to `GET /api/events`, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back. The reconnection policy lives in the shared consumer (exponential 2/4/8/16s, capped at 30s), not here.
 - `run.ts` -- The runtime the CLI's `channel` branch imports; owns the `tandem_reply` HTTP calls and the outbound `fetchWithTimeout` usage.
 

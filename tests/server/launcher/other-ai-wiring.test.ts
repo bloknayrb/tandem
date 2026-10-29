@@ -41,11 +41,51 @@ describe("index.ts wires the one-time greeting (#2197)", () => {
     expect(call).toMatch(/greetingHeldBySolo: \(\) => readModeState\(\) !== "tandem",/);
   });
 
+  // #2227: both default to "never tag", so without this wiring every
+  // behavioural test still passes while production announces the hello as
+  // "Claude replied" again.
+  it("passes the greeting-reply classifier seam and the chat snapshot into createSupervisor", () => {
+    const call = (INDEX.match(/createSupervisor\(\{[\s\S]*?\}\);/g) ?? [])[0] ?? "";
+    expect(call).toMatch(/registerGreetingReplyClassifier: setGreetingReplyClassifier,/);
+    expect(call).toMatch(/userChatSnapshot: snapshotUserChat,/);
+    expect(INDEX).toMatch(
+      /import \{[^}]*\bsetGreetingReplyClassifier\b[^}]*\bsnapshotUserChat\b[^}]*\} from "\.\/mcp\/greeting-reply\.js";/,
+    );
+  });
+
   it("arms the greeting at boot from the version check, before the launcher starts", () => {
     const arm = INDEX.indexOf("await armFirstRunGreeting(resolveAppDataDir(), {");
     expect(arm).toBeGreaterThan(-1);
     expect(INDEX.slice(arm, arm + 200)).toMatch(/firstInstall: versionChange === "first-install"/);
     expect(arm).toBeLessThan(INDEX.indexOf("await startLauncherSupervisor();"));
+  });
+});
+
+describe("index.ts never moves the spawn cwd's confinement root (#1822)", () => {
+  // `homeOverride` REPLACES the home the saved workingDirectory is confined to.
+  // It is a test seam; a production caller passing it would silently move the
+  // boundary, and every behavioural test (which passes it) would stay green.
+  it("passes no homeOverride into the one createSupervisor call", () => {
+    const call = (INDEX.match(/createSupervisor\(\{[\s\S]*?\}\);/g) ?? [])[0] ?? "";
+    expect(call).not.toBe("");
+    expect(call).not.toMatch(/homeOverride/);
+  });
+
+  it("is the only createSupervisor caller under src/", () => {
+    const callers: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(ts|svelte)$/.test(entry.name)) {
+          if (/\bcreateSupervisor\(\{/.test(fs.readFileSync(full, "utf8"))) callers.push(full);
+        }
+      }
+    };
+    walk(path.join(import.meta.dirname, "../../../src"));
+    expect(
+      callers.map((f) => path.relative(path.join(import.meta.dirname, "../../.."), f)),
+    ).toEqual([path.join("src", "server", "index.ts")]);
   });
 });
 

@@ -165,6 +165,10 @@ function makeSupervisor(): Supervisor {
     // host has installed.
     resolveClaudeCommand: () => process.execPath,
     restartBackoffsMs: [0],
+    // The spawn cwd is home-confined (#1822 item 4a), and the fixture's cwd is
+    // a temp dir: inside home on Windows, outside it (`/tmp`) on ubuntu.
+    // Treating the temp root as home keeps the fixture meaning the same on both.
+    homeOverride: fs.realpathSync(os.tmpdir()),
     // Both fan-out seams faked: the defaults subscribe to the REAL queue, and
     // a supervisor left armed would leak a subscription into the next test.
     subscribeToEvents: () => () => {},

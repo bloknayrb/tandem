@@ -1296,7 +1296,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:45`), which is positive proof a preflight passed |
 | `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
 | `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce; relaunch, start-fresh and the deferred start answer 403 `LAUNCHER_UNLICENSED` (with the licence envelope) while Tandem is unlicensed |
-| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` and the two `channel-permission` POSTs answer 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
+| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` answers 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
 | `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express; refused 403 (JSON body) while unlicensed, and a live socket is closed `4403 LICENSE_REQUIRED` |
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
@@ -1554,46 +1554,9 @@ Channel shim reports connection errors.
 
 The shim gives this best-effort report a 3-second deadline.
 
-### Channel permission relay (experimental — no return leg)
+### Channel permission relay (withdrawn, #1885)
 
-**These three routes accept and store a permission request, and nothing more (#1794).** The shim forwards Claude Code's tool approval prompt, the server holds it, and the next permission request sweeps out anything older than 30 seconds: **nothing displays it and no verdict ever reaches Claude Code.** The editor has no permission UI (nothing in `src/client/` reads `pendingPermissions`); the shim registers `permission_request` as an MCP *notification*, which cannot be answered; and the verdict route only deletes the pending entry and echoes the verdict back to the browser that submitted it. See [docs/architecture.md](architecture.md) and ADR-047 §3. The request/response shapes below are accurate about the wire.
-
-**One asymmetry worth stating.** `description` — the tool-level summary line, "Run npm test" — is still sent, stored and served; `inputPreview`, which carries file bodies and command lines, is not: the shim no longer sends it, and the server discards it if anything else does. On `description` alone this moves exposure the *wrong* way: the stderr line that only the machine owner reads no longer carries it, while the served copy any local process can read (`authMiddleware` bypasses on loopback) still does. That is defensible for a summary line, and it is **not** a claim that prompt content is no longer exposed — see the register entry for #1884.
-
-#### POST /api/channel-permission
-
-The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged. A non-string `description` is stored as `""`.
-
-**Request:**
-```json
-{ "requestId": "req_1", "toolName": "tandem_edit", "description": "Edit paragraph 1" }
-```
-
-**Response:** `{ "ok": true }`
-
-The permission relay has a 5-second deadline; failures are logged, and the request is then dropped.
-
-#### GET /api/channel-permission
-
-Returns the pending requests. **No client polls this.** **Loopback only.** A non-loopback caller (decided by peer address, never `Host`) gets `403 { "error": "FORBIDDEN", "message": "Loopback only." }`, and the request evicts nothing (#1884). That refusal matters only under a non-loopback bind, which no release build has; any process on this machine can still read the pending entries.
-
-**Response:**
-```json
-{ "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
-```
-
-Stale requests (>30s) are evicted whenever either channel-permission route runs for an admitted caller — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
-
-#### POST /api/channel-permission-verdict
-
-Deletes the pending entry and echoes the verdict to its own caller. **The verdict goes nowhere else** — there is no store, no poll route and no SSE carrying it back to the shim.
-
-**Request:**
-```json
-{ "requestId": "req_1", "approved": true }
-```
-
-**Response:** `{ "ok": true, "requestId": "req_1", "behavior": "allow" }`
+`POST /api/channel-permission`, `GET /api/channel-permission` and `POST /api/channel-permission-verdict` were removed. They accepted and stored Claude Code's tool-approval prompts, but nothing could answer one: no verdict ever reached Claude Code. The stored prompts were readable by any local caller (#1884). The channel shim no longer declares the `claude/channel/permission` capability, so it no longer asks Claude Code to forward approval prompts; approve or deny them in Claude Code. An older shim that still declares the capability gets a 404 for each prompt it tries to forward, and the server stores nothing. See ADR-047's 2026-10-28 update.
 
 ### GET /api/notify-stream
 
@@ -1641,7 +1604,7 @@ CLI **2.1.157** began injecting `CLAUDE_CODE_SESSION_ID` and `CLAUDECODE=1` into
 **Decision: consume it as an opaque correlation tag, forwarded as an HTTP header.** Both stdio entry points Tandem ships are exactly such subprocesses — the channel shim (`src/channel/`) and the stdio proxy (`src/cli/mcp-stdio.ts`). `resolveClaudeSessionId()` in `src/shared/cli-runtime.ts` reads the id, but **only when `CLAUDECODE === "1"`** (so a value a user happened to export in their own shell is never forwarded), trims it, and applies a printable-ASCII length-bounded guard (header-injection / oversize defense). The id is then attached as the `X-Claude-Session-Id` header on outbound requests to the Tandem server:
 
 - `authFetch` (channel/monitor SSE path: awareness, mode, error-report POSTs) attaches it unconditionally.
-- The channel shim's `tandem_reply` and permission-relay POSTs attach it via `withClaudeSessionHeader`.
+- The channel shim's `tandem_reply` POST attaches it via `withClaudeSessionHeader` (the permission-relay POST that also did was deleted in #1885).
 - The stdio proxy attaches it to every forwarded JSON-RPC POST via the transport's `requestInit.headers`.
 
 This is deliberately a **read-only metadata header**, not a route schema change: server routes that don't read it ignore it, so no server-side change was required to start emitting the correlation data onto the wire. The header gives the server (and host logs) the raw material to disambiguate concurrent Claude sessions in the channel queue. Wiring the server to *act* on the header (e.g. tagging channel-queue entries or scoping inbox traffic per session) is deferred until a concrete multi-session disambiguation need lands — the value is captured at the boundary now so that follow-up doesn't require touching every call site again.
