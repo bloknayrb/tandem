@@ -26,13 +26,25 @@ import type { LauncherUnavailableReason } from "../../shared/launcher/contract.j
  *   distribution, which has neither a Settings toggle nor a presence trigger to
  *   recover with.
  *
+ * - Otherwise the reason is the transport's (#1823). HTTP mode reads
+ *   `server-starting` until `startLauncherSupervisor()` creates the supervisor
+ *   (the status route then reads the supervisor, never this) or fails
+ *   (`spawn-failed`). Stdio mode, and any other transport string, reads
+ *   `stdio-mode`: `index.ts` starts a launcher only under `=== "http"`, so
+ *   anything else really has none.
+ *
  * Both vars are compared against exactly `"1"`, matching every other
- * `TANDEM_*` switch in the codebase.
+ * `TANDEM_*` switch in the codebase. `transport` is required, not defaulted:
+ * a caller that forgot it would typecheck and silently read `stdio-mode`
+ * again, which is the bug this parameter fixes.
  */
-export function resolveInitialLauncherReason(env: NodeJS.ProcessEnv): LauncherUnavailableReason {
+export function resolveInitialLauncherReason(
+  env: NodeJS.ProcessEnv,
+  transport: string,
+): LauncherUnavailableReason {
   if (env.TANDEM_DISABLE_LAUNCHER === "1") return "disabled-by-env";
   if (env.TANDEM_DEFER_LAUNCHER === "1" && env.TANDEM_TAURI_SIDECAR === "1") {
     return "deferred-autostart";
   }
-  return "stdio-mode";
+  return transport === "http" ? "server-starting" : "stdio-mode";
 }

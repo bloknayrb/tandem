@@ -1006,6 +1006,31 @@ describe("parseAnnotationDoc — row-level tolerance (#1791)", () => {
     expect(result.skipped).toEqual({ annotations: 0, replies: 0 });
   });
 
+  it("drops a non-object row and an id-less row beside a good one, naming each <missing>", () => {
+    // A null or primitive row skips the legacy per-record normalization (there
+    // is nothing to clone) and is judged by the row filter like any other.
+    // Neither carries an id, so the drop line must still say WHICH row went —
+    // `<missing>` — rather than throwing on `null.id` or printing `undefined`.
+    // The id-less case used to be reached only incidentally, by a force-open
+    // spec that seeded `{ text: "test" }` into the map and let the reload's
+    // flush carry it into the envelope; #2269 rewrote that spec, so it is
+    // pinned here directly.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const idless = { ...baseAnnotation } as Record<string, unknown>;
+    delete idless.id;
+    const result = parseAnnotationDoc({
+      ...validDoc,
+      annotations: [baseAnnotation, null, 42, idless],
+    });
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.doc.annotations.map((a) => a.id)).toEqual(["ann_1_abc"]);
+    expect(result.skipped).toEqual({ annotations: 3, replies: 0 });
+    const dropLines = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("dropping unreadable annotation"),
+    );
+    expect(dropLines.map((args) => args[1])).toEqual(["<missing>", "<missing>", "<missing>"]);
+  });
+
   it("tolerates a rev-less row alongside a good one", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     // The pinned "missing rev => corrupt" contract above survives unchanged

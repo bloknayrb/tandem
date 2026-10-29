@@ -121,7 +121,7 @@ The hinted tools also carry `openWorldHint: false`. Everything else is unannotat
 
 `INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
 
-**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact.
+**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the reload remap in `src/server/documents/reload-remap.ts`, which carries annotations across a content-replacing reload) stays byte-exact.
 
 ## Coordinate System
 
@@ -1286,7 +1286,8 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `GET /api/diagnostics` | `tandem doctor` report + host info. | loopback-only by hand (403) |
 | `GET /api/notify-stream` | SSE stream of server notifications. | — |
 | `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. `POST /api/mode/release` no longer writes the mode key: it answers 409 `MODE_NOT_TANDEM` when the room does not read Tandem, and releases nothing (#1769). | origin + loopback |
-| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | activate: loopback; origin when present (the CLI sends none, #2205), plus a required JSON `license` field. Status: scrubbed for non-loopback |
+| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | activate: loopback; origin when present (the CLI sends none, #2205), plus a required JSON `license` field. Status: scrubbed for non-loopback (the grace period's dates and code survive the scrub, #2231) |
+| `POST /api/license/deactivate` | Remove this device's license and grace record (#1943). Local only: no seat release. Answers `{ removed, wasUnverifiable?, ...status }`, or 500 `LICENSE_REMOVE_FAILED`. | loopback; origin when present (the CLI sends none), plus a required JSON `confirm: true` |
 | `POST /api/open` | Open a file by absolute path. | **one layer** |
 | `POST /api/close` | Close a document by id. | **one layer** |
 | `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |
@@ -1306,7 +1307,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:45`), which is positive proof a preflight passed |
 | `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
 | `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce; relaunch, start-fresh and the deferred start answer 403 `LAUNCHER_UNLICENSED` (with the licence envelope) while Tandem is unlicensed |
-| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` and the two `channel-permission` POSTs answer 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
+| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` answers 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
 | `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express; refused 403 (JSON body) while unlicensed, and a live socket is closed `4403 LICENSE_REQUIRED` |
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
@@ -1564,46 +1565,9 @@ Channel shim reports connection errors.
 
 The shim gives this best-effort report a 3-second deadline.
 
-### Channel permission relay (experimental — no return leg)
+### Channel permission relay (withdrawn, #1885)
 
-**These three routes accept and store a permission request, and nothing more (#1794).** The shim forwards Claude Code's tool approval prompt, the server holds it, and the next permission request sweeps out anything older than 30 seconds: **nothing displays it and no verdict ever reaches Claude Code.** The editor has no permission UI (nothing in `src/client/` reads `pendingPermissions`); the shim registers `permission_request` as an MCP *notification*, which cannot be answered; and the verdict route only deletes the pending entry and echoes the verdict back to the browser that submitted it. See [docs/architecture.md](architecture.md) and ADR-047 §3. The request/response shapes below are accurate about the wire.
-
-**One asymmetry worth stating.** `description` — the tool-level summary line, "Run npm test" — is still sent, stored and served; `inputPreview`, which carries file bodies and command lines, is not: the shim no longer sends it, and the server discards it if anything else does. On `description` alone this moves exposure the *wrong* way: the stderr line that only the machine owner reads no longer carries it, while the served copy any local process can read (`authMiddleware` bypasses on loopback) still does. That is defensible for a summary line, and it is **not** a claim that prompt content is no longer exposed — see the register entry for #1884.
-
-#### POST /api/channel-permission
-
-The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged. A non-string `description` is stored as `""`.
-
-**Request:**
-```json
-{ "requestId": "req_1", "toolName": "tandem_edit", "description": "Edit paragraph 1" }
-```
-
-**Response:** `{ "ok": true }`
-
-The permission relay has a 5-second deadline; failures are logged, and the request is then dropped.
-
-#### GET /api/channel-permission
-
-Returns the pending requests. **No client polls this.** **Loopback only.** A non-loopback caller (decided by peer address, never `Host`) gets `403 { "error": "FORBIDDEN", "message": "Loopback only." }`, and the request evicts nothing (#1884). That refusal matters only under a non-loopback bind, which no release build has; any process on this machine can still read the pending entries.
-
-**Response:**
-```json
-{ "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
-```
-
-Stale requests (>30s) are evicted whenever either channel-permission route runs for an admitted caller — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
-
-#### POST /api/channel-permission-verdict
-
-Deletes the pending entry and echoes the verdict to its own caller. **The verdict goes nowhere else** — there is no store, no poll route and no SSE carrying it back to the shim.
-
-**Request:**
-```json
-{ "requestId": "req_1", "approved": true }
-```
-
-**Response:** `{ "ok": true, "requestId": "req_1", "behavior": "allow" }`
+`POST /api/channel-permission`, `GET /api/channel-permission` and `POST /api/channel-permission-verdict` were removed. They accepted and stored Claude Code's tool-approval prompts, but nothing could answer one: no verdict ever reached Claude Code. The stored prompts were readable by any local caller (#1884). The channel shim no longer declares the `claude/channel/permission` capability, so it no longer asks Claude Code to forward approval prompts; approve or deny them in Claude Code. An older shim that still declares the capability gets a 404 for each prompt it tries to forward, and the server stores nothing. See ADR-047's 2026-10-28 update.
 
 ### GET /api/notify-stream
 
@@ -1651,7 +1615,7 @@ CLI **2.1.157** began injecting `CLAUDE_CODE_SESSION_ID` and `CLAUDECODE=1` into
 **Decision: consume it as an opaque correlation tag, forwarded as an HTTP header.** Both stdio entry points Tandem ships are exactly such subprocesses — the channel shim (`src/channel/`) and the stdio proxy (`src/cli/mcp-stdio.ts`). `resolveClaudeSessionId()` in `src/shared/cli-runtime.ts` reads the id, but **only when `CLAUDECODE === "1"`** (so a value a user happened to export in their own shell is never forwarded), trims it, and applies a printable-ASCII length-bounded guard (header-injection / oversize defense). The id is then attached as the `X-Claude-Session-Id` header on outbound requests to the Tandem server:
 
 - `authFetch` (channel/monitor SSE path: awareness, mode, error-report POSTs) attaches it unconditionally.
-- The channel shim's `tandem_reply` and permission-relay POSTs attach it via `withClaudeSessionHeader`.
+- The channel shim's `tandem_reply` POST attaches it via `withClaudeSessionHeader` (the permission-relay POST that also did was deleted in #1885).
 - The stdio proxy attaches it to every forwarded JSON-RPC POST via the transport's `requestInit.headers`.
 
 This is deliberately a **read-only metadata header**, not a route schema change: server routes that don't read it ignore it, so no server-side change was required to start emitting the correlation data onto the wire. The header gives the server (and host logs) the raw material to disambiguate concurrent Claude sessions in the channel queue. Wiring the server to *act* on the header (e.g. tagging channel-queue entries or scoping inbox traffic per session) is deferred until a concrete multi-session disambiguation need lands — the value is captured at the boundary now so that follow-up doesn't require touching every call site again.

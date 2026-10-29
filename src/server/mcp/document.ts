@@ -1040,12 +1040,13 @@ export function registerDocumentTools(server: McpServer): void {
                   // `rejectHeadingOverlap` is deliberately omitted — this
                   // relocates an EXISTING annotation rather than creating one,
                   // and refusing would drop exactly the records the destroyed
-                  // element held. Precedent: the watcher's relocation anchor.
+                  // element held. Precedent: the reload remap
+                  // (`documents/reload-remap.ts`), which does the same.
                   // `allowEmpty` because point annotations are a real population
                   // (Word comment import emits them) and the remap preserves
                   // `to - from`, so it can never turn a real span into one.
-                  // No `surrogates: "ignore"` — Critical Rule 4 enumerates four
-                  // callers and this must not be a fifth.
+                  // No `surrogates: "ignore"` — Critical Rule 4 enumerates three
+                  // callers and this must not be a fourth.
                   const anchored = anchoredRange(r.doc, next.from, next.to, undefined, {
                     allowEmpty: true,
                   });

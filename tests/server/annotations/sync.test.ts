@@ -982,6 +982,125 @@ describe("loadAndMerge", () => {
 });
 
 // ---------------------------------------------------------------------------
+// loadAndMerge — afterMerge (#2269)
+// ---------------------------------------------------------------------------
+
+describe("loadAndMerge — afterMerge hook (#2269)", () => {
+  async function seedFile(annotations: AnnotationRecordV1[]): Promise<void> {
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A, { annotations }));
+    await store0.flush();
+    resetStoreForTesting();
+  }
+
+  it("names every id the file won — inserted, replaced on rev, replaced on rule 3 — and nothing else", async () => {
+    await seedFile([
+      annRecord({ id: "inserted", rev: 1 }),
+      annRecord({ id: "rev-wins", rev: 5, content: "disk" }),
+      annRecord({ id: "rule3", rev: 2, editedAt: 111, content: "disk" }),
+      annRecord({ id: "tie", rev: 3, content: "disk" }),
+    ]);
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("rev-wins", annRecord({ id: "rev-wins", rev: 2, content: "map" }));
+    // Rule 3: rev tie, file has editedAt, the map copy does not.
+    annMap.set("rule3", annRecord({ id: "rule3", rev: 2, content: "map" }));
+    // A plain tie keeps the map copy, so it is NOT a file win.
+    annMap.set("tie", annRecord({ id: "tie", rev: 3, content: "map" }));
+
+    const seen: string[][] = [];
+    let origin: unknown;
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), {
+      afterMerge: (ids) => {
+        seen.push([...ids].sort());
+        // Runs inside the merge's own transaction.
+        origin = (ydoc as unknown as { _transaction: { origin: unknown } | null })._transaction
+          ?.origin;
+        return false;
+      },
+    });
+
+    expect(seen).toEqual([["inserted", "rev-wins", "rule3"]]);
+    expect(origin).toBe(FILE_SYNC_ORIGIN);
+    expect((annMap.get("tie") as AnnotationRecordV1).content, "tie keeps the map copy").toBe("map");
+    cleanup("close");
+  });
+
+  it("an unreadable map value under a file id is replaced by the file copy and named as a file win", async () => {
+    await seedFile([annRecord({ id: "ann_1", rev: 1, content: "disk" })]);
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Not a record at all, so it cannot be normalized and `pickWinner` never
+    // runs: the file copy replaces it outright. It is still a value the merge
+    // took FROM the file, so the hook must hear about it — a remap that skipped
+    // it would leave the file copy at its pre-reload coordinates.
+    annMap.set("ann_1", "garbage");
+
+    const afterMerge = vi.fn((_ids: ReadonlySet<string>) => false);
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), { afterMerge });
+
+    expect(afterMerge).toHaveBeenCalledTimes(1);
+    expect([...(afterMerge.mock.calls[0]?.[0] ?? [])]).toEqual(["ann_1"]);
+    const merged = annMap.get("ann_1") as AnnotationRecordV1;
+    expect(merged.content).toBe("disk");
+    expect(merged.rev).toBe(1);
+    cleanup("close");
+  });
+
+  it("a hook that wrote forces the post-merge durable write", async () => {
+    await seedFile([annRecord({ id: "ann_1", rev: 5 })]);
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Nothing map-only and the file wins: without the hook's answer, nothing
+    // would be written.
+    annMap.set("ann_1", annRecord({ id: "ann_1", rev: 2 }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), {
+      afterMerge: () => {
+        annMap.set("ann_1", annRecord({ id: "ann_1", rev: 5, range: { from: 1, to: 2 } }));
+        return true;
+      },
+    });
+    expect(queueSpy).toHaveBeenCalledTimes(1);
+    await store.flush();
+    const onDisk = await store.load();
+    expect(onDisk.annotations[0].range).toEqual({ from: 1, to: 2 });
+    cleanup("close");
+  });
+
+  it("NEGATIVE CONTROL: the same merge with a hook that wrote nothing queues no write", async () => {
+    // Pins that the write above comes from the hook's `true`, not from the
+    // merge: identical inputs, a hook answering `false`, no durable write.
+    await seedFile([annRecord({ id: "ann_1", rev: 5 })]);
+    const ydoc = new Y.Doc();
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set("ann_1", annRecord({ id: "ann_1", rev: 2 }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const afterMerge = vi.fn(() => false);
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), { afterMerge });
+    expect(afterMerge).toHaveBeenCalledTimes(1);
+    expect(queueSpy).not.toHaveBeenCalled();
+    cleanup("close");
+  });
+
+  it("is not called when the file wins nothing", async () => {
+    await seedFile([annRecord({ id: "ann_1", rev: 1 })]);
+    const ydoc = new Y.Doc();
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set("ann_1", annRecord({ id: "ann_1", rev: 4 }));
+    const afterMerge = vi.fn(() => false);
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store), { afterMerge });
+    expect(afterMerge).not.toHaveBeenCalled();
+    cleanup("close");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // loadAndMerge — rename tombstone union (#1040)
 // ---------------------------------------------------------------------------
 

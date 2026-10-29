@@ -59,6 +59,8 @@ export type LauncherStatus =
        * because the commonest reason the hello never comes — Claude Code not
        * signed in — stops the child. */
       greetingLate?: true;
+      /** Loopback-only (#1822 item 4a): see the running arm. */
+      workingDirectoryIgnored?: WorkingDirectoryIgnored;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     }
@@ -86,9 +88,35 @@ export type LauncherStatus =
        * panel shows how to fix it. Decided server-side, so neither a cleared
        * chat nor the client's clock can fake it. */
       greetingLate?: true;
+      /** Loopback-only (#1822 item 4a). The LAST spawn did not use the saved
+       * `workingDirectory` and ran in home instead. Absent when it did, when
+       * none is saved, and from an older server. See
+       * `WorkingDirectoryIgnored`. */
+      workingDirectoryIgnored?: WorkingDirectoryIgnored;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };
+
+/**
+ * The saved `workingDirectory` the last spawn refused, and why (#1822 item
+ * 4a). The launcher home-confines it like the HTTP routes do, and falls back
+ * to home rather than failing the launch.
+ *
+ * `workingDirectory` is the saved value exactly as `integrations.json` holds it,
+ * so Settings shows its warning only while the folder it has loaded IS that
+ * value. A bare "the last spawn ignored it" flag could not tell a stale verdict
+ * from a current one: after the user saved a valid folder, a remount re-read
+ * the flag and brought the warning back for a folder that was fine.
+ *
+ * Loopback-only, like `cwd`: it is a fact about the user's disk layout, and no
+ * more than `GET /api/integrations/existing` already returns there.
+ */
+export interface WorkingDirectoryIgnored {
+  /** `outside-home`: it resolves to a directory home does not contain.
+   * `unresolvable`: it is missing, not a directory, or rejected outright. */
+  reason: "outside-home" | "unresolvable";
+  workingDirectory: string;
+}
 
 /**
  * `deferred-autostart` (#1236): the desktop app was launched by the OS at
@@ -108,9 +136,19 @@ export type LauncherStatus =
  * clears when the user completes setup: the wizard's Apply re-reads the
  * integration and, when the start mode allows, starts Claude
  * (`Supervisor.startAfterSetup`, #2197).
+ *
+ * `server-starting` (#1823): HTTP mode, in the window between the server
+ * answering and `startLauncherSupervisor()` creating the supervisor (or
+ * failing to, which reads `spawn-failed`). Before this the window read
+ * `stdio-mode`, which is a terminal "this runtime has no launcher" — Settings
+ * then called the launcher absent on an ordinary boot. It is transient for the
+ * UI (`isTransientlyUnavailable`) but is NOT promotable by
+ * `POST /api/launcher/start` (`isPromotableByStartRoute`): boot creates the
+ * supervisor itself, and the route has no business racing it.
  */
 export type LauncherUnavailableReason =
   | "stdio-mode"
+  | "server-starting"
   | "disabled-by-env"
   | "spawn-failed"
   | "deferred-autostart"
@@ -118,12 +156,14 @@ export type LauncherUnavailableReason =
 
 /**
  * True when `available: false` is a *transient phase* the launcher will leave on
- * its own, rather than a terminal explanation.
+ * its own, rather than a terminal explanation. **A UI predicate, and NOT an
+ * authorization gate** — `POST /api/launcher/start` asks
+ * `isPromotableByStartRoute` instead (#1823 split them).
  *
- * Only `deferred-autostart` resolves without the user changing anything.
- * `not-configured` is recoverable too, but only by the user setting Claude Code
- * up, so it is NOT transient: setup is exactly the CTA it needs. The rest mean
- * "this runtime will not have a launcher". The UI must
+ * `deferred-autostart` and `server-starting` resolve without the user changing
+ * anything. `not-configured` is recoverable too, but only by the user setting
+ * Claude Code up, so it is NOT transient: setup is exactly the CTA it needs.
+ * The rest mean "this runtime will not have a launcher". The UI must
  * not offer a fix-it CTA for a state that fixes itself — a fully-configured user
  * who booted hidden would otherwise be told to re-run the integration wizard.
  *
@@ -135,6 +175,20 @@ export type LauncherUnavailableReason =
  * a LAN viewer cannot act on the deferral, so treating it as terminal is right.
  */
 export function isTransientlyUnavailable(reason: LauncherUnavailableReason | undefined): boolean {
+  return reason === "deferred-autostart" || reason === "server-starting";
+}
+
+/**
+ * The ONE reason `POST /api/launcher/start` may promote to a live supervisor:
+ * `deferred-autostart` (#1236). Split from `isTransientlyUnavailable` (#1823)
+ * so the UI's notion of "this fixes itself" can grow without widening the
+ * route. ADR-046 §7's argument rests on this gate being exactly this narrow:
+ * `disabled-by-env` outranks the deferral in `resolveInitialLauncherReason`,
+ * so the route can never become an HTTP bypass of the operator kill switch.
+ * `server-starting` is refused because boot is about to create the supervisor
+ * itself.
+ */
+export function isPromotableByStartRoute(reason: LauncherUnavailableReason | undefined): boolean {
   return reason === "deferred-autostart";
 }
 
@@ -424,6 +478,89 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
 
 // --- Claude CLI stream-json wire contract ---------------------------------
 
+/** Pre-approved in a launched session (#2286): server-state reads, annotation
+ * work and chat. None of them opens, writes, renames or exports a file, none
+ * changes document content (content edits reach disk through autosave), and
+ * none destroys a record the user cannot get back. `tandem_diagnostics` does
+ * spawn one process — `runDoctor`'s static `npm ls -g` probe — but it takes no
+ * input, so the model cannot steer it. */
+export const TANDEM_PREAPPROVED_TOOLS = [
+  "tandem_checkInbox",
+  "tandem_reply",
+  "tandem_status",
+  "tandem_listDocuments",
+  "tandem_switchDocument",
+  "tandem_scratchpad",
+  "tandem_getTextContent",
+  "tandem_getOutline",
+  "tandem_getContext",
+  "tandem_getAnnotations",
+  "tandem_getActivity",
+  "tandem_search",
+  "tandem_resolveRange",
+  "tandem_diagnostics",
+  "tandem_comment",
+  "tandem_annotationReply",
+  "tandem_editAnnotation",
+  "tandem_resolveAnnotation",
+] as const;
+
+/** Left to auto mode's classifier in a launched session (#2286): each can open
+ * a caller-named path (#1666), change document content that autosave writes
+ * back, write, rename, export, restore or close a file-backed document, or —
+ * `tandem_removeAnnotation` — permanently delete a user's shared comment and
+ * its whole reply thread, which has no undo. */
+export const TANDEM_CLASSIFIER_GATED_TOOLS = [
+  "tandem_open",
+  "tandem_edit",
+  "tandem_appendContent",
+  "tandem_editList",
+  "tandem_save",
+  "tandem_rename",
+  "tandem_close",
+  "tandem_convertToMarkdown",
+  "tandem_applyChanges",
+  "tandem_exportAnnotations",
+  "tandem_restoreBackup",
+  "tandem_removeAnnotation",
+] as const;
+
+/**
+ * The allow rules that pre-approve SOME of Tandem's MCP tools in a launched
+ * session (#2286, ADR-047 §4 amendment 2026-10-28).
+ *
+ * Only `TANDEM_PREAPPROVED_TOOLS` are listed. A matched allow rule is decided
+ * before auto mode's classifier, and the launched session reads third-party
+ * text (opened documents, imported comments, chat) with nobody watching, so a
+ * tool that can reach a file the user owns stays with the classifier — see
+ * `TANDEM_CLASSIFIER_GATED_TOOLS`. Bryan chose this narrow grant over the full
+ * `*` grant on 2026-10-28. `tests/server/launcher/allow-rules-coverage.test.ts`
+ * fails on a registered tool that is in neither list, so whoever adds a tool
+ * decides which side it sits on.
+ *
+ * Since Claude Code 2.1.299 an MCP allow rule matches a server's WHOLE
+ * normalized name only, never a prefix, so each tool gets one rule per
+ * spelling a user can have registered:
+ *
+ *   - `mcp__tandem__<tool>` — the entry `tandem setup` writes (server name
+ *     `tandem`, whether it is the direct-HTTP entry or the stdio bridge).
+ *   - `mcp__plugin_tandem_tandem__<tool>` — the plugin's server: `plugin.json`
+ *     names it `tandem`, and Claude Code normalizes `plugin:tandem:tandem`.
+ *
+ * The opt-in channel shim's server (`tandem-channel`) is deliberately absent:
+ * a supervised session never loads it (see `CLAUDE_STREAM_JSON_FLAGS`).
+ *
+ * An unmatched rule is a silent no-op, not an error, so a wrong spelling here
+ * fails toward "auto mode alone decides" rather than toward a crash.
+ *
+ * An unlisted Tandem tool is screened by the classifier as any other tool is;
+ * where auto mode is disabled it is refused (there is no approval surface).
+ */
+export const TANDEM_MCP_ALLOW_RULES: readonly string[] = [
+  "mcp__tandem__",
+  "mcp__plugin_tandem_tandem__",
+].flatMap((prefix) => TANDEM_PREAPPROVED_TOOLS.map((tool) => `${prefix}${tool}`));
+
 /**
  * Flag prefix the supervisor passes to `claude`, ahead of the
  * session-selection flag (`--session-id` / `--resume`).
@@ -438,6 +575,37 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
  * `--verbose` is NOT a readiness signal. The CLI emits nothing at all until it
  * has received a turn, so there is no handshake to wait for; see
  * `SUPERVISOR_INITIAL_PROMPT`.
+ *
+ * **`--permission-mode auto` and `--allowedTools` (#2286, ADR-047 §4
+ * amendment 2026-10-28).** A supervised session has no approval surface, so
+ * before this it could call Tandem's tools only when Claude Code happened to
+ * start a `-p` session in auto mode. Claude Code 2.1.302 changed that default
+ * to `default` (manual) for third-party providers, telemetry-off and fresh
+ * installs, and every `tandem_*` call from a launched session was then refused.
+ * The two flags make the posture explicit and are BOTH needed:
+ *
+ *   - `--permission-mode auto` restores what most launched sessions already got
+ *     before 2.1.302: Claude Code's classifier, not a person, decides risky
+ *     actions. It is a CLI flag, so it outranks a user's own
+ *     `permissions.defaultMode` for this session (managed policy still wins).
+ *     Where auto mode is unavailable (managed `disableAutoMode`, a model or plan
+ *     without it) the CLI degrades to `default` rather than refusing to start —
+ *     measured on 2.1.312 — and then:
+ *   - `--allowedTools` keeps Tandem's read, annotate and chat tools
+ *     (`TANDEM_PREAPPROVED_TOOLS`) working regardless of mode. Those calls skip
+ *     the auto-mode classifier too, which is why the grant is narrow: the
+ *     `TANDEM_CLASSIFIER_GATED_TOOLS` (`tandem_open`, `tandem_save`, …) are NOT
+ *     listed, stay with the classifier, and are refused where auto mode is
+ *     unavailable. See ADR-047 §4's amendment and `docs/security.md`.
+ *
+ * The allow list is ONE comma-joined token, so the CLI's variadic
+ * `<tools...>` parser cannot swallow a following argument. No shell is involved
+ * on any OS (POSIX execs `claude` through the reaper; Windows resolves only a
+ * `.exe`), so no rule is ever shell-expanded. Both pairs sit in this shared prefix so
+ * the `--session-id` AND `--resume` arms carry them — whether a resumed `-p`
+ * session keeps its creation-time mode is unestablished, and passing it on
+ * both arms avoids depending on it. `--permission-prompts none` was considered
+ * and not adopted: it names the posture but grants nothing.
  *
  * Lives here (not in `supervisor.ts`) because the spawn path and the stub-CLI
  * test harness must agree on it byte-for-byte; a drift between them would make
@@ -470,6 +638,10 @@ export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
   "--output-format",
   "stream-json",
   "--verbose",
+  "--permission-mode",
+  "auto",
+  "--allowedTools",
+  TANDEM_MCP_ALLOW_RULES.join(","),
 ];
 
 /**

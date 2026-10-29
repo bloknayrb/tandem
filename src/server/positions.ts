@@ -38,9 +38,14 @@ import {
   rangeOverlapsHeadingPrefix,
   resolveToElement,
 } from "../shared/positions/ydoc.js";
-import { snapshotContradicts } from "../shared/snapshot.js";
+import { SNAPSHOT_CAP, snapshotContradicts } from "../shared/snapshot.js";
 import type { Annotation } from "../shared/types.js";
-import { collectXmlTexts, extractText, flatDocLength } from "./mcp/document-model.js";
+import {
+  collectXmlTexts,
+  extractText,
+  type FlatBreak,
+  flatDocLength,
+} from "./mcp/document-model.js";
 
 // Moved to `src/shared/positions/ydoc.ts` — see that file's header for why the
 // move is a leaf extraction rather than a file move. Re-exported so existing
@@ -122,21 +127,20 @@ export interface FlatRangeOpts {
 }
 
 /**
- * The five call sites that hoist an `extractText` across a loop.
+ * The four call sites that hoist an `extractText` across a loop.
  *
  * A closed union rather than `string`, because these tags key
  * `hoistMismatchCounts`, which is module-global and never cleared: a tag built
  * from a document id or an annotation id would grow it without bound. Adding an
  * arm is the moment to re-read `resolveDocText`'s scoped argument for why a
- * length comparison is a sufficient guard — it is a claim about what these five
+ * length comparison is a sufficient guard — it is a claim about what these four
  * callers write, not a general one.
  */
 export type HoistTag =
   | "document/stamp-whole-doc"
   | "docx-capture/score"
   | "docx-comments/inject"
-  | "watcher/relocation-anchor"
-  | "watcher/relocation-probe";
+  | "reload/remap";
 
 /** Options shared by `validateRange` and `anchoredRange`. */
 export interface RangeValidationOpts extends FlatRangeOpts {
@@ -197,7 +201,7 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * since written to.
    *
    * Guarded by a flat-length comparison on every call — cheap (a tree walk, no
-   * string build), and sufficient for the five callers that pass it because none
+   * string build), and sufficient for the four callers that pass it because none
    * of them writes document text inside its loop. It is NOT a full content
    * check: read `resolveDocText` before adding a call site, because the argument
    * is scoped to what those callers do, not to the option.
@@ -205,7 +209,7 @@ export interface RangeValidationOpts extends FlatRangeOpts {
   text?: string;
   /**
    * Names the call site for the hoist-mismatch log, so a loop over hundreds of
-   * annotations reports "the watcher's relocation pass, occurrence 100" rather
+   * annotations reports "the reload remap, occurrence 100" rather
    * than hundreds of identical anonymous lines. Only meaningful with `text`.
    */
   textTag?: HoistTag;
@@ -221,10 +225,10 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * cannot see a U+00A0, so its snapshot comes back with U+0020 and today's
    * exact comparison answers `RANGE_GONE` for text that is right there.
    *
-   * **The two STORED-snapshot sites must stay exact** — `documents/watcher.ts`'s
-   * relocation probe and relocation anchor. There the snapshot is the server's
-   * own earlier slice, so an external U+00A0→U+0020 edit genuinely IS a document
-   * change; normalizing would make the probe answer `ok` while
+   * **The STORED-text site must stay exact** — the reload remap
+   * (`documents/reload-remap.ts`, #2269). Its probe is the server's own earlier
+   * text, so an external U+00A0→U+0020 edit genuinely IS a document change;
+   * normalizing would make the probe answer a match while
    * `snapshotContradicts` — still exact — refuses the editor accept and the
    * `.docx` apply, the #1631 divergence shape.
    *
@@ -540,11 +544,13 @@ function resolveDocText(
  * Two placements are load-bearing rather than arbitrary:
  *
  *  - **Lower bound BEFORE staleness**, because `slice` wraps a negative start.
- *  - **Upper bound AFTER staleness.** After an external edit shortens the file,
- *    the watcher's relocation probe passes stale offsets past the new end WITH
- *    a snapshot and relies on `RANGE_MOVED`. Bounds-first would answer
- *    `INVALID_RANGE` and pin the annotation to dead offsets — silent annotation
- *    loss. Same for `tandem_edit`'s documented retry path. So with a mismatched
+ *  - **Upper bound AFTER staleness.** `tandem_edit`'s documented retry path
+ *    passes offsets Claude read before the document shrank, WITH a snapshot, and
+ *    relies on `RANGE_MOVED` naming where that text went. Bounds-first would
+ *    answer `INVALID_RANGE` for text that is right there and leave Claude no
+ *    retry. (The file watcher's relocation probe made the same call until #2269
+ *    replaced it with the reload remap, which searches a bounded window itself
+ *    and never hands `validateRange` a stale offset.) So with a mismatched
  *    `textSnapshot`, a staleness outcome WINS over `out-of-bounds`, and the
  *    surrogate check applies only to a range about to be returned `ok`;
  *    relocated coordinates are re-checked on the caller's retry.
@@ -761,6 +767,45 @@ export function remapRangeAcrossReplacement(
 }
 
 // ---------------------------------------------------------------------------
+// Pure: snapshot capture over an already-extracted flat text
+// ---------------------------------------------------------------------------
+
+/**
+ * The text a `textSnapshot` holds for `[from, to)` of `fullText`, capped at
+ * {@link SNAPSHOT_CAP}, plus its non-literal breaks — the pure core of
+ * `captureSnapshot` (`mcp/annotations.ts`), which documents every rule here
+ * (#1486 cap and out-of-band truncation flag, #1767 surrogate back-off,
+ * snapshot-relative breaks).
+ *
+ * Split out so a caller holding a flat text that is NOT the Y.Doc's current
+ * content can capture from it: the reload remap (#2269) snapshots a collapsed
+ * record from the PRE-reload text, after the fragment has been replaced. It
+ * lives here rather than in `mcp/annotations.ts` so that caller need not import
+ * the annotation tool module (it does import `mcp/document-model.js` for text
+ * extraction), and here rather than in `src/shared/` because the cut uses
+ * {@link splitsSurrogatePair}, the one paired predicate (Critical Rule 4), which
+ * `src/shared/` cannot import.
+ */
+export function captureSnapshotFromText(
+  fullText: string,
+  allBreaks: readonly FlatBreak[],
+  from: number,
+  to: number,
+): { text: string; truncated: boolean; breaks: FlatBreak[] } {
+  const text = fullText.slice(from, to);
+  const capped = text.length > SNAPSHOT_CAP;
+  const cap = splitsSurrogatePair(text, SNAPSHOT_CAP) ? SNAPSHOT_CAP - 1 : SNAPSHOT_CAP;
+  const kept = capped ? text.slice(0, cap) : text;
+  // `at < from + kept.length`, not `<= to`: a break AT the range's end is the
+  // separator to whatever comes NEXT and is not part of this range. Bounding on
+  // the kept text also drops anything past the cap in one step.
+  const breaks = allBreaks
+    .filter((b) => b.at >= from && b.at < from + kept.length)
+    .map((b) => ({ at: b.at - from, kind: b.kind }));
+  return { text: kept, truncated: capped, breaks };
+}
+
+// ---------------------------------------------------------------------------
 // High-level: annotation range refresh
 // ---------------------------------------------------------------------------
 
@@ -940,7 +985,7 @@ export function refreshRange(
   // A COLLAPSE has two causes needing opposite answers (#1764). A block split,
   // heading toggle or join resolves two live anchors onto one offset while the
   // annotated text is still there — persisting `{n, n}` destroys the stored
-  // flat range the watcher's snapshot relocation needs, and undo then resolves
+  // flat range a later relocation needs, and undo then resolves
   // the two zero-width anchors to opposite ends and the record is `failed`
   // forever. Deleting the annotated span produces the same shape and there
   // `{n, n}` is correct. The discriminator is the stored `textSnapshot`.
@@ -980,9 +1025,9 @@ export function refreshRange(
  *
  * When `skipTransact` is true, writes happen inline without wrapping a
  * `ydoc.transact`. The caller is responsible for providing an outer
- * transaction with the appropriate origin. Used by `reloadFromDisk` to merge
- * this pass with the subsequent textSnapshot relocation pass into a single
- * `MCP_ORIGIN` transaction (closes the two-write crash window — GH #622).
+ * transaction with the appropriate origin. Used by `repairClonedAnchors`
+ * (`documents/annotation-wiring.ts`), which runs inside a transaction it has
+ * already tagged.
  */
 export function refreshAllRanges(
   annotations: Annotation[],

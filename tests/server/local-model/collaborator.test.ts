@@ -1,6 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bumpContentGeneration,
+  contentGeneration,
+} from "../../../src/server/documents/content-generation.js";
 import { getOpenDocs } from "../../../src/server/documents/registry.js";
 import {
   addDoc,
@@ -752,9 +756,11 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
 
   it("notifies NOTHING when the document was CLOSED rather than swapped", async () => {
     // `requireDocument` returns null once the registry row is dropped, so
-    // `docUnchanged()` is false for a close too (#2069: a close never arrives
-    // as an abort). Telling that user the document "reconnected" names a remedy
-    // no retry can satisfy, so only the message is suppressed — not the abort.
+    // `docUnchanged()` is false for a close too. Since #2069 a real close also
+    // arrives as an abort (`document:closed`); this drops the row through the
+    // test seam, which broadcasts nothing, to pin the fallback arm on its own.
+    // Telling that user the document "reconnected" names a remedy no retry can
+    // satisfy, so only the message is suppressed — not the abort.
     setupDoc("doc-swap-closed", "Body");
     let release!: () => void;
     const gate = new Promise<void>((res) => {
@@ -817,6 +823,108 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
 
     release();
     await drain(collab);
+  });
+});
+
+/**
+ * #2070: a content-replacing reload keeps the SAME Y.Doc instance, so the
+ * identity conjunct above cannot see it. The content generation can.
+ */
+describe("collaborator — content replaced under a parked turn (#2070)", () => {
+  async function parkThen(
+    id: string,
+    whileParked: (ydoc: ReturnType<typeof setupDoc>) => void,
+    result: () => LoopResult,
+  ) {
+    const ydoc = setupDoc(id, "Body");
+    let captured: { isDocCurrent?: () => boolean } | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          captured = opts;
+          opts.onContentDelta?.("partial answer");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          await gate;
+          return result();
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: id }));
+    await Promise.resolve();
+    whileParked(ydoc);
+    const afterReload = captured?.isDocCurrent?.();
+    release();
+    await drain(collab);
+    return { afterReload, ydoc };
+  }
+
+  it("isDocCurrent flips on a content replacement of the same instance", async () => {
+    const { afterReload, ydoc } = await parkThen(
+      "doc-reload-flip",
+      (d) => bumpContentGeneration(d),
+      () => swappedResult(),
+    );
+    expect(afterReload).toBe(false);
+    // The same instance throughout: identity alone would have said `true`.
+    expect(getOrCreateDocument("doc-reload-flip")).toBe(ydoc);
+  });
+
+  it("flips on the REAL reload path — clearAndReload bumps inside its transaction", async () => {
+    // The production bump sites, not the helper: a reload that forgot to bump
+    // would leave this run believing its prompt still described the document.
+    const seen: number[] = [];
+    const doc = setupDoc("doc-reload-real", "Body");
+    doc.on("afterTransaction", () => seen.push(contentGeneration(doc)));
+    const before = contentGeneration(doc);
+    const { clearAndReload } = await import("../../../src/server/documents/populate.js");
+    const existing = getOpenDocs().get("doc-reload-real");
+    if (!existing) throw new Error("not registered");
+    await clearAndReload("doc-reload-real", doc, existing.filePath, "md", existing, "New body\n");
+    expect(contentGeneration(doc)).toBe(before + 1);
+    // Bumped exactly once, and visible to an observer of the content swap
+    // itself — not after it.
+    expect(seen.filter((g) => g === before + 1).length).toBeGreaterThan(0);
+    expect(seen.every((g) => g === before || g === before + 1)).toBe(true);
+  });
+
+  it("notifies with the reload copy, and mints no terminal reply", async () => {
+    await parkThen(
+      "doc-reload-notify",
+      (d) => bumpContentGeneration(d),
+      () => swappedResult(),
+    );
+    const notes = getBuffer().filter((n) => n.documentId === "doc-reload-notify");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].message).toMatch(/content was replaced/);
+    expect(notes[0].message).not.toMatch(/reconnected/);
+    expect(chatMessages()).toHaveLength(0);
+  });
+
+  it("keeps the reconnect copy for an instance swap", async () => {
+    await parkThen(
+      "doc-reload-vs-swap",
+      () => swapDoc("doc-reload-vs-swap", "Body"),
+      () => swappedResult(),
+    );
+    const notes = getBuffer().filter((n) => n.documentId === "doc-reload-vs-swap");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].message).toMatch(/reconnected/);
+  });
+
+  it("drops a CLEAN reply from a turn whose content was replaced (stillOwner reads the generation)", async () => {
+    // The loop's turn-boundary check is mocked away here, so the run comes back
+    // `clean`; the terminal gate must still refuse to flush it.
+    await parkThen(
+      "doc-reload-clean",
+      (d) => bumpContentGeneration(d),
+      () => cleanResult("a reply about the old text"),
+    );
+    expect(chatMessages()).toHaveLength(0);
   });
 });
 

@@ -49,7 +49,7 @@ commercial setup, hardware verification, and two flag flips.
 |---|---|---|
 | **Whether an accountant is wanted before taking money.** The price itself is decided: $45, with a $25 student discount (so $20), recorded in ADR-040's 2026-10-17 amendment and confirmed for the README on 2026-10-22. ADR-040 §6's LLC requirement was withdrawn on 2026-10-09 (no company will be formed); the accountant question was not decided then and stays here. | ADR-040 §6 | Nothing else tracks it |
 | **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
-| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether it joins the commercial gate |
+| **Whether resale law requires more than `tandem deactivate`.** #1943 is built (local only: deletes the file, releases no seat, the key stays activatable from its email); open is only whether resale law requires more than that. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether anything more joins the commercial gate |
 | **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
 
 **"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision
@@ -81,11 +81,11 @@ correctness, security, install or a named gate. Not all of them block. Triage ea
 before the flip: fix it, mark it post-v1.0 below, or accept it in
 [security.md](security.md#open-findings). For everything else, run `gh issue list`.
 
-- **Security findings:** #1884 (the channel permission relay serves its `description` to local callers; its LAN half is dark under ADR-056), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
+- **Security findings:** #1949 (signing-job isolation; accepted with a bound in [security.md](security.md#open-findings), revisit 2027-04-28), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #2064, #2069, #2070, #1982, #1980, #1662, #1632, #2009, #1920, #2187 (`tandem_checkInbox` misses a comment on a non-active document), #2188, #2219 (a scratchpad's source-view commit drops its notes).
 - **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2180 (launcher action per setup), #2192, #2186 (a beta report's diagnosis tracker).
-- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245, #2231, #2201.
+- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31), #2231, #2201.
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.

@@ -19,6 +19,13 @@
  * | `browser`     | emit                | persist               | record             |
  * | `mode-release`| skip                | persist               | record             |
  *
+ * ONE keyed exception to the channel column (#2069): CTRL_ROOM `documentMeta`'s
+ * tab-list keys (`openDocuments`, `activeDocumentId`) derive `document:opened` /
+ * `closed` / `switched` for EVERY origin except `mcp` — see
+ * {@link shouldSkipDocumentLifecycle}. Their only writer is the server's own
+ * `broadcastOpenDocs`, under `internal`, so under the table's rule those events
+ * could never fire.
+ *
  * Picking the wrong helper is a silent bug. See ADR-031 for the full
  * "how to choose" enumeration with worked examples.
  */
@@ -112,6 +119,29 @@ export function shouldSkipChannel(origin: unknown): boolean {
 
 export function shouldSkipDurableSync(origin: unknown): boolean {
   return DURABLE_SKIP.has(origin);
+}
+
+/**
+ * Should the CTRL_ROOM `documentMeta` observer skip a write to the tab-list keys
+ * (`openDocuments`, `activeDocumentId`) — i.e. derive no `document:*` event from
+ * it? (#2069)
+ *
+ * The one exception to {@link shouldSkipChannel}, and narrower than it on
+ * purpose. Those keys are written only by `broadcastOpenDocs`
+ * (`documents/registry.ts`), always under `withInternal` because they are
+ * server bookkeeping mirrored to clients — so the general channel rule made
+ * `document:opened` / `closed` / `switched` unreachable, while the local-model
+ * collaborator's abort-on-close/switch and the channel shim's advertised
+ * lifecycle events depended on them. The tab list changing IS the event,
+ * whoever wrote it, so every origin emits except `mcp`, kept as the single skip
+ * for a future Claude-initiated write that should not echo back at Claude.
+ *
+ * Applies to those two keys ONLY. Every other key in that map, and every other
+ * observer, stays on `shouldSkipChannel`. A future `file-sync`, `reload` or
+ * `mode-release` writer of those keys would emit; none exists today.
+ */
+export function shouldSkipDocumentLifecycle(origin: unknown): boolean {
+  return origin === MCP_ORIGIN;
 }
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ import * as Y from "yjs";
 import { relRangeToPmPositions } from "../../src/client/positions";
 import { loadMarkdown } from "../../src/server/file-io/markdown";
 import { extractText } from "../../src/server/mcp/document-model";
-import { flatOffsetToRelPos } from "../../src/server/positions";
+import { flatOffsetToRelPos, relPosToFlatOffset } from "../../src/server/positions";
 import { toFlatOffset } from "../../src/shared/positions/types";
 import { productionSchema, yDocToPmNode } from "./editor-roundtrip-harness.js";
 
@@ -102,22 +102,21 @@ const SHAPES: Record<string, string> = {
  * beginning with a literal `#` — and the equality assertion is what would catch
  * it if one were added.
  */
-function unanchorableOffsets(flat: string, assoc: 0 | -1): number[] {
+function unanchorableOffsets(flat: string): number[] {
   const out: number[] = [];
   // An empty block (an empty list item, say) renders as a Y element with no
   // Y.XmlText child at all, so the separators around it name positions no
   // stored character backs. In the flat text that is a pair of adjacent
   // separators — derivable here without asking the code under test.
   //
-  // THE TWO ASSOCS REFUSE IN DIFFERENT PLACES, which is why this takes one.
-  // Each retries in its own direction and so fails toward the empty element:
-  // assoc 0 refuses on the leading separator (its +1 retry lands in the void),
-  // assoc -1 on the trailing one (its -1 retry lands in the same void). They
-  // are mirror images, not a shared set — and since `anchorFlatRange` is
-  // all-or-nothing across both endpoints, a range touching EITHER offset
-  // degrades to flat.
+  // BOTH ASSOCS REFUSE IN THE SAME PLACE (#2001). A separator offset k is
+  // anchored at the end of the Y.XmlText holding k-1, whatever the assoc. The
+  // LEADING separator of an empty block has text before it, so it mints; the
+  // TRAILING one has the empty block before it — no Y.XmlText ends there — so
+  // it refuses for both. (Before #2001, assoc 0 retried at k+1 instead and so
+  // refused on the leading separator; the two assocs were mirror images.)
   for (let i = 0; i + 1 < flat.length; i++) {
-    if (flat[i] === "\n" && flat[i + 1] === "\n") out.push(assoc === 0 ? i : i + 1);
+    if (flat[i] === "\n" && flat[i + 1] === "\n") out.push(i + 1);
   }
   // Heading prefixes exist only in `extractText`’s rendering — no Y.XmlText
   // contains them — so neither assoc can anchor there.
@@ -144,7 +143,7 @@ function unanchorableOffsets(flat: string, assoc: 0 | -1): number[] {
  *   `unanchorableOffsets`.
  */
 function addressableOffsets(flat: string): number[] {
-  const prefixes = new Set([...unanchorableOffsets(flat, 0), ...unanchorableOffsets(flat, -1)]);
+  const prefixes = new Set(unanchorableOffsets(flat));
   const out: number[] = [];
   for (let i = 0; i < flat.length; i++) if (flat[i] !== "\n" && !prefixes.has(i)) out.push(i);
   return out;
@@ -238,9 +237,12 @@ describe("server flat offsets and client PM positions name the same character", 
     // snapshot, so the test states WHY each null is there. A snapshot would
     // accept a new null anywhere in the corpus as long as someone ran `-u`.
     //
-    // Note the set is this small: block separators and the end-of-document
-    // offset all mint successfully, because `flatOffsetToRelPos` applies an
-    // assoc-directed ±1 retry when `findXmlTextAtOffset` comes back empty.
+    // Note the set is this small: block separators, hardBreaks and the
+    // end-of-document offset all mint successfully, because `flatOffsetToRelPos`
+    // anchors a separator offset at the end of the Y.XmlText before it (#2001).
+    // The round-trip test below proves those mints land EXACTLY on the offset
+    // asked for, which is what makes minting there correct rather than merely
+    // non-null.
     for (const [name, markdown] of Object.entries(SHAPES)) {
       const { ydoc } = docPair(markdown);
       const flat = extractText(ydoc);
@@ -250,20 +252,18 @@ describe("server flat offsets and client PM positions name the same character", 
         if (flatOffsetToRelPos(ydoc, toFlatOffset(i), 0) === null) refused.push(i);
       }
 
-      expect(refused, `${name}: offsets where assoc 0 refused`).toEqual(
-        unanchorableOffsets(flat, 0),
-      );
+      expect(refused, `${name}: offsets where assoc 0 refused`).toEqual(unanchorableOffsets(flat));
 
-      // Both assocs, separately, because they genuinely DISAGREE around an empty
-      // block (see `unanchorableOffsets`). Checking only assoc 0 — the obvious
-      // thing to write — would have hidden that, since only `anchorPair`, which
-      // needs both endpoints, would ever have noticed, and then only coarsely.
+      // Both assocs, separately. They used to DISAGREE around an empty block,
+      // and checking only assoc 0 — the obvious thing to write — would let them
+      // drift apart again unnoticed, since only `anchorPair`, which needs both
+      // endpoints, would ever see it, and then only coarsely.
       const refusedLeft: number[] = [];
       for (let i = 0; i <= flat.length; i++) {
         if (flatOffsetToRelPos(ydoc, toFlatOffset(i), -1) === null) refusedLeft.push(i);
       }
       expect(refusedLeft, `${name}: offsets where assoc -1 refused`).toEqual(
-        unanchorableOffsets(flat, -1),
+        unanchorableOffsets(flat),
       );
     }
   });
@@ -334,18 +334,38 @@ describe("server flat offsets and client PM positions name the same character", 
     expect(problems, "block-boundary range resolution").toEqual([]);
   });
 
-  it("shifts rather than refuses at a hardBreak, per assoc", () => {
-    // THE TRAP THIS TEST EXISTS FOR. `findXmlTextAtOffset` finds nothing at a
-    // hardBreak, so it would be reasonable to expect a null — and to write the
-    // client mint's failure-mode table on that assumption. It is wrong:
-    // `flatOffsetToRelPos` retries ±1 in the direction of the assoc and mints
-    // anyway. A `from` endpoint (assoc 0) therefore lands one character to the
-    // RIGHT of where it was asked for.
-    //
-    // That is a one-character under-coverage, visually benign, and permanent —
-    // nothing downstream reconciles the flat range against the anchor. It is
-    // recorded here as the contract so nobody "fixes" a correct anchor into a
-    // null, or writes code expecting a null that never arrives.
+  it("every mint, at every offset and for each assoc, resolves back to the offset asked for", () => {
+    // THE #2001 CONTRACT. A mint is exact or it is refused: never an anchor that
+    // resolves somewhere else. Before #2001 an assoc-0 mint on a hardBreak or an
+    // intra-element separator retried at offset+1, so a `from` there resolved one
+    // character to the right and a no-edit `refreshRange` reported — and
+    // persisted — the shift as `updated`. Checked through the SERVER reader
+    // (`relPosToFlatOffset`), because that is the reader `refreshRange` uses.
+    const drifted: string[] = [];
+    let minted = 0;
+    for (const [name, markdown] of Object.entries(SHAPES)) {
+      const { ydoc } = docPair(markdown);
+      const flat = extractText(ydoc);
+      for (let i = 0; i <= flat.length; i++) {
+        for (const assoc of [0, -1] as const) {
+          const rel = flatOffsetToRelPos(ydoc, toFlatOffset(i), assoc);
+          if (rel === null) continue;
+          minted++;
+          const back = relPosToFlatOffset(ydoc, rel);
+          if (back !== i) drifted.push(`${name}[${i}] assoc ${assoc}: resolved to ${back}`);
+        }
+      }
+    }
+    expect(minted, "mints actually round-tripped").toBeGreaterThan(400);
+    expect(drifted, "mint/resolve round trip").toEqual([]);
+  });
+
+  it("anchors exactly at a hardBreak, covering the break itself", () => {
+    // `findXmlTextAtOffset` finds nothing ON a hardBreak, and before #2001 the
+    // assoc-0 retry shifted a `from` there one character right, so a range
+    // starting on the break covered nothing of it. The anchor now sits at the end
+    // of the text before the break, so the one-character range [br, br+1)
+    // resolves to exactly the break.
     const { ydoc, pmDoc } = docPair(SHAPES["hard breaks"]);
     const flat = extractText(ydoc);
 
@@ -355,22 +375,16 @@ describe("server flat offsets and client PM positions name the same character", 
       "the fixture must have a hardBreak between two letters",
     ).toBe("a\nb");
 
-    const shifted = flatOffsetToRelPos(ydoc, toFlatOffset(br), 0);
-    expect(shifted, "assoc 0 at a hardBreak mints rather than refusing").not.toBeNull();
+    const fromRel = flatOffsetToRelPos(ydoc, toFlatOffset(br), 0);
+    expect(fromRel, "assoc 0 at a hardBreak mints").not.toBeNull();
+    expect(relPosToFlatOffset(ydoc, fromRel!), "and resolves back to the break").toBe(br);
 
     const at = relRangeToPmPositions(ydoc, pmDoc, {
-      fromRel: shifted!,
+      fromRel: fromRel!,
       toRel: flatOffsetToRelPos(ydoc, toFlatOffset(br + 1), -1)!,
     });
-    // Both endpoints resolve to the same place. The `from` needed the retry and
-    // shifted right onto "b"; the `to` needed no retry at all — offset br+1 is
-    // already the start of "bravo" — so they meet on one position. Worth stating
-    // precisely, because "the `to` snapped back to the end of alpha" describes
-    // the same point and is the wrong mechanism.
-    expect(at, "the shifted anchor still resolves").not.toBeNull();
-    expect(
-      pmDoc.textBetween(at!.from, at!.to),
-      "so the hardBreak itself is covered by nothing",
-    ).toBe("");
+    expect(at, "the anchor resolves").not.toBeNull();
+    expect(at!.to - at!.from, "the range spans the break's one PM position").toBe(1);
+    expect(pmDoc.textBetween(at!.from, at!.to, "\n", "\n"), "and covers the break").toBe("\n");
   });
 });

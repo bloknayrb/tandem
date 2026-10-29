@@ -1,23 +1,18 @@
 /**
- * The reload relocation pass must not chase a TRUNCATED `textSnapshot` (#1486).
+ * Truncated snapshots, bounds and reporting across a content-replacing reload.
  *
- * `captureSnapshot` caps snapshots at 200 characters. The relocation pass in
- * `reloadFromDisk` finds the snapshot with `indexOf` and re-anchors the
- * annotation to `match + snapshot.length` — correct for a whole snapshot, and
- * for a PREFIX it silently moves the annotation's end to the cap. A 900-word
- * annotation becomes a 200-character one, on every reload, with no error and no
- * notification. Accept then replaces the wrong span, and the `.docx` apply
- * guard — which compares the same slice — starts PASSING on the shrunken range
- * instead of rejecting it.
- *
- * This hazard was DORMANT before #1486 and opened by its first draft. The old
- * code marked the cut with a trailing `"..."`, which occurs nowhere in the
- * document, so `indexOf` missed, `validateRange` returned RANGE_GONE, and the
- * pass left the annotation alone by accident. Removing the marker to fix the
- * UNDO path made the prefix findable and turned that accident into corruption.
- * The negative control below is the point of this file: it drives the same
- * reload with the guard's input removed and shows the shrink actually happens,
- * so a future deletion of the guard cannot pass as a no-op.
+ * `captureSnapshot` caps snapshots at 200 characters (#1486), so a long
+ * annotation's `textSnapshot` is a PREFIX of its text. Before #2269 the
+ * file-watcher's relocation pass searched the whole document for a snapshot
+ * and re-anchored to `match + snapshot.length`, which silently shrank an
+ * unmarked long annotation to the cap; the flag was what stopped that. Since
+ * #2269 every content-replacing reload runs the remap in
+ * `documents/reload-remap.ts` instead: a record is carried by exact arithmetic
+ * when its text is outside every changed region, probed for only inside the
+ * changed region it touches, and detached (`degraded`) when its text is gone.
+ * The flag still decides how a record is READ — whether its stored range is
+ * seen to hold its snapshot at all — and the negative control below shows that
+ * an unmarked prefix makes the record untrusted, never re-anchored.
  */
 
 import fs from "node:fs/promises";
@@ -56,7 +51,7 @@ import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { anchoredRange } from "../../src/server/positions.js";
+import { anchoredRange, refreshRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { withMcp } from "../../src/shared/origins.js";
@@ -159,19 +154,19 @@ function spanOf(doc: Y.Doc, id: string): number {
 }
 
 /**
- * Every `[watcher]` line printed while `fn` runs.
+ * Every `[reload-remap]` line printed while `fn` runs.
  *
- * Module-scoped rather than nested in one describe: #1767's relocation spec
- * asks the same question — "did this reload say anything?" — and a second copy
- * of the filter is how two specs start disagreeing about what counts as silence.
+ * Module-scoped rather than nested in one describe: #1767's spec asks the same
+ * question — "did this reload say anything?" — and a second copy of the filter
+ * is how two specs start disagreeing about what counts as silence.
  */
-async function watcherLogs(fn: () => Promise<void>): Promise<string[]> {
+async function remapLogs(fn: () => Promise<void>): Promise<string[]> {
   const spy = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     await fn();
     return spy.mock.calls
       .map((args) => args.map((a) => String(a)).join(" "))
-      .filter((line) => line.includes("[watcher]"));
+      .filter((line) => line.includes("[reload-remap]"));
   } finally {
     spy.mockRestore();
   }
@@ -184,12 +179,11 @@ function expectedStart(doc: Y.Doc): number {
   return idx;
 }
 
-describe("#1486: reload relocation skips truncated snapshots", () => {
+describe("#1486: a truncated snapshot is a prefix, never the whole text", () => {
   /**
    * Open with the paragraph at offset 0, then rewrite the file with a heading
    * in front of it. The paragraph's content is unchanged but its flat offsets
-   * all shift, so the stored range no longer validates and the relocation pass
-   * is the code under test.
+   * all shift, so the record is carried by the remap's exact shift.
    */
   async function reloadWithShiftedOffsets(extras: Partial<Annotation> = {}) {
     const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
@@ -201,106 +195,99 @@ describe("#1486: reload relocation skips truncated snapshots", () => {
     return { doc, id };
   }
 
-  it("relocates a flagged annotation to the moved text at its FULL span", async () => {
+  it("carries a flagged annotation to the moved text at its FULL span, anchored", async () => {
     const { doc, id } = await reloadWithShiftedOffsets({ textSnapshotTruncated: true });
     expect(spanOf(doc, id), "not shrunk to the cap").toBe(LONG_BODY.length);
-    // The half an earlier draft of this test could not see. Asserting the span
-    // alone passes with the annotation anchored at completely the wrong offset
-    // — which is what a bare `continue` here produced: correct length, stale
-    // start, and a freshly minted `relRange` cementing it.
+    // Span alone passes with the annotation at completely the wrong offset;
+    // the start is the other half.
     expect(annOf(doc, id).range.from, "starts where the text now starts").toBe(expectedStart(doc));
+    expect(refreshRange(annOf(doc, id), doc).kind).toBe("ok");
   });
 
-  it("relocates a LEGACY truncated annotation too, by trimming the old marker", async () => {
+  it("carries a LEGACY truncated annotation too, by trimming the old marker", async () => {
     // Records written before the flag existed carry no `textSnapshotTruncated`
-    // — only the old trailing ellipsis. Those three characters are not in the
-    // document, so searching for the snapshot as stored finds nothing and the
-    // annotation falls to RANGE_GONE: it survives, but stranded at stale
-    // offsets. `snapshotSearchPrefix` trims them, which turns the accidental
-    // miss into a real relocation.
+    // — only the old trailing ellipsis, three characters that are not in the
+    // document. `snapshotSearchPrefix` trims them, so the stored range is seen
+    // to still hold its snapshot and the record is carried and re-anchored.
     const { doc, id } = await reloadWithShiftedOffsets({
       textSnapshot: `${LONG_BODY.slice(0, SNAPSHOT_CAP - 3)}...`,
       textSnapshotTruncated: undefined,
     });
     expect(spanOf(doc, id)).toBe(LONG_BODY.length);
     expect(annOf(doc, id).range.from).toBe(expectedStart(doc));
+    expect(refreshRange(annOf(doc, id), doc).kind).toBe("ok");
   });
 
-  it("NEGATIVE CONTROL: unmarked, the same 200-char snapshot shrinks the span to the cap", async () => {
-    // Not an assertion about desired behaviour — an assertion that the marker
-    // is load-bearing. This annotation is byte-identical to the first test's
-    // except that nothing says its snapshot is a prefix, so the pass believes
-    // the 200 characters ARE the annotated text and re-anchors the end to the
-    // match's end. Remove the `truncated` branch in `file-opener.ts` and the
-    // two tests above collapse onto this result.
-    //
-    // It also pins the shape a legitimately-200-character annotation must keep:
-    // for that one, shrinking to 200 is CORRECT, because 200 is its true span.
+  it("NEGATIVE CONTROL: unmarked, the same 200-char snapshot contradicts the range and is never re-anchored", async () => {
+    // Not an assertion about desired behaviour so much as that the marker is
+    // load-bearing. This record is byte-identical to the first test's except
+    // that nothing says its snapshot is a prefix — so the 200 characters claim
+    // to BE the annotated text, the full stored span contradicts them, and the
+    // remap treats the record as untrusted: shifted, never minted a relRange
+    // (#1764), still `degraded`. The pre-#2269 watcher's global relocation
+    // shrank exactly this record to the cap instead.
     const { doc, id } = await reloadWithShiftedOffsets();
-    expect(spanOf(doc, id)).toBe(SNAPSHOT_CAP);
+    expect(spanOf(doc, id), "neither shrunk nor extended").toBe(LONG_BODY.length);
     expect(annOf(doc, id).range.from).toBe(expectedStart(doc));
+    expect(annOf(doc, id).relRange, "no anchor minted over unverified offsets").toBeUndefined();
+    expect(refreshRange(annOf(doc, id), doc).kind).toBe("degraded");
   });
 });
 
 /**
- * #1752: the relocation call below the fixed one must survive the new rules.
- *
- * `resolvedTo = resolvedFrom + span` carries the ORIGINAL span, so if the
- * external edit deleted text INSIDE the annotated region the computed end now
- * exceeds the new document length. Before this change `resolveToElement`'s
- * clamp made `anchoredRange` succeed anyway; after it, an unclamped call
- * returns INVALID_RANGE — and `if (relocated.ok)` has no `else`, while
- * `refreshAllRanges` has already minted a fresh `relRange` from the STALE flat
- * offsets. That is the durable mispin the #1486 comment describes as the first
- * draft's bug, re-opened by a bounds check.
- *
- * Every fixture here is TRUNCATED on purpose. On the non-truncated branch
- * `resolvedTo = best + snapshot.length` can never exceed the length (the
- * snapshot was just found in the text) and can never be empty, so a
- * non-truncated fixture passes vacuously.
+ * #1752's bounds, under the remap (#2269). A carried span may never end past
+ * the document, and a point record must still go through `anchoredRange`
+ * (`allowEmpty`).
  */
-describe("#1752: the relocation call keeps working under the new bounds", () => {
-  it("clamps a relocated end past the new document length instead of mispinning", async () => {
+describe("#1752: the remap keeps working under the bounds", () => {
+  it("shrinks a record whose tail was deleted to the text that survived", async () => {
     const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
     const id = seedLongAnnotation(doc, { textSnapshotTruncated: true });
 
-    // Shift the start AND delete text from inside the annotated region, so the
-    // carried span overshoots the end of the shorter document.
+    // Delete text from inside the annotated region, through its end: the
+    // record's end anchor would resolve to the deletion point in the editor,
+    // and the remap maps it there too.
     const shortened = LONG_BODY.slice(0, SNAPSHOT_CAP + 20);
-    await fs.writeFile(filePath, `# Heading\n\n${shortened}\n`);
+    await fs.writeFile(filePath, `${shortened}\n`);
     await triggerReload();
 
     const ann = annOf(doc, id);
-    const len = extractText(doc).length;
-    expect(ann.range.from, "relocated to where the prefix now is").toBe(
-      extractText(doc).indexOf(shortened.slice(0, SNAPSHOT_CAP)),
-    );
-    expect(ann.range.to, "clamped to the document end, not left past it").toBeLessThanOrEqual(len);
-    expect(ann.range.to).toBeGreaterThan(ann.range.from);
+    expect(ann.range.from).toBe(0);
+    expect(ann.range.to, "ends where the surviving text ends").toBe(extractText(doc).length);
+    expect(extractText(doc).slice(ann.range.from, ann.range.to)).toBe(shortened);
+    expect(ann.relRange, "re-anchored").toBeDefined();
   });
 
-  it("relocates a COLLAPSED annotation (span 0) rather than dropping it into the no-else hole", async () => {
-    // `refreshRange` can resolve a relRange to newFrom === newTo (#1764's
-    // acknowledged zero-length output) while the annotation keeps its older
-    // non-empty snapshot: it passes the `!ann.textSnapshot` guard and the
-    // `probe.length === 0` guard, reaches this call with span 0, and the new
-    // `empty` rule would reject it. Hence `allowEmpty: true` here.
+  it("detaches, rather than guesses, when that truncation is merged with another edit", async () => {
+    // Inserting a heading on the line above makes the line diff report ONE
+    // changed region covering both lines, so the record's end is inside a
+    // replaced region and its old text is probed — and is not there, because
+    // it was cut. Collapsed and `degraded`, never left on unrelated text.
     const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
-    const text = extractText(doc);
-    const idx = text.indexOf(LONG_BODY);
-    const id = "ann_collapsed";
+    const id = seedLongAnnotation(doc, { textSnapshotTruncated: true });
+
+    await fs.writeFile(filePath, `# Heading\n\n${LONG_BODY.slice(0, SNAPSHOT_CAP + 20)}\n`);
+    await triggerReload();
+
+    const ann = annOf(doc, id);
+    expect(ann.range.from).toBe(ann.range.to);
+    expect(ann.range.to).toBeLessThanOrEqual(extractText(doc).length);
+    expect(refreshRange(ann, doc).kind).toBe("degraded");
+  });
+
+  it("carries a POINT record and re-anchors it (allowEmpty)", async () => {
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
+    const idx = extractText(doc).indexOf(LONG_BODY);
+    const id = "ann_point";
     withMcp(doc, () =>
       doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
         id,
         author: "claude",
         type: "comment",
-        // Collapsed range, non-empty truncated snapshot.
         range: { from: toFlatOffset(idx), to: toFlatOffset(idx) },
-        content: "collapsed",
+        content: "an insertion point",
         status: "pending",
         timestamp: 0,
-        textSnapshot: LONG_BODY.slice(0, SNAPSHOT_CAP),
-        textSnapshotTruncated: true,
         rev: 1,
       } as Annotation),
     );
@@ -309,15 +296,17 @@ describe("#1752: the relocation call keeps working under the new bounds", () => 
     await triggerReload();
 
     const ann = annOf(doc, id);
-    expect(ann.range.from, "relocated, not left at the stale offset").toBe(expectedStart(doc));
+    // A point sticks to the text after it, so the heading inserted above does
+    // not capture it.
+    expect(ann.range.from, "carried with its text").toBe(expectedStart(doc));
     expect(ann.range.to).toBe(ann.range.from);
+    expect(ann.relRange, "minted for a point").toBeDefined();
   });
 
-  it("relocates when the capped probe starts mid-emoji instead of mispinning", async () => {
-    // `resolvedFrom` is `fullText.indexOf(probe)` and the probe is a
-    // character-count-capped PREFIX (#1486), so it can be cut between the
-    // halves of a pair. These are derived offsets and nothing here is
-    // serialized to a file, so the relocation call takes surrogates: "ignore".
+  it("carries a record that starts mid-emoji instead of refusing it", async () => {
+    // A stored range can start between the halves of a pair (a CRDT edit
+    // inside an emoji). These are derived offsets and nothing here is written
+    // to a file, so the remap takes surrogates: "ignore".
     const body = `\u{1F600}${LONG_BODY}`;
     const { doc, filePath, triggerReload } = await setupOpenedFile(`${body}\n`);
     const text = extractText(doc);
@@ -344,33 +333,23 @@ describe("#1752: the relocation call keeps working under the new bounds", () => 
 
     const ann = annOf(doc, id);
     const now = extractText(doc);
-    expect(ann.range.from, "relocated to the shifted mid-pair start").toBe(
+    expect(ann.range.from, "carried to the shifted mid-pair start").toBe(
       now.indexOf(body.slice(1, 1 + SNAPSHOT_CAP)),
     );
-    expect(ann.range.to).toBeGreaterThan(ann.range.from);
+    expect(ann.range.to - ann.range.from).toBe(SNAPSHOT_CAP);
   });
 });
 
 /**
- * #1752 round 2: the relocation PROBE's own options, and the arm that reports a
- * relocation it could not do.
- *
- * These two are a pair. The probe decides whether an annotation is healthy; the
- * `else` arm below `RANGE_MOVED` is what SAYS SO when it is not. Get the probe's
- * options wrong and that arm fires on a healthy annotation forever; delete the
- * arm and a genuinely mispinned one goes back to being silent. Neither had a
- * spec, and both were silent for months.
+ * What the remap SAYS. A healthy record must reload in silence, and a record it
+ * detaches must be named — the pre-#2269 watcher's RANGE_GONE arm was silent
+ * for months while its twin logged.
  */
-describe("#1752: the relocation probe and its failure report", () => {
-  it("says NOTHING when a capped probe ends mid-pair and the document did not change", async () => {
-    // The probe range ends at `from + probe.length`, and `captureSnapshot` caps
-    // a snapshot at SNAPSHOT_CAP code units — so a body with an emoji straddling
-    // that boundary puts `probeTo` between the halves of a pair. On a reload
-    // that does NOT move the annotation, staleness passes and the surrogate
-    // check is the next thing to run: without `surrogates: "ignore"` on the
-    // PROBE it answers INVALID_RANGE, which is not RANGE_MOVED, so a perfectly
-    // healthy annotation takes the failure arm and is reported as durably
-    // mispinned — on every reload, forever.
+describe("#1752 / #2269: the remap's report", () => {
+  it("says NOTHING when a capped snapshot ends mid-pair and the document did not change", async () => {
+    // `captureSnapshot` caps at SNAPSHOT_CAP code units, so a body with an emoji
+    // straddling that boundary makes the snapshot prefix end between the halves
+    // of a pair. The record must still be seen as matching and carried.
     const body = `${"x".repeat(SNAPSHOT_CAP - 1)}\u{1F600} and then some trailing words.`;
     // Assert the fixture actually straddles the cap rather than trusting it:
     // high surrogate at CAP-1, low at CAP.
@@ -397,59 +376,46 @@ describe("#1752: the relocation probe and its failure report", () => {
     );
 
     // The same bytes back: nothing moved, nothing is stale.
-    const logs = await watcherLogs(async () => {
+    const logs = await remapLogs(async () => {
       await fs.writeFile(filePath, `${body}\n`);
       await triggerReload();
     });
 
-    expect(logs, "a healthy annotation must not be reported as mispinned").toEqual([]);
+    expect(logs, "a healthy annotation must not be reported").toEqual([]);
     const ann = annOf(doc, id);
     expect(ann.range.from).toBe(idx);
     expect(ann.range.to).toBe(idx + body.length);
   });
 
-  it("REPORTS an annotation whose text is gone rather than leaving it silently mispinned", async () => {
-    // This arm was silent while its RANGE_MOVED twin logged, and the outcome is
-    // identical: `refreshAllRanges` has already re-anchored a fresh relRange
-    // onto the stale flat offsets, so the record is durably pinned to
-    // coordinates describing different text and nothing revisits it.
+  it("REPORTS an annotation whose text is gone, and leaves it degraded", async () => {
     const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
     const id = seedLongAnnotation(doc, { textSnapshotTruncated: true });
 
-    const logs = await watcherLogs(async () => {
-      // The annotated paragraph is gone entirely, so the staleness search finds
-      // the probe nowhere and answers RANGE_GONE.
+    const logs = await remapLogs(async () => {
       await fs.writeFile(filePath, "# Something else entirely\n\nNothing of the original.\n");
       await triggerReload();
     });
 
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain(id);
-    expect(logs[0]).toContain("RANGE_GONE");
-    expect(logs[0]).toMatch(/stale coordinates/i);
+    expect(logs[0]).toMatch(/detached/i);
+    expect(refreshRange(annOf(doc, id), doc).kind).toBe("degraded");
   });
 
-  it("REPORTS a RANGE_MOVED relocation the bounds check refuses, and leaves the record where it was", async () => {
-    // The twin of the arm above, on the RANGE_MOVED side: the text was FOUND,
-    // the relocation was computed, and `anchoredRange` still said no.
-    //
-    // What can still make it say no, after #1752's clamp: the clamp bounds
-    // `resolvedTo` from ABOVE (`Math.min(..., text.length)`) and nothing bounds
-    // it from below, so a stored range whose `to` precedes its `from` carries a
-    // NEGATIVE span and `resolvedFrom + span` lands before `resolvedFrom` —
-    // `inverted`, which `allowEmpty` does not excuse. That state is reachable
-    // rather than hypothetical: `refreshRange` has an explicit arm for an
-    // inverted CRDT resolution (it logs and returns `failed`, KEEPING the
-    // record's offsets), and the annotations Y.Map is writable by any connected
-    // client. The probe itself is unbothered — staleness runs before the shape
-    // and bound checks, so `fullText.slice(from, to)` on an inverted range is
-    // `""`, never the probe, and the answer is RANGE_MOVED.
+  it("never mints an anchor for an INVERTED stored range, and leaves it degraded", async () => {
+    // `refreshRange` has an explicit arm for an inverted CRDT resolution (it
+    // logs and returns `failed`, KEEPING the record's offsets), and the
+    // annotations Y.Map is writable by any connected client, so an inverted
+    // stored range is reachable. The pre-#2269 watcher relocated it by its
+    // snapshot and then refused the inverted carried span; the remap shifts
+    // each endpoint, sees an untrusted record (an inverted range slices to "",
+    // which contradicts the snapshot) and mints nothing.
     const prefix = "Intro line.\n\n";
     const { doc, filePath, triggerReload } = await setupOpenedFile(`${prefix}${LONG_BODY}\n`);
     const staleFrom = extractText(doc).indexOf(LONG_BODY);
     expect(staleFrom).toBeGreaterThan(5);
     const staleTo = staleFrom - 5;
-    const id = "ann_inverted_relocation";
+    const id = "ann_inverted";
     withMcp(doc, () =>
       doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
         id,
@@ -465,45 +431,16 @@ describe("#1752: the relocation probe and its failure report", () => {
       } as Annotation),
     );
 
-    const logs = await watcherLogs(async () => {
-      // Same paragraph, shifted: the probe is found at a new offset, so the
-      // pass reaches the relocation call rather than RANGE_GONE.
-      await fs.writeFile(
-        filePath,
-        `# A heading that did not used to be here\n\n${prefix}${LONG_BODY}\n`,
-      );
-      await triggerReload();
-    });
+    const heading = "# A heading that did not used to be here\n\n";
+    await fs.writeFile(filePath, `${heading}${prefix}${LONG_BODY}\n`);
+    await triggerReload();
 
-    const movedTo = expectedStart(doc);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain(`Relocation rejected for annotation ${id}`);
-    // The pair it refused, spelled out — this is what pins the clamp's
-    // arithmetic rather than merely the fact that something was logged.
-    expect(logs[0]).toContain(`[${movedTo}, ${movedTo - 5}]`);
-    expect(logs[0]).toMatch(/stale coordinates/i);
-
-    // The consequence the message claims, asserted rather than trusted: the
-    // record still carries its pre-reload offsets and they no longer describe
-    // the annotated text.
-    //
-    // **The durable-mispin half changed with #1764, and this assertion is
-    // inverted from what it used to be.** `refreshAllRanges` used to mint a
-    // relRange from these stale offsets, so the record was pinned to
-    // coordinates describing different text and every later reload resolved it
-    // cleanly. The lazy-attach arm is now gated on the stored range still
-    // holding its `textSnapshot` — an inverted range slices to `""`, which
-    // contradicts a non-empty snapshot — so the mint is refused, the record
-    // answers `degraded`, and NO relRange is written. The rejection log above
-    // is unchanged and is still the signal; what it no longer describes is a
-    // durable pin.
     const ann = annOf(doc, id);
-    expect(ann.range.from, "not relocated").toBe(staleFrom);
-    expect(ann.range.to).toBe(staleTo);
-    expect(ann.relRange, "left alone, not durably pinned (#1764)").toBeUndefined();
-    expect(extractText(doc).slice(staleFrom, staleFrom + SNAPSHOT_CAP)).not.toBe(
-      LONG_BODY.slice(0, SNAPSHOT_CAP),
-    );
+    const shift = extractText(doc).indexOf(LONG_BODY) - staleFrom;
+    expect(shift).toBeGreaterThan(0);
+    expect(ann.range).toEqual({ from: staleFrom + shift, to: staleTo + shift });
+    expect(ann.relRange, "not durably pinned (#1764)").toBeUndefined();
+    expect(refreshRange(ann, doc).kind).toBe("degraded");
   });
 });
 
@@ -515,16 +452,16 @@ describe("#1752: the relocation probe and its failure report", () => {
  * SURROGATE. That matched in process and matched out of the lossless JSON
  * envelope, but the first Yjs `encodeStateAsUpdate` — session persist, doc
  * swap, any client sync — re-encoded it as U+FFFD, after which the snapshot
- * occurs NOWHERE in the document: `indexOf` misses, the probe answers
- * RANGE_GONE, and the annotation stays pinned to stale coordinates on every
- * reload forever.
+ * occurs NOWHERE in the document. Before #2269 the watcher's probe then
+ * answered RANGE_GONE forever; under the remap the same miss would read the
+ * stored range as contradicting its snapshot, and the record would be carried
+ * unanchored and `degraded` instead of re-anchored.
  *
  * These records are already on disk, so the writer-side back-off cannot reach
  * them; `snapshotSearchPrefix` trims the dead tail instead. This is the same
- * shape as the legacy-ellipsis case above — an accidental `indexOf` miss turned
- * into a real relocation — and it is asserted here rather than only at the
- * predicate because the placement of that trim decides whether the flag-bearing
- * population (i.e. all of it) is reached at all.
+ * shape as the legacy-ellipsis case above, and it is asserted here rather than
+ * only at the predicate because the placement of that trim decides whether the
+ * flag-bearing population (i.e. all of it) is reached at all.
  */
 describe("#1767: a split-pair snapshot tail relocates instead of going RANGE_GONE", () => {
   /** Emoji straddling the cap: high half at CAP-1, low half at CAP. */
@@ -550,7 +487,7 @@ describe("#1767: a split-pair snapshot tail relocates instead of going RANGE_GON
       } as Annotation),
     );
 
-    const logs = await watcherLogs(async () => {
+    const logs = await remapLogs(async () => {
       // Same paragraph, pushed down by a heading: the stored offsets are stale,
       // so relocation is the only thing that can save the annotation.
       await fs.writeFile(filePath, `# A heading that did not used to be here\n\n${STRADDLING}\n`);
@@ -582,6 +519,10 @@ describe("#1767: a split-pair snapshot tail relocates instead of going RANGE_GON
     const ann = annOf(doc, id);
     expect(ann.range.from, "relocated to where the text now starts").toBe(straddlingStart(doc));
     expect(ann.range.to - ann.range.from, "carried at its full span").toBe(STRADDLING.length);
+    // The discriminating half under the remap: without the trim the stored
+    // range would read as contradicting its snapshot and be carried
+    // UNANCHORED (`degraded`). Re-anchored is what proves the trim ran.
+    expect(refreshRange(ann, doc).kind, "re-anchored, not degraded").toBe("ok");
   });
 
   it("CONTROL: the pre-round-trip spelling of the same record was never broken here", async () => {

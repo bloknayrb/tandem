@@ -50,17 +50,11 @@ const LINE_BREAK = /\r\n|[\r\n]/;
  *      at exactly the same characters. Verified against both split strategies —
  *      replacing the block wholesale and truncating it in place — and the
  *      annotation kept its text under both, for offsets that sit on a real
- *      character. **Caveat: an offset sitting exactly ON the break itself is
- *      not one of those** — `flatOffsetToRelPos`'s boundary fallback has to
- *      round it to the nearest real character, and which character counts as
- *      nearest differs before and after this flatten (pre-flatten it rounds
- *      forward into the second paragraph; post-flatten the break offset is a
- *      genuine paragraph edge and resolves exactly). An anchor minted at that
- *      one offset therefore lands in a different `Y.XmlText`, at a different
- *      flat offset, depending on which side of the flatten it's asked from.
- *      Not fixed here — it would mean redesigning the shared
- *      `flatOffsetToRelPos` tie-break rule for every caller, not just this
- *      one. See `tests/server/plaintext-flatten.test.ts`'s boundary test.
+ *      character — and, since #2001, for an offset sitting exactly ON the
+ *      break too: `flatOffsetToRelPos` anchors a separator offset at the end
+ *      of the text before it, which is the same flat offset whether that
+ *      separator is a hardBreak (pre-flatten) or a paragraph edge (after).
+ *      See `tests/server/plaintext-flatten.test.ts`'s boundary test.
  *   2. It runs on a one-shot, deliberate action, not on the autosave timer. A
  *      normalizer inside `plaintextAdapter.save` would ALSO have fired from
  *      `serializeDocument`, which is documented as touching neither disk nor

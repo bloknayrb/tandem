@@ -9,8 +9,10 @@
  * the HTTP route is unreachable there; the MCP transport is the only channel
  * back to the host, and this tool rides it.
  *
- * Security: adds NO new HTTP surface. `runDoctor()` is a side-effect-free
- * collector; the MCP transport is already loopback-gated, the same posture
+ * Security: adds NO new HTTP surface. `runDoctor()` writes nothing; it does
+ * spawn one process, a static `npm ls -g --depth=0 --json tandem-editor`, and
+ * makes loopback-only HTTP probes, none of it steerable by the tool's (empty)
+ * input — which is why a launched session pre-approves it (#2286). The MCP transport is already loopback-gated, the same posture
  * that lets `/api/diagnostics` return the full report (paths/PIDs/config URLs)
  * loopback-only. Like every MCP tool it is unreachable while Tandem is
  * unlicensed, because the `/mcp` transport itself refuses (#1521); `tandem

@@ -18,7 +18,7 @@ import { render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
-import { TANDEM_SUPPORT_EMAIL } from "../../src/shared/constants";
+import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../src/shared/constants";
 
 // Set BEFORE mount — the tab captures it once at init, which is the point of
 // the fix (the runtime never changes under a live component).
@@ -29,9 +29,12 @@ vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal)
 });
 
 const fetchLicenseStatus = vi.fn<() => Promise<LicenseStatusResponse>>();
+const deactivateLicenseClient =
+  vi.fn<() => Promise<{ ok: true; removed: boolean } | { ok: false; error: string }>>();
 vi.mock(import("../../src/client/hooks/useLicense"), () => ({
   fetchLicenseStatus: () => fetchLicenseStatus(),
   activateLicenseClient: vi.fn(),
+  deactivateLicenseClient: () => deactivateLicenseClient(),
 }));
 
 const { licenseStore } = await import("../../src/client/hooks/useLicense.svelte");
@@ -75,6 +78,7 @@ async function flush(): Promise<void> {
 
 beforeEach(() => {
   fetchLicenseStatus.mockReset();
+  deactivateLicenseClient.mockReset();
   licenseStore.stop();
 });
 
@@ -303,13 +307,255 @@ describe("Settings → License — no purchase link for an unverifiable licence 
     ["trial + unverifiable", { ...TRIAL, licenseUnverifiable: "MALFORMED" }, false],
     ["restricted + unlicensed", RESTRICTED, true],
     ["a plain trial", TRIAL, true],
+    // #1943: a dark build carries no reason code, only `licenseFileUnverifiable`,
+    // and the Remove section says the file fails its check — so no buy link.
+    [
+      "a dark build with a licence file that would not verify",
+      {
+        gateActive: false,
+        updateWindowCurrent: false,
+        licenseInstalled: false,
+        licenseFileUnverifiable: true,
+      },
+      false,
+    ],
+    [
+      "a dark build with nothing installed",
+      { gateActive: false, updateWindowCurrent: false, licenseInstalled: false },
+      true,
+    ],
   ] as const)("%s ⇒ buy link shown: %s", (_label, state, buy) => {
     licenseStore.set(state as LicenseStatusResponse);
     const { container, unmount } = render(SettingsLicenseTab, { props: makeProps() });
     expect(byTestId(container, "license-buy-link") !== null).toBe(buy);
-    // The support mailto renders in all four.
+    // The support mailto renders in every case.
     expect(container.querySelector(`a[href='mailto:${TANDEM_SUPPORT_EMAIL}']`)).toBeTruthy();
     expect(flat(container)).toContain("Trouble activating?");
     unmount();
+  });
+});
+
+/**
+ * The grace period (#2231): the notice replaces the plain unverifiable warning
+ * (one remedy, not two), and there is still no purchase link.
+ */
+describe("Settings → License — the grace period (#2231)", () => {
+  const GRACE: LicenseStatusResponse = {
+    gateActive: true,
+    status: "grace",
+    updateWindowCurrent: false,
+    licenseUnverifiable: "BAD_SIGNATURE",
+    grace: {
+      firstFailedAt: new Date(2026, 9, 29, 12).toISOString(),
+      endsAt: new Date(2026, 10, 12, 12).toISOString(),
+      daysRemaining: 6,
+    },
+  };
+
+  it("shows the grace notice with its date, no plain warning, and no buy link", () => {
+    licenseStore.set(GRACE);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    const notice = byTestId(container, "license-grace-notice");
+    expect(notice).toBeTruthy();
+    expect(notice?.getAttribute("role")).toBe("alert");
+    expect(flat(notice)).toContain("until 2026-11-12");
+    expect(flat(notice)).toContain(TANDEM_SUPPORT_EMAIL);
+    expect(byTestId(container, "license-unverifiable-warning")).toBeNull();
+    expect(byTestId(container, "license-buy-link")).toBeNull();
+    expect(flat(byTestId(container, "license-status-pill"))).toBe(
+      "License not verified — AI on for 6 more days",
+    );
+  });
+
+  it("outside grace, an unverifiable licence keeps the plain warning (positive twin)", () => {
+    licenseStore.set({
+      gateActive: true,
+      status: "restricted",
+      updateWindowCurrent: false,
+      licenseUnverifiable: "BAD_SIGNATURE",
+    });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-grace-notice")).toBeNull();
+    expect(byTestId(container, "license-unverifiable-warning")).toBeTruthy();
+  });
+});
+
+/** "Remove license" (#1943): local only, behind an inline confirm. */
+describe("Settings → License — Remove license (#1943)", () => {
+  const LICENSED: LicenseStatusResponse = {
+    gateActive: true,
+    status: "licensed",
+    updateWindowCurrent: true,
+    license: { email: "paying@example.com", type: "personal" },
+  };
+
+  it.each([
+    ["licensed (armed)", LICENSED, true],
+    [
+      "a dark build with a licence installed",
+      { ...LICENSED, gateActive: false, licenseInstalled: true },
+      true,
+    ],
+    [
+      "grace",
+      {
+        gateActive: true,
+        status: "grace",
+        updateWindowCurrent: false,
+        licenseUnverifiable: "MALFORMED",
+        grace: { firstFailedAt: "x", endsAt: "y", daysRemaining: 2 },
+      },
+      true,
+    ],
+    [
+      "restricted + unverifiable",
+      {
+        gateActive: true,
+        status: "restricted",
+        updateWindowCurrent: false,
+        licenseUnverifiable: "UNKNOWN",
+      },
+      true,
+    ],
+    ["a plain trial (no licence file)", TRIAL, false],
+    [
+      "a dark build with nothing installed",
+      { ...LICENSED, gateActive: false, licenseInstalled: false },
+      false,
+    ],
+    [
+      "a dark build with a licence file that would not verify",
+      { ...LICENSED, gateActive: false, licenseInstalled: false, licenseFileUnverifiable: true },
+      true,
+    ],
+  ] as const)("%s ⇒ section shown: %s", (_label, state, shown) => {
+    licenseStore.set(state as LicenseStatusResponse);
+    const { container, unmount } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-remove-section") !== null).toBe(shown);
+    unmount();
+  });
+
+  it("asks first; Cancel deletes nothing", async () => {
+    licenseStore.set(LICENSED);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-remove-confirm")).toBeNull();
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const confirm = byTestId(container, "license-remove-confirm");
+    expect(confirm).toBeTruthy();
+    expect(flat(confirm)).toContain("activate the same key again any time");
+    byTestId(container, "license-remove-cancel")?.click();
+    await flush();
+    expect(byTestId(container, "license-remove-confirm")).toBeNull();
+    expect(deactivateLicenseClient).not.toHaveBeenCalled();
+  });
+
+  it("a key that fails its check is NOT promised a reactivation", async () => {
+    licenseStore.set({
+      gateActive: true,
+      status: "grace",
+      updateWindowCurrent: false,
+      licenseUnverifiable: "BAD_SIGNATURE",
+      grace: { firstFailedAt: "x", endsAt: "y", daysRemaining: 2 },
+    });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const text = flat(byTestId(container, "license-remove-confirm"));
+    expect(text).toContain("can't be activated again");
+    expect(text).not.toContain("activate the same key again any time");
+  });
+
+  it("on a dark build, says nothing changes now and the key is needed at v1.0", async () => {
+    licenseStore.set({ ...LICENSED, gateActive: false, licenseInstalled: true });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const text = flat(byTestId(container, "license-remove-confirm"));
+    expect(text).toContain("nothing changes now");
+    expect(text).not.toContain("AI features will turn off");
+  });
+
+  it("on a dark build with a failing file, promises neither v1.0 use nor a purchase", async () => {
+    licenseStore.set({
+      ...LICENSED,
+      gateActive: false,
+      licenseInstalled: false,
+      licenseFileUnverifiable: true,
+    });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    const text = flat(byTestId(container, "license-remove-confirm"));
+    expect(text).toContain("nothing changes now");
+    expect(text).toContain("wouldn't work at v1.0");
+    expect(text).not.toContain("will be needed at v1.0");
+    expect(text).not.toContain(TANDEM_PURCHASE_URL);
+  });
+
+  it("confirming removes, notifies and re-polls", async () => {
+    licenseStore.set(LICENSED);
+    deactivateLicenseClient.mockResolvedValue({ ok: true, removed: true });
+    fetchLicenseStatus.mockResolvedValue({ ...TRIAL });
+    const props = makeProps();
+    const { container } = render(SettingsLicenseTab, { props });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    byTestId(container, "license-remove-confirm-btn")?.click();
+    await flush();
+    await flush();
+    expect(deactivateLicenseClient).toHaveBeenCalledTimes(1);
+    expect(props.notify).toHaveBeenCalledWith("info", "License removed.");
+    expect(fetchLicenseStatus).toHaveBeenCalled();
+    expect(byTestId(container, "license-remove-error")).toBeNull();
+  });
+
+  it("a removal whose re-poll fails says the status could not be refreshed", async () => {
+    licenseStore.set(LICENSED);
+    deactivateLicenseClient.mockResolvedValue({ ok: true, removed: true });
+    fetchLicenseStatus.mockRejectedValue(new Error("offline"));
+    const props = makeProps();
+    const { container } = render(SettingsLicenseTab, { props });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    byTestId(container, "license-remove-confirm-btn")?.click();
+    await flush();
+    await flush();
+    expect(props.notify).toHaveBeenCalledTimes(1);
+    const [, message] = props.notify.mock.calls[0] as [string, string];
+    expect(message).toContain("License removed.");
+    expect(message).toContain("Couldn't refresh the license status");
+  });
+
+  it("a poll that hides the section disarms an open confirm step", async () => {
+    licenseStore.set(LICENSED);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    expect(byTestId(container, "license-remove-confirm")).toBeTruthy();
+    licenseStore.set(TRIAL);
+    await flush();
+    expect(byTestId(container, "license-remove-section")).toBeNull();
+    licenseStore.set(LICENSED);
+    await flush();
+    expect(byTestId(container, "license-remove-section")).toBeTruthy();
+    expect(byTestId(container, "license-remove-confirm")).toBeNull();
+  });
+
+  it("a failure is shown inline and the confirm stays open", async () => {
+    licenseStore.set(LICENSED);
+    deactivateLicenseClient.mockResolvedValue({ ok: false, error: "Tandem couldn't remove it." });
+    const props = makeProps();
+    const { container } = render(SettingsLicenseTab, { props });
+    byTestId(container, "license-remove-button")?.click();
+    await flush();
+    byTestId(container, "license-remove-confirm-btn")?.click();
+    await flush();
+    await flush();
+    const err = byTestId(container, "license-remove-error");
+    expect(err?.getAttribute("role")).toBe("alert");
+    expect(flat(err)).toBe("Tandem couldn't remove it.");
+    expect(byTestId(container, "license-remove-confirm")).toBeTruthy();
+    expect(props.notify).not.toHaveBeenCalled();
   });
 });

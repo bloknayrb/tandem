@@ -14,25 +14,19 @@ import { createConnection } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import { API_CHANNEL_PERMISSION, API_CHANNEL_REPLY } from "../shared/api-paths.js";
+import { API_CHANNEL_REPLY } from "../shared/api-paths.js";
 import {
   redirectConsoleToStderr,
   resolveTandemUrl,
   withClaudeSessionHeader,
 } from "../shared/cli-runtime.js";
-import {
-  CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
-  CHANNEL_REPLY_FETCH_TIMEOUT_MS,
-  DEFAULT_MCP_PORT,
-} from "../shared/constants.js";
+import { CHANNEL_REPLY_FETCH_TIMEOUT_MS, DEFAULT_MCP_PORT } from "../shared/constants.js";
 import {
   describeFetchError,
   fetchWithTimeout,
   isAbortOrTimeoutError,
 } from "../shared/fetch-with-timeout.js";
 import { CHAT_ACK_RULE } from "../shared/launcher/contract.js";
-import { licenseRefusalMessage } from "../shared/sse-consumer.js";
 import { startEventBridge } from "./event-bridge.js";
 import { CHANNEL_INSTRUCTIONS } from "./instructions.js";
 
@@ -53,9 +47,18 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     { name: "tandem-channel", version: "0.1.0" },
     {
       capabilities: {
+        // `claude/channel` only. `claude/channel/permission` was declared
+        // until #1885 and is withdrawn: declaring it asks Claude Code to
+        // forward every tool-approval prompt here, and Tandem never had a way
+        // to answer one, so the prompts only ever reached a server-side
+        // holding map that any local caller could read (#1884). No
+        // `permission_request` handler is registered either, so a host that
+        // still sends one reaches nothing (the SDK drops an unhandled
+        // notification). Re-declaring the capability is a security change:
+        // only together with a working approval round trip and a
+        // docs/security.md register entry (ADR-047 update, 2026-10-28).
         experimental: {
           "claude/channel": {},
-          "claude/channel/permission": {},
         },
         tools: {},
       },
@@ -148,71 +151,6 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
       }
     }
     throw new Error(`Unknown tool: ${req.params.name}`);
-  });
-
-  // Claude Code also sends `input_preview` — the approval prompt's payload: file
-  // bodies for a `Write`, the command line for a `Bash`. It is deliberately
-  // absent here, so the parse below strips it and nothing downstream can reach
-  // it (#1884). The POST it used to ride on is a `NON_LOOPBACK_ALLOWED` route,
-  // so under Cowork the whole body crosses the LAN in plaintext — and the
-  // server discarded the field on arrival anyway (#1794). `description` is the
-  // tool-level summary line and still travels; that asymmetry is stated in
-  // docs/mcp-tools.md and the #1884 register entry.
-  const PermissionRequestSchema = z.object({
-    method: z.literal("notifications/claude/channel/permission_request"),
-    params: z.object({
-      request_id: z.string(),
-      tool_name: z.string(),
-      description: z.string(),
-    }),
-  });
-
-  // Latched for one refused stretch (#1521): the relay logs the licence refusal
-  // once, and a later successful relay re-arms it. Inside `runChannel`, never at
-  // module level, so two shims in one process (or two tests) never share it.
-  let permissionRelayRefused = false;
-
-  mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
-    try {
-      const res = await fetchWithTimeout(
-        `${tandemUrl}${API_CHANNEL_PERMISSION}`,
-        {
-          method: "POST",
-          headers: withClaudeSessionHeader({ "Content-Type": "application/json" }),
-          body: JSON.stringify({
-            requestId: params.request_id,
-            toolName: params.tool_name,
-            description: params.description,
-          }),
-        },
-        CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
-      );
-      if (res.ok) {
-        permissionRelayRefused = false;
-      } else {
-        // The body read is bounded by the request's own AbortSignal.timeout.
-        const refusal = await licenseRefusalMessage(res);
-        if (refusal !== null) {
-          if (!permissionRelayRefused) {
-            permissionRelayRefused = true;
-            console.error(
-              // Kind-neutral: the refusal may be an unverifiable licence, and its
-              // own message (appended) already names which.
-              `[Channel] Permission relay refused — Tandem's AI features are off; approve or deny in Claude Code instead. (${refusal})`,
-            );
-          }
-        } else {
-          console.error(
-            `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
-          );
-        }
-      }
-    } catch (err) {
-      console.error(
-        "[Channel] Failed to forward permission request:",
-        describeFetchError(err, API_CHANNEL_PERMISSION, CHANNEL_PERMISSION_FETCH_TIMEOUT_MS),
-      );
-    }
   });
 
   console.error(`[Channel] Tandem channel shim starting (server: ${tandemUrl})`);

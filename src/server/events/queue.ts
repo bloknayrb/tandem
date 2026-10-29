@@ -470,10 +470,12 @@ function pushEvent(event: TandemEvent): void {
 /**
  * Test-only seam onto `pushEvent`.
  *
- * Most queue tests drive real Y.Map observers, which is the right default. But
- * `document:*` events are pushed directly by the document service rather than
- * derived from an observer, so the Solo forwarder gate cannot be exercised for
- * them any other way.
+ * Most queue tests drive real Y.Map observers, which is the right default. This
+ * seam is for the cases an observer cannot stage cheaply — a hand-built event of
+ * an exact shape fed straight into the gates. (`document:*` events are derived
+ * from the CTRL_ROOM `documentMeta` observer like everything else; until #2069
+ * that observer never fired in production, which is why this comment once said
+ * they were pushed directly.)
  */
 export function _pushEventForTests(event: TandemEvent): void {
   pushEvent(event);
@@ -560,7 +562,19 @@ export function unsubscribe(cb: EventCallback): void {
 export function replaySince(lastEventId: string): TandemEvent[] {
   const idx = buffer.findIndex((e) => e.id === lastEventId);
   const slice = idx === -1 ? [...buffer] : buffer.slice(idx + 1);
-  return slice.filter((e) => shouldForwardExternally(e));
+  return slice.filter((e) => shouldForwardExternally(e) && !heldLifecycleEvent(e));
+}
+
+/**
+ * A `document:*` event that did NOT forward when it was pushed (#2069) — Solo,
+ * indeterminate mode, or a licence refusal at the time. `replaySince` filters
+ * by the mode NOW, so without this a consumer reconnecting after a switch to
+ * Tandem would receive the whole Solo span's tab churn, file names included.
+ * Lifecycle events are informational, so withholding a stale one costs nothing;
+ * annotation and chat events keep their existing replay rule.
+ */
+function heldLifecycleEvent(event: TandemEvent): boolean {
+  return event.type.startsWith("document:") && !forwardedEvents.has(event);
 }
 
 /**
