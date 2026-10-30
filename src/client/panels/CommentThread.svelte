@@ -43,9 +43,12 @@ const uid = $props.id();
 // A parent carrying its own `suggestedText` already shows the reason under its
 // disabled Accept (`AnnotationCardActions`). A reply-only proposal has no such
 // line — the parent's Accept is a live status change — so the reason is shown
-// here, once, or a disabled button's `title` is all there is (never announced:
-// a disabled button cannot take focus).
+// here, once per thread (under the first proposal; every disabled button points
+// at it), or a disabled button's `title` is all there is (never announced: a
+// disabled button cannot take focus).
 const showBlockedReason = $derived(targetLost && annotation.suggestedText === undefined);
+const firstProposalId = $derived(replies.find((r) => r.suggestedText !== undefined)?.id);
+const blockedReasonId = `${uid}-accept-blocked`;
 </script>
 
 {#if replies.length > 0}
@@ -113,7 +116,7 @@ const showBlockedReason = $derived(targetLost && annotation.suggestedText === un
               data-testid="accept-reply-btn-{reply.id}"
               disabled={targetLost}
               title={targetLost ? ACCEPT_BLOCKED_REASON : undefined}
-              aria-describedby={showBlockedReason ? `${uid}-blocked-${reply.id}` : undefined}
+              aria-describedby={showBlockedReason ? blockedReasonId : undefined}
               onclick={(e) => {
                 e.stopPropagation();
                 if (targetLost) return;
@@ -122,8 +125,8 @@ const showBlockedReason = $derived(targetLost && annotation.suggestedText === un
             >
               Accept replacement
             </button>
-            {#if showBlockedReason}
-              <div id="{uid}-blocked-{reply.id}" class="ct-blocked">{ACCEPT_BLOCKED_REASON}</div>
+            {#if showBlockedReason && reply.id === firstProposalId}
+              <div id={blockedReasonId} class="ct-blocked">{ACCEPT_BLOCKED_REASON}</div>
             {/if}
           {/if}
         {/if}

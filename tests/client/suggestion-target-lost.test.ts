@@ -304,6 +304,34 @@ describe("the card renders a lost target as a disabled Accept with the reason", 
     unmount();
   });
 
+  it("shows the reason once per thread, however many replies propose", () => {
+    const mk = (id: string) =>
+      ({
+        id,
+        annotationId: "a1",
+        author: "claude",
+        text: "try this",
+        suggestedText: `howdy ${id}`,
+        timestamp: 0,
+      }) as AnnotationReply;
+    const { container, unmount } = render(CommentThread, {
+      props: {
+        replies: [mk("r1"), mk("r2")],
+        annotation: comment(),
+        isPending: true,
+        onAcceptReplySuggestion: vi.fn(),
+        targetLost: true,
+      },
+    });
+    expect(container.textContent?.match(/has changed/g)).toHaveLength(1);
+    const ids = ["r1", "r2"].map((id) =>
+      within(container).getByTestId(`accept-reply-btn-${id}`).getAttribute("aria-describedby"),
+    );
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBe(ids[0]);
+    unmount();
+  });
+
   it("does not repeat the reason in the thread when the parent's own Accept already shows it", () => {
     const reply = {
       id: "r1",
