@@ -2,6 +2,7 @@
 import { onDestroy } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_OFF_TITLE } from "../utils/license-ui";
+import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
 
 interface Props {
   annotationId: string;
@@ -21,6 +22,11 @@ interface Props {
    * rather than fail open.
    */
   aiDisabled: boolean;
+  /**
+   * #1632: `isAcceptBlocked`. The button still renders (Rule 7, and a vanished
+   * Accept reads as a bug) but disabled, with the reason beside it.
+   */
+  acceptBlocked?: boolean;
 }
 
 let {
@@ -35,9 +41,14 @@ let {
   onRemove,
   onSendToClaude,
   aiDisabled,
+  acceptBlocked = false,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
+// Per-instance: the same record's card can be mounted in the side panel and a
+// margin column at once, and an `id` keyed on the record alone would collide.
+const uid = $props.id();
+const blockedReasonId = `${uid}-accept-blocked`;
 
 let undoError = $state(false);
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
@@ -77,8 +88,14 @@ onDestroy(clearUndoTimer);
       <button
         data-testid="accept-btn-{annotationId}"
         class="aca-btn aca-btn--accept"
+        disabled={acceptBlocked}
+        title={acceptBlocked ? ACCEPT_BLOCKED_REASON : undefined}
+        aria-describedby={acceptBlocked ? blockedReasonId : undefined}
         onclick={(e) => {
           e.stopPropagation();
+          // `disabled` alone is not a guard: a programmatic click, or a flip
+          // between render and click, gets past it.
+          if (acceptBlocked) return;
           onAccept!(annotationId);
         }}
       >
@@ -98,6 +115,15 @@ onDestroy(clearUndoTimer);
       </button>
     {/if}
   </div>
+  {#if onAccept && acceptBlocked}
+    <div
+      id={blockedReasonId}
+      data-testid="accept-blocked-{annotationId}"
+      class="aca-blocked"
+    >
+      {ACCEPT_BLOCKED_REASON}
+    </div>
+  {/if}
 {:else if isPending && !isEditing && annotationType === "note"}
   <div class="aca-row">
     {#if onRemove}
@@ -183,6 +209,22 @@ onDestroy(clearUndoTimer);
   .aca-btn--accept {
     background: var(--tandem-success-bg);
     color: var(--tandem-success-fg-strong);
+  }
+  /* #1632: offered but refused — the target text is gone. Twin of
+     `.ct-accept:disabled` in CommentThread.svelte (styles are scoped per
+     component); change both together. */
+  .aca-btn--accept:disabled {
+    cursor: default;
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-subtle);
+  }
+  .aca-btn--accept:disabled:active {
+    transform: none;
+  }
+  .aca-blocked {
+    margin-top: 4px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
   }
   .aca-btn--reject {
     background: var(--tandem-error-bg);

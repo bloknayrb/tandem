@@ -4,6 +4,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
 import AnnotationBody from "./AnnotationBody.svelte";
 import { formatRelativeTime } from "./annotation-card-helpers";
+import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
 
 interface Props {
   replies: AnnotationReply[];
@@ -19,11 +20,35 @@ interface Props {
    * says so, so a separate boolean prop would be the same fact spelled twice.
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
+  /**
+   * #1632: the PARENT's target text is gone. A reply's proposal rewrites the
+   * parent's range against the parent's snapshot, so it is refused whether or
+   * not the parent carries a suggestion of its own.
+   */
+  targetLost?: boolean;
 }
 
-let { replies, annotation, isPending, onAcceptReplySuggestion }: Props = $props();
+let {
+  replies,
+  annotation,
+  isPending,
+  onAcceptReplySuggestion,
+  targetLost = false,
+}: Props = $props();
 
 const agentLabel = createAgentLabel();
+// Per-instance: the same record's thread can be mounted in the side panel and
+// a margin column at once, and an `id` keyed on the record alone would collide.
+const uid = $props.id();
+// A parent carrying its own `suggestedText` already shows the reason under its
+// disabled Accept (`AnnotationCardActions`). A reply-only proposal has no such
+// line — the parent's Accept is a live status change — so the reason is shown
+// here, once per thread (under the first proposal; every disabled button points
+// at it), or a disabled button's `title` is all there is (never announced: a
+// disabled button cannot take focus).
+const showBlockedReason = $derived(targetLost && annotation.suggestedText === undefined);
+const firstProposalId = $derived(replies.find((r) => r.suggestedText !== undefined)?.id);
+const blockedReasonId = `${uid}-accept-blocked`;
 </script>
 
 {#if replies.length > 0}
@@ -89,13 +114,20 @@ const agentLabel = createAgentLabel();
               type="button"
               class="ct-accept"
               data-testid="accept-reply-btn-{reply.id}"
+              disabled={targetLost}
+              title={targetLost ? ACCEPT_BLOCKED_REASON : undefined}
+              aria-describedby={showBlockedReason ? blockedReasonId : undefined}
               onclick={(e) => {
                 e.stopPropagation();
+                if (targetLost) return;
                 onAcceptReplySuggestion?.(annotation.id, reply.id);
               }}
             >
               Accept replacement
             </button>
+            {#if showBlockedReason && reply.id === firstProposalId}
+              <div id={blockedReasonId} class="ct-blocked">{ACCEPT_BLOCKED_REASON}</div>
+            {/if}
           {/if}
         {/if}
       </div>
@@ -189,5 +221,18 @@ const agentLabel = createAgentLabel();
     background: var(--tandem-accent-bg);
     color: var(--tandem-accent-fg-strong);
     cursor: pointer;
+  }
+  /* #1632: offered but refused — the parent's target text is gone. Twin of
+     `.aca-btn--accept:disabled` in AnnotationCardActions.svelte. */
+  .ct-accept:disabled {
+    cursor: default;
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-subtle);
+  }
+  /* Twin of `.aca-blocked` in AnnotationCardActions.svelte. */
+  .ct-blocked {
+    margin-top: 4px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
   }
 </style>

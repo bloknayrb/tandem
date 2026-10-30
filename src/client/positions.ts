@@ -142,10 +142,16 @@ export function pmDocFlatText(doc: PmNode): string {
  * boundary cases are the hard part (an offset landing ON a block separator, a
  * container whose last child is a block), `pmPosToFlatOffset` already solves
  * them and is already tested, and a second range-walk would be a second copy of
- * that reasoning. Cost is O(document) per call; this runs on a click.
+ * that reasoning. Cost is O(document) per call; this runs on a click. A caller
+ * checking many ranges against one document (#1632's render-time accept gate)
+ * passes `flat` — `pmDocFlatText(doc)` for that same `doc` — to pay it once.
  */
-export function flatTextForPmRange(doc: PmNode, from: PmPos, to: PmPos): string {
-  const flat = pmDocFlatText(doc);
+export function flatTextForPmRange(
+  doc: PmNode,
+  from: PmPos,
+  to: PmPos,
+  flat: string = pmDocFlatText(doc),
+): string {
   return flat.slice(pmPosToFlatOffset(doc, from), pmPosToFlatOffset(doc, to));
 }
 
