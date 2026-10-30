@@ -23,11 +23,8 @@ interface Props {
    */
   aiDisabled: boolean;
   /**
-   * #1632: Accept is offered but would be refused — the suggestion's target
-   * text is gone (`isAcceptBlocked`). The button still renders (Rule 7, and a
-   * vanished Accept reads as a bug) but disabled, with the reason beside it.
-   * Absent ⇒ not blocked, which is the pre-#1632 behaviour; `applySuggestion`
-   * is the gate either way.
+   * #1632: `isAcceptBlocked`. The button still renders (Rule 7, and a vanished
+   * Accept reads as a bug) but disabled, with the reason beside it.
    */
   acceptBlocked?: boolean;
 }
@@ -209,7 +206,9 @@ onDestroy(clearUndoTimer);
     background: var(--tandem-success-bg);
     color: var(--tandem-success-fg-strong);
   }
-  /* #1632: offered but refused — the target text is gone. */
+  /* #1632: offered but refused — the target text is gone. Twin of
+     `.ct-accept:disabled` in CommentThread.svelte (styles are scoped per
+     component); change both together. */
   .aca-btn--accept:disabled {
     cursor: default;
     background: var(--tandem-surface-muted);

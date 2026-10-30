@@ -26,11 +26,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import AnnotationCard from "../../src/client/panels/AnnotationCard.svelte";
-import CommentThread from "../../src/client/panels/CommentThread.svelte";
 import {
   buildAnnotationMenuContext,
   isAcceptBlocked,
 } from "../../src/client/panels/annotation-context-menu";
+import CommentThread from "../../src/client/panels/CommentThread.svelte";
 import {
   applySuggestion,
   checkSuggestionTarget,
@@ -38,6 +38,7 @@ import {
   useAnnotationReview,
 } from "../../src/client/panels/useAnnotationReview.svelte";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
+import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants";
 import type { Annotation, AnnotationReply } from "../../src/shared/types";
 
 function comment(extras: Partial<Annotation> = {}): Annotation {
@@ -155,6 +156,26 @@ describe("useAnnotationReview.isTargetLost — reactive on document edits", () =
     await Promise.resolve();
     await tick();
     expect(api.isTargetLost("a1")).toBe(false);
+    unmount();
+  });
+
+  it("grades a plain comment only when a reply proposes a replacement over it", async () => {
+    // The parent carries no `suggestedText`, so its own Accept is a status
+    // change; only the reply's "Accept replacement" rewrites its range.
+    const { api, unmount } = mount([comment({ id: "plain" }), comment({ id: "proposed" })]);
+    ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r1", {
+      id: "r1",
+      annotationId: "proposed",
+      author: "claude",
+      text: "try this",
+      suggestedText: "howdy",
+      timestamp: 0,
+    });
+    editTarget(editor);
+    await Promise.resolve();
+    await tick();
+    expect(api.isTargetLost("proposed")).toBe(true);
+    expect(api.isTargetLost("plain")).toBe(false);
     unmount();
   });
 

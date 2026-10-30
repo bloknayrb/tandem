@@ -52,6 +52,10 @@ const isPending = (a: AnnotationGate): boolean => a.status === "pending";
 export const canAccept = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
 export const canDismiss = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
 
+/** The reason a blocked Accept shows (#1632). Generic per ADR-027: no annotation content. */
+export const ACCEPT_BLOCKED_REASON =
+  "The text this suggestion was written against has changed, so it can't be applied.";
+
 /**
  * Accept is OFFERED but cannot succeed (#1632): the record's target text is
  * gone, so `applySuggestion` would refuse the rewrite.
@@ -66,11 +70,11 @@ export const canDismiss = (a: AnnotationGate): boolean => a.author !== "user" &&
  * status change that writes no text, so a lost target cannot make it fail.
  * (A reply's proposal rewrites the PARENT's range, so "Accept replacement" is
  * blocked on `targetLost` alone — see `CommentThread.svelte`.)
+ *
+ * The card props that carry this are optional and default to not lost: that is
+ * the pre-#1632 behaviour, and `applySuggestion` refuses the click either way,
+ * so a mount that forgets one loses the explanation, never the safety.
  */
-/** The reason a blocked Accept shows (#1632). Generic per ADR-027: no annotation content. */
-export const ACCEPT_BLOCKED_REASON =
-  "The text this suggestion was written against has changed, so it can't be applied.";
-
 export const isAcceptBlocked = (
   a: Pick<Annotation, "suggestedText">,
   targetLost: boolean,

@@ -7,6 +7,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { withBrowser } from "../../shared/origins";
 import { isPlaintextFormat } from "../../shared/plaintext-format";
+import type { PmRangeResult } from "../../shared/positions/index";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import { isSnapshotTruncated, snapshotContradicts } from "../../shared/snapshot";
@@ -15,9 +16,9 @@ import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
 import type { RestoreBreak } from "../editor/utils/literal-content";
 import { literalInlineContent, literalRestoreContent } from "../editor/utils/literal-content";
-import type { PmRangeResult } from "../../shared/positions/index";
 import { annotationToPmRange, flatTextForPmRange, pmDocFlatText } from "../positions";
 import { createCoalescingTick } from "../utils/coalescing-tick";
+import { setsEqual } from "../utils/sets";
 import { canAccept } from "./annotation-context-menu";
 
 /** Why undo refused, permanently. See `onUndoFailed`. */
@@ -292,39 +293,42 @@ function applyAsBlocks(
   );
 }
 
+export type SuggestionTargetCheck =
+  | { kind: "unresolvable" }
+  | { kind: "unverified" | "contradicted" | "ok"; resolved: PmRangeResult };
+
 /**
  * What a suggestion's target reads as, against the document as it is now.
  *
- * The ONE check behind both sides of #1632: `applySuggestion` refuses on
- * `unresolvable` / `contradicted` at click time, and `isTargetLost` asks the
- * same question at render time so the card can disable Accept before the click.
- * Two copies of this would be two answers to "will Accept work?".
+ * The ONE check behind both sides of #1632: `applySuggestion` refuses on it at
+ * click time, and `isTargetLost` asks it at render time so the card can disable
+ * Accept before the click. Two copies would be two answers to "will Accept
+ * work?". {@link isTargetRefused} is the one reading of the answer.
  *
  * Deliberately blind to `suggestedText`: a reply's proposal rewrites the
  * PARENT's range against the parent's snapshot, so a parent with no
  * `suggestedText` of its own still needs a verdict. `applySuggestion` keeps its
  * own `suggestedText` guard.
  *
- * `flat` is `pmDocFlatText(pmDoc)` when the caller checks many records against
- * one document; `warn: false` is for that per-change caller too.
+ * `flat` is `pmDocFlatText(pmDoc)`, passed when checking many records against
+ * one document.
  */
-export type SuggestionTargetCheck =
-  | { kind: "unresolvable" }
-  | { kind: "unverified" | "contradicted" | "ok"; resolved: PmRangeResult };
-
 export function checkSuggestionTarget(
   ann: Annotation,
   pmDoc: PmNode,
   ydoc: Y.Doc | null,
-  { warn = true, flat }: { warn?: boolean; flat?: string } = {},
+  flat?: string,
 ): SuggestionTargetCheck {
-  const resolved = annotationToPmRange(ann, pmDoc, ydoc, { warn });
+  const resolved = annotationToPmRange(ann, pmDoc, ydoc);
   if (!resolved) return { kind: "unresolvable" };
-  // Not refused: legacy records predate `textSnapshot`. See `applySuggestion`.
   if (ann.textSnapshot === undefined) return { kind: "unverified", resolved };
   const actual = flatTextForPmRange(pmDoc, resolved.from, resolved.to, flat);
   return { kind: snapshotContradicts(ann, actual) ? "contradicted" : "ok", resolved };
 }
+
+/** The target alone makes Accept fail. `unverified` (legacy, no snapshot) applies. */
+export const isTargetRefused = (check: SuggestionTargetCheck): boolean =>
+  check.kind === "unresolvable" || check.kind === "contradicted";
 
 /**
  * Apply an annotation's replacement text in the editor.
@@ -983,6 +987,7 @@ export function useAnnotationReview({
   const lostTargetIds = $derived.by(() => {
     void docTick;
     const ed = getEditor();
+    const live = ed && !ed.isDestroyed ? ed : null;
     const ydoc = getYdoc();
     const lost = new Set<string>();
     // No editor (source view, teardown): no verdict, Accept stays live and its
@@ -993,16 +998,25 @@ export function useAnnotationReview({
     // `Editor.svelte` re-mounts, and resolving one tab's records against the
     // other's document reads every target as lost (or worse, as fine). No
     // verdict until the two agree. A missing sync plugin (tests) is not that.
-    const bound = ed && !ed.isDestroyed ? ySyncPluginKey.getState(ed.state) : undefined;
-    if (ed && !ed.isDestroyed && (bound === undefined || bound.doc === ydoc)) {
-      const pmDoc = ed.state.doc;
+    const bound = live ? ySyncPluginKey.getState(live.state) : undefined;
+    if (live && (bound === undefined || bound.doc === ydoc)) {
+      const pmDoc = live.state.doc;
+      // Only records with something to apply can be blocked: their own
+      // suggestion, or a reply's proposal over their range. Plain comments are
+      // most of Claude's, and each check is several document walks. The
+      // replies map is read, not tracked: a reply arriving between edits only
+      // leaves its Accept live until the next one, and the click still checks.
+      const proposed = new Set<string>();
+      for (const reply of ydoc?.getMap<AnnotationReply>(Y_MAP_ANNOTATION_REPLIES).values() ?? []) {
+        if (typeof reply.suggestedText === "string") proposed.add(reply.annotationId);
+      }
       let flat: string | undefined;
       for (const ann of getAnnotations()) {
         if (!canAccept(ann)) continue;
+        if (ann.suggestedText === undefined && !proposed.has(ann.id)) continue;
         try {
           flat ??= pmDocFlatText(pmDoc);
-          const { kind } = checkSuggestionTarget(ann, pmDoc, ydoc, { warn: false, flat });
-          if (kind === "unresolvable" || kind === "contradicted") lost.add(ann.id);
+          if (isTargetRefused(checkSuggestionTarget(ann, pmDoc, ydoc, flat))) lost.add(ann.id);
         } catch {
           // A check that throws gives no verdict, so Accept stays live and
           // `applySuggestion`, which catches the same throw, stays the gate.
@@ -1010,7 +1024,7 @@ export function useAnnotationReview({
         }
       }
     }
-    if (lost.size === lastLost.size && [...lost].every((id) => lastLost.has(id))) return lastLost;
+    if (setsEqual(lost, lastLost)) return lastLost;
     lastLost = lost;
     return lost;
   });

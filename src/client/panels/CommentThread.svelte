@@ -3,8 +3,8 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
 import AnnotationBody from "./AnnotationBody.svelte";
-import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
 import { formatRelativeTime } from "./annotation-card-helpers";
+import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
 
 interface Props {
   replies: AnnotationReply[];
@@ -22,9 +22,8 @@ interface Props {
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /**
    * #1632: the PARENT's target text is gone. A reply's proposal rewrites the
-   * parent's range against the parent's snapshot, so it would be refused just
-   * as the parent's own suggestion would — whether or not the parent carries
-   * one. Absent ⇒ not lost.
+   * parent's range against the parent's snapshot, so it is refused whether or
+   * not the parent carries a suggestion of its own.
    */
   targetLost?: boolean;
 }
@@ -207,7 +206,8 @@ const agentLabel = createAgentLabel();
     color: var(--tandem-accent-fg-strong);
     cursor: pointer;
   }
-  /* #1632: offered but refused — the parent's target text is gone. */
+  /* #1632: offered but refused — the parent's target text is gone. Twin of
+     `.aca-btn--accept:disabled` in AnnotationCardActions.svelte. */
   .ct-accept:disabled {
     cursor: default;
     background: var(--tandem-surface-muted);

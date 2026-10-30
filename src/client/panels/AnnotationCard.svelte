@@ -5,8 +5,8 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
-import { isAcceptBlocked } from "./annotation-context-menu";
 import { getCardLabel, getCardTint, getDisplayAuthor } from "./annotation-card-helpers";
+import { isAcceptBlocked } from "./annotation-context-menu";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
 import { cardEnter, cardExit } from "./cardMotion";
@@ -79,10 +79,8 @@ interface Props {
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /**
    * #1632: the record's target text is gone (`useAnnotationReview`'s
-   * `isTargetLost`). Accept and "Accept replacement" render disabled with the
-   * reason, instead of failing after the click. Optional, defaulting to not
-   * lost: that is the pre-#1632 behaviour and `applySuggestion` still refuses,
-   * so forgetting it only costs the explanation, never the safety.
+   * `isTargetLost`); Accept and "Accept replacement" render disabled with the
+   * reason. See `isAcceptBlocked` for the default.
    */
   targetLost?: boolean;
   /**

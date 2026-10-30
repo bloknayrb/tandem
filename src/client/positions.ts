@@ -456,7 +456,6 @@ export function relRangeToPmPositions(
   ydoc: Y.Doc,
   pmDoc: PmNode,
   relRange: RelativeRange,
-  warn = true,
 ): { from: PmPos; to: PmPos } | null {
   let fromAbs, toAbs;
   try {
@@ -465,7 +464,7 @@ export function relRangeToPmPositions(
     fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
     toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
   } catch (err) {
-    if (warn) console.warn("[positions] relRangeToPmPositions: failed to resolve relRange:", err);
+    console.warn("[positions] relRangeToPmPositions: failed to resolve relRange:", err);
     return null;
   }
   if (!fromAbs || !toAbs) return null;
@@ -488,26 +487,23 @@ export function relRangeToPmPositions(
  * Prefers relRange (CRDT-anchored, survives edits). Falls back to flat offsets.
  * Returns null if neither path resolves. The `method` field tells the caller
  * which path was used — useful for diagnostics and testing.
- *
- * `warn: false` silences the fallback warnings for a caller that resolves on
- * every document change rather than on a gesture (#1632's accept gate): the
- * fallback is the same, only the per-keystroke console noise goes.
  */
 export function annotationToPmRange(
   ann: Annotation,
   pmDoc: PmNode,
   ydoc: Y.Doc | null,
-  { warn = true }: { warn?: boolean } = {},
 ): PmRangeResult | null {
   // Try relRange first
   if (ann.relRange && ydoc) {
-    const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange, warn);
+    const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange);
     if (resolved && resolved.from <= resolved.to) return { ...resolved, method: "rel" };
-    if (warn) {
+    if (resolved) {
       console.warn(
-        resolved
-          ? `[positions] annotationToPmRange: inverted rel range for ${ann.id}, falling back to flat`
-          : `[positions] annotationToPmRange: relRange resolved to null for ${ann.id}, falling back to flat`,
+        `[positions] annotationToPmRange: inverted rel range for ${ann.id}, falling back to flat`,
+      );
+    } else {
+      console.warn(
+        `[positions] annotationToPmRange: relRange resolved to null for ${ann.id}, falling back to flat`,
       );
     }
   }

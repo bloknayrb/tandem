@@ -5,6 +5,7 @@ import { getVisibleReplies } from "../annotations/replies";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { licenseStore } from "../hooks/useLicense.svelte";
 import type { MarginMode } from "../layout/editor-stage.svelte";
+import { setsEqual } from "../utils/sets";
 import AnnotationCard from "./AnnotationCard.svelte";
 import { getDisplayAuthor } from "./annotation-card-helpers";
 import {
@@ -228,12 +229,6 @@ $effect(() => {
     prevCrowded = next;
   });
 });
-
-function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const id of a) if (!b.has(id)) return false;
-  return true;
-}
 
 /** Model-only projection for the height estimate — never a measurement. */
 function toCardModel(a: Annotation): CardModel {
