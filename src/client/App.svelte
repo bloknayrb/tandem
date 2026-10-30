@@ -2501,6 +2501,7 @@ const tutorial = createTutorial(
   // A getter, not a value: `chatState.messages` is `[]` at mount, so a
   // by-value capture would freeze the chat advance branch dead.
   () => chatState.messages,
+  () => review.getRecentlyResolved(),
 );
 
 // First-run model picker (#1123) — an OPTIONAL, skippable step sequenced AFTER
@@ -2629,23 +2630,16 @@ const shouldShowModelPicker = $derived(
       <LicenseBanner />
 
       {#if tutorial.tutorialActive && !shouldShowWizard && !shouldShowModelPicker}
-        <!-- #1711: the getting-started checklist. Inside the measured stack, in
-             normal flow, so it sits above the document rather than over it.
-             Sequenced behind the first-run wizard AND the optional model picker
-             (#1123 M2b): the wizard scrim (z=100000) buries the strip and the
-             welcome doc it points at, so on a true first run it waits until the
-             wizard is dismissed (shouldShowWizard→false) and the model picker is
-             completed/skipped (shouldShowModelPicker→false). While dark
-             `shouldShowModelPicker` is always false. Nothing is lost while
-             buried: each item ticks only on the user's own action, which the
-             scrim prevents. (Claude could resolve an annotation over MCP and
-             tick "Accept or dismiss"; the record does not say who resolved it.) -->
+        <!-- #1711: the getting-started checklist. In normal flow inside the
+             measured stack, so it sits above the document rather than over it.
+             Waits behind the first-run wizard and the model picker (#1123 M2b),
+             whose scrim would bury it; nothing ticks meanwhile (useTutorial). -->
         <OnboardingTutorial
           reviewed={tutorial.reviewed}
           asked={tutorial.asked}
           edited={tutorial.edited}
           allDone={tutorial.allDone}
-          coworkDone={tutorial.coworkDone}
+          showCowork={tutorial.showCowork}
           coworkStatus={tutorial.coworkStatus}
           onDismiss={tutorial.dismissTutorial}
           onCoworkAdvance={tutorial.completeCowork}

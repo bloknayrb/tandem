@@ -888,8 +888,8 @@ Server opens sample/welcome.md (first run, no restored sessions)
 
 Browser renders OnboardingTutorial as a strip in the top-of-shell banner stack (#1711)
     → Three items, ticked independently and in any order — no Next button:
-        "Accept or dismiss a comment from Claude" — a review target seen pending is resolved
-          (first seen already resolved never counts: replay, restored session)
+        "Accept or dismiss a comment from Claude" — the user resolved an annotation
+          (useAnnotationReview's recentlyResolved; Claude's MCP resolves never count)
         "Ask Claude something" — a Claude-visible user comment or a user chat
           message newer than the arm time (#1965)
         "Make an edit" — a focused local edit; ySync-tagged (remote/Claude) and
@@ -1258,7 +1258,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `hooks/useTandemModeBroadcast.svelte.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
 - `hooks/useConnectionBanner.svelte.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
 - `ToastContainer` (`src/client/components/`) -- Renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
-- `OnboardingTutorial` (`src/client/components/`) -- Getting-started checklist strip in the top banner stack: three self-ticking items (review, ask, edit), any order, no Next (#1711). `useTutorial` owns the ticks (annotation pending→resolved, Claude-visible comment or chat after arming, focused local user edit). localStorage persistence, suppressed after completion.
+- `OnboardingTutorial` (`src/client/components/`) -- Getting-started checklist strip in the top banner stack: three self-ticking items (review, ask, edit), any order, no Next (#1711). `useTutorial` owns the ticks (a user resolve, an outbound comment or chat after arming, a focused local user edit). localStorage persistence, suppressed after completion.
 - `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files (ships dark with `.docx`)
 - `FileOpenDialog` (`src/client/components/`) -- Browser-distribution modal for opening files without Claude (HTML file-upload + recent list). In the desktop app the native picker is used directly instead (see `DocumentTabs` above)
 - `HelpModal` (`src/client/components/`) -- Keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)

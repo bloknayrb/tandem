@@ -23,9 +23,8 @@ import { createTutorial, type TutorialState } from "../../src/client/hooks/useTu
 
 /**
  * #1725 — the tutorial's highlight seed is the user's own (`author: "user"`,
- * private, no Accept/Dismiss). "Accept or dismiss a comment from Claude" must
- * still tick through the two Claude comment seeds, and the user highlight seed
- * must never count as the user asking Claude something (#1711 checklist).
+ * private, no Accept/Dismiss). It must never count as the user asking Claude
+ * something, or as the user resolving one (#1711 checklist).
  */
 
 function seed(name: string, over: Record<string, unknown>): Annotation {
@@ -61,6 +60,7 @@ function harness(
       () => null,
       () => "welcome.md",
       () => [],
+      () => new Set(),
     );
     flushSync();
     run({
@@ -77,14 +77,6 @@ function harness(
 describe("tutorial with a user-authored highlight seed (#1725)", () => {
   afterEach(() => {
     localStorage.clear();
-  });
-
-  it("waits on the pending seeds and ticks when the Claude comment is accepted", () => {
-    harness([highlightSeed(), noteSeed(), commentSeed()], ({ set, tut }) => {
-      expect(tut.reviewed).toBe(false);
-      set([highlightSeed(), noteSeed(), commentSeed("accepted")]);
-      expect(tut.reviewed).toBe(true);
-    });
   });
 
   it("the pending user highlight seed never ticks 'Ask Claude something'", () => {

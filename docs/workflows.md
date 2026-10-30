@@ -302,7 +302,7 @@ The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 
 A **Getting started** checklist strip appears in the top-of-shell banner stack, above the document (#1711 — it replaced a four-step card with a Next button that users clicked through without reading). Its three items tick independently, in any order, and only on the real action:
 
-**Accept or dismiss a comment from Claude.** Ticks when a review target (any non-user annotation — the two tutorial comments, or a real one) that the strip saw `pending` becomes accepted or dismissed, from its card or with `Ctrl+Enter` / `Ctrl+Shift+Enter`. The tutorial highlight and note are the user's, so they have no Accept or Dismiss. A record first seen already resolved (a restored session, or a replay whose seeds still exist) never ticks it; counting real annotations too is what lets such a replay still tick. Claude resolving an annotation over MCP does tick it — nothing on the record says who resolved it.
+**Accept or dismiss a comment from Claude.** Ticks when the user accepts or dismisses an annotation — one of the two tutorial comments or a real one — from its card, in bulk, or with `Ctrl+Enter` / `Ctrl+Shift+Enter`. The signal is `useAnnotationReview`'s `recentlyResolved` set, which only the user's own resolves write, so Claude resolving one over MCP does not tick it, and neither do the already-resolved seeds a replay keeps. The tutorial highlight and note are the user's, so they have no Accept or Dismiss.
 
 **Ask Claude something.** Ticks on a comment of the user's own that Claude can see (not a note, not a private comment), or a chat message the user sends, created after the strip armed. Without AI (keyless, ADR-040) the send still ticks it; no reply comes.
 

@@ -6,7 +6,7 @@ import {
   TUTORIAL_ANNOTATION_PREFIX,
   TUTORIAL_COMPLETED_KEY,
 } from "../../shared/constants.js";
-import { type Annotation, type ChatMessage, isReviewTarget } from "../../shared/types.js";
+import type { Annotation, ChatMessage } from "../../shared/types.js";
 import {
   isTauriRuntime,
   readCoworkOnboardingSkipped,
@@ -25,9 +25,8 @@ export interface TutorialState {
   readonly asked: boolean;
   /** "Make an edit" — ticked. */
   readonly edited: boolean;
-  /** The Cowork row is part of this run (dark while `COWORK_ENABLED` is false). */
-  readonly includeCowork: boolean;
-  readonly coworkDone: boolean;
+  /** Show the Cowork row: part of this run and not yet done (dark while `COWORK_ENABLED` is false). */
+  readonly showCowork: boolean;
   /** Every item ticked and the Cowork status settled: the strip shows "You're ready!". */
   readonly allDone: boolean;
   readonly coworkStatus: CoworkStatus | null;
@@ -70,16 +69,13 @@ export function isNonTutorialUserAnnotation(a: Annotation): boolean {
 }
 
 /**
- * A user annotation that reaches Claude: a non-tutorial comment that is not
- * private. A note, or a `{comment, audience: private}`, is never shown to
- * Claude (ADR-027), so making one is not asking Claude anything.
+ * A user annotation that reaches Claude: a non-tutorial outbound comment —
+ * the server's `isClaudeFacing` rule (`audience === "outbound"`, never the
+ * looser `!== "private"`). A note is never shown to Claude (ADR-027), so
+ * making one is not asking Claude anything.
  */
 function isQuestionForClaude(a: Annotation): boolean {
-  return (
-    isNonTutorialUserAnnotation(a) &&
-    a.type === "comment" &&
-    (a as { audience?: string }).audience !== "private"
-  );
+  return isNonTutorialUserAnnotation(a) && a.type === "comment" && a.audience === "outbound";
 }
 
 function writeCompleted(): void {
@@ -106,6 +102,7 @@ export function createTutorial(
   getEditor: () => Editor | null,
   getActiveTabFileName: () => string | undefined,
   getChatMessages: () => ChatMessage[],
+  getRecentlyResolved: () => ReadonlySet<string>,
 ): TutorialState {
   let completed = $state(readCompleted());
   let reviewed = $state(false);
@@ -118,11 +115,9 @@ export function createTutorial(
   // and every earlier chat message would tick the item (#1965). Plain `let`,
   // so reading it adds no dependency.
   let armedAt = Date.now();
-  // First-seen status per annotation id: true while it has been seen pending.
-  // A record first seen already resolved — a restored session, or a replay
-  // whose seeds the injector skipped because their ids still exist — never
-  // ticks "Accept or dismiss". Plain Map, not reactive state.
-  const seenPending = new Map<string, boolean>();
+  // Resolves still inside their undo window when the checklist was (re)armed.
+  // Plain `let`, like `armedAt`.
+  let resolvedAtArm: ReadonlySet<string> = new Set();
   const coworkSkipped = readCoworkOnboardingSkipped();
 
   const isWelcome = $derived(getActiveTabFileName() === "welcome.md");
@@ -147,19 +142,16 @@ export function createTutorial(
     coworkStatusSettled && reviewed && asked && edited && (!includeCoworkStep || coworkDone),
   );
 
-  // "Accept or dismiss a comment from Claude": a review target seen pending is now
-  // accepted or dismissed. Any review target counts, not only seeds, so a
-  // replay whose seeds are all stale can still tick on a real one. Known
-  // limit: Claude resolving an annotation over MCP writes the same status and
-  // ticks this too — nothing on the record says who resolved it.
+  // "Accept or dismiss a comment from Claude": the user resolved an annotation.
+  // `useAnnotationReview`'s `recentlyResolved` is that signal: every Accept or
+  // Dismiss the user makes (card, keyboard, bulk, reply suggestion) adds to it,
+  // and nothing else does — not Claude's `tandem_resolveAnnotation`, not the
+  // already-resolved seeds a replay keeps. Entries leave it when their undo
+  // window closes; the effect has already seen the add by then.
   $effect(() => {
     if (!tutorialActive || reviewed) return;
-    for (const a of getAnnotations()) {
-      if (!isReviewTarget(a)) continue;
-      const wasPending = seenPending.get(a.id);
-      if (wasPending === undefined) {
-        seenPending.set(a.id, a.status === "pending");
-      } else if (wasPending && a.status !== "pending") {
+    for (const id of getRecentlyResolved()) {
+      if (!resolvedAtArm.has(id)) {
         reviewed = true;
         return;
       }
@@ -242,7 +234,7 @@ export function createTutorial(
     edited = false;
     coworkDone = false;
     armedAt = Date.now();
-    seenPending.clear();
+    resolvedAtArm = new Set(getRecentlyResolved());
   };
 
   return {
@@ -258,11 +250,8 @@ export function createTutorial(
     get edited() {
       return edited;
     },
-    get includeCowork() {
-      return includeCoworkStep;
-    },
-    get coworkDone() {
-      return coworkDone;
+    get showCowork() {
+      return includeCoworkStep && !coworkDone;
     },
     get allDone() {
       return allDone;

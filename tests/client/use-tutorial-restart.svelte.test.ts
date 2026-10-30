@@ -41,6 +41,7 @@ describe("restartTutorial (replay re-arm)", () => {
         () => null,
         () => "welcome.md",
         () => [],
+        () => new Set(),
       );
       flushSync();
       // Completed → not active despite welcome.md being the active tab.

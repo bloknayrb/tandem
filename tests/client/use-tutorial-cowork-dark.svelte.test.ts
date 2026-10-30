@@ -21,8 +21,7 @@ import { flushSync } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isTauriRuntime } from "../../src/client/cowork/cowork-helpers.js";
 import { COWORK_ENABLED, TUTORIAL_COMPLETED_KEY } from "../../src/shared/constants.js";
-import type { Annotation, ChatMessage } from "../../src/shared/types.js";
-import { makeAnnotation } from "../helpers/ydoc-factory.js";
+import type { ChatMessage } from "../../src/shared/types.js";
 
 const captured: { getActive: (() => boolean) | null } = { getActive: null };
 
@@ -62,8 +61,7 @@ describe("Cowork ships dark (ADR-055): the desktop tutorial", () => {
     expect(COWORK_ENABLED).toBe(false);
     expect(isTauriRuntime()).toBe(true);
 
-    const pending = makeAnnotation({ id: "tutorial-suggest-1", author: "claude" });
-    let annotations = $state<Annotation[]>([pending]);
+    let resolved = $state<ReadonlySet<string>>(new Set());
     let messages = $state<ChatMessage[]>([]);
     const handlers = new Set<(p: { transaction: unknown }) => void>();
     const editor = {
@@ -74,10 +72,11 @@ describe("Cowork ships dark (ADR-055): the desktop tutorial", () => {
     let tut: ReturnType<typeof createTutorial> | undefined;
     const dispose = $effect.root(() => {
       tut = createTutorial(
-        () => annotations,
+        () => [],
         () => editor as unknown as Editor,
         () => "welcome.md",
         () => messages,
+        () => resolved,
       );
     });
     flushSync();
@@ -87,13 +86,13 @@ describe("Cowork ships dark (ADR-055): the desktop tutorial", () => {
     expect(captured.getActive?.()).toBe(false);
 
     // Tick all three. An unsettled Cowork status would hold `allDone` false.
-    annotations = [{ ...pending, status: "accepted" }];
+    resolved = new Set(["tutorial-suggest-1"]);
     messages = [{ id: "m", author: "user", text: "hi", timestamp: Date.now() + 1, read: true }];
     for (const h of handlers) h({ transaction: { docChanged: true, getMeta: () => undefined } });
     await Promise.resolve();
     flushSync();
     expect(tut?.allDone).toBe(true);
-    expect(tut?.includeCowork).toBe(false);
+    expect(tut?.showCowork).toBe(false);
 
     vi.advanceTimersByTime(3000);
     flushSync();

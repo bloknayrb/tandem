@@ -31,7 +31,7 @@ function mount(
       asked: false,
       edited: false,
       allDone: false,
-      coworkDone: false,
+      showCowork: false,
       coworkStatus: null,
       onDismiss,
       onCoworkAdvance: vi.fn(),

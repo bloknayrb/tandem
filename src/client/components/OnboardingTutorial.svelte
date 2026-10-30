@@ -1,19 +1,17 @@
 <script lang="ts">
 import { COWORK_ENABLED } from "../../shared/constants";
-import {
-  isTauriRuntime,
-  readCoworkOnboardingSkipped,
-  shouldShowCoworkOnboarding,
-} from "../cowork/cowork-helpers";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
 import type { CoworkStatus } from "../types";
 import CoworkOnboardingStep from "./CoworkOnboardingStep.svelte";
+import LiveRegion from "./LiveRegion.svelte";
+import { SR_ONLY_STYLE } from "./live-region";
 
 interface Props {
   reviewed: boolean;
   asked: boolean;
   edited: boolean;
   allDone: boolean;
-  coworkDone: boolean;
+  showCowork: boolean;
   coworkStatus: CoworkStatus | null;
   onDismiss: () => void;
   onCoworkAdvance: () => void;
@@ -24,7 +22,7 @@ let {
   asked,
   edited,
   allDone,
-  coworkDone,
+  showCowork,
   coworkStatus,
   onDismiss,
   onCoworkAdvance,
@@ -60,13 +58,9 @@ const items = $derived([
   },
 ]);
 
-const skipped = readCoworkOnboardingSkipped();
-
-// COWORK_ENABLED here as well as in useTutorial, so this component cannot
-// show a row the hook's `allDone` does not wait for if a status is passed in.
-const showCowork = $derived(
-  COWORK_ENABLED && tauri && !coworkDone && shouldShowCoworkOnboarding(coworkStatus, skipped),
-);
+// COWORK_ENABLED here as well as in useTutorial, so a dark build shows no
+// Cowork row even if a status and `showCowork` are ever passed in.
+const coworkRow = $derived(COWORK_ENABLED && showCowork);
 
 // The check-pop and the announcement fire only for an item that ticked while
 // this strip was mounted. The strip remounts on every tab switch back to
@@ -113,7 +107,7 @@ $effect(() => {
           {#if item.done}✓{/if}
         </span>
         <span class="tut-label">{item.label}</span>
-        <span class="sr-only">{item.done ? "(done)" : "(to do)"} {item.hint}</span>
+        <span style={SR_ONLY_STYLE}>{item.done ? "(done)" : "(to do)"} {item.hint}</span>
       </li>
     {/each}
   </ul>
@@ -133,9 +127,9 @@ $effect(() => {
     ×
   </button>
 
-  <div class="sr-only" role="status" aria-live="polite">{announcement}</div>
+  <LiveRegion srOnly message={announcement} />
 
-  {#if showCowork && coworkStatus !== null}
+  {#if coworkRow && coworkStatus !== null}
     <div class="tut-cowork">
       <CoworkOnboardingStep status={coworkStatus} onAdvance={onCoworkAdvance} />
     </div>
@@ -223,17 +217,6 @@ $effect(() => {
   }
   .tut-cowork {
     flex-basis: 100%;
-  }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
 
   /* Ticking an item is state feedback — the fill just lands. */

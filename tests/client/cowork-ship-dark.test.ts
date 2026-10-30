@@ -172,16 +172,16 @@ describe("Cowork ships dark (ADR-055): the desktop client", () => {
   });
 
   it("the tutorial checklist shows no Cowork row even when handed an eligible status", () => {
-    // `useTutorial` never produces a status while dark, so this prop is null in
-    // the app. The component is gated anyway so it cannot show a row the hook's
-    // `allDone` does not wait for; this is that gate's only witness.
+    // `useTutorial` never produces a status while dark, so `showCowork` is false
+    // in the app. The component keeps its own COWORK_ENABLED gate anyway, so a
+    // dark build shows no row even when told to; this is that gate's only witness.
     const { container } = render(OnboardingTutorial, {
       props: {
         reviewed: true,
         asked: true,
         edited: true,
         allDone: true,
-        coworkDone: false,
+        showCowork: true,
         coworkStatus: coworkStatusFixture(),
         onDismiss: vi.fn(),
         onCoworkAdvance: vi.fn(),

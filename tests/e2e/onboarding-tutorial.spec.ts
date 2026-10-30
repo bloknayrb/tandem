@@ -4,6 +4,7 @@ import { expect, type Page, test } from "@playwright/test";
 import path from "path";
 import {
   cleanupAllOpenDocuments,
+  cleanupFixtureDir,
   McpTestClient,
   openChat,
   switchToAnnotationsTab,
@@ -42,6 +43,9 @@ test.beforeEach(async () => {
 test.afterEach(async () => {
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
+  // cleanupFixtureDir also drops the document's annotation envelope, which a
+  // later test would otherwise inherit through rename recovery (#313).
+  cleanupFixtureDir(path.join(tmpDir, "sample"));
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
