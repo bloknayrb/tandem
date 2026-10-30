@@ -40,8 +40,12 @@ import {
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants";
 import type { Annotation, AnnotationReply } from "../../src/shared/types";
+import { range } from "../helpers/positions";
 
-function comment(extras: Partial<Annotation> = {}): Annotation {
+/** Loose on purpose: some cases build records the type forbids (no `range`). */
+type Extras = Record<string, unknown>;
+
+function comment(extras: Extras = {}): Annotation {
   return {
     id: "a1",
     type: "comment",
@@ -49,14 +53,13 @@ function comment(extras: Partial<Annotation> = {}): Annotation {
     status: "pending",
     content: "why",
     timestamp: 0,
-    range: { from: 0, to: 5 },
+    range: range(0, 5),
     textSnapshot: "hello",
     ...extras,
   } as Annotation;
 }
 
-const suggestion = (extras: Partial<Annotation> = {}) =>
-  comment({ suggestedText: "howdy", ...extras });
+const suggestion = (extras: Extras = {}) => comment({ suggestedText: "howdy", ...extras });
 
 /** Replace the first word, the way a user edit under the annotation would. */
 function editTarget(editor: Editor) {
@@ -79,13 +82,9 @@ describe("checkSuggestionTarget — the one verdict behind both the click and th
     ["intact target", suggestion(), "ok"],
     // The #2328 reload remap collapses a record whose text was deleted to a
     // point; its snapshot still claims "hello".
-    ["point-collapsed after a reload", suggestion({ range: { from: 3, to: 3 } }), "contradicted"],
+    ["point-collapsed after a reload", suggestion({ range: range(3, 3) }), "contradicted"],
     ["legacy record with no snapshot", suggestion({ textSnapshot: undefined }), "unverified"],
-    [
-      "no range at all",
-      suggestion({ range: undefined as unknown as Annotation["range"] }),
-      "unresolvable",
-    ],
+    ["no range at all", suggestion({ range: undefined }), "unresolvable"],
   ])("%s → %s", (_label, ann, kind) => {
     expect(checkSuggestionTarget(ann, editor.state.doc, ydoc).kind).toBe(kind);
   });
@@ -105,9 +104,9 @@ describe("checkSuggestionTarget — the one verdict behind both the click and th
     // would have honoured, or a live one it will refuse, is the bug.
     const cases: Annotation[] = [
       suggestion(),
-      suggestion({ range: { from: 3, to: 3 } }),
+      suggestion({ range: range(3, 3) }),
       suggestion({ textSnapshot: undefined }),
-      suggestion({ range: undefined as unknown as Annotation["range"] }),
+      suggestion({ range: undefined }),
     ];
     for (const ann of cases) {
       const fresh = new Editor({
