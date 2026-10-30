@@ -2,13 +2,14 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AI_CTA } from "../../src/client/hooks/useAiReadiness.svelte";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
 import { GREETING_LATE_TEXT, type GreetingAction } from "../../src/client/panels/chat-greeting";
 import type { ChatResume } from "../../src/client/panels/chat-resume";
 import type { ChatMessage } from "../../src/shared/types";
 import { reactiveCell } from "../helpers/reactive-cell.svelte";
+import { spyChatAutoScroll } from "./chat-auto-scroll";
 
 function renderChat(messages: ChatMessage[]) {
   return render(ChatPanel, {
@@ -266,7 +267,72 @@ describe("ChatPanel — AI off by licence", () => {
   });
 });
 
+describe("ChatPanel — auto-scroll moves the messages list, never its ancestors", () => {
+  // `scrollIntoView` on an end sentinel also scrolled App's `overflow: hidden`
+  // `.rail-full-right`, by a distance the user could not scroll back (found in
+  // #2329). `tests/e2e/chat-autoscroll.spec.ts` measures the rail in a real layout.
+  let spy: ReturnType<typeof spyChatAutoScroll>;
+  beforeEach(() => {
+    spy = spyChatAutoScroll();
+  });
+  afterEach(() => {
+    spy.restore();
+  });
+  function list(container: HTMLElement): HTMLElement {
+    const el = container.querySelector<HTMLElement>("[data-testid='chat-messages']");
+    if (!el) throw new Error("no messages list");
+    // happy-dom lays nothing out; a distinct height proves where `top` comes from.
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 1234 });
+    return el;
+  }
+
+  it("a new message scrolls the list to its own bottom, and never calls scrollIntoView", async () => {
+    const { scrolls, intoView } = spy;
+    const { container, rerender } = renderChat([claudeMsg()]);
+    list(container);
+    await tick();
+    scrolls.mockClear();
+    await rerender({ messages: [claudeMsg(), claudeMsg({ id: "m2", text: "next" })] });
+    await tick();
+    expect(scrolls).toHaveBeenCalledWith({ top: 1234, behavior: "smooth" });
+    expect(intoView).not.toHaveBeenCalled();
+  });
+
+  it("jumps instead of animating under reduced motion", async () => {
+    const { scrolls, intoView } = spy;
+    const { container, rerender } = renderChat([claudeMsg()]);
+    list(container);
+    await tick();
+    scrolls.mockClear();
+    await rerender({ reduceMotion: true, messages: [claudeMsg(), claudeMsg({ id: "m2" })] });
+    await tick();
+    expect(scrolls).toHaveBeenLastCalledWith({ top: 1234, behavior: "auto" });
+    expect(intoView).not.toHaveBeenCalled();
+  });
+
+  it("showing the panel scrolls the list, and never calls scrollIntoView", async () => {
+    const { scrolls, intoView } = spy;
+    const { container, rerender } = renderChat([claudeMsg()]);
+    list(container);
+    await rerender({ visible: false });
+    await tick();
+    scrolls.mockClear();
+    await rerender({ visible: true });
+    await tick();
+    expect(scrolls).toHaveBeenCalledWith({ top: 1234, behavior: "smooth" });
+    expect(intoView).not.toHaveBeenCalled();
+  });
+});
+
 describe("ChatPanel — the resume row (#2196)", () => {
+  let scroll: ReturnType<typeof spyChatAutoScroll>;
+  beforeEach(() => {
+    scroll = spyChatAutoScroll();
+  });
+  afterEach(() => {
+    scroll.restore();
+  });
+
   function renderWithResume(
     resume: ChatResume | null | { value: ChatResume | null },
     messages: ChatMessage[] = [],
@@ -322,42 +388,30 @@ describe("ChatPanel — the resume row (#2196)", () => {
   });
 
   it("scrolls when resuming turns into the failed row, so its remedy is in view", async () => {
-    const spy = vi.fn();
-    const orig = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = spy;
-    try {
-      const { rerender } = renderWithResume({ kind: "resuming", verb: "starting" });
-      await tick();
-      spy.mockClear();
-      await rerender({ tandemClaudeResume: { kind: "failed", remedy: "start" } });
-      await tick();
-      expect(spy).toHaveBeenCalled();
-    } finally {
-      Element.prototype.scrollIntoView = orig;
-    }
+    const spy = scroll.scrolls;
+    const { rerender } = renderWithResume({ kind: "resuming", verb: "starting" });
+    await tick();
+    spy.mockClear();
+    await rerender({ tandemClaudeResume: { kind: "failed", remedy: "start" } });
+    await tick();
+    expect(spy).toHaveBeenCalled();
   });
 
   it("does not scroll again when the row is recomputed with nothing changed", async () => {
-    const spy = vi.fn();
-    const orig = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = spy;
-    try {
-      // Only this prop changes, as in App: `rerender` would re-set every prop.
-      const cell = reactiveCell<ChatResume | null>({ kind: "resuming", verb: "starting" });
-      renderWithResume(cell);
-      await tick();
-      spy.mockClear();
-      // A fresh object with the same kind, as every `chatResume` recompute is.
-      cell.value = { kind: "resuming", verb: "starting" };
-      await tick();
-      expect(spy).not.toHaveBeenCalled();
-      // Control: a change of kind still scrolls.
-      cell.value = { kind: "failed", remedy: "start" };
-      await tick();
-      expect(spy).toHaveBeenCalled();
-    } finally {
-      Element.prototype.scrollIntoView = orig;
-    }
+    const spy = scroll.scrolls;
+    // Only this prop changes, as in App: `rerender` would re-set every prop.
+    const cell = reactiveCell<ChatResume | null>({ kind: "resuming", verb: "starting" });
+    renderWithResume(cell);
+    await tick();
+    spy.mockClear();
+    // A fresh object with the same kind, as every `chatResume` recompute is.
+    cell.value = { kind: "resuming", verb: "starting" };
+    await tick();
+    expect(spy).not.toHaveBeenCalled();
+    // Control: a change of kind still scrolls.
+    cell.value = { kind: "failed", remedy: "start" };
+    await tick();
+    expect(spy).toHaveBeenCalled();
   });
 
   it("says starting for a Claude that was off", () => {

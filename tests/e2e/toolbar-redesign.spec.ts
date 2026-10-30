@@ -225,15 +225,16 @@ test("the annotate composer never exceeds its placement reserve", async ({ page 
  * scrolling still must.
  *
  * The scroll-dismiss guard used to fire on ANY scroll outside the popup. The
- * chat panel smooth-scrolls itself (and, through `scrollIntoView`, the right
- * rail) whenever a message lands or its pickup row changes, so an AI reply
+ * chat panel smooth-scrolls its message list (and until #2331, through
+ * `scrollIntoView`, the right rail) whenever a message lands or its pickup row
+ * changes, so an AI reply
  * arriving while text was selected unmounted the popup and left the selection
  * painted with nothing attached — and nothing re-arms the popup until the
  * selection changes. That was the intermittent `openAnnotatePopup` timeout in
  * "the annotate composer never exceeds its placement reserve": earlier specs
  * leave unanswered chat messages behind, and the panel was still scrolling when
  * the dwell mounted the popup (measured: mounted, then unmounted 4ms later by a
- * scroll on `.rail-full-right`).
+ * scroll on `.rail-full-right`; the list's own scroll is the same sibling case).
  *
  * Synthetic events, like the a8-fidelity draft test: the guard is a
  * capture-phase listener on `document`, so a non-bubbling dispatch reaches it

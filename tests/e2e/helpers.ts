@@ -469,6 +469,22 @@ export async function cleanupAllOpenDocuments(mcp: McpTestClient): Promise<void>
 }
 
 /**
+ * Clear the chat history via `DELETE /api/chat`. Chat lives in CTRL_ROOM and
+ * outlives the page, so a chat spec's `afterEach` clears it for the next spec.
+ * Best-effort — a failure must not mask the assertion that just ran — but said
+ * out loud under `tag`, because a later chat spec would otherwise inherit stale
+ * messages.
+ */
+export async function clearChat(tag: string): Promise<void> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
+    if (!res.ok) console.warn(`[${tag}] clearing chat answered ${res.status}`);
+  } catch (err) {
+    console.warn(`[${tag}] clearing chat failed:`, err);
+  }
+}
+
+/**
  * Does this element actually receive clicks at its own centre? `toBeVisible()`
  * passes on an element that is clipped (#1302) or painted under another layer
  * such as a modal scrim (#2257), so a user can neither see nor click it.

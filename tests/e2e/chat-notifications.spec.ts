@@ -1,9 +1,9 @@
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
+  clearChat,
   createFixtureDir,
   McpTestClient,
   openSettingsViaBrandMenu,
@@ -52,12 +52,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async () => {
-  try {
-    const res = await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
-    if (!res.ok) console.warn(`[chat-notifications] clearing chat answered ${res.status}`);
-  } catch (err) {
-    console.warn("[chat-notifications] clearing chat failed:", err);
-  }
+  await clearChat("chat-notifications");
   try {
     await cleanupAllOpenDocuments(mcp);
     await mcp.close();
