@@ -173,7 +173,9 @@ describe("licence refusal (#1521): aiDisabled gates the AI writes only", () => {
     expect(off.canSendToClaude).toBe(false);
     expect(off.canReply).toBe(true);
     expect(buildAnnotationMenuContext(ann("comment", "claude"), true, false).canReply).toBe(false);
-    expect(buildAnnotationMenuContext(ann("note", "user"), false, false).canSendToClaude).toBe(true);
+    expect(buildAnnotationMenuContext(ann("note", "user"), false, false).canSendToClaude).toBe(
+      true,
+    );
   });
 });
 
