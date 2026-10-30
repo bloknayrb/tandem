@@ -224,10 +224,10 @@ interface Props {
    */
   notify?: (severity: "info" | "warning" | "error", message: string) => void;
   /**
-   * Re-arm the onboarding tutorial for replay (clears the completed flag +
-   * resets step). Wired to `useTutorial().restartTutorial` in App.svelte. The
+   * Re-arm the getting-started checklist for replay (clears the completed flag
+   * and every tick). Wired to `useTutorial().restartTutorial` in App.svelte. The
    * "Replay tutorial" button calls this AFTER the welcome doc reopens, then
-   * closes the modal so the (now-active) tutorial card is visible.
+   * closes the modal so the (now-active) checklist strip is visible.
    */
   onReplayTutorial?: () => void;
 }

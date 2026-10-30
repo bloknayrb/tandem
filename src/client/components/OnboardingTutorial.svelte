@@ -84,6 +84,12 @@ $effect(() => {
       doneAtMount[item.id] = true;
       popped[item.id] = true;
       ticked.push(item.label);
+    } else if (before && !item.done) {
+      // Un-ticked while mounted: a Settings → Replay with welcome.md already
+      // active keeps this strip mounted and resets every item. Re-baseline so
+      // the re-tick pops and announces like a first tick.
+      doneAtMount[item.id] = false;
+      popped[item.id] = false;
     }
   }
   let becameReady = false;
@@ -92,6 +98,8 @@ $effect(() => {
   } else if (!readyAtMount && allDone) {
     readyAtMount = true;
     becameReady = true;
+  } else if (readyAtMount && !allDone) {
+    readyAtMount = false;
   }
   if (ticked.length > 0 || becameReady) {
     const parts = ticked.length > 0 ? [`Done: ${ticked.join(", ")}.`] : [];

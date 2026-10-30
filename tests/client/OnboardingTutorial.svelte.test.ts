@@ -104,6 +104,19 @@ describe("OnboardingTutorial checklist strip (#1711)", () => {
     );
   });
 
+  it("a replay while mounted re-arms the pop and the announcement for each item", async () => {
+    const { container, rerender } = mount({ reviewed: true });
+    const dot = () => byTestId(container, "tutorial-item-review")?.querySelector(".tut-dot");
+    // Replay resets every tick while welcome.md stays active (strip stays mounted).
+    await rerender({ reviewed: false });
+    expect(dot()?.classList.contains("is-popped")).toBe(false);
+    await rerender({ reviewed: true });
+    expect(dot()?.classList.contains("is-popped")).toBe(true);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Accept or dismiss a comment from Claude",
+    );
+  });
+
   it("announces readiness when allDone turns true without an item ticking (Cowork last)", async () => {
     const ticked = { reviewed: true, asked: true, edited: true };
     const { container, rerender } = mount({ ...ticked, allDone: false });
