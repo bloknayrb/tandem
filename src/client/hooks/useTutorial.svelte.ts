@@ -1,25 +1,39 @@
 import type { Editor } from "@tiptap/core";
+import type { Transaction } from "@tiptap/pm/state";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import {
   COWORK_ENABLED,
   TUTORIAL_ANNOTATION_PREFIX,
   TUTORIAL_COMPLETED_KEY,
+  TUTORIAL_PROGRESS_KEY,
 } from "../../shared/constants.js";
-import type { Annotation, ChatMessage } from "../../shared/types.js";
+import { type Annotation, type ChatMessage, isReviewTarget } from "../../shared/types.js";
 import {
   isTauriRuntime,
   readCoworkOnboardingSkipped,
   shouldShowCoworkOnboarding,
 } from "../cowork/cowork-helpers.js";
+import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship.js";
 import type { CoworkStatus } from "../types.js";
+import { createCoalescingTick } from "../utils/coalescing-tick.js";
 import { createCoworkStatus } from "./useCoworkStatus.svelte.js";
 
 export interface TutorialState {
   readonly tutorialActive: boolean;
-  readonly currentStep: number;
+  /** "Accept or dismiss a comment from Claude" — ticked. */
+  readonly reviewed: boolean;
+  /** "Ask Claude something" — ticked. */
+  readonly asked: boolean;
+  /** "Make an edit" — ticked. */
+  readonly edited: boolean;
+  /** Show the Cowork row: part of this run and not yet done (dark while `COWORK_ENABLED` is false). */
+  readonly showCowork: boolean;
+  /** Every item ticked and the Cowork status settled: the strip shows "You're ready!". */
+  readonly allDone: boolean;
   readonly coworkStatus: CoworkStatus | null;
   dismissTutorial: () => void;
-  nextStep: () => void;
-  /** Re-arm the tutorial for replay: clears the completed flag + resets step.
+  completeCowork: () => void;
+  /** Re-arm the checklist for replay: clears the completed flag and every tick.
    *  The caller must also (re)open welcome.md so the basename gate re-activates
    *  and the server re-injects the seed annotations. */
   restartTutorial: () => void;
@@ -44,16 +58,59 @@ function readCompleted(): boolean {
 /**
  * True iff the annotation is authored by the user AND is not a tutorial seed.
  *
- * Load-bearing: used by the step-1 advance effect. A tutorial-seeded annotation
- * must NOT trip this predicate even though the tutorial note and highlight carry
- * `author="user"` (ADR-027: notes are the user's; #1725: so are highlights).
- * The `TUTORIAL_ANNOTATION_PREFIX` marker is the ONLY thing distinguishing a
- * seed from a real user annotation —
- * renaming that constant without updating this predicate silently re-introduces
- * the step-1 auto-advance bug from PR #621 PR-A2b.
+ * Load-bearing: used by the "Ask Claude something" tick. A tutorial-seeded
+ * annotation must NOT trip this predicate even though tutorial seeds carry
+ * `author="user"` (the note, per ADR-027, and since #1725 the highlight). The
+ * `TUTORIAL_ANNOTATION_PREFIX` marker is the ONLY thing distinguishing a seed
+ * from a real user annotation — renaming that constant without updating this
+ * predicate silently re-introduces the auto-tick bug from PR #621 PR-A2b.
  */
 export function isNonTutorialUserAnnotation(a: Annotation): boolean {
   return a.author === "user" && !a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX);
+}
+
+/**
+ * A user annotation that reaches Claude: a non-tutorial outbound comment —
+ * the server's `isClaudeFacing` rule (`audience === "outbound"`, never the
+ * looser `!== "private"`). A note is never shown to Claude (ADR-027), so
+ * making one is not asking Claude anything.
+ */
+function isQuestionForClaude(a: Annotation): boolean {
+  return isNonTutorialUserAnnotation(a) && a.type === "comment" && a.audience === "outbound";
+}
+
+interface Progress {
+  reviewed: boolean;
+  asked: boolean;
+  edited: boolean;
+}
+
+function readProgress(): Progress {
+  const none = { reviewed: false, asked: false, edited: false };
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(TUTORIAL_PROGRESS_KEY) ?? "null");
+    if (typeof raw !== "object" || raw === null) return none;
+    const p = raw as Record<string, unknown>;
+    return { reviewed: p.reviewed === true, asked: p.asked === true, edited: p.edited === true };
+  } catch {
+    return none;
+  }
+}
+
+function writeProgress(p: Progress): void {
+  try {
+    localStorage.setItem(TUTORIAL_PROGRESS_KEY, JSON.stringify(p));
+  } catch {
+    // Storage unavailable — ticks last for this page load only
+  }
+}
+
+function clearProgress(): void {
+  try {
+    localStorage.removeItem(TUTORIAL_PROGRESS_KEY);
+  } catch {
+    // Storage unavailable — the in-memory reset still re-arms this session
+  }
 }
 
 function writeCompleted(): void {
@@ -65,11 +122,13 @@ function writeCompleted(): void {
 }
 
 /**
- * Svelte 5 port of `useTutorial`.
+ * The first-run getting-started checklist (#1711).
  *
- * Drives the onboarding tutorial through 4–5 steps. The Cowork step (index 3)
- * is only present when running under Tauri AND the Rust side reports an
- * eligible Cowork install that isn't already enabled.
+ * Three independent items, each ticked only by the real action, in any order:
+ * accept or dismiss an annotation, ask Claude something, make an edit. There is
+ * no Next button — the 4-step card it replaced was clicked through without
+ * being read. When every item is ticked (and the Cowork row, if present, is
+ * done) the checklist reports `allDone`, and completes itself 3 s later.
  *
  * Accepts getter functions for reactive inputs.
  */
@@ -78,10 +137,27 @@ export function createTutorial(
   getEditor: () => Editor | null,
   getActiveTabFileName: () => string | undefined,
   getChatMessages: () => ChatMessage[],
+  getRecentlyResolved: () => ReadonlySet<string>,
 ): TutorialState {
   let completed = $state(readCompleted());
-  let currentStep = $state(0);
-  let stepAdvancedAt = 0;
+  // Saved, so a reload or desktop restart mid-checklist keeps what is done:
+  // the signals below are page-load state and cannot all be re-earned.
+  const saved = readProgress();
+  let reviewed = $state(saved.reviewed);
+  let asked = $state(saved.asked);
+  let edited = $state(saved.edited);
+  let coworkDone = $state(false);
+  // The baseline for the chat and annotation terms of "Ask Claude something".
+  // Set here and in `restartTutorial`, never from an effect: an arming effect
+  // that ran after the `asked` effect in the same flush would leave it at 0,
+  // and every earlier chat message would tick the item (#1965). Plain `let`,
+  // so reading it adds no dependency.
+  let armedAt = Date.now();
+  // Every id in `recentlyResolved` when the checklist was (re)armed. That set
+  // has no time-based expiry — an entry leaves it only through the Undo paths — so this
+  // is every resolve the user made earlier in this page load. Plain `let`, like
+  // `armedAt`.
+  let resolvedAtArm: ReadonlySet<string> = new Set();
   const coworkSkipped = readCoworkOnboardingSkipped();
 
   const isWelcome = $derived(getActiveTabFileName() === "welcome.md");
@@ -90,11 +166,10 @@ export function createTutorial(
   // One value feeds all three readers below. While Cowork ships dark the
   // poller never runs, so a `coworkStatusSettled` still keyed on Tauri alone
   // would wait forever on a status that cannot arrive and the desktop
-  // tutorial would never complete.
+  // checklist would never complete.
   const cowork = COWORK_ENABLED && isTauriRuntime();
 
-  // Cowork step eligibility — drives the step count so step 2 advances to
-  // the right completion index (3 when no Cowork, 4 when Cowork is inserted).
+  // Cowork row eligibility — part of `allDone` when present.
   const coworkState = createCoworkStatus(() => cowork && tutorialActive);
 
   const coworkStatusSettled = $derived(
@@ -103,61 +178,97 @@ export function createTutorial(
   const includeCoworkStep = $derived(
     cowork && shouldShowCoworkOnboarding(coworkState.status, coworkSkipped),
   );
-  const completionStep = $derived(coworkStatusSettled ? (includeCoworkStep ? 4 : 3) : Infinity);
+  const allDone = $derived(
+    coworkStatusSettled && reviewed && asked && edited && (!includeCoworkStep || coworkDone),
+  );
 
-  // Step 0: advance once any seeded tutorial annotation is resolved. If no seeds
-  // exist yet (still injecting, or a doc with none) this holds at step 0 — it
-  // does NOT auto-skip forward.
+  // "Accept or dismiss a comment from Claude": the user resolved an annotation.
+  // `useAnnotationReview`'s `recentlyResolved` is that signal: every Accept or
+  // Dismiss the user makes (card, keyboard, bulk, reply suggestion) adds to it,
+  // and nothing else does — not Claude's `tandem_resolveAnnotation`, not the
+  // already-resolved seeds a replay keeps. The set is App-level, not
+  // per-document, and an entry leaves it only through the Undo paths, so a resolve made
+  // on another tab earlier in this page load ticks this once welcome.md is
+  // active. It is also page-load state: after a reload it starts empty.
   $effect(() => {
-    if (!tutorialActive || currentStep !== 0) return;
-    const annotations = getAnnotations();
-    const tutorialAnns = annotations.filter((a) => a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX));
-    if (tutorialAnns.length === 0) return;
-    const resolved = tutorialAnns.some((a) => a.status !== "pending");
-    if (resolved) {
-      stepAdvancedAt = Date.now();
-      currentStep = 1;
+    if (!tutorialActive || reviewed) return;
+    for (const id of getRecentlyResolved()) {
+      if (!resolvedAtArm.has(id)) {
+        reviewed = true;
+        return;
+      }
     }
   });
 
-  // Step 1 ("Ask a question"): detect a user-authored annotation (excluding
-  // tutorial seeds — see isNonTutorialUserAnnotation JSDoc for ADR-027
-  // context) OR a chat message the user sent during this step (#1965). The
-  // step's own copy and the user guide both say chat completes it, so a user
-  // who only uses Chat was stuck here with nothing explaining why.
-  //
-  // The `timestamp > stepAdvancedAt` term is required, not a refinement: chat
-  // is durable and app-global (the session manager snapshots and restores
-  // Y_MAP_CHAT, `useChatState` repopulates from the ctrl Y.Doc on connect, and
-  // `documentId` is optional), and `restartTutorial` cannot clear chat
-  // history. Without it, every replay — and any first run against a server
-  // with prior chat — would see the step-0 advance and the chat term true in
-  // the same flush, silently auto-skipping the very step this fixes.
-  // `stepAdvancedAt` is a plain `let`, not `$state`, so reading it adds no
-  // dependency; the effect still re-runs off the two getters.
+  // Nothing left to review: welcome.md's Claude seeds are all resolved, at
+  // least one of them by the user. A replay keeps resolved seeds (#2269) and
+  // the injector skips ids already in the map, so without this a replay — or a
+  // reload without saved progress — leaves an item no action can tick. The old
+  // card counted resolved seeds the same way. Claude's resolves are stamped
+  // `resolvedBy: "claude"` (#1770); a user's resolve of a pending record has no
+  // stamp. Residuals: seeds Claude resolved before #1770 carry no stamp and
+  // read as the user's, and if Claude resolved every seed this never fires
+  // (× still closes the checklist).
   $effect(() => {
-    if (!tutorialActive || currentStep !== 1) return;
-    const annotations = getAnnotations();
+    if (!tutorialActive || reviewed) return;
+    const seeds = getAnnotations().filter(
+      (a) => a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX) && isReviewTarget(a),
+    );
     if (
-      annotations.some(isNonTutorialUserAnnotation) ||
-      getChatMessages().some((m) => m.author === "user" && m.timestamp > stepAdvancedAt)
+      seeds.length > 0 &&
+      seeds.every((a) => a.status !== "pending") &&
+      seeds.some((a) => a.resolvedBy !== "claude")
     ) {
-      stepAdvancedAt = Date.now();
-      currentStep = 2;
+      reviewed = true;
     }
   });
 
-  // Step 2: detect editor content change
   $effect(() => {
-    if (!tutorialActive || currentStep !== 2 || !isFinite(completionStep)) return;
+    if (!tutorialActive) return;
+    writeProgress({ reviewed, asked, edited });
+  });
+
+  // "Ask Claude something": a question comment (see isQuestionForClaude) or a
+  // chat message the user sent after arming (#1965). The `timestamp > armedAt`
+  // terms are required, not a refinement: chat is durable and app-global (the
+  // session manager snapshots and restores Y_MAP_CHAT, `useChatState`
+  // repopulates from the ctrl Y.Doc on connect, and `documentId` is optional),
+  // `restartTutorial` cannot clear chat history, and a replay keeps every
+  // annotation on welcome.md — so without them a replay ticks this at once.
+  // Both timestamps are the browser's `Date.now()`, like `armedAt`.
+  $effect(() => {
+    if (!tutorialActive || asked) return;
+    if (
+      getAnnotations().some((a) => isQuestionForClaude(a) && a.timestamp > armedAt) ||
+      getChatMessages().some((m) => m.author === "user" && m.timestamp > armedAt)
+    ) {
+      asked = true;
+    }
+  });
+
+  // "Make an edit": a focused, local, user-authored change. Skipped:
+  // - ySync-tagged transactions — a remote change, including Claude's
+  //   `tandem_edit`, which Tiptap reports through the same `update` event;
+  // - Claude-authored local writes — accepting a suggestion applies it as a
+  //   local transaction tagged `AUTHORSHIP_ORIGIN_META: "claude"` (#1388), and
+  //   that accept is pressed from inside the editor, so focus alone would let
+  //   it tick this item too.
+  // The `$state` write is deferred through a coalescing tick: never write
+  // `$state` synchronously from a Tiptap event handler (CLAUDE.md).
+  const markEdited = createCoalescingTick(() => {
+    if (tutorialActive && !edited) edited = true;
+  });
+  $effect(() => {
+    if (!tutorialActive || edited) return;
     const editor = getEditor();
     if (!editor) return;
 
-    const handler = () => {
-      if (Date.now() - stepAdvancedAt < 2000) return;
+    const handler = ({ transaction }: { transaction: Transaction }) => {
+      if (!transaction.docChanged) return;
+      if (transaction.getMeta(ySyncPluginKey)) return;
+      if (transaction.getMeta(AUTHORSHIP_ORIGIN_META) === "claude") return;
       if (!editor.isFocused) return;
-      stepAdvancedAt = Date.now();
-      currentStep = 3;
+      markEdited();
     };
 
     editor.on("update", handler);
@@ -166,54 +277,63 @@ export function createTutorial(
     };
   });
 
-  // Completion step: auto-complete after 3 seconds
+  // Every item ticked: show "You're ready!" for 3 s, then complete.
   $effect(() => {
-    if (!tutorialActive || !isFinite(completionStep) || currentStep !== completionStep) return;
+    if (!tutorialActive || !allDone) return;
     const timer = setTimeout(() => {
       writeCompleted();
+      clearProgress();
       completed = true;
     }, 3000);
     return () => clearTimeout(timer);
   });
 
-  // Clamp current step when completionStep changes
-  $effect(() => {
-    if (isFinite(completionStep)) {
-      if (currentStep > completionStep) {
-        currentStep = completionStep;
-      }
-    }
-  });
-
   const dismissTutorial = () => {
     writeCompleted();
+    clearProgress();
     completed = true;
+  };
+
+  const completeCowork = () => {
+    coworkDone = true;
   };
 
   const restartTutorial = () => {
     clearCompleted();
+    clearProgress();
     completed = false;
-    currentStep = 0;
-    stepAdvancedAt = 0;
-  };
-
-  const nextStep = () => {
-    stepAdvancedAt = Date.now();
-    currentStep = Math.min(currentStep + 1, completionStep);
+    reviewed = false;
+    asked = false;
+    edited = false;
+    coworkDone = false;
+    armedAt = Date.now();
+    resolvedAtArm = new Set(getRecentlyResolved());
   };
 
   return {
     get tutorialActive() {
       return tutorialActive;
     },
-    get currentStep() {
-      return currentStep;
+    get reviewed() {
+      return reviewed;
+    },
+    get asked() {
+      return asked;
+    },
+    get edited() {
+      return edited;
+    },
+    get showCowork() {
+      return includeCoworkStep && !coworkDone;
+    },
+    get allDone() {
+      return allDone;
     },
     get coworkStatus() {
       return coworkState.status;
     },
     dismissTutorial,
-    nextStep,
+    completeCowork,
     restartTutorial,
   };
 }

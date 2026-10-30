@@ -224,10 +224,10 @@ interface Props {
    */
   notify?: (severity: "info" | "warning" | "error", message: string) => void;
   /**
-   * Re-arm the onboarding tutorial for replay (clears the completed flag +
-   * resets step). Wired to `useTutorial().restartTutorial` in App.svelte. The
+   * Re-arm the getting-started checklist for replay (clears the completed flag
+   * and every tick). Wired to `useTutorial().restartTutorial` in App.svelte. The
    * "Replay tutorial" button calls this AFTER the welcome doc reopens, then
-   * closes the modal so the (now-active) tutorial card is visible.
+   * closes the modal so the (now-active) checklist strip is visible.
    */
   onReplayTutorial?: () => void;
 }
@@ -661,7 +661,8 @@ async function handleReplayTutorial(): Promise<void> {
   }
   replayLoading = true;
   replayError = null;
-  // force:true clears the doc so the server re-injects fresh seed annotations.
+  // force:true reloads welcome.md from disk. It keeps every annotation (#2269),
+  // including resolved seeds, and re-creates only seeds the user deleted (#1696).
   const result = await openServerPath(filePath, {
     force: true,
     notFoundMessage: "Welcome document not found.",

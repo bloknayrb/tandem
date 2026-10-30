@@ -304,7 +304,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `error-boundary-{recover,reload}-btn` (resolved from constants)
 - `command-palette`, `palette-{input,empty}`, `palette-item-{*}`,
   `palette-item-new-scratchpad`
-- `onboarding-tutorial`, `tutorial-{dismiss,next}-btn`
+- `onboarding-tutorial` (the checklist strip), `tutorial-dismiss-btn` (its ×), `tutorial-next-btn` (the Done button, shown once every item is ticked — #1711), `tutorial-item-{review,ask,edit}` (each with `data-done`)
 
 ### Settings — popover (REMOVED 2026-07-21 — consolidated into the modal below; testids deleted)
 - `settings-popover`, `settings-content`, `settings-sidebar-{version,footer}`,

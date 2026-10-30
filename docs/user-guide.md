@@ -22,17 +22,17 @@ Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/relea
 
 On first run, Tandem opens `sample/welcome.md` automatically. Four tutorial annotations appear in the document — a highlight, a comment, a comment with replacement text, and a private note — so you have something to interact with immediately.
 
-A floating tutorial card appears at the bottom-left of the editor with three steps:
+A **Getting started** checklist sits at the top of the window, above the document, with three things to try. Each one ticks itself off when you do it, in any order — there is no Next button:
 
-1. **Review an annotation** — Accept or dismiss one of your AI's two tutorial comments from the side panel (the highlight and the note are yours, so they have no Accept or Dismiss), or turn on the margin view to see them beside the text.
-2. **Ask a question** — Select text, click Annotate, and send your question to your AI assistant. Or type in the Chat panel.
-3. **Make an edit** — Click in the document and type something.
+1. **Accept or dismiss a comment from Claude** — one of the two tutorial comments, from the side panel or the margin view (`Ctrl+Enter` accepts the selected comment, `Ctrl+Shift+Enter` dismisses it). The highlight and the note are yours, so they have no Accept or Dismiss.
+2. **Ask Claude something** — select text, click Annotate and send it to Claude, or type in the Chat panel. A private note doesn't count: Claude never sees it.
+3. **Make an edit** — click in the document and type. Edits Claude makes, and suggestions you accept, don't count.
 
-A "You're ready!" card follows the three steps. The tutorial dismisses after that and won't appear again (progress is saved to localStorage).
+When all three are ticked the strip says "You're ready!" and closes itself a few seconds later (or click **Done**). The **×** dismisses it at any time. Either way it won't appear again (saved to localStorage); **Settings → Replay tutorial** brings it back. Items you've ticked stay ticked if you reload or restart before finishing.
 
-**Tip:** Start the Tandem server before Claude Code. Having the AI connected before the tutorial means you'll see real responses when you ask a question in step 2.
+**Tip:** Start the Tandem server before Claude Code. Having the AI connected before the tutorial means you'll see real responses when you ask a question with item 2.
 
-![The three-step tutorial card, anchored at the bottom-left of the editor](screenshots/08-onboarding-tutorial.png)
+![The getting-started checklist above the welcome document](screenshots/08-onboarding-tutorial.png)
 
 **On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item.
 

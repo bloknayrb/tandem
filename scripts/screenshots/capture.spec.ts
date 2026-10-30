@@ -357,11 +357,12 @@ async function openWithMarginAnnotations(): Promise<string> {
 /**
  * Mark the first-run tutorial complete before any page script runs.
  *
- * The tutorial card is `position: fixed` bottom-left and covers three lines of
- * the document. That is correct product behaviour and slot 08 exists to
- * photograph it — but in the full-viewport document shots it sits on top of the
- * prose those shots are of, so the README hero shipped its first capture with
- * the "Notes / Comments / Suggestions" bullets hidden behind it.
+ * The getting-started checklist (#1711) is a strip in the top-of-shell banner
+ * stack on welcome.md. That is correct product behaviour and slot 08 exists to
+ * photograph it — but in the full-viewport shots it is first-run chrome that
+ * pushes the document down and is not what those shots are of. (Before #1711 it
+ * was a card fixed bottom-left over the prose: the README hero shipped its first
+ * capture with the "Notes / Comments / Suggestions" bullets hidden behind it.)
  *
  * `addInitScript` rather than a post-load `evaluate`: `useTutorial` reads
  * localStorage once at construction, so a write after navigation is too late —
@@ -591,8 +592,8 @@ test("01-editor-overview", async ({ page }) => {
   // tab bar all read at README's 820px display width.
   await page.setViewportSize({ width: 1600, height: 1000 });
   await openWithAnnotations();
-  // The hero is a shot of the document; the tutorial card covers three lines of
-  // it. Slot 08 is where that card gets photographed.
+  // The hero is a shot of the document, not of first-run chrome. Slot 08 is
+  // where the getting-started strip gets photographed.
   await suppressTutorialCard(page);
   await gotoAnnotatedEditor(page);
 
@@ -905,7 +906,7 @@ test("08-onboarding-tutorial", async ({ page }) => {
   // Ported from take-screenshots.mjs. There the capture sat inside a `try` whose
   // `catch` wrote `console.warn("   SKIPPED")` — which is why the committed file
   // carried an Apr 12 mtime while 01-07 were Jul 22: it was skipped in the last
-  // run and the stale image survived, invisibly. Here the card must be visible
+  // run and the stale image survived, invisibly. Here the strip must be visible
   // or the run fails.
   await openWelcome();
   await page.goto("/");
@@ -929,8 +930,8 @@ test("08-onboarding-tutorial", async ({ page }) => {
 test("09-settings-modal", async ({ page }) => {
   await stubClaudeCodeIntegration(page);
   await openWelcome();
-  // A full-viewport shot: the tutorial card sits bottom-left, half under the
-  // modal's backdrop and half beside it, and read as part of Settings.
+  // A full-viewport shot: the getting-started strip would sit above the modal's
+  // backdrop's top edge and read as part of Settings.
   await suppressTutorialCard(page);
   await loadEditor(page);
   const modal = await openSettingsClaudeCodeTab(page);
@@ -1042,11 +1043,12 @@ test("11-margin-annotations", async ({ page }) => {
 test("12-outline-rail", async ({ page }) => {
   await openWelcome();
   // Before `goto`: this installs an init script, so it has no effect on a page
-  // that has already navigated. The tutorial card is anchored bottom-left and
-  // overlaps the outline rail, which is the one element this shot exists to
-  // show. It survived the first capture because every assertion below still
-  // passed with a card clipped across the lower third of the frame -- passing
-  // is not the same as depicting the subject.
+  // that has already navigated. Before #1711 the tutorial card was anchored
+  // bottom-left over the outline rail, the one element this shot exists to
+  // show, and it survived the first capture because every assertion below
+  // still passed with the card clipped across the lower third of the frame --
+  // passing is not the same as depicting the subject. The strip that replaced
+  // it is first-run chrome above the rail; it stays suppressed.
   await suppressTutorialCard(page);
   await loadEditor(page);
   await setRailVisible(page, "left", true);

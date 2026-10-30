@@ -15,7 +15,7 @@ Back to the [docs hub](../README.md).
   [How you work with Tandem](../../README.md#how-you-work-with-tandem) sections are the quickest
   start. Read it first.
 - [The welcome document](../../sample/welcome.md) is the sample Tandem opens on first run, with the
-  onboarding tutorial anchored to it. Its [tutorial](../workflows.md#onboarding-tutorial-first-run)
+  getting-started checklist anchored to it. Its [tutorial](../workflows.md#onboarding-tutorial-first-run)
   is described in Workflows.
 - [User guide → First launch](../user-guide.md#first-launch) covers what you see the first time.
 
