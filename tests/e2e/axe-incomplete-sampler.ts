@@ -63,6 +63,23 @@ export async function sampleIncompleteNodes(
         const cs = getComputedStyle(n, p);
         return cs.content !== "none" && cs.content !== "normal" && paints(cs);
       });
+    /**
+     * Replaced and SVG content paints pixels no `background-color` describes,
+     * so an icon or image over or under the glyphs must count as painting.
+     */
+    const REPLACED = new Set(["img", "canvas", "video", "iframe", "object", "embed"]);
+    const replaced = (n: Element) =>
+      n instanceof SVGElement || REPLACED.has(n.tagName.toLowerCase());
+    /** `opacity: 0` on the element or an ancestor: its subtree paints nothing. */
+    const invisible = (n: Element) => {
+      for (let a: Element | null = n; a; a = a.parentElement) {
+        if (Number(getComputedStyle(a).opacity) === 0) return true;
+      }
+      return false;
+    };
+    /** A stack entry that puts pixels at the probed point. */
+    const paintsHere = (s: Element) =>
+      !invisible(s) && (replaced(s) || paints(getComputedStyle(s)) || !!pseudoFill(s));
     // `opaque(o, other)`: `o` paints an opaque, unfiltered fill that no
     // opacity between it and its nearest common ancestor with `other` fades
     // (a shared ancestor's opacity fades both together).
@@ -216,9 +233,7 @@ export async function sampleIncompleteNodes(
             // point carries no evidence either way.
             if (at === -1) continue;
             hits++;
-            const above = stack
-              .slice(0, at)
-              .filter((s) => paints(getComputedStyle(s)) || pseudoFill(s));
+            const above = stack.slice(0, at).filter(paintsHere);
             const cover = above.find((s) => opaque(s, el));
             if (cover) {
               covered++;
@@ -236,7 +251,7 @@ export async function sampleIncompleteNodes(
             });
             stack.slice(at + 1).forEach((s, i) => {
               if (s.contains(el)) return;
-              if (!paints(getComputedStyle(s)) && !pseudoFill(s)) return;
+              if (!paintsHere(s)) return;
               const between = stack.slice(at, at + 1 + i);
               if (between.some((o) => (o === el || o.contains(el)) && opaque(o, s))) return;
               notes.add(`${describe(s)} paints beneath it and shows through`);
