@@ -299,12 +299,15 @@ describe("ChatPanel — auto-scroll moves the messages list, never its ancestors
   });
 
   it("jumps instead of animating under reduced motion", async () => {
-    const { scrolls } = spy;
+    const { scrolls, intoView } = spy;
     const { container, rerender } = renderChat([claudeMsg()]);
     list(container);
+    await tick();
+    scrolls.mockClear();
     await rerender({ reduceMotion: true, messages: [claudeMsg(), claudeMsg({ id: "m2" })] });
     await tick();
     expect(scrolls).toHaveBeenLastCalledWith({ top: 1234, behavior: "auto" });
+    expect(intoView).not.toHaveBeenCalled();
   });
 
   it("showing the panel scrolls the list, and never calls scrollIntoView", async () => {

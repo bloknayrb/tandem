@@ -1,9 +1,9 @@
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
+  clearChat,
   createFixtureDir,
   McpTestClient,
   openChat,
@@ -35,15 +35,7 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  // Chat lives in CTRL_ROOM and outlives the page, so clear it for the next spec.
-  // Best-effort — a failure must not mask the assertion that just ran — but said
-  // out loud, because a later chat spec would otherwise inherit stale messages.
-  try {
-    const res = await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
-    if (!res.ok) console.warn(`[chat-pickup] clearing chat answered ${res.status}`);
-  } catch (err) {
-    console.warn("[chat-pickup] clearing chat failed:", err);
-  }
+  await clearChat("chat-pickup");
   try {
     await cleanupAllOpenDocuments(mcp);
     await mcp.close();
