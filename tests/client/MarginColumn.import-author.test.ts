@@ -35,6 +35,7 @@ describe("MarginColumn — import-author render path", () => {
     const positions = new Map<string, number>([["ann-1", 100]]);
     const { container } = render(MarginColumn, {
       annotations: [ann],
+      isTargetLost: () => false,
       positions,
       side: "right",
       mode: "full",
@@ -84,6 +85,7 @@ describe("MarginColumn — a PROMOTED import keeps the import leader (#1714)", (
   function renderOne(ann: Annotation) {
     return render(MarginColumn, {
       annotations: [ann],
+      isTargetLost: () => false,
       positions: new Map<string, number>([[ann.id, 100]]),
       side: "right",
       mode: "full",

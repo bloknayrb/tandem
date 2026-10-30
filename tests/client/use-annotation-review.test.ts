@@ -123,6 +123,9 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
     const editor = {
       state: { doc: {} },
       chain: vi.fn(),
+      // The hook subscribes to `update` for #1632's render-time verdict.
+      on: vi.fn(),
+      off: vi.fn(),
     } as unknown as TiptapEditor;
 
     const onApplyFailed = vi.fn();
@@ -300,7 +303,12 @@ describe("useAnnotationReview — the revert clears resolvedBy (#1770)", () => {
     };
     map.set(ann.id, ann);
 
-    const editor = { state: { doc: {} }, chain: vi.fn() } as unknown as TiptapEditor;
+    const editor = {
+      state: { doc: {} },
+      chain: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as TiptapEditor;
 
     const review = mountReview({
       getYdoc: () => ydoc,
@@ -360,7 +368,12 @@ describe("useAnnotationReview — no silent divergence after a failed Accept (#1
     map.set(ann.id, ann);
     const seen = observeStatuses(map, ann.id);
 
-    const editor = { state: { doc: {} }, chain: vi.fn() } as unknown as TiptapEditor;
+    const editor = {
+      state: { doc: {} },
+      chain: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as TiptapEditor;
     const review = mountReview({
       getYdoc: () => ydoc,
       getEditor: () => editor,

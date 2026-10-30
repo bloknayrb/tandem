@@ -137,6 +137,7 @@ function mountSidePanel(annotations: Annotation[]) {
         getRecentlyResolved: () => new Set<string>(),
         getReviewIndex: () => 0,
         getReviewTargets: () => [],
+        isTargetLost: () => false,
       },
     },
   });
@@ -216,6 +217,7 @@ function mountMarginColumn(annotations: Annotation[]) {
   const r = render(MarginColumn, {
     props: {
       annotations,
+      isTargetLost: () => false,
       positions: new Map(annotations.map((a, i) => [a.id, 100 + i * 120])),
       side: "right",
       mode: "full",

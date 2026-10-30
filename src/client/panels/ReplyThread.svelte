@@ -26,6 +26,8 @@ interface Props {
    * margin view, and any card SidePanel's `canAccept` gate declines).
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
+  /** #1632: the parent's target text is gone. Forwarded to CommentThread. */
+  targetLost?: boolean;
   /**
    * The licence refuses the AI (#1521). A reply to a COMMENT is an AI write, so
    * it is blocked; a reply inside the user's own note thread (#1000) is not.
@@ -44,6 +46,7 @@ let {
   reduceMotion = false,
   openNonce = 0,
   onAcceptReplySuggestion,
+  targetLost = false,
   aiDisabled,
 }: Props = $props();
 
@@ -174,6 +177,7 @@ async function handleSendReply() {
           {annotation}
           {isPending}
           {onAcceptReplySuggestion}
+          {targetLost}
         />
       </div>
     {/if}

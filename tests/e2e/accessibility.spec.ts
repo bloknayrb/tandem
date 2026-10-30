@@ -3,7 +3,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
 import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
-import { checkIncompleteBaseline, colorContrastNodeCount } from "./axe-incomplete.js";
+import {
+  assessIncompleteNode,
+  checkIncompleteBaseline,
+  colorContrastNodeCount,
+  describeVerdict,
+  type IncompleteWaiver,
+  incompleteMessageKey,
+  staleWaivers,
+} from "./axe-incomplete.js";
+import { sampleIncompleteNodes } from "./axe-incomplete-sampler.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -200,6 +209,41 @@ async function selectFirstParagraph(page: Page) {
   await selectTextStable(editor.locator("p").first());
 }
 
+/**
+ * Why axe leaves color-contrast nodes `incomplete` (#1721, measured 2026-10-30
+ * across all 51 scans; the per-node numbers are in docs/a11y-gate-results.md).
+ * Its own `messageKey` puts every one in four buckets: `nonBmp` (text made only
+ * of symbol glyphs — ⇅ ▾ ↵ ●), `shortTextContent` (one-letter text — the B/I/S
+ * buttons), `bgOverlap`, and `elmPartiallyObscured(ing)`. None is the modern
+ * colour syntax and none is the annotation card's tint. The loop at the bottom
+ * decides every such node itself — measured from computed style, or proven to
+ * paint no pixel — so a node in this bucket cannot fade to any contrast with
+ * the run green.
+ *
+ * Grading split, stated so nobody mistakes it for an accident: a node axe
+ * DECIDES is graded by axe (4.5:1 for all normal text); a node it leaves
+ * incomplete is graded by `requiredRatio`, which gives symbol-only glyphs 3:1
+ * under SC 1.4.11. Telling axe to decide glyphs itself (`ignoreUnicode: false`)
+ * would grade them at 4.5:1 instead — a policy change, not a cleanup.
+ *
+ * A node computed style cannot measure fails unless its surface carries a
+ * waiver for it (`Surface.incompleteWaivers`). The only case today: the
+ * annotation rail's sort (⇅) and filter (▾) glyphs BEHIND an open
+ * `aria-modal` dialog's translucent scrim — the page beneath is out of reach
+ * until it closes, and the same two glyphs are measured unobscured on every
+ * other surface. A waiver excuses only an unmeasurable node whose every reason
+ * matches `expect`, never one that measured and failed; one that excuses
+ * nothing in a theme fails that theme's run.
+ */
+function behindModalScrim(scrim: RegExp, reason: string): Record<string, IncompleteWaiver> {
+  return Object.fromEntries(
+    [
+      '[data-testid="annotation-sort-toggle"] <span> "⇅"',
+      '[data-testid="filter-bar-toggle"] <span> "▾"',
+    ].map((d) => [d, { reason, expect: scrim }]),
+  );
+}
+
 type Surface = {
   name: string;
   /** Leaves the surface visible and ready to scan. */
@@ -216,6 +260,12 @@ type Surface = {
    * test would multiply that by the whole surface table for no benefit.
    */
   close?: (page: Page) => Promise<void>;
+  /**
+   * Keyed exemptions for color-contrast nodes axe left `incomplete` on this
+   * surface that computed style cannot measure either, keyed by the sampler's
+   * descriptor and applying in every theme. See `behindModalScrim`.
+   */
+  incompleteWaivers?: Record<string, IncompleteWaiver>;
 };
 
 /**
@@ -343,34 +393,22 @@ const SURFACES: Surface[] = [
     // real user annotation and is the only way to get the user tint on screen:
     // notes are user-only by ADR-027, so no MCP tool can create one.
     //
-    // WHAT THIS DOES NOT BUY, stated because the obvious reading is wrong.
-    // Adding the note does NOT make this a contrast gate for the user tint.
-    // Measured when #1721 was filed: paint the note card `#4a4a4a` — mid-grey
-    // behind dark body text, an unmissable AA failure — and all three themes
-    // still reported `violations: []`, so the assertion below did not gate it.
+    // #1721 history, settled 2026-10-30. When it was filed, painting the note
+    // card `#4a4a4a` — mid-grey behind dark body text — was reported as
+    // `violations: []` in all three themes, and the mechanism was left open.
+    // Re-run with the tint painted in BOTH `:root` and the dark block of
+    // index.html (dark overrides `--tandem-author-user-bg` with its own hex, so
+    // a `:root`-only mutation never reaches it — which is why the 2026-09-06
+    // re-measure saw dark stay green), all three themes now FAIL on
+    // `violations`. The card was never in the `incomplete` bucket: this
+    // surface's four incomplete nodes are the side panel's ⇅/▾ glyphs, the
+    // collapse-filters glyph and the Private pill, and every one of them is
+    // measured by the per-node gate in the loop below. Why axe leaves nodes
+    // incomplete at all is recorded on `behindModalScrim`.
     //
-    // The structural reason is certain and is the durable half: a contrast
-    // failure axe files under `incomplete` is not a violation, and
-    // `color-contrast` is not in `disableRules`, so the rule DOES run — this is
-    // a bucketing gap, not a disabled rule.
-    //
-    // The exact mechanism is NOT established, and an earlier version of this
-    // comment asserted one it could not support. That run observed 25
-    // color-contrast nodes under `incomplete` against 17 under `passes`, but a
-    // faithful standalone repro of these tints — `oklch` tokens, `color-mix`
-    // grounds, the clip-path hidden word — reports the bad card as a plain
-    // VIOLATION with zero incomplete under the same axe version. So it is
-    // something structural in the live app (overlap/obscuring is the likely
-    // check), not the modern colour syntax, which is the first thing the next
-    // reader will suspect. Do not repeat the earlier claim that a
-    // `.withRules(["color-contrast"])` scan finds violations the default scan
-    // buckets away: `withRules` narrows which rules RUN, it does not change how
-    // a rule buckets a node, and those two probes were not the same page state.
-    // Fixing this is suite-wide work, hence the issue rather than a patch here.
-    //
-    // What the note IS worth: it puts a second card variant through every OTHER
-    // rule — roles, names, the visually-hidden badge word, the Private pill —
-    // none of which have that problem.
+    // What the note is worth: it puts a second card variant, and the user
+    // tint, through every rule — roles, names, the visually-hidden badge word,
+    // the Private pill, and color-contrast itself.
     //
     // And two things nothing covers anywhere: axe's color-contrast rule
     // evaluates TEXT, so the highlight icon's `<svg>` fill against the card tint
@@ -407,6 +445,10 @@ const SURFACES: Surface[] = [
   },
   {
     name: "settings modal",
+    incompleteWaivers: behindModalScrim(
+      /^painted over by <div\[data-testid="settings-modal-scrim"\]>$/,
+      "behind the settings modal's translucent scrim (aria-modal)",
+    ),
     open: async (page) => {
       await bootEditor(page);
       await openSettingsViaBrandMenu(page);
@@ -425,6 +467,10 @@ const SURFACES: Surface[] = [
   },
   {
     name: "command palette",
+    incompleteWaivers: behindModalScrim(
+      /^painted over by <div\.palette-scrim>$/,
+      "behind the command palette's scrim and backdrop blur (aria-modal)",
+    ),
     open: async (page) => {
       await bootEditor(page);
       await page.keyboard.press("Control+Shift+P");
@@ -512,21 +558,12 @@ const SURFACES: Surface[] = [
  * (#1721, option 3). It applies to EVERY surface above, not just the annotation
  * card whose comment records why the bucket matters.
  *
- * What it buys, because the obvious reading is wrong: it makes a JUMP loud — a
- * change that pushes more nodes into the bucket reds this suite — and it forces
- * a newly added surface to be measured rather than silently unmeasured. It does
- * NOT say any individual incomplete node is acceptable, and it is NOT a contrast
- * gate.
- *
- * RE-MEASURED 2026-09-06 — data, not a resolution. Repainting
- * `--tandem-author-user-bg` to `#4a4a4a` and running `-g "annotation card"`:
- * LIGHT and WARM FAIL on `violations` (axe 4.13 reports contrast 1.21 and 1.47),
- * DARK stays green, and the `incomplete` count stayed at its baseline of 4 in
- * all three. So this pin caught that mutation nowhere and the pre-existing
- * `violations` assertion caught two thirds of it — which the filed measurement
- * says it did not. Whether that is an axe/Chromium difference or a tint change
- * since is the unestablished mechanism recorded on the annotation-card surface.
- * It does not narrow what options (1) and (2) on #1721 still have to explain.
+ * What it buys: it makes a JUMP loud — a change that pushes more nodes into
+ * the bucket reds this suite — and it forces a newly added surface to be
+ * measured rather than silently unmeasured. It is not the contrast gate for
+ * those nodes; the per-node verdicts in the loop are (options 1/2 on #1721).
+ * Both stay: the ceiling still catches a surface that suddenly hands axe many
+ * more nodes, even if each one individually measures fine.
  *
  * Read once with `readFileSync` rather than a JSON import — the file's existing
  * style, and no `resolveJsonModule` dependency.
@@ -581,7 +618,42 @@ for (const theme of ["light", "dark", "warm"] as const) {
           const key = `${theme} / ${surface.name}`;
           const incompleteNodes = colorContrastNodeCount(results.incomplete);
           console.log(`axe color-contrast incomplete — ${key} = ${incompleteNodes}`);
+          // #1721: every node axe could not decide is decided here instead —
+          // measured from computed style, proven covered by pixels, or excused
+          // by a keyed waiver on the surface. See `behindModalScrim`.
+          const ccNodes = results.incomplete.find((e) => e.id === "color-contrast")?.nodes ?? [];
+          const waivers = surface.incompleteWaivers ?? {};
+          const samples = await sampleIncompleteNodes(
+            page,
+            ccNodes.map((n) => ({
+              target: [...n.target],
+              html: n.html,
+              messageKey: incompleteMessageKey(n),
+            })),
+          );
+          expect(samples).toHaveLength(ccNodes.length);
+          const used = new Set<string>();
+          const failures: string[] = [];
+          const tally = { measured: 0, covered: 0, waived: 0, failure: 0 };
+          for (const sample of samples) {
+            const verdict = assessIncompleteNode(key, sample, waivers[sample.descriptor]);
+            // Permanent and ungated, like the count line above: CI's verdicts
+            // are the evidence for whatever this gate decides on a runner whose
+            // browser and fonts differ from the one these were measured on.
+            console.log(
+              `axe incomplete verdict — ${key} — ${sample.descriptor} (${sample.messageKey}): ${describeVerdict(verdict)}`,
+            );
+            if (verdict.kind === "waived") used.add(sample.descriptor);
+            if (verdict.kind === "failure") failures.push(verdict.message);
+            tally[verdict.kind]++;
+          }
+          console.log(`axe incomplete tally — ${key} — ${JSON.stringify(tally)}`);
           expect(results.violations).toEqual([]);
+          expect(failures, "color-contrast nodes axe left incomplete").toEqual([]);
+          expect(
+            staleWaivers(waivers, used),
+            "waivers that excused nothing on this surface — remove them",
+          ).toEqual([]);
           expect(
             checkIncompleteBaseline(
               key,

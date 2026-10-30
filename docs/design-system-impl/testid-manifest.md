@@ -196,7 +196,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `claude-typing-indicator-{*}` (#651 — three-dot presence while Claude's tool
   targets this card)
 - Actions: `accept-btn-{*}`, `dismiss-btn-{*}`, `archive-btn-{*}`,
-  `remove-btn-{*}`, `send-to-claude-btn-{*}`, `undo-btn`
+  `remove-btn-{*}`, `send-to-claude-btn-{*}`, `undo-btn`,
+  `accept-blocked-{*}` (#1632 — the reason beside a disabled Accept whose
+  suggestion's target text is gone)
 - Edit form: `edit-btn-{*}`, `edit-{newtext,reason,text}-{*}`,
   `edit-{save,cancel}-btn-{*}`
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
