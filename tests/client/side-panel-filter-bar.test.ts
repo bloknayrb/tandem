@@ -45,6 +45,7 @@ function makeReview(): UseAnnotationReviewReturn {
     getRecentlyResolved: () => new Set<string>(),
     getReviewIndex: () => 0,
     getReviewTargets: () => [],
+    isTargetLost: () => false,
   };
 }
 

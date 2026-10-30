@@ -3331,6 +3331,7 @@ const shouldShowModelPicker = $derived(
         onEdit={marginHandlers.onEdit}
         onReply={marginHandlers.onReply}
         onSendToClaude={marginHandlers.onSendToClaude}
+        isTargetLost={review.isTargetLost}
       />
     {/snippet}
     {#if documentWorkspace.inSourceView && activeTab}

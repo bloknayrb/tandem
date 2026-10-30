@@ -1,5 +1,7 @@
 import type { JSONContent, Editor as TiptapEditor } from "@tiptap/core";
+import type { Node as PmNode } from "@tiptap/pm/model";
 import { Fragment, Slice } from "@tiptap/pm/model";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
@@ -13,7 +15,10 @@ import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
 import type { RestoreBreak } from "../editor/utils/literal-content";
 import { literalInlineContent, literalRestoreContent } from "../editor/utils/literal-content";
-import { annotationToPmRange, flatTextForPmRange } from "../positions";
+import type { PmRangeResult } from "../../shared/positions/index";
+import { annotationToPmRange, flatTextForPmRange, pmDocFlatText } from "../positions";
+import { createCoalescingTick } from "../utils/coalescing-tick";
+import { canAccept } from "./annotation-context-menu";
 
 /** Why undo refused, permanently. See `onUndoFailed`. */
 export type UndoDeclineReason = "truncated-snapshot" | "block-structure";
@@ -288,6 +293,40 @@ function applyAsBlocks(
 }
 
 /**
+ * What a suggestion's target reads as, against the document as it is now.
+ *
+ * The ONE check behind both sides of #1632: `applySuggestion` refuses on
+ * `unresolvable` / `contradicted` at click time, and `isTargetLost` asks the
+ * same question at render time so the card can disable Accept before the click.
+ * Two copies of this would be two answers to "will Accept work?".
+ *
+ * Deliberately blind to `suggestedText`: a reply's proposal rewrites the
+ * PARENT's range against the parent's snapshot, so a parent with no
+ * `suggestedText` of its own still needs a verdict. `applySuggestion` keeps its
+ * own `suggestedText` guard.
+ *
+ * `flat` is `pmDocFlatText(pmDoc)` when the caller checks many records against
+ * one document; `warn: false` is for that per-change caller too.
+ */
+export type SuggestionTargetCheck =
+  | { kind: "unresolvable" }
+  | { kind: "unverified" | "contradicted" | "ok"; resolved: PmRangeResult };
+
+export function checkSuggestionTarget(
+  ann: Annotation,
+  pmDoc: PmNode,
+  ydoc: Y.Doc | null,
+  { warn = true, flat }: { warn?: boolean; flat?: string } = {},
+): SuggestionTargetCheck {
+  const resolved = annotationToPmRange(ann, pmDoc, ydoc, { warn });
+  if (!resolved) return { kind: "unresolvable" };
+  // Not refused: legacy records predate `textSnapshot`. See `applySuggestion`.
+  if (ann.textSnapshot === undefined) return { kind: "unverified", resolved };
+  const actual = flatTextForPmRange(pmDoc, resolved.from, resolved.to, flat);
+  return { kind: snapshotContradicts(ann, actual) ? "contradicted" : "ok", resolved };
+}
+
+/**
  * Apply an annotation's replacement text in the editor.
  *
  * Exported for tests only. The hook's own suite drives it through a fully
@@ -305,11 +344,6 @@ export function applySuggestion(
   if (ann.suggestedText === undefined) return false;
 
   const newText = ann.suggestedText;
-  const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
-  if (!resolved) {
-    console.warn("[SidePanel] Could not resolve range for suggestion", ann.id);
-    return false;
-  }
 
   try {
     // #1629: verify the target still reads as what the suggestion was written
@@ -338,16 +372,20 @@ export function applySuggestion(
     // no `onApplyFailed` toast. Nothing on this path throws today —
     // `flatOffsetToPmPos` clamps — but the guard would otherwise be silently
     // relying on that.
-    if (ann.textSnapshot === undefined) {
+    const target = checkSuggestionTarget(ann, editor.state.doc, ydoc);
+    if (target.kind === "unresolvable") {
+      console.warn("[SidePanel] Could not resolve range for suggestion", ann.id);
+      return false;
+    }
+    const { resolved } = target;
+    if (target.kind === "unverified") {
       // Not refused: legacy records predate `textSnapshot`, and refusing every
       // one of them would break accept for documents that are perfectly fine.
       // But "we do not refuse" and "we do not mention it" are separate calls,
       // and only the first is argued — this write really is going out without
       // the check the feature advertises.
       console.warn(`[SidePanel] Applying ${ann.id} UNVERIFIED — no textSnapshot to check against`);
-    } else if (
-      snapshotContradicts(ann, flatTextForPmRange(editor.state.doc, resolved.from, resolved.to))
-    ) {
+    } else if (target.kind === "contradicted") {
       // `method` distinguishes the two ways this fires, and they mean opposite
       // things: on `flat` the CRDT anchor is dead and the offsets are a guess —
       // the case this guard was written for. On `rel` the anchor TRACKED the
@@ -494,6 +532,13 @@ export interface UseAnnotationReviewReturn {
   getRecentlyResolved: () => Set<string>;
   getReviewIndex: () => number;
   getReviewTargets: () => Annotation[];
+  /**
+   * #1632: the record's target text is gone, so accepting its suggestion (or a
+   * reply's proposal over its range) would be refused. Reactive: read it in
+   * markup or a `$derived`. Feed it to `isAcceptBlocked`, never straight into a
+   * gate — a plain comment's Accept writes no text and stays live.
+   */
+  isTargetLost: (id: string) => boolean;
 }
 
 export function useAnnotationReview({
@@ -909,6 +954,67 @@ export function useAnnotationReview({
     }
   });
 
+  // #1632: which pending review targets would `applySuggestion` refuse on the
+  // target alone? The card disables Accept on these instead of letting the user
+  // find out from a toast after the click.
+  //
+  // `editor.state.doc` is not reactive, so a coalesced tick on `update`
+  // (doc-changing transactions only, remote y-sync steps included) drives the
+  // recompute; annotation-map changes arrive through `getAnnotations()`. No
+  // bump on attach: this effect would then read and write `docTick` and
+  // invalidate itself, and the derived already re-runs on a `getEditor()`
+  // change.
+  let docTick = $state(0);
+  $effect(() => {
+    const ed = getEditor();
+    if (!ed || ed.isDestroyed) return;
+    const bump = createCoalescingTick(() => {
+      if (!ed.isDestroyed) docTick++;
+    });
+    ed.on("update", bump);
+    return () => {
+      ed.off("update", bump);
+    };
+  });
+
+  // The previous answer, returned when unchanged so a keystroke that loses no
+  // target does not invalidate every card reading the set.
+  let lastLost = new Set<string>();
+  const lostTargetIds = $derived.by(() => {
+    void docTick;
+    const ed = getEditor();
+    const ydoc = getYdoc();
+    const lost = new Set<string>();
+    // No editor (source view, teardown): no verdict, Accept stays live and its
+    // own `no-editor` toast applies.
+    //
+    // An editor bound to a DIFFERENT Y.Doc is a tab switch caught half-way:
+    // `getYdoc` follows the active tab at once, the editor only when
+    // `Editor.svelte` re-mounts, and resolving one tab's records against the
+    // other's document reads every target as lost (or worse, as fine). No
+    // verdict until the two agree. A missing sync plugin (tests) is not that.
+    const bound = ed && !ed.isDestroyed ? ySyncPluginKey.getState(ed.state) : undefined;
+    if (ed && !ed.isDestroyed && (bound === undefined || bound.doc === ydoc)) {
+      const pmDoc = ed.state.doc;
+      let flat: string | undefined;
+      for (const ann of getAnnotations()) {
+        if (!canAccept(ann)) continue;
+        try {
+          flat ??= pmDocFlatText(pmDoc);
+          const { kind } = checkSuggestionTarget(ann, pmDoc, ydoc, { warn: false, flat });
+          if (kind === "unresolvable" || kind === "contradicted") lost.add(ann.id);
+        } catch {
+          // A check that throws gives no verdict, so Accept stays live and
+          // `applySuggestion`, which catches the same throw, stays the gate.
+          // Never let it escape: this runs inside the panels' render.
+        }
+      }
+    }
+    if (lost.size === lastLost.size && [...lost].every((id) => lastLost.has(id))) return lastLost;
+    lastLost = lost;
+    return lost;
+  });
+
   return {
     resolveAnnotation,
     acceptReplySuggestion,
@@ -919,5 +1025,6 @@ export function useAnnotationReview({
     getRecentlyResolved: () => recentlyResolved,
     getReviewIndex: () => reviewIndex,
     getReviewTargets,
+    isTargetLost: (id) => lostTargetIds.has(id),
   };
 }

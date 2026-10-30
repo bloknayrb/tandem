@@ -5,6 +5,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
+import { isAcceptBlocked } from "./annotation-context-menu";
 import { getCardLabel, getCardTint, getDisplayAuthor } from "./annotation-card-helpers";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
@@ -77,6 +78,14 @@ interface Props {
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /**
+   * #1632: the record's target text is gone (`useAnnotationReview`'s
+   * `isTargetLost`). Accept and "Accept replacement" render disabled with the
+   * reason, instead of failing after the click. Optional, defaulting to not
+   * lost: that is the pre-#1632 behaviour and `applySuggestion` still refuses,
+   * so forgetting it only costs the explanation, never the safety.
+   */
+  targetLost?: boolean;
+  /**
    * The licence refuses the AI (#1521). REQUIRED, no default: a mount that
    * forgets it must fail to compile rather than fail open. Forwarded to the
    * actions row and the reply thread, which disable their AI writes.
@@ -106,6 +115,7 @@ let {
   exitModes,
   openRequest = null,
   onAcceptReplySuggestion,
+  targetLost = false,
   aiDisabled,
 }: Props = $props();
 
@@ -372,6 +382,7 @@ function onCardClick(event: MouseEvent) {
     {onRemove}
     {onSendToClaude}
     {aiDisabled}
+    acceptBlocked={isAcceptBlocked(annotation, targetLost)}
   />
   <!-- A13 (#798): the inline disclosure in ReplyThread is now the reply reader;
        it replaced the former "Expand thread" → portaled ReplyThreadOverlay
@@ -385,6 +396,7 @@ function onCardClick(event: MouseEvent) {
     {reduceMotion}
     openNonce={replyOpenNonce}
     {onAcceptReplySuggestion}
+    {targetLost}
     {aiDisabled}
   />
 </div>

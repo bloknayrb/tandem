@@ -120,12 +120,13 @@ export async function openAnnotationContextMenu(
   ann: Annotation,
   run: (action: AnnotationContextMenuActionId) => void,
   aiDisabled: boolean,
+  targetLost: boolean,
 ): Promise<void> {
   setAnnotationGesture({ run });
   try {
     const invoke = await loadInvoke();
     await invoke("show_annotation_context_menu", {
-      req: buildAnnotationMenuContext(ann, aiDisabled),
+      req: buildAnnotationMenuContext(ann, aiDisabled, targetLost),
     });
   } catch {
     /* Tauri unavailable or command error — native menu already suppressed. */

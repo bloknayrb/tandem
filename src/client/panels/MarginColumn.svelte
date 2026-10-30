@@ -75,6 +75,12 @@ interface Props {
   onEdit?: (id: string, content: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onSendToClaude?: (id: string) => void;
+  /**
+   * #1632: `useAnnotationReview`'s `isTargetLost`, so a margin Accept whose
+   * target text is gone renders disabled with the reason, and the native menu
+   * leaves it out. Required, so the one App mount cannot forget it.
+   */
+  isTargetLost: (id: string) => boolean;
   /** App `reduceMotion` setting, threaded to the A27 fly-to-margin transition. */
   reduceMotion?: boolean;
 }
@@ -100,6 +106,7 @@ let {
   onEdit,
   onReply,
   onSendToClaude,
+  isTargetLost,
   reduceMotion = false,
 }: Props = $props();
 
@@ -392,7 +399,12 @@ async function handleAnnotationContextMenu(e: MouseEvent) {
 
   e.preventDefault();
   e.stopPropagation();
-  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id), aiDisabled);
+  await openAnnotationContextMenu(
+    ann,
+    dispatchAnnotationAction(id),
+    aiDisabled,
+    isTargetLost(ann.id),
+  );
 }
 
 $effect(() => {
@@ -574,6 +586,7 @@ $effect(() => subscribeAnnotationActions());
         onEdit={canEdit(ann) ? onEdit : undefined}
         onReply={canReply(ann, false) ? onReply : undefined}
         openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
+        targetLost={isTargetLost(ann.id)}
         {aiDisabled}
       />
     </div>

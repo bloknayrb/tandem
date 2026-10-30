@@ -2,6 +2,7 @@
 import { onDestroy } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { AI_OFF_TITLE } from "../utils/license-ui";
+import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
 
 interface Props {
   annotationId: string;
@@ -21,6 +22,14 @@ interface Props {
    * rather than fail open.
    */
   aiDisabled: boolean;
+  /**
+   * #1632: Accept is offered but would be refused — the suggestion's target
+   * text is gone (`isAcceptBlocked`). The button still renders (Rule 7, and a
+   * vanished Accept reads as a bug) but disabled, with the reason beside it.
+   * Absent ⇒ not blocked, which is the pre-#1632 behaviour; `applySuggestion`
+   * is the gate either way.
+   */
+  acceptBlocked?: boolean;
 }
 
 let {
@@ -35,6 +44,7 @@ let {
   onRemove,
   onSendToClaude,
   aiDisabled,
+  acceptBlocked = false,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -77,8 +87,14 @@ onDestroy(clearUndoTimer);
       <button
         data-testid="accept-btn-{annotationId}"
         class="aca-btn aca-btn--accept"
+        disabled={acceptBlocked}
+        title={acceptBlocked ? ACCEPT_BLOCKED_REASON : undefined}
+        aria-describedby={acceptBlocked ? `accept-blocked-${annotationId}` : undefined}
         onclick={(e) => {
           e.stopPropagation();
+          // `disabled` alone is not a guard: a programmatic click, or a flip
+          // between render and click, gets past it.
+          if (acceptBlocked) return;
           onAccept!(annotationId);
         }}
       >
@@ -98,6 +114,15 @@ onDestroy(clearUndoTimer);
       </button>
     {/if}
   </div>
+  {#if onAccept && acceptBlocked}
+    <div
+      id="accept-blocked-{annotationId}"
+      data-testid="accept-blocked-{annotationId}"
+      class="aca-blocked"
+    >
+      {ACCEPT_BLOCKED_REASON}
+    </div>
+  {/if}
 {:else if isPending && !isEditing && annotationType === "note"}
   <div class="aca-row">
     {#if onRemove}
@@ -183,6 +208,20 @@ onDestroy(clearUndoTimer);
   .aca-btn--accept {
     background: var(--tandem-success-bg);
     color: var(--tandem-success-fg-strong);
+  }
+  /* #1632: offered but refused — the target text is gone. */
+  .aca-btn--accept:disabled {
+    cursor: default;
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-subtle);
+  }
+  .aca-btn--accept:disabled:active {
+    transform: none;
+  }
+  .aca-blocked {
+    margin-top: 4px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
   }
   .aca-btn--reject {
     background: var(--tandem-error-bg);

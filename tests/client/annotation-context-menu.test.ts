@@ -104,7 +104,7 @@ describe("annotation context-menu gating predicates", () => {
 
 describe("buildAnnotationMenuContext", () => {
   it("user note → compose + copy + archive (isNote true)", () => {
-    const req = buildAnnotationMenuContext(ann("note", "user"), false);
+    const req = buildAnnotationMenuContext(ann("note", "user"), false, false);
     expect(req).toEqual({
       canAccept: false,
       canDismiss: false,
@@ -118,7 +118,7 @@ describe("buildAnnotationMenuContext", () => {
   });
 
   it("claude comment → review + reply + copy, no edit/remove/send", () => {
-    const req = buildAnnotationMenuContext(ann("comment", "claude"), false);
+    const req = buildAnnotationMenuContext(ann("comment", "claude"), false, false);
     expect(req).toMatchObject({
       canAccept: true,
       canDismiss: true,
@@ -131,7 +131,7 @@ describe("buildAnnotationMenuContext", () => {
   });
 
   it("user highlight → edit + copy + remove (isNote false), no reply", () => {
-    const req = buildAnnotationMenuContext(ann("highlight", "user"), false);
+    const req = buildAnnotationMenuContext(ann("highlight", "user"), false, false);
     expect(req).toMatchObject({
       canReply: false,
       canEdit: true,
@@ -142,7 +142,7 @@ describe("buildAnnotationMenuContext", () => {
   });
 
   it("resolved annotation → copy only", () => {
-    const req = buildAnnotationMenuContext(ann("comment", "claude", "accepted"), false);
+    const req = buildAnnotationMenuContext(ann("comment", "claude", "accepted"), false, false);
     expect(req).toEqual({
       canAccept: false,
       canDismiss: false,
@@ -169,11 +169,11 @@ describe("licence refusal (#1521): aiDisabled gates the AI writes only", () => {
   });
 
   it("the menu builder forwards it", () => {
-    const off = buildAnnotationMenuContext(ann("note", "user"), true);
+    const off = buildAnnotationMenuContext(ann("note", "user"), true, false);
     expect(off.canSendToClaude).toBe(false);
     expect(off.canReply).toBe(true);
-    expect(buildAnnotationMenuContext(ann("comment", "claude"), true).canReply).toBe(false);
-    expect(buildAnnotationMenuContext(ann("note", "user"), false).canSendToClaude).toBe(true);
+    expect(buildAnnotationMenuContext(ann("comment", "claude"), true, false).canReply).toBe(false);
+    expect(buildAnnotationMenuContext(ann("note", "user"), false, false).canSendToClaude).toBe(true);
   });
 });
 

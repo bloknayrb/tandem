@@ -554,7 +554,12 @@ async function handleAnnotationContextMenu(e: MouseEvent) {
 
   e.preventDefault();
   e.stopPropagation();
-  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id), aiDisabled);
+  await openAnnotationContextMenu(
+    ann,
+    dispatchAnnotationAction(id),
+    aiDisabled,
+    review.isTargetLost(ann.id),
+  );
 }
 
 // Delegated contextmenu listener on the list container (attached imperatively so
@@ -875,6 +880,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
           onEdit={canEdit(ann) ? handleEdit : undefined}
           onReply={canReply(ann, false) ? handleReply : undefined}
           onAcceptReplySuggestion={canAccept(ann) ? review.acceptReplySuggestion : undefined}
+          targetLost={review.isTargetLost(ann.id)}
           openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
           onClick={() => review.scrollToAnnotation(ann)}
           selected={selectedImportIds.has(ann.id)}

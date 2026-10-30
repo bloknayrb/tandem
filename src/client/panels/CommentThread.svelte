@@ -3,6 +3,7 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
 import AnnotationBody from "./AnnotationBody.svelte";
+import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
 import { formatRelativeTime } from "./annotation-card-helpers";
 
 interface Props {
@@ -19,9 +20,22 @@ interface Props {
    * says so, so a separate boolean prop would be the same fact spelled twice.
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
+  /**
+   * #1632: the PARENT's target text is gone. A reply's proposal rewrites the
+   * parent's range against the parent's snapshot, so it would be refused just
+   * as the parent's own suggestion would — whether or not the parent carries
+   * one. Absent ⇒ not lost.
+   */
+  targetLost?: boolean;
 }
 
-let { replies, annotation, isPending, onAcceptReplySuggestion }: Props = $props();
+let {
+  replies,
+  annotation,
+  isPending,
+  onAcceptReplySuggestion,
+  targetLost = false,
+}: Props = $props();
 
 const agentLabel = createAgentLabel();
 </script>
@@ -89,8 +103,11 @@ const agentLabel = createAgentLabel();
               type="button"
               class="ct-accept"
               data-testid="accept-reply-btn-{reply.id}"
+              disabled={targetLost}
+              title={targetLost ? ACCEPT_BLOCKED_REASON : undefined}
               onclick={(e) => {
                 e.stopPropagation();
+                if (targetLost) return;
                 onAcceptReplySuggestion?.(annotation.id, reply.id);
               }}
             >
@@ -189,5 +206,11 @@ const agentLabel = createAgentLabel();
     background: var(--tandem-accent-bg);
     color: var(--tandem-accent-fg-strong);
     cursor: pointer;
+  }
+  /* #1632: offered but refused — the parent's target text is gone. */
+  .ct-accept:disabled {
+    cursor: default;
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-subtle);
   }
 </style>

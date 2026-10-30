@@ -53,6 +53,30 @@ export const canAccept = (a: AnnotationGate): boolean => a.author !== "user" && 
 export const canDismiss = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
 
 /**
+ * Accept is OFFERED but cannot succeed (#1632): the record's target text is
+ * gone, so `applySuggestion` would refuse the rewrite.
+ *
+ * `targetLost` is a fact about the record AND the document — computed by
+ * `useAnnotationReview`'s `isTargetLost` — which is why it is a parameter and
+ * not folded into {@link canAccept}: the predicates above stay pure functions
+ * of the record. This one is still the single place the card's button, its
+ * click guard and the native menu all ask, so they cannot drift.
+ *
+ * Only a record with `suggestedText` is blocked. Accepting a plain comment is a
+ * status change that writes no text, so a lost target cannot make it fail.
+ * (A reply's proposal rewrites the PARENT's range, so "Accept replacement" is
+ * blocked on `targetLost` alone — see `CommentThread.svelte`.)
+ */
+/** The reason a blocked Accept shows (#1632). Generic per ADR-027: no annotation content. */
+export const ACCEPT_BLOCKED_REASON =
+  "The text this suggestion was written against has changed, so it can't be applied.";
+
+export const isAcceptBlocked = (
+  a: Pick<Annotation, "suggestedText">,
+  targetLost: boolean,
+): boolean => targetLost && a.suggestedText !== undefined;
+
+/**
  * Reply — comment + note (post-#1000 notes carry PRIVATE user-authored reply threads
  * shown only to the owning user; the Claude privacy boundary is server-side and
  * untouched). Highlights have no body to thread. Bryan-approved 2026-06-03.
@@ -100,13 +124,21 @@ export interface AnnotationContextMenuRequest {
   isNote: boolean;
 }
 
-/** Compute the booleans-only menu request for a right-clicked annotation. */
+/**
+ * Compute the booleans-only menu request for a right-clicked annotation.
+ *
+ * `targetLost` (#1632) is required, so every caller has to decide. The native
+ * menu has nowhere to put a reason, so a blocked Accept is left out of it,
+ * like every other item that does not apply; the card shows it disabled with
+ * the reason instead.
+ */
 export function buildAnnotationMenuContext(
-  a: AnnotationGate,
+  a: AnnotationGate & Pick<Annotation, "suggestedText">,
   aiDisabled: boolean,
+  targetLost: boolean,
 ): AnnotationContextMenuRequest {
   return {
-    canAccept: canAccept(a),
+    canAccept: canAccept(a) && !isAcceptBlocked(a, targetLost),
     canDismiss: canDismiss(a),
     canReply: canReply(a, aiDisabled),
     canEdit: canEdit(a),

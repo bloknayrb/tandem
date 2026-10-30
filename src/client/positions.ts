@@ -142,10 +142,16 @@ export function pmDocFlatText(doc: PmNode): string {
  * boundary cases are the hard part (an offset landing ON a block separator, a
  * container whose last child is a block), `pmPosToFlatOffset` already solves
  * them and is already tested, and a second range-walk would be a second copy of
- * that reasoning. Cost is O(document) per call; this runs on a click.
+ * that reasoning. Cost is O(document) per call; this runs on a click. A caller
+ * checking many ranges against one document (#1632's render-time accept gate)
+ * passes `flat` — `pmDocFlatText(doc)` for that same `doc` — to pay it once.
  */
-export function flatTextForPmRange(doc: PmNode, from: PmPos, to: PmPos): string {
-  const flat = pmDocFlatText(doc);
+export function flatTextForPmRange(
+  doc: PmNode,
+  from: PmPos,
+  to: PmPos,
+  flat: string = pmDocFlatText(doc),
+): string {
   return flat.slice(pmPosToFlatOffset(doc, from), pmPosToFlatOffset(doc, to));
 }
 
@@ -450,6 +456,7 @@ export function relRangeToPmPositions(
   ydoc: Y.Doc,
   pmDoc: PmNode,
   relRange: RelativeRange,
+  warn = true,
 ): { from: PmPos; to: PmPos } | null {
   let fromAbs, toAbs;
   try {
@@ -458,7 +465,7 @@ export function relRangeToPmPositions(
     fromAbs = Y.createAbsolutePositionFromRelativePosition(fromRpos, ydoc);
     toAbs = Y.createAbsolutePositionFromRelativePosition(toRpos, ydoc);
   } catch (err) {
-    console.warn("[positions] relRangeToPmPositions: failed to resolve relRange:", err);
+    if (warn) console.warn("[positions] relRangeToPmPositions: failed to resolve relRange:", err);
     return null;
   }
   if (!fromAbs || !toAbs) return null;
@@ -481,23 +488,26 @@ export function relRangeToPmPositions(
  * Prefers relRange (CRDT-anchored, survives edits). Falls back to flat offsets.
  * Returns null if neither path resolves. The `method` field tells the caller
  * which path was used — useful for diagnostics and testing.
+ *
+ * `warn: false` silences the fallback warnings for a caller that resolves on
+ * every document change rather than on a gesture (#1632's accept gate): the
+ * fallback is the same, only the per-keystroke console noise goes.
  */
 export function annotationToPmRange(
   ann: Annotation,
   pmDoc: PmNode,
   ydoc: Y.Doc | null,
+  { warn = true }: { warn?: boolean } = {},
 ): PmRangeResult | null {
   // Try relRange first
   if (ann.relRange && ydoc) {
-    const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange);
+    const resolved = relRangeToPmPositions(ydoc, pmDoc, ann.relRange, warn);
     if (resolved && resolved.from <= resolved.to) return { ...resolved, method: "rel" };
-    if (resolved) {
+    if (warn) {
       console.warn(
-        `[positions] annotationToPmRange: inverted rel range for ${ann.id}, falling back to flat`,
-      );
-    } else {
-      console.warn(
-        `[positions] annotationToPmRange: relRange resolved to null for ${ann.id}, falling back to flat`,
+        resolved
+          ? `[positions] annotationToPmRange: inverted rel range for ${ann.id}, falling back to flat`
+          : `[positions] annotationToPmRange: relRange resolved to null for ${ann.id}, falling back to flat`,
       );
     }
   }
