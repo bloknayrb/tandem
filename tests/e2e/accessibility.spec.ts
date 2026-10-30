@@ -263,7 +263,7 @@ type Surface = {
   /**
    * Keyed exemptions for color-contrast nodes axe left `incomplete` on this
    * surface that computed style cannot measure either, keyed by the sampler's
-   * descriptor and applying in every theme. See BEHIND_MODAL_SCRIM.
+   * descriptor and applying in every theme. See `behindModalScrim`.
    */
   incompleteWaivers?: Record<string, IncompleteWaiver>;
 };

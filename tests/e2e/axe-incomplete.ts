@@ -2,9 +2,9 @@
  * The pure half of #1721's handling of axe's `color-contrast` **incomplete**
  * nodes: the per-surface count ceiling, and the per-node verdict that measures
  * each such node without axe. Why axe leaves nodes incomplete, and the waiver
- * table, are on `INCOMPLETE_WAIVERS` in `accessibility.spec.ts`; the page-side
- * sampler is `sampleIncompleteNodes` there. Kept there so the history has one
- * home.
+ * table, are on `behindModalScrim` in `accessibility.spec.ts`, kept there so the
+ * history has one home; the page-side sampler is `sampleIncompleteNodes` in
+ * `axe-incomplete-sampler.ts`.
  *
  * Not a `.spec.ts`/`.test.ts`: Playwright's default `testMatch` under
  * `testDir: "tests/e2e"` must not collect it, and neither must vitest's node
@@ -133,10 +133,19 @@ function luminance([r, g, b]: Rgba): number {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
 }
 
-/** WCAG 2.x contrast ratio, rounded to two places the way axe reports it. */
-export function contrastRatio(a: Rgba, b: Rgba): number {
+/** WCAG 2.x contrast ratio, unrounded — what a threshold is compared against. */
+function rawContrastRatio(a: Rgba, b: Rgba): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * WCAG 2.x contrast ratio rounded to two places, for display only. Never
+ * compare a threshold against it: 4.496:1 rounds to 4.5 and would pass a 4.5:1
+ * bar it misses.
+ */
+export function contrastRatio(a: Rgba, b: Rgba): number {
+  return Math.round(rawContrastRatio(a, b) * 100) / 100;
 }
 
 /**
@@ -164,13 +173,13 @@ export function requiredRatio(
   return 4.5;
 }
 
+const rgb = (c: Rgba) => `rgb(${c.slice(0, 3).map(Math.round).join(",")})`;
+
 /**
  * A keyed exemption for a node computed style cannot measure. `expect` must
  * match EVERY reason the sampler gave: a new reason appearing on a waived node
  * (a background image added later, say) is a new question, not the old one.
  */
-const rgb = (c: Rgba) => `rgb(${c.slice(0, 3).map(Math.round).join(",")})`;
-
 export type IncompleteWaiver = { reason: string; expect: RegExp };
 
 export type NodeVerdict =
@@ -196,7 +205,14 @@ export function assessIncompleteNode(
   const where = `${key}: ${sample.descriptor} (axe: ${sample.messageKey ?? "no messageKey"})`;
   if (sample.coveredBy) return { kind: "covered", by: sample.coveredBy };
   if (sample.unresolvable.length > 0) {
-    const unexpected = sample.unresolvable.filter((r) => !waiver?.expect.test(r));
+    // `lastIndex = 0`: one RegExp is shared by several waivers and every theme,
+    // and a `g`/`y` flag would otherwise make `test` alternate between calls.
+    const covers = (r: string) => {
+      if (!waiver) return false;
+      waiver.expect.lastIndex = 0;
+      return waiver.expect.test(r);
+    };
+    const unexpected = sample.unresolvable.filter((r) => !covers(r));
     if (waiver && unexpected.length === 0) return { kind: "waived", reason: waiver.reason };
     return {
       kind: "failure",
@@ -206,10 +222,12 @@ export function assessIncompleteNode(
   const { text, ground } = paintedPair(sample);
   const ratio = contrastRatio(text, ground);
   const required = requiredRatio(sample);
-  if (ratio < required) {
+  const raw = rawContrastRatio(text, ground);
+  if (raw < required) {
+    // Truncated, as axe reports it, so a near miss never prints as "4.5:1, needs 4.5:1".
     return {
       kind: "failure",
-      message: `${where} measures ${ratio}:1, needs ${required}:1 (text ${rgb(text)} on ${rgb(ground)}).`,
+      message: `${where} measures ${Math.floor(raw * 100) / 100}:1, needs ${required}:1 (text ${rgb(text)} on ${rgb(ground)}).`,
     };
   }
   return { kind: "measured", ratio, required };

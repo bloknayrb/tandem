@@ -105,6 +105,8 @@ export async function sampleIncompleteNodes(
           coveredBy: null as string | null,
           descriptor: String(target.at(-1) ?? ""),
           rects: [] as Box[],
+          /** Ancestor-or-self hops (0 = the node) that carry a mask image. */
+          maskHops: [] as number[],
         };
         // axe's target is a PATH: more than one entry means an iframe or
         // shadow root, and `querySelector` on the last hop would find
@@ -141,6 +143,12 @@ export async function sampleIncompleteNodes(
           unresolvable.push("no text of its own (its text is in a descendant)");
           return result;
         }
+        // Inherited, so the node's own computed value already carries any
+        // ancestor's: a shadow or stroke repaints the glyph edge in another colour.
+        if (cs.textShadow !== "none") unresolvable.push("text-shadow on the node");
+        if (Number.parseFloat(cs.getPropertyValue("-webkit-text-stroke-width")) > 0) {
+          unresolvable.push("-webkit-text-stroke on the node");
+        }
         const fill = paint(cs.getPropertyValue("-webkit-text-fill-color") || "transparent");
         result.fg = fill[3] > 0 ? fill : paint(cs.color);
         result.fontSizePx = Number.parseFloat(cs.fontSize);
@@ -151,11 +159,14 @@ export async function sampleIncompleteNodes(
         result.layers = chain.map((n) => {
           const ncs = getComputedStyle(n);
           const label = n === el ? "the node" : describe(n);
-          if (ncs.backgroundImage !== "none") unresolvable.push(`background-image on ${label}`);
-          if (ncs.filter !== "none") unresolvable.push(`filter on ${label}`);
-          if ((ncs.backdropFilter ?? "none") !== "none")
-            unresolvable.push(`backdrop-filter on ${label}`);
-          if (ncs.mixBlendMode !== "normal") unresolvable.push(`mix-blend-mode on ${label}`);
+          for (const p of alters(ncs)) unresolvable.push(`${p} on ${label}`);
+          // A mask fades the whole subtree toward transparent wherever its
+          // image does (scroll-fade edges), which no flat ratio describes.
+          const mask = ncs.maskImage || ncs.getPropertyValue("-webkit-mask-image");
+          if (mask && mask !== "none") {
+            unresolvable.push(`mask-image on ${label}`);
+            result.maskHops.push(chain.length - 1 - chain.indexOf(n));
+          }
           const pseudo = pseudoFill(n);
           if (pseudo) unresolvable.push(`${pseudo} fill on ${label}`);
           return { bg: paint(ncs.backgroundColor), opacity: Number(ncs.opacity) };
@@ -168,9 +179,16 @@ export async function sampleIncompleteNodes(
           );
         }
 
+        // The node's OWN text boxes — the same text `result.text`, `fg` and the
+        // font size describe. `selectNodeContents(el)` would also return every
+        // descendant element's border box, hit-testing ground no glyph sits on.
         const range = document.createRange();
-        range.selectNodeContents(el);
-        result.rects = Array.from(range.getClientRects())
+        result.rects = Array.from(el.childNodes)
+          .filter((c) => c.nodeType === Node.TEXT_NODE)
+          .flatMap((c) => {
+            range.selectNodeContents(c);
+            return Array.from(range.getClientRects());
+          })
           .filter((r) => r.width > 0 && r.height > 0)
           .map((r) => ({ x: r.left, y: r.top, width: r.width, height: r.height }));
         if (result.rects.length === 0) {
@@ -240,56 +258,103 @@ export async function sampleIncompleteNodes(
     }
   }, nodes);
 
-  // A hit test can only say an opaque element sits ABOVE the text at the
-  // sampled points. Whether the text paints any pixel at all is answered by the
-  // pixels: hide the node (and every descendant, with transitions off so the
-  // change is immediate), and if a screenshot of every line box is unchanged,
-  // nothing of it was on screen. Anything short of that stays unresolvable.
+  // Two questions the hit test cannot answer are answered by the pixels
+  // instead: does the node paint anything at all (an opaque element above it at
+  // every sampled point is only a candidate for "covered"), and does a mask on
+  // an ancestor change anything over the node's own boxes (a scroll-fade only
+  // bites near its edges). Each is a screenshot of every line box before and
+  // after one change, with transitions and animations off; identical bytes
+  // answer yes, anything else leaves the node unresolvable.
   const out: IncompleteNodeSample[] = [];
-  for (const { rects, ...sample } of sampled) {
+  for (const { rects, maskHops, ...sample } of sampled) {
     if (sample.coveredBy) {
-      const x0 = Math.min(...rects.map((r) => r.x));
-      const y0 = Math.min(...rects.map((r) => r.y));
-      const x1 = Math.max(...rects.map((r) => r.x + r.width));
-      const y1 = Math.max(...rects.map((r) => r.y + r.height));
-      const clip = {
-        x: Math.max(0, Math.floor(x0) - 1),
-        y: Math.max(0, Math.floor(y0) - 1),
-        width: Math.ceil(x1 - x0) + 2,
-        height: Math.ceil(y1 - y0) + 2,
-      };
-      const shot = () => page.screenshot({ clip, animations: "disabled" });
-      const shown = await shot();
-      const hiddenOk = await page.evaluate((target) => {
-        const before = document.activeElement;
-        document.querySelector(target)?.setAttribute("data-axe-probe-hide", "");
-        const style = document.createElement("style");
-        style.id = "axe-probe-hide";
-        style.textContent =
-          "[data-axe-probe-hide], [data-axe-probe-hide] * { visibility: hidden !important; transition: none !important; }";
-        document.head.appendChild(style);
-        const el = document.querySelector(target);
-        return (
-          !!el && getComputedStyle(el).visibility === "hidden" && document.activeElement === before
-        );
-      }, sample.target);
-      const hidden = await shot();
-      await page.evaluate((target) => {
-        document.querySelector(target)?.removeAttribute("data-axe-probe-hide");
-        document.getElementById("axe-probe-hide")?.remove();
-      }, sample.target);
-      if (hiddenOk && shown.equals(hidden)) {
+      const result = await pixelsUnchanged(page, rects, sample.target, "hide", []);
+      if (result === "unchanged") {
         out.push(sample);
         continue;
       }
       sample.unresolvable.push(
-        hiddenOk
+        result === "changed"
           ? `partly visible under ${sample.coveredBy}`
-          : "could not hide it to prove it covered",
+          : "could not hide it to prove it covered (it holds focus, or did not hide)",
       );
       sample.coveredBy = null;
+    } else if (maskHops.length > 0) {
+      const result = await pixelsUnchanged(page, rects, sample.target, "unmask", maskHops);
+      if (result === "unchanged") {
+        sample.unresolvable = sample.unresolvable.filter((r) => !r.startsWith("mask-image on "));
+      }
     }
     out.push(sample);
   }
   return out;
+}
+
+/**
+ * Screenshot the union of `rects`, apply one change, screenshot again, revert.
+ * `hide` hides the node and its subtree; `unmask` removes the mask images on
+ * the ancestors `hops` above the node. `refused` when the change could not be
+ * applied (the node holds focus, or the style did not take).
+ */
+async function pixelsUnchanged(
+  page: Page,
+  rects: Array<{ x: number; y: number; width: number; height: number }>,
+  target: string,
+  change: "hide" | "unmask",
+  hops: number[],
+): Promise<"unchanged" | "changed" | "refused"> {
+  const x0 = Math.min(...rects.map((r) => r.x));
+  const y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.width));
+  const y1 = Math.max(...rects.map((r) => r.y + r.height));
+  const clip = {
+    x: Math.max(0, Math.floor(x0) - 1),
+    y: Math.max(0, Math.floor(y0) - 1),
+    width: Math.ceil(x1 - x0) + 2,
+    height: Math.ceil(y1 - y0) + 2,
+  };
+  const shot = () => page.screenshot({ clip, animations: "disabled" });
+  const before = await shot();
+  try {
+    const applied = await page.evaluate(
+      ({ target, change, hops }) => {
+        const el = document.querySelector(target);
+        if (!el) return false;
+        const style = document.createElement("style");
+        style.id = "axe-probe";
+        if (change === "hide") {
+          // Chromium blurs a focused element that turns `visibility: hidden`
+          // in a task AFTER this returns, so comparing `activeElement` here
+          // would always pass. Refuse up front instead: hiding a node that
+          // holds focus would move focus, and nothing restores it.
+          if (el.contains(document.activeElement)) return false;
+          el.setAttribute("data-axe-probe", "");
+          style.textContent =
+            "[data-axe-probe], [data-axe-probe] * { visibility: hidden !important; transition: none !important; }";
+          document.head.appendChild(style);
+          return getComputedStyle(el).visibility === "hidden";
+        }
+        const holders = hops.map((h) => {
+          let n: Element | null = el;
+          for (let i = 0; i < h && n; i++) n = n.parentElement;
+          return n;
+        });
+        for (const n of holders) n?.setAttribute("data-axe-probe", "");
+        style.textContent =
+          "[data-axe-probe] { mask-image: none !important; -webkit-mask-image: none !important; transition: none !important; }";
+        document.head.appendChild(style);
+        return holders.every((n) => n && getComputedStyle(n).maskImage === "none");
+      },
+      { target, change, hops },
+    );
+    if (!applied) return "refused";
+    return before.equals(await shot()) ? "unchanged" : "changed";
+  } finally {
+    await page.evaluate(() => {
+      for (const n of document.querySelectorAll("[data-axe-probe]")) {
+        n.removeAttribute("data-axe-probe");
+      }
+      document.getElementById("axe-probe")?.remove();
+    });
+  }
 }

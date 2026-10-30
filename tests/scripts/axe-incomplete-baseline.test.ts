@@ -172,6 +172,24 @@ describe("assessIncompleteNode", () => {
     expect(v.kind === "failure" && v.message).toMatch(/measures 1\.\d+:1, needs 3:1/);
   });
 
+  it("compares the unrounded ratio, so a near miss that rounds up still fails", () => {
+    // rgb(118,119,118) on white is 4.496:1 — it displays as 4.5 and owes 4.5.
+    const v = assessIncompleteNode(
+      "light / s",
+      sample({ text: "B", fg: [118, 119, 118, 1] }),
+      undefined,
+    );
+    expect(v.kind).toBe("failure");
+    expect(v.kind === "failure" && v.message).toContain("measures 4.49:1, needs 4.5:1");
+  });
+
+  it("does not let a `g` flag on a shared waiver RegExp alternate its verdict", () => {
+    const waiver = { reason: "behind a modal scrim", expect: /^painted over by <div\.scrim>$/g };
+    const s = sample({ unresolvable: ["painted over by <div.scrim>"] });
+    expect(assessIncompleteNode("light / s", s, waiver).kind).toBe("waived");
+    expect(assessIncompleteNode("dark / s", s, waiver).kind).toBe("waived");
+  });
+
   it("fails CLOSED on an unmeasurable node with no waiver", () => {
     const v = assessIncompleteNode(
       "light / s",
