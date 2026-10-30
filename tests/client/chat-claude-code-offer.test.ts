@@ -6,7 +6,7 @@
  */
 import { fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
 import {
   CLAUDE_CODE_OFFER_TEXT,
@@ -15,6 +15,7 @@ import {
 } from "../../src/client/panels/chat-claude-code-offer";
 import { DELIVERY_STALL_MS } from "../../src/shared/constants";
 import type { ChatMessage } from "../../src/shared/types";
+import { spyChatAutoScroll } from "./chat-auto-scroll";
 
 const base = {
   launcherNotConfigured: true,
@@ -60,8 +61,12 @@ describe("showClaudeCodeOffer", () => {
 });
 
 describe("ChatPanel — the offer row", () => {
+  let scroll: ReturnType<typeof spyChatAutoScroll>;
   beforeEach(() => {
-    Element.prototype.scrollIntoView = vi.fn() as unknown as Element["scrollIntoView"];
+    scroll = spyChatAutoScroll();
+  });
+  afterEach(() => {
+    scroll.restore();
   });
 
   function renderChat(messages: ChatMessage[], eligible: boolean) {
@@ -138,8 +143,6 @@ describe("ChatPanel — the offer row", () => {
     try {
       const t0 = 1_800_000_000_000;
       vi.setSystemTime(t0);
-      const scroll = vi.fn();
-      Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
       const sent: ChatMessage = {
         id: "u1",
         author: "user",
@@ -150,11 +153,11 @@ describe("ChatPanel — the offer row", () => {
       const { container } = renderChat([sent], true);
       await tick();
       expect(row(container)).toBeNull();
-      const before = scroll.mock.calls.length;
+      const before = scroll.scrolls.mock.calls.length;
       await vi.advanceTimersByTimeAsync(DELIVERY_STALL_MS + 1_000);
       await tick();
       expect(row(container)).not.toBeNull();
-      expect(scroll.mock.calls.length).toBeGreaterThan(before);
+      expect(scroll.scrolls.mock.calls.length).toBeGreaterThan(before);
     } finally {
       vi.useRealTimers();
     }

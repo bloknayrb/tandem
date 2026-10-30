@@ -192,14 +192,14 @@ export function attachSelectionToolbarListener(
  * misplaced popup, and avoids reading the editor view on every scroll event.
  *
  * Everything else is a sibling panel, and dismissing on it was a real bug: the
- * chat panel smooth-scrolls itself to the bottom whenever a message arrives or
- * its pickup row changes, and that `scrollIntoView` also scrolls the right
- * rail. A reply from the AI landing while the user had text selected therefore
- * unmounted the popup, leaving the selection painted with nothing attached to
- * it — and nothing re-arms the popup until the selection itself changes. That
- * was the intermittent `openAnnotatePopup` failure in toolbar-redesign.spec.ts,
- * where an earlier spec's unanswered chat messages kept the chat panel
- * scrolling through the dwell.
+ * chat panel smooth-scrolls its message list to the bottom whenever a message
+ * arrives or its pickup row changes (and until #2331, through `scrollIntoView`,
+ * the right rail too). A reply from the AI landing while the user had text
+ * selected therefore unmounted the popup, leaving the selection painted with
+ * nothing attached to it — and nothing re-arms the popup until the selection
+ * itself changes. That was the intermittent `openAnnotatePopup` failure in
+ * toolbar-redesign.spec.ts, where an earlier spec's unanswered chat messages
+ * kept the chat panel scrolling through the dwell.
  *
  * A target that is not a `Node` answers true, so an unrecognized scroll falls
  * back to the old dismiss-on-any-scroll behaviour rather than leaving a

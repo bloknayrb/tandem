@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
 import { PICKUP_MAX_AGE_MS } from "../../src/client/panels/chat-pickup";
 import type { ChatMessage } from "../../src/shared/types";
+import { spyChatAutoScroll } from "./chat-auto-scroll";
 
 const T0 = 1_800_000_000_000;
 
@@ -57,17 +58,18 @@ function row(container: HTMLElement): HTMLElement | null {
   return container.querySelector("[data-testid='chat-pickup-status']");
 }
 
-let scrollSpy: ReturnType<typeof vi.fn>;
+let scrollSpy: ReturnType<typeof spyChatAutoScroll>["scrolls"];
+let restoreScroll: () => void;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   vi.setSystemTime(T0);
-  scrollSpy = vi.fn();
-  Element.prototype.scrollIntoView = scrollSpy as unknown as Element["scrollIntoView"];
+  ({ scrolls: scrollSpy, restore: restoreScroll } = spyChatAutoScroll());
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  restoreScroll();
 });
 
 describe("ChatPanel pickup row — clock", () => {
