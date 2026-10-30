@@ -37,6 +37,15 @@ let {
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
+// Per-instance: the same record's thread can be mounted in the side panel and
+// a margin column at once, and an `id` keyed on the record alone would collide.
+const uid = $props.id();
+// A parent carrying its own `suggestedText` already shows the reason under its
+// disabled Accept (`AnnotationCardActions`). A reply-only proposal has no such
+// line — the parent's Accept is a live status change — so the reason is shown
+// here, once, or a disabled button's `title` is all there is (never announced:
+// a disabled button cannot take focus).
+const showBlockedReason = $derived(targetLost && annotation.suggestedText === undefined);
 </script>
 
 {#if replies.length > 0}
@@ -104,6 +113,7 @@ const agentLabel = createAgentLabel();
               data-testid="accept-reply-btn-{reply.id}"
               disabled={targetLost}
               title={targetLost ? ACCEPT_BLOCKED_REASON : undefined}
+              aria-describedby={showBlockedReason ? `${uid}-blocked-${reply.id}` : undefined}
               onclick={(e) => {
                 e.stopPropagation();
                 if (targetLost) return;
@@ -112,6 +122,9 @@ const agentLabel = createAgentLabel();
             >
               Accept replacement
             </button>
+            {#if showBlockedReason}
+              <div id="{uid}-blocked-{reply.id}" class="ct-blocked">{ACCEPT_BLOCKED_REASON}</div>
+            {/if}
           {/if}
         {/if}
       </div>
@@ -212,5 +225,11 @@ const agentLabel = createAgentLabel();
     cursor: default;
     background: var(--tandem-surface-muted);
     color: var(--tandem-fg-subtle);
+  }
+  /* Twin of `.aca-blocked` in AnnotationCardActions.svelte. */
+  .ct-blocked {
+    margin-top: 4px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
   }
 </style>

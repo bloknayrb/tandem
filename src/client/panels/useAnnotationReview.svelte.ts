@@ -980,6 +980,23 @@ export function useAnnotationReview({
       ed.off("update", bump);
     };
   });
+  // Which records carry a reply proposal is read off the replies Y.Map, which
+  // no Svelte signal tracks. Without this a proposal arriving AFTER the edit
+  // that lost its parent's target — the common order: the user edits, then
+  // asks Claude to refine — leaves "Accept replacement" live until the next
+  // keystroke, which is the exact click-then-toast #1632 exists to remove.
+  $effect(() => {
+    const y = getYdoc();
+    if (!y) return;
+    const replies = y.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const bump = createCoalescingTick(() => {
+      docTick++;
+    });
+    replies.observe(bump);
+    return () => {
+      replies.unobserve(bump);
+    };
+  });
 
   // The previous answer, returned when unchanged so a keystroke that loses no
   // target does not invalidate every card reading the set.
@@ -1004,8 +1021,7 @@ export function useAnnotationReview({
       // Only records with something to apply can be blocked: their own
       // suggestion, or a reply's proposal over their range. Plain comments are
       // most of Claude's, and each check is several document walks. The
-      // replies map is read, not tracked: a reply arriving between edits only
-      // leaves its Accept live until the next one, and the click still checks.
+      // replies map is not a signal; the observer above bumps `docTick` on it.
       const proposed = new Set<string>();
       for (const reply of ydoc?.getMap<AnnotationReply>(Y_MAP_ANNOTATION_REPLIES).values() ?? []) {
         if (typeof reply.suggestedText === "string") proposed.add(reply.annotationId);

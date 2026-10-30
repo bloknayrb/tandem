@@ -178,6 +178,28 @@ describe("useAnnotationReview.isTargetLost — reactive on document edits", () =
     unmount();
   });
 
+  it("grades a parent when the reply proposal arrives AFTER the edit that lost its target", async () => {
+    // The common order: the user edits, then asks Claude to refine. No
+    // keystroke follows the reply, so the replies map itself must drive it.
+    const { api, unmount } = mount([comment({ id: "proposed" })]);
+    editTarget(editor);
+    await Promise.resolve();
+    await tick();
+    expect(api.isTargetLost("proposed")).toBe(false);
+    ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r1", {
+      id: "r1",
+      annotationId: "proposed",
+      author: "claude",
+      text: "try this",
+      suggestedText: "howdy",
+      timestamp: 0,
+    });
+    await Promise.resolve();
+    await tick();
+    expect(api.isTargetLost("proposed")).toBe(true);
+    unmount();
+  });
+
   it("never grades a user-authored record (Accept is not offered on one)", async () => {
     const { api, unmount } = mount([suggestion({ author: "user", type: "note" })]);
     editTarget(editor);
@@ -224,8 +246,10 @@ describe("the card renders a lost target as a disabled Accept with the reason", 
     const { scoped, onAccept, unmount } = renderCard(suggestion(), true);
     const accept = scoped.getByTestId("accept-btn-a1") as HTMLButtonElement;
     expect(accept.disabled).toBe(true);
-    expect(accept.getAttribute("aria-describedby")).toBe("accept-blocked-a1");
-    expect(scoped.getByTestId("accept-blocked-a1").textContent).toMatch(/has changed/);
+    const reason = scoped.getByTestId("accept-blocked-a1");
+    expect(reason.id).not.toBe("");
+    expect(accept.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(reason.textContent).toMatch(/has changed/);
     accept.click();
     expect(onAccept).not.toHaveBeenCalled();
     expect((scoped.getByTestId("dismiss-btn-a1") as HTMLButtonElement).disabled).toBe(false);
@@ -270,8 +294,38 @@ describe("the card renders a lost target as a disabled Accept with the reason", 
     });
     const btn = within(container).getByTestId("accept-reply-btn-r1") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
+    // A reply-only proposal: the parent's own Accept is a live status change
+    // and shows no reason, so the thread must show it.
+    const describedBy = btn.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toMatch(/has changed/);
     btn.click();
     expect(onAcceptReplySuggestion).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does not repeat the reason in the thread when the parent's own Accept already shows it", () => {
+    const reply = {
+      id: "r1",
+      annotationId: "a1",
+      author: "claude",
+      text: "try this",
+      suggestedText: "howdy",
+      timestamp: 0,
+    } as AnnotationReply;
+    const { container, unmount } = render(CommentThread, {
+      props: {
+        replies: [reply],
+        annotation: suggestion(),
+        isPending: true,
+        onAcceptReplySuggestion: vi.fn(),
+        targetLost: true,
+      },
+    });
+    const btn = within(container).getByTestId("accept-reply-btn-r1") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("aria-describedby")).toBeNull();
+    expect(container.textContent).not.toMatch(/has changed/);
     unmount();
   });
 });

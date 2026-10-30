@@ -45,6 +45,10 @@ let {
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
+// Per-instance: the same record's card can be mounted in the side panel and a
+// margin column at once, and an `id` keyed on the record alone would collide.
+const uid = $props.id();
+const blockedReasonId = `${uid}-accept-blocked`;
 
 let undoError = $state(false);
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
@@ -86,7 +90,7 @@ onDestroy(clearUndoTimer);
         class="aca-btn aca-btn--accept"
         disabled={acceptBlocked}
         title={acceptBlocked ? ACCEPT_BLOCKED_REASON : undefined}
-        aria-describedby={acceptBlocked ? `accept-blocked-${annotationId}` : undefined}
+        aria-describedby={acceptBlocked ? blockedReasonId : undefined}
         onclick={(e) => {
           e.stopPropagation();
           // `disabled` alone is not a guard: a programmatic click, or a flip
@@ -113,7 +117,7 @@ onDestroy(clearUndoTimer);
   </div>
   {#if onAccept && acceptBlocked}
     <div
-      id="accept-blocked-{annotationId}"
+      id={blockedReasonId}
       data-testid="accept-blocked-{annotationId}"
       class="aca-blocked"
     >
