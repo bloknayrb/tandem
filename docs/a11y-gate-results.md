@@ -93,6 +93,30 @@ means "axe passes" is a claim about the application chrome, not the document.
 The three excluded classes of colour are measured directly instead, in
 `editor-contrast.spec.ts` (see A6).
 
+**axe's `incomplete` bucket is asserted too (#1721, 2026-10-30).** axe files a
+contrast check it cannot decide under `incomplete`, not `violations`, and until
+#1721 nothing read that bucket. Measured across all 51 scans, axe's own
+`messageKey` puts every such node in four buckets: `nonBmp` (symbol-only text
+such as ⇅ ▾ ↵ ●), `shortTextContent` (the one-letter B/I/S buttons),
+`bgOverlap`, and `elmPartiallyObscured(ing)`. The spec now decides each node
+itself and fails on anything else:
+
+- **measured** from computed style — colours through a canvas readback, each
+  ancestor's opacity treated as a group, against 4.5:1, or 3:1 for large text
+  and for symbol-only glyphs (SC 1.4.11). Every one passes today; the tightest
+  is the side panel's ⇅/▾ at 3.29:1 (warm), 3.36:1 (light) and 3.67:1 (dark).
+- **covered** — an opaque popover is over the whole text, proven by a
+  screenshot of its box that does not change when the node is hidden (the
+  B/I/S/H1 controls under the new-tab launcher, "Aa" under the find bar).
+- **waived** — only for a node computed style cannot measure, by a keyed entry
+  whose expected reasons must match exactly: today the ⇅/▾ glyphs behind the
+  settings modal's and the command palette's scrims (both `aria-modal`).
+
+A waiver can never excuse a node that measured and failed, and one that
+excuses nothing fails the run. The per-surface count ceiling from before stays
+alongside. Fading the ▾ glyph to `opacity: 0.35` leaves the old assertions
+green and turns this gate red at 1.72:1.
+
 Also excluded, each with a rationale recorded at the exclusion site:
 `nested-interactive`, `region`, `scrollable-region-focusable`.
 
