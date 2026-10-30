@@ -889,7 +889,8 @@ Server opens sample/welcome.md (first run, no restored sessions)
 Browser renders OnboardingTutorial as a strip in the top-of-shell banner stack (#1711)
     → Three items, ticked independently and in any order — no Next button:
         "Accept or dismiss a comment from Claude" — the user resolved an annotation
-          (useAnnotationReview's recentlyResolved; Claude's MCP resolves never count)
+          (useAnnotationReview's recentlyResolved; Claude's MCP resolves never count),
+          or every Claude seed is already resolved, one by the user (replay keeps them)
         "Ask Claude something" — a Claude-visible user comment or a user chat
           message newer than the arm time (#1965)
         "Make an edit" — a focused local edit; ySync-tagged (remote/Claude) and
@@ -898,6 +899,8 @@ Browser renders OnboardingTutorial as a strip in the top-of-shell banner stack (
     → Cowork row — only on the Tauri build when COWORK_ENABLED is on (it ships
       dark, ADR-055) and shouldShowCoworkOnboarding() passes; allDone waits for it
     → allDone → "You're ready!" + Done, auto-complete after 3 s
+    → ticks saved under tandem:tutorialProgress (reload-safe); cleared on
+      completion, dismiss and replay
     → useTutorial (src/client/hooks/useTutorial.svelte.ts) owns the ticks
     → Completion flag persisted to localStorage (try-catch guarded)
 ```

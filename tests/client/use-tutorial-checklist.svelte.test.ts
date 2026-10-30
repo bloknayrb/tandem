@@ -4,7 +4,11 @@ import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { flushSync } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTHORSHIP_ORIGIN_META } from "../../src/client/editor/extensions/authorship.js";
-import { TUTORIAL_ANNOTATION_PREFIX, TUTORIAL_COMPLETED_KEY } from "../../src/shared/constants.js";
+import {
+  TUTORIAL_ANNOTATION_PREFIX,
+  TUTORIAL_COMPLETED_KEY,
+  TUTORIAL_PROGRESS_KEY,
+} from "../../src/shared/constants.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
@@ -148,12 +152,15 @@ describe("Accept or dismiss a comment from Claude", () => {
       expect(tut.reviewed).toBe(true);
     }));
 
-  it("does not tick on annotations that are merely resolved on the record", () =>
-    // Claude's tandem_resolveAnnotation, or a replay's leftover seeds: resolved
-    // records the user did not resolve now. Only the review hook's signal counts.
+  it("does not tick on a seed Claude resolved over MCP", () =>
+    // `resolvedBy: "claude"` is what Claude's tandem_resolveAnnotation stamps.
     withTutorial(({ tut, setAnnotations }) => {
       setAnnotations([
-        makeAnnotation({ id: `${TUTORIAL_ANNOTATION_PREFIX}suggest-1`, status: "accepted" }),
+        makeAnnotation({
+          id: `${TUTORIAL_ANNOTATION_PREFIX}suggest-1`,
+          status: "accepted",
+          resolvedBy: "claude",
+        }),
       ]);
       expect(tut.reviewed).toBe(false);
     }));
@@ -312,4 +319,82 @@ describe("completion", () => {
     withTutorial(({ tut }) => {
       expect(tut.tutorialActive).toBe(false);
     }, "notes.md"));
+});
+
+describe("progress survives a reload and replay is never a dead end", () => {
+  const claudeSeed = (suffix: string, over: Partial<Annotation> = {}) =>
+    makeAnnotation({ id: `${TUTORIAL_ANNOTATION_PREFIX}${suffix}`, author: "claude", ...over });
+
+  it("restores saved ticks after a reload, and clears them on completion", async () => {
+    await withTutorial(async ({ tut, ed, setMessages }) => {
+      setMessages([message("user", Date.now() + 1000)]);
+      ed.emit();
+      await settle();
+      expect([tut.asked, tut.edited]).toEqual([true, true]);
+    });
+    // A fresh hook is a reload: chat is now history and the editor is new.
+    await withTutorial(({ tut }) => {
+      expect([tut.reviewed, tut.asked, tut.edited]).toEqual([false, true, true]);
+      tut.dismissTutorial();
+      flushSync();
+    });
+    expect(localStorage.getItem(TUTORIAL_PROGRESS_KEY)).toBeNull();
+  });
+
+  it("restartTutorial clears saved ticks", async () => {
+    await withTutorial(({ tut, setMessages }) => {
+      setMessages([message("user", Date.now() + 1000)]);
+      expect(tut.asked).toBe(true);
+      setMessages([]);
+      tut.restartTutorial();
+      flushSync();
+      expect(tut.asked).toBe(false);
+    });
+    await withTutorial(({ tut }) => {
+      expect(tut.asked).toBe(false);
+    });
+  });
+
+  it("ticks 'Accept or dismiss' when every Claude seed is already resolved by the user", () =>
+    // The replay case: the forced reopen keeps resolved seeds (#2269), so there
+    // is nothing left to accept.
+    withTutorial(({ tut, setAnnotations }) => {
+      setAnnotations([
+        claudeSeed("suggest-1", { status: "accepted" }),
+        claudeSeed("comment-1", { status: "dismissed" }),
+        makeAnnotation({
+          id: `${TUTORIAL_ANNOTATION_PREFIX}note-1`,
+          author: "user",
+          type: "note",
+          status: "pending",
+        }),
+      ]);
+      expect(tut.reviewed).toBe(true);
+    }));
+
+  it("pre-ticks when the user resolved one seed and Claude the other (no dead end)", () =>
+    withTutorial(({ tut, setAnnotations }) => {
+      setAnnotations([
+        claudeSeed("suggest-1", { status: "accepted" }),
+        claudeSeed("comment-1", { status: "dismissed", resolvedBy: "claude" }),
+      ]);
+      expect(tut.reviewed).toBe(true);
+    }));
+
+  it.each([
+    ["one Claude seed is still pending", { status: "pending" as const }, {}],
+    [
+      "Claude resolved every seed",
+      { status: "accepted" as const, resolvedBy: "claude" as const },
+      { resolvedBy: "claude" as const },
+    ],
+  ])("does not pre-tick when %s", (_label, over, first) =>
+    withTutorial(({ tut, setAnnotations }) => {
+      setAnnotations([
+        claudeSeed("suggest-1", { status: "accepted", ...first }),
+        claudeSeed("comment-1", over),
+      ]);
+      expect(tut.reviewed).toBe(false);
+    }),
+  );
 });

@@ -28,7 +28,7 @@ A **Getting started** checklist sits at the top of the window, above the documen
 2. **Ask Claude something** — select text, click Annotate and send it to Claude, or type in the Chat panel. A private note doesn't count: Claude never sees it.
 3. **Make an edit** — click in the document and type. Edits Claude makes, and suggestions you accept, don't count.
 
-When all three are ticked the strip says "You're ready!" and closes itself a few seconds later (or click **Done**). The **×** dismisses it at any time. Either way it won't appear again (saved to localStorage); **Settings → Replay tutorial** brings it back.
+When all three are ticked the strip says "You're ready!" and closes itself a few seconds later (or click **Done**). The **×** dismisses it at any time. Either way it won't appear again (saved to localStorage); **Settings → Replay tutorial** brings it back. Items you've ticked stay ticked if you reload or restart before finishing.
 
 **Tip:** Start the Tandem server before Claude Code. Having the AI connected before the tutorial means you'll see real responses when you ask a question with item 2.
 

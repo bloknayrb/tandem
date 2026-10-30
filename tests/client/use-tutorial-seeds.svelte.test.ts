@@ -84,7 +84,6 @@ describe("tutorial with a user-authored highlight seed (#1725)", () => {
       // Re-delivering the seeds (as a reconnect would) is not a user action.
       set([highlightSeed(), noteSeed(), commentSeed("accepted")]);
       expect(tut.asked).toBe(false);
-      expect(tut.reviewed).toBe(false);
     });
   });
 });

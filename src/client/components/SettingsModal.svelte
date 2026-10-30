@@ -661,7 +661,8 @@ async function handleReplayTutorial(): Promise<void> {
   }
   replayLoading = true;
   replayError = null;
-  // force:true clears the doc so the server re-injects fresh seed annotations.
+  // force:true reloads welcome.md from disk. It keeps every annotation (#2269),
+  // including resolved seeds, and re-creates only seeds the user deleted (#1696).
   const result = await openServerPath(filePath, {
     force: true,
     notFoundMessage: "Welcome document not found.",

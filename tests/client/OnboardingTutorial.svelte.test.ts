@@ -103,4 +103,11 @@ describe("OnboardingTutorial checklist strip (#1711)", () => {
       "Ask Claude something",
     );
   });
+
+  it("announces readiness when allDone turns true without an item ticking (Cowork last)", async () => {
+    const ticked = { reviewed: true, asked: true, edited: true };
+    const { container, rerender } = mount({ ...ticked, allDone: false });
+    await rerender({ ...ticked, allDone: true });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("You're ready.");
+  });
 });

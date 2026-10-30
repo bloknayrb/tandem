@@ -68,6 +68,10 @@ const coworkRow = $derived(COWORK_ENABLED && showCowork);
 // checked, silently, with no pop. Plain object, not `$state`: it is read and
 // written only inside the effect below.
 const doneAtMount: Record<string, boolean> = {};
+// `allDone` can turn true without any of the three items ticking in that flush
+// (the Cowork row completed last, or the Cowork status settling late), so
+// "You're ready." keys on its own transition rather than riding on a tick.
+let readyAtMount: boolean | undefined;
 let popped = $state<Record<string, boolean>>({});
 let announcement = $state("");
 $effect(() => {
@@ -82,8 +86,17 @@ $effect(() => {
       ticked.push(item.label);
     }
   }
-  if (ticked.length > 0) {
-    announcement = `Done: ${ticked.join(", ")}.${allDone ? " You're ready." : ""}`;
+  let becameReady = false;
+  if (readyAtMount === undefined) {
+    readyAtMount = allDone;
+  } else if (!readyAtMount && allDone) {
+    readyAtMount = true;
+    becameReady = true;
+  }
+  if (ticked.length > 0 || becameReady) {
+    const parts = ticked.length > 0 ? [`Done: ${ticked.join(", ")}.`] : [];
+    if (becameReady) parts.push("You're ready.");
+    announcement = parts.join(" ");
   }
 });
 </script>

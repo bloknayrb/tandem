@@ -542,6 +542,8 @@ export const DELIVERY_STALL_MS = 2 * 60_000;
 
 // Onboarding tutorial
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
+// The getting-started checklist's ticks, so a reload or restart keeps them (#1711).
+export const TUTORIAL_PROGRESS_KEY = "tandem:tutorialProgress";
 // Load-bearing: useTutorial.svelte.ts uses this prefix to exclude tutorial
 // SEEDS from "user-authored annotation" detection. The tutorial note and
 // highlight carry author="user" (ADR-027: notes are the user's; #1725: so are

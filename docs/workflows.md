@@ -302,13 +302,13 @@ The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 
 A **Getting started** checklist strip appears in the top-of-shell banner stack, above the document (#1711 — it replaced a four-step card with a Next button that users clicked through without reading). Its three items tick independently, in any order, and only on the real action:
 
-**Accept or dismiss a comment from Claude.** Ticks when the user accepts or dismisses an annotation — one of the two tutorial comments or a real one — from its card, in bulk, or with `Ctrl+Enter` / `Ctrl+Shift+Enter`. The signal is `useAnnotationReview`'s `recentlyResolved` set, which only the user's own resolves write, so Claude resolving one over MCP does not tick it, and neither do the already-resolved seeds a replay keeps. The tutorial highlight and note are the user's, so they have no Accept or Dismiss.
+**Accept or dismiss a comment from Claude.** Ticks when the user accepts or dismisses an annotation — one of the two tutorial comments or a real one — from its card, in bulk, or with `Ctrl+Enter` / `Ctrl+Shift+Enter`. The signal is `useAnnotationReview`'s `recentlyResolved` set, which only the user's own resolves write, so Claude resolving one over MCP does not tick it. It also starts ticked when there is nothing left to review — every Claude tutorial seed is resolved, at least one by the user (Claude's resolves carry `resolvedBy`, #1770) — because a replay keeps resolved seeds (#2269) and would otherwise leave an item no action can tick. The tutorial highlight and note are the user's, so they have no Accept or Dismiss.
 
 **Ask Claude something.** Ticks on a comment of the user's own that Claude can see (not a note, not a private comment), or a chat message the user sends, created after the strip armed. Without AI (keyless, ADR-040) the send still ticks it; no reply comes.
 
 **Make an edit.** Ticks on a focused, local, user-authored change. Remote changes (Claude's `tandem_edit`) and Claude-authored local writes (accepting a suggestion) are skipped.
 
-When all three are ticked the strip shows "You're ready!" with a **Done** button and completes itself after 3 s. The **×** dismisses it at any time. Either way it doesn't return (persisted to localStorage); Settings → Replay tutorial re-arms it. It is shown only while `welcome.md` is the active tab, and never to a user who completed the old card.
+When all three are ticked the strip shows "You're ready!" with a **Done** button and completes itself after 3 s. The **×** dismisses it at any time. Either way it doesn't return (persisted to localStorage); Settings → Replay tutorial re-arms it. Ticks are saved too (`tandem:tutorialProgress`), so a reload or restart mid-checklist keeps them; completion, × and replay clear them. It is shown only while `welcome.md` is the active tab, and never to a user who completed the old card.
 
 ## Editing Annotations After Creation
 

@@ -5,8 +5,9 @@ import {
   COWORK_ENABLED,
   TUTORIAL_ANNOTATION_PREFIX,
   TUTORIAL_COMPLETED_KEY,
+  TUTORIAL_PROGRESS_KEY,
 } from "../../shared/constants.js";
-import type { Annotation, ChatMessage } from "../../shared/types.js";
+import { type Annotation, type ChatMessage, isReviewTarget } from "../../shared/types.js";
 import {
   isTauriRuntime,
   readCoworkOnboardingSkipped,
@@ -78,6 +79,40 @@ function isQuestionForClaude(a: Annotation): boolean {
   return isNonTutorialUserAnnotation(a) && a.type === "comment" && a.audience === "outbound";
 }
 
+interface Progress {
+  reviewed: boolean;
+  asked: boolean;
+  edited: boolean;
+}
+
+function readProgress(): Progress {
+  const none = { reviewed: false, asked: false, edited: false };
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(TUTORIAL_PROGRESS_KEY) ?? "null");
+    if (typeof raw !== "object" || raw === null) return none;
+    const p = raw as Record<string, unknown>;
+    return { reviewed: p.reviewed === true, asked: p.asked === true, edited: p.edited === true };
+  } catch {
+    return none;
+  }
+}
+
+function writeProgress(p: Progress): void {
+  try {
+    localStorage.setItem(TUTORIAL_PROGRESS_KEY, JSON.stringify(p));
+  } catch {
+    // Storage unavailable — ticks last for this page load only
+  }
+}
+
+function clearProgress(): void {
+  try {
+    localStorage.removeItem(TUTORIAL_PROGRESS_KEY);
+  } catch {
+    // Storage unavailable — the in-memory reset still re-arms this session
+  }
+}
+
 function writeCompleted(): void {
   try {
     localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
@@ -105,9 +140,12 @@ export function createTutorial(
   getRecentlyResolved: () => ReadonlySet<string>,
 ): TutorialState {
   let completed = $state(readCompleted());
-  let reviewed = $state(false);
-  let asked = $state(false);
-  let edited = $state(false);
+  // Saved, so a reload or desktop restart mid-checklist keeps what is done:
+  // the signals below are page-load state and cannot all be re-earned.
+  const saved = readProgress();
+  let reviewed = $state(saved.reviewed);
+  let asked = $state(saved.asked);
+  let edited = $state(saved.edited);
   let coworkDone = $state(false);
   // The baseline for the chat and annotation terms of "Ask Claude something".
   // Set here and in `restartTutorial`, never from an effect: an arming effect
@@ -115,8 +153,10 @@ export function createTutorial(
   // and every earlier chat message would tick the item (#1965). Plain `let`,
   // so reading it adds no dependency.
   let armedAt = Date.now();
-  // Resolves still inside their undo window when the checklist was (re)armed.
-  // Plain `let`, like `armedAt`.
+  // Every id in `recentlyResolved` when the checklist was (re)armed. That set
+  // has no time-based expiry — an entry leaves it only through the Undo paths — so this
+  // is every resolve the user made earlier in this page load. Plain `let`, like
+  // `armedAt`.
   let resolvedAtArm: ReadonlySet<string> = new Set();
   const coworkSkipped = readCoworkOnboardingSkipped();
 
@@ -146,8 +186,10 @@ export function createTutorial(
   // `useAnnotationReview`'s `recentlyResolved` is that signal: every Accept or
   // Dismiss the user makes (card, keyboard, bulk, reply suggestion) adds to it,
   // and nothing else does — not Claude's `tandem_resolveAnnotation`, not the
-  // already-resolved seeds a replay keeps. Entries leave it when their undo
-  // window closes; the effect has already seen the add by then.
+  // already-resolved seeds a replay keeps. The set is App-level, not
+  // per-document, and an entry leaves it only through the Undo paths, so a resolve made
+  // on another tab earlier in this page load ticks this once welcome.md is
+  // active. It is also page-load state: after a reload it starts empty.
   $effect(() => {
     if (!tutorialActive || reviewed) return;
     for (const id of getRecentlyResolved()) {
@@ -156,6 +198,34 @@ export function createTutorial(
         return;
       }
     }
+  });
+
+  // Nothing left to review: welcome.md's Claude seeds are all resolved, at
+  // least one of them by the user. A replay keeps resolved seeds (#2269) and
+  // the injector skips ids already in the map, so without this a replay — or a
+  // reload without saved progress — leaves an item no action can tick. The old
+  // card counted resolved seeds the same way. Claude's resolves are stamped
+  // `resolvedBy: "claude"` (#1770); a user's resolve of a pending record has no
+  // stamp. Residuals: seeds Claude resolved before #1770 carry no stamp and
+  // read as the user's, and if Claude resolved every seed this never fires
+  // (× still closes the checklist).
+  $effect(() => {
+    if (!tutorialActive || reviewed) return;
+    const seeds = getAnnotations().filter(
+      (a) => a.id.startsWith(TUTORIAL_ANNOTATION_PREFIX) && isReviewTarget(a),
+    );
+    if (
+      seeds.length > 0 &&
+      seeds.every((a) => a.status !== "pending") &&
+      seeds.some((a) => a.resolvedBy !== "claude")
+    ) {
+      reviewed = true;
+    }
+  });
+
+  $effect(() => {
+    if (!tutorialActive) return;
+    writeProgress({ reviewed, asked, edited });
   });
 
   // "Ask Claude something": a question comment (see isQuestionForClaude) or a
@@ -212,6 +282,7 @@ export function createTutorial(
     if (!tutorialActive || !allDone) return;
     const timer = setTimeout(() => {
       writeCompleted();
+      clearProgress();
       completed = true;
     }, 3000);
     return () => clearTimeout(timer);
@@ -219,6 +290,7 @@ export function createTutorial(
 
   const dismissTutorial = () => {
     writeCompleted();
+    clearProgress();
     completed = true;
   };
 
@@ -228,6 +300,7 @@ export function createTutorial(
 
   const restartTutorial = () => {
     clearCompleted();
+    clearProgress();
     completed = false;
     reviewed = false;
     asked = false;

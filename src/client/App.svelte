@@ -2633,7 +2633,9 @@ const shouldShowModelPicker = $derived(
         <!-- #1711: the getting-started checklist. In normal flow inside the
              measured stack, so it sits above the document rather than over it.
              Waits behind the first-run wizard and the model picker (#1123 M2b),
-             whose scrim would bury it; nothing ticks meanwhile (useTutorial). -->
+             whose scrim would bury it. useTutorial does not know about either:
+             its ticks and completion timer keep running while the strip is
+             hidden, and nothing ticks only because the scrim blocks the user. -->
         <OnboardingTutorial
           reviewed={tutorial.reviewed}
           asked={tutorial.asked}
