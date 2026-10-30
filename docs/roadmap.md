@@ -88,7 +88,6 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **Tutorial gate:** #1711.
-- **Accessibility gate:** #1721.
 - **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
 - **Docs owed:** #2075.
@@ -174,7 +173,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 **Accessibility.** PARTIAL. See [a11y-gate-results.md](a11y-gate-results.md).
 - Windows Narrator and macOS VoiceOver full walkthroughs are both **unrun**. Each needs a human at a real OS.
 - Forced colors, the axe-core scan, keyboard-only navigation, and WCAG AA contrast across all status colors and themes all **pass**. Contrast must be re-verified after any redesign. The axe scans exclude the editable document, whose colours are measured separately.
-- Open: #1721 (axe contrast failures land in `incomplete` and go unasserted).
+- #1721 is closed: every color-contrast node axe leaves `incomplete` is now measured per node, proven covered, or named in a keyed waiver (see [a11y-gate-results.md](a11y-gate-results.md#a4--axe-core)).
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
