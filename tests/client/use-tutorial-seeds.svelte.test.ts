@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 
-// Same stub as use-tutorial-chat-advance: createCoworkStatus registers
+// Same stub as use-tutorial-checklist: createCoworkStatus registers
 // onDestroy, which is illegal under $effect.root.
 vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte.js"), () => ({
   createCoworkStatus: () => ({
@@ -19,13 +19,13 @@ vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte.js"), () => ({
   }),
 }));
 
-import { createTutorial } from "../../src/client/hooks/useTutorial.svelte.js";
+import { createTutorial, type TutorialState } from "../../src/client/hooks/useTutorial.svelte.js";
 
 /**
  * #1725 — the tutorial's highlight seed is the user's own (`author: "user"`,
- * private, no Accept/Dismiss). Step 0 must still complete through the two
- * Claude comment seeds, and the user highlight seed must never count as the
- * user's own action at step 1.
+ * private, no Accept/Dismiss). "Accept or dismiss a comment from Claude" must
+ * still tick through the two Claude comment seeds, and the user highlight seed
+ * must never count as the user asking Claude something (#1711 checklist).
  */
 
 function seed(name: string, over: Record<string, unknown>): Annotation {
@@ -50,7 +50,7 @@ const commentSeed = (status: Annotation["status"] = "pending"): Annotation =>
 
 function harness(
   initial: Annotation[],
-  run: (ctx: { set: (a: Annotation[]) => void; step: () => number }) => void,
+  run: (ctx: { set: (a: Annotation[]) => void; tut: TutorialState }) => void,
 ): void {
   // `$state`, so a reassignment re-runs the hook's effects; with a plain `let`
   // every "does not advance" case would pass vacuously.
@@ -68,7 +68,7 @@ function harness(
         annotations = a;
         flushSync();
       },
-      step: () => tut.currentStep,
+      tut,
     });
   });
   dispose();
@@ -79,20 +79,20 @@ describe("tutorial with a user-authored highlight seed (#1725)", () => {
     localStorage.clear();
   });
 
-  it("step 0 waits on the pending seeds and completes when the Claude comment is accepted", () => {
-    harness([highlightSeed(), noteSeed(), commentSeed()], ({ set, step }) => {
-      expect(step()).toBe(0);
+  it("waits on the pending seeds and ticks when the Claude comment is accepted", () => {
+    harness([highlightSeed(), noteSeed(), commentSeed()], ({ set, tut }) => {
+      expect(tut.reviewed).toBe(false);
       set([highlightSeed(), noteSeed(), commentSeed("accepted")]);
-      expect(step()).toBe(1);
+      expect(tut.reviewed).toBe(true);
     });
   });
 
-  it("at step 1, the pending user highlight seed alone does not advance", () => {
-    harness([highlightSeed(), noteSeed(), commentSeed("accepted")], ({ set, step }) => {
-      expect(step()).toBe(1);
+  it("the pending user highlight seed never ticks 'Ask Claude something'", () => {
+    harness([highlightSeed(), noteSeed(), commentSeed("accepted")], ({ set, tut }) => {
       // Re-delivering the seeds (as a reconnect would) is not a user action.
       set([highlightSeed(), noteSeed(), commentSeed("accepted")]);
-      expect(step()).toBe(1);
+      expect(tut.asked).toBe(false);
+      expect(tut.reviewed).toBe(false);
     });
   });
 });

@@ -49,11 +49,16 @@ describe("restartTutorial (replay re-arm)", () => {
       tut.restartTutorial();
       flushSync();
 
-      // Re-armed: the persisted flag is cleared and the tutorial is active again,
-      // reset to step 0 so a full replay runs.
+      // Re-armed: the persisted flag is cleared and the checklist is active
+      // again with every item unticked, so a full replay runs.
       expect(localStorage.getItem(TUTORIAL_COMPLETED_KEY)).toBeNull();
       expect(tut.tutorialActive).toBe(true);
-      expect(tut.currentStep).toBe(0);
+      expect([tut.reviewed, tut.asked, tut.edited, tut.allDone]).toEqual([
+        false,
+        false,
+        false,
+        false,
+      ]);
     });
     dispose();
   });

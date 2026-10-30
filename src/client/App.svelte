@@ -2627,6 +2627,30 @@ const shouldShowModelPicker = $derived(
       <!-- #1116: trial countdown. Self-gates (renders only during an active trial;
            silent when the gate is dark or a license is active). -->
       <LicenseBanner />
+
+      {#if tutorial.tutorialActive && !shouldShowWizard && !shouldShowModelPicker}
+        <!-- #1711: the getting-started checklist. Inside the measured stack, in
+             normal flow, so it sits above the document rather than over it.
+             Sequenced behind the first-run wizard AND the optional model picker
+             (#1123 M2b): the wizard scrim (z=100000) buries the strip and the
+             welcome doc it points at, so on a true first run it waits until the
+             wizard is dismissed (shouldShowWizard→false) and the model picker is
+             completed/skipped (shouldShowModelPicker→false). While dark
+             `shouldShowModelPicker` is always false. Nothing is lost while
+             buried: each item ticks only on the user's own action, which the
+             scrim prevents. (Claude could resolve an annotation over MCP and
+             tick "Accept or dismiss"; the record does not say who resolved it.) -->
+        <OnboardingTutorial
+          reviewed={tutorial.reviewed}
+          asked={tutorial.asked}
+          edited={tutorial.edited}
+          allDone={tutorial.allDone}
+          coworkDone={tutorial.coworkDone}
+          coworkStatus={tutorial.coworkStatus}
+          onDismiss={tutorial.dismissTutorial}
+          onCoworkAdvance={tutorial.completeCowork}
+        />
+      {/if}
     </div>
 
     <Toolbar
@@ -3066,26 +3090,6 @@ const shouldShowModelPicker = $derived(
       <CoworkAdminDeclinedModal />
     {/if}
 
-    {#if tutorial.tutorialActive && !shouldShowWizard && !shouldShowModelPicker}
-      <!-- Sequenced behind the first-run wizard AND the optional model picker
-           (#1123 M2b): the wizard scrim (z=100000) buries the tutorial card
-           (z=900) AND the welcome doc it points at, so on a true first run the
-           card waits until the wizard is dismissed (shouldShowWizard→false) and
-           the model picker is completed/skipped (shouldShowModelPicker→false).
-           While dark `shouldShowModelPicker` is always false, so this gate is
-           byte-identical to the pre-M2b wizard-only sequencing. Mirrors the
-           CoworkAdminDeclinedModal gate above. Nothing harmful happens while
-           buried: the user can't drive any step forward under the scrim, and the
-           only auto-advancing step (the completion timer) is unreachable from the
-           step-0 start state. (Claude could in theory resolve a seed annotation
-           via MCP and nudge step 0, but that's real progress, not a lost step.) -->
-      <OnboardingTutorial
-        currentStep={tutorial.currentStep}
-        onNext={tutorial.nextStep}
-        onDismiss={tutorial.dismissTutorial}
-        coworkStatus={tutorial.coworkStatus}
-      />
-    {/if}
   {/if}
 </div>
 

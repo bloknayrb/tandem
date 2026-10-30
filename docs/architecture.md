@@ -863,9 +863,9 @@ The `useTabOrder` hook manages the tab ordering state. Tab overflow scroll uses 
 
 ## Onboarding Tutorial
 
-First-time users get **four** seeded annotations and a three-actionable-step card on
+First-time users get **four** seeded annotations and a three-item checklist strip on
 `sample/welcome.md`. The two counts are independent — the annotations are server-side seeds, the
-steps are a client component — and they have drifted apart before, so read them separately:
+items are a client component — and they have drifted apart before, so read them separately:
 
 ```
 Server opens sample/welcome.md (first run, no restored sessions)
@@ -886,19 +886,19 @@ Server opens sample/welcome.md (first run, no restored sessions)
       anchor goes through anchoredRange(), so a target string that has moved
       is skipped with a log line rather than mis-anchored.
 
-Browser renders OnboardingTutorial floating card (bottom-left)
-    → Step 1: "Review an annotation" — accept or dismiss one
-    → Step 2: "Ask a question"       — annotate a selection, or use Chat
-    → Step 3: "Make an edit"         — type in the document
-    → Step "Claude Desktop Cowork detected" — inserted between 3 and the last
-      card only on the Tauri build when COWORK_ENABLED is on (it ships dark, ADR-055) and shouldShowCoworkOnboarding() passes
-    → Final card: "You're ready!" — not an actionable step; totalActionable is
-      activeSteps.length - 1, so the card ends on a completion panel rather
-      than vanishing at the end of step 3
-    → useTutorial (src/client/hooks/useTutorial.svelte.ts) advances each step
-      from a $effect: step 0 on any SEEDED annotation being resolved (not any
-      annotation — that was the #621 PR-A2b auto-advance bug), step 1 on the
-      user creating one, step 2 on an editor edit
+Browser renders OnboardingTutorial as a strip in the top-of-shell banner stack (#1711)
+    → Three items, ticked independently and in any order — no Next button:
+        "Accept or dismiss a comment from Claude" — a review target seen pending is resolved
+          (first seen already resolved never counts: replay, restored session)
+        "Ask Claude something" — a Claude-visible user comment or a user chat
+          message newer than the arm time (#1965)
+        "Make an edit" — a focused local edit; ySync-tagged (remote/Claude) and
+          AUTHORSHIP_ORIGIN_META "claude" (accepted suggestion) transactions skipped,
+          and the $state write deferred through createCoalescingTick
+    → Cowork row — only on the Tauri build when COWORK_ENABLED is on (it ships
+      dark, ADR-055) and shouldShowCoworkOnboarding() passes; allDone waits for it
+    → allDone → "You're ready!" + Done, auto-complete after 3 s
+    → useTutorial (src/client/hooks/useTutorial.svelte.ts) owns the ticks
     → Completion flag persisted to localStorage (try-catch guarded)
 ```
 
@@ -1258,7 +1258,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `hooks/useTandemModeBroadcast.svelte.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
 - `hooks/useConnectionBanner.svelte.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
 - `ToastContainer` (`src/client/components/`) -- Renders toast notifications from `GET /api/notify-stream` SSE endpoint. Type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible. `useNotifications` hook manages EventSource connection.
-- `OnboardingTutorial` (`src/client/components/`) -- Floating card at bottom-left, 3-step progression (review → ask → edit). `useTutorial` hook detects step completion via annotation status, user annotation creation, and editor focus. localStorage persistence, suppressed after completion.
+- `OnboardingTutorial` (`src/client/components/`) -- Getting-started checklist strip in the top banner stack: three self-ticking items (review, ask, edit), any order, no Next (#1711). `useTutorial` owns the ticks (annotation pending→resolved, Claude-visible comment or chat after arming, focused local user edit). localStorage persistence, suppressed after completion.
 - `ApplyChangesButton` (`src/client/components/`) -- Browser button for applying tracked changes to `.docx` files (ships dark with `.docx`)
 - `FileOpenDialog` (`src/client/components/`) -- Browser-distribution modal for opening files without Claude (HTML file-upload + recent list). In the desktop app the native picker is used directly instead (see `DocumentTabs` above)
 - `HelpModal` (`src/client/components/`) -- Keyboard shortcuts reference, toggled by `?` (suppressed in text inputs)

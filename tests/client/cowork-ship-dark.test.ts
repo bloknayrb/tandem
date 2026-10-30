@@ -171,16 +171,20 @@ describe("Cowork ships dark (ADR-055): the desktop client", () => {
     expect(coworkInvokes()).toEqual([]);
   });
 
-  it("the tutorial card inserts no Cowork step even when handed an eligible status", () => {
+  it("the tutorial checklist shows no Cowork row even when handed an eligible status", () => {
     // `useTutorial` never produces a status while dark, so this prop is null in
-    // the app. The component is gated anyway so its step count cannot disagree
-    // with the hook's completion index; this is that gate's only witness.
+    // the app. The component is gated anyway so it cannot show a row the hook's
+    // `allDone` does not wait for; this is that gate's only witness.
     const { container } = render(OnboardingTutorial, {
       props: {
-        currentStep: 3,
-        onNext: vi.fn(),
-        onDismiss: vi.fn(),
+        reviewed: true,
+        asked: true,
+        edited: true,
+        allDone: true,
+        coworkDone: false,
         coworkStatus: coworkStatusFixture(),
+        onDismiss: vi.fn(),
+        onCoworkAdvance: vi.fn(),
       },
     });
     expect(byTestId(container, "cowork-onboarding-step")).toBeNull();

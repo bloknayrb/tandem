@@ -300,15 +300,15 @@ The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 3. A **comment** with replacement text — introduces accept/reject workflow
 4. A **note** on a paragraph — a private reminder the AI never sees
 
-A floating tutorial card appears at the bottom-left of the editor with three actionable steps, followed by a "You're ready!" completion card:
+A **Getting started** checklist strip appears in the top-of-shell banner stack, above the document (#1711 — it replaced a four-step card with a Next button that users clicked through without reading). Its three items tick independently, in any order, and only on the real action:
 
-**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the two tutorial comments your AI left (the tutorial highlight and note are yours, so they have no Accept or Dismiss). Accepting or dismissing either tutorial comment (from its card, or with `Ctrl+Enter` / `Ctrl+Shift+Enter` while it is selected) completes this step; reviewing any other annotation does not.
+**Accept or dismiss a comment from Claude.** Ticks when a review target (any non-user annotation — the two tutorial comments, or a real one) that the strip saw `pending` becomes accepted or dismissed, from its card or with `Ctrl+Enter` / `Ctrl+Shift+Enter`. The tutorial highlight and note are the user's, so they have no Accept or Dismiss. A record first seen already resolved (a restored session, or a replay whose seeds still exist) never ticks it; counting real annotations too is what lets such a replay still tick. Claude resolving an annotation over MCP does tick it — nothing on the record says who resolved it.
 
-**Step 2: Ask a question.** The card prompts the user to select text and create a Comment (sent to the AI) or a Note (private to the user), or to ask in the Chat panel. Creating any annotation of their own, or sending a chat message during this step, completes it.
+**Ask Claude something.** Ticks on a comment of the user's own that Claude can see (not a note, not a private comment), or a chat message the user sends, created after the strip armed. Without AI (keyless, ADR-040) the send still ticks it; no reply comes.
 
-**Step 3: Make an edit.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
+**Make an edit.** Ticks on a focused, local, user-authored change. Remote changes (Claude's `tandem_edit`) and Claude-authored local writes (accepting a suggestion) are skipped.
 
-After all three steps, the tutorial card disappears and doesn't return (persisted to localStorage). The tutorial is suppressed entirely if the user opened a different document or has completed it before.
+When all three are ticked the strip shows "You're ready!" with a **Done** button and completes itself after 3 s. The **×** dismisses it at any time. Either way it doesn't return (persisted to localStorage); Settings → Replay tutorial re-arms it. It is shown only while `welcome.md` is the active tab, and never to a user who completed the old card.
 
 ## Editing Annotations After Creation
 

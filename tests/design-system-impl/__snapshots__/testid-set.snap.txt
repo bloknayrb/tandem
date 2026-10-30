@@ -546,6 +546,7 @@ toast-{*}
 toolbar-highlight-color-toggle
 toolbar-highlight-color-{*}
 tutorial-dismiss-btn
+tutorial-item-{*}
 tutorial-next-btn
 undo-btn
 unsaved-indicator-{*}
