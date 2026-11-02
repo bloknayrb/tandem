@@ -83,9 +83,18 @@ supporting two schemas in `verifyLicenseSignature` forever:
    2026-10-15). Paddle, as merchant of record, still collects the buyer's name
    at checkout; the Worker never reads it. `version` stays `"1.0"`: no license
    with a `name` was ever issued, so there is no old shape to tell apart.
-3. **Missing fields.** *Still open.* `version` is not stored in the ledger (so a
-   future `LICENSE_VERSION` change would make a re-signed blob diverge from the
-   one the buyer holds), and there is no `orderId`.
+3. **Missing fields.** *Decided 2026-11-02: `version` is stored in the ledger.*
+   Each new ledger record carries the `version` its license was signed under,
+   and a re-drive re-signs with that, so a future `LICENSE_VERSION` change
+   cannot make a resent blob diverge from the one the buyer holds. A record
+   written before then has no `version` and is read as `"1.0"`, which is exact:
+   `LICENSE_VERSION` has been `"1.0"` since it was introduced. A stored
+   `version` that is not `<digits>.<digits>` makes the record corrupt
+   (`stage: "ledger"`), never silently `"1.0"`. **`orderId` is not added to the
+   signed bytes.** The verifier canonicalizes whatever keys are present, so it
+   could be added later without a schema break, but doing so would make
+   [security.md](security.md#licensing-activation-v10)'s "does not carry an
+   order ID" false, and that sentence would have to change with it.
 
 Then:
 
@@ -209,12 +218,11 @@ window instead) even while enforcement still ships dark.
 > **id** only, never the email (spec §12 L1, `docs/superpowers/specs/2026-06-18-licensing-system-design.md`). The issuance Worker already does this.
 
 > **Ledger caveat.** A script-issued license has no `LEDGER_KV` record, so it is
-> invisible to reconcile (§5) and to any future resend endpoint. **It is still
-> THE grandfather path today:** the coupon route in §1b depends on whether a $0
-> Paddle checkout fires `transaction.completed` at all, which is unverified
-> (U2, §8). Once U2 is settled in the sandbox, the coupon route is preferable for
-> the cohort because it goes through `issue()` and is ledgered, entitled and
-> idempotent. Keep §1a regardless for the cases it uniquely solves: a buyer
+> invisible to reconcile (§5) and to any future resend endpoint. A $0 Paddle
+> checkout does fire `transaction.completed` (U2, confirmed in the 2026-10-21
+> sandbox run, #2244), so the coupon route in §1b is the preferred grandfather
+> path once the live Worker is deployed: it goes through `issue()` and is
+> ledgered, entitled and idempotent. Keep §1a regardless for the cases it uniquely solves: a buyer
 > whose mail provider quarantined the automated email (re-sending through the
 > same pipe cannot fix that), a buyer whose reversed chargeback or adjustment
 > was tombstoned before their license was ever issued (§7), and any license you
@@ -236,10 +244,33 @@ editing the list.
 > the Paddle API at all, so a leaked code cannot drive API traffic either.
 > "Free" means both `details.totals.grand_total` and `details.totals.total` parse
 > as integers ≤ 0; if either fails to parse the event is `dropped`, never
-> treated as paid. Whether a `$0` checkout fires `transaction.completed` at all
-> is **still unverified (U2, §8)** — confirm it in the Paddle sandbox before
-> creating the 100% code, and keep §1a (manual signing) as the grandfather path
-> until then.
+> treated as paid. A `$0` checkout does fire `transaction.completed` (U2,
+> confirmed in the sandbox, #2244).
+
+**Sending a tester a beta code.** **Precondition: no code, and no key, goes out
+until installs can run a release that trusts the signing key
+`c24dd9f66f449a56`, which is v0.29.0 or later** (§0; every earlier release
+trusts only the retired key, and tells the tester their key "may need to be
+reissued"). Then, in this order, for each tester:
+
+1. Add their address to the cohort list (the gitignored
+   `private/v1.0-launch/grandfather-cohort.csv`).
+2. Run `npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS` with the **full**
+   list, every address so far. The put **replaces** the old value; it does not
+   append, so a put holding only the new address un-lists everyone before them.
+3. Send the code privately, with "check out with this same email", and tell
+   them to **update Tandem to v0.29.0 or later before activating** the key that
+   comes back. Every code email says both. The Worker matches the checkout's
+   email against the list, not the person.
+4. **Recovery, when they checked out with another address.** A $0 order from an
+   unlisted email answers `ignored`: no ledger record, no `notice:`, no alert,
+   so nothing tells you. Find the transaction in Paddle, **confirm with the
+   tester that the address they used is theirs** (anyone holding the code can
+   check out with any address), add it to the list, re-put the full list, and
+   replay the notification (§5b). Prefer a single-use code per tester (its own
+   code, `usage_limit` 1), so a forwarded code is spent once at most; the limit
+   is not exact under concurrent checkouts (below), so `GRANDFATHER_EMAILS`
+   stays the real control.
 
 **Discount codes in Paddle (the student code, and any 100% code).** Two
 properties of Paddle discounts matter here:
@@ -251,8 +282,9 @@ properties of Paddle discounts matter here:
   (`restrict_to`) to the Tandem price. Students email the support inbox from a
   school address and are sent the code: honour system plus a school email, and
   nothing more. The Worker needs no logic for it: a $20 transaction is a paid
-  transaction. Whether the transaction carries a `discount_id` is unverified
-  (U10), so the ledger does not record which code was used.
+  transaction. The transaction does carry a `discount_id` (U10, confirmed in
+  the sandbox, #2244), but the Worker does not read it, so the ledger does not
+  record which code was used; Paddle's transaction record does.
 
 ### 1c. The cohort problem (settle this before the flip)
 
@@ -282,6 +314,13 @@ Before flipping, decide and do:
 3. Whether the README promise survives "we cannot identify beta users." Largely
    answered by the same README paragraph, which says plainly that only people who
    get in touch can be grandfathered.
+
+**Decided 2026-11-02: the cohort is the beta users who have sent feedback.**
+Bryan: "ok we'll go back to just people who have sent me feedback". There is no
+in-app invitation (an earlier idea, a v0.30 popup inviting everyone to email for
+a code, was dropped); he contacts the cohort directly, from support@, and each
+one gets a code through the procedure in §1b. The list lives in the gitignored
+`private/v1.0-launch/grandfather-cohort.csv`, never in a tracked file.
 
 ## 2. Issuing a paid license manually (fallback)
 
@@ -431,10 +470,11 @@ deleted — issuance happens here and nowhere else, apart from the operator's ow
 Paddle accounts (live and sandbox are separate accounts), the Worker, its KV
 namespaces, and its secrets.
 
-> **Nothing below has run against a real Paddle account yet.** The Worker is
-> built from Paddle's documentation and tested against hand-built payloads; twelve
-> facts are unverified until a sandbox run (U1–U12, §8), and U1 is a hard gate
-> before any live deploy.
+> **This has run against a Paddle sandbox account (2026-10-21, #2244), not yet
+> against the live account.** §8 ticks which of the unverified facts (U1–U12)
+> that run settled. U1 is mitigated by the asymmetric signature window below,
+> not proven (whether a live retry carries a fresh `ts` is still unknown), and
+> U12 waits on a second sandbox run on this Worker version.
 
 ### 3.5a. What it does
 
@@ -444,8 +484,24 @@ namespaces, and its secrets.
    used as-is, not base64-decoded: inferred from Paddle's SDK, and settled only
    by the first real sandbox delivery), and accepts if any `h1` matches (Paddle may
    send several during a secret rotation; more than 8 is refused). Exactly one
-   integer `ts` is required, and it must be within 300 s of the Worker's clock in
-   either direction. A missing header is a `400`; a bad or stale signature is a
+   integer `ts` is required. The window is **asymmetric**: `ts` may be up to
+   300 s ahead of the Worker's clock, but up to 4 days minus 1 hour
+   (`EVENT_TTL_S - 3600`) behind it, because a live Paddle retry can arrive up
+   to 3 days after the first attempt and may keep its original `ts` (U1, §8).
+   So the timestamp does not stop a replay of a captured body; the `evt:`
+   marker and the ledger do (below). A capture of a delivery signed at or
+   before the event's first processing expires before that event's marker
+   does. A capture of a delivery signed **after** it (an operator replay of an
+   already-processed event, or a Paddle retry after a `200` that was lost) can
+   outlive the marker, and once the marker lapses a replay of it re-runs the
+   event: a full refund re-revokes an order you restored by hand (§7's restore
+   step re-puts the marker against this), a notice is rewritten, and an alert
+   is sent. Inside the window a capture can also re-run any outcome that writes
+   **no** marker: `dropped`, `issue()`'s `ignored` (a free order, an off-list
+   sandbox buyer, an out-of-scope price) and every `500`. Rotating the webhook secret invalidates every captured
+   body. Accepted as [#2341](https://github.com/bloknayrb/tandem/issues/2341)
+   ([security.md](security.md#accepted-bounded--decided-not-fixed)). A missing
+   header is a `400`; a bad or stale signature is a
    `401` and **never alerts**, because anyone can send one (§5c).
 2. **Routes by `event_type`:**
 
@@ -560,11 +616,13 @@ replies `500` (stage `notice-write`, alerted) and Paddle retries; the write is
 idempotent. Paddle will not retry a 200, and the alert is best-effort, so **the
 record is the guarantee**: §5b says how to list, act on and clear them.
 
-Idempotent across Paddle retries in three layers: per-attempt timestamp
-freshness, the `evt:<mode>:<event_id>` completion marker (keyed on `event_id`,
-or its body digest when the id is malformed, never on the per-attempt
-`notification_id`), and the durable
-`order:<mode>:<txn_id>` ledger. PII lives only in `LEDGER_KV`; `LICENSE_KV` is
+Idempotent across Paddle retries in three layers: the asymmetric timestamp
+window (step 1 above; it bounds how long a captured body stays usable, not
+whether it replays), the `evt:<mode>:<event_id>` completion marker (keyed on
+`event_id`, or its body digest when the id is malformed, never on the
+per-attempt `notification_id`), and the durable
+`order:<mode>:<txn_id>` ledger. The unmarked outcomes (`dropped`, `issue()`'s
+`ignored`, every `500`) stay replayable for the whole window. PII lives only in `LEDGER_KV`; `LICENSE_KV` is
 PII-free; the HTTP response never carries the blob; logs are `{ result, ts }`
 plus a non-PII `stage`/`status` or `notice`/`ref`, never an email or license id.
 
@@ -577,12 +635,29 @@ npx wrangler@4.130.0 kv namespace create LEDGER_KV        # new, issuance-only (
 # edit wrangler.toml: paste both ids, set RESEND_FROM, SUPPORT_EMAIL,
 #   PADDLE_PRICE_IDS and TANDEM_ISSUANCE_ENV
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY        # Ed25519 PEM PKCS#8 (§0)
-npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET     # pdl_ntfset_... from the Paddle notification destination
 npx wrangler@4.130.0 secret put PADDLE_API_KEY            # pdl_live_apikey_... (scopes below)
 npx wrangler@4.130.0 secret put RESEND_API_KEY            # re_... from Resend
 npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS        # optional (§1b)
+# (a) deploy. With no PADDLE_WEBHOOK_SECRET yet, every webhook answers 503
+#     (stage `config`) before anything is parsed or written, so nothing mints.
+npx wrangler@4.130.0 deploy
+# (b) in Paddle, create the notification destination at the deployed URL (below)
+# (c) give the Worker that destination's secret and id:
+npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET     # pdl_ntfset_... from that destination
+#     and set PADDLE_NOTIFICATION_SETTING_ID (ntfset_..., from the dashboard or
+#     GET /notification-settings) in wrangler.toml [vars]
+# (d) redeploy, so the var takes effect
 npx wrangler@4.130.0 deploy
 ```
+
+The order is forced: the destination needs the deployed Worker's URL, and the
+secret and id come from the destination. Step (a) is safe because the webhook
+secret is checked before any parse or write: a Worker without it answers every
+delivery `503` (and alerts on the `config` stage), and Paddle has no
+destination to send from yet anyway. Until `PADDLE_NOTIFICATION_SETTING_ID` is
+set, the daily delivery check alerts every day with cause `destination` (it
+cannot tell which destination is this Worker's); webhooks are not affected by
+that var, so it never causes a `503`.
 
 **Delete any leftover `POLAR_WEBHOOK_SECRET`** from a Worker deployed before the
 switch: `npx wrangler@4.130.0 secret delete POLAR_WEBHOOK_SECRET` (with
@@ -593,7 +668,7 @@ switch: `npx wrangler@4.130.0 secret delete POLAR_WEBHOOK_SECRET` (with
 | Name | Kind | What, and what happens when it is wrong |
 |---|---|---|
 | `PADDLE_WEBHOOK_SECRET` | secret | The notification destination's secret key (`pdl_ntfset_…`). Missing → `503` stage `config`. Wrong → every delivery `401`s, **silently** (no alert, by design); Paddle retries into `failed` and the daily delivery check (below) is what tells you. |
-| `PADDLE_API_KEY` | secret | `pdl_live_apikey_…` (live) or `pdl_sdbx_apikey_…` (sandbox). Give it **`customer.read` plus read access to notifications and notification settings, and nothing else** (the exact scope names for the last two are to confirm in Paddle's API-key screen; the Worker calls `GET /notifications` and `GET /notification-settings`). Missing, legacy-format or unrecognised → `503` stage `config-paddle-api-key`. Expired or lacking `customer.read` → each sale `500`s at stage `paddle-api-auth` (alerted). **Paddle API keys expire** (90 days by default, one year at most, and cannot be renewed): create it with the one-year maximum and put a reminder in your calendar two weeks before it expires. Paddle also sends `api_key.expiring` seven days before, which the Worker turns into a notice and an alert, if you subscribed to it. |
+| `PADDLE_API_KEY` | secret | `pdl_live_apikey_…` (live) or `pdl_sdbx_apikey_…` (sandbox). Give it **`customer.read`, `notification.read` and `notification_setting.read`, and nothing else**: the permissions Paddle's API reference names for the three calls the Worker makes (`GET /customers/{id}`, `GET /notifications`, `GET /notification-settings`; developer.paddle.com/api-reference, each endpoint's "Requires … permission" line). Never `notification.write`: replay keys are separate (§5b). Missing, legacy-format or unrecognised → `503` stage `config-paddle-api-key`. Expired or lacking `customer.read` → each sale `500`s at stage `paddle-api-auth` (alerted). **Paddle API keys expire** (90 days by default, one year at most, and cannot be renewed): create it with the one-year maximum and put a reminder in your calendar two weeks before it expires. Paddle also sends `api_key.expiring` seven days before, which the Worker turns into a notice and an alert, if you subscribed to it. |
 | `PADDLE_PRICE_IDS` | var | **Required.** Comma-separated `pri_…` ids this Worker may mint for (empty entries from a stray comma are ignored). Empty or any malformed entry → `503` stage `config-price-ids`. |
 | `SANDBOX_SIGNING_UNTIL` | var | **Required on any Worker holding a `pdl_sdbx_` key**, ignored otherwise. A full ISO timestamp with a zone, e.g. `2026-10-24T00:00:00Z`, no more than 7 days ahead. A date-only value is refused. Missing, unparseable, past or too far ahead → `503` stage `config-sandbox-until`. |
 | `SANDBOX_BUYER_EMAILS` | var | **Required on any Worker holding a `pdl_sdbx_` key**, ignored otherwise. Comma/space-separated buyer emails (your own test addresses). The sandbox Worker mints only for these buyers; any other buyer's transaction is `ignored`, with no record and no alert. Empty → `503` stage `config-sandbox-buyers`. |
@@ -618,13 +693,75 @@ value is fixed.
 
 **The daily delivery check.** `wrangler.toml` declares a cron trigger
 (`0 13 * * *`, once a day at 13:00 UTC). It calls
-`GET /notifications?status=failed,needs_retry` and `GET /notification-settings`
-with the Worker's own API key, and raises an operator alert (stage
-`delivery-check`) if any notification is failed or waiting to retry, if Paddle
-reports no destination at all or any destination is inactive, or if the check
-itself could not run (no usable key, or an API error). This is what notices a webhook secret that no longer matches,
-since bad signatures never alert. The comma-separated `status` filter follows
-Paddle's reference but has not been exercised against a real account (§8).
+`GET /notifications?status=failed,needs_retry&from=<now − 89 days>&per_page=150`
+and `GET /notification-settings` with the Worker's own API key, and raises an
+operator alert (stage `delivery-check`) if any failed or waiting notification is
+**unresolved**, if this Worker's own destination would not deliver a sale, or if the check itself
+could not run (no usable key, an API error, or a throw anywhere in the check;
+that last alert skips the 5-minute throttle). The alert and its log line carry
+`causes=` with every cause that applies: `cannot-run` (no usable key, an API
+or page failure, or a throw), `destination` (this Worker's destination would
+not deliver a real sale, or its id is unset) and `unresolved`. With
+`unresolved` it also names how many notifications are unresolved and the first
+one's `ntf_` id (or its `evt_` id), so a new failure does not read like a
+standing one. This is what notices a
+webhook secret that no longer matches, since bad signatures never alert. The
+comma-separated `status` filter was confirmed in the sandbox (#2244).
+
+- **Resolved** means the outcome is on record. A replay creates a *new*
+  notification and leaves the original `failed` forever (seen in the sandbox,
+  U12), so "anything in the failed list" would alert daily after every
+  recovered failure. A failure is resolved when its event's
+  `evt:<mode>:<event_id>` marker reads `done`; when an operator has written
+  `ack:<mode>:<event_id>` (any value, §5b), for any event type; or, for a
+  `transaction.completed` (or any type the Worker does not know),
+  when `order:<mode>:<txn_id>` exists with `emailSent: true` or
+  `refunded: true`. Anything the check cannot prove is unresolved: no payload,
+  an `event_id` outside Paddle's documented shape, a KV read that throws
+  (including the per-invocation limit) or a record that will not parse.
+- **How long each kind counts.** A paid sale stays in view for as long as
+  Paddle keeps the notification: "Notifications older than 90 days aren't
+  retained" (developer.paddle.com/api-reference/notifications/list-notifications),
+  and the check asks for 89. It resolves only through the marker, an ack or the
+  permanent ledger, so it can never flip back. Only the non-sale types the
+  Worker subscribes to (`adjustment.created`, `adjustment.updated`,
+  `api_key.expiring`, `api_key.expired`) count just while the notification's
+  `occurred_at` is within `EVENT_TTL_S` (4 days); after that their marker may
+  have expired, so they are ignored. A missing, unknown or renamed
+  `event_type` is judged like a sale and never ages out.
+- **Destinations.** The destination whose id is `PADDLE_NOTIFICATION_SETTING_ID`
+  (this Worker's own) must be in the list, with `active: true`, `type: "url"`,
+  `traffic_source` of `platform` or `all` (a `simulation` destination gets no
+  real sale, so an empty failed list would prove nothing) and
+  `transaction.completed` among its `subscribed_events` (the field names and
+  values in Paddle's list-notification-settings reference). Another healthy
+  destination does not count: ours could be deactivated beside it. An unset,
+  malformed or placeholder id alerts rather than skipping the check. The
+  destination's URL is not checked, because the Worker does not know its own
+  public URL. So an entry edited to point somewhere else is **not** caught
+  here: if that other address answers `200`, nothing fails in Paddle either,
+  and the only trace is completed sales with no ledger record, which the §5b
+  reconcile finds.
+- **Paging.** The check follows `meta.pagination.next` while `has_more` is
+  true (`next` is "Always returned, even if `has_more` is `false`", per the
+  same list-notifications reference), only to a URL on the same Paddle API
+  host, and stops after 2 pages of 150. At up to three KV reads a row (`evt:`,
+  `ack:`, `order:`) that stays under the 1,000 KV operations allowed per
+  Worker invocation (developers.cloudflare.com/kv/platform/limits). More pages than that, a missing `meta.pagination`, or a page
+  that fails to load alerts.
+- **Known limit.** A paid sale whose notification never recovers alerts daily
+  for as long as Paddle lists it, as before, until you either recover it or
+  write its `ack:` key (§5b). Some failures can never resolve on their own: a
+  sale you fulfilled by hand, or a replay that `issue()` answered `ignored`.
+  Those need the ack. An adjustment failure alerts for about 4 days and then
+  goes quiet: accepted as
+  [#2340](https://github.com/bloknayrb/tandem/issues/2340), with the §5b
+  reconcile (transaction list against the ledger, and the `notice:` records)
+  as the backstop.
+
+A second sandbox run on this Worker version must still confirm that the list
+response carries `payload.event_id` and how `from` behaves on the real API
+(U12, §8).
 
 **Set up the notification destination in Paddle** (Developer tools →
 Notifications), one per account:
@@ -635,19 +772,22 @@ Notifications), one per account:
   is `ignored`.
 - Traffic source (`traffic_source`): `platform` on the live destination, so
   simulator traffic never reaches it; `all` on the sandbox destination, so you
-  can use the simulator there.
-- Copy the destination's secret key into `PADDLE_WEBHOOK_SECRET`.
+  can use the simulator there. Never `simulation` alone: such a destination
+  receives no real sale, and the delivery check alerts on it (cause
+  `destination`).
+- Copy the destination's secret key into `PADDLE_WEBHOOK_SECRET` and its
+  `ntfset_…` id into `PADDLE_NOTIFICATION_SETTING_ID`, then redeploy (steps (c)
+  and (d) above).
 
 Paddle expects a `200` within 5 seconds. Live, it retries a failed delivery up
 to 60 times over about 3 days; sandbox, 3 times in 15 minutes. After that the
-notification is marked `failed` and can be replayed from the dashboard or the
-API. Event order is not guaranteed.
+notification is marked `failed` and can be replayed through the API (§5b).
+Event order is not guaranteed.
 
 **Before a live Worker sends its first license email**, the Terms
 (`https://tandem.ink/terms`) and the Refund Policy (`https://tandem.ink/refunds`)
 must be live: the license email links both, plus Paddle's buyer-support site
-(`https://paddle.net`), because Paddle's seller handbook asks for them. Neither
-page is live yet.
+(`https://paddle.net`), because Paddle's seller handbook asks for them.
 
 The wrangler version is pinned deliberately: `./crypto.js` resolving to `crypto.ts`
 is the bundler rewriting the extension, and the bundle shape is wrangler's too, so
@@ -692,6 +832,7 @@ before any payout setup. The sandbox Worker is the **`[env.sandbox]` block** at
 the end of `wrangler.toml`; it deploys as `tandem-license-issuance-sandbox`. The
 block re-declares its own vars (`TANDEM_ISSUANCE_ENV = "sandbox"`,
 `RESEND_FROM`, `SUPPORT_EMAIL`, the sandbox price ids in `PADDLE_PRICE_IDS`,
+the sandbox destination's id in `PADDLE_NOTIFICATION_SETTING_ID`,
 `SANDBOX_BUYER_EMAILS`, `SANDBOX_SIGNING_UNTIL`) and its **own KV namespaces**,
 because Wrangler does not inherit vars or namespaces into an environment, so a
 sandbox deploy can never fall back to production's. Fill in its placeholders,
@@ -702,12 +843,22 @@ bare command targets production**: run without the flag from
 
 ```bash
 npx wrangler@4.130.0 kv namespace create LEDGER_KV --env sandbox     # and LICENSE_KV
-npx wrangler@4.130.0 deploy --env sandbox
-npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET --env sandbox
 npx wrangler@4.130.0 secret put PADDLE_API_KEY --env sandbox          # pdl_sdbx_apikey_...
 npx wrangler@4.130.0 secret put RESEND_API_KEY --env sandbox
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY --env sandbox
+# (a) deploy; with no webhook secret yet every webhook answers 503 and nothing mints
+npx wrangler@4.130.0 deploy --env sandbox
+# (b) create the destination in the SANDBOX Paddle account at the sandbox URL
+# (c) its secret, and its ntfset_... id as PADDLE_NOTIFICATION_SETTING_ID
+#     in [env.sandbox.vars]:
+npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET --env sandbox
+# (d) redeploy, so the var takes effect
+npx wrangler@4.130.0 deploy --env sandbox
 ```
+
+The sandbox needs the id too. Without it the delivery check alerts every day
+with cause `destination`, and a U12 test that "waits for the alert" would pass
+on that alert instead of the one it is meant to see (§8).
 
 `SANDBOX_SIGNING_UNTIL` is at most 7 days ahead, so a sandbox session longer
 than that means editing the date and redeploying. That is the point.
@@ -853,8 +1004,12 @@ failures that matter most, because they produce **no ledger record at all**:
 > also deactivates a destination that keeps failing is unverified (U5). Either
 > way the Worker has no record of those sales, and a bad signature never alerts.
 > The **daily delivery check** (§3.5b) is the in-band signal: it alerts once a
-> day while any notification is `failed` or `needs_retry`, a destination is
-> inactive, or Paddle reports no destination at all. Paddle's notification log is the surface that shows the detail.
+> day while any `failed` or `needs_retry` notification is unresolved (no
+> marker, ledger record or operator ack shows it recovered, §3.5b), or no
+> destination would deliver a sale. A recovered failure stops
+> alerting even though Paddle keeps listing it as `failed`; an adjustment that
+> never recovers alerts for about 4 days and then goes quiet (#2340), which is
+> why the steps below are still the backstop. Paddle's notification log is the surface that shows the detail.
 
 **The steps:**
 
@@ -863,13 +1018,24 @@ failures that matter most, because they produce **no ledger record at all**:
    here), and for each one read
    `order:live:<txn_id>` from `LEDGER_KV`.
 2. In Paddle's notification log (Developer tools → Notifications), look for
-   `failed` notifications. Once the cause is fixed, **replay** each one from the
-   dashboard or the API. A replay is safe: an already-processed event answers
-   `duplicate`, and the ledger blocks a re-mint. The one exception: replaying a
+   `failed` notifications. Once the cause is fixed, **replay** each one.
+   **Replay is API-only**: `POST /notifications/{notification_id}/replay`
+   (the sandbox run found no dashboard replay button, #2244). It needs an API
+   key with
+   `notification.write`, which the Worker's key deliberately lacks: create a
+   separate key for replays, keep it off every Worker, and expire it promptly.
+   A replay of an event the Worker already **processed** is safe: it answers
+   `duplicate` from the `evt:` marker, and the ledger blocks a re-mint. That
+   covers only processed events. An event that was `dropped`, `ignored` by
+   `issue()` or failed with a `500` left no marker, so a replay runs it again
+   in full, which is the point when you have fixed the cause. The one exception: replaying a
    full refund for an order you have since restored by hand (§7) revokes it
-   again, once its 4-day `evt:` marker has lapsed. Whether a replay carries a
-   fresh `ts` (so that it passes the 300 s freshness window) is unverified and a
-   deploy gate (U1, §8).
+   again, once its 4-day `evt:` marker has lapsed; §7's restore step re-puts
+   the marker for that reason. Replaying an already-processed event is also not
+   free: the replay is a fresh signed delivery, so a capture of it stays usable
+   for 4 days minus 1 hour from the replay, longer than the original marker
+   (#2341). Replay only what failed. A replay passed the signature check in
+   the sandbox (U1).
 3. **List and act on the notices.** Every `dropped` and `noticed` event left a
    record:
 
@@ -878,9 +1044,8 @@ failures that matter most, because they produce **no ledger record at all**:
    npx wrangler@4.130.0 kv key get "notice:live:<stage>:<ref>" --remote --namespace-id <LEDGER_KV id>
    ```
 
-   The value names the stage, the transaction (`txnId`, when known) and the
-   event type. Act on it: for `dropped`, fix the cause and replay the event
-   (drops are not marked done, so a replay is processed again); for
+   The value names the stage, the transaction (`txnId`, when known), the
+   event type and when it was written (`at`). Act on it: for
    `refund-partial`, decide whether the partials now add up to a full refund
    and revoke by hand if so (§7); for the reversal notices, restore by hand
    (§7); for `api-key-expiry`, replace the key. Then delete the record:
@@ -888,6 +1053,25 @@ failures that matter most, because they produce **no ledger record at all**:
    ```bash
    npx wrangler@4.130.0 kv key delete "notice:live:<stage>:<ref>" --remote --namespace-id <LEDGER_KV id>
    ```
+
+   **A `dropped` notice is different: it may be the only trace of a paid sale
+   that never got its license**, so it is deleted only once the replay is
+   proven to have worked. Fix the cause, then:
+
+   1. Replay the event (step 2). Do not delete anything first.
+   2. Wait a minute, then read the notice again, and the order:
+      `kv key get "order:live:<txnId>"`.
+   3. Delete the notice only once `order:live:<txnId>` shows
+      `emailSent: true`.
+
+   If the notice's `at` changed, the replay dropped again: the cause is not
+   fixed. If neither the notice nor the order changed, the replay is still
+   pending or answered `500`. In both cases keep the notice and look again.
+   A replay that drops again alerts again, at most once per ref per isolate
+   every 5 minutes (the alert throttle); that is expected (#2341). A dropped event that is not a sale (an
+   adjustment, or a body with no `txnId`) has no order record to prove it;
+   check its effect by hand (for a refund, the revoked entitlement, §7) before
+   deleting the notice.
 
 4. **Check for double mints.** List every license a transaction minted:
 
@@ -901,6 +1085,31 @@ failures that matter most, because they produce **no ledger record at all**:
    minute of the double mint may have missed the second (KV `list()` is
    eventually consistent), so tombstone any listed license that is still live on
    a refunded order (§7).
+
+5. **Acknowledge a failure that can never resolve itself.** The delivery check
+   (§3.5b) alerts on a failed notification until the Worker has a record of
+   recovering it, and some never will: a sale you fulfilled by hand (§1a or
+   §2), or a replay that `issue()` answered `ignored` (for example a $0 order
+   from an address you then chose not to list). Each would repeat the same
+   daily alert for up to 89 days. Once you have dealt with it, write an ack
+   under the notification's `event_id` (`evt_…`, from `payload.event_id` in
+   Paddle's notification log). It never expires. The checker accepts any value,
+   but **the value must carry no email and no name**: a date and a reason code
+   only, e.g. `2026-11-05 manual-fulfil` or `2026-11-05 ignored-unlisted`. It
+   sits in `LEDGER_KV` with no TTL, and the erasure steps (§7) look for it:
+
+   ```bash
+   npx wrangler@4.130.0 kv key put "ack:live:<event_id>" "2026-11-05 manual-fulfil" \
+     --remote --namespace-id <LEDGER_KV id>
+   # sandbox Worker: --env sandbox --binding LEDGER_KV in place of --namespace-id, and
+   # "ack:test:<event_id>" unless its TANDEM_ISSUANCE_ENV is "production" (then "ack:live:")
+   ```
+
+   The ack only quiets the check. It is not an `evt:` marker, so a later
+   replay of the same event is still processed in full: the §1b recovery
+   replay still mints once the address is listed. Never write an `evt:` marker
+   by hand to quiet the check, for exactly that reason (the one exception is
+   §7's restore step).
 
 For a transaction Paddle has and the ledger doesn't, replay its notification
 once the cause is fixed. For an order that has a ledger record but no
@@ -1026,6 +1235,17 @@ record and re-`PUT` their entitlement.
   window + perpetual run ≈ **28 days of legitimate free use ending in a
   permanent license.** That's a deliberate consequence of the design, not a leak
   to plug — but it should be a decision, not a surprise.
+- **Buyers before 1.0 get a refund window that runs from 1.0's release**
+  (Bryan, 2026-11-02: "Refund window runs from 1.0's release"), because sales
+  open before the build that needs a key ships. **The exact wording is pending
+  Bryan**, after a check of Paddle's refund-policy limits; the Refund Policy
+  page is where it will be stated, not here.
+- **Paddle can refund only recent payments**: "card payments can only be
+  refunded on transactions less than 120 days old", and PayPal payments only
+  if "less than 179 days old" (paddle.com/help/manage/your-customers/how-do-i-issue-refunds). A refund owed on anything older (which a window
+  running from 1.0 can produce for an early buyer) cannot go through Paddle's
+  refund flow, so no `adjustment.*` event arrives and nothing is revoked
+  automatically. It is a manual refund plus a revoke by hand (below).
 - **Revoking updates** = writing a TOMBSTONE over `KV[licenseId]`, never
   deleting it:
 
@@ -1098,14 +1318,30 @@ For a reversed chargeback, credit or adjustment (`chargeback-reverse`,
 2. Re-`PUT` the live entitlement for the ledger's `licenseId` and every
    `licenseId` under `txnlic:live:<txn_id>:`. The value is fully derivable from
    the record (`entitlementValue`): `status` is the record's `type`,
-   `personal` or `grandfathered`:
+   `personal` or `grandfathered`, and `version` is the record's `version`
+   (`"1.0"` when the record has none, i.e. it predates 2026-11-02):
 
    ```bash
-   npx wrangler@4.130.0 kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"personal","version":"1.0"}' \
+   npx wrangler@4.130.0 kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"<type>","version":"<version>"}' \
      --remote --namespace-id <LICENSE_KV id>
    ```
 
-3. Delete the `notice:` key.
+3. Re-put the completion marker of the refund (or chargeback, or credit) event
+   that revoked the order, so a replay of it cannot revoke again. The event id
+   is the `evt_…` of the `adjustment.*` notification in Paddle's log:
+
+   ```bash
+   npx wrangler@4.130.0 kv key put "evt:live:<event_id>" done --ttl 345600 \
+     --remote --namespace-id <LEDGER_KV id>
+   ```
+
+   The original marker may already have lapsed (it lives 4 days from first
+   processing), and a captured copy of a delivery signed later than that, such
+   as an operator replay or a Paddle retry after a lost `200`, stays valid for
+   up to 4 days minus 1 hour from its own `ts` (#2341). A fresh 4-day
+   (345,600 s) marker written now outlives any delivery signed before the
+   restore.
+4. Delete the `notice:` key.
 
 If the record is a **tombstone** (empty `licenseId` and `email`: a full refund
 or chargeback arrived before the purchase, so nothing was ever issued), there is
@@ -1125,7 +1361,13 @@ the license id alone:
    the whole record back, as in "Revoke by hand" step 1. Keep every other field:
    the ids and the `refunded` flag are what stop a replay from re-minting or
    un-revoking.
-2. `notice:` and `txnlic:` keys hold ids only, so leave them.
+2. `notice:` and `txnlic:` keys hold ids only, so leave them. `ack:` keys hold
+   text you wrote by hand (§5b step 5), so check them: find the buyer's event
+   ids (the `evt_…` of each notification for their transactions, in Paddle's
+   notification log), read `ack:live:<event_id>` for each, and if a value holds
+   anything beyond a date and a reason code, rewrite it to just that
+   (`kv key put` over it, same command as §5b step 5). Keep the key itself: it
+   is what stops the delivery check alerting on that failure again.
 3. Your `LEDGER_KV` backups (§6) still hold the old record. Delete or rewrite
    any backup that contains it.
 4. Tell the buyer what this does not reach: Paddle's customer record (they ask
@@ -1146,10 +1388,15 @@ Then walk §5a steps 2–4 with that order number.
 
 ## 8. Pre-launch gate (all of these, before a stranger can pay)
 
-- [ ] Key ceremony done (§0), including the three now-or-never decisions, two
+Sales open before 1.0 (decided 2026-11-02), so the gate is in two parts: what
+must hold before anyone can buy, and what must hold before a build that
+enforces the license (the flip, §4) ships. A ticked line records what the
+2026-10-21 sandbox run (#2244) or a merged change settled.
+
+### Before a stranger pays
+
+- [x] Key ceremony done (§0), including the three now-or-never decisions, two
       offline private-key copies, and the CI fingerprint updated in the same commit.
-- [ ] Custom domain in front of the update Worker, and that URL — not
-      `*.workers.dev` — compiled into `LICENSE_UPDATE_ENDPOINT`.
 - [ ] Both `wrangler.toml` files carry the **same** `LICENSE_KV` id.
 - [ ] Workers Paid enabled.
 - [ ] Resend sending domain verified with SPF, DKIM and DMARC.
@@ -1181,9 +1428,12 @@ Then walk §5a steps 2–4 with that order number.
       per-customer update history the no-id invariant exists to prevent. If it
       does, the response is to drop `[observability]` on the update Worker or to
       stop sending the id in a header. Do not assume either way from the docs.
-- [ ] A sandbox purchase completed end-to-end: email → activate →
-      `tandem license` reports `licensed` → §5a steps 2–3 pass **against the
-      sandbox's own namespaces** (`--env sandbox --binding LEDGER_KV` /
+- [x] A sandbox purchase completed end-to-end. What #2244 records, and all
+      this tick claims: purchase → `issued` → a ledger record and an
+      entitlement written in the sandbox's own namespaces → the Resend email
+      delivered from the verified domain → the key activates on a master build
+      (`tandem license` reports `licensed`). To repeat it, read §5a steps 2–3
+      **against the sandbox's own namespaces** (`--env sandbox --binding LEDGER_KV` /
       `--binding LICENSE_KV` in place of `--namespace-id`).
       Deploy the sandbox (`--env sandbox`) with **`TANDEM_ISSUANCE_ENV =
       "production"` in `[env.sandbox.vars]`, its own KV namespaces, and the
@@ -1196,7 +1446,7 @@ Then walk §5a steps 2–4 with that order number.
       Never point the sandbox at production's `LICENSE_KV` to make it pass:
       that would give a test-card license, signed with the real key, permanent
       production updates. Step 4 is first proven on the first real sale (§5a).
-- [ ] **The sandbox "it activates" check runs on a build from `master`**
+- [x] **The sandbox "it activates" check runs on a build from `master`**
       (a dev build, `npm run dev:standalone` or a fresh `npm run build`) made
       after the 2026-10-20 key ceremony merged — never on an installed
       release. Every release before that trusts only the retired key
@@ -1205,53 +1455,64 @@ Then walk §5a steps 2–4 with that order number.
 - [ ] **No grandfather or live key is sent until a release carrying
       `c24dd9f66f449a56` has shipped and installs have updated.** Until then a
       tester or buyer on the build they have is told their key is unverifiable.
-- [ ] **U1 — the hard deploy gate. Do not deploy a live Worker until it
-      passes.** Does a Paddle retry, and a dashboard or API replay, carry a
-      *fresh* `ts` in `Paddle-Signature`? The Worker refuses a `ts` more than
-      300 s old, so if either keeps the original, every retry after five
-      minutes and every replay in §5b is a `401`, and a sale that failed once
-      can never be recovered through Paddle. Test: in the sandbox, break
-      `RESEND_FROM`, let a retry land more than five minutes after the first
-      attempt, then run a dashboard replay; both must succeed once
-      `RESEND_FROM` is fixed. If either fails, the tolerance has to widen
-      (to about 4 days, leaning on the `evt:` marker and the ledger for replay
-      defence) before launch.
+- [ ] **U1 — mitigated by the widened window (#2341); live retry behaviour
+      unproven.** Does a Paddle retry, and an API replay, carry a *fresh* `ts`
+      in `Paddle-Signature`? The replay half passed in the sandbox (an API
+      replay 32 minutes after the original attempt carried a fresh `ts` and
+      issued). The retry half could not be tested there (the sandbox retries
+      within about a minute), so whether a late live retry keeps its original
+      `ts` is unknown. The past-side window (§3.5a step 1: a `ts` up to 4 days
+      minus 1 hour old is accepted) is what keeps such a retry working, and it
+      holds only while Paddle's retry span (3 days) stays under 4 days minus
+      1 hour. Stays unticked until a live retry is seen; the window's cost is
+      accepted as #2341.
 - [ ] **The other unverified facts (U2–U12), settled in the sandbox** and
       captured as fixtures (email and name scrubbed). U4, whether checkout
       fills the customer's name, was retired on 2026-10-20: a license no
-      longer carries one.
-      - **U2** — does a $0 (100%-code) checkout fire `transaction.completed` at
-        all? Governs §1b; until it is settled, §1a is the grandfather path.
-      - **U3** — what `status` does an auto-created chargeback adjustment carry?
-        Anything but `approved` is dropped and alerted rather than revoked.
-      - **U5** — does Paddle deactivate a destination that keeps failing?
-      - **U6** — which id does Paddle's receipt show the buyer (Vocabulary)?
-      - **U7** — are simulator deliveries signed?
-      - **U8** — how large is a real `transaction.completed`? The Worker
-        refuses bodies over 256 KiB before verifying them.
-      - **U9** — does archiving a price block a checkout that is already open
-        (§7 kill switch)?
-      - **U10** — does the transaction carry `discount_id`?
-      - **U11** — does Paddle create notifications for a destination that is
-        deactivated (§7 kill switch step 3)? If not, there is nothing to replay
-        afterwards, and sales made meanwhile are recovered from the transaction
-        list (§5b step 1) instead.
-      - **U12** — does a replay create a new notification and leave the
-        original `failed`? If so, the daily delivery check alerts every day
-        after any past failure, and needs a time bound (`from`) before launch,
-        or the alert channel learns to be ignored. The `status=failed,needs_retry`
-        filter syntax is confirmed on the same run.
-
-      Also confirm, on the same run, that the Worker's Ed25519 import works on
-      real Cloudflare (it never has, and a key-import failure fails closed to
-      503 on *every* webhook), and that the daily delivery check's
-      `GET /notifications?status=failed,needs_retry` and
-      `GET /notification-settings` calls work with the key's scopes (break the
-      webhook secret on the sandbox and wait for the alert).
+      longer carries one. Each one has its own box:
+- [x] **U2** — does a $0 (100%-code) checkout fire `transaction.completed` at
+      all? Yes (#2244); §1b is the grandfather path once the live Worker is up.
+- [ ] **U3** — what `status` does an auto-created chargeback adjustment carry?
+      Anything but `approved` is dropped and alerted rather than revoked.
+- [ ] **U5** — does Paddle deactivate a destination that keeps failing?
+- [ ] **U6** — which id does Paddle's receipt show the buyer (Vocabulary)?
+- [ ] **U7** — are simulator deliveries signed?
+- [ ] **U8** — how large is a real `transaction.completed`? The Worker
+      refuses bodies over 256 KiB before verifying them.
+- [ ] **U9** — does archiving a price block a checkout that is already open
+      (§7 kill switch)?
+- [x] **U10** — does the transaction carry `discount_id`? Yes (#2244). The
+      ledger still does not record it (§1b).
+- [ ] **U11** — does Paddle create notifications for a destination that is
+      deactivated (§7 kill switch step 3)? If not, there is nothing to replay
+      afterwards, and sales made meanwhile are recovered from the transaction
+      list (§5b step 1) instead.
+- [ ] **U12** — does a replay create a new notification and leave the
+      original `failed`? The sandbox showed it does, so the daily delivery
+      check now counts only failures the Worker has no record of recovering,
+      bounded by `from` (§3.5b). **Unticked until a second sandbox run on this
+      Worker version** confirms that the list response carries
+      `payload.event_id`, how `from` behaves on the real API, and that the
+      check's `GET /notifications?status=failed,needs_retry…` and
+      `GET /notification-settings` calls work with the key's scopes. The
+      procedure, in order: (1) with the sandbox's
+      `PADDLE_NOTIFICATION_SETTING_ID` set (§3.5b), see **one quiet** daily
+      check, which proves the destination half passes on the real response;
+      (2) break the webhook secret on the sandbox, make a sandbox purchase, and
+      wait for the alert; it must read `causes=unresolved` (not `destination`
+      or `cannot-run`) and name that purchase's notification. The
+      `status=failed,needs_retry` filter syntax itself was confirmed (#2244).
+- [x] The Worker's Ed25519 import works on real Cloudflare (#2244). A
+      key-import failure fails closed to 503 on *every* webhook, so this had
+      to be seen once.
 - [ ] **`PADDLE_API_KEY` expiry is in your calendar**, two weeks before the
       date Paddle shows (one year at most from creation), and the live
       destination is subscribed to `api_key.expiring` / `api_key.expired`. An
       expired key turns every sale into a `paddle-api-auth` 500.
+- [ ] **`PADDLE_NOTIFICATION_SETTING_ID` on the live Worker is the live
+      destination's `ntfset_…` id** (§3.5b), set after that destination was
+      created, and the first daily delivery check after it ran quiet. Unset or
+      wrong, the check alerts every day, which hides the alert that matters.
 - [ ] **`PADDLE_PRICE_IDS` on the live Worker lists only the live $45 price**,
       and no sandbox Worker is left holding the production signing key (§3.5b).
 - [ ] Any `POLAR_WEBHOOK_SECRET` left on a deployed Worker is deleted (§3.5b).
@@ -1260,16 +1521,26 @@ Then walk §5a steps 2–4 with that order number.
       license email: the email links both. Paddle's domain review also wants
       them reachable from the site menu, naming the seller and Paddle as
       merchant of record.
-- [ ] **The refund race is fixed or accepted.** A refund overlapping a
+- [x] **The refund race is fixed or accepted.** A refund overlapping a
       redelivered `transaction.completed` can leave a live entitlement behind, through
       `issue()`'s recheck window or `reDrive()`, which has no recheck at all
       (`infra/license-issuance-worker/README.md`). Since keys carry no update
       window (decision A5), that entitlement never runs out. Either serialise
       per order (the Durable Object fix the README names) or record an
-      acceptance in `docs/security.md`'s register. It is neither yet.
+      acceptance in `docs/security.md`'s register. **Accepted** for launch
+      (#2245, revisit 2027-01-31); the README's post-refund KV check is its
+      mitigation.
 - [ ] `LEDGER_KV` backup scheduled (§6).
 - [ ] Terms, refund policy and privacy notice published (see
       `docs/licensing-terms.md`).
+
+### Before the flip
+
+These need the armed build (§4) or the update endpoint it compiles in, so they
+can wait until sales are open, but not past the flip.
+
+- [ ] Custom domain in front of the update Worker, and that URL — not
+      `*.workers.dev` — compiled into `LICENSE_UPDATE_ENDPOINT`.
 - [ ] Beta-cohort claim path and copy settled (§1c).
 - [ ] **A license whose update window has ENDED reaches the Worker and is
       refused there** — not served public builds. Only a key hand-signed with

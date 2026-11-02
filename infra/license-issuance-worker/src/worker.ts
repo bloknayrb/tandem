@@ -22,9 +22,13 @@
  *    stale timestamp → 401, never alerted (anyone can send one). A validly
  *    signed but unusable payload is `dropped`: Paddle signed it, so it is
  *    schema drift, not an attacker.
- *  - Three idempotency layers: per-attempt timestamp freshness, an `event_id`
- *    completion set (blocks replays of fully-processed events), and the durable
- *    transaction ledger (blocks re-mint; drives retry-based recovery). `issue()`
+ *  - Three idempotency layers: a timestamp window (300 s into the future, but
+ *    nearly `EVENT_TTL_S` into the past so a late Paddle retry still verifies;
+ *    it bounds how long a captured body stays usable, not whether it replays),
+ *    an `event_id` completion set (blocks replays of fully-processed events),
+ *    and the durable transaction ledger (blocks re-mint; drives retry-based
+ *    recovery). Outcomes that write no completion marker (`dropped`,
+ *    `issue()`'s `ignored`, every 500) stay replayable inside the window. `issue()`
  *    and `revoke()` each re-read the ledger immediately before their first
  *    commit (see the "pre-commit recheck" comments below) so a same-transaction
  *    write from a concurrent request — another `transaction.completed`
@@ -51,6 +55,7 @@ import {
   keyIdOfPkcs8Ed25519,
   type SignBytes,
   signLicense,
+  type TimestampTolerance,
   verifyPaddleSignature,
   webCryptoSigner,
 } from "./crypto.js";
@@ -77,17 +82,41 @@ export function _setTrustedKeyIdsForTests(ids: readonly string[] = TRUSTED_KEY_I
   signerCache = null;
 }
 
-/** `Paddle-Signature` freshness tolerance. Paddle's SDK uses 5 s; 300 s allows
- * for clock skew. Whether a retry or a dashboard replay carries a FRESH `ts` is
- * unverified (U1, docs/licensing-operations.md §8) and is a deploy gate: if it
- * keeps the original, widen this to 4 days and lean on the `evt:` marker and
- * the ledger for replay defence. */
-export const TIMESTAMP_TOLERANCE_S = 300;
 /** TTL for the `event_id` completion marker: Paddle's live retry span is 60
  * attempts over 3 days, plus a day. A late marker miss is harmless — the
  * transaction ledger still answers `duplicate` without re-minting or
  * re-emailing. */
 export const EVENT_TTL_S = 4 * 24 * 60 * 60;
+/** `Paddle-Signature` freshness, past side. The sandbox run (#2244) could not
+ * prove that a live automatic retry carries a fresh `ts` (U1), and a retry can
+ * arrive up to 3 days after the first attempt, so a 300 s window could refuse
+ * every retry of a failed sale. The timestamp is therefore not the replay
+ * defence; the `evt:` completion marker and the permanent `order:` ledger are.
+ *
+ * Why this is bounded by `EVENT_TTL_S - 3600`: for a delivery signed at or
+ * before the event was first processed, the marker is written at processing
+ * time P >= ts - 300 (the future side) and lives until P + EVENT_TTL_S, so a
+ * capture of it expires (at ts + this window) before its marker does; the hour
+ * of margin absorbs the 300 s. Keep it there, and keep it longer than Paddle's
+ * retry span (3 days), or retries are lost again.
+ *
+ * That argument does NOT cover a delivery signed AFTER first processing: an
+ * operator replay of an already-processed event, or a Paddle retry after a 200
+ * that was lost on the way back. Its `ts` is later than the marker's start, so
+ * a capture of it can outlive the marker. Once the marker lapses, replaying it
+ * re-runs the event: a full refund re-revokes an order restored by hand (ops
+ * §7 re-puts the marker at restore time to cover this), a notice is rewritten,
+ * and an alert is sent.
+ *
+ * Inside the window a captured body can also re-run any outcome that writes no
+ * marker at all: `dropped`, `issue()`'s `ignored` (a free order, an off-list
+ * sandbox buyer, an out-of-scope price) and every 500. Rotating the webhook
+ * secret invalidates every captured request. Accepted as #2341
+ * (docs/security.md). */
+export const TIMESTAMP_PAST_TOLERANCE_S = EVENT_TTL_S - 3600;
+/** `Paddle-Signature` freshness, future side: clock skew only. Paddle's SDK
+ * uses 5 s; nothing legitimate is dated ahead, so this side stays narrow. */
+export const TIMESTAMP_FUTURE_TOLERANCE_S = 300;
 
 /** Linked from the license email; paths agreed with the tandem-website pages. */
 const TERMS_URL = "https://tandem.ink/terms";
@@ -186,7 +215,17 @@ export interface LogEntry {
   status?: number;
   notice?: NoticeStage;
   ref?: string;
+  /** Delivery check only: how many failed notifications are unresolved. */
+  unresolved?: number;
+  /** Delivery check only: every reason it alerted (see `DeliveryCheckCause`). */
+  causes?: DeliveryCheckCause[];
 }
+
+/** Why the delivery check alerted. `cannot-run`: no usable key, an API or page
+ * failure, or a throw. `destination`: this Worker's pinned destination would
+ * not deliver a real sale, or its id is unset. `unresolved`: failed
+ * notifications nothing records as recovered. */
+export type DeliveryCheckCause = "cannot-run" | "destination" | "unresolved";
 
 /** What issue()/revoke() produce. */
 type EventOutcome = Exclude<ResultKind, "rejected" | "error" | "noticed"> | Failure | Notice;
@@ -202,7 +241,8 @@ export interface IssuanceDeps {
   keyId: string;
   /** licenseId → LicenseEntitlement; read by the update Worker. NO PII. */
   entitlementKv: KvNamespace;
-  /** issuance-owned store: `order:`, `evt:`, `notice:`, `txnlic:` keys. */
+  /** issuance-owned store: `order:`, `evt:`, `notice:`, `txnlic:` keys, plus
+   * operator-written `ack:` keys (ops §5b; a date and reason code, no PII). */
   ledgerKv: KvNamespace;
   sendEmail: (to: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
   isGrandfathered: (email: string) => boolean;
@@ -220,7 +260,7 @@ export interface IssuanceDeps {
   isTest: boolean;
   now: () => number;
   newLicenseId: () => string;
-  toleranceS?: number;
+  tolerance?: TimestampTolerance;
   log?: (entry: LogEntry) => void;
 }
 
@@ -242,7 +282,17 @@ interface LedgerRecord {
   updateWindowEnd: string | null;
   emailSent: boolean;
   refunded: boolean;
+  /** The `LICENSE_VERSION` the license was signed under, so a re-drive after a
+   * future version bump re-signs the bytes the buyer already holds (ops §0,
+   * decision 3). Absent on records written before 2026-11-02 and on refund
+   * tombstones; read through `versionOf`. */
+  version?: string;
 }
+
+/** `LICENSE_VERSION` has been "1.0" since it was introduced (321c619c), so a
+ * record with no stored version was signed under exactly that. */
+const LEGACY_LICENSE_VERSION = "1.0";
+const versionOf = (rec: LedgerRecord): string => rec.version ?? LEGACY_LICENSE_VERSION;
 
 // ---------------------------------------------------------------------------
 // Mode-scoped ledger keys. EVERY ledger key carries the test/live mode segment
@@ -254,6 +304,13 @@ const modeOf = (isTest: boolean): string => (isTest ? "test" : "live");
 const orderKeyOf = (isTest: boolean, orderId: string): string =>
   `order:${modeOf(isTest)}:${orderId}`;
 const evtKeyOf = (isTest: boolean, eventId: string): string => `evt:${modeOf(isTest)}:${eventId}`;
+/** Operator acknowledgement of a failed notification the Worker can never
+ * resolve by itself (a sale fulfilled by hand, or a replay that `issue()`
+ * ignored). Written only by hand (ops §5b), never by the Worker, and never
+ * expires. Deliberately separate from `evt:`: a `done` marker would make a
+ * later replay answer `duplicate`, which would stop the §1b recovery replay
+ * from minting once the address is added. */
+const ackKeyOf = (isTest: boolean, eventId: string): string => `ack:${modeOf(isTest)}:${eventId}`;
 const noticeKeyOf = (isTest: boolean, stage: NoticeStage, ref: string): string =>
   `notice:${modeOf(isTest)}:${stage}:${ref}`;
 const txnLicPrefixOf = (isTest: boolean, txnId: string): string =>
@@ -275,7 +332,10 @@ function isLedgerRecord(v: unknown): v is LedgerRecord {
     typeof r.createdAt === "string" &&
     (r.updateWindowEnd === null || typeof r.updateWindowEnd === "string") &&
     typeof r.emailSent === "boolean" &&
-    typeof r.refunded === "boolean"
+    typeof r.refunded === "boolean" &&
+    // Present means signed bytes depend on it, so anything unusable is corrupt
+    // rather than silently replaced by the legacy default.
+    (r.version === undefined || (typeof r.version === "string" && /^\d+\.\d+$/.test(r.version)))
   );
 }
 
@@ -327,7 +387,7 @@ function entitlementValue(rec: LedgerRecord): string {
   return JSON.stringify({
     updateWindowEnd: rec.updateWindowEnd,
     status: rec.type,
-    version: LICENSE_VERSION,
+    version: versionOf(rec),
   });
 }
 
@@ -338,7 +398,7 @@ function metadataFrom(rec: LedgerRecord, keyId: string) {
     type: rec.type,
     createdAt: rec.createdAt,
     expiresAt: rec.updateWindowEnd,
-    version: LICENSE_VERSION,
+    version: versionOf(rec),
     keyId,
   };
 }
@@ -472,6 +532,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
     updateWindowEnd: null,
     emailSent: false,
     refunded: false,
+    version: LICENSE_VERSION,
   };
 
   const blob = await signLicense(metadataFrom(rec, deps.keyId), deps.signBytes);
@@ -664,7 +725,10 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
       rawBody,
       deps.webhookSecret,
       nowMs,
-      deps.toleranceS ?? TIMESTAMP_TOLERANCE_S,
+      deps.tolerance ?? {
+        pastS: TIMESTAMP_PAST_TOLERANCE_S,
+        futureS: TIMESTAMP_FUTURE_TOLERANCE_S,
+      },
     );
     if (!ok) return reply(401, "rejected");
 
@@ -775,6 +839,10 @@ interface WorkerEnv {
   PADDLE_API_KEY?: string;
   /** Comma-separated `pri_…` ids this Worker may mint for. REQUIRED. */
   PADDLE_PRICE_IDS?: string;
+  /** `ntfset_…` id of this Worker's own notification destination. Read only by
+   *  the daily delivery check, which alerts while it is unusable; never a
+   *  webhook config guard. */
+  PADDLE_NOTIFICATION_SETTING_ID?: string;
   /** Full ISO timestamp with a zone, ≤ 7 days ahead; REQUIRED on any Worker
    *  holding a `pdl_sdbx_` key (`sandboxSigningAllowed`). */
   SANDBOX_SIGNING_UNTIL?: string;
@@ -1191,11 +1259,14 @@ const STAGE_TEXT: Partial<Record<FailStage, string>> = {
   "notice-write":
     "A notice or dropped-event record could not be written to LEDGER_KV; Paddle will retry the event",
   "delivery-check":
-    "The daily delivery check found failed Paddle notifications or an inactive destination (or could not run)",
+    "The daily delivery check found failed Paddle notifications the Worker has no record of recovering, or an inactive destination (or could not run)",
 };
 
-/** Alert text. Carries the coarse result/stage ONLY — never an email, a license
- *  id, a ref, or payload bytes, so an alert channel is not a PII sink. */
+/** Alert text. Carries the coarse result/stage — never an email, a license id,
+ *  a webhook ref, or payload bytes, so an alert channel is not a PII sink. The
+ *  one exception is the delivery check, which names how many notifications are
+ *  unresolved and the first one's Paddle `ntf_`/`evt_` id: Paddle ids, no PII,
+ *  and without them a new failure reads exactly like a standing one. */
 function alertBody(entry: LogEntry): string {
   const what = isConfigStage(entry.stage)
     ? "The Worker is refusing every webhook (misconfiguration) — no sale can complete"
@@ -1209,6 +1280,12 @@ function alertBody(entry: LogEntry): string {
   return [
     `Tandem license issuance: ${what}.`,
     `result=${entry.result} stage=${entry.stage ?? entry.notice ?? "-"} status=${entry.status ?? "-"}`,
+    ...(entry.stage === "delivery-check" && entry.causes?.length
+      ? [`causes=${entry.causes.join(",")}`]
+      : []),
+    ...(entry.stage === "delivery-check" && entry.unresolved !== undefined
+      ? [`unresolved=${entry.unresolved} first=${entry.ref ?? "-"}`]
+      : []),
     "",
     // The cron's own alert is about no particular delivery, so the retry tail
     // would mislead.
@@ -1342,6 +1419,123 @@ async function paddleGet(apiKey: string, url: string): Promise<unknown | null> {
   }
 }
 
+/** Test or live mode, read the same way by the webhook handler and the
+ * delivery check, so the check looks up markers under the mode that wrote them. */
+function isTestEnv(env: WorkerEnv): boolean {
+  return (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production";
+}
+
+/** Paddle's list-notifications reference: "Notifications older than 90 days
+ * aren't retained" (developer.paddle.com/api-reference/notifications/
+ * list-notifications). One day short of that keeps the `from` bound inside what
+ * the endpoint can return. */
+const DELIVERY_CHECK_LOOKBACK_MS = 89 * 24 * 60 * 60 * 1000;
+/** 2 pages of 150 rows at up to three KV reads each (`evt:`, `ack:`, `order:`)
+ * is 900, under the Workers limit of 1,000 KV operations per invocation. More
+ * pages than this alerts rather than reading as healthy. */
+const DELIVERY_CHECK_PER_PAGE = 150;
+const DELIVERY_CHECK_MAX_PAGES = 2;
+
+/** The non-sale event types the Worker subscribes to, and so the only ones
+ * allowed to age out with their `evt:` marker. A missing, unknown or renamed
+ * type is judged like a sale: it stays unresolved until a marker, a ledger
+ * record or an operator ack proves otherwise, so a schema change cannot
+ * silently retire a failure. */
+const AGEING_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "adjustment.created",
+  "adjustment.updated",
+  "api_key.expiring",
+  "api_key.expired",
+]);
+
+/**
+ * Whether a failed or `needs_retry` notification still needs a human.
+ *
+ * A replay creates a NEW notification and leaves the original `failed` forever
+ * (#2244, U12), so "anything in the failed list" alerted daily after every
+ * recovered failure. A failure counts as recovered when the Worker itself
+ * recorded the outcome: the event's `evt:` completion marker, or, for a sale,
+ * the permanent `order:` ledger record showing the email went out or the order
+ * was refunded. An operator `ack:` key resolves any type: it is how a failure
+ * the Worker can never resolve itself (a sale fulfilled by hand, a replay that
+ * `issue()` ignored) stops repeating for 89 days. Everything the check cannot
+ * prove recovered is `unresolved`, because a check that guesses healthy is
+ * worse than none.
+ *
+ * `ignored` is the one exception: a known non-sale event (`AGEING_EVENT_TYPES`)
+ * older than `EVENT_TTL_S` may have outlived its marker, so it is no longer
+ * evaluated (accepted as #2340; the §5b reconcile is the backstop). A sale
+ * never ages out this way, because its ledger record is permanent.
+ */
+async function notificationState(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  note: any,
+  ledgerKv: KvNamespace,
+  isTest: boolean,
+  nowMs: number,
+): Promise<"resolved" | "unresolved" | "ignored"> {
+  try {
+    const payload = note?.payload;
+    if (typeof payload !== "object" || payload === null) return "unresolved";
+    const ages = AGEING_EVENT_TYPES.has(payload.event_type);
+    if (ages) {
+      const occurredMs = typeof note.occurred_at === "string" ? Date.parse(note.occurred_at) : NaN;
+      if (!Number.isFinite(occurredMs)) return "unresolved";
+      if (nowMs - occurredMs > EVENT_TTL_S * 1000) return "ignored";
+    }
+    const eventId = payload.event_id;
+    if (typeof eventId !== "string" || !EVT_ID.test(eventId)) return "unresolved";
+    if ((await ledgerKv.get(evtKeyOf(isTest, eventId))) === "done") return "resolved";
+    if ((await ledgerKv.get(ackKeyOf(isTest, eventId))) !== null) return "resolved";
+    if (!ages) {
+      const txnId = payload.data?.id;
+      if (typeof txnId !== "string" || !TXN_ID.test(txnId)) return "unresolved";
+      const raw = await ledgerKv.get(orderKeyOf(isTest, txnId));
+      if (raw !== null) {
+        const rec = JSON.parse(raw);
+        if (rec?.emailSent === true || rec?.refunded === true) return "resolved";
+      }
+    }
+    return "unresolved";
+  } catch {
+    // A KV read that throws (including the per-invocation limit) or a record
+    // that will not parse proves nothing, so it fails toward the alert.
+    return "unresolved";
+  }
+}
+
+/** Every failed or `needs_retry` notification in the lookback, or null when
+ * the list could not be read completely. */
+async function listFailedNotifications(
+  apiKey: string,
+  base: string,
+  nowMs: number,
+): Promise<unknown[] | null> {
+  // The `status` filter's comma syntax was confirmed in the sandbox (#2244).
+  // Built by hand rather than with URLSearchParams, which would encode that
+  // comma. `from` and `per_page` come after `status`.
+  const from = new Date(nowMs - DELIVERY_CHECK_LOOKBACK_MS).toISOString();
+  let url =
+    `${base}/notifications?status=failed,needs_retry` +
+    `&from=${encodeURIComponent(from)}&per_page=${DELIVERY_CHECK_PER_PAGE}`;
+  const notes: unknown[] = [];
+  for (let page = 1; ; page++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = await paddleGet(apiKey, url);
+    const pagination = body?.meta?.pagination;
+    if (!Array.isArray(body?.data) || typeof pagination?.has_more !== "boolean") return null;
+    notes.push(...body.data);
+    // `next` is "Always returned, even if `has_more` is `false`" (the same
+    // list-notifications reference), so `has_more` decides.
+    if (!pagination.has_more) return notes;
+    if (page >= DELIVERY_CHECK_MAX_PAGES) return null;
+    // The API key goes with every request, so never follow a link off Paddle.
+    const next = pagination.next;
+    if (typeof next !== "string" || !next.startsWith(`${base}/`)) return null;
+    url = next;
+  }
+}
+
 /** Daily delivery check. Signature failures never alert (see `isAlertable`),
  * so a webhook secret regenerated in Paddle without a matching `wrangler secret
  * put`, or a destination Paddle deactivated, would otherwise leave sales sitting
@@ -1349,40 +1543,112 @@ async function paddleGet(apiKey: string, url: string): Promise<unknown | null> {
  * key, so no outsider can trigger it. Returns true when it raised an alert. */
 export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<boolean> {
   const base = paddleApiBase(env.PADDLE_API_KEY);
-  let bad: boolean;
+  // Every cause that applies is reported, so an operator fixing one sees
+  // whether another is still behind the same alert.
+  const causes: DeliveryCheckCause[] = [];
+  let unresolved = 0;
+  let firstRef: string | undefined;
   if (!base || !env.PADDLE_API_KEY) {
-    bad = true; // a check that cannot run must say so, or it reads as healthy
+    causes.push("cannot-run"); // a check that cannot run must say so, or it reads as healthy
   } else {
-    // Comma-separated `status` filter per Paddle's list-notifications
-    // reference; not yet exercised against a real account (ops §8).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const notes: any = await paddleGet(
-      env.PADDLE_API_KEY,
-      `${base}/notifications?status=failed,needs_retry`,
-    );
+    const notes = await listFailedNotifications(env.PADDLE_API_KEY, base, nowMs);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const settings: any = await paddleGet(env.PADDLE_API_KEY, `${base}/notification-settings`);
-    if (!Array.isArray(notes?.data) || !Array.isArray(settings?.data)) {
-      bad = true; // an API failure alerts too, for the same reason
-    } else {
-      bad =
-        notes.data.length > 0 ||
-        // No destination at all is the quietest way sales stop.
-        settings.data.length === 0 ||
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        settings.data.some((d: any) => d?.active === false);
+    // An API failure or an incomplete list alerts too, for the same reason; the
+    // half that did load is still judged.
+    if (notes === null || !Array.isArray(settings?.data)) causes.push("cannot-run");
+    if (Array.isArray(settings?.data)) {
+      if (!ourDestinationDeliversSales(settings.data, env.PADDLE_NOTIFICATION_SETTING_ID)) {
+        causes.push("destination");
+      }
+    }
+    if (notes !== null) {
+      const isTest = isTestEnv(env);
+      for (const note of notes) {
+        if ((await notificationState(note, env.LEDGER_KV, isTest, nowMs)) !== "unresolved") {
+          continue;
+        }
+        unresolved++;
+        firstRef ??= firstRefOf(note);
+      }
+      if (unresolved > 0) causes.push("unresolved");
     }
   }
-  if (!bad) return false;
+  if (causes.length === 0) return false;
+  return raiseDeliveryCheckAlert(env, nowMs, {
+    causes,
+    ...(unresolved > 0 ? { unresolved, ref: firstRef ?? "-" } : {}),
+  });
+}
+
+/** The notification's own `ntf_` id, else its event's `evt_` id, so an alert
+ * can tell a new failure from a standing one. Shape-checked: it reaches the
+ * alert channel, which must carry Paddle ids only. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function firstRefOf(note: any): string {
+  if (typeof note?.id === "string" && /^ntf_[a-z0-9]{1,64}$/.test(note.id)) return note.id;
+  const evt = note?.payload?.event_id;
+  return typeof evt === "string" && EVT_ID.test(evt) ? evt : "-";
+}
+
+const NTFSET_ID = /^ntfset_[a-z0-9]{1,64}$/;
+
+/**
+ * Whether THIS Worker's own notification destination would deliver a sale.
+ *
+ * The destination is pinned by `PADDLE_NOTIFICATION_SETTING_ID`, because "some
+ * healthy destination exists" stays green while ours is deactivated beside an
+ * unrelated one. An unset, malformed or placeholder id fails closed: the check
+ * alerts rather than skipping, since a check that cannot say which destination
+ * is ours cannot say sales are arriving. The id is what identifies our entry,
+ * so the destination URL is not matched (the Worker does not know its own
+ * public URL). An entry whose URL was edited to point elsewhere therefore
+ * still passes here; if that address answers 200, Paddle records no failure
+ * either, and only the ops §5b reconcile (sales with no ledger record) sees it.
+ *
+ * Shape from Paddle's list-notification-settings reference
+ * (developer.paddle.com/api-reference/notification-settings/
+ * list-notification-settings): `id` is `ntfset_…`, `active` is a boolean,
+ * `type` is `url` or `email`, `traffic_source` is `platform`, `simulation` or
+ * `all` ("whether Paddle should deliver real platform events, simulation events
+ * or both"), and `subscribed_events` is an array of objects whose `name` is
+ * the event type. A `simulation`-only destination receives no real sale, so
+ * its failed list staying empty proves nothing. `active` must be strictly
+ * `true`: a missing or drifted field must not read as healthy.
+ */
+function ourDestinationDeliversSales(destinations: unknown[], settingId: unknown): boolean {
+  if (typeof settingId !== "string" || !NTFSET_ID.test(settingId)) return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d: any = destinations.find((x: any) => x?.id === settingId);
+  return (
+    d?.active === true &&
+    d.type === "url" &&
+    (d.traffic_source === "platform" || d.traffic_source === "all") &&
+    Array.isArray(d.subscribed_events) &&
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    d.subscribed_events.some((e: any) => e?.name === "transaction.completed")
+  );
+}
+
+/** Log and alert the cron's own entry. Alerts directly rather than via
+ * isAlertable: this entry is never a webhook's. `bypassThrottle` is for the
+ * path where the check itself threw: that alert is the only signal that the
+ * check is broken, so the 5-minute slot must not swallow it. */
+async function raiseDeliveryCheckAlert(
+  env: WorkerEnv,
+  nowMs: number,
+  extra: { causes: DeliveryCheckCause[]; unresolved?: number; ref?: string },
+  bypassThrottle = false,
+): Promise<boolean> {
   const entry: LogEntry = {
     result: "error",
     ts: Math.floor(nowMs / 1000),
     stage: "delivery-check",
+    ...extra,
   };
   console.log(JSON.stringify(entry));
-  // Alerts directly rather than via isAlertable: this is the cron's own entry,
-  // never a webhook's.
-  if (!shouldAlert(alertThrottleKey(entry), nowMs)) return false;
+  const allowed = shouldAlert(alertThrottleKey(entry), nowMs);
+  if (!allowed && !bypassThrottle) return false;
   await sendOperatorAlert(env, entry);
   return true;
 }
@@ -1488,7 +1754,7 @@ export default {
     // carry SANDBOX_SIGNING_UNTIL: a sandbox Worker signs with the PRODUCTION
     // key, and a sandbox checkout needs only a public token and the 4242 test
     // card, so a forgotten one would mint real licenses forever.
-    const isTest = (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production";
+    const isTest = isTestEnv(env);
     if (apiKey.startsWith("pdl_live_") && isTest) return configFail("config-env-mismatch");
     if (
       apiKey.startsWith("pdl_sdbx_") &&
@@ -1528,16 +1794,16 @@ export default {
   },
 
   async scheduled(_controller: unknown, env: WorkerEnv, ctx?: ExecutionContext): Promise<void> {
-    const run = runDeliveryCheck(env, Date.now()).catch(() => {
-      // An alert that throws must not fail the cron, but it must not vanish.
-      console.log(
-        JSON.stringify({
-          result: "error",
-          ts: Math.floor(Date.now() / 1000),
-          stage: "delivery-check",
-        }),
-      );
-      return false;
+    const run = runDeliveryCheck(env, Date.now()).catch(async () => {
+      // A check that cannot run must never read as healthy, so a throw alerts,
+      // past the throttle: an earlier alert in the same 5-minute slot may have
+      // been about something else entirely. The alert itself must not fail the
+      // cron.
+      try {
+        return await raiseDeliveryCheckAlert(env, Date.now(), { causes: ["cannot-run"] }, true);
+      } catch {
+        return false;
+      }
     });
     if (ctx) ctx.waitUntil(run);
     await run;
