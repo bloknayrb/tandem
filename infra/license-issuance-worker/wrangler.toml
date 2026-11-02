@@ -63,9 +63,10 @@ PADDLE_PRICE_IDS = "REPLACE_WITH_PADDLE_PRICE_IDS"
 [observability]
 enabled = true
 
-# Daily delivery check: alerts on failed or needs-retry Paddle notifications and
-# on an inactive destination. A bad signature never alerts (anyone can send
-# one), so this is what notices a webhook secret that no longer matches.
+# Daily delivery check: alerts on failed or needs-retry Paddle notifications the
+# Worker has no record of recovering, and on an inactive destination. A bad
+# signature never alerts (anyone can send one), so this is what notices a
+# webhook secret that no longer matches.
 [triggers]
 crons = ["0 13 * * *"]
 
@@ -93,9 +94,12 @@ id = "REPLACE_WITH_LEDGER_KV_NAMESPACE_ID"
 #   TANDEM_PRIVATE_KEY    Ed25519 PEM PKCS#8: the private half of a key in public-key.ts
 #                         whose id is in TRUSTED_KEY_IDS (worker.ts), or every webhook 503s
 #   PADDLE_WEBHOOK_SECRET pdl_ntfset_... from the Paddle notification destination
-#   PADDLE_API_KEY        pdl_live_apikey_... / pdl_sdbx_apikey_... with customer.read
-#                         and notification read ONLY; expires (max 1 year), so set a
-#                         reminder. A live key in a sandbox-mode Worker is refused.
+#   PADDLE_API_KEY        pdl_live_apikey_... / pdl_sdbx_apikey_... holding customer.read,
+#                         notification.read and the notification-settings read
+#                         permission, and NOTHING else (never notification.write: the
+#                         replay key is a separate one that stays off every Worker);
+#                         expires (max 1 year), so set a reminder. A live key in a
+#                         sandbox-mode Worker is refused.
 #   RESEND_API_KEY        re_... from Resend
 #   GRANDFATHER_EMAILS    optional, comma/space-separated beta-tester emails
 #

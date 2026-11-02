@@ -17,18 +17,24 @@ payment-processor endpoint to a server that binds to loopback.
   mailer + mock Paddle API + a real generated Ed25519 key; runs under the normal
   `npm test`, no Cloudflare runtime needed. Includes a signature vector built the
   way `@paddle/paddle-node-sdk` 3.10.0 computes it, canonicalize parity with the
-  real on-device verifier, and the sign→verify round-trip. **Nothing here has
-  run against a real Paddle account yet**: every payload is hand-built from
-  Paddle's documentation (no captured sandbox fixtures yet), and the twelve unverified facts (U1–U12) are listed in
-  `docs/licensing-operations.md` §8.
+  real on-device verifier, and the sign→verify round-trip. **It has run against
+  a Paddle sandbox account (2026-10-21, #2244), not yet the live one.** The
+  test payloads are still hand-built from Paddle's documentation (no captured
+  sandbox fixtures yet); which of the twelve unverified facts (U1–U12) that run
+  settled is in `docs/licensing-operations.md` §8.
 
 ## How it works
 
 1. Paddle `POST`s a signed event. The Worker verifies `Paddle-Signature`
    (`ts=<unix>;h1=<hex>`, HMAC-SHA256 over `${ts}:${rawBody}` keyed with the
    destination's `pdl_ntfset_…` secret, any matching `h1` accepted, at most 8)
-   and rejects a `ts` more than 300 s off — **before** any parse or side effect.
-   A bad signature is a `401` and is never alerted (anyone can send one).
+   and rejects a `ts` more than 300 s in the future or more than 4 days minus
+   1 hour (`EVENT_TTL_S - 3600`) in the past — **before** any parse or side
+   effect. The past side is wide because a live Paddle retry can come 3 days
+   late and may keep its original `ts` (U1); a captured body can therefore be
+   replayed inside that window, but only outcomes that write no completion
+   marker re-run (accepted as #2341, `docs/security.md`). A bad signature is a
+   `401` and is never alerted (anyone can send one).
 2. On **`transaction.completed`** it checks the transaction (`txn_…`, status
    `completed`), re-drives an order already in the ledger, parses the totals,
    requires every item's price to be in `PADDLE_PRICE_IDS` (an out-of-scope paid
@@ -53,16 +59,25 @@ payment-processor endpoint to a server that binds to loopback.
 4. On **`api_key.expiring` / `api_key.expired`** it leaves a notice: replace
    the API key.
 5. Once a day (`[triggers] crons`) it asks the Paddle API for failed or
-   retrying notifications and inactive destinations, and alerts on any, or when
-   Paddle reports no destination at all.
+   retrying notifications from the last 89 days (`from`, paged, at most 2
+   pages of 200) and for inactive destinations. It alerts on a failure the
+   Worker has no record of recovering (no `evt:` marker and, for a sale, no
+   `order:` record with `emailSent` or `refunded`), on an inactive destination,
+   when Paddle reports no destination at all, or when the check cannot run or
+   throws. A replay leaves the original notification `failed` forever (#2244),
+   which is why a recorded recovery is what counts. An adjustment failure
+   older than `EVENT_TTL_S` is ignored, since its marker may have expired
+   (accepted as #2340).
 
-**Idempotency (three layers):** per-attempt timestamp freshness, an
+**Idempotency (three layers):** a timestamp window (above; it bounds how long a
+captured body stays usable, not whether it replays), an
 `evt:<mode>:<event_id>` completion marker (blocks replays of processed events;
 never the per-attempt `notification_id`), and the durable
 `order:<mode>:<txn_id>` ledger (blocks re-mint; a retry of a *failed* delivery
 re-drives — re-asserts the entitlement and resends the email). A full refund
 that outraces its purchase writes a **tombstone** so the late purchase can't mint
-a live entitlement for a refunded order.
+a live entitlement for a refunded order. Outcomes that write no marker
+(`dropped`, `issue()`'s `ignored`, every 500) are reprocessed by any replay.
 
 **Durable notices:** every `dropped` event (signed, but unusable: schema drift,
 a foreign price, a missing customer, …) and every `noticed` one writes a
@@ -117,11 +132,10 @@ your calendar two weeks before, and subscribe the destination to
 `api_key.expiring` / `api_key.expired`. An expired key makes every sale fail at
 stage `paddle-api-auth`.
 
-**Deploy preconditions for the live Worker:** the U1 sandbox test in
-`docs/licensing-operations.md` §8 has passed (retries and replays must carry a
-fresh `ts`, or a failed sale can never be recovered), and the Terms
+**Deploy preconditions for the live Worker:** the "Before a stranger pays"
+half of `docs/licensing-operations.md` §8, including the Terms
 (`https://tandem.ink/terms`) and Refund Policy (`https://tandem.ink/refunds`)
-are live, because the license email links both. Neither page is live yet.
+being live, because the license email links both.
 
 **Roll forward, never back, past the 2026-10-20 name removal.** Ledger records
 written since then carry no `name`, and a Worker deployed from before that change
@@ -238,10 +252,10 @@ also retire the `txnlic:` listing residual above.
   also closes the KV-list residual.
 - A rate-limited **"resend my license"** endpoint (needs an email index +
   rate-limit store).
-- A sandbox run against a real Paddle account, settling U1–U12
-  (`docs/licensing-operations.md` §8). U1 is a hard gate before a live deploy.
-- Recording which discount code a transaction used, if Paddle's transaction
-  turns out to carry `discount_id` (U10).
+- The rest of U1–U12 (`docs/licensing-operations.md` §8), including the second
+  sandbox run (1b) that confirms the delivery check against the real API (U12).
+- Recording which discount code a transaction used: Paddle's transaction does
+  carry `discount_id` (U10, #2244), and the Worker does not read it yet.
 
 ## Related
 

@@ -230,8 +230,9 @@ Four moving parts:
    Paddle's `transaction.completed` webhook (Paddle is the merchant of record),
    looks the buyer's email up through the Paddle API, because the
    webhook carries none, then mints and signs the license, records it, and
-   emails it. Refunds and chargebacks arrive as `adjustment.*` events. None of
-   this has run against a real Paddle account yet; the open questions are U1–U12
+   emails it. Refunds and chargebacks arrive as `adjustment.*` events. This has
+   run against a Paddle sandbox account (#2244), not yet the live one; what that
+   run settled, and what is still open, is U1–U12
    in [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay).
 2. **`infra/license-update-worker/`** — a second Worker. Decides whether a given
    license id may be served the update manifest.
@@ -649,8 +650,10 @@ Worker can do is leave a trace of two kinds:
   that delivers licenses. So a webhook secret regenerated in Paddle without the
   matching Worker secret is silent per request; a once-a-day cron in the Worker
   asks the Paddle API for failed or retrying notifications and inactive
-  destinations, and alerts if it finds any, if there is no destination at all,
-  or if it cannot ask.
+  destinations, and alerts on a failure the Worker has no record of
+  recovering (a replay leaves the original notification `failed` forever), on
+  an inactive destination, if there is no destination at all, or if it cannot
+  ask.
 
 Two silences remain, deliberately. A `rejected` request (no signature, a bad
 one, a stale one) leaves nothing, for the reason above. And a free (100%-code)
