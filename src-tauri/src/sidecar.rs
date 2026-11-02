@@ -2531,26 +2531,49 @@ fn parse_netstat_row(line: &str) -> Option<NetstatRow> {
     })
 }
 
-/// Shared scan behind `parse_netstat_listening_pid` and
-/// `parse_netstat_lingering_port` below: find the first row matching one of
-/// `ports` whose `listening` flag equals `listening`. The two callers differ
-/// only in which flag value they want and what they extract from the match.
+/// Shared scan behind the three `parse_netstat_*` functions below: find the
+/// first row on one of `ports` that `keep` accepts. The filter is applied
+/// inside the scan, not after it, so a row `keep` rejects (a PID-0 listener on
+/// 3478) never hides a later row it accepts (a named listener on 3479).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn find_netstat_row(output: &str, ports: &[u16], listening: bool) -> Option<NetstatRow> {
+fn find_netstat_row(
+    output: &str,
+    ports: &[u16],
+    keep: impl Fn(&NetstatRow) -> bool,
+) -> Option<NetstatRow> {
     output.lines().find_map(|line| {
         let row = parse_netstat_row(line)?;
-        (row.listening == listening && ports.contains(&row.local_port)).then_some(row)
+        (ports.contains(&row.local_port) && keep(&row)).then_some(row)
     })
 }
 
 /// Parse `netstat -ano` output for a process LISTENING on one of `ports`.
 /// Returns the first `(port, pid)` match in output order.
 ///
+/// A listening row with PID 0 is skipped: no process can be named or ended
+/// from it (#2343), and `parseNetstatListeningPids` in `src/server/platform.ts`
+/// skips it for the same reason, so `freePort()` never targets it either.
+/// `parse_netstat_hidden_listener_port` reports that population instead.
+///
 /// Kept out of the `cfg(windows)` block so its tests run on every CI platform;
 /// the allow keeps a non-Windows release build warning-free.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_netstat_listening_pid(output: &str, ports: &[u16]) -> Option<(u16, u32)> {
-    find_netstat_row(output, ports, true).map(|row| (row.local_port, row.pid))
+    find_netstat_row(output, ports, |row| row.listening && row.pid != 0)
+        .map(|row| (row.local_port, row.pid))
+}
+
+/// Find a port held by a LIVE listener whose owner Windows will not disclose:
+/// a listening row with PID 0 (#2343). Windows 11 build 26300 reports PID 0
+/// for every listener to an unelevated caller (`netstat -ano` and
+/// `Get-NetTCPConnection` alike), including one the caller itself holds.
+///
+/// It must be checked BEFORE the lingering scan. A live listener's old
+/// connections often sit in TIME_WAIT on the same port, and reporting the port
+/// as `Lingering` would tell the user no program is using it while one is.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_netstat_hidden_listener_port(output: &str, ports: &[u16]) -> Option<u16> {
+    find_netstat_row(output, ports, |row| row.listening && row.pid == 0).map(|row| row.local_port)
 }
 
 /// Find a port held by a lingering CONNECTION rather than by a live listener —
@@ -2563,7 +2586,7 @@ fn parse_netstat_listening_pid(output: &str, ports: &[u16]) -> Option<(u16, u32)
 /// to generic text in exactly the headline scenario.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_netstat_lingering_port(output: &str, ports: &[u16]) -> Option<u16> {
-    find_netstat_row(output, ports, false).map(|row| row.local_port)
+    find_netstat_row(output, ports, |row| !row.listening).map(|row| row.local_port)
 }
 
 /// Parse the image name out of `tasklist /NH /FO CSV` output.
@@ -2639,6 +2662,10 @@ fn run_system32_tool(exe: &str, args: &[&str]) -> Option<String> {
 pub(crate) enum PortHolder {
     /// A live process we can name and that a retry would terminate.
     Listener { port: u16, pid: u32, name: Option<String> },
+    /// A live process holds the port, but Windows reported its PID as 0, so it
+    /// can be neither named nor ended (#2343). Not `Lingering`: something IS
+    /// using the port, and the retry will not free it on its own.
+    HiddenListener { port: u16 },
     /// Windows TIME_WAIT: the old sidecar is gone, so there is no owning
     /// process, but the OS hasn't released the port yet. Nothing to kill;
     /// the retry works only because time passed.
@@ -2654,6 +2681,9 @@ impl PortHolder {
             PortHolder::Listener { port, pid, name } => {
                 format!("Port {port} appears to be held by {}.", describe_process(*pid, name.as_deref()))
             }
+            PortHolder::HiddenListener { port } => format!(
+                "Port {port} is in use by another program. Windows did not say which one."
+            ),
             PortHolder::Lingering { port } => format!(
                 "Port {port} is still tied up by a connection from a previous run \
                  (Windows releases these after a short delay). No other program is using it."
@@ -2661,12 +2691,13 @@ impl PortHolder {
         }
     }
 
-    /// A description of the process a retry would terminate, or `None` for
-    /// the `Lingering` case where there is nothing to kill.
+    /// A description of the process a retry would terminate, or `None` when
+    /// there is nothing a retry can end: `Lingering` has no process, and
+    /// `HiddenListener`'s process cannot be identified.
     pub(crate) fn killable_process(&self) -> Option<String> {
         match self {
             PortHolder::Listener { pid, name, .. } => Some(describe_process(*pid, name.as_deref())),
-            PortHolder::Lingering { .. } => None,
+            PortHolder::HiddenListener { .. } | PortHolder::Lingering { .. } => None,
         }
     }
 }
@@ -2683,11 +2714,14 @@ fn describe_process(pid: u32, name: Option<&str>) -> String {
 
 /// Describe what is holding one of `ports`.
 ///
-/// Two populations, and the second one is the headline case:
+/// Three populations, and the last one is the headline case:
 ///
 /// 1. **A live listener** — a stale sidecar, a `npm run dev:server`, an
 ///    unrelated app. Nameable, and `freePort()` will terminate it on retry.
-/// 2. **A lingering connection (Windows TIME_WAIT)** — the update case. The old
+/// 2. **A live listener Windows reports as PID 0** (#2343) — something holds
+///    the port, but it can be neither named nor ended. Re-verification below is
+///    skipped for it: there is no tasklist lookup for the PID to change across.
+/// 3. **A lingering connection (Windows TIME_WAIT)** — the update case. The old
 ///    sidecar is gone, so there is no LISTENING row and no owning process, but
 ///    Windows still refuses the bind. Nothing to kill; the retry works because
 ///    the state expires. Reporting this honestly is the difference between "we
@@ -2708,7 +2742,11 @@ fn describe_port_holder(ports: &[u16]) -> Option<PortHolder> {
     let netstat = run_system32_tool("netstat.exe", &["-ano"])?;
 
     let Some(first) = parse_netstat_listening_pid(&netstat, ports) else {
-        // No listener — check for the TIME_WAIT population before giving up.
+        // No nameable listener. A listener Windows hides the owner of comes
+        // before the TIME_WAIT check: see `parse_netstat_hidden_listener_port`.
+        if let Some(port) = parse_netstat_hidden_listener_port(&netstat, ports) {
+            return Some(PortHolder::HiddenListener { port });
+        }
         let port = parse_netstat_lingering_port(&netstat, ports)?;
         return Some(PortHolder::Lingering { port });
     };
@@ -3420,6 +3458,56 @@ Active Connections
         assert_eq!(parse_netstat_lingering_port(NETSTAT, &[3479]), None);
     }
 
+    // Windows 11 build 26300 reports PID 0 for every listener to an unelevated
+    // caller (#2343). Such a row must never be named (tasklist answers "System
+    // Idle Process" for PID 0) and never be offered for termination.
+    const HIDDEN_LISTENER: &str =
+        "  TCP    127.0.0.1:3479         127.0.0.1:0            LISTENING       0\n";
+
+    #[test]
+    fn a_pid_zero_listener_is_hidden_not_named() {
+        assert_eq!(parse_netstat_listening_pid(HIDDEN_LISTENER, &[3479]), None);
+        assert_eq!(parse_netstat_hidden_listener_port(HIDDEN_LISTENER, &[3479]), Some(3479));
+    }
+
+    #[test]
+    fn a_pid_zero_listener_does_not_hide_a_named_one_later_in_the_output() {
+        let out = format!(
+            "  TCP    127.0.0.1:3478         127.0.0.1:0            LISTENING       0\n{}",
+            "  TCP    127.0.0.1:3479         0.0.0.0:0              LISTENING       12345\n"
+        );
+        assert_eq!(parse_netstat_listening_pid(&out, &[3478, 3479]), Some((3479, 12345)));
+    }
+
+    #[test]
+    fn a_hidden_listener_with_time_wait_rows_is_found_by_the_hidden_scan() {
+        // The live listener's old connections linger on the same port. The
+        // lingering scan alone would match the TIME_WAIT row, which is why
+        // `describe_port_holder` runs the hidden scan first.
+        let out = format!(
+            "{HIDDEN_LISTENER}{}",
+            "  TCP    127.0.0.1:3479         127.0.0.1:52000        TIME_WAIT       0\n"
+        );
+        assert_eq!(parse_netstat_listening_pid(&out, &[3479]), None);
+        assert_eq!(parse_netstat_hidden_listener_port(&out, &[3479]), Some(3479));
+    }
+
+    #[test]
+    fn a_time_wait_row_is_not_a_hidden_listener() {
+        let out = "  TCP    127.0.0.1:3479         127.0.0.1:52000        TIME_WAIT       0\n";
+        assert_eq!(parse_netstat_hidden_listener_port(out, &[3479]), None);
+    }
+
+    #[test]
+    fn a_hidden_listener_offers_nothing_to_end() {
+        let holder = PortHolder::HiddenListener { port: 3479 };
+        assert_eq!(holder.killable_process(), None);
+        let message = holder.message();
+        assert!(message.contains("Port 3479"), "{message}");
+        assert!(!message.contains("PID"), "must not name a PID: {message}");
+        assert!(!message.contains("No other program"), "must not deny the holder: {message}");
+    }
+
     #[test]
     fn returns_none_for_empty_or_garbage_output() {
         assert_eq!(parse_netstat_listening_pid("", &[3479]), None);
@@ -3458,6 +3546,44 @@ Active Connections
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let port = listener.local_addr().expect("local_addr").port();
+
+        // Which branch runs is decided by what THIS machine reports for a socket
+        // we provably hold, read first and asserted on, never assumed. CI's
+        // Windows runner lists it with our PID. On the maintainer's PC (#2343)
+        // loopback listeners are either missing from the table or listed with
+        // PID 0, in an unelevated terminal as much as in a sandbox, while a
+        // system listener such as :135 keeps its real PID.
+        let netstat = run_system32_tool("netstat.exe", &["-ano"]).expect("netstat must run");
+        let Some(row) = find_netstat_row(&netstat, &[port], |row| row.listening) else {
+            // Missing is accepted only alongside that machine's signature: some
+            // other loopback listener parsed with PID 0. Output whose format
+            // drifted parses no rows at all, so it still fails here.
+            let hidden_signature =
+                netstat.lines().filter_map(parse_netstat_row).any(|r| r.listening && r.pid == 0);
+            assert!(
+                hidden_signature,
+                "netstat does not list the port this test is listening on:\n{netstat}"
+            );
+            // An unlisted holder cannot be described; the dialog's generic
+            // text is the honest answer, and Lingering would not be.
+            assert_eq!(describe_port_holder(&[port]), None);
+            return;
+        };
+        let reported_pid = row.pid;
+        if reported_pid == 0 {
+            assert_eq!(
+                describe_port_holder(&[port]),
+                Some(PortHolder::HiddenListener { port }),
+                "a listener whose owner Windows hides must be reported as hidden, never as \
+                 Lingering (which tells the user no program is using the port)"
+            );
+            return;
+        }
+        assert_eq!(
+            reported_pid,
+            std::process::id(),
+            "netstat attributed our own listener to another process"
+        );
 
         let holder = describe_port_holder(&[port]).expect("a held port must be described");
         let described = holder.message();
