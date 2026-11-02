@@ -93,17 +93,26 @@ export const EVENT_TTL_S = 4 * 24 * 60 * 60;
  * every retry of a failed sale. The timestamp is therefore not the replay
  * defence; the `evt:` completion marker and the permanent `order:` ledger are.
  *
- * Why this is safe only up to `EVENT_TTL_S - 3600`: the marker is written at
- * processing time P >= ts and lives until P + EVENT_TTL_S, so any capture
- * accepted here expires (at ts + this window) before its marker does. Keep it
- * there, and keep it longer than Paddle's retry span (3 days), or retries are
- * lost again.
+ * Why this is bounded by `EVENT_TTL_S - 3600`: for a delivery signed at or
+ * before the event was first processed, the marker is written at processing
+ * time P >= ts - 300 (the future side) and lives until P + EVENT_TTL_S, so a
+ * capture of it expires (at ts + this window) before its marker does; the hour
+ * of margin absorbs the 300 s. Keep it there, and keep it longer than Paddle's
+ * retry span (3 days), or retries are lost again.
  *
- * What a captured, validly signed body CAN still do inside the window is
- * re-run an outcome that writes no marker: `dropped`, `issue()`'s `ignored`
- * (a free order, an off-list sandbox buyer, an out-of-scope price) and every
- * 500. Rotating the webhook secret invalidates every captured request.
- * Accepted as #2341 (docs/security.md). */
+ * That argument does NOT cover a delivery signed AFTER first processing: an
+ * operator replay of an already-processed event, or a Paddle retry after a 200
+ * that was lost on the way back. Its `ts` is later than the marker's start, so
+ * a capture of it can outlive the marker. Once the marker lapses, replaying it
+ * re-runs the event: a full refund re-revokes an order restored by hand (ops
+ * §7 re-puts the marker at restore time to cover this), a notice is rewritten,
+ * and an alert is sent.
+ *
+ * Inside the window a captured body can also re-run any outcome that writes no
+ * marker at all: `dropped`, `issue()`'s `ignored` (a free order, an off-list
+ * sandbox buyer, an out-of-scope price) and every 500. Rotating the webhook
+ * secret invalidates every captured request. Accepted as #2341
+ * (docs/security.md). */
 export const TIMESTAMP_PAST_TOLERANCE_S = EVENT_TTL_S - 3600;
 /** `Paddle-Signature` freshness, future side: clock skew only. Paddle's SDK
  * uses 5 s; nothing legitimate is dated ahead, so this side stays narrow. */
@@ -206,6 +215,8 @@ export interface LogEntry {
   status?: number;
   notice?: NoticeStage;
   ref?: string;
+  /** Delivery check only: how many failed notifications are unresolved. */
+  unresolved?: number;
 }
 
 /** What issue()/revoke() produce. */
@@ -284,6 +295,13 @@ const modeOf = (isTest: boolean): string => (isTest ? "test" : "live");
 const orderKeyOf = (isTest: boolean, orderId: string): string =>
   `order:${modeOf(isTest)}:${orderId}`;
 const evtKeyOf = (isTest: boolean, eventId: string): string => `evt:${modeOf(isTest)}:${eventId}`;
+/** Operator acknowledgement of a failed notification the Worker can never
+ * resolve by itself (a sale fulfilled by hand, or a replay that `issue()`
+ * ignored). Written only by hand (ops §5b), never by the Worker, and never
+ * expires. Deliberately separate from `evt:`: a `done` marker would make a
+ * later replay answer `duplicate`, which would stop the §1b recovery replay
+ * from minting once the address is added. */
+const ackKeyOf = (isTest: boolean, eventId: string): string => `ack:${modeOf(isTest)}:${eventId}`;
 const noticeKeyOf = (isTest: boolean, stage: NoticeStage, ref: string): string =>
   `notice:${modeOf(isTest)}:${stage}:${ref}`;
 const txnLicPrefixOf = (isTest: boolean, txnId: string): string =>
@@ -1231,8 +1249,11 @@ const STAGE_TEXT: Partial<Record<FailStage, string>> = {
     "The daily delivery check found failed Paddle notifications the Worker has no record of recovering, or an inactive destination (or could not run)",
 };
 
-/** Alert text. Carries the coarse result/stage ONLY — never an email, a license
- *  id, a ref, or payload bytes, so an alert channel is not a PII sink. */
+/** Alert text. Carries the coarse result/stage — never an email, a license id,
+ *  a webhook ref, or payload bytes, so an alert channel is not a PII sink. The
+ *  one exception is the delivery check, which names how many notifications are
+ *  unresolved and the first one's Paddle `ntf_`/`evt_` id: Paddle ids, no PII,
+ *  and without them a new failure reads exactly like a standing one. */
 function alertBody(entry: LogEntry): string {
   const what = isConfigStage(entry.stage)
     ? "The Worker is refusing every webhook (misconfiguration) — no sale can complete"
@@ -1246,6 +1267,9 @@ function alertBody(entry: LogEntry): string {
   return [
     `Tandem license issuance: ${what}.`,
     `result=${entry.result} stage=${entry.stage ?? entry.notice ?? "-"} status=${entry.status ?? "-"}`,
+    ...(entry.stage === "delivery-check" && entry.unresolved !== undefined
+      ? [`unresolved=${entry.unresolved} first=${entry.ref ?? "-"}`]
+      : []),
     "",
     // The cron's own alert is about no particular delivery, so the retry tail
     // would mislead.
@@ -1385,14 +1409,28 @@ function isTestEnv(env: WorkerEnv): boolean {
   return (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production";
 }
 
-/** Paddle keeps a notification for 90 days; one day short of that keeps the
- * `from` bound inside what the list endpoint can return. */
+/** Paddle's list-notifications reference: "Notifications older than 90 days
+ * aren't retained" (developer.paddle.com/api-reference/notifications/
+ * list-notifications). One day short of that keeps the `from` bound inside what
+ * the endpoint can return. */
 const DELIVERY_CHECK_LOOKBACK_MS = 89 * 24 * 60 * 60 * 1000;
-const DELIVERY_CHECK_PER_PAGE = 200;
-/** 400 rows at up to two KV reads each stays under the Workers limit of about
- * 1,000 subrequests per invocation. More pages than this alerts rather than
- * reading as healthy. */
+/** 2 pages of 150 rows at up to three KV reads each (`evt:`, `ack:`, `order:`)
+ * is 900, under the Workers limit of 1,000 KV operations per invocation. More
+ * pages than this alerts rather than reading as healthy. */
+const DELIVERY_CHECK_PER_PAGE = 150;
 const DELIVERY_CHECK_MAX_PAGES = 2;
+
+/** The non-sale event types the Worker subscribes to, and so the only ones
+ * allowed to age out with their `evt:` marker. A missing, unknown or renamed
+ * type is judged like a sale: it stays unresolved until a marker, a ledger
+ * record or an operator ack proves otherwise, so a schema change cannot
+ * silently retire a failure. */
+const AGEING_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "adjustment.created",
+  "adjustment.updated",
+  "api_key.expiring",
+  "api_key.expired",
+]);
 
 /**
  * Whether a failed or `needs_retry` notification still needs a human.
@@ -1402,13 +1440,16 @@ const DELIVERY_CHECK_MAX_PAGES = 2;
  * recovered failure. A failure counts as recovered when the Worker itself
  * recorded the outcome: the event's `evt:` completion marker, or, for a sale,
  * the permanent `order:` ledger record showing the email went out or the order
- * was refunded. Everything the check cannot prove recovered is `unresolved`,
- * because a check that guesses healthy is worse than none.
+ * was refunded. An operator `ack:` key resolves any type: it is how a failure
+ * the Worker can never resolve itself (a sale fulfilled by hand, a replay that
+ * `issue()` ignored) stops repeating for 89 days. Everything the check cannot
+ * prove recovered is `unresolved`, because a check that guesses healthy is
+ * worse than none.
  *
- * `ignored` is the one exception: an adjustment older than `EVENT_TTL_S` may
- * have outlived its marker, so it is no longer evaluated (accepted as #2340;
- * the §5b reconcile is the backstop). A sale never ages out this way, because
- * its ledger record is permanent.
+ * `ignored` is the one exception: a known non-sale event (`AGEING_EVENT_TYPES`)
+ * older than `EVENT_TTL_S` may have outlived its marker, so it is no longer
+ * evaluated (accepted as #2340; the §5b reconcile is the backstop). A sale
+ * never ages out this way, because its ledger record is permanent.
  */
 async function notificationState(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1420,9 +1461,8 @@ async function notificationState(
   try {
     const payload = note?.payload;
     if (typeof payload !== "object" || payload === null) return "unresolved";
-    const eventType = payload.event_type;
-    const isSale = eventType === "transaction.completed";
-    if (!isSale) {
+    const ages = AGEING_EVENT_TYPES.has(payload.event_type);
+    if (ages) {
       const occurredMs = typeof note.occurred_at === "string" ? Date.parse(note.occurred_at) : NaN;
       if (!Number.isFinite(occurredMs)) return "unresolved";
       if (nowMs - occurredMs > EVENT_TTL_S * 1000) return "ignored";
@@ -1430,7 +1470,8 @@ async function notificationState(
     const eventId = payload.event_id;
     if (typeof eventId !== "string" || !EVT_ID.test(eventId)) return "unresolved";
     if ((await ledgerKv.get(evtKeyOf(isTest, eventId))) === "done") return "resolved";
-    if (isSale) {
+    if ((await ledgerKv.get(ackKeyOf(isTest, eventId))) !== null) return "resolved";
+    if (!ages) {
       const txnId = payload.data?.id;
       if (typeof txnId !== "string" || !TXN_ID.test(txnId)) return "unresolved";
       const raw = await ledgerKv.get(orderKeyOf(isTest, txnId));
@@ -1468,7 +1509,8 @@ async function listFailedNotifications(
     const pagination = body?.meta?.pagination;
     if (!Array.isArray(body?.data) || typeof pagination?.has_more !== "boolean") return null;
     notes.push(...body.data);
-    // `next` is present even on the last page, so `has_more` decides.
+    // `next` is "Always returned, even if `has_more` is `false`" (the same
+    // list-notifications reference), so `has_more` decides.
     if (!pagination.has_more) return notes;
     if (page >= DELIVERY_CHECK_MAX_PAGES) return null;
     // The API key goes with every request, so never follow a link off Paddle.
@@ -1486,6 +1528,8 @@ async function listFailedNotifications(
 export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<boolean> {
   const base = paddleApiBase(env.PADDLE_API_KEY);
   let bad: boolean;
+  let unresolved = 0;
+  let firstRef: string | undefined;
   if (!base || !env.PADDLE_API_KEY) {
     bad = true; // a check that cannot run must say so, or it reads as healthy
   } else {
@@ -1496,35 +1540,74 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
       bad = true; // an API failure or an incomplete list alerts too, for the same reason
     } else {
       const isTest = isTestEnv(env);
-      let unresolved = false;
       for (const note of notes) {
-        if ((await notificationState(note, env.LEDGER_KV, isTest, nowMs)) === "unresolved") {
-          unresolved = true;
-          break;
+        if ((await notificationState(note, env.LEDGER_KV, isTest, nowMs)) !== "unresolved") {
+          continue;
         }
+        unresolved++;
+        firstRef ??= firstRefOf(note);
       }
-      bad =
-        unresolved ||
-        // No destination at all is the quietest way sales stop.
-        settings.data.length === 0 ||
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        settings.data.some((d: any) => d?.active === false);
+      bad = unresolved > 0 || !settings.data.some(deliversSales);
     }
   }
   if (!bad) return false;
-  return raiseDeliveryCheckAlert(env, nowMs);
+  return raiseDeliveryCheckAlert(env, nowMs, {
+    ...(unresolved > 0 ? { unresolved, ref: firstRef ?? "-" } : {}),
+  });
+}
+
+/** The notification's own `ntf_` id, else its event's `evt_` id, so an alert
+ * can tell a new failure from a standing one. Shape-checked: it reaches the
+ * alert channel, which must carry Paddle ids only. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function firstRefOf(note: any): string {
+  if (typeof note?.id === "string" && /^ntf_[a-z0-9]{1,64}$/.test(note.id)) return note.id;
+  const evt = note?.payload?.event_id;
+  return typeof evt === "string" && EVT_ID.test(evt) ? evt : "-";
+}
+
+/**
+ * Whether one notification destination would deliver a sale to a Worker.
+ *
+ * Shape from Paddle's list-notification-settings reference
+ * (developer.paddle.com/api-reference/notification-settings/
+ * list-notification-settings): `active` is a boolean, `type` is `url` or
+ * `email`, and `subscribed_events` is an array of objects whose `name` is the
+ * event type. `active` must be strictly `true`: a missing or drifted field must
+ * not read as healthy. The destination URL is deliberately NOT matched: the
+ * Worker does not know its own public URL, so a destination pointed at the
+ * wrong place still passes here and is caught by its failed deliveries instead.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function deliversSales(d: any): boolean {
+  return (
+    d?.active === true &&
+    d.type === "url" &&
+    Array.isArray(d.subscribed_events) &&
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    d.subscribed_events.some((e: any) => e?.name === "transaction.completed")
+  );
 }
 
 /** Log and alert the cron's own entry. Alerts directly rather than via
- * isAlertable: this entry is never a webhook's. */
-async function raiseDeliveryCheckAlert(env: WorkerEnv, nowMs: number): Promise<boolean> {
+ * isAlertable: this entry is never a webhook's. `bypassThrottle` is for the
+ * path where the check itself threw: that alert is the only signal that the
+ * check is broken, so the 5-minute slot must not swallow it. */
+async function raiseDeliveryCheckAlert(
+  env: WorkerEnv,
+  nowMs: number,
+  extra: { unresolved?: number; ref?: string } = {},
+  bypassThrottle = false,
+): Promise<boolean> {
   const entry: LogEntry = {
     result: "error",
     ts: Math.floor(nowMs / 1000),
     stage: "delivery-check",
+    ...extra,
   };
   console.log(JSON.stringify(entry));
-  if (!shouldAlert(alertThrottleKey(entry), nowMs)) return false;
+  const allowed = shouldAlert(alertThrottleKey(entry), nowMs);
+  if (!allowed && !bypassThrottle) return false;
   await sendOperatorAlert(env, entry);
   return true;
 }
@@ -1671,11 +1754,12 @@ export default {
 
   async scheduled(_controller: unknown, env: WorkerEnv, ctx?: ExecutionContext): Promise<void> {
     const run = runDeliveryCheck(env, Date.now()).catch(async () => {
-      // A check that cannot run must never read as healthy, so a throw alerts
-      // like any other failure (same throttle). The alert itself must not fail
-      // the cron.
+      // A check that cannot run must never read as healthy, so a throw alerts,
+      // past the throttle: an earlier alert in the same 5-minute slot may have
+      // been about something else entirely. The alert itself must not fail the
+      // cron.
       try {
-        return await raiseDeliveryCheckAlert(env, Date.now());
+        return await raiseDeliveryCheckAlert(env, Date.now(), {}, true);
       } catch {
         return false;
       }
