@@ -22,9 +22,13 @@
  *    stale timestamp → 401, never alerted (anyone can send one). A validly
  *    signed but unusable payload is `dropped`: Paddle signed it, so it is
  *    schema drift, not an attacker.
- *  - Three idempotency layers: per-attempt timestamp freshness, an `event_id`
- *    completion set (blocks replays of fully-processed events), and the durable
- *    transaction ledger (blocks re-mint; drives retry-based recovery). `issue()`
+ *  - Three idempotency layers: a timestamp window (300 s into the future, but
+ *    nearly `EVENT_TTL_S` into the past so a late Paddle retry still verifies;
+ *    it bounds how long a captured body stays usable, not whether it replays),
+ *    an `event_id` completion set (blocks replays of fully-processed events),
+ *    and the durable transaction ledger (blocks re-mint; drives retry-based
+ *    recovery). Outcomes that write no completion marker (`dropped`,
+ *    `issue()`'s `ignored`, every 500) stay replayable inside the window. `issue()`
  *    and `revoke()` each re-read the ledger immediately before their first
  *    commit (see the "pre-commit recheck" comments below) so a same-transaction
  *    write from a concurrent request — another `transaction.completed`
@@ -51,6 +55,7 @@ import {
   keyIdOfPkcs8Ed25519,
   type SignBytes,
   signLicense,
+  type TimestampTolerance,
   verifyPaddleSignature,
   webCryptoSigner,
 } from "./crypto.js";
@@ -77,17 +82,32 @@ export function _setTrustedKeyIdsForTests(ids: readonly string[] = TRUSTED_KEY_I
   signerCache = null;
 }
 
-/** `Paddle-Signature` freshness tolerance. Paddle's SDK uses 5 s; 300 s allows
- * for clock skew. Whether a retry or a dashboard replay carries a FRESH `ts` is
- * unverified (U1, docs/licensing-operations.md §8) and is a deploy gate: if it
- * keeps the original, widen this to 4 days and lean on the `evt:` marker and
- * the ledger for replay defence. */
-export const TIMESTAMP_TOLERANCE_S = 300;
 /** TTL for the `event_id` completion marker: Paddle's live retry span is 60
  * attempts over 3 days, plus a day. A late marker miss is harmless — the
  * transaction ledger still answers `duplicate` without re-minting or
  * re-emailing. */
 export const EVENT_TTL_S = 4 * 24 * 60 * 60;
+/** `Paddle-Signature` freshness, past side. The sandbox run (#2244) could not
+ * prove that a live automatic retry carries a fresh `ts` (U1), and a retry can
+ * arrive up to 3 days after the first attempt, so a 300 s window could refuse
+ * every retry of a failed sale. The timestamp is therefore not the replay
+ * defence; the `evt:` completion marker and the permanent `order:` ledger are.
+ *
+ * Why this is safe only up to `EVENT_TTL_S - 3600`: the marker is written at
+ * processing time P >= ts and lives until P + EVENT_TTL_S, so any capture
+ * accepted here expires (at ts + this window) before its marker does. Keep it
+ * there, and keep it longer than Paddle's retry span (3 days), or retries are
+ * lost again.
+ *
+ * What a captured, validly signed body CAN still do inside the window is
+ * re-run an outcome that writes no marker: `dropped`, `issue()`'s `ignored`
+ * (a free order, an off-list sandbox buyer, an out-of-scope price) and every
+ * 500. Rotating the webhook secret invalidates every captured request.
+ * Accepted as #2341 (docs/security.md). */
+export const TIMESTAMP_PAST_TOLERANCE_S = EVENT_TTL_S - 3600;
+/** `Paddle-Signature` freshness, future side: clock skew only. Paddle's SDK
+ * uses 5 s; nothing legitimate is dated ahead, so this side stays narrow. */
+export const TIMESTAMP_FUTURE_TOLERANCE_S = 300;
 
 /** Linked from the license email; paths agreed with the tandem-website pages. */
 const TERMS_URL = "https://tandem.ink/terms";
@@ -220,7 +240,7 @@ export interface IssuanceDeps {
   isTest: boolean;
   now: () => number;
   newLicenseId: () => string;
-  toleranceS?: number;
+  tolerance?: TimestampTolerance;
   log?: (entry: LogEntry) => void;
 }
 
@@ -664,7 +684,10 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
       rawBody,
       deps.webhookSecret,
       nowMs,
-      deps.toleranceS ?? TIMESTAMP_TOLERANCE_S,
+      deps.tolerance ?? {
+        pastS: TIMESTAMP_PAST_TOLERANCE_S,
+        futureS: TIMESTAMP_FUTURE_TOLERANCE_S,
+      },
     );
     if (!ok) return reply(401, "rejected");
 

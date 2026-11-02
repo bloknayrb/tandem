@@ -27,6 +27,8 @@ import issuanceWorker, {
   resendFromProblem,
   sandboxSigningAllowed,
   supportEmailProblem,
+  TIMESTAMP_FUTURE_TOLERANCE_S,
+  TIMESTAMP_PAST_TOLERANCE_S,
   TRUSTED_KEY_IDS,
 } from "../../infra/license-issuance-worker/src/worker.js";
 import {
@@ -326,8 +328,9 @@ describe("crypto: production WebCrypto signing path", () => {
 describe("crypto: verifyPaddleSignature", () => {
   const body = '{"event_id":"evt_1"}';
   const good = signPaddle(NOW_S, body);
+  const tolerance = { pastS: TIMESTAMP_PAST_TOLERANCE_S, futureS: TIMESTAMP_FUTURE_TOLERANCE_S };
   const v = (header: string | null, o: { body?: string; secret?: string; now?: number } = {}) =>
-    verifyPaddleSignature(header, o.body ?? body, o.secret ?? SECRET, o.now ?? NOW, 300);
+    verifyPaddleSignature(header, o.body ?? body, o.secret ?? SECRET, o.now ?? NOW, tolerance);
 
   it("accepts a vector computed exactly as the Paddle Node SDK computes it", async () => {
     // Hardcoded: secret, ts, body and h1 from the SDK's construction.
@@ -336,7 +339,10 @@ describe("crypto: verifyPaddleSignature", () => {
       .update('1700000000:{"a":1}')
       .digest("hex");
     expect(
-      await verifyPaddleSignature(`ts=1700000000;h1=${h1}`, '{"a":1}', "pdl_ntfset_vector", NOW, 5),
+      await verifyPaddleSignature(`ts=1700000000;h1=${h1}`, '{"a":1}', "pdl_ntfset_vector", NOW, {
+        pastS: 5,
+        futureS: 5,
+      }),
     ).toBe(true);
   });
 
@@ -354,10 +360,37 @@ describe("crypto: verifyPaddleSignature", () => {
     expect(await v(`ts=${NOW_S};h1=${good.slice(0, 62)}`)).toBe(false);
     expect(await v(`h1=${good}`)).toBe(false);
     expect(await v(`ts=${NOW_S};ts=${NOW_S};h1=${good}`)).toBe(false);
-    expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW + 600_000 })).toBe(false);
     expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW - 600_000 })).toBe(false);
     expect(await v(`ts=12ab;h1=${good}`)).toBe(false);
     expect(await v(null)).toBe(false);
+  });
+
+  // The window is asymmetric (U1): a Paddle retry may carry its original `ts`
+  // for up to 3 days, while nothing legitimate is dated ahead. Each case moves
+  // the verifier's clock instead of re-signing, so `ts` and `h1` stay fixed.
+  it("accepts a ts 3 days in the past (a late retry keeping its original ts)", async () => {
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW + 3 * 86_400_000 })).toBe(true);
+  });
+
+  it("refuses a ts older than the past tolerance", async () => {
+    const tooOld = NOW + (TIMESTAMP_PAST_TOLERANCE_S + 1) * 1000;
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: tooOld })).toBe(false);
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: tooOld - 2000 })).toBe(true);
+  });
+
+  it("refuses a ts 301 s in the future and accepts one 299 s ahead", async () => {
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW - 301_000 })).toBe(false);
+    expect(await v(`ts=${NOW_S};h1=${good}`, { now: NOW - 299_000 })).toBe(true);
+  });
+
+  it("the past tolerance expires before the completion marker a capture would meet", () => {
+    // The marker is written at processing time P >= ts and lives until
+    // P + EVENT_TTL_S, so a capture accepted at ts + window must be dead
+    // before that marker is. An hour of margin covers clock skew.
+    expect(TIMESTAMP_PAST_TOLERANCE_S).toBeLessThanOrEqual(EVENT_TTL_S - 3600);
+    // And it must still cover Paddle's live retry span (3 days), or U1 returns.
+    expect(TIMESTAMP_PAST_TOLERANCE_S).toBeGreaterThan(3 * 24 * 60 * 60);
+    expect(TIMESTAMP_FUTURE_TOLERANCE_S).toBe(300);
   });
 
   it("a one-whitespace body tamper fails, and a base64-decoded secret fails", async () => {
