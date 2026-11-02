@@ -223,6 +223,7 @@ interface LedgerRec {
   updateWindowEnd: string | null;
   emailSent: boolean;
   refunded: boolean;
+  version?: string;
 }
 
 const ledgerRec = (deps: TestDeps, txnId = "txn_1", mode = "live"): LedgerRec =>
@@ -547,6 +548,61 @@ describe("handleIssuance: idempotency & recovery", () => {
     expect(res.status).toBe(500);
     expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "ledger" });
     expect(deps.sendEmail).not.toHaveBeenCalled();
+  });
+
+  // --- `version` in the ledger (ops §0, decision 3) ---------------------------
+  const storedRecord = (extra: Record<string, unknown>) =>
+    JSON.stringify({
+      orderId: "txn_1",
+      licenseId: "lic-old",
+      email: "buyer@example.com",
+      type: "personal",
+      createdAt: new Date(NOW).toISOString(),
+      updateWindowEnd: null,
+      emailSent: false,
+      refunded: false,
+      ...extra,
+    });
+
+  it("a mint stores the version it signed under", async () => {
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(ledgerRec(deps).version).toBe(LICENSE_VERSION);
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
+    expect(decodeBlob(blob).metadata.version).toBe(LICENSE_VERSION);
+  });
+
+  it("a legacy record with no version re-drives as 1.0 in both the blob and the entitlement", async () => {
+    const deps = baseDeps();
+    deps.ledgerKv.map.set("order:live:txn_1", storedRecord({}));
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(lastLog(deps).result).toBe("duplicate");
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
+    expect(blobVerifies(blob)).toBe(true);
+    expect(decodeBlob(blob).metadata.version).toBe("1.0");
+    expect(JSON.parse(deps.entitlementKv.map.get("lic-old") as string).version).toBe("1.0");
+  });
+
+  it("a re-drive signs the record's stored version, not today's LICENSE_VERSION", async () => {
+    // Without this the re-sent blob would diverge from the one the buyer holds
+    // the first time LICENSE_VERSION moves.
+    const deps = baseDeps();
+    deps.ledgerKv.map.set("order:live:txn_1", storedRecord({ version: "7.3" }));
+    await handleIssuance(makeRequest(paidBody()), deps);
+    const blob = deps.sendEmail.mock.calls[0][1] as string;
+    expect(decodeBlob(blob).metadata.version).toBe("7.3");
+    expect(JSON.parse(deps.entitlementKv.map.get("lic-old") as string).version).toBe("7.3");
+  });
+
+  it("an empty, malformed or non-string version is a corrupt record, never the default", async () => {
+    for (const version of ["", "1", "v1.0", 1, null]) {
+      const deps = baseDeps();
+      deps.ledgerKv.map.set("order:live:txn_1", storedRecord({ version }));
+      const res = await handleIssuance(makeRequest(paidBody()), deps);
+      expect(res.status, JSON.stringify(version)).toBe(500);
+      expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "ledger" });
+      expect(deps.sendEmail).not.toHaveBeenCalled();
+    }
   });
 
   it("a failed email logs stage 'email' with the upstream status", async () => {

@@ -83,9 +83,18 @@ supporting two schemas in `verifyLicenseSignature` forever:
    2026-10-15). Paddle, as merchant of record, still collects the buyer's name
    at checkout; the Worker never reads it. `version` stays `"1.0"`: no license
    with a `name` was ever issued, so there is no old shape to tell apart.
-3. **Missing fields.** *Still open.* `version` is not stored in the ledger (so a
-   future `LICENSE_VERSION` change would make a re-signed blob diverge from the
-   one the buyer holds), and there is no `orderId`.
+3. **Missing fields.** *Decided 2026-11-02: `version` is stored in the ledger.*
+   Each new ledger record carries the `version` its license was signed under,
+   and a re-drive re-signs with that, so a future `LICENSE_VERSION` change
+   cannot make a resent blob diverge from the one the buyer holds. A record
+   written before then has no `version` and is read as `"1.0"`, which is exact:
+   `LICENSE_VERSION` has been `"1.0"` since it was introduced. A stored
+   `version` that is not `<digits>.<digits>` makes the record corrupt
+   (`stage: "ledger"`), never silently `"1.0"`. **`orderId` is not added to the
+   signed bytes.** The verifier canonicalizes whatever keys are present, so it
+   could be added later without a schema break, but doing so would make
+   [security.md](security.md#licensing-activation-v10)'s "does not carry an
+   order ID" false, and that sentence would have to change with it.
 
 Then:
 
@@ -1098,10 +1107,11 @@ For a reversed chargeback, credit or adjustment (`chargeback-reverse`,
 2. Re-`PUT` the live entitlement for the ledger's `licenseId` and every
    `licenseId` under `txnlic:live:<txn_id>:`. The value is fully derivable from
    the record (`entitlementValue`): `status` is the record's `type`,
-   `personal` or `grandfathered`:
+   `personal` or `grandfathered`, and `version` is the record's `version`
+   (`"1.0"` when the record has none, i.e. it predates 2026-11-02):
 
    ```bash
-   npx wrangler@4.130.0 kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"personal","version":"1.0"}' \
+   npx wrangler@4.130.0 kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"<type>","version":"<version>"}' \
      --remote --namespace-id <LICENSE_KV id>
    ```
 

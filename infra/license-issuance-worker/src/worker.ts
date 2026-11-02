@@ -262,7 +262,17 @@ interface LedgerRecord {
   updateWindowEnd: string | null;
   emailSent: boolean;
   refunded: boolean;
+  /** The `LICENSE_VERSION` the license was signed under, so a re-drive after a
+   * future version bump re-signs the bytes the buyer already holds (ops §0,
+   * decision 3). Absent on records written before 2026-11-02 and on refund
+   * tombstones; read through `versionOf`. */
+  version?: string;
 }
+
+/** `LICENSE_VERSION` has been "1.0" since it was introduced (321c619c), so a
+ * record with no stored version was signed under exactly that. */
+const LEGACY_LICENSE_VERSION = "1.0";
+const versionOf = (rec: LedgerRecord): string => rec.version ?? LEGACY_LICENSE_VERSION;
 
 // ---------------------------------------------------------------------------
 // Mode-scoped ledger keys. EVERY ledger key carries the test/live mode segment
@@ -295,7 +305,10 @@ function isLedgerRecord(v: unknown): v is LedgerRecord {
     typeof r.createdAt === "string" &&
     (r.updateWindowEnd === null || typeof r.updateWindowEnd === "string") &&
     typeof r.emailSent === "boolean" &&
-    typeof r.refunded === "boolean"
+    typeof r.refunded === "boolean" &&
+    // Present means signed bytes depend on it, so anything unusable is corrupt
+    // rather than silently replaced by the legacy default.
+    (r.version === undefined || (typeof r.version === "string" && /^\d+\.\d+$/.test(r.version)))
   );
 }
 
@@ -347,7 +360,7 @@ function entitlementValue(rec: LedgerRecord): string {
   return JSON.stringify({
     updateWindowEnd: rec.updateWindowEnd,
     status: rec.type,
-    version: LICENSE_VERSION,
+    version: versionOf(rec),
   });
 }
 
@@ -358,7 +371,7 @@ function metadataFrom(rec: LedgerRecord, keyId: string) {
     type: rec.type,
     createdAt: rec.createdAt,
     expiresAt: rec.updateWindowEnd,
-    version: LICENSE_VERSION,
+    version: versionOf(rec),
     keyId,
   };
 }
@@ -492,6 +505,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
     updateWindowEnd: null,
     emailSent: false,
     refunded: false,
+    version: LICENSE_VERSION,
   };
 
   const blob = await signLicense(metadataFrom(rec, deps.keyId), deps.signBytes);
