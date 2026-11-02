@@ -64,7 +64,7 @@ outcome is keep, replace or retire.
 | Date | Issue | Checkpoint |
 |---|---|---|
 | monthly — next 2026-10-29 | #1506 | Has Claude Code gone modern-only? Last pass 2026-09-29: no |
-| 2026-11-01 | #1345 | Revisit packaged-desktop WebDriver smoke (workflow disabled 2026-08-08) |
+| 2026-11-01 | #1345 | Packaged-desktop WebDriver smoke: reviewed 2026-11-02, **retire** (no green run since 2026-07-13 and no fix attempted, so the issue's own rule applies); deleting the workflow and spec is still to do |
 | 2026-11-09 | #1363 | Native theme push on Linux |
 | 2026-11-30 | #1687 | Converge the lifecycle result families |
 | 2026-12-01 | #1728 | Make `coverage` a required check, or record that its floors stay advisory |
@@ -83,9 +83,9 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 
 - **Security findings:** #2323 (the dated gate for #1949's accepted signing-job isolation bound in [security.md](security.md#open-findings), revisit 2027-04-28), #1822 (the v1-review Lows), #2160 (start-at-login registration scope on Windows), #2161 (desktop crash-report scrubbing). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit: the Linux fix landed in #2326 and waits on a desktop smoke run; macOS is accepted), #1994, #1869, #2041.
-- **Correctness:** #1982, #1980, #1632, #2009 (#2324 landed its tombstone half; whole-envelope cleanup still open), #1920.
+- **Correctness:** #1982, #1980, #2009 (#2324 landed its tombstone half; whole-envelope cleanup still open), #1920.
 - **Distribution and setup:** #1533, #1610, #1704, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch), #2186 (a beta report's diagnosis tracker), #2286 (an auto-launched Claude can't call Tandem tools when `claude -p` starts in `default` permission mode; #2326 landed the fix, a real desktop run still needs human evidence).
-- **Licensing and issuance:** #2244 (the Paddle sandbox run that must precede the live issuance Worker; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
+- **Licensing and issuance:** #2244 (the Paddle sandbox run; its pre-live Worker fixes merged in #2344, and the remaining U-checks re-run on master's Worker before the live deploy; needs a human), #2245 (the KV double-mint / refund race; accepted for launch in [security.md](security.md#open-findings), revisit 2027-01-31).
 - **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1911, #1937, #2073, #1333.
 - **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + TS 7; zod 4 landed with #2098), #2099, #2100.
@@ -176,7 +176,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** UNMET. #1632 is open.
+- **Zero open position- or anchor-related bugs.** UNMET only by #1754, a Word-comment mis-anchor on the `.docx` path, which ships dark (#1632 closed).
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**
