@@ -132,12 +132,20 @@ export function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
+/** How far a `ts` may sit from the verifier's clock, per direction, in seconds.
+ * The two sides differ on purpose: a retry can carry an old `ts`, while nothing
+ * legitimate carries one from the future beyond clock skew. */
+export interface TimestampTolerance {
+  pastS: number;
+  futureS: number;
+}
+
 export async function verifyPaddleSignature(
   header: string | null,
   rawBody: string,
   secret: string,
   nowMs: number,
-  toleranceS: number,
+  tolerance: TimestampTolerance,
 ): Promise<boolean> {
   if (!header || !secret) return false;
   let ts: string | null = null;
@@ -159,7 +167,8 @@ export async function verifyPaddleSignature(
   if (!/^\d+$/.test(ts)) return false;
   const tsNum = Number(ts);
   if (!Number.isSafeInteger(tsNum)) return false;
-  if (Math.abs(nowMs / 1000 - tsNum) > toleranceS) return false;
+  const ageS = nowMs / 1000 - tsNum;
+  if (ageS > tolerance.pastS || -ageS > tolerance.futureS) return false;
 
   const expected = await hmacSha256(
     textEncoder.encode(secret),
