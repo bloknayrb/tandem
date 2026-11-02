@@ -1880,6 +1880,7 @@ describe("default fetch wiring (env → deps)", () => {
     id: "ntfset_1",
     type: "url",
     destination: "https://issuance.example/",
+    traffic_source: "platform",
     active: true,
     subscribed_events: [
       { name: "transaction.completed", description: "", group: "Transaction" },
@@ -2011,7 +2012,10 @@ describe("default fetch wiring (env → deps)", () => {
       const hooks = callsTo(f, HOOK);
       expect(alerted).toBe(hooks.length === 1);
       const text = alerted ? (JSON.parse(hooks[0][1]?.body as string).text as string) : "";
-      return { alerted, f, text };
+      // The causes line, "" when quiet: every alert must name at least one.
+      const causes = /^causes=(.*)$/m.exec(text)?.[1] ?? "";
+      expect(alerted, "an alert with no causes line").toBe(causes !== "");
+      return { alerted, f, text, causes };
     } finally {
       spy.mockRestore();
     }
@@ -2322,6 +2326,56 @@ describe("default fetch wiring (env → deps)", () => {
     expect(dest.text).not.toContain("unresolved=");
   });
 
+  it("delivery check: the alert names every cause that applies", async () => {
+    const unresolved = await deliveryCheck({ failed: [failedNote()] });
+    expect(unresolved.causes).toBe("unresolved");
+    const dest = await deliveryCheck({ settings: [destination({ active: false })] });
+    expect(dest.causes).toBe("destination");
+    // Both at once: both are named.
+    const both = await deliveryCheck({
+      failed: [failedNote()],
+      settings: [destination({ traffic_source: "simulation" })],
+    });
+    expect(both.causes).toBe("destination,unresolved");
+    // No key: cannot-run alone.
+    const noKey = await deliveryCheck({}, () => {}, { PADDLE_API_KEY: undefined });
+    expect(noKey.causes).toBe("cannot-run");
+    // The list fails but settings load: cannot-run, and our destination is
+    // still judged.
+    const listFails = await deliveryCheck({
+      pages: [{}],
+      pageStatus: [500],
+      settings: [destination({ active: false })],
+    });
+    expect(listFails.causes).toBe("cannot-run,destination");
+    // Settings fail but the list loads: the unresolved note is still counted.
+    const settingsFail = await deliveryCheck({ failed: [failedNote()], settingsStatus: 500 });
+    expect(settingsFail.causes).toBe("cannot-run,unresolved");
+    // A page cap overrun is cannot-run too.
+    const capped = await deliveryCheck({
+      pages: [
+        { data: [], meta: morePage() },
+        { data: [], meta: morePage("https://api.paddle.com/notifications?after=ntf_p2") },
+      ],
+    });
+    expect(capped.causes).toBe("cannot-run");
+  });
+
+  it("scheduled: a thrown check alerts with cause cannot-run", async () => {
+    _resetAlertThrottleForTests();
+    const f = deliveryFetch({});
+    vi.stubGlobal("fetch", f);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: HOOK });
+    Object.defineProperty(env, "PADDLE_API_KEY", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    await runScheduled(env);
+    const text = JSON.parse(callsTo(f, HOOK)[0][1]?.body as string).text as string;
+    expect(text).toMatch(/^causes=cannot-run$/m);
+  });
+
   it("PADDLE_NOTIFICATION_SETTING_ID is not a webhook guard: unset, a sale still issues", async () => {
     vi.stubGlobal("fetch", routedFetch());
     const env = makeEnv({ PADDLE_NOTIFICATION_SETTING_ID: undefined });
@@ -2334,8 +2388,16 @@ describe("default fetch wiring (env → deps)", () => {
   });
 
   it("delivery check: passes only when OUR pinned destination delivers sales", async () => {
-    const quiet = async (settings: unknown[], env: Record<string, unknown> = {}) =>
-      !(await deliveryCheck({ settings }, () => {}, env)).alerted;
+    // Quiet, or else an alert whose only cause is `destination`.
+    const quiet = async (settings: unknown[], env: Record<string, unknown> = {}) => {
+      const { alerted, causes } = await deliveryCheck({ settings }, () => {}, env);
+      if (alerted) expect(causes).toBe("destination");
+      return !alerted;
+    };
+    // traffic_source: only real-sale traffic counts.
+    expect(await quiet([destination({ traffic_source: "all" })])).toBe(true);
+    expect(await quiet([destination({ traffic_source: "simulation" })])).toBe(false);
+    expect(await quiet([destination({ traffic_source: undefined })])).toBe(false);
     // The pinned entry (ntfset_1, makeEnv's PADDLE_NOTIFICATION_SETTING_ID) good → quiet.
     expect(await quiet([destination()])).toBe(true);
     expect(await quiet([destination({ id: "ntfset_other" }), destination()])).toBe(true);

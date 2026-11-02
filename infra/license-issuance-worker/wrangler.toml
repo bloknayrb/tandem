@@ -59,7 +59,8 @@ PADDLE_PRICE_IDS = "REPLACE_WITH_PADDLE_PRICE_IDS"
 # The id (`ntfset_...`) of THIS Worker's Paddle notification destination, from
 # the dashboard or `GET /notification-settings`, set after the destination is
 # created. The daily delivery check alerts unless that one entry is active, a
-# url destination and subscribed to transaction.completed; another healthy
+# url destination with traffic_source platform or all, and subscribed to
+# transaction.completed; another healthy
 # destination does not stand in for it. Unset, malformed or still this
 # placeholder makes the CHECK alert every day; it never 503s a webhook.
 PADDLE_NOTIFICATION_SETTING_ID = "REPLACE_WITH_NOTIFICATION_SETTING_ID"

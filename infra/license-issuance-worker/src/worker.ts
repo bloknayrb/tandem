@@ -217,7 +217,15 @@ export interface LogEntry {
   ref?: string;
   /** Delivery check only: how many failed notifications are unresolved. */
   unresolved?: number;
+  /** Delivery check only: every reason it alerted (see `DeliveryCheckCause`). */
+  causes?: DeliveryCheckCause[];
 }
+
+/** Why the delivery check alerted. `cannot-run`: no usable key, an API or page
+ * failure, or a throw. `destination`: this Worker's pinned destination would
+ * not deliver a real sale, or its id is unset. `unresolved`: failed
+ * notifications nothing records as recovered. */
+export type DeliveryCheckCause = "cannot-run" | "destination" | "unresolved";
 
 /** What issue()/revoke() produce. */
 type EventOutcome = Exclude<ResultKind, "rejected" | "error" | "noticed"> | Failure | Notice;
@@ -1272,6 +1280,9 @@ function alertBody(entry: LogEntry): string {
   return [
     `Tandem license issuance: ${what}.`,
     `result=${entry.result} stage=${entry.stage ?? entry.notice ?? "-"} status=${entry.status ?? "-"}`,
+    ...(entry.stage === "delivery-check" && entry.causes?.length
+      ? [`causes=${entry.causes.join(",")}`]
+      : []),
     ...(entry.stage === "delivery-check" && entry.unresolved !== undefined
       ? [`unresolved=${entry.unresolved} first=${entry.ref ?? "-"}`]
       : []),
@@ -1532,18 +1543,26 @@ async function listFailedNotifications(
  * key, so no outsider can trigger it. Returns true when it raised an alert. */
 export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<boolean> {
   const base = paddleApiBase(env.PADDLE_API_KEY);
-  let bad: boolean;
+  // Every cause that applies is reported, so an operator fixing one sees
+  // whether another is still behind the same alert.
+  const causes: DeliveryCheckCause[] = [];
   let unresolved = 0;
   let firstRef: string | undefined;
   if (!base || !env.PADDLE_API_KEY) {
-    bad = true; // a check that cannot run must say so, or it reads as healthy
+    causes.push("cannot-run"); // a check that cannot run must say so, or it reads as healthy
   } else {
     const notes = await listFailedNotifications(env.PADDLE_API_KEY, base, nowMs);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const settings: any = await paddleGet(env.PADDLE_API_KEY, `${base}/notification-settings`);
-    if (notes === null || !Array.isArray(settings?.data)) {
-      bad = true; // an API failure or an incomplete list alerts too, for the same reason
-    } else {
+    // An API failure or an incomplete list alerts too, for the same reason; the
+    // half that did load is still judged.
+    if (notes === null || !Array.isArray(settings?.data)) causes.push("cannot-run");
+    if (Array.isArray(settings?.data)) {
+      if (!ourDestinationDeliversSales(settings.data, env.PADDLE_NOTIFICATION_SETTING_ID)) {
+        causes.push("destination");
+      }
+    }
+    if (notes !== null) {
       const isTest = isTestEnv(env);
       for (const note of notes) {
         if ((await notificationState(note, env.LEDGER_KV, isTest, nowMs)) !== "unresolved") {
@@ -1552,13 +1571,12 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
         unresolved++;
         firstRef ??= firstRefOf(note);
       }
-      bad =
-        unresolved > 0 ||
-        !ourDestinationDeliversSales(settings.data, env.PADDLE_NOTIFICATION_SETTING_ID);
+      if (unresolved > 0) causes.push("unresolved");
     }
   }
-  if (!bad) return false;
+  if (causes.length === 0) return false;
   return raiseDeliveryCheckAlert(env, nowMs, {
+    causes,
     ...(unresolved > 0 ? { unresolved, ref: firstRef ?? "-" } : {}),
   });
 }
@@ -1591,9 +1609,12 @@ const NTFSET_ID = /^ntfset_[a-z0-9]{1,64}$/;
  * Shape from Paddle's list-notification-settings reference
  * (developer.paddle.com/api-reference/notification-settings/
  * list-notification-settings): `id` is `ntfset_…`, `active` is a boolean,
- * `type` is `url` or `email`, and `subscribed_events` is an array of objects
- * whose `name` is the event type. `active` must be strictly `true`: a missing
- * or drifted field must not read as healthy.
+ * `type` is `url` or `email`, `traffic_source` is `platform`, `simulation` or
+ * `all` ("whether Paddle should deliver real platform events, simulation events
+ * or both"), and `subscribed_events` is an array of objects whose `name` is
+ * the event type. A `simulation`-only destination receives no real sale, so
+ * its failed list staying empty proves nothing. `active` must be strictly
+ * `true`: a missing or drifted field must not read as healthy.
  */
 function ourDestinationDeliversSales(destinations: unknown[], settingId: unknown): boolean {
   if (typeof settingId !== "string" || !NTFSET_ID.test(settingId)) return false;
@@ -1602,6 +1623,7 @@ function ourDestinationDeliversSales(destinations: unknown[], settingId: unknown
   return (
     d?.active === true &&
     d.type === "url" &&
+    (d.traffic_source === "platform" || d.traffic_source === "all") &&
     Array.isArray(d.subscribed_events) &&
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     d.subscribed_events.some((e: any) => e?.name === "transaction.completed")
@@ -1615,7 +1637,7 @@ function ourDestinationDeliversSales(destinations: unknown[], settingId: unknown
 async function raiseDeliveryCheckAlert(
   env: WorkerEnv,
   nowMs: number,
-  extra: { unresolved?: number; ref?: string } = {},
+  extra: { causes: DeliveryCheckCause[]; unresolved?: number; ref?: string },
   bypassThrottle = false,
 ): Promise<boolean> {
   const entry: LogEntry = {
@@ -1778,7 +1800,7 @@ export default {
       // been about something else entirely. The alert itself must not fail the
       // cron.
       try {
-        return await raiseDeliveryCheckAlert(env, Date.now(), {}, true);
+        return await raiseDeliveryCheckAlert(env, Date.now(), { causes: ["cannot-run"] }, true);
       } catch {
         return false;
       }
