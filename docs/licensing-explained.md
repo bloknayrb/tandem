@@ -652,8 +652,9 @@ Worker can do is leave a trace of two kinds:
   asks the Paddle API for failed or retrying notifications and for its
   destinations, and alerts on a failure nothing records as recovered (a replay
   leaves the original notification `failed` forever, and an operator can
-  acknowledge one that will never recover), when no active destination is
-  subscribed to completed sales, or if it cannot ask.
+  acknowledge one that will never recover), unless the Worker's own
+  destination (pinned by id) is active and subscribed to completed sales, or
+  if it cannot ask.
 
 Two silences remain, deliberately. A `rejected` request (no signature, a bad
 one, a stale one) leaves nothing, for the reason above. And a free (100%-code)

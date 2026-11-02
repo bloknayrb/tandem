@@ -63,8 +63,9 @@ payment-processor endpoint to a server that binds to loopback.
    pages of 150) and for its notification destinations. It alerts on a failure
    nothing records as recovered (no `evt:` marker, no operator
    `ack:<mode>:<event_id>` key, and, for a sale or an unknown event type, no
-   `order:` record with `emailSent` or `refunded`), when no destination is an
-   active `url` destination subscribed to `transaction.completed`, or when the
+   `order:` record with `emailSent` or `refunded`), unless this Worker's own
+   destination (`PADDLE_NOTIFICATION_SETTING_ID`) is an active `url`
+   destination subscribed to `transaction.completed`, or when the
    check cannot run or throws (that alert skips the throttle). The alert names
    the unresolved count and the first `ntf_` id. A replay leaves the original
    notification `failed` forever (#2244), which is why a recorded recovery is
@@ -123,6 +124,11 @@ npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET  # pdl_ntfset_... from the
 npx wrangler@4.130.0 secret put PADDLE_API_KEY         # pdl_live_apikey_..., customer.read + notification.read + notification_setting.read ONLY
 npx wrangler@4.130.0 secret put RESEND_API_KEY         # re_...
 npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS     # optional, comma/space-separated
+npx wrangler@4.130.0 deploy
+# after creating the Paddle notification destination for this URL, set its id
+# (ntfset_..., dashboard or GET /notification-settings) as
+# PADDLE_NOTIFICATION_SETTING_ID in wrangler.toml and deploy again. Unset, the
+# daily delivery check alerts every day; it never 503s a webhook.
 npx wrangler@4.130.0 deploy
 ```
 

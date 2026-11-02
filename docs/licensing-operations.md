@@ -640,7 +640,16 @@ npx wrangler@4.130.0 secret put PADDLE_API_KEY            # pdl_live_apikey_... 
 npx wrangler@4.130.0 secret put RESEND_API_KEY            # re_... from Resend
 npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS        # optional (§1b)
 npx wrangler@4.130.0 deploy
+# then create the notification destination in Paddle (below), and set its id
+# (ntfset_..., from the dashboard or GET /notification-settings) as
+# PADDLE_NOTIFICATION_SETTING_ID in wrangler.toml [vars], and deploy again
+npx wrangler@4.130.0 deploy
 ```
+
+`PADDLE_NOTIFICATION_SETTING_ID` comes last because the destination needs the
+deployed Worker's URL first. Until it is set, the daily delivery check alerts
+every day (it cannot tell which destination is this Worker's); webhooks are not
+affected, so it never causes a `503`.
 
 **Delete any leftover `POLAR_WEBHOOK_SECRET`** from a Worker deployed before the
 switch: `npx wrangler@4.130.0 secret delete POLAR_WEBHOOK_SECRET` (with
@@ -679,7 +688,7 @@ value is fixed.
 `GET /notifications?status=failed,needs_retry&from=<now − 89 days>&per_page=150`
 and `GET /notification-settings` with the Worker's own API key, and raises an
 operator alert (stage `delivery-check`) if any failed or waiting notification is
-**unresolved**, if no destination would deliver a sale, or if the check itself
+**unresolved**, if this Worker's own destination would not deliver a sale, or if the check itself
 could not run (no usable key, an API error, or a throw anywhere in the check;
 that last alert skips the 5-minute throttle). The alert names how many
 notifications are unresolved and the first one's `ntf_` id (or its `evt_` id),
@@ -708,11 +717,17 @@ comma-separated `status` filter was confirmed in the sandbox (#2244).
   `occurred_at` is within `EVENT_TTL_S` (4 days); after that their marker may
   have expired, so they are ignored. A missing, unknown or renamed
   `event_type` is judged like a sale and never ages out.
-- **Destinations.** At least one destination must have `active: true`,
-  `type: "url"` and `transaction.completed` among its `subscribed_events`
-  (the object shape in Paddle's list-notification-settings reference). The
-  destination URL is not checked, because the Worker does not know its own; a
-  destination pointed at the wrong place shows up as failed deliveries instead.
+- **Destinations.** The destination whose id is `PADDLE_NOTIFICATION_SETTING_ID`
+  (this Worker's own) must be in the list, with `active: true`, `type: "url"`
+  and `transaction.completed` among its `subscribed_events` (the object shape
+  in Paddle's list-notification-settings reference). Another healthy
+  destination does not count: ours could be deactivated beside it. An unset,
+  malformed or placeholder id alerts rather than skipping the check. The
+  destination's URL is not checked, because the Worker does not know its own
+  public URL. So an entry edited to point somewhere else is **not** caught
+  here: if that other address answers `200`, nothing fails in Paddle either,
+  and the only trace is completed sales with no ledger record, which the §5b
+  reconcile finds.
 - **Paging.** The check follows `meta.pagination.next` while `has_more` is
   true (`next` is "Always returned, even if `has_more` is `false`", per the
   same list-notifications reference), only to a URL on the same Paddle API
@@ -799,6 +814,7 @@ before any payout setup. The sandbox Worker is the **`[env.sandbox]` block** at
 the end of `wrangler.toml`; it deploys as `tandem-license-issuance-sandbox`. The
 block re-declares its own vars (`TANDEM_ISSUANCE_ENV = "sandbox"`,
 `RESEND_FROM`, `SUPPORT_EMAIL`, the sandbox price ids in `PADDLE_PRICE_IDS`,
+the sandbox destination's id in `PADDLE_NOTIFICATION_SETTING_ID`,
 `SANDBOX_BUYER_EMAILS`, `SANDBOX_SIGNING_UNTIL`) and its **own KV namespaces**,
 because Wrangler does not inherit vars or namespaces into an environment, so a
 sandbox deploy can never fall back to production's. Fill in its placeholders,
@@ -1049,10 +1065,13 @@ failures that matter most, because they produce **no ledger record at all**:
    from an address you then chose not to list). Each would repeat the same
    daily alert for up to 89 days. Once you have dealt with it, write an ack
    under the notification's `event_id` (`evt_…`, from `payload.event_id` in
-   Paddle's notification log). Any value; it never expires:
+   Paddle's notification log). It never expires. The checker accepts any value,
+   but **the value must carry no email and no name**: a date and a reason code
+   only, e.g. `2026-11-05 manual-fulfil` or `2026-11-05 ignored-unlisted`. It
+   sits in `LEDGER_KV` with no TTL, and the erasure steps (§7) look for it:
 
    ```bash
-   npx wrangler@4.130.0 kv key put "ack:live:<event_id>" "<why, e.g. signed by hand 2026-11-02>" \
+   npx wrangler@4.130.0 kv key put "ack:live:<event_id>" "2026-11-05 manual-fulfil" \
      --remote --namespace-id <LEDGER_KV id>
    # sandbox Worker: --env sandbox --binding LEDGER_KV in place of --namespace-id, and
    # "ack:test:<event_id>" unless its TANDEM_ISSUANCE_ENV is "production" (then "ack:live:")
@@ -1314,7 +1333,13 @@ the license id alone:
    the whole record back, as in "Revoke by hand" step 1. Keep every other field:
    the ids and the `refunded` flag are what stop a replay from re-minting or
    un-revoking.
-2. `notice:` and `txnlic:` keys hold ids only, so leave them.
+2. `notice:` and `txnlic:` keys hold ids only, so leave them. `ack:` keys hold
+   text you wrote by hand (§5b step 5), so check them: find the buyer's event
+   ids (the `evt_…` of each notification for their transactions, in Paddle's
+   notification log), read `ack:live:<event_id>` for each, and if a value holds
+   anything beyond a date and a reason code, rewrite it to just that
+   (`kv key put` over it, same command as §5b step 5). Keep the key itself: it
+   is what stops the delivery check alerting on that failure again.
 3. Your `LEDGER_KV` backups (§6) still hold the old record. Delete or rewrite
    any backup that contains it.
 4. Tell the buyer what this does not reach: Paddle's customer record (they ask
@@ -1451,6 +1476,10 @@ enforces the license (the flip, §4) ships. A ticked line records what the
       date Paddle shows (one year at most from creation), and the live
       destination is subscribed to `api_key.expiring` / `api_key.expired`. An
       expired key turns every sale into a `paddle-api-auth` 500.
+- [ ] **`PADDLE_NOTIFICATION_SETTING_ID` on the live Worker is the live
+      destination's `ntfset_…` id** (§3.5b), set after that destination was
+      created, and the first daily delivery check after it ran quiet. Unset or
+      wrong, the check alerts every day, which hides the alert that matters.
 - [ ] **`PADDLE_PRICE_IDS` on the live Worker lists only the live $45 price**,
       and no sandbox Worker is left holding the production signing key (§3.5b).
 - [ ] Any `POLAR_WEBHOOK_SECRET` left on a deployed Worker is deleted (§3.5b).
