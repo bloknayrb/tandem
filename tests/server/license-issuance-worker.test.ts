@@ -565,6 +565,13 @@ describe("handleIssuance: idempotency & recovery", () => {
       ...extra,
     });
 
+  it("LICENSE_VERSION has the shape the ledger accepts", () => {
+    // A mint stores it and `isLedgerRecord` refuses any other shape, so a
+    // version like "1.0.1" would turn every re-drive into a permanent
+    // stage:"ledger" 500. Widen the ledger check first if this must change.
+    expect(LICENSE_VERSION).toMatch(/^\d+\.\d+$/);
+  });
+
   it("a mint stores the version it signed under", async () => {
     const deps = baseDeps();
     await handleIssuance(makeRequest(paidBody()), deps);
