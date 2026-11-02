@@ -60,14 +60,16 @@ payment-processor endpoint to a server that binds to loopback.
    the API key.
 5. Once a day (`[triggers] crons`) it asks the Paddle API for failed or
    retrying notifications from the last 89 days (`from`, paged, at most 2
-   pages of 200) and for inactive destinations. It alerts on a failure the
-   Worker has no record of recovering (no `evt:` marker and, for a sale, no
-   `order:` record with `emailSent` or `refunded`), on an inactive destination,
-   when Paddle reports no destination at all, or when the check cannot run or
-   throws. A replay leaves the original notification `failed` forever (#2244),
-   which is why a recorded recovery is what counts. An adjustment failure
-   older than `EVENT_TTL_S` is ignored, since its marker may have expired
-   (accepted as #2340).
+   pages of 150) and for its notification destinations. It alerts on a failure
+   nothing records as recovered (no `evt:` marker, no operator
+   `ack:<mode>:<event_id>` key, and, for a sale or an unknown event type, no
+   `order:` record with `emailSent` or `refunded`), when no destination is an
+   active `url` destination subscribed to `transaction.completed`, or when the
+   check cannot run or throws (that alert skips the throttle). The alert names
+   the unresolved count and the first `ntf_` id. A replay leaves the original
+   notification `failed` forever (#2244), which is why a recorded recovery is
+   what counts. An adjustment or API-key failure older than `EVENT_TTL_S` is
+   ignored, since its marker may have expired (accepted as #2340).
 
 **Idempotency (three layers):** a timestamp window (above; it bounds how long a
 captured body stays usable, not whether it replays), an
@@ -94,11 +96,13 @@ below.
 PII-free. The HTTP response never contains the license blob (it would leak into
 Paddle's notification logs) — it reaches the buyer by email alone. Logs carry
 `{ result, ts }` plus a non-PII failure `stage` (and upstream HTTP status) or a
-`notice`/`ref` id, never an email or license id; alerts carry no ids at all. The
+`notice`/`ref` id, never an email or license id; alerts carry no ids, except
+that the delivery-check alert names one Paddle `ntf_`/`evt_` id. The
 `PADDLE_API_KEY` can read **every** Paddle customer's email and name, not only
 the ones the ledger holds (the Worker itself reads only the email; a license
-carries no name since 2026-10-20), so keep its scopes to `customer.read` plus
-notification read (`docs/security.md`).
+carries no name since 2026-10-20), so keep its permissions to exactly
+`customer.read`, `notification.read` and `notification_setting.read`, the ones
+Paddle's API reference names for the three calls it makes (`docs/security.md`).
 
 ## Deploy
 
@@ -116,7 +120,7 @@ npx wrangler@4.130.0 kv namespace create LEDGER_KV
 #   SANDBOX_BUYER_EMAILS.
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY     # Ed25519 PEM PKCS#8
 npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET  # pdl_ntfset_... from the notification destination
-npx wrangler@4.130.0 secret put PADDLE_API_KEY         # pdl_live_apikey_..., customer.read + notification read ONLY
+npx wrangler@4.130.0 secret put PADDLE_API_KEY         # pdl_live_apikey_..., customer.read + notification.read + notification_setting.read ONLY
 npx wrangler@4.130.0 secret put RESEND_API_KEY         # re_...
 npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS     # optional, comma/space-separated
 npx wrangler@4.130.0 deploy
@@ -252,8 +256,9 @@ also retire the `txnlic:` listing residual above.
   also closes the KV-list residual.
 - A rate-limited **"resend my license"** endpoint (needs an email index +
   rate-limit store).
-- The rest of U1–U12 (`docs/licensing-operations.md` §8), including the second
-  sandbox run (1b) that confirms the delivery check against the real API (U12).
+- The rest of U1–U12 (`docs/licensing-operations.md` §8), including a second
+  sandbox run on this Worker version that confirms the delivery check against
+  the real API (U12).
 - Recording which discount code a transaction used: Paddle's transaction does
   carry `discount_id` (U10, #2244), and the Worker does not read it yet.
 

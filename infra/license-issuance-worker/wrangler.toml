@@ -63,8 +63,9 @@ PADDLE_PRICE_IDS = "REPLACE_WITH_PADDLE_PRICE_IDS"
 [observability]
 enabled = true
 
-# Daily delivery check: alerts on failed or needs-retry Paddle notifications the
-# Worker has no record of recovering, and on an inactive destination. A bad
+# Daily delivery check: alerts on failed or needs-retry Paddle notifications
+# nothing records as recovered, and when no active destination is subscribed to
+# transaction.completed. A bad
 # signature never alerts (anyone can send one), so this is what notices a
 # webhook secret that no longer matches.
 [triggers]
@@ -81,7 +82,8 @@ binding = "LICENSE_KV"
 id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"
 
 # Issuance ledger: order:<mode>:<txn_id> -> record (email, licenseId, ...), plus
-# evt:<mode>:<event_id> replay markers, notice:<mode>:<stage>:<ref> records for
+# evt:<mode>:<event_id> replay markers, ack:<mode>:<event_id> operator
+# acknowledgements (written by hand, ops §5b), notice:<mode>:<stage>:<ref> records for
 # a human to act on, and txnlic:<mode>:<txn_id>:<licenseId> index entries (every
 # key carries the test/live mode segment). Holds PII — a SEPARATE,
 # issuance-only namespace the update Worker never binds. Create with
@@ -95,8 +97,9 @@ id = "REPLACE_WITH_LEDGER_KV_NAMESPACE_ID"
 #                         whose id is in TRUSTED_KEY_IDS (worker.ts), or every webhook 503s
 #   PADDLE_WEBHOOK_SECRET pdl_ntfset_... from the Paddle notification destination
 #   PADDLE_API_KEY        pdl_live_apikey_... / pdl_sdbx_apikey_... holding customer.read,
-#                         notification.read and the notification-settings read
-#                         permission, and NOTHING else (never notification.write: the
+#                         notification.read and notification_setting.read (the names
+#                         Paddle's API reference gives for the three calls the Worker
+#                         makes), and NOTHING else (never notification.write: the
 #                         replay key is a separate one that stays off every Worker);
 #                         expires (max 1 year), so set a reminder. A live key in a
 #                         sandbox-mode Worker is refused.

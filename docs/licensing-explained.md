@@ -649,11 +649,11 @@ Worker can do is leave a trace of two kinds:
   internet can send one and an alert per request would drain the email quota
   that delivers licenses. So a webhook secret regenerated in Paddle without the
   matching Worker secret is silent per request; a once-a-day cron in the Worker
-  asks the Paddle API for failed or retrying notifications and inactive
-  destinations, and alerts on a failure the Worker has no record of
-  recovering (a replay leaves the original notification `failed` forever), on
-  an inactive destination, if there is no destination at all, or if it cannot
-  ask.
+  asks the Paddle API for failed or retrying notifications and for its
+  destinations, and alerts on a failure nothing records as recovered (a replay
+  leaves the original notification `failed` forever, and an operator can
+  acknowledge one that will never recover), when no active destination is
+  subscribed to completed sales, or if it cannot ask.
 
 Two silences remain, deliberately. A `rejected` request (no signature, a bad
 one, a stale one) leaves nothing, for the reason above. And a free (100%-code)
