@@ -1858,12 +1858,23 @@ fn show_server_error_dialog(
         // When the port is merely in TIME_WAIT there is nothing to kill and
         // the retry works only because time passed; promising to "free the
         // port" there would be a lie.
-        match holder.as_ref().and_then(|h| h.killable_process()) {
-            Some(proc) => message.push_str(&format!(
+        // A listener Windows hides the owner of (#2343) is still running, so
+        // neither "will try to end" nor "once Windows has released the port"
+        // is true of it: only the user can close it.
+        let hidden_port = match &holder {
+            Some(PortHolder::HiddenListener { port }) => Some(*port),
+            _ => None,
+        };
+        match (holder.as_ref().and_then(|h| h.killable_process()), hidden_port) {
+            (Some(proc), _) => message.push_str(&format!(
                 "\n\nRetry Server Start will try to end {proc} and start Tandem's server again. \
                  This can take up to two minutes."
             )),
-            None => message.push_str(
+            (None, Some(port)) => message.push_str(&format!(
+                "\n\nClose the program using port {port}, then choose Retry Server Start. \
+                 This can take up to two minutes."
+            )),
+            (None, None) => message.push_str(
                 "\n\nRetry Server Start will try again, which usually succeeds once Windows \
                  has released the port. This can take up to two minutes.",
             ),
