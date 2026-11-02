@@ -65,9 +65,11 @@ payment-processor endpoint to a server that binds to loopback.
    `ack:<mode>:<event_id>` key, and, for a sale or an unknown event type, no
    `order:` record with `emailSent` or `refunded`), unless this Worker's own
    destination (`PADDLE_NOTIFICATION_SETTING_ID`) is an active `url`
-   destination subscribed to `transaction.completed`, or when the
-   check cannot run or throws (that alert skips the throttle). The alert names
-   the unresolved count and the first `ntf_` id. A replay leaves the original
+   destination taking real traffic (`traffic_source` `platform` or `all`) and
+   subscribed to `transaction.completed`, or when the check cannot run or
+   throws (that alert skips the throttle). The alert lists every cause that
+   applies (`causes=cannot-run,destination,unresolved`) and, for
+   `unresolved`, the count and the first `ntf_` id. A replay leaves the original
    notification `failed` forever (#2244), which is why a recorded recovery is
    what counts. An adjustment or API-key failure older than `EVENT_TTL_S` is
    ignored, since its marker may have expired (accepted as #2340).
@@ -120,15 +122,18 @@ npx wrangler@4.130.0 kv namespace create LEDGER_KV
 #   without a valid SANDBOX_SIGNING_UNTIL and an address-shaped
 #   SANDBOX_BUYER_EMAILS.
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY     # Ed25519 PEM PKCS#8
-npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET  # pdl_ntfset_... from the notification destination
 npx wrangler@4.130.0 secret put PADDLE_API_KEY         # pdl_live_apikey_..., customer.read + notification.read + notification_setting.read ONLY
 npx wrangler@4.130.0 secret put RESEND_API_KEY         # re_...
 npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS     # optional, comma/space-separated
+# (a) deploy: with no PADDLE_WEBHOOK_SECRET every webhook 503s before any parse
+#     or write, so nothing mints
 npx wrangler@4.130.0 deploy
-# after creating the Paddle notification destination for this URL, set its id
-# (ntfset_..., dashboard or GET /notification-settings) as
-# PADDLE_NOTIFICATION_SETTING_ID in wrangler.toml and deploy again. Unset, the
-# daily delivery check alerts every day; it never 503s a webhook.
+# (b) create the Paddle notification destination at the deployed URL
+# (c) its secret, and its ntfset_... id as PADDLE_NOTIFICATION_SETTING_ID in
+#     wrangler.toml (unset, the daily check alerts with cause `destination`;
+#     it never 503s a webhook)
+npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET  # pdl_ntfset_... from that destination
+# (d) redeploy so the var takes effect
 npx wrangler@4.130.0 deploy
 ```
 
@@ -162,7 +167,8 @@ two Worker READMEs.
 
 Point the Paddle notification destination (events `transaction.completed`,
 `adjustment.created`, `adjustment.updated`, `api_key.expiring`,
-`api_key.expired`; traffic source `platform` on live) at the deployed URL.
+`api_key.expired`; traffic source `platform` on live, never `simulation`
+alone) at the deployed URL: that is step (b) above.
 
 **Sandbox.** Paddle's sandbox is a separate account with its own destination,
 secret and `pdl_sdbx_` API key. Its Worker is the `[env.sandbox]` block at the
@@ -178,11 +184,15 @@ sandbox command takes `--env sandbox`; a bare command targets production:
 
 ```bash
 npx wrangler@4.130.0 kv namespace create LEDGER_KV --env sandbox   # and LICENSE_KV
-npx wrangler@4.130.0 deploy --env sandbox
-npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET --env sandbox
 npx wrangler@4.130.0 secret put PADDLE_API_KEY --env sandbox
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY --env sandbox
 npx wrangler@4.130.0 secret put RESEND_API_KEY --env sandbox
+npx wrangler@4.130.0 deploy --env sandbox        # (a) 503s every webhook until (c)
+# (b) create the destination in the sandbox Paddle account at the sandbox URL
+# (c) its secret, and its ntfset_... id as PADDLE_NOTIFICATION_SETTING_ID in
+#     [env.sandbox.vars]
+npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET --env sandbox
+npx wrangler@4.130.0 deploy --env sandbox        # (d)
 ```
 
 A `pdl_live_` key in a Worker whose `TANDEM_ISSUANCE_ENV` is not `production` is

@@ -635,21 +635,29 @@ npx wrangler@4.130.0 kv namespace create LEDGER_KV        # new, issuance-only (
 # edit wrangler.toml: paste both ids, set RESEND_FROM, SUPPORT_EMAIL,
 #   PADDLE_PRICE_IDS and TANDEM_ISSUANCE_ENV
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY        # Ed25519 PEM PKCS#8 (§0)
-npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET     # pdl_ntfset_... from the Paddle notification destination
 npx wrangler@4.130.0 secret put PADDLE_API_KEY            # pdl_live_apikey_... (scopes below)
 npx wrangler@4.130.0 secret put RESEND_API_KEY            # re_... from Resend
 npx wrangler@4.130.0 secret put GRANDFATHER_EMAILS        # optional (§1b)
+# (a) deploy. With no PADDLE_WEBHOOK_SECRET yet, every webhook answers 503
+#     (stage `config`) before anything is parsed or written, so nothing mints.
 npx wrangler@4.130.0 deploy
-# then create the notification destination in Paddle (below), and set its id
-# (ntfset_..., from the dashboard or GET /notification-settings) as
-# PADDLE_NOTIFICATION_SETTING_ID in wrangler.toml [vars], and deploy again
+# (b) in Paddle, create the notification destination at the deployed URL (below)
+# (c) give the Worker that destination's secret and id:
+npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET     # pdl_ntfset_... from that destination
+#     and set PADDLE_NOTIFICATION_SETTING_ID (ntfset_..., from the dashboard or
+#     GET /notification-settings) in wrangler.toml [vars]
+# (d) redeploy, so the var takes effect
 npx wrangler@4.130.0 deploy
 ```
 
-`PADDLE_NOTIFICATION_SETTING_ID` comes last because the destination needs the
-deployed Worker's URL first. Until it is set, the daily delivery check alerts
-every day (it cannot tell which destination is this Worker's); webhooks are not
-affected, so it never causes a `503`.
+The order is forced: the destination needs the deployed Worker's URL, and the
+secret and id come from the destination. Step (a) is safe because the webhook
+secret is checked before any parse or write: a Worker without it answers every
+delivery `503` (and alerts on the `config` stage), and Paddle has no
+destination to send from yet anyway. Until `PADDLE_NOTIFICATION_SETTING_ID` is
+set, the daily delivery check alerts every day with cause `destination` (it
+cannot tell which destination is this Worker's); webhooks are not affected by
+that var, so it never causes a `503`.
 
 **Delete any leftover `POLAR_WEBHOOK_SECRET`** from a Worker deployed before the
 switch: `npx wrangler@4.130.0 secret delete POLAR_WEBHOOK_SECRET` (with
@@ -690,9 +698,13 @@ and `GET /notification-settings` with the Worker's own API key, and raises an
 operator alert (stage `delivery-check`) if any failed or waiting notification is
 **unresolved**, if this Worker's own destination would not deliver a sale, or if the check itself
 could not run (no usable key, an API error, or a throw anywhere in the check;
-that last alert skips the 5-minute throttle). The alert names how many
-notifications are unresolved and the first one's `ntf_` id (or its `evt_` id),
-so a new failure does not read like a standing one. This is what notices a
+that last alert skips the 5-minute throttle). The alert and its log line carry
+`causes=` with every cause that applies: `cannot-run` (no usable key, an API
+or page failure, or a throw), `destination` (this Worker's destination would
+not deliver a real sale, or its id is unset) and `unresolved`. With
+`unresolved` it also names how many notifications are unresolved and the first
+one's `ntf_` id (or its `evt_` id), so a new failure does not read like a
+standing one. This is what notices a
 webhook secret that no longer matches, since bad signatures never alert. The
 comma-separated `status` filter was confirmed in the sandbox (#2244).
 
@@ -718,9 +730,11 @@ comma-separated `status` filter was confirmed in the sandbox (#2244).
   have expired, so they are ignored. A missing, unknown or renamed
   `event_type` is judged like a sale and never ages out.
 - **Destinations.** The destination whose id is `PADDLE_NOTIFICATION_SETTING_ID`
-  (this Worker's own) must be in the list, with `active: true`, `type: "url"`
-  and `transaction.completed` among its `subscribed_events` (the object shape
-  in Paddle's list-notification-settings reference). Another healthy
+  (this Worker's own) must be in the list, with `active: true`, `type: "url"`,
+  `traffic_source` of `platform` or `all` (a `simulation` destination gets no
+  real sale, so an empty failed list would prove nothing) and
+  `transaction.completed` among its `subscribed_events` (the field names and
+  values in Paddle's list-notification-settings reference). Another healthy
   destination does not count: ours could be deactivated beside it. An unset,
   malformed or placeholder id alerts rather than skipping the check. The
   destination's URL is not checked, because the Worker does not know its own
@@ -758,8 +772,12 @@ Notifications), one per account:
   is `ignored`.
 - Traffic source (`traffic_source`): `platform` on the live destination, so
   simulator traffic never reaches it; `all` on the sandbox destination, so you
-  can use the simulator there.
-- Copy the destination's secret key into `PADDLE_WEBHOOK_SECRET`.
+  can use the simulator there. Never `simulation` alone: such a destination
+  receives no real sale, and the delivery check alerts on it (cause
+  `destination`).
+- Copy the destination's secret key into `PADDLE_WEBHOOK_SECRET` and its
+  `ntfset_…` id into `PADDLE_NOTIFICATION_SETTING_ID`, then redeploy (steps (c)
+  and (d) above).
 
 Paddle expects a `200` within 5 seconds. Live, it retries a failed delivery up
 to 60 times over about 3 days; sandbox, 3 times in 15 minutes. After that the
@@ -825,12 +843,22 @@ bare command targets production**: run without the flag from
 
 ```bash
 npx wrangler@4.130.0 kv namespace create LEDGER_KV --env sandbox     # and LICENSE_KV
-npx wrangler@4.130.0 deploy --env sandbox
-npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET --env sandbox
 npx wrangler@4.130.0 secret put PADDLE_API_KEY --env sandbox          # pdl_sdbx_apikey_...
 npx wrangler@4.130.0 secret put RESEND_API_KEY --env sandbox
 npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY --env sandbox
+# (a) deploy; with no webhook secret yet every webhook answers 503 and nothing mints
+npx wrangler@4.130.0 deploy --env sandbox
+# (b) create the destination in the SANDBOX Paddle account at the sandbox URL
+# (c) its secret, and its ntfset_... id as PADDLE_NOTIFICATION_SETTING_ID
+#     in [env.sandbox.vars]:
+npx wrangler@4.130.0 secret put PADDLE_WEBHOOK_SECRET --env sandbox
+# (d) redeploy, so the var takes effect
+npx wrangler@4.130.0 deploy --env sandbox
 ```
+
+The sandbox needs the id too. Without it the delivery check alerts every day
+with cause `destination`, and a U12 test that "waits for the alert" would pass
+on that alert instead of the one it is meant to see (§8).
 
 `SANDBOX_SIGNING_UNTIL` is at most 7 days ahead, so a sandbox session longer
 than that means editing the date and redeploying. That is the point.
@@ -1466,8 +1494,13 @@ enforces the license (the flip, §4) ships. A ticked line records what the
       Worker version** confirms that the list response carries
       `payload.event_id`, how `from` behaves on the real API, and that the
       check's `GET /notifications?status=failed,needs_retry…` and
-      `GET /notification-settings` calls work with the key's scopes (break the
-      webhook secret on the sandbox and wait for the alert). The
+      `GET /notification-settings` calls work with the key's scopes. The
+      procedure, in order: (1) with the sandbox's
+      `PADDLE_NOTIFICATION_SETTING_ID` set (§3.5b), see **one quiet** daily
+      check, which proves the destination half passes on the real response;
+      (2) break the webhook secret on the sandbox, make a sandbox purchase, and
+      wait for the alert; it must read `causes=unresolved` (not `destination`
+      or `cannot-run`) and name that purchase's notification. The
       `status=failed,needs_retry` filter syntax itself was confirmed (#2244).
 - [x] The Worker's Ed25519 import works on real Cloudflare (#2244). A
       key-import failure fails closed to 503 on *every* webhook, so this had
