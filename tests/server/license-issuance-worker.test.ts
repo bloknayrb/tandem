@@ -1303,6 +1303,7 @@ describe("default fetch wiring (env → deps)", () => {
       PADDLE_WEBHOOK_SECRET: SECRET,
       PADDLE_API_KEY: "pdl_live_apikey_test1",
       PADDLE_PRICE_IDS: "pri_test1",
+      PADDLE_NOTIFICATION_SETTING_ID: "ntfset_1",
       TANDEM_PRIVATE_KEY: pem,
       RESEND_API_KEY: "re_test",
       RESEND_FROM: "Tandem <noreply@example.com>",
@@ -2247,9 +2248,16 @@ describe("default fetch wiring (env → deps)", () => {
     ).toBe(true);
   });
 
-  it("delivery check: an unresolved note followed by a resolved one still alerts", async () => {
+  it("delivery check: one unresolved note alerts whichever side of a resolved one it sits", async () => {
     const notes = [failedNote(), adjustmentNote()];
     expect((await deliveryCheck({ failed: notes }, done("evt_adj1"))).alerted).toBe(true);
+    expect((await deliveryCheck({ failed: [...notes].reverse() }, done("evt_adj1"))).alerted).toBe(
+      true,
+    );
+    // Control: both resolved → quiet.
+    expect((await deliveryCheck({ failed: notes }, done("evt_adj1", "evt_dc1"))).alerted).toBe(
+      false,
+    );
   });
 
   it("delivery check: an unmarked note on page 2 is evaluated", async () => {
@@ -2314,13 +2322,42 @@ describe("default fetch wiring (env → deps)", () => {
     expect(dest.text).not.toContain("unresolved=");
   });
 
-  it("delivery check: passes only with an active url destination subscribed to sales", async () => {
-    const quiet = async (settings: unknown[]) => !(await deliveryCheck({ settings })).alerted;
-    expect(await quiet([destination()])).toBe(true);
-    // One good destination is enough, even beside a retired one.
-    expect(await quiet([destination({ active: false }), destination({ id: "ntfset_2" })])).toBe(
-      true,
+  it("PADDLE_NOTIFICATION_SETTING_ID is not a webhook guard: unset, a sale still issues", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    const env = makeEnv({ PADDLE_NOTIFICATION_SETTING_ID: undefined });
+    const res = await issuanceWorker.fetch(
+      makeRequest(paidBody({ txnId: "txn_nopin" }), { ts: nowTs() }),
+      env as never,
     );
+    expect(res.status).toBe(200);
+    expect(env.LEDGER_KV.map.has("order:live:txn_nopin")).toBe(true);
+  });
+
+  it("delivery check: passes only when OUR pinned destination delivers sales", async () => {
+    const quiet = async (settings: unknown[], env: Record<string, unknown> = {}) =>
+      !(await deliveryCheck({ settings }, () => {}, env)).alerted;
+    // The pinned entry (ntfset_1, makeEnv's PADDLE_NOTIFICATION_SETTING_ID) good → quiet.
+    expect(await quiet([destination()])).toBe(true);
+    expect(await quiet([destination({ id: "ntfset_other" }), destination()])).toBe(true);
+    // Ours deactivated beside another good destination → alert: the other one
+    // is not where Paddle sends this Worker's sales.
+    expect(await quiet([destination({ active: false }), destination({ id: "ntfset_2" })])).toBe(
+      false,
+    );
+    // Ours missing from the list → alert.
+    expect(await quiet([destination({ id: "ntfset_2" })])).toBe(false);
+    // The var unset, malformed or still the placeholder → alert, never skipped.
+    for (const id of [
+      undefined,
+      "",
+      "REPLACE_WITH_NOTIFICATION_SETTING_ID",
+      "ntfset_",
+      "NTFSET_1",
+    ]) {
+      expect(await quiet([destination()], { PADDLE_NOTIFICATION_SETTING_ID: id }), String(id)).toBe(
+        false,
+      );
+    }
     expect(await quiet([destination({ active: "true" })])).toBe(false);
     expect(await quiet([destination({ active: undefined })])).toBe(false);
     expect(await quiet([destination({ type: "email" })])).toBe(false);

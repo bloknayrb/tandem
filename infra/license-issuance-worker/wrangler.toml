@@ -55,6 +55,14 @@ SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"
 # licenses. 503 (`stage: "config-price-ids"`) while empty or malformed. Removing
 # a price here is part of the kill switch (ops §7).
 PADDLE_PRICE_IDS = "REPLACE_WITH_PADDLE_PRICE_IDS"
+#
+# The id (`ntfset_...`) of THIS Worker's Paddle notification destination, from
+# the dashboard or `GET /notification-settings`, set after the destination is
+# created. The daily delivery check alerts unless that one entry is active, a
+# url destination and subscribed to transaction.completed; another healthy
+# destination does not stand in for it. Unset, malformed or still this
+# placeholder makes the CHECK alert every day; it never 503s a webhook.
+PADDLE_NOTIFICATION_SETTING_ID = "REPLACE_WITH_NOTIFICATION_SETTING_ID"
 
 # Retention. Without this the log lines above are kept NOWHERE: `wrangler tail`
 # is a live stream that dies with the terminal session, so a `dropped` or
@@ -64,7 +72,8 @@ PADDLE_PRICE_IDS = "REPLACE_WITH_PADDLE_PRICE_IDS"
 enabled = true
 
 # Daily delivery check: alerts on failed or needs-retry Paddle notifications
-# nothing records as recovered, and when no active destination is subscribed to
+# nothing records as recovered, and unless the destination named by
+# PADDLE_NOTIFICATION_SETTING_ID is active and subscribed to
 # transaction.completed. A bad
 # signature never alerts (anyone can send one), so this is what notices a
 # webhook secret that no longer matches.
@@ -133,6 +142,7 @@ TANDEM_ISSUANCE_ENV = "sandbox"
 RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"
 SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"
 PADDLE_PRICE_IDS = "REPLACE_WITH_SANDBOX_PADDLE_PRICE_IDS"
+PADDLE_NOTIFICATION_SETTING_ID = "REPLACE_WITH_SANDBOX_NOTIFICATION_SETTING_ID"
 SANDBOX_BUYER_EMAILS = "REPLACE_WITH_YOUR_OWN_TEST_EMAIL"
 SANDBOX_SIGNING_UNTIL = "REPLACE_WITH_ISO_TIMESTAMP_AT_MOST_7_DAYS_AHEAD"
 # ALERT_WEBHOOK_URL = "REPLACE_WITH_INCOMING_WEBHOOK_URL"

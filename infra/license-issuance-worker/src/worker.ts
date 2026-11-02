@@ -233,7 +233,8 @@ export interface IssuanceDeps {
   keyId: string;
   /** licenseId → LicenseEntitlement; read by the update Worker. NO PII. */
   entitlementKv: KvNamespace;
-  /** issuance-owned store: `order:`, `evt:`, `notice:`, `txnlic:` keys. */
+  /** issuance-owned store: `order:`, `evt:`, `notice:`, `txnlic:` keys, plus
+   * operator-written `ack:` keys (ops §5b; a date and reason code, no PII). */
   ledgerKv: KvNamespace;
   sendEmail: (to: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
   isGrandfathered: (email: string) => boolean;
@@ -830,6 +831,10 @@ interface WorkerEnv {
   PADDLE_API_KEY?: string;
   /** Comma-separated `pri_…` ids this Worker may mint for. REQUIRED. */
   PADDLE_PRICE_IDS?: string;
+  /** `ntfset_…` id of this Worker's own notification destination. Read only by
+   *  the daily delivery check, which alerts while it is unusable; never a
+   *  webhook config guard. */
+  PADDLE_NOTIFICATION_SETTING_ID?: string;
   /** Full ISO timestamp with a zone, ≤ 7 days ahead; REQUIRED on any Worker
    *  holding a `pdl_sdbx_` key (`sandboxSigningAllowed`). */
   SANDBOX_SIGNING_UNTIL?: string;
@@ -1547,7 +1552,9 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
         unresolved++;
         firstRef ??= firstRefOf(note);
       }
-      bad = unresolved > 0 || !settings.data.some(deliversSales);
+      bad =
+        unresolved > 0 ||
+        !ourDestinationDeliversSales(settings.data, env.PADDLE_NOTIFICATION_SETTING_ID);
     }
   }
   if (!bad) return false;
@@ -1566,20 +1573,32 @@ function firstRefOf(note: any): string {
   return typeof evt === "string" && EVT_ID.test(evt) ? evt : "-";
 }
 
+const NTFSET_ID = /^ntfset_[a-z0-9]{1,64}$/;
+
 /**
- * Whether one notification destination would deliver a sale to a Worker.
+ * Whether THIS Worker's own notification destination would deliver a sale.
+ *
+ * The destination is pinned by `PADDLE_NOTIFICATION_SETTING_ID`, because "some
+ * healthy destination exists" stays green while ours is deactivated beside an
+ * unrelated one. An unset, malformed or placeholder id fails closed: the check
+ * alerts rather than skipping, since a check that cannot say which destination
+ * is ours cannot say sales are arriving. The id is what identifies our entry,
+ * so the destination URL is not matched (the Worker does not know its own
+ * public URL). An entry whose URL was edited to point elsewhere therefore
+ * still passes here; if that address answers 200, Paddle records no failure
+ * either, and only the ops §5b reconcile (sales with no ledger record) sees it.
  *
  * Shape from Paddle's list-notification-settings reference
  * (developer.paddle.com/api-reference/notification-settings/
- * list-notification-settings): `active` is a boolean, `type` is `url` or
- * `email`, and `subscribed_events` is an array of objects whose `name` is the
- * event type. `active` must be strictly `true`: a missing or drifted field must
- * not read as healthy. The destination URL is deliberately NOT matched: the
- * Worker does not know its own public URL, so a destination pointed at the
- * wrong place still passes here and is caught by its failed deliveries instead.
+ * list-notification-settings): `id` is `ntfset_…`, `active` is a boolean,
+ * `type` is `url` or `email`, and `subscribed_events` is an array of objects
+ * whose `name` is the event type. `active` must be strictly `true`: a missing
+ * or drifted field must not read as healthy.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function deliversSales(d: any): boolean {
+function ourDestinationDeliversSales(destinations: unknown[], settingId: unknown): boolean {
+  if (typeof settingId !== "string" || !NTFSET_ID.test(settingId)) return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const d: any = destinations.find((x: any) => x?.id === settingId);
   return (
     d?.active === true &&
     d.type === "url" &&
