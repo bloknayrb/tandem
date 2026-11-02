@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -84,19 +84,16 @@ function plantRepo(config: BiomeConfig): string {
   return dir;
 }
 
+// Both streams, on success too: biome 2.6.4 moved the "Checked N files"
+// summary from stdout to stderr, and the summary is the positive anchor below.
 function runBiome(cwd: string): { status: number; output: string } {
-  try {
-    const output = execFileSync(process.execPath, [BIOME_BIN, "check", "."], {
-      cwd,
-      env: isolatedGitEnv(),
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-    return { status: 0, output };
-  } catch (error) {
-    const err = error as { status?: number; stdout?: string; stderr?: string };
-    return { status: err.status ?? 1, output: `${err.stdout ?? ""}${err.stderr ?? ""}` };
-  }
+  const result = spawnSync(process.execPath, [BIOME_BIN, "check", "."], {
+    cwd,
+    env: isolatedGitEnv(),
+    encoding: "utf-8",
+  });
+  if (result.error) throw result.error;
+  return { status: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
 }
 
 describe("miniature repo isolation from the hook's git environment (#1957)", () => {
