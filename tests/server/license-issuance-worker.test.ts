@@ -25,6 +25,7 @@ import issuanceWorker, {
   licenseEmailText,
   parsePriceIds,
   resendFromProblem,
+  runDeliveryCheck,
   sandboxSigningAllowed,
   supportEmailProblem,
   TIMESTAMP_FUTURE_TOLERANCE_S,
@@ -1818,16 +1819,37 @@ describe("default fetch wiring (env → deps)", () => {
   });
 
   // --- scheduled delivery check ---------------------------------------------
+  // Paddle sends `next` even on the last page; only `has_more` says whether to
+  // follow it.
+  const lastPage = {
+    pagination: {
+      per_page: 200,
+      next: "https://api.paddle.com/notifications?after=ntf_last",
+      has_more: false,
+    },
+  };
+  const morePage = (next = "https://api.paddle.com/notifications?after=ntf_p1") => ({
+    pagination: { per_page: 200, next, has_more: true },
+  });
   function deliveryFetch(o: {
     failed?: unknown[];
     settings?: unknown[];
     status?: number;
     settingsStatus?: number;
+    /** Bodies for successive notification-list requests, in order. */
+    pages?: unknown[];
+    /** HTTP status per successive notification-list request. */
+    pageStatus?: number[];
   }) {
+    let listCalls = 0;
     return vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/notifications?")) {
-        return new Response(JSON.stringify({ data: o.failed ?? [] }), { status: o.status ?? 200 });
+        const i = listCalls++;
+        const body = o.pages ? o.pages[i] : { data: o.failed ?? [], meta: lastPage };
+        return new Response(JSON.stringify(body), {
+          status: o.pageStatus?.[i] ?? o.status ?? 200,
+        });
       }
       if (url.endsWith("/notification-settings")) {
         return new Response(
@@ -1885,5 +1907,229 @@ describe("default fetch wiring (env → deps)", () => {
       makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/dc", PADDLE_API_KEY: undefined }),
     );
     expect(callsTo(f, "https://hooks.example.com/dc")).toHaveLength(1);
+  });
+
+  // --- delivery check: which failures are resolved (U12) ---------------------
+  const HOOK = "https://hooks.example.com/dc";
+  const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
+  interface NoteOpts {
+    eventId?: string;
+    eventType?: string;
+    txnId?: string;
+    ageDays?: number;
+    status?: string;
+    payload?: unknown;
+  }
+  const failedNote = (o: NoteOpts = {}) => ({
+    id: "ntf_dc",
+    status: o.status ?? "failed",
+    occurred_at: daysAgo(o.ageDays ?? 1),
+    payload:
+      "payload" in o
+        ? o.payload
+        : {
+            event_id: o.eventId ?? "evt_dc1",
+            event_type: o.eventType ?? "transaction.completed",
+            data: { id: o.txnId ?? "txn_dc1" },
+          },
+  });
+  const adjustmentNote = (o: NoteOpts = {}) =>
+    failedNote({ eventType: "adjustment.created", eventId: "evt_adj1", ...o });
+
+  /** Runs `runDeliveryCheck` directly at NOW, after `seed` has written to the
+   * env's LEDGER_KV. Returns whether it alerted and the fetch mock. */
+  async function deliveryCheck(
+    o: Parameters<typeof deliveryFetch>[0],
+    seed: (kv: ReturnType<typeof makeKv>) => void = () => {},
+    envOverrides: Record<string, unknown> = {},
+  ) {
+    _resetAlertThrottleForTests();
+    const f = deliveryFetch(o);
+    vi.stubGlobal("fetch", f);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: HOOK, ...envOverrides });
+    seed(env.LEDGER_KV as ReturnType<typeof makeKv>);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const alerted = await runDeliveryCheck(env as never, NOW);
+      expect(alerted).toBe(callsTo(f, HOOK).length === 1);
+      return { alerted, f };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  const done =
+    (...ids: string[]) =>
+    (kv: ReturnType<typeof makeKv>) => {
+      for (const id of ids) kv.map.set(`evt:live:${id}`, "done");
+    };
+  const order =
+    (txnId: string, rec: Record<string, unknown>) => (kv: ReturnType<typeof makeKv>) => {
+      kv.map.set(`order:live:${txnId}`, JSON.stringify(rec));
+    };
+
+  it("delivery check: the URL carries from (89 days back) and per_page after status", async () => {
+    const { f } = await deliveryCheck({});
+    const [[url]] = callsTo(f, "https://api.paddle.com/notifications?");
+    const from = encodeURIComponent(new Date(NOW - 89 * 86_400_000).toISOString());
+    expect(String(url)).toBe(
+      `https://api.paddle.com/notifications?status=failed,needs_retry&from=${from}&per_page=200`,
+    );
+  });
+
+  it("delivery check: every failure carrying a completion marker → no alert", async () => {
+    const notes = [failedNote(), adjustmentNote()];
+    expect((await deliveryCheck({ failed: notes }, done("evt_dc1", "evt_adj1"))).alerted).toBe(
+      false,
+    );
+    // Control: the same list with one marker missing does alert.
+    expect((await deliveryCheck({ failed: notes }, done("evt_dc1"))).alerted).toBe(true);
+  });
+
+  it("delivery check: one unmarked failed sale → alert", async () => {
+    expect((await deliveryCheck({ failed: [failedNote()] })).alerted).toBe(true);
+  });
+
+  it("delivery check: an unmarked needs_retry notification → alert", async () => {
+    expect((await deliveryCheck({ failed: [failedNote({ status: "needs_retry" })] })).alerted).toBe(
+      true,
+    );
+  });
+
+  it("delivery check: an adjustment failure older than EVENT_TTL_S is ignored (#2340)", async () => {
+    const days = EVENT_TTL_S / 86_400;
+    expect((await deliveryCheck({ failed: [adjustmentNote({ ageDays: days + 1 })] })).alerted).toBe(
+      false,
+    );
+    // Control: the same unmarked adjustment inside the window alerts.
+    expect((await deliveryCheck({ failed: [adjustmentNote({ ageDays: days - 1 })] })).alerted).toBe(
+      true,
+    );
+  });
+
+  it("delivery check: a sale failure 60 days old and unresolved → alert", async () => {
+    expect((await deliveryCheck({ failed: [failedNote({ ageDays: 60 })] })).alerted).toBe(true);
+  });
+
+  it("delivery check: a sale resolved by its ledger record with no marker → no alert", async () => {
+    const base = {
+      orderId: "txn_dc1",
+      licenseId: "lic-dc",
+      email: "buyer@example.com",
+      type: "personal",
+      createdAt: daysAgo(60),
+      updateWindowEnd: null,
+    };
+    const note = failedNote({ ageDays: 60 });
+    const sent = order("txn_dc1", { ...base, emailSent: true, refunded: false });
+    expect((await deliveryCheck({ failed: [note] }, sent)).alerted).toBe(false);
+    const refunded = order("txn_dc1", { ...base, emailSent: false, refunded: true });
+    expect((await deliveryCheck({ failed: [note] }, refunded)).alerted).toBe(false);
+    // Control: a record whose email never went out is still owed a human.
+    const stuck = order("txn_dc1", { ...base, emailSent: false, refunded: false });
+    expect((await deliveryCheck({ failed: [note] }, stuck)).alerted).toBe(true);
+  });
+
+  it("delivery check: a missing payload or an event id outside EVT_ID → alert", async () => {
+    expect((await deliveryCheck({ failed: [failedNote({ payload: null })] })).alerted).toBe(true);
+    // Even with a "done" marker sitting under that raw id.
+    const bad = failedNote({ eventId: "EVT-not-paddle" });
+    expect((await deliveryCheck({ failed: [bad] }, done("EVT-not-paddle"))).alerted).toBe(true);
+  });
+
+  it("delivery check: a ledger read that rejects → alert", async () => {
+    const throwing = {
+      ...makeKv(),
+      get: async () => {
+        throw new Error("KV: too many subrequests");
+      },
+    };
+    const { alerted } = await deliveryCheck({ failed: [failedNote()] }, () => {}, {
+      LEDGER_KV: throwing,
+    });
+    expect(alerted).toBe(true);
+  });
+
+  it("delivery check: follows has_more to a second page and resolves both", async () => {
+    const { alerted, f } = await deliveryCheck(
+      {
+        pages: [
+          { data: [failedNote()], meta: morePage() },
+          { data: [adjustmentNote()], meta: lastPage },
+        ],
+      },
+      done("evt_dc1", "evt_adj1"),
+    );
+    expect(alerted).toBe(false);
+    const lists = callsTo(f, "https://api.paddle.com/notifications?");
+    expect(lists.map(([u]) => String(u))[1]).toBe(
+      "https://api.paddle.com/notifications?after=ntf_p1",
+    );
+  });
+
+  it("delivery check: a page fetch that fails → alert", async () => {
+    const { alerted } = await deliveryCheck(
+      {
+        pages: [{ data: [], meta: morePage() }, {}],
+        pageStatus: [200, 500],
+      },
+      done(),
+    );
+    expect(alerted).toBe(true);
+  });
+
+  it("delivery check: has_more past the 2-page cap → alert, no third fetch", async () => {
+    const { alerted, f } = await deliveryCheck({
+      pages: [
+        { data: [], meta: morePage() },
+        { data: [], meta: morePage("https://api.paddle.com/notifications?after=ntf_p2") },
+        { data: [], meta: lastPage },
+      ],
+    });
+    expect(alerted).toBe(true);
+    expect(callsTo(f, "https://api.paddle.com/notifications?")).toHaveLength(2);
+  });
+
+  it("delivery check: a `next` pointing at another origin is not fetched → alert", async () => {
+    const { alerted, f } = await deliveryCheck({
+      pages: [
+        { data: [], meta: morePage("https://evil.example/notifications?after=x") },
+        { data: [], meta: lastPage },
+      ],
+    });
+    expect(alerted).toBe(true);
+    expect(f.mock.calls.some(([u]) => String(u).startsWith("https://evil.example/"))).toBe(false);
+  });
+
+  it("delivery check: a page with no meta.pagination → alert", async () => {
+    const { alerted } = await deliveryCheck({ pages: [{ data: [] }] });
+    expect(alerted).toBe(true);
+  });
+
+  it("delivery check: markers are read under evt:live: in production and evt:test: otherwise", async () => {
+    const note = [failedNote()];
+    const testMarker = (kv: ReturnType<typeof makeKv>) => kv.map.set("evt:test:evt_dc1", "done");
+    // Production (the default env) reads live, so a test-mode marker proves nothing.
+    expect((await deliveryCheck({ failed: note }, done("evt_dc1"))).alerted).toBe(false);
+    expect((await deliveryCheck({ failed: note }, testMarker)).alerted).toBe(true);
+    const sandbox = { TANDEM_ISSUANCE_ENV: "sandbox" };
+    expect((await deliveryCheck({ failed: note }, testMarker, sandbox)).alerted).toBe(false);
+    expect((await deliveryCheck({ failed: note }, done("evt_dc1"), sandbox)).alerted).toBe(true);
+  });
+
+  it("scheduled: a delivery check that throws alerts rather than only logging", async () => {
+    _resetAlertThrottleForTests();
+    const f = deliveryFetch({});
+    vi.stubGlobal("fetch", f);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: HOOK });
+    // The first thing the check reads; a throw here escapes it entirely.
+    Object.defineProperty(env, "PADDLE_API_KEY", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    await runScheduled(env);
+    expect(callsTo(f, HOOK)).toHaveLength(1);
+    const text = JSON.parse(callsTo(f, HOOK)[0][1]?.body as string).text as string;
+    expect(text).toContain("delivery check");
   });
 });

@@ -1228,7 +1228,7 @@ const STAGE_TEXT: Partial<Record<FailStage, string>> = {
   "notice-write":
     "A notice or dropped-event record could not be written to LEDGER_KV; Paddle will retry the event",
   "delivery-check":
-    "The daily delivery check found failed Paddle notifications or an inactive destination (or could not run)",
+    "The daily delivery check found failed Paddle notifications the Worker has no record of recovering, or an inactive destination (or could not run)",
 };
 
 /** Alert text. Carries the coarse result/stage ONLY — never an email, a license
@@ -1379,6 +1379,105 @@ async function paddleGet(apiKey: string, url: string): Promise<unknown | null> {
   }
 }
 
+/** Test or live mode, read the same way by the webhook handler and the
+ * delivery check, so the check looks up markers under the mode that wrote them. */
+function isTestEnv(env: WorkerEnv): boolean {
+  return (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production";
+}
+
+/** Paddle keeps a notification for 90 days; one day short of that keeps the
+ * `from` bound inside what the list endpoint can return. */
+const DELIVERY_CHECK_LOOKBACK_MS = 89 * 24 * 60 * 60 * 1000;
+const DELIVERY_CHECK_PER_PAGE = 200;
+/** 400 rows at up to two KV reads each stays under the Workers limit of about
+ * 1,000 subrequests per invocation. More pages than this alerts rather than
+ * reading as healthy. */
+const DELIVERY_CHECK_MAX_PAGES = 2;
+
+/**
+ * Whether a failed or `needs_retry` notification still needs a human.
+ *
+ * A replay creates a NEW notification and leaves the original `failed` forever
+ * (#2244, U12), so "anything in the failed list" alerted daily after every
+ * recovered failure. A failure counts as recovered when the Worker itself
+ * recorded the outcome: the event's `evt:` completion marker, or, for a sale,
+ * the permanent `order:` ledger record showing the email went out or the order
+ * was refunded. Everything the check cannot prove recovered is `unresolved`,
+ * because a check that guesses healthy is worse than none.
+ *
+ * `ignored` is the one exception: an adjustment older than `EVENT_TTL_S` may
+ * have outlived its marker, so it is no longer evaluated (accepted as #2340;
+ * the §5b reconcile is the backstop). A sale never ages out this way, because
+ * its ledger record is permanent.
+ */
+async function notificationState(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  note: any,
+  ledgerKv: KvNamespace,
+  isTest: boolean,
+  nowMs: number,
+): Promise<"resolved" | "unresolved" | "ignored"> {
+  try {
+    const payload = note?.payload;
+    if (typeof payload !== "object" || payload === null) return "unresolved";
+    const eventType = payload.event_type;
+    const isSale = eventType === "transaction.completed";
+    if (!isSale) {
+      const occurredMs = typeof note.occurred_at === "string" ? Date.parse(note.occurred_at) : NaN;
+      if (!Number.isFinite(occurredMs)) return "unresolved";
+      if (nowMs - occurredMs > EVENT_TTL_S * 1000) return "ignored";
+    }
+    const eventId = payload.event_id;
+    if (typeof eventId !== "string" || !EVT_ID.test(eventId)) return "unresolved";
+    if ((await ledgerKv.get(evtKeyOf(isTest, eventId))) === "done") return "resolved";
+    if (isSale) {
+      const txnId = payload.data?.id;
+      if (typeof txnId !== "string" || !TXN_ID.test(txnId)) return "unresolved";
+      const raw = await ledgerKv.get(orderKeyOf(isTest, txnId));
+      if (raw !== null) {
+        const rec = JSON.parse(raw);
+        if (rec?.emailSent === true || rec?.refunded === true) return "resolved";
+      }
+    }
+    return "unresolved";
+  } catch {
+    // A KV read that throws (including the per-invocation limit) or a record
+    // that will not parse proves nothing, so it fails toward the alert.
+    return "unresolved";
+  }
+}
+
+/** Every failed or `needs_retry` notification in the lookback, or null when
+ * the list could not be read completely. */
+async function listFailedNotifications(
+  apiKey: string,
+  base: string,
+  nowMs: number,
+): Promise<unknown[] | null> {
+  // The `status` filter's comma syntax was confirmed in the sandbox (#2244).
+  // Built by hand rather than with URLSearchParams, which would encode that
+  // comma. `from` and `per_page` come after `status`.
+  const from = new Date(nowMs - DELIVERY_CHECK_LOOKBACK_MS).toISOString();
+  let url =
+    `${base}/notifications?status=failed,needs_retry` +
+    `&from=${encodeURIComponent(from)}&per_page=${DELIVERY_CHECK_PER_PAGE}`;
+  const notes: unknown[] = [];
+  for (let page = 1; ; page++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = await paddleGet(apiKey, url);
+    const pagination = body?.meta?.pagination;
+    if (!Array.isArray(body?.data) || typeof pagination?.has_more !== "boolean") return null;
+    notes.push(...body.data);
+    // `next` is present even on the last page, so `has_more` decides.
+    if (!pagination.has_more) return notes;
+    if (page >= DELIVERY_CHECK_MAX_PAGES) return null;
+    // The API key goes with every request, so never follow a link off Paddle.
+    const next = pagination.next;
+    if (typeof next !== "string" || !next.startsWith(`${base}/`)) return null;
+    url = next;
+  }
+}
+
 /** Daily delivery check. Signature failures never alert (see `isAlertable`),
  * so a webhook secret regenerated in Paddle without a matching `wrangler secret
  * put`, or a destination Paddle deactivated, would otherwise leave sales sitting
@@ -1390,20 +1489,22 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
   if (!base || !env.PADDLE_API_KEY) {
     bad = true; // a check that cannot run must say so, or it reads as healthy
   } else {
-    // Comma-separated `status` filter per Paddle's list-notifications
-    // reference; not yet exercised against a real account (ops §8).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const notes: any = await paddleGet(
-      env.PADDLE_API_KEY,
-      `${base}/notifications?status=failed,needs_retry`,
-    );
+    const notes = await listFailedNotifications(env.PADDLE_API_KEY, base, nowMs);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const settings: any = await paddleGet(env.PADDLE_API_KEY, `${base}/notification-settings`);
-    if (!Array.isArray(notes?.data) || !Array.isArray(settings?.data)) {
-      bad = true; // an API failure alerts too, for the same reason
+    if (notes === null || !Array.isArray(settings?.data)) {
+      bad = true; // an API failure or an incomplete list alerts too, for the same reason
     } else {
+      const isTest = isTestEnv(env);
+      let unresolved = false;
+      for (const note of notes) {
+        if ((await notificationState(note, env.LEDGER_KV, isTest, nowMs)) === "unresolved") {
+          unresolved = true;
+          break;
+        }
+      }
       bad =
-        notes.data.length > 0 ||
+        unresolved ||
         // No destination at all is the quietest way sales stop.
         settings.data.length === 0 ||
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1411,14 +1512,18 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
     }
   }
   if (!bad) return false;
+  return raiseDeliveryCheckAlert(env, nowMs);
+}
+
+/** Log and alert the cron's own entry. Alerts directly rather than via
+ * isAlertable: this entry is never a webhook's. */
+async function raiseDeliveryCheckAlert(env: WorkerEnv, nowMs: number): Promise<boolean> {
   const entry: LogEntry = {
     result: "error",
     ts: Math.floor(nowMs / 1000),
     stage: "delivery-check",
   };
   console.log(JSON.stringify(entry));
-  // Alerts directly rather than via isAlertable: this is the cron's own entry,
-  // never a webhook's.
   if (!shouldAlert(alertThrottleKey(entry), nowMs)) return false;
   await sendOperatorAlert(env, entry);
   return true;
@@ -1525,7 +1630,7 @@ export default {
     // carry SANDBOX_SIGNING_UNTIL: a sandbox Worker signs with the PRODUCTION
     // key, and a sandbox checkout needs only a public token and the 4242 test
     // card, so a forgotten one would mint real licenses forever.
-    const isTest = (env.TANDEM_ISSUANCE_ENV ?? "production").toLowerCase() !== "production";
+    const isTest = isTestEnv(env);
     if (apiKey.startsWith("pdl_live_") && isTest) return configFail("config-env-mismatch");
     if (
       apiKey.startsWith("pdl_sdbx_") &&
@@ -1565,16 +1670,15 @@ export default {
   },
 
   async scheduled(_controller: unknown, env: WorkerEnv, ctx?: ExecutionContext): Promise<void> {
-    const run = runDeliveryCheck(env, Date.now()).catch(() => {
-      // An alert that throws must not fail the cron, but it must not vanish.
-      console.log(
-        JSON.stringify({
-          result: "error",
-          ts: Math.floor(Date.now() / 1000),
-          stage: "delivery-check",
-        }),
-      );
-      return false;
+    const run = runDeliveryCheck(env, Date.now()).catch(async () => {
+      // A check that cannot run must never read as healthy, so a throw alerts
+      // like any other failure (same throttle). The alert itself must not fail
+      // the cron.
+      try {
+        return await raiseDeliveryCheckAlert(env, Date.now());
+      } catch {
+        return false;
+      }
     });
     if (ctx) ctx.waitUntil(run);
     await run;
