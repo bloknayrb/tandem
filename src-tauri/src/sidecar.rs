@@ -2564,13 +2564,14 @@ fn parse_netstat_listening_pid(output: &str, ports: &[u16]) -> Option<(u16, u32)
 }
 
 /// Find a port held by a LIVE listener whose owner Windows will not disclose:
-/// a listening row with PID 0 (#2343). Windows 11 build 26300 reports PID 0
-/// for every listener to an unelevated caller (`netstat -ano` and
-/// `Get-NetTCPConnection` alike), including one the caller itself holds.
+/// a listening row with PID 0 (#2343). On the machine that found it, loopback
+/// listeners are listed with PID 0 or not listed at all (`netstat -ano` and
+/// `Get-NetTCPConnection` alike, unelevated), including one the caller itself
+/// holds, while a system listener such as :135 keeps its real PID.
 ///
 /// It must be checked BEFORE the lingering scan. A live listener's old
 /// connections often sit in TIME_WAIT on the same port, and reporting the port
-/// as `Lingering` would tell the user no program is using it while one is.
+/// as `Lingering` would tell the user to wait out a delay while a program holds it.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_netstat_hidden_listener_port(output: &str, ports: &[u16]) -> Option<u16> {
     find_netstat_row(output, ports, |row| row.listening && row.pid == 0).map(|row| row.local_port)
@@ -2686,7 +2687,7 @@ impl PortHolder {
             ),
             PortHolder::Lingering { port } => format!(
                 "Port {port} is still tied up by a connection from a previous run \
-                 (Windows releases these after a short delay). No other program is using it."
+                 (Windows releases these after a short delay)."
             ),
         }
     }
@@ -3458,8 +3459,8 @@ Active Connections
         assert_eq!(parse_netstat_lingering_port(NETSTAT, &[3479]), None);
     }
 
-    // Windows 11 build 26300 reports PID 0 for every listener to an unelevated
-    // caller (#2343). Such a row must never be named (tasklist answers "System
+    // Some machines list loopback listeners with PID 0 to an unelevated caller
+    // (#2343). Such a row must never be named (tasklist answers "System
     // Idle Process" for PID 0) and never be offered for termination.
     const HIDDEN_LISTENER: &str =
         "  TCP    127.0.0.1:3479         127.0.0.1:0            LISTENING       0\n";
@@ -3505,7 +3506,7 @@ Active Connections
         let message = holder.message();
         assert!(message.contains("Port 3479"), "{message}");
         assert!(!message.contains("PID"), "must not name a PID: {message}");
-        assert!(!message.contains("No other program"), "must not deny the holder: {message}");
+        assert!(message.contains("another program"), "must say something holds it: {message}");
     }
 
     #[test]
@@ -3554,7 +3555,17 @@ Active Connections
         // PID 0, in an unelevated terminal as much as in a sandbox, while a
         // system listener such as :135 keeps its real PID.
         let netstat = run_system32_tool("netstat.exe", &["-ano"]).expect("netstat must run");
-        let Some(row) = find_netstat_row(&netstat, &[port], |row| row.listening) else {
+        let row = find_netstat_row(&netstat, &[port], |row| row.listening);
+        // On CI only the full branch counts: if a runner image started hiding
+        // owners, the fallback branches would pass without ever running the
+        // tasklist, `.exe` and re-verification assertions below.
+        if std::env::var_os("CI").is_some() {
+            assert!(
+                row.as_ref().is_some_and(|r| r.pid == std::process::id()),
+                "CI's netstat must list this test's listener with its PID:\n{netstat}"
+            );
+        }
+        let Some(row) = row else {
             // Missing is accepted only alongside that machine's signature: some
             // other loopback listener parsed with PID 0. Output whose format
             // drifted parses no rows at all, so it still fails here.
@@ -3575,7 +3586,7 @@ Active Connections
                 describe_port_holder(&[port]),
                 Some(PortHolder::HiddenListener { port }),
                 "a listener whose owner Windows hides must be reported as hidden, never as \
-                 Lingering (which tells the user no program is using the port)"
+                 Lingering (which tells the user to wait for Windows to release the port)"
             );
             return;
         }
