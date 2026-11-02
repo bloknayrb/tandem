@@ -1433,7 +1433,7 @@ The trial clock in §3 is unchanged and now matches the licence's own wording: 1
 - Doc surfaces updated: positioning.md, README.md (free-during-beta + activation/telemetry + audience bullets), roadmap.md (#394), security.md, workflows.md + user-guide.md, CHANGELOG.md.
 - One public build throughout (no installer takedown); the only gated surface is the update endpoint.
 - In-app license-verification + server-side trial gate + license-authenticated updater are v1.0 work — tracked in #1116 (engineering, Wave 5L / v0.16.0) + #1117 (commercial infra, Bryan-led calendar gate) since 2026-06-11; the v1.0.0 tag is gated by the Commercial-readiness exit criterion in roadmap.md.
-- Existing beta users are grandfathered with a free license at 1.0; new users pay.
+- Existing beta users are grandfathered with a free license at 1.0; new users pay. *Amended 2026-11-02: the free license goes to beta testers who sent feedback, by email or on GitHub, contacted directly (licensing-operations.md §1c). Tandem has no list of beta users, so "every beta user" could not be honoured as written.*
 - §1/§2 finalized; revenue ceiling is modest and accepted (full commitment, no kill-criterion).
 - *Superseded 2026-10-17 (see the §6 amendment above): the seam is Paddle-only now.* **§6 narrowed to Polar for the issuance seam (2026-07-03, #1176):** the issuance Worker (`infra/license-issuance-worker/`) verifies Polar's Standard-Webhooks (svix) signature scheme specifically — it does not implement Paddle's webhook scheme. §6's "Polar.sh or Paddle" framing is still open at the checkout-provider level, but the built issuance seam is Polar-only in practice; adding Paddle later means a second signature-verification path in the Worker, not a drop-in swap.
 
