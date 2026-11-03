@@ -176,7 +176,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** UNMET only by #1754, a Word-comment mis-anchor on the `.docx` path, which ships dark (#1632 closed).
+- **Zero open position- or anchor-related bugs.** UNMET. #1632 closed; still open are #1823's range items (`tandem_getContext` accepting inverted or negative ranges, a zero-length MCP range inverting its anchors, a hardBreak offset drift, the outline ignoring `relRange`) and, on the `.docx` path that ships dark, #1754 and #1693.
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**
