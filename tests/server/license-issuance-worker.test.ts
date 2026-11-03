@@ -949,9 +949,49 @@ describe("handleIssuance: ignored $0 orders leave an unmarked notice (#2350)", (
     const body = paidBody({ totals: free });
     await handleIssuance(makeRequest(body), deps);
     listed = true;
-    expect((await handleIssuance(makeRequest(body), deps)).status).toBe(200);
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((l: string) => {
+      lines.push(l);
+    });
+    try {
+      expect((await handleIssuance(makeRequest(body), deps)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
     expect(lastLog(deps).result).toBe("issued");
     expect(noticeKeys(deps)).toEqual(["notice:live:free-unlisted:txn_1"]);
+    // The runbook tells the operator to look for exactly this line.
+    expect(lines.map((l) => JSON.parse(l))).toContainEqual({
+      result: "notice-clear-failed",
+      ts: NOW / 1000,
+      notice: "free-unlisted",
+      ref: "txn_1",
+    });
+  });
+
+  it("a mint that 500s after its order write is cleared by the re-drive", async () => {
+    let listed = false;
+    const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => listed });
+    const body = paidBody({ totals: free });
+    await handleIssuance(makeRequest(body), deps);
+    listed = true;
+    const realPut = deps.entitlementKv.put.bind(deps.entitlementKv);
+    let down = true;
+    deps.entitlementKv.put = async (k, v, o) => {
+      if (down) throw new Error("KV down");
+      return realPut(k, v, o);
+    };
+    const realDelete = deps.ledgerKv.delete.bind(deps.ledgerKv);
+    deps.ledgerKv.delete = async (k) => {
+      if (down) throw new Error("KV down"); // the first attempt never reaches a working clear
+      return realDelete(k);
+    };
+    expect((await handleIssuance(makeRequest(body), deps)).status).toBe(500);
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-unlisted:txn_1"]);
+    down = false;
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps).result).toBe("duplicate");
+    expect(noticeKeys(deps)).toEqual([]);
   });
 
   it("a paid issuance clears no notice record", async () => {
@@ -2355,6 +2395,29 @@ describe("default fetch wiring (env → deps)", () => {
       };
     });
     expect(broken.causes).toBe("cannot-run");
+
+    // The runbook tells the operator this line marks a KV, not a Paddle, fault.
+    _resetAlertThrottleForTests();
+    vi.stubGlobal("fetch", deliveryFetch({}));
+    const env = makeEnv({ ALERT_WEBHOOK_URL: HOOK });
+    (env.LEDGER_KV as ReturnType<typeof makeKv>).list = async () => {
+      throw new Error("KV down");
+    };
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((l: string) => {
+      lines.push(l);
+    });
+    try {
+      await runDeliveryCheck(env as never, NOW);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.map((l) => JSON.parse(l))).toContainEqual({
+      result: "error",
+      ts: Math.floor(NOW / 1000),
+      stage: "delivery-check",
+      note: "free-notice-list-failed",
+    });
   });
 
   it("delivery check: the URL carries from (89 days back) and per_page after status", async () => {

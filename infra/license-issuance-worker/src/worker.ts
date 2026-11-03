@@ -461,6 +461,11 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
     await deps.entitlementKv.put(existing.licenseId, entitlementValue(existing)); // idempotent re-assert
   }
   if (!existing.emailSent) {
+    // A mint that 500'd after its order write (a failed entitlement put, a
+    // dead isolate) never reached `issue()`'s clear, and every retry lands
+    // here, so clear again. Two deletes, only on a stuck-email re-drive; a paid
+    // order has no such record and the deletes find nothing.
+    await clearIgnoredNotices(deps, existing.orderId, deps.now());
     const blob = await signLicense(metadataFrom(existing, deps.keyId), deps.signBytes);
     const sent = await deps.sendEmail(existing.email, blob);
     if (!sent.ok) return { stage: "email", status: sent.status };
@@ -830,9 +835,10 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
       evtKey?: string,
     ): Promise<Response> => {
       const policy = NOTICE_POLICY[n.notice];
-      // Loud, never a silent skip: a marked notice settled without its marker
-      // would answer `noticed` and then re-run on every redelivery. The throw
-      // is a 500, so Paddle retries.
+      // Fail safe, never a silent skip: a marked notice settled without its
+      // marker would answer `noticed` and then re-run on every redelivery. The
+      // throw is a 500 (`unexpected`, not alerted in-band), so the event stays
+      // unmarked, Paddle retries, and the daily check lists it if it never lands.
       if (policy.marked && !evtKey) throw new Error("a marked notice needs its event key");
       try {
         await deps.ledgerKv.put(
