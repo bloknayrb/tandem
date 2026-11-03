@@ -73,8 +73,9 @@ payment-processor endpoint to a server that binds to loopback.
    subscribed to `transaction.completed`, or when the check cannot run or
    throws (that alert skips the throttle). It also lists the
    `notice:<mode>:free-unlisted:` and `notice:<mode>:free-list-empty:` keys
-   and alerts while any remain (until resolved or deleted), since Paddle got a 200 for those and never
-   lists them as failed. The alert lists every cause that
+   and alerts while any remain (until resolved or deleted), since Paddle got a
+   200 for those and never lists them as failed; a list that throws is
+   `cannot-run`, logged with `note: "free-notice-list-failed"`. The alert lists every cause that
    applies (`causes=cannot-run,destination,unresolved,free-notices`) and, for
    `unresolved`, the count and the first `ntf_` id; for `free-notices`,
    `free_notices=N` (`N+` when a list page was incomplete). A replay leaves the original
@@ -101,10 +102,13 @@ in-scope $0 order `issue()` ignored (`free-unlisted`, `free-list-empty`) writes 
 the `free-*` notices are deliberately NOT marked done, so replaying them from
 Paddle after a fix reprocesses them. The `free-*` alerts throttle on one key per
 stage rather than per transaction, so a leaked code cannot send one per checkout;
-the daily check repeats them until the records are resolved or deleted. A $0
-order that later issues (the ops §1b step 4 replay) deletes its own `free-*`
-records once the license email is sent; if that delete fails, the record stays
-for the operator. The alert is best-effort; the record is
+the daily check repeats them until the records are resolved or deleted. When a
+$0 order later mints (the ops §1b step 4 replay), `issue()` clears its `free-*`
+records right after writing the order, before the email; an email that then
+fails is re-driven by Paddle's retry and is the delivery check's `unresolved`
+case. If the delete itself fails, it logs
+`{result: "notice-clear-failed", notice, ref}` and the record stays for the
+operator. The alert is best-effort; the record is
 what the operator lists and clears (`docs/licensing-operations.md` §5b).
 `issue()` and `revoke()` each re-read the ledger a second time immediately
 before their first commit, narrowing (not eliminating) the window for a

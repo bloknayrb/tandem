@@ -895,6 +895,51 @@ describe("handleIssuance: ignored $0 orders leave an unmarked notice (#2350)", (
     expect(noticeKeys(deps)).toEqual([]);
   });
 
+  it("a free-list-empty record clears too once the list is put and the replay mints", async () => {
+    const deps = baseDeps({ hasGrandfathers: false });
+    const body = paidBody({ totals: free });
+    await handleIssuance(makeRequest(body), deps);
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-list-empty:txn_1"]);
+    deps.hasGrandfathers = true;
+    deps.isGrandfathered = () => true;
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps).result).toBe("issued");
+    expect(noticeKeys(deps)).toEqual([]);
+  });
+
+  it("a recovery replay whose email fails still clears the record; the retry re-drives the order", async () => {
+    let listed = false;
+    let emailUp = false;
+    const deps = baseDeps({
+      hasGrandfathers: true,
+      isGrandfathered: () => listed,
+      sendEmail: vi.fn(async () => ({ ok: emailUp })),
+    });
+    const body = paidBody({ totals: free });
+    await handleIssuance(makeRequest(body), deps);
+    listed = true;
+    expect((await handleIssuance(makeRequest(body), deps)).status).toBe(500);
+    expect(lastLog(deps).stage).toBe("email");
+    // The order record now carries it: the delivery check's `unresolved` case.
+    expect(noticeKeys(deps)).toEqual([]);
+    expect(ledgerRec(deps).emailSent).toBe(false);
+    emailUp = true;
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps).result).toBe("duplicate");
+    expect(ledgerRec(deps).emailSent).toBe(true);
+  });
+
+  it("a test-mode Worker writes and clears under notice:test:", async () => {
+    let listed = false;
+    const deps = baseDeps({ isTest: true, hasGrandfathers: true, isGrandfathered: () => listed });
+    const body = paidBody({ totals: free });
+    await handleIssuance(makeRequest(body), deps);
+    expect(noticeKeys(deps)).toEqual(["notice:test:free-unlisted:txn_1"]);
+    listed = true;
+    await handleIssuance(makeRequest(body), deps);
+    expect(noticeKeys(deps)).toEqual([]);
+  });
+
   it("a failed clear after issuance still issues; the record stays for the operator", async () => {
     let listed = false;
     const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => listed });
@@ -2254,6 +2299,7 @@ describe("default fetch wiring (env → deps)", () => {
   it("delivery check: a waiting free-unlisted or free-list-empty record alerts daily, with a count", async () => {
     const one = await deliveryCheck({}, freeNotice("notice:live:free-unlisted:txn_a"));
     expect(one.causes).toBe("free-notices");
+    expect(one.text).toContain("ignored $0 orders waiting");
     expect(one.text).toContain("free_notices=1");
     expect(one.text).toContain("§1b step 4");
     expect(one.text).toContain("until it is deleted");
@@ -2266,6 +2312,15 @@ describe("default fetch wiring (env → deps)", () => {
       freeNotice("notice:live:free-unlisted:txn_a", "notice:live:free-list-empty:txn_b"),
     );
     expect(two.text).toContain("free_notices=2");
+  });
+
+  it("delivery check: free records are counted even with no Paddle key", async () => {
+    const r = await deliveryCheck({}, freeNotice("notice:live:free-unlisted:txn_a"), {
+      PADDLE_API_KEY: undefined,
+    });
+    expect(r.causes).toBe("cannot-run,free-notices");
+    expect(r.text).toContain("free_notices=1");
+    expect(r.text).toContain("Developer tools > Notifications"); // not free-only
   });
 
   it("delivery check: no records, or records only under the other mode, add no free-notices cause", async () => {

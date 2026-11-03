@@ -658,12 +658,14 @@ Worker can do is leave a trace of two kinds:
   if it cannot ask.
 
 A free (100%-code) transaction for a price the Worker sells, from a buyer not
-on the grandfather list (or while the list is empty), mints nothing but is not
-silent (#2350): it leaves a `free-unlisted` (or `free-list-empty`) notice with
-ids only, sends an alert, and is counted by the daily check until the record is
-resolved (a later replay that issues deletes it) or deleted by the operator, because that buyer may be a beta tester who checked out
-with another address. Its alerts share one throttle slot per stage, so a leaked
-code cannot fill the operator's inbox with one email per checkout.
+on the grandfather list (or while the list is empty), mints nothing, but it is
+not silent (#2350), because that buyer may be a beta tester who checked out
+with another address. It leaves a `free-unlisted` (or `free-list-empty`)
+notice with ids only and sends an alert, and the daily check counts the record
+until it is resolved or deleted: the Worker clears it itself when a later
+replay mints, and the operator deletes it by hand otherwise. Its alerts share
+one throttle slot per stage, so a leaked code cannot fill the operator's inbox
+with one email per checkout.
 
 Two silences remain, deliberately. A `rejected` request (no signature, a bad
 one, a stale one) leaves nothing, for the reason above. And a free transaction

@@ -110,9 +110,10 @@ export const EVENT_TTL_S = 4 * 24 * 60 * 60;
  *
  * Inside the window a captured body can also re-run any outcome that writes no
  * marker at all: `dropped`, `issue()`'s `ignored` (a free order, an off-list
- * sandbox buyer, an out-of-scope price) and every 500. Rotating the webhook
- * secret invalidates every captured request. Accepted as #2341
- * (docs/security.md). */
+ * sandbox buyer, an out-of-scope price) and every 500. A free order ignored
+ * with a `free-*` notice (#2350) rewrites that record, recreating one the
+ * operator deleted, and alerts again. Rotating the webhook secret invalidates
+ * every captured request. Accepted as #2341 (docs/security.md). */
 export const TIMESTAMP_PAST_TOLERANCE_S = EVENT_TTL_S - 3600;
 /** `Paddle-Signature` freshness, future side: clock skew only. Paddle's SDK
  * uses 5 s; nothing legitimate is dated ahead, so this side stays narrow. */
@@ -288,8 +289,9 @@ export interface IssuanceDeps {
   sendEmail: (to: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
   isGrandfathered: (email: string) => boolean;
   /** Whether `GRANDFATHER_EMAILS` has any entry. When it has none, a free
-   * order is ignored before the customer lookup, so a leaked 100% code cannot
-   * drive Paddle API traffic. */
+   * order is ignored before the customer lookup (leaving a `free-list-empty`
+   * notice on a production Worker), so a leaked 100% code cannot drive Paddle
+   * API traffic. */
   hasGrandfathers: boolean;
   /** Set only on a Worker holding a `pdl_sdbx_` key: the lower-cased buyer
    * emails it may mint for (`SANDBOX_BUYER_EMAILS`). Anyone else is ignored. */
@@ -596,21 +598,42 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   await deps.ledgerKv.put(`${txnLicPrefixOf(deps.isTest, txnId)}${licenseId}`, "");
   await writeOrder(deps, rec);
   if (!deps.isTest) await deps.entitlementKv.put(licenseId, entitlementValue(rec));
+  // A $0 order that mints is the §1b recovery replay of an earlier ignored one,
+  // so its notice is resolved: clear it, or the daily check would keep alerting
+  // about a tester who has their key. Here, not after the email: once the order
+  // record exists every retry re-drives it (`reDrive`, which never reaches
+  // this), and an email that never goes out is the delivery check's
+  // `unresolved` case (order present, `emailSent` false). Best-effort: a failed
+  // delete is logged and leaves the record, which the daily check reports.
+  if (free) await clearIgnoredNotices(deps, txnId, nowMs);
 
   const sent = await deps.sendEmail(email, blob);
   if (!sent.ok) return { stage: "email", status: sent.status };
   rec.emailSent = true;
   await writeOrder(deps, rec);
-  // A $0 order that issues is the §1b recovery replay of an earlier ignored
-  // one, so its notice is resolved: clear it here, or the daily check would
-  // keep alerting about a tester who already has their key. Best-effort: a
-  // failed delete leaves the record for the operator, and the check says so.
-  if (free) {
-    for (const stage of IGNORED_NOTICE_STAGES) {
-      await deps.ledgerKv.delete(noticeKeyOf(deps.isTest, stage, txnId)).catch(() => {});
-    }
-  }
   return "issued";
+}
+
+async function clearIgnoredNotices(
+  deps: IssuanceDeps,
+  txnId: string,
+  nowMs: number,
+): Promise<void> {
+  await Promise.all(
+    IGNORED_NOTICE_STAGES.map((stage) =>
+      deps.ledgerKv.delete(noticeKeyOf(deps.isTest, stage, txnId)).catch(() => {
+        // Ids only, like every other log line.
+        console.log(
+          JSON.stringify({
+            result: "notice-clear-failed",
+            ts: Math.floor(nowMs / 1000),
+            notice: stage,
+            ref: txnId,
+          }),
+        );
+      }),
+    ),
+  );
 }
 
 const REVOKED_VALUE = JSON.stringify({ updateWindowEnd: null, status: "revoked" });
@@ -807,6 +830,10 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
       evtKey?: string,
     ): Promise<Response> => {
       const policy = NOTICE_POLICY[n.notice];
+      // Loud, never a silent skip: a marked notice settled without its marker
+      // would answer `noticed` and then re-run on every redelivery. The throw
+      // is a 500, so Paddle retries.
+      if (policy.marked && !evtKey) throw new Error("a marked notice needs its event key");
       try {
         await deps.ledgerKv.put(
           noticeKeyOf(deps.isTest, n.notice, n.ref),
@@ -1652,7 +1679,18 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
   let firstRef: string | undefined;
   // Needs no Paddle key, so it runs whatever the key's state. A throw is the
   // check being unable to say, never zero records.
-  const free = await countFreeNotices(env.LEDGER_KV, isTestEnv(env)).catch(() => null);
+  const free = await countFreeNotices(env.LEDGER_KV, isTestEnv(env)).catch(() => {
+    // `cannot-run` alone would read as a Paddle problem; say it was the KV list.
+    console.log(
+      JSON.stringify({
+        result: "error",
+        ts: Math.floor(nowMs / 1000),
+        stage: "delivery-check",
+        note: "free-notice-list-failed",
+      }),
+    );
+    return null;
+  });
   if (!base || !env.PADDLE_API_KEY) {
     causes.push("cannot-run"); // a check that cannot run must say so, or it reads as healthy
   } else {
@@ -1690,10 +1728,11 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
 }
 
 /** Ignored-$0 `notice:` records still waiting for the operator (#2350). Paddle
- * got a 200 for each, so the failed-notification list never shows them; this is
- * what repeats their alert daily until an issuing replay clears them or the operator deletes them. One list call
- * per stage. A stage with more keys than one page reports the page and `more`,
- * not `cannot-run`: the check knows there is work, it just cannot count it all. */
+ * got a 200 for each, so the failed-notification list never shows them; this
+ * is what repeats their alert daily until an issuing replay clears them or the
+ * operator deletes them. One list call per stage. A stage with more keys than
+ * one page reports the page and `more`, not `cannot-run`: the check knows
+ * there is work, it just cannot count it all. */
 async function countFreeNotices(
   ledgerKv: KvNamespace,
   isTest: boolean,

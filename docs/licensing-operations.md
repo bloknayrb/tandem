@@ -293,14 +293,18 @@ reissued"). Then, in this order, for each tester:
       the event payload". That is documented but **not yet measured**; it is on
       the §8 sandbox list. Failing that, find the notification in Paddle's
       notification log by its `event_id`.
-   5. **Verify that `order:<mode>:<txn_id>` shows `emailSent: true`**
-      (`kv key get "order:live:<txn_id>"`, as in §5b step 3). The Worker
-      deletes that transaction's `free-*` records itself on that issuance. If
-      the record is still there (the delete failed, or the email went out on a
-      later retry rather than on the replay), delete it
-      (`kv key delete "notice:live:free-unlisted:<txn_id>"`). If the record's
-      `at` changed and there is no order, the replay was ignored again: the
-      listed address does not match what Paddle holds.
+   5. **Verify the order.** The Worker clears that transaction's `free-*`
+      records itself when the replay mints, right after it writes the order
+      and before it sends the email. So check that `order:<mode>:<txn_id>`
+      exists (`kv key get "order:live:<txn_id>"`, as in §5b step 3), and later
+      that it shows `emailSent: true`; an email that fails is retried by
+      Paddle and, if it never goes out, is the delivery check's `unresolved`
+      case, not this record's. Delete the record by hand
+      (`kv key delete "notice:live:free-unlisted:<txn_id>"`) only if it is
+      still there once the order exists: that means the Worker's delete
+      failed, which it logs as `{result: "notice-clear-failed", notice, ref}`.
+      If the record's `at` changed and there is no order, the replay was
+      ignored again: the listed address does not match what Paddle holds.
    6. Add the issued address to the cohort CSV.
 
    - **Nobody vouches for the address:** treat the code as leaked. Archive or
@@ -311,9 +315,12 @@ reissued"). Then, in this order, for each tester:
      `500`, and only a later one was ignored): when you decline, also write
      `ack:<mode>:<event_id>` (§5b step 5), or the check keeps alerting on the
      failed notification.
-   - **Many records** (a leaked code): delete them in one call with a JSON file
-     holding the list of key names,
-     `npx wrangler@4.130.0 kv bulk delete keys.json --remote --namespace-id <LEDGER_KV id>`.
+   - **Many records** (a leaked code): delete them in one call,
+     `npx wrangler@4.130.0 kv bulk delete keys.json --remote --namespace-id <LEDGER_KV id>`,
+     where `keys.json` is a JSON array of key-name strings
+     (`["notice:live:free-unlisted:txn_…", …]`). It asks for confirmation;
+     `--force` skips the prompt (both checked against `wrangler@4.130.0 kv bulk
+     delete --help`).
    - **A `free-list-empty` record** means a $0 order arrived before any list was
      put. Put the full list, then replay each `free-list-empty` record's event
      the same way, and verify each order as in sub-step 5.
@@ -780,10 +787,13 @@ or `notice:<mode>:free-list-empty:` records exist: ignored $0 orders waiting for
 §1b step 4. Paddle got a `200` for those, so they never appear as failed
 notifications; the check lists both prefixes itself (one KV `list` each, needing
 no Paddle key) and prints `free_notices=N`, or `N+` when a prefix held more keys
-than one list page returns. It repeats daily while any record remains (a replay
-that issues deletes its own; otherwise you delete it, §1b step 4), which
-is what catches an alert the per-stage throttle swallowed (§5c). A list that
-throws is `cannot-run`. This is what notices a
+than one list page returns. It repeats daily while any record remains (the
+Worker clears a record when its replay mints; otherwise you delete it, §1b
+step 4), which is what catches an alert the per-stage throttle swallowed
+(§5c). A list that throws is `cannot-run`, and logs
+`{result: "error", stage: "delivery-check", note: "free-notice-list-failed"}`,
+so a `cannot-run` from KV can be told apart from one from Paddle. This is what
+notices a
 webhook secret that no longer matches, since bad signatures never alert. The
 comma-separated `status` filter was confirmed in the sandbox (#2244).
 
@@ -1130,9 +1140,11 @@ failures that matter most, because they produce **no ledger record at all**:
    it: for `refund-partial`, decide whether the partials now add up to a full
    refund and revoke by hand if so (§7); for the reversal notices, restore by
    hand (§7); for `api-key-expiry`, replace the key; for `free-unlisted` and
-   `free-list-empty`, follow §1b step 4 (a replay that issues deletes the
-   record itself; you delete it by hand when you decide not to list the
-   address, or when that delete failed). Then delete the record:
+   `free-list-empty`, follow §1b step 4 (the Worker clears the record when the
+   replay mints; you delete it by hand when you decide not to list the
+   address, or when the order exists and the record is still there, meaning
+   the Worker's delete failed: look for a `notice-clear-failed` log line). Then
+   delete the record:
 
    ```bash
    npx wrangler@4.130.0 kv key delete "notice:live:<stage>:<ref>" --remote --namespace-id <LEDGER_KV id>
@@ -1177,9 +1189,11 @@ failures that matter most, because they produce **no ledger record at all**:
    (§3.5b) alerts on a failed notification until the Worker has a record of
    recovering it, and some never will: a sale you fulfilled by hand (§1a or
    §2), or a replay that `issue()` answered `ignored` (for example a $0 order
-   from an address you then chose not to list: its first delivery failed, so
-   the event sits in the failed list as well as in a `free-*` record, and
-   deleting the record quiets only the `free-notices` cause). Each would repeat
+   from an address you then chose not to list, when its first delivery failed
+   with a `500` and only a later one was ignored; an ignored notice replies
+   `200` on its own and never reaches the failed list. Then the event sits in
+   the failed list as well as in a `free-*` record, and deleting the record
+   quiets only the `free-notices` cause). Each would repeat
    the same daily alert for up to 89 days. Once you have dealt with it, write an
    ack under the notification's `event_id` (`evt_…`, from `payload.event_id` in
    Paddle's notification log, or the `eventId` in its `notice:` record when
@@ -1261,8 +1275,8 @@ make many distinct transactions, and a per-ref slot would send an email for
 each. So a second same-stage event inside one isolate's 5 minutes sends no
 alert of its own; its record is still written, and the daily delivery check
 reports every record that remains (`free-notices`, §3.5b), so a swallowed alert
-is late by a day at most. Records remain until resolved (a replay that issues
-deletes its own) or deleted by hand.
+is late by a day at most. Records remain until resolved (the Worker clears one
+when its replay mints) or deleted by hand.
 
 `wrangler tail` is a **debugging tool, not an alert**: no history, no thresholds,
 no notification, and it dies with the terminal session. Cloudflare offers nothing
@@ -1564,8 +1578,8 @@ enforces the license (the flip, §4) ships. A ticked line records what the
       the notification to replay (documented, not yet measured); (b) whether
       Paddle emails the buyer a receipt with an order number for a $0 order,
       which tandem.ink's `/thanks` copy relies on. Confirm the record is gone
-      after the issuing replay (the Worker deletes it); if it is not, delete it
-      and find out why.
+      once the replay mints (the Worker clears it); if it is not, look for a
+      `notice-clear-failed` log line, then delete it.
 - [ ] **U1 — mitigated by the widened window (#2341); live retry behaviour
       unproven.** Does a Paddle retry, and an API replay, carry a *fresh* `ts`
       in `Paddle-Signature`? The replay half passed in the sandbox (an API
