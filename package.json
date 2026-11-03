@@ -61,7 +61,6 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "perf:gate": "tsx scripts/perf-build.ts && playwright test --config=tests/perf/playwright.config.ts",
-    "test:tauri-driver": "npm --prefix tests/tauri-driver test",
     "test:acceptance-harness": "node scripts/spikes/run-acceptance-harness.mjs",
     "capture:screenshots": "cross-env SCREENSHOTS=1 playwright test --config=scripts/screenshots/playwright.config.ts",
     "capture:design-baselines": "cross-env CAPTURE_DESIGN_BASELINES=1 playwright test --config=scripts/design-baselines/playwright.config.ts",

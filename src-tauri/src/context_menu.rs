@@ -471,7 +471,8 @@ pub(crate) fn forward_context_menu_event(app: &tauri::AppHandle, event: tauri::m
     // `app.emit(...)` is green everywhere -- confirmed by mutation, and it is
     // the one survivor in Unit 11b's battery. Reaching it needs a live
     // `AppHandle` and a second window, which no unit test can build and which
-    // only a `tests/tauri-driver/` WebDriver spec could. Left as prose with
+    // only a packaged-app WebDriver harness could (none exists since #1345
+    // retired it). Left as prose with
     // its limitation stated rather than covered by a source-text assertion
     // that would read stronger than it is.
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
