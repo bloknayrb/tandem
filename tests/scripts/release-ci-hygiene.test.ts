@@ -109,18 +109,19 @@ function stepByMarker(job: Job, marker: string): { index: number; step: Step } {
  * `/\bnpm ci\b[^\n]*--ignore-scripts/` is satisfied by
  * `npm ci --ignore-scripts || true` and by `npm ci # --ignore-scripts`, so
  * equality subsumes the whole exit-code-masking family in one assertion. The
- * count pin is what stops five of the six being deleted, and what makes a
- * seventh site arrive red rather than silently unflagged.
+ * count pin is what stops four of the five being deleted, and what makes a
+ * sixth site arrive red rather than silently unflagged. (Six until #1345
+ * retired tauri-webdriver.yml, which held one.)
  */
 describe("#1832 npm ci runs no dependency lifecycle scripts", () => {
   const EXPECTED = "npm ci --ignore-scripts";
-  const EXPECTED_SITES = 6;
+  const EXPECTED_SITES = 5;
 
   function installSteps() {
     return allSteps().filter(({ step }) => step.run?.includes("npm ci"));
   }
 
-  it("has exactly six npm ci sites across the workflows", () => {
+  it("has exactly five npm ci sites across the workflows", () => {
     const sites = installSteps().map(({ file, job }) => `${file}:${job}`);
     expect(
       sites.length,

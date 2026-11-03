@@ -73,7 +73,7 @@ const exeSuffix = isWindows ? ".exe" : "";
 
 // Forward --target to cargo ONLY when it was explicitly requested. A bare
 // invocation builds natively (host triple) so the output stays under
-// reaper/target/release/ — the path the webdriver workflow and local dev rely on.
+// reaper/target/release/ — the path local dev relies on.
 const cargoArgs = ["build", "--release"];
 if (explicitTarget) cargoArgs.push("--target", explicitTarget);
 

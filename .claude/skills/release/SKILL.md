@@ -64,9 +64,7 @@ other six.
    Hygiene only, NOT a breakage surface: nothing verifies this lockfile —
    `ci.yml` runs a bare `cargo test --manifest-path src-tauri/Cargo.toml` with
    no `--locked`, so cargo silently regenerates a stale lock and CI stays
-   green. (`tauri-webdriver.yml` does pass `--locked`, but only to
-   `cargo install` for its own tooling — unrelated to `src-tauri/Cargo.lock`.)
-   The tree still goes dirty on the next local build if you skip this.
+   green. The tree still goes dirty on the next local build if you skip this.
 7. `.claude-plugin/marketplace.json` — the `tandem` entry's `source.ref`, the
    release tag the Claude Code plugin installs from (`"ref": "v<version>"`).
    **Do NOT bump it with surfaces 1–6.** It must name a tag that exists, and
@@ -266,9 +264,7 @@ other six.
    build`).
 
 8. Walk [`docs/release-smoke-checklist.md`](../../../docs/release-smoke-checklist.md): CI signal first (matrix + macOS
-   launch smoke — **not** `tauri-webdriver.yml`, whose tag trigger was removed
-   on 2026-08-08 per #1197, so a release tag no longer produces a run to check;
-   review scheduled 2026-11-01 in #1345), then real installers on real
+   launch smoke), then real installers on real
    machines — SmartScreen/Gatekeeper, updater from the *previous* version,
    file associations, `npm install -g tandem-editor@<version>` + `tandem
    doctor`. Record the outcome (platforms covered, anything skipped) on the

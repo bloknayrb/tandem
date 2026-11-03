@@ -1,15 +1,10 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  // tests/tauri-driver is a standalone sub-package with its own WebdriverIO
-  // toolchain (and its own node_modules / tsconfig). Its globals (browser, $,
-  // describe, expect, ...) aren't in the root resolution graph, so lint it from
-  // within that package, not from the root `eslint .` sweep.
   {
     ignores: [
       "dist/**",
       "node_modules/**",
-      "tests/tauri-driver/**",
       // Git worktrees checked out inside the repo, plus Rust build output. All
       // three are gitignored, so CI's fresh checkout never sees them -- but
       // locally they made `npm run lint` report 86k problems against CI's 230,

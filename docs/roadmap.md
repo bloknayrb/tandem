@@ -64,7 +64,6 @@ outcome is keep, replace or retire.
 | Date | Issue | Checkpoint |
 |---|---|---|
 | monthly — next 2026-10-29 | #1506 | Has Claude Code gone modern-only? Last pass 2026-09-29: no |
-| 2026-11-01 | #1345 | Packaged-desktop WebDriver smoke: reviewed 2026-11-02, **retire** (no green run since 2026-07-13 and no fix attempted, so the issue's own rule applies); deleting the workflow and spec is still to do |
 | 2026-11-09 | #1363 | Native theme push on Linux |
 | 2026-11-30 | #1687 | Converge the lifecycle result families |
 | 2026-12-01 | #1728 | Make `coverage` a required check, or record that its floors stay advisory |
