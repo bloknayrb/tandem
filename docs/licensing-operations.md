@@ -288,10 +288,11 @@ properties of Paddle discounts matter here:
 
 ### 1c. The cohort problem (settle this before the flip)
 
-`README.md` publicly promises beta users a free grandfathered license that skips
-the trial once they activate it. **There is no list, and no way to build one** — no telemetry, no
+`README.md` publicly promises beta testers who sent feedback a free grandfathered
+license that skips the trial once they activate it. (Through v0.29.0 it promised
+every beta user one, claimed by email.) **There is no list of beta users, and no way to build one** — no telemetry, no
 analytics, no signup. Both grandfather mechanisms (§1a and §1b) need the email
-*in advance*, so every beta user has to contact you first.
+*in advance*, which is why the cohort is the people who already got in touch.
 
 The flip choreography also actively misleads them if left alone:
 
@@ -305,15 +306,17 @@ The flip choreography also actively misleads them if left alone:
 Before flipping, decide and do:
 
 1. ~~A **claim path** that works without a list.~~ **Done:** README.md's
-   "Claiming the beta license" paragraph asks beta users to email support with
-   roughly when they first installed, then activate in Settings → License as soon
-   as the key arrives.
+   "The beta tester license" paragraph says the cohort is contacted directly,
+   asks anyone who sent feedback and heard nothing to email support saying where
+   they sent it, and says to activate in Settings → License as soon as the key
+   arrives.
 2. **Banner and wall copy naming the beta offer**, so a grandfathered user
    doesn't read the countdown as a bill. Still open: `LicenseBanner.svelte` names
    no beta offer.
-3. Whether the README promise survives "we cannot identify beta users." Largely
-   answered by the same README paragraph, which says plainly that only people who
-   get in touch can be grandfathered.
+3. Whether the README promise survives "we cannot identify beta users."
+   Answered by narrowing it (2026-11-02): the promise now covers only testers
+   who sent feedback, which the inbox and the tracker mostly enumerate and the
+   README's write-in line covers the rest.
 
 **Decided 2026-11-02: the cohort is the beta users who have sent feedback.**
 Bryan: "ok we'll go back to just people who have sent me feedback". There is no
@@ -321,6 +324,10 @@ in-app invitation (an earlier idea, a v0.30 popup inviting everyone to email for
 a code, was dropped); he contacts the cohort directly, from support@, and each
 one gets a code through the procedure in §1b. The list lives in the gitignored
 `private/v1.0-launch/grandfather-cohort.csv`, never in a tracked file.
+
+Two follow-on calls, same day. A claim email sent under the old README promise
+does not by itself qualify ("Feedback-givers only"). And the README keeps a line inviting anyone who sent feedback and
+has heard nothing to email support@ and say where they sent it.
 
 ## 2. Issuing a paid license manually (fallback)
 

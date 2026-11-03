@@ -109,9 +109,9 @@ unreachable in it.
 
 At v1.0 the gate flips, and the 14-day trial starts on every install at its first
 launch of v1.0 or later — beta installs included — and an activated key takes
-precedence over it. **Beta users are grandfathered with a free license, and they skip the
-trial by activating it** — see the claiming instructions in the README, which matter because Tandem has no telemetry
-and therefore no list of beta users to work from.
+precedence over it. **Beta testers who sent feedback get a free license, and they skip the
+trial by activating it** — see the README's "The beta tester license" paragraph. Tandem has no telemetry
+and therefore no list of beta users to work from, so the cohort is the beta testers who sent feedback.
 
 ## The states Tandem can be in
 

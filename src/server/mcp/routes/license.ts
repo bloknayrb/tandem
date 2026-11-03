@@ -50,7 +50,7 @@ export function toLicenseStatusWire(
       // gate-only renders. Without it a dark build has no way to tell a user
       // their activation worked: the pill reads "Not enforced in this version"
       // and the hint keeps saying "activate it now" whether or not they just
-      // did. The README sends every beta user down exactly that path.
+      // did. The README sends every beta tester's free key down exactly that path.
       licenseInstalled: darkInstall?.installed ?? false,
       ...(darkInstall?.licenseeEmail ? { licenseeEmail: darkInstall.licenseeEmail } : {}),
       // Loopback only, like the email: the one caller that can act on it is

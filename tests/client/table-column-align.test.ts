@@ -270,8 +270,19 @@ describe("T6 — values off the disk are not trusted", () => {
     // what is under test. Without it, `x y z` injects three arbitrary class
     // tokens onto editor DOM from a file that may not be the user's own.
     expect(cellAlignments(editor)).toEqual(["td:left", "td:-", "td:-", "td:center"]);
-    expect(editor.view.dom.innerHTML).not.toContain("not-an-align");
-    expect(editor.view.dom.innerHTML).not.toContain("x y z");
+    // Scan class tokens, not innerHTML: since @tiptap/extension-table 3.32.2 the
+    // table view writes node attributes onto <table>, so the raw `data-align`
+    // value (escaped, read by no CSS) is in the live DOM by design, exactly as
+    // the attribute's own renderHTML puts it in getHTML(). Class tokens are the
+    // injection surface; the allowlist is what keeps them out.
+    const classTokens = Array.from(editor.view.dom.querySelectorAll("[class]")).flatMap((el) =>
+      Array.from(el.classList),
+    );
+    expect(classTokens).toContain("tandem-cell-align-left");
+    for (const forged of ["not-an-align", "x", "y", "z"]) {
+      expect(classTokens).not.toContain(forged);
+    }
+    expect(classTokens.some((t) => t.includes("not-an-align"))).toBe(false);
   });
 
   it("survives an unparseable attribute instead of throwing on open", () => {
