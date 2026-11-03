@@ -42,6 +42,10 @@ payment-processor endpoint to a server that binds to loopback.
    or alert), looks the buyer up with
    `GET /customers/{customer_id}` (the webhook carries no email), and mints a
    license: `personal`, or, for a grandfather-listed email, `grandfathered`.
+   An in-scope free transaction from an unlisted email, or (production only)
+   one that arrives while `GRANDFATHER_EMAILS` is empty, mints nothing: it is
+   `ignored` with a `free-unlisted` / `free-list-empty` notice and an alert
+   (#2350, ops §1b step 4).
    Both carry `expiresAt: null`: every key includes all future updates (ADR-040,
    decision A5, 2026-10-09). It signs the canonical metadata (byte-compatible
    with `verifier.ts`), writes a `txnlic:` index entry and the issuance
@@ -67,9 +71,14 @@ payment-processor endpoint to a server that binds to loopback.
    destination (`PADDLE_NOTIFICATION_SETTING_ID`) is an active `url`
    destination taking real traffic (`traffic_source` `platform` or `all`) and
    subscribed to `transaction.completed`, or when the check cannot run or
-   throws (that alert skips the throttle). The alert lists every cause that
-   applies (`causes=cannot-run,destination,unresolved`) and, for
-   `unresolved`, the count and the first `ntf_` id. A replay leaves the original
+   throws (that alert skips the throttle). It also lists the
+   `notice:<mode>:free-unlisted:` and `notice:<mode>:free-list-empty:` keys
+   and alerts while any remain (until resolved or deleted), since Paddle got a
+   200 for those and never lists them as failed; a list that throws is
+   `cannot-run`, logged with `note: "free-notice-list-failed"`. The alert lists every cause that
+   applies (`causes=cannot-run,destination,unresolved,free-notices`) and, for
+   `unresolved`, the count and the first `ntf_` id; for `free-notices`,
+   `free_notices=N` (`N+` when a list page was incomplete). A replay leaves the original
    notification `failed` forever (#2244), which is why a recorded recovery is
    what counts. An adjustment or API-key failure older than `EVENT_TTL_S` is
    ignored, since its marker may have expired (accepted as #2340).
@@ -82,13 +91,26 @@ never the per-attempt `notification_id`), and the durable
 re-drives — re-asserts the entitlement and resends the email). A full refund
 that outraces its purchase writes a **tombstone** so the late purchase can't mint
 a live entitlement for a refunded order. Outcomes that write no marker
-(`dropped`, `issue()`'s `ignored`, every 500) are reprocessed by any replay.
+(`dropped`, `issue()`'s `ignored`, every 500) are reprocessed by any replay;
+some of those `ignored` outcomes (the `free-*` ones below) still write a record.
 
 **Durable notices:** every `dropped` event (signed, but unusable: schema drift,
-a foreign price, a missing customer, …) and every `noticed` one writes a
-`notice:<mode>:<stage>:<ref>` record to `LEDGER_KV` (ids only, no PII) before
-answering 200. A `dropped` event is deliberately NOT marked done, so replaying it
-from Paddle after a fix reprocesses it. The alert is best-effort; the record is
+a foreign price, a missing customer, …), every `noticed` one, and every
+in-scope $0 order `issue()` ignored (`free-unlisted`, `free-list-empty`) writes a
+`notice:<mode>:<stage>:<ref>` record to `LEDGER_KV` (ids only, no PII:
+`{stage, txnId?, eventId, eventType, at}`) before answering 200. `dropped` and
+the `free-*` notices are deliberately NOT marked done, so replaying them from
+Paddle after a fix reprocesses them. The `free-*` alerts throttle on one key per
+stage rather than per transaction, so a leaked code cannot send one per checkout;
+the daily check repeats them until the records are resolved or deleted. When a
+$0 order later mints (the ops §1b step 4 replay), `issue()` clears its `free-*`
+records right after writing the order, before the email; an email that then
+fails is re-driven by Paddle's retry and is the delivery check's `unresolved`
+case. `reDrive` clears again before resending a stuck email, which covers a
+mint that answered `500` after the order write. If a delete fails, it logs
+`{result: "notice-clear-failed", notice, ref}`; once the order shows
+`emailSent: true` a record still present is that case, and it stays for the
+operator. The alert is best-effort; the record is
 what the operator lists and clears (`docs/licensing-operations.md` §5b).
 `issue()` and `revoke()` each re-read the ledger a second time immediately
 before their first commit, narrowing (not eliminating) the window for a

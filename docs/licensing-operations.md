@@ -242,6 +242,11 @@ editing the list.
 > email (a leaked code would otherwise mint unbounded free licenses), and when
 > `GRANDFATHER_EMAILS` is empty it ignores every `$0` transaction before calling
 > the Paddle API at all, so a leaked code cannot drive API traffic either.
+> Neither is silent (#2350): an ignored `$0` order for a price the Worker sells
+> writes a `notice:<mode>:free-unlisted:<txn_id>` record (or
+> `free-list-empty`, when the list was empty; production only, a sandbox Worker
+> stays silent there) and alerts, so a tester who checked out with another
+> address is found rather than left with nothing. Step 4 below is the recovery.
 > "Free" means both `details.totals.grand_total` and `details.totals.total` parse
 > as integers ≤ 0; if either fails to parse the event is `dropped`, never
 > treated as paid. A `$0` checkout does fire `transaction.completed` (U2,
@@ -263,11 +268,67 @@ reissued"). Then, in this order, for each tester:
    comes back. Every code email says both. The Worker matches the checkout's
    email against the list, not the person.
 4. **Recovery, when they checked out with another address.** A $0 order from an
-   unlisted email answers `ignored`: no ledger record, no `notice:`, no alert,
-   so nothing tells you. Find the transaction in Paddle, **confirm with the
-   tester that the address they used is theirs** (anyone holding the code can
-   check out with any address), add it to the list, re-put the full list, and
-   replay the notification (§5b). Prefer a single-use code per tester (its own
+   unlisted email answers `ignored` and mints nothing, but it writes
+   `notice:<mode>:free-unlisted:<txn_id>` (ids only:
+   `{stage, txnId, eventId, eventType, at}`) and alerts. It writes no `evt:`
+   marker, so a replay after you list the address runs in full. Two things
+   start this: the alert (or the daily delivery check's `free-notices` cause,
+   §3.5b, which repeats every day until the records are resolved or deleted), or a tester's
+   support email with an order number. Either way:
+
+   1. **Find the transaction.** From the alert, list the records
+      (`kv key list --prefix "notice:live:free-unlisted:"`, as in §5b step 3);
+      the `txn_…` id is the last part of the key. From a support email, find
+      the transaction for their order number in Paddle, then look for its
+      record. Read the record (`kv key get`); `eventId` is the event to replay.
+   2. **Identify the tester** by the transaction's discount code (each tester
+      has their own single-use code, below), and **confirm with them that the
+      address they used is theirs** (anyone holding a code can check out with
+      any address).
+   3. Add the address to the cohort list and re-put the **full** list (steps 1
+      and 2 above).
+   4. **Find the notification and replay it** (§5b step 2). The replay needs the
+      notification's `ntf_…` id: `GET /notifications?filter=<txn_id>`, which
+      Paddle documents as taking "a Paddle ID or email address that appears in
+      the event payload". That is documented but **not yet measured**; it is on
+      the §8 sandbox list. Failing that, find the notification in Paddle's
+      notification log by its `event_id`.
+   5. **Verify the order.** The Worker clears that transaction's `free-*`
+      records itself when the replay mints, right after it writes the order
+      and before it sends the email. So check that `order:<mode>:<txn_id>`
+      exists (`kv key get "order:live:<txn_id>"`, as in §5b step 3), and later
+      that it shows `emailSent: true`; an email that fails is retried by
+      Paddle and, if it never goes out, is the delivery check's `unresolved`
+      case, not this record's. Delete the record by hand
+      (`kv key delete "notice:live:free-unlisted:<txn_id>"`) only if it is
+      still there once the order shows `emailSent: true`: every path that
+      sends the key tries the delete first, so that means the delete failed,
+      which it logs as `{result: "notice-clear-failed", notice, ref}`. (Before
+      `emailSent: true`, a record can still be present because the mint
+      answered `500` after the order write; Paddle's retry clears it.)
+      If the record's `at` changed and there is no order, the replay was
+      ignored again: the listed address does not match what Paddle holds.
+   6. Add the issued address to the cohort CSV.
+
+   - **Nobody vouches for the address:** treat the code as leaked. Archive or
+     deactivate that discount in Paddle **first**, then delete the records. A
+     real tester whose single-use code is now spent gets a hand-signed key
+     (§1a) or a fresh code.
+   - **A delivery-check alert names the event** (its first delivery answered
+     `500`, and only a later one was ignored): when you decline, also write
+     `ack:<mode>:<event_id>` (§5b step 5), or the check keeps alerting on the
+     failed notification.
+   - **Many records** (a leaked code): delete them in one call,
+     `npx wrangler@4.130.0 kv bulk delete keys.json --remote --namespace-id <LEDGER_KV id>`,
+     where `keys.json` is a JSON array of key-name strings
+     (`["notice:live:free-unlisted:txn_…", …]`). It asks for confirmation;
+     `--force` skips the prompt (both checked against `wrangler@4.130.0 kv bulk
+     delete --help`).
+   - **A `free-list-empty` record** means a $0 order arrived before any list was
+     put. Put the full list, then replay each `free-list-empty` record's event
+     the same way, and verify each order as in sub-step 5.
+
+   Prefer a single-use code per tester (its own
    code, `usage_limit` 1), so a forwarded code is spent once at most; the limit
    is not exact under concurrent checkouts (below), so `GRANDFATHER_EMAILS`
    stays the real control.
@@ -505,7 +566,9 @@ namespaces, and its secrets.
    step re-puts the marker against this), a notice is rewritten, and an alert
    is sent. Inside the window a capture can also re-run any outcome that writes
    **no** marker: `dropped`, `issue()`'s `ignored` (a free order, an off-list
-   sandbox buyer, an out-of-scope price) and every `500`. Rotating the webhook secret invalidates every captured
+   sandbox buyer, an out-of-scope price) and every `500`. For a free order
+   from an unlisted address, or with the list empty, that replay also rewrites
+   its `free-*` notice (recreating one you deleted) and alerts again. Rotating the webhook secret invalidates every captured
    body. Accepted as [#2341](https://github.com/bloknayrb/tandem/issues/2341)
    ([security.md](security.md#accepted-bounded--decided-not-fixed)). A missing
    header is a `400`; a bad or stale signature is a
@@ -542,7 +605,10 @@ namespaces, and its secrets.
       checkout quantity to 1 in Paddle.
    5. `customer_id` must be `ctm_…` (a null one is `dropped`).
    6. A free transaction (§1b) with `GRANDFATHER_EMAILS` empty is `ignored` here,
-      before any API call.
+      before any API call. On a production Worker it writes
+      `notice:<mode>:free-list-empty:<txn_id>` and alerts (§1b step 4); on a
+      sandbox Worker it stays silent, because the buyer is not known yet and
+      the sandbox-buyer filter (step 8) has not run.
    7. **Buyer lookup.** Paddle's webhook carries no email, so the Worker calls
       `GET /customers/{customer_id}` with `PADDLE_API_KEY` (host from the key
       prefix: `pdl_live_` → `api.paddle.com`, `pdl_sdbx_` →
@@ -560,7 +626,9 @@ namespaces, and its secrets.
 
    8. On a sandbox Worker (a `pdl_sdbx_` key), a buyer whose email is not in
       `SANDBOX_BUYER_EMAILS` is `ignored` (§3.5b).
-   9. A free transaction from an email not in `GRANDFATHER_EMAILS` is `ignored`.
+   9. A free transaction from an email not in `GRANDFATHER_EMAILS` is `ignored`,
+      and writes `notice:<mode>:free-unlisted:<txn_id>` and alerts (§1b step 4).
+      The record holds ids only, never the address.
    10. Mint and sign (`personal`, or `grandfathered` for a listed email; both
       `expiresAt: null`, all future updates included), re-check the ledger, write
       the `txnlic:<mode>:<txn_id>:<licenseId>` index entry, write the **ledger**
@@ -608,16 +676,20 @@ marked done), `revoked`, `settled` and `noticed` reply `200` and mark the event
 done (`evt:<mode>:<event_id>`, 4-day TTL; an `event_id` outside Paddle's
 documented shape is keyed by the `body_…` digest instead). `ignored` replies `200`; it is marked
 done for an unknown event type but **not** for a transaction `issue()` ignores
-(a free one, or a sandbox buyer not on the list). `dropped`
+(a free one, or a sandbox buyer not on the list). An ignored free order for an
+in-scope price also carries a notice (`free-unlisted`, or `free-list-empty` on a
+production Worker) and is alerted, still unmarked (§1b step 4). `dropped`
 replies `200` and is deliberately **not** marked, so a replay after you fix the
 cause is processed again. `error` replies `500` (Paddle retries) with a
 non-PII `stage`; `rejected` is a `400`/`401`/`405`.
 
-**Every `noticed` and every `dropped` leaves a durable record** before the 200
-reply: `notice:<mode>:<stage>:<ref>` in `LEDGER_KV`, holding
-`{stage, txnId?, eventType, at}` and no PII, with no TTL. The ref is the
+**Every `noticed`, every `dropped` and every `free-*` `ignored` leaves a
+durable record** before the 200 reply: `notice:<mode>:<stage>:<ref>` in
+`LEDGER_KV`, holding `{stage, txnId?, eventId, eventType, at}` and no PII, with
+no TTL. `eventId` is the event's own id (`evt_…`, or the `body_…` digest), which
+you need to find the notification to replay and to key an `ack:`. The ref is the
 adjustment, transaction, event or API-key id (`adj_…`, `txn_…`, `evt_…`,
-`apikey_…`); for an unparseable body with no usable `event_id` it is
+`apikey_…`; the `free-*` notices use the `txn_…` id); for an unparseable body with no usable `event_id` it is
 `body_<16 hex>`, a digest a replay reproduces. If that write fails the Worker
 replies `500` (stage `notice-write`, alerted) and Paddle retries; the write is
 idempotent. Paddle will not retry a 200, and the alert is best-effort, so **the
@@ -629,7 +701,8 @@ whether it replays), the `evt:<mode>:<event_id>` completion marker (keyed on
 `event_id`, or its body digest when the id is malformed, never on the
 per-attempt `notification_id`), and the durable
 `order:<mode>:<txn_id>` ledger. The unmarked outcomes (`dropped`, `issue()`'s
-`ignored`, every `500`) stay replayable for the whole window. PII lives only in `LEDGER_KV`; `LICENSE_KV` is
+`ignored`, with or without a `free-*` notice, every `500`) stay replayable for
+the whole window. PII lives only in `LEDGER_KV`; `LICENSE_KV` is
 PII-free; the HTTP response never carries the blob; logs are `{ result, ts }`
 plus a non-PII `stage`/`status` or `notice`/`ref`, never an email or license id.
 
@@ -703,15 +776,27 @@ value is fixed.
 `GET /notifications?status=failed,needs_retry&from=<now − 89 days>&per_page=150`
 and `GET /notification-settings` with the Worker's own API key, and raises an
 operator alert (stage `delivery-check`) if any failed or waiting notification is
-**unresolved**, if this Worker's own destination would not deliver a sale, or if the check itself
+**unresolved**, if this Worker's own destination would not deliver a sale, if
+any ignored-$0 `notice:` record remains (below), or if the check itself
 could not run (no usable key, an API error, or a throw anywhere in the check;
 that last alert skips the 5-minute throttle). The alert and its log line carry
 `causes=` with every cause that applies: `cannot-run` (no usable key, an API
 or page failure, or a throw), `destination` (this Worker's destination would
-not deliver a real sale, or its id is unset) and `unresolved`. With
-`unresolved` it also names how many notifications are unresolved and the first
+not deliver a real sale, or its id is unset), `unresolved` and `free-notices`.
+With `unresolved` it also names how many notifications are unresolved and the first
 one's `ntf_` id (or its `evt_` id), so a new failure does not read like a
-standing one. This is what notices a
+standing one. **`free-notices`** (#2350) means `notice:<mode>:free-unlisted:`
+or `notice:<mode>:free-list-empty:` records exist: ignored $0 orders waiting for
+§1b step 4. Paddle got a `200` for those, so they never appear as failed
+notifications; the check lists both prefixes itself (one KV `list` each, needing
+no Paddle key) and prints `free_notices=N`, or `N+` when a prefix held more keys
+than one list page returns. It repeats daily while any record remains (the
+Worker clears a record when its replay mints; otherwise you delete it, §1b
+step 4), which is what catches an alert the per-stage throttle swallowed
+(§5c). A list that throws is `cannot-run`, and logs
+`{result: "error", stage: "delivery-check", note: "free-notice-list-failed"}`,
+so a `cannot-run` from KV can be told apart from one from Paddle. This is what
+notices a
 webhook secret that no longer matches, since bad signatures never alert. The
 comma-separated `status` filter was confirmed in the sandbox (#2244).
 
@@ -753,8 +838,8 @@ comma-separated `status` filter was confirmed in the sandbox (#2244).
   true (`next` is "Always returned, even if `has_more` is `false`", per the
   same list-notifications reference), only to a URL on the same Paddle API
   host, and stops after 2 pages of 150. At up to three KV reads a row (`evt:`,
-  `ack:`, `order:`) that stays under the 1,000 KV operations allowed per
-  Worker invocation (developers.cloudflare.com/kv/platform/limits). More pages than that, a missing `meta.pagination`, or a page
+  `ack:`, `order:`), plus the two `free-notices` lists, that is at most 902, under
+  the 1,000 KV operations allowed per Worker invocation (developers.cloudflare.com/kv/platform/limits). More pages than that, a missing `meta.pagination`, or a page
   that fails to load alerts.
 - **Known limit.** A paid sale whose notification never recovers alerts daily
   for as long as Paddle lists it, as before, until you either recover it or
@@ -1041,10 +1126,12 @@ failures that matter most, because they produce **no ledger record at all**:
    the marker for that reason. Replaying an already-processed event is also not
    free: the replay is a fresh signed delivery, so a capture of it stays usable
    for 4 days minus 1 hour from the replay, longer than the original marker
-   (#2341). Replay only what failed. A replay passed the signature check in
+   (#2341). Replay only what failed, or what a `notice:` record asks you to
+   replay (a `dropped` one, or a §1b step 4 `free-*` one). A replay passed the signature check in
    the sandbox (U1).
-3. **List and act on the notices.** Every `dropped` and `noticed` event left a
-   record:
+3. **List and act on the notices.** Every `dropped` and `noticed` event, and
+   every $0 order ignored at the `free-unlisted` or `free-list-empty` stage,
+   left a record:
 
    ```bash
    npx wrangler@4.130.0 kv key list --prefix "notice:live:" --remote --namespace-id <LEDGER_KV id>
@@ -1052,10 +1139,16 @@ failures that matter most, because they produce **no ledger record at all**:
    ```
 
    The value names the stage, the transaction (`txnId`, when known), the
-   event type and when it was written (`at`). Act on it: for
-   `refund-partial`, decide whether the partials now add up to a full refund
-   and revoke by hand if so (§7); for the reversal notices, restore by hand
-   (§7); for `api-key-expiry`, replace the key. Then delete the record:
+   event (`eventId`), the event type and when it was written (`at`). Act on
+   it: for `refund-partial`, decide whether the partials now add up to a full
+   refund and revoke by hand if so (§7); for the reversal notices, restore by
+   hand (§7); for `api-key-expiry`, replace the key; for `free-unlisted` and
+   `free-list-empty`, follow §1b step 4 (the Worker clears the record when the
+   replay mints; you delete it by hand when you decide not to list the
+   address, or when the order shows `emailSent: true` and the record is still
+   there, meaning the Worker's delete failed: look for a `notice-clear-failed`
+   log line). Then
+   delete the record:
 
    ```bash
    npx wrangler@4.130.0 kv key delete "notice:live:<stage>:<ref>" --remote --namespace-id <LEDGER_KV id>
@@ -1075,7 +1168,10 @@ failures that matter most, because they produce **no ledger record at all**:
    fixed. If neither the notice nor the order changed, the replay is still
    pending or answered `500`. In both cases keep the notice and look again.
    A replay that drops again alerts again, at most once per ref per isolate
-   every 5 minutes (the alert throttle); that is expected (#2341). A dropped event that is not a sale (an
+   every 5 minutes (the alert throttle); that is expected (#2341). The `free-*`
+   notices throttle on one shared key per stage instead (§5c), so a replay
+   that is ignored again may send no alert of its own; the rewritten `at` and
+   the daily `free-notices` cause still show it. A dropped event that is not a sale (an
    adjustment, or a body with no `txnId`) has no order record to prove it;
    check its effect by hand (for a refund, the revoked entitlement, §7) before
    deleting the notice.
@@ -1097,10 +1193,15 @@ failures that matter most, because they produce **no ledger record at all**:
    (§3.5b) alerts on a failed notification until the Worker has a record of
    recovering it, and some never will: a sale you fulfilled by hand (§1a or
    §2), or a replay that `issue()` answered `ignored` (for example a $0 order
-   from an address you then chose not to list). Each would repeat the same
-   daily alert for up to 89 days. Once you have dealt with it, write an ack
-   under the notification's `event_id` (`evt_…`, from `payload.event_id` in
-   Paddle's notification log). It never expires. The checker accepts any value,
+   from an address you then chose not to list, when its first delivery failed
+   with a `500` and only a later one was ignored; an ignored notice replies
+   `200` on its own and never reaches the failed list. Then the event sits in
+   the failed list as well as in a `free-*` record, and deleting the record
+   quiets only the `free-notices` cause). Each would repeat
+   the same daily alert for up to 89 days. Once you have dealt with it, write an
+   ack under the notification's `event_id` (`evt_…`, from `payload.event_id` in
+   Paddle's notification log, or the `eventId` in its `notice:` record when
+   that is an `evt_…` id). It never expires. The checker accepts any value,
    but **the value must carry no email and no name**: a date and a reason code
    only, e.g. `2026-11-05 manual-fulfil` or `2026-11-05 ignored-unlisted`. It
    sits in `LEDGER_KV` with no TTL, and the erasure steps (§7) look for it:
@@ -1131,6 +1232,7 @@ for:
 |---|---|---|
 | `dropped` | A signed event could not be fulfilled; a paid sale may be behind it | 200 + `notice:` record |
 | `noticed` | An adjustment or API-key event a human must act on | 200 + `notice:` record |
+| `ignored` with notice `free-unlisted` or `free-list-empty` | A $0 order for a price the Worker sells came from an address not in `GRANDFATHER_EMAILS`, or arrived while the list was empty (production only); a beta tester may be waiting (§1b step 4) | 200 + `notice:` record, no `evt:` marker |
 | stage `email` | A license was minted but not emailed | 500 |
 | stage `paddle-api` | The Paddle API could not be reached to look up a buyer | 500 |
 | stage `paddle-api-auth` | The Paddle API key is expired or lacks `customer.read`; every sale fails until it is replaced | 500 |
@@ -1143,9 +1245,11 @@ Not alerted, deliberately: `rejected` (a missing or bad signature, a stale
 timestamp, an oversized body, a non-POST: anyone on the internet can produce
 these, and an alert per request would drain the Resend quota that delivers
 licenses), `unexpected` / `blob-size` (transient, retried), and the quiet 200s
-(`issued`, `duplicate`, `revoked`, `settled`, `ignored`). `ignored` includes a
-free transaction for a price outside `PADDLE_PRICE_IDS` and, on a sandbox
-Worker, a buyer outside `SANDBOX_BUYER_EMAILS`: both leave no record.
+(`issued`, `duplicate`, `revoked`, `settled`, and `ignored` without a notice).
+The silent `ignored` cases are an unknown event type, a free transaction for a
+price outside `PADDLE_PRICE_IDS` and, on a sandbox Worker, a buyer outside
+`SANDBOX_BUYER_EMAILS` or any free order while `GRANDFATHER_EMAILS` is empty:
+none of these leaves a record.
 
 The config stages are enumerated rather than prefix-matched, and they are the
 only alerts raised before signature verification, so their volume is bounded by
@@ -1154,7 +1258,7 @@ ones. An alert about a broken `RESEND_FROM` never goes through Resend, for the
 same reason an email-stage one does not: the fallback would send *from* the
 broken address.
 
-A 200-reply alert (`dropped`, `noticed`) says "Paddle will not retry this" and
+A 200-reply alert (`dropped`, `noticed`, a `free-*` `ignored`) says "Paddle will not retry this" and
 points at the `notice:` keys (§5b); a 500-reply alert says Paddle retries for up
 to 3 days (60 attempts) and then marks the notification failed.
 
@@ -1169,7 +1273,14 @@ Paddle id, or payload bytes; the ids are in the `notice:` record and the log
 line. Alerts are throttled per isolate for five minutes, by (result, stage), so
 a retry storm doesn't become an alert storm; `noticed` and `dropped` are
 throttled by (result, stage, ref) instead, so two different transactions never
-share a slot.
+share a slot. The `free-*` notices are the exception: they share **one** slot
+per stage (`ignored:<stage>`), because anyone holding a leaked 100% code can
+make many distinct transactions, and a per-ref slot would send an email for
+each. So a second same-stage event inside one isolate's 5 minutes sends no
+alert of its own; its record is still written, and the daily delivery check
+reports every record that remains (`free-notices`, §3.5b), so a swallowed alert
+is late by a day at most. Records remain until resolved (the Worker clears one
+when its replay mints) or deleted by hand.
 
 `wrangler tail` is a **debugging tool, not an alert**: no history, no thresholds,
 no notification, and it dies with the terminal session. Cloudflare offers nothing
@@ -1462,6 +1573,17 @@ enforces the license (the flip, §4) ships. A ticked line records what the
 - [ ] **No grandfather or live key is sent until a release carrying
       `c24dd9f66f449a56` has shipped and installs have updated.** Until then a
       tester or buyer on the build they have is told their key is unverifiable.
+- [ ] **The §1b step 4 recovery, end to end in the sandbox (#2350).** With a non-empty `GRANDFATHER_EMAILS` that leaves
+      out one test buyer who is in `SANDBOX_BUYER_EMAILS`, check out at $0 with
+      that buyer: a `notice:<mode>:free-unlisted:<txn_id>` record appears and
+      an alert arrives. List the buyer, re-put the full list, replay, and see
+      `issued` and `order:<mode>:<txn_id>` with `emailSent: true`. Measure two
+      things on the way: (a) whether `GET /notifications?filter=<txn_id>` finds
+      the notification to replay (documented, not yet measured); (b) whether
+      Paddle emails the buyer a receipt with an order number for a $0 order,
+      which tandem.ink's `/thanks` copy relies on. Confirm the record is gone
+      once the replay mints (the Worker clears it); if it is not, look for a
+      `notice-clear-failed` log line, then delete it.
 - [ ] **U1 — mitigated by the widened window (#2341); live retry behaviour
       unproven.** Does a Paddle retry, and an API replay, carry a *fresh* `ts`
       in `Paddle-Signature`? The replay half passed in the sandbox (an API
