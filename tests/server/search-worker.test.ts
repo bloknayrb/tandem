@@ -63,8 +63,14 @@ describe("searchRegexInWorker — the event loop stays free", () => {
     }, 10);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const re = new RegExp("(a+)+$", "gi");
+    // The run length sets how long the main thread is blocked, doubling per
+    // extra `a`. It only has to clear the 500 ms floor below. Measured on
+    // Node 24.22.1 (Windows, quiet machine, fresh process each): 24 → 1.7–2.2 s,
+    // 25 → 3.6–3.8 s, 26 → 7.0–7.4 s. At 26 the full pre-push suite's load
+    // pushed it past this spec's 15 s timeout on every run (2026-11-03), so 24
+    // keeps ~3.5x headroom over the floor and ~7x under the timeout.
     const t0 = Date.now();
-    re.exec("a".repeat(26) + "b");
+    re.exec("a".repeat(24) + "b");
     const elapsed = Date.now() - t0;
     clearInterval(interval);
 
