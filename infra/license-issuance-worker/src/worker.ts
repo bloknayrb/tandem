@@ -464,8 +464,9 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
     // A mint that 500'd after its order write (a failed entitlement put, a
     // dead isolate) never reached `issue()`'s clear, and every retry lands
     // here, so clear again. Every free mint is `grandfathered` (a free order
-    // from anyone else is ignored), so a paid order never pays for the deletes
-    // or logs a clear failure about a record it never had.
+    // from anyone else is ignored), so a `personal` order, the usual paid case,
+    // skips the deletes. A paid order from a listed address is `grandfathered`
+    // too and runs them; deleting a missing key is a no-op.
     if (existing.type === "grandfathered") {
       await clearIgnoredNotices(deps, existing.orderId, deps.now());
     }
