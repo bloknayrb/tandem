@@ -315,7 +315,8 @@ Before flipping, decide and do:
    no beta offer.
 3. Whether the README promise survives "we cannot identify beta users."
    Answered by narrowing it (2026-11-02): the promise now covers only testers
-   who sent feedback, a set the inbox and the tracker can enumerate.
+   who sent feedback, which the inbox and the tracker mostly enumerate and the
+   README's write-in line covers the rest.
 
 **Decided 2026-11-02: the cohort is the beta users who have sent feedback.**
 Bryan: "ok we'll go back to just people who have sent me feedback". There is no
@@ -325,11 +326,9 @@ one gets a code through the procedure in §1b. The list lives in the gitignored
 `private/v1.0-launch/grandfather-cohort.csv`, never in a tracked file.
 
 Two follow-on calls, same day. A claim email sent under the old README promise
-does not by itself qualify: feedback-givers only (none had arrived when the
-wording narrowed). And the README invites anyone who sent feedback and heard
-nothing to write in saying where they sent it, because feedback given on
-Reddit, Discord or in person left no address; check each claim against that
-source before adding the row.
+does not by itself qualify ("Feedback-givers only"); a Gmail search that day
+found none. And the README keeps a line inviting anyone who sent feedback and
+has heard nothing to email support@ and say where they sent it.
 
 ## 2. Issuing a paid license manually (fallback)
 
