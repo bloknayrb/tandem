@@ -290,7 +290,7 @@ properties of Paddle discounts matter here:
 
 `README.md` publicly promises beta testers who sent feedback a free grandfathered
 license that skips the trial once they activate it. (Through v0.29.0 it promised
-every beta user one.) **There is no list of beta users, and no way to build one** — no telemetry, no
+every beta user one, claimed by email.) **There is no list of beta users, and no way to build one** — no telemetry, no
 analytics, no signup. Both grandfather mechanisms (§1a and §1b) need the email
 *in advance*, which is why the cohort is the people who already got in touch.
 
@@ -326,8 +326,7 @@ one gets a code through the procedure in §1b. The list lives in the gitignored
 `private/v1.0-launch/grandfather-cohort.csv`, never in a tracked file.
 
 Two follow-on calls, same day. A claim email sent under the old README promise
-does not by itself qualify ("Feedback-givers only"); a Gmail search that day
-found none. And the README keeps a line inviting anyone who sent feedback and
+does not by itself qualify ("Feedback-givers only"). And the README keeps a line inviting anyone who sent feedback and
 has heard nothing to email support@ and say where they sent it.
 
 ## 2. Issuing a paid license manually (fallback)
