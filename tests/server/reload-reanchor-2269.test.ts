@@ -38,11 +38,20 @@ vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) =>
   return { ...actual, deleteSession: vi.fn(actual.deleteSession) };
 });
 
+// Same reason as tests/server/annotations/sync.test.ts: the store's
+// fire-and-forget ACL run on a fresh `annotations/` held the directory at
+// teardown on Windows (#2347, #2289). Nothing here tests ACLs.
+vi.mock(import("../../src/server/integrations/acl-win.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import {
   acquireStoreLock,
   envelopePath,
   getAnnotationsDir,
+  quiesceForTesting,
   resetForTesting,
 } from "../../src/server/annotations/store.js";
 import { contentGeneration } from "../../src/server/documents/content-generation.js";
@@ -155,10 +164,18 @@ function kindOf(doc: Y.Doc, id: string): string {
   return refreshRange(ann, doc).kind;
 }
 
+/**
+ * How long a poll waits for a debounced durable write: POLL_TRIES × 25 ms.
+ * One second was not enough under full-suite load on Windows (#2347). A poll
+ * returns as soon as it sees the write, so a passing spec pays nothing for the
+ * width; only a missing write waits the full 4 s, inside the 15 s testTimeout.
+ */
+const POLL_TRIES = 160;
+
 /** Let the durable store's debounce fire. */
 async function settleEnvelope(filePath: string): Promise<void> {
   const target = envelopePath(docHash(filePath));
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < POLL_TRIES; i++) {
     await new Promise((r) => setTimeout(r, 25));
     if (
       await fs
@@ -413,7 +430,7 @@ describe("the remap lands with the content — no window, no loss", () => {
 
     // The merge queued the write; wait for the debounce, then read it back.
     let onDisk: { range: unknown } | undefined;
-    for (let i = 0; i < 40 && !onDisk; i++) {
+    for (let i = 0; i < POLL_TRIES && !onDisk; i++) {
       await new Promise((r) => setTimeout(r, 25));
       const env = JSON.parse(await fs.readFile(envelopePath(docHash(filePath)), "utf-8")) as {
         annotations: Array<{ id: string; range: unknown }>;
@@ -448,6 +465,10 @@ describe.each(Object.keys(ENVELOPE_WIN_PATHS))(
       await settleEnvelope(filePath);
       const preReloadRange = annMap(doc).get("mcp")?.range;
       if (!preReloadRange) throw new Error("mcp not seeded");
+      // `settleEnvelope` returns once the file exists, which can be before a
+      // second queued write lands; let it land first, or its rename replaces
+      // the hand edit below.
+      await quiesceForTesting();
       // Another writer bumped the durable copy past the map's (same old
       // coordinates, newer rev), so the post-reload merge takes the FILE copy.
       const envPath = envelopePath(docHash(filePath));
@@ -483,7 +504,7 @@ describe.each(Object.keys(ENVELOPE_WIN_PATHS))(
       // the remapped range reaches the envelope rather than the stale one.
       const expected = after?.range;
       let onDisk: Record<string, unknown> | undefined;
-      for (let i = 0; i < 40 && !onDisk; i++) {
+      for (let i = 0; i < POLL_TRIES && !onDisk; i++) {
         await new Promise((r) => setTimeout(r, 25));
         const latest = JSON.parse(await fs.readFile(envPath, "utf-8")) as {
           annotations: Array<Record<string, unknown>>;
