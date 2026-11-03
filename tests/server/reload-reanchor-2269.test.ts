@@ -466,8 +466,8 @@ describe.each(Object.keys(ENVELOPE_WIN_PATHS))(
       const preReloadRange = annMap(doc).get("mcp")?.range;
       if (!preReloadRange) throw new Error("mcp not seeded");
       // `settleEnvelope` returns once the file exists, which can be before a
-      // second queued write lands; let it land first, or its rename replaces
-      // the hand edit below.
+      // second write lands. Let a running one land and cancel a still-debounced
+      // one, or its rename replaces the hand edit below.
       await quiesceForTesting();
       // Another writer bumped the durable copy past the map's (same old
       // coordinates, newer rev), so the post-reload merge takes the FILE copy.
