@@ -641,8 +641,9 @@ is structurally blind to it — those sales have no record to find. What the
 Worker can do is leave a trace of two kinds:
 
 - **A durable record.** Every event the Worker authenticated but could not
-  fulfil (`dropped`), and every refund or API-key event that needs a human
-  (`noticed`), writes a `notice:` key to `LEDGER_KV` before the Worker answers
+  fulfil (`dropped`), every refund or API-key event that needs a human
+  (`noticed`), and every $0 order it ignored for a price it sells (below),
+  writes a `notice:` key to `LEDGER_KV` before the Worker answers
   200. The alert that goes with it is best-effort; the record is what the
   operator lists, acts on and clears.
 - **A daily check.** A bad signature never alerts, because anyone on the
@@ -656,17 +657,27 @@ Worker can do is leave a trace of two kinds:
   destination (pinned by id) is active and subscribed to completed sales, or
   if it cannot ask.
 
+A free (100%-code) transaction for a price the Worker sells, from a buyer not
+on the grandfather list (or while the list is empty), mints nothing but is not
+silent (#2350): it leaves a `free-unlisted` (or `free-list-empty`) notice with
+ids only, sends an alert, and is counted by the daily check until the record is
+resolved (a later replay that issues deletes it) or deleted by the operator, because that buyer may be a beta tester who checked out
+with another address. Its alerts share one throttle slot per stage, so a leaked
+code cannot fill the operator's inbox with one email per checkout.
+
 Two silences remain, deliberately. A `rejected` request (no signature, a bad
-one, a stale one) leaves nothing, for the reason above. And a free (100%-code)
-transaction is `ignored` with no record and no alert when its buyer is not on
-the grandfather list or its price is not one the Worker sells, because nobody
-paid and a leaked code must not become a way to fill the operator's inbox. (A
-sandbox Worker also ignores every buyer not on its own test list.) Whether Paddle also deactivates a destination that keeps
+one, a stale one) leaves nothing, for the reason above. And a free transaction
+whose price is not one the Worker sells is `ignored` with no record and no
+alert, because nobody paid and a leaked client token must not become a way to
+fill the operator's inbox. (A sandbox Worker also silently ignores every buyer
+not on its own test list, and every free order while its grandfather list is
+empty.) Whether Paddle also deactivates a destination that keeps
 failing is unverified (U5); the daily check looks for that too.
 
 ## Why alerts don't go through the thing that's broken
 
-Operator alerts fire on `dropped` and `noticed` results, on email-stage and
+Operator alerts fire on `dropped` and `noticed` results, on the ignored-$0
+notices, on email-stage and
 Paddle-API failures, on a failed notice write, on a corrupt ledger record, on
 the config stages, and from
 the daily delivery check. The email-stage alert deliberately does **not** route through Resend — Resend is

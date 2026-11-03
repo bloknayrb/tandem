@@ -157,7 +157,8 @@ export interface KvNamespace {
 
 /** Coarse, closed result enum for logging. `settled` = an authenticated
  * adjustment that needs no action; `noticed` = an authenticated event a human
- * must act on (a durable `notice:` record is written first). */
+ * must act on (a durable `notice:` record is written first, and the event is
+ * marked done). `ignored` can carry a notice too, unmarked: see NOTICE_POLICY. */
 export type ResultKind =
   | "issued"
   | "duplicate"
@@ -194,7 +195,42 @@ export type NoticeStage =
   | "credit-reverse"
   | "chargeback-reverse"
   | "adjustment-reversed"
-  | "dropped";
+  | "dropped"
+  | "free-unlisted"
+  | "free-list-empty";
+
+/** How the handler settles each notice: whether it writes the `evt:` completion
+ * marker, and the result it replies with. Exhaustive, so a new stage does not
+ * compile until someone decides both. The union ties them together: only a
+ * `noticed` result is ever marked.
+ *
+ * Unmarked stages are the ones a replay must be able to run again once the
+ * operator fixes the cause. `dropped` is any unfulfillable event. The two
+ * `free-*` stages are a $0 order `issue()` ignored (#2350): the §1b recovery
+ * lists the address and replays the event, which a marker would answer
+ * `duplicate`. They reply `ignored` because nothing was minted and the event is
+ * not done, and `noticed` means marked done (ops §3.5a, Result kinds). */
+type NoticePolicy =
+  | { marked: true; result: "noticed" }
+  | { marked: false; result: "dropped" | "ignored" };
+const MARKED: NoticePolicy = { marked: true, result: "noticed" };
+const NOTICE_POLICY: Record<NoticeStage, NoticePolicy> = {
+  "api-key-expiry": MARKED,
+  "refund-partial": MARKED,
+  "credit-partial": MARKED,
+  "credit-reverse": MARKED,
+  "chargeback-reverse": MARKED,
+  "adjustment-reversed": MARKED,
+  dropped: { marked: false, result: "dropped" },
+  "free-unlisted": { marked: false, result: "ignored" },
+  "free-list-empty": { marked: false, result: "ignored" },
+};
+
+/** An unmarked notice that replies `ignored`: the ignored-$0 stages. Derived
+ * from the table, so a new one cannot miss the shared alert throttle or the
+ * daily delivery check's count. */
+const isIgnoredNotice = (stage: NoticeStage): boolean => NOTICE_POLICY[stage].result === "ignored";
+const IGNORED_NOTICE_STAGES = (Object.keys(NOTICE_POLICY) as NoticeStage[]).filter(isIgnoredNotice);
 
 interface Failure {
   stage: FailStage;
@@ -219,13 +255,18 @@ export interface LogEntry {
   unresolved?: number;
   /** Delivery check only: every reason it alerted (see `DeliveryCheckCause`). */
   causes?: DeliveryCheckCause[];
+  /** Delivery check only: how many ignored-$0 `notice:` records exist, and
+   * whether there were more than one list page could show. */
+  free?: { count: number; more: boolean };
 }
 
 /** Why the delivery check alerted. `cannot-run`: no usable key, an API or page
  * failure, or a throw. `destination`: this Worker's pinned destination would
  * not deliver a real sale, or its id is unset. `unresolved`: failed
- * notifications nothing records as recovered. */
-export type DeliveryCheckCause = "cannot-run" | "destination" | "unresolved";
+ * notifications nothing records as recovered. `free-notices`: ignored-$0
+ * `notice:` records are waiting for the operator (#2350); Paddle got a 200 for
+ * those, so they never appear as failed notifications. */
+export type DeliveryCheckCause = "cannot-run" | "destination" | "unresolved" | "free-notices";
 
 /** What issue()/revoke() produce. */
 type EventOutcome = Exclude<ResultKind, "rejected" | "error" | "noticed"> | Failure | Notice;
@@ -496,8 +537,13 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   // 6.
   const customerId = data?.customer_id;
   if (typeof customerId !== "string" || !CTM_ID.test(customerId)) return "dropped";
-  // 7. A leaked 100% code cannot drive Paddle API traffic.
-  if (free && !deps.hasGrandfathers) return "ignored";
+  // 7. A leaked 100% code cannot drive Paddle API traffic. With no list, a $0
+  // in-scope order means a code went out before the list did, so it leaves a
+  // notice (#2350). Not on a sandbox Worker: the buyer is not known yet, so the
+  // sandbox-buyer filter below has not run, and its ignores stay silent.
+  if (free && !deps.hasGrandfathers) {
+    return deps.sandboxBuyers ? "ignored" : { notice: "free-list-empty", ref: txnId, txnId };
+  }
   // 8. Buyer lookup.
   const found = await deps.lookupCustomer(customerId);
   if (!found.ok) {
@@ -516,9 +562,11 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   // sandbox client token and the 4242 test card would otherwise get a real,
   // permanent run license while SANDBOX_SIGNING_UNTIL is open.
   if (deps.sandboxBuyers && !deps.sandboxBuyers.has(email.toLowerCase())) return "ignored";
-  // 9. Free-order gate, now that the email is known.
+  // 9. Free-order gate, now that the email is known. A tester who checked out
+  // with another address would otherwise get nothing with no trace (#2350), so
+  // this leaves a notice (ids only) for the §1b recovery.
   const grandfathered = deps.isGrandfathered(email);
-  if (free && !grandfathered) return "ignored";
+  if (free && !grandfathered) return { notice: "free-unlisted", ref: txnId, txnId };
 
   // 10. Fresh issuance.
   const licenseId = deps.newLicenseId();
@@ -553,6 +601,15 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   if (!sent.ok) return { stage: "email", status: sent.status };
   rec.emailSent = true;
   await writeOrder(deps, rec);
+  // A $0 order that issues is the §1b recovery replay of an earlier ignored
+  // one, so its notice is resolved: clear it here, or the daily check would
+  // keep alerting about a tester who already has their key. Best-effort: a
+  // failed delete leaves the record for the operator, and the check says so.
+  if (free) {
+    for (const stage of IGNORED_NOTICE_STAGES) {
+      await deps.ledgerKv.delete(noticeKeyOf(deps.isTest, stage, txnId)).catch(() => {});
+    }
+  }
   return "issued";
 }
 
@@ -732,35 +789,45 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
     );
     if (!ok) return reply(401, "rejected");
 
-    // Every notice and every drop leaves a durable record BEFORE the 200 reply,
-    // because Paddle will not retry a 200 and the alert is best-effort. A
-    // failed write is a 500 (alertable), so Paddle retries; the put is
-    // idempotent. Ids only, no PII.
-    const writeNotice = (n: Notice, eventType: unknown) =>
-      deps.ledgerKv.put(
-        noticeKeyOf(deps.isTest, n.notice, n.ref),
-        JSON.stringify({
-          stage: n.notice,
-          ...(n.txnId ? { txnId: n.txnId } : {}),
-          eventType: typeof eventType === "string" ? eventType : null,
-          at: new Date(nowMs).toISOString(),
-        }),
-      );
-    // A drop stays unmarked so a replay after the operator fixes the cause
-    // still works.
-    const drop = async (
-      ref: string,
+    // Every notice (a drop included) leaves a durable record BEFORE the 200
+    // reply, because Paddle will not retry a 200 and the alert is best-effort.
+    // A failed write is a 500 (alertable), so Paddle retries; the put is
+    // idempotent. Ids only, no PII. `eventId` is the event's ref (an `evt_…` id,
+    // or the `body_…` digest), which the operator needs to find the
+    // notification to replay and to key an `ack:`.
+    //
+    // Then NOTICE_POLICY decides the marker: an unmarked notice (a drop, an
+    // ignored $0 order) stays replayable so a replay after the operator fixes
+    // the cause still works. `evtKey` is absent only before the event id is
+    // known, where the only notice is a drop (unmarked).
+    const settleNotice = async (
+      n: Notice,
       eventType: unknown,
-      txnId?: string | null,
+      eventId: string,
+      evtKey?: string,
     ): Promise<Response> => {
-      const n: Notice = { notice: "dropped", ref, ...(txnId ? { txnId } : {}) };
+      const policy = NOTICE_POLICY[n.notice];
       try {
-        await writeNotice(n, eventType);
+        await deps.ledgerKv.put(
+          noticeKeyOf(deps.isTest, n.notice, n.ref),
+          JSON.stringify({
+            stage: n.notice,
+            ...(n.txnId ? { txnId: n.txnId } : {}),
+            eventId,
+            eventType: typeof eventType === "string" ? eventType : null,
+            at: new Date(nowMs).toISOString(),
+          }),
+        );
       } catch {
         return reply(500, "error", { stage: "notice-write" });
       }
-      return reply(200, "dropped", n);
+      if (policy.marked && evtKey) {
+        await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
+      }
+      return reply(200, policy.result, n);
     };
+    const drop = (ref: string, eventType: unknown, txnId?: string | null): Promise<Response> =>
+      settleNotice({ notice: "dropped", ref, ...(txnId ? { txnId } : {}) }, eventType, ref);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let payload: any;
@@ -801,13 +868,7 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
     // Notice before Failure: both are objects, and a Notice routed to the
     // Failure arm would reply 500 to an event that needs no retry.
     if (typeof outcome !== "string" && "notice" in outcome) {
-      try {
-        await writeNotice(outcome, eventType);
-      } catch {
-        return reply(500, "error", { stage: "notice-write" });
-      }
-      await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
-      return reply(200, "noticed", outcome);
+      return settleNotice(outcome, eventType, eventRef, evtKey);
     }
     if (typeof outcome !== "string") return reply(500, "error", outcome);
     if (outcome === "dropped") return drop(eventRef, eventType, txnIdOf(eventType, payload.data));
@@ -1177,6 +1238,8 @@ export function licenseEmailText(blob: string, supportEmail: string): string {
 // Worth waking someone for (exact set in `isAlertable`):
 //   - `dropped`  — a payload we couldn't fulfil. A paid sale may be behind it.
 //   - `noticed`  — an adjustment or API-key event a human must act on.
+//   - `ignored` with a `free-*` notice — a $0 order from an unlisted address
+//     (or with the list empty): a beta tester may be waiting (#2350).
 //   - `stage:"email"` — the license was minted but not delivered.
 //   - `paddle-api*` / `notice-write` — a sale is waiting on Paddle or on KV.
 //   - the `config*` stages — the Worker is 503ing every webhook, so no sale can
@@ -1247,6 +1310,10 @@ const NOTICE_TEXT: Record<NoticeStage, string> = {
   "adjustment-reversed":
     "An adjustment was reversed; restore the license by hand (or hand-sign one if it was never issued)",
   dropped: "A signed webhook event could not be fulfilled (a paid sale may be behind it)",
+  "free-unlisted":
+    "A $0 order came from an address not in GRANDFATHER_EMAILS, so nothing was issued: a beta tester may have checked out with another email, or a code leaked. There may be more than one: list the `notice:<mode>:free-unlisted:` keys (ops §1b step 4)",
+  "free-list-empty":
+    "A $0 order arrived while GRANDFATHER_EMAILS is empty, so nothing was issued: put the full list, then replay each `notice:<mode>:free-list-empty:` record (ops §1b step 4)",
 };
 
 const STAGE_TEXT: Partial<Record<FailStage, string>> = {
@@ -1267,40 +1334,66 @@ const STAGE_TEXT: Partial<Record<FailStage, string>> = {
  *  one exception is the delivery check, which names how many notifications are
  *  unresolved and the first one's Paddle `ntf_`/`evt_` id: Paddle ids, no PII,
  *  and without them a new failure reads exactly like a standing one. */
-function alertBody(entry: LogEntry): string {
-  const what = isConfigStage(entry.stage)
-    ? "The Worker is refusing every webhook (misconfiguration) — no sale can complete"
-    : entry.notice
-      ? NOTICE_TEXT[entry.notice]
-      : entry.result === "dropped"
-        ? NOTICE_TEXT.dropped
-        : ((entry.stage && STAGE_TEXT[entry.stage]) ??
-          "A webhook event could not be fulfilled (a paid sale may be behind it)");
-  const replied200 = entry.result === "dropped" || entry.result === "noticed";
-  return [
-    `Tandem license issuance: ${what}.`,
-    `result=${entry.result} stage=${entry.stage ?? entry.notice ?? "-"} status=${entry.status ?? "-"}`,
-    ...(entry.stage === "delivery-check" && entry.causes?.length
-      ? [`causes=${entry.causes.join(",")}`]
-      : []),
-    ...(entry.stage === "delivery-check" && entry.unresolved !== undefined
-      ? [`unresolved=${entry.unresolved} first=${entry.ref ?? "-"}`]
-      : []),
-    "",
-    // The cron's own alert is about no particular delivery, so the retry tail
-    // would mislead.
-    ...(entry.stage === "delivery-check"
-      ? [
-          "Check Paddle > Developer tools > Notifications and the destination, then reconcile:",
-          "docs/licensing-operations.md §5.",
-        ]
-      : replied200
-        ? ["Paddle will not retry this; see the `notice:` keys in LEDGER_KV (ops §5)."]
+function alertWhat(entry: LogEntry, freeOnly: boolean): string {
+  if (isConfigStage(entry.stage)) {
+    return "The Worker is refusing every webhook (misconfiguration) — no sale can complete";
+  }
+  if (freeOnly) {
+    return "The daily delivery check found ignored $0 orders waiting in `notice:` records (a beta tester may have checked out with another email)";
+  }
+  if (entry.notice) return NOTICE_TEXT[entry.notice];
+  if (entry.result === "dropped") return NOTICE_TEXT.dropped;
+  return (
+    (entry.stage && STAGE_TEXT[entry.stage]) ??
+    "A webhook event could not be fulfilled (a paid sale may be behind it)"
+  );
+}
+
+function alertTail(entry: LogEntry, check: boolean, freeOnly: boolean): string[] {
+  // The cron's own alert is about no particular delivery, so the retry tail
+  // would mislead.
+  if (check) {
+    return [
+      ...(freeOnly
+        ? []
         : [
-            "Paddle retries for up to 3 days (60 attempts), then marks the notification failed.",
-            "Check Paddle > Developer tools > Notifications, replay after fixing, then reconcile:",
+            "Check Paddle > Developer tools > Notifications and the destination, then reconcile:",
             "docs/licensing-operations.md §5.",
           ]),
+      ...(entry.free
+        ? [
+            "Ignored $0 orders: list the `notice:<mode>:free-unlisted:` and `notice:<mode>:free-list-empty:` keys",
+            "and follow docs/licensing-operations.md §1b step 4. A record clears itself when its replay issues; otherwise this repeats daily until it is deleted.",
+          ]
+        : []),
+    ];
+  }
+  // Every notice is settled with a 200, so Paddle will not retry it.
+  if (entry.result === "dropped" || entry.notice !== undefined) {
+    return ["Paddle will not retry this; see the `notice:` keys in LEDGER_KV (ops §5)."];
+  }
+  return [
+    "Paddle retries for up to 3 days (60 attempts), then marks the notification failed.",
+    "Check Paddle > Developer tools > Notifications, replay after fixing, then reconcile:",
+    "docs/licensing-operations.md §5.",
+  ];
+}
+
+function alertBody(entry: LogEntry): string {
+  const check = entry.stage === "delivery-check";
+  const freeOnly = check && entry.causes?.length === 1 && entry.causes[0] === "free-notices";
+  return [
+    `Tandem license issuance: ${alertWhat(entry, freeOnly)}.`,
+    `result=${entry.result} stage=${entry.stage ?? entry.notice ?? "-"} status=${entry.status ?? "-"}`,
+    ...(check && entry.causes?.length ? [`causes=${entry.causes.join(",")}`] : []),
+    ...(check && entry.unresolved !== undefined
+      ? [`unresolved=${entry.unresolved} first=${entry.ref ?? "-"}`]
+      : []),
+    ...(check && entry.free
+      ? [`free_notices=${entry.free.count}${entry.free.more ? "+" : ""}`]
+      : []),
+    "",
+    ...alertTail(entry, check, freeOnly),
   ].join("\n");
 }
 
@@ -1396,13 +1489,21 @@ export function isAlertable(entry: LogEntry): boolean {
         entry.stage === "paddle-api-auth" ||
         entry.stage === "notice-write" ||
         entry.stage === "ledger")) ||
-    entry.result === "noticed" ||
+    entry.notice !== undefined ||
     isConfigStage(entry.stage)
   );
 }
 
-/** Noticed/dropped throttle by ref, so two transactions never share a key. */
+/** Noticed/dropped throttle by ref, so two transactions never share a key.
+ * The ignored-$0 notices (#2350) are the exception: they share ONE key per
+ * stage, because anyone holding a leaked 100% code can make many distinct
+ * transactions and a per-ref key would send an alert for each. Their records
+ * are all written, and the daily delivery check reports any that remain, so a
+ * swallowed alert is late by a day at most. */
 export function alertThrottleKey(entry: LogEntry): string {
+  if (entry.notice !== undefined && isIgnoredNotice(entry.notice)) {
+    return `ignored:${entry.notice}`;
+  }
   if (entry.result === "noticed" || entry.result === "dropped") {
     return `${entry.result}:${entry.notice ?? "-"}:${entry.ref ?? "-"}`;
   }
@@ -1431,7 +1532,8 @@ function isTestEnv(env: WorkerEnv): boolean {
  * the endpoint can return. */
 const DELIVERY_CHECK_LOOKBACK_MS = 89 * 24 * 60 * 60 * 1000;
 /** 2 pages of 150 rows at up to three KV reads each (`evt:`, `ack:`, `order:`)
- * is 900, under the Workers limit of 1,000 KV operations per invocation. More
+ * is 900, plus one `list` per ignored-$0 notice stage (`countFreeNotices`) is
+ * 902, under the Workers limit of 1,000 KV operations per invocation. More
  * pages than this alerts rather than reading as healthy. */
 const DELIVERY_CHECK_PER_PAGE = 150;
 const DELIVERY_CHECK_MAX_PAGES = 2;
@@ -1548,6 +1650,9 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
   const causes: DeliveryCheckCause[] = [];
   let unresolved = 0;
   let firstRef: string | undefined;
+  // Needs no Paddle key, so it runs whatever the key's state. A throw is the
+  // check being unable to say, never zero records.
+  const free = await countFreeNotices(env.LEDGER_KV, isTestEnv(env)).catch(() => null);
   if (!base || !env.PADDLE_API_KEY) {
     causes.push("cannot-run"); // a check that cannot run must say so, or it reads as healthy
   } else {
@@ -1574,11 +1679,32 @@ export async function runDeliveryCheck(env: WorkerEnv, nowMs: number): Promise<b
       if (unresolved > 0) causes.push("unresolved");
     }
   }
+  if (free === null && !causes.includes("cannot-run")) causes.push("cannot-run");
+  if (free !== null && free.count > 0) causes.push("free-notices");
   if (causes.length === 0) return false;
   return raiseDeliveryCheckAlert(env, nowMs, {
     causes,
     ...(unresolved > 0 ? { unresolved, ref: firstRef ?? "-" } : {}),
+    ...(free?.count ? { free } : {}),
   });
+}
+
+/** Ignored-$0 `notice:` records still waiting for the operator (#2350). Paddle
+ * got a 200 for each, so the failed-notification list never shows them; this is
+ * what repeats their alert daily until an issuing replay clears them or the operator deletes them. One list call
+ * per stage. A stage with more keys than one page reports the page and `more`,
+ * not `cannot-run`: the check knows there is work, it just cannot count it all. */
+async function countFreeNotices(
+  ledgerKv: KvNamespace,
+  isTest: boolean,
+): Promise<{ count: number; more: boolean }> {
+  const pages = await Promise.all(
+    IGNORED_NOTICE_STAGES.map((stage) => ledgerKv.list({ prefix: noticeKeyOf(isTest, stage, "") })),
+  );
+  return {
+    count: pages.reduce((n, p) => n + p.keys.length, 0),
+    more: pages.some((p) => !p.list_complete),
+  };
 }
 
 /** The notification's own `ntf_` id, else its event's `evt_` id, so an alert
@@ -1637,7 +1763,7 @@ function ourDestinationDeliversSales(destinations: unknown[], settingId: unknown
 async function raiseDeliveryCheckAlert(
   env: WorkerEnv,
   nowMs: number,
-  extra: { causes: DeliveryCheckCause[]; unresolved?: number; ref?: string },
+  extra: Pick<LogEntry, "unresolved" | "ref" | "free"> & { causes: DeliveryCheckCause[] },
   bypassThrottle = false,
 ): Promise<boolean> {
   const entry: LogEntry = {

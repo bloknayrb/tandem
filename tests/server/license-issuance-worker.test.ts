@@ -753,7 +753,12 @@ describe("handleIssuance: issue() order of operations", () => {
     const body = paidBody({ eventId: "evt_free", totals: free });
     await handleIssuance(makeRequest(body), other);
     expect(other.lookupCustomer).toHaveBeenCalledOnce();
-    expect(lastLog(other)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(lastLog(other)).toEqual({
+      result: "ignored",
+      ts: NOW / 1000,
+      notice: "free-unlisted",
+      ref: "txn_1",
+    });
     expect(other.ledgerKv.map.get("evt:live:evt_free")).toBeUndefined(); // not marked
   });
 
@@ -761,7 +766,12 @@ describe("handleIssuance: issue() order of operations", () => {
     const deps = baseDeps({ hasGrandfathers: false });
     await handleIssuance(makeRequest(paidBody({ totals: { grand_total: "0", total: "0" } })), deps);
     expect(deps.lookupCustomer).not.toHaveBeenCalled();
-    expect(lastLog(deps).result).toBe("ignored");
+    expect(lastLog(deps)).toEqual({
+      result: "ignored",
+      ts: NOW / 1000,
+      notice: "free-list-empty",
+      ref: "txn_1",
+    });
   });
 
   it("free-order totals: '4500' issues, unparseable either field → dropped, never reads balance", async () => {
@@ -788,6 +798,165 @@ describe("handleIssuance: issue() order of operations", () => {
       mixed,
     );
     expect(lastLog(mixed).result).toBe("issued");
+  });
+});
+
+describe("handleIssuance: ignored $0 orders leave an unmarked notice (#2350)", () => {
+  const free = { grand_total: "0", total: "0" };
+  const evtKeys = (deps: TestDeps) =>
+    [...deps.ledgerKv.map.keys()].filter((k) => k.startsWith("evt:"));
+  const record = (deps: TestDeps, key: string) =>
+    JSON.parse(deps.ledgerKv.map.get(key) as string) as Record<string, unknown>;
+
+  it("gate 9 (unlisted email): 200, a record with ids only, no marker, alertable", async () => {
+    const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => false });
+    const res = await handleIssuance(
+      makeRequest(paidBody({ eventId: "evt_g9", txnId: "txn_g9", totals: free })),
+      deps,
+    );
+    expect(res.status).toBe(200);
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-unlisted:txn_g9"]);
+    expect(record(deps, "notice:live:free-unlisted:txn_g9")).toEqual({
+      stage: "free-unlisted",
+      txnId: "txn_g9",
+      eventId: "evt_g9",
+      eventType: "transaction.completed",
+      at: new Date(NOW).toISOString(),
+    });
+    expect(evtKeys(deps)).toEqual([]);
+    expect(deps.ledgerKv.map.has("order:live:txn_g9")).toBe(false);
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(isAlertable(lastLog(deps) as never)).toBe(true);
+  });
+
+  it("gate 7 (empty list): a free-list-empty record, no lookup, no marker", async () => {
+    const deps = baseDeps({ hasGrandfathers: false });
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_g7", totals: free })), deps);
+    expect(deps.lookupCustomer).not.toHaveBeenCalled();
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-list-empty:txn_1"]);
+    expect(record(deps, "notice:live:free-list-empty:txn_1").eventId).toBe("evt_g7");
+    expect(evtKeys(deps)).toEqual([]);
+  });
+
+  it("a sandbox Worker stays silent at gate 7 (buyer unknown) and for an off-list buyer", async () => {
+    const sandboxBuyers = new Set(["me@example.com"]);
+    const g7 = baseDeps({ hasGrandfathers: false, sandboxBuyers });
+    await handleIssuance(makeRequest(paidBody({ totals: free })), g7);
+    expect(g7.lookupCustomer).not.toHaveBeenCalled();
+    expect(lastLog(g7)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(noticeKeys(g7)).toEqual([]);
+    expect(isAlertable(lastLog(g7) as never)).toBe(false);
+
+    const offList = baseDeps({
+      hasGrandfathers: true,
+      isGrandfathered: () => false,
+      sandboxBuyers,
+    });
+    await handleIssuance(makeRequest(paidBody({ totals: free })), offList);
+    expect(offList.lookupCustomer).toHaveBeenCalledOnce();
+    expect(lastLog(offList)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(noticeKeys(offList)).toEqual([]);
+
+    // A listed sandbox buyer who is not grandfathered does reach gate 9.
+    const listed = baseDeps({
+      hasGrandfathers: true,
+      isGrandfathered: () => false,
+      sandboxBuyers: new Set(["buyer@example.com"]),
+    });
+    await handleIssuance(makeRequest(paidBody({ totals: free })), listed);
+    expect(noticeKeys(listed)).toEqual(["notice:live:free-unlisted:txn_1"]);
+  });
+
+  it("a free order on an out-of-scope price stays silent (gate 5)", async () => {
+    const deps = baseDeps({ hasGrandfathers: true });
+    await handleIssuance(
+      makeRequest(paidBody({ totals: free, items: [{ price: { id: "pri_other" } }] })),
+      deps,
+    );
+    expect(lastLog(deps)).toEqual({ result: "ignored", ts: NOW / 1000 });
+    expect(noticeKeys(deps)).toEqual([]);
+  });
+
+  it("recovery: listing the address and replaying the SAME event mints and clears the record", async () => {
+    let listed = false;
+    const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => listed });
+    const body = paidBody({ eventId: "evt_rec", totals: free });
+    await handleIssuance(makeRequest(body), deps);
+    expect(lastLog(deps).notice).toBe("free-unlisted");
+    expect(deps.ledgerKv.map.has("evt:live:evt_rec")).toBe(false);
+
+    listed = true;
+    const res = await handleIssuance(makeRequest(body), deps);
+    expect(res.status).toBe(200);
+    expect(lastLog(deps)).toEqual({ result: "issued", ts: NOW / 1000 });
+    expect(ledgerRec(deps).type).toBe("grandfathered");
+    expect(deps.ledgerKv.map.get("evt:live:evt_rec")).toBe("done");
+    // Resolved by the issuance itself, so the daily check stops reporting it.
+    expect(noticeKeys(deps)).toEqual([]);
+  });
+
+  it("a failed clear after issuance still issues; the record stays for the operator", async () => {
+    let listed = false;
+    const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => listed });
+    deps.ledgerKv.delete = async () => {
+      throw new Error("KV down");
+    };
+    const body = paidBody({ totals: free });
+    await handleIssuance(makeRequest(body), deps);
+    listed = true;
+    expect((await handleIssuance(makeRequest(body), deps)).status).toBe(200);
+    expect(lastLog(deps).result).toBe("issued");
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-unlisted:txn_1"]);
+  });
+
+  it("a paid issuance clears no notice record", async () => {
+    const deps = baseDeps();
+    deps.ledgerKv.map.set("notice:live:free-unlisted:txn_1", "{}");
+    await handleIssuance(makeRequest(paidBody()), deps);
+    expect(lastLog(deps).result).toBe("issued");
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-unlisted:txn_1"]);
+  });
+
+  it("a failed record write is a 500 notice-write; Paddle's retry then writes it", async () => {
+    const deps = baseDeps({ hasGrandfathers: true, isGrandfathered: () => false });
+    const realPut = deps.ledgerKv.put.bind(deps.ledgerKv);
+    let down = true;
+    deps.ledgerKv.put = async (k, v, o) => {
+      if (down && k.startsWith("notice:")) throw new Error("KV down");
+      return realPut(k, v, o);
+    };
+    const body = paidBody({ totals: free });
+    expect((await handleIssuance(makeRequest(body), deps)).status).toBe(500);
+    expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "notice-write" });
+    expect(noticeKeys(deps)).toEqual([]);
+
+    down = false;
+    expect((await handleIssuance(makeRequest(body), deps)).status).toBe(200);
+    expect(noticeKeys(deps)).toEqual(["notice:live:free-unlisted:txn_1"]);
+  });
+
+  it("the refactor keeps marked notices marked and drops unmarked", async () => {
+    const adj = baseDeps();
+    await handleIssuance(makeRequest(refundBody({ eventId: "evt_rp", type: "partial" })), adj);
+    expect(lastLog(adj).result).toBe("noticed");
+    expect(adj.ledgerKv.map.get("evt:live:evt_rp")).toBe("done");
+
+    const drop = baseDeps();
+    await handleIssuance(makeRequest(paidBody({ eventId: "evt_dr", status: "billed" })), drop);
+    expect(lastLog(drop).result).toBe("dropped");
+    expect(drop.ledgerKv.map.has("evt:live:evt_dr")).toBe(false);
+    expect(record(drop, "notice:live:dropped:evt_dr").eventId).toBe("evt_dr");
+  });
+
+  it("throttle: one shared key per ignored stage, still per ref for dropped", () => {
+    const a = { result: "ignored" as const, ts: 0, notice: "free-unlisted" as const, ref: "txn_a" };
+    const b = { ...a, ref: "txn_b" };
+    expect(alertThrottleKey(a)).toBe("ignored:free-unlisted");
+    expect(alertThrottleKey(b)).toBe(alertThrottleKey(a));
+    expect(alertThrottleKey({ ...a, notice: "free-list-empty" })).toBe("ignored:free-list-empty");
+    expect(
+      alertThrottleKey({ result: "dropped", ts: 0, notice: "dropped", ref: "txn_a" }),
+    ).not.toBe(alertThrottleKey({ result: "dropped", ts: 0, notice: "dropped", ref: "txn_b" }));
   });
 });
 
@@ -918,6 +1087,7 @@ describe("handleIssuance: gate and dispatcher", () => {
       JSON.parse(deps.ledgerKv.map.get("notice:live:api-key-expiry:apikey_01abc") as string),
     ).toEqual({
       stage: "api-key-expiry",
+      eventId: "evt_ak",
       eventType: "api_key.expiring",
       at: new Date(NOW).toISOString(),
     });
@@ -1628,6 +1798,50 @@ describe("default fetch wiring (env → deps)", () => {
     await captureLogs(() => issuanceWorker.fetch(makeRequest(body, { ts: nowTs() }), env as never));
     expect(callsTo(f, "https://api.paddle.com/")).toHaveLength(0);
     expect(env.LEDGER_KV.map.has("order:live:txn_1")).toBe(false);
+    expect(env.LEDGER_KV.map.has("notice:live:free-list-empty:txn_1")).toBe(true);
+  });
+
+  it("an ignored $0 order alerts through the webhook: once per stage per slot, no ids (#2350)", async () => {
+    const hook = "https://hooks.example.com/free";
+    const f = routedFetch();
+    vi.stubGlobal("fetch", f);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: hook, GRANDFATHER_EMAILS: "someone@example.com" });
+    const send = (txnId: string) =>
+      captureLogs(() =>
+        issuanceWorker.fetch(
+          makeRequest(paidBody({ txnId, totals: { grand_total: "0", total: "0" } }), {
+            ts: nowTs(),
+          }),
+          env as never,
+        ),
+      );
+    await send("txn_fa");
+    const alerts = () => callsTo(f, hook).map(([, init]) => JSON.parse(init?.body as string).text);
+    expect(alerts()).toHaveLength(1);
+    const text = alerts()[0] as string;
+    expect(text).toContain("GRANDFATHER_EMAILS");
+    expect(text).toContain("Paddle will not retry");
+    expect(text).not.toContain("retries for up to 3 days");
+    expect(text).not.toContain("txn_");
+    expect(text).not.toContain("buyer@example.com");
+
+    // A second transaction in the same slot is recorded but not alerted again.
+    await send("txn_fb");
+    expect(alerts()).toHaveLength(1);
+    expect(env.LEDGER_KV.map.has("notice:live:free-unlisted:txn_fb")).toBe(true);
+
+    // The other stage has its own slot.
+    const empty = makeEnv({ ALERT_WEBHOOK_URL: hook });
+    await captureLogs(() =>
+      issuanceWorker.fetch(
+        makeRequest(paidBody({ txnId: "txn_fc", totals: { grand_total: "0", total: "0" } }), {
+          ts: nowTs(),
+        }),
+        empty as never,
+      ),
+    );
+    expect(alerts()).toHaveLength(2);
+    expect(alerts()[1]).toContain("GRANDFATHER_EMAILS is empty");
   });
 
   it("a Paddle network error or a non-JSON 200 is retryable (500 paddle-api), never dropped", async () => {
@@ -2029,6 +2243,64 @@ describe("default fetch wiring (env → deps)", () => {
     (txnId: string, rec: Record<string, unknown>) => (kv: ReturnType<typeof makeKv>) => {
       kv.map.set(`order:live:${txnId}`, JSON.stringify(rec));
     };
+
+  // --- delivery check: ignored $0 notices (#2350) -----------------------------
+  const freeNotice =
+    (...keys: string[]) =>
+    (kv: ReturnType<typeof makeKv>) => {
+      for (const k of keys) kv.map.set(k, "{}");
+    };
+
+  it("delivery check: a waiting free-unlisted or free-list-empty record alerts daily, with a count", async () => {
+    const one = await deliveryCheck({}, freeNotice("notice:live:free-unlisted:txn_a"));
+    expect(one.causes).toBe("free-notices");
+    expect(one.text).toContain("free_notices=1");
+    expect(one.text).toContain("§1b step 4");
+    expect(one.text).toContain("until it is deleted");
+    // Not a failed-notification problem, so not pointed at Paddle's list.
+    expect(one.text).not.toContain("Developer tools > Notifications");
+    expect(one.text).not.toContain("txn_a");
+
+    const two = await deliveryCheck(
+      {},
+      freeNotice("notice:live:free-unlisted:txn_a", "notice:live:free-list-empty:txn_b"),
+    );
+    expect(two.text).toContain("free_notices=2");
+  });
+
+  it("delivery check: no records, or records only under the other mode, add no free-notices cause", async () => {
+    expect((await deliveryCheck({})).alerted).toBe(false);
+    const other = await deliveryCheck({}, freeNotice("notice:test:free-unlisted:txn_a"));
+    expect(other.alerted).toBe(false);
+    // Other notice stages are not counted (they are not this backstop's job).
+    const dropped = await deliveryCheck({}, freeNotice("notice:live:dropped:evt_x"));
+    expect(dropped.alerted).toBe(false);
+  });
+
+  it("delivery check: free notices combine with other causes; a page cap reads N+, a throw reads cannot-run", async () => {
+    const mixed = await deliveryCheck(
+      { failed: [failedNote()] },
+      freeNotice("notice:live:free-unlisted:txn_a"),
+    );
+    expect(mixed.causes).toBe("unresolved,free-notices");
+    expect(mixed.text).toContain("Developer tools > Notifications");
+    expect(mixed.text).toContain("§1b step 4");
+
+    const capped = await deliveryCheck({}, (kv) => {
+      kv.map.set("notice:live:free-unlisted:txn_a", "{}");
+      const list = kv.list.bind(kv);
+      kv.list = async (o) => ({ ...(await list(o)), list_complete: false });
+    });
+    expect(capped.causes).toBe("free-notices");
+    expect(capped.text).toContain("free_notices=1+");
+
+    const broken = await deliveryCheck({}, (kv) => {
+      kv.list = async () => {
+        throw new Error("KV down");
+      };
+    });
+    expect(broken.causes).toBe("cannot-run");
+  });
 
   it("delivery check: the URL carries from (89 days back) and per_page after status", async () => {
     const { f } = await deliveryCheck({});
