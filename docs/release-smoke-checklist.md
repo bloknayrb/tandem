@@ -284,7 +284,7 @@ Three things this run established:
   images **with no emitted `ENVIRONMENT` warning** — the fault mode where the mirror
   is unreachable, the package is never evaluated, and the step still reports success.
   Reading the conclusion instead of the output would have passed both rows either way.
-- **`tauri-webdriver.yml` is confirmed still disabled by the absence of a run**, not
+- **`tauri-webdriver.yml` (since retired, #1345) is confirmed still disabled by the absence of a run**, not
   by reading the workflow: no run exists for `v0.24.1`, the last being v0.20.1. That
   is the only check the box's wording actually permits, and the distinction matters
   because a re-enabled workflow that then fails would look identical from the file.
