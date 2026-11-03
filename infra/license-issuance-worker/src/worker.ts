@@ -463,9 +463,12 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
   if (!existing.emailSent) {
     // A mint that 500'd after its order write (a failed entitlement put, a
     // dead isolate) never reached `issue()`'s clear, and every retry lands
-    // here, so clear again. Two deletes, only on a stuck-email re-drive; a paid
-    // order has no such record and the deletes find nothing.
-    await clearIgnoredNotices(deps, existing.orderId, deps.now());
+    // here, so clear again. Every free mint is `grandfathered` (a free order
+    // from anyone else is ignored), so a paid order never pays for the deletes
+    // or logs a clear failure about a record it never had.
+    if (existing.type === "grandfathered") {
+      await clearIgnoredNotices(deps, existing.orderId, deps.now());
+    }
     const blob = await signLicense(metadataFrom(existing, deps.keyId), deps.signBytes);
     const sent = await deps.sendEmail(existing.email, blob);
     if (!sent.ok) return { stage: "email", status: sent.status };

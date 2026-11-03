@@ -301,8 +301,11 @@ reissued"). Then, in this order, for each tester:
       Paddle and, if it never goes out, is the delivery check's `unresolved`
       case, not this record's. Delete the record by hand
       (`kv key delete "notice:live:free-unlisted:<txn_id>"`) only if it is
-      still there once the order exists: that means the Worker's delete
-      failed, which it logs as `{result: "notice-clear-failed", notice, ref}`.
+      still there once the order shows `emailSent: true`: every path that
+      sends the key tries the delete first, so that means the delete failed,
+      which it logs as `{result: "notice-clear-failed", notice, ref}`. (Before
+      `emailSent: true`, a record can still be present because the mint
+      answered `500` after the order write; Paddle's retry clears it.)
       If the record's `at` changed and there is no order, the replay was
       ignored again: the listed address does not match what Paddle holds.
    6. Add the issued address to the cohort CSV.
@@ -1142,8 +1145,9 @@ failures that matter most, because they produce **no ledger record at all**:
    hand (§7); for `api-key-expiry`, replace the key; for `free-unlisted` and
    `free-list-empty`, follow §1b step 4 (the Worker clears the record when the
    replay mints; you delete it by hand when you decide not to list the
-   address, or when the order exists and the record is still there, meaning
-   the Worker's delete failed: look for a `notice-clear-failed` log line). Then
+   address, or when the order shows `emailSent: true` and the record is still
+   there, meaning the Worker's delete failed: look for a `notice-clear-failed`
+   log line). Then
    delete the record:
 
    ```bash

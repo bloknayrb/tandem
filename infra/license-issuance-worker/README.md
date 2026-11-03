@@ -106,8 +106,10 @@ the daily check repeats them until the records are resolved or deleted. When a
 $0 order later mints (the ops §1b step 4 replay), `issue()` clears its `free-*`
 records right after writing the order, before the email; an email that then
 fails is re-driven by Paddle's retry and is the delivery check's `unresolved`
-case. If the delete itself fails, it logs
-`{result: "notice-clear-failed", notice, ref}` and the record stays for the
+case. `reDrive` clears again before resending a stuck email, which covers a
+mint that answered `500` after the order write. If a delete fails, it logs
+`{result: "notice-clear-failed", notice, ref}`; once the order shows
+`emailSent: true` a record still present is that case, and it stays for the
 operator. The alert is best-effort; the record is
 what the operator lists and clears (`docs/licensing-operations.md` §5b).
 `issue()` and `revoke()` each re-read the ledger a second time immediately
