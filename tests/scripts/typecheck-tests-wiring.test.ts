@@ -227,31 +227,15 @@ describe("the test configs actually reach the test tree", () => {
       // `ts.sys.readDirectory` resolves exclude patterns against the root, so
       // the bare form matches only `<root>/node_modules` and does nothing here.
       // Measured over `tests/`: bare form 4,389 files, `**/` form 640, no
-      // exclude 4,389 -- the vendored tauri-driver tree was being removed purely
-      // by the prefix filter below, and a `node_modules` appearing anywhere else
-      // under tests/ would have turned the guard spuriously red.
+      // exclude 4,389 -- a `node_modules` appearing anywhere under tests/ would
+      // turn the guard spuriously red.
       .readDirectory(
         path.join(ROOT, "tests"),
         [".ts", ".mts", ".cts", ".tsx"],
         ["**/node_modules"],
         undefined,
       )
-      .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"))
-      // `tests/tauri-driver` is a self-contained WebdriverIO project with its own
-      // package.json, node_modules and tsconfig.
-      //
-      // This carve-out used to claim "It is checked, just not by these configs."
-      // That was false and a review measured it: its package.json runs only
-      // `wdio run` (transpile-only, no tsc), nothing in package.json, ci.yml or
-      // .husky invokes `tsc -p tests/tauri-driver/tsconfig.json`, and
-      // tauri-webdriver.yml is `workflow_dispatch` only. Running that config by
-      // hand reports a real TS2353 in `wdio.conf.ts` that has been sitting there
-      // unseen -- an unrun tsconfig, which is #1399's shape.
-      //
-      // It stays excluded here because folding it into `typecheck:tests` needs CI
-      // to install its separate node_modules, which is a bigger change than this
-      // unit. The exclusion is correct; only its old justification was not.
-      .filter((f) => !f.startsWith("tests/tauri-driver/"));
+      .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"));
 
     const orphans = all.filter((f) => !owned.has(f));
     expect(

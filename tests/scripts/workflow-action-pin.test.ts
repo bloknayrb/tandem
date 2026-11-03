@@ -38,8 +38,7 @@ const WORKFLOW_DIR = path.join(ROOT, ".github/workflows");
  *     `release-ci-hygiene.test.ts`), which closes the install-time
  *     entrypoint only: the build that follows runs the same dependency tree
  *     with the same privileges, as do `cargo build.rs` and the Windows job's
- *     `dotnet tool install`. (`cargo install tauri-driver` runs in
- *     `tauri-webdriver.yml`, which holds no secrets.) Compromising one
+ *     `dotnet tool install`. Compromising one
  *     transitive dependency is still a cheaper attack than moving a tag. That
  *     exposure is accepted with a bound, not fixed: see the #1949 entry under
  *     "Accepted (bounded)" in docs/security.md, which names this test as one
@@ -54,13 +53,7 @@ const WORKFLOW_DIR = path.join(ROOT, ".github/workflows");
 
 // ADR-051 rule 3. A new workflow file fails this until it is added here, which
 // is what stops one arriving unpinned.
-const WORKFLOW_FILES = [
-  "ci.yml",
-  "claude-code-review.yml",
-  "publish.yml",
-  "tauri-release.yml",
-  "tauri-webdriver.yml",
-];
+const WORKFLOW_FILES = ["ci.yml", "claude-code-review.yml", "publish.yml", "tauri-release.yml"];
 
 // The complete inventory of third-party actions this repo executes. Editing it
 // means adding or removing a dependency that runs with repository secrets, which
@@ -80,7 +73,7 @@ const ALLOWED_ACTIONS = [
 ];
 
 const RUST_TOOLCHAIN = "dtolnay/rust-toolchain";
-const RUST_TOOLCHAIN_SITES = 5;
+const RUST_TOOLCHAIN_SITES = 4;
 
 const SHA_PINNED = /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/;
 
