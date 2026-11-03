@@ -885,13 +885,60 @@ export async function closeStore(docHash: string): Promise<void> {
 // Test-only reset
 // ---------------------------------------------------------------------------
 
+/**
+ * Writes a reset forgot but that are still running. `resetForTesting` used to
+ * drop them with `diskWrites.clear()`, so a test's teardown could `rm` the
+ * directory while one still held a handle in it — EBUSY on Windows, or a late
+ * write into the next test's directory (#2347). Each entry removes itself
+ * when it settles (the tails never reject; see `runSerialized`).
+ */
+const abandonedWrites = new Set<Promise<void>>();
+
 /** Reset all module state. Tests only — never call in production. */
 export function resetForTesting(): void {
   for (const entry of pending.values()) clearTimeout(entry.timer);
   pending.clear();
+  for (const write of diskWrites.values()) {
+    abandonedWrites.add(write);
+    void write.then(() => abandonedWrites.delete(write));
+  }
   diskWrites.clear();
   failureState.clear();
   annotationsDirReady = false;
   readOnly = false;
   reclaimInFlight = null;
+}
+
+const QUIESCE_CAP_MS = 5000;
+
+/**
+ * Wait until no store write is running, so a teardown can remove the store's
+ * directory. Tests only. Pending debounced writes are cancelled, not run: a
+ * test that needs its write on disk calls `flush()` itself. Loops because a
+ * write that finishes can let a queued one start. Throws after
+ * `QUIESCE_CAP_MS`, naming the docHashes still busy, so a stubbed write that
+ * never settles reads as itself rather than as a hook timeout.
+ */
+export async function quiesceForTesting(): Promise<void> {
+  const deadline = Date.now() + QUIESCE_CAP_MS;
+  for (;;) {
+    for (const entry of pending.values()) clearTimeout(entry.timer);
+    pending.clear();
+    const running = [...diskWrites.values(), ...abandonedWrites];
+    if (running.length === 0) return;
+    const left = deadline - Date.now();
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = await Promise.race([
+      Promise.allSettled(running).then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), Math.max(0, left));
+      }),
+    ]);
+    clearTimeout(timer);
+    if (timedOut) {
+      throw new Error(
+        `annotation store still writing after ${QUIESCE_CAP_MS} ms: ${[...diskWrites.keys()].join(", ") || "(abandoned writes)"}`,
+      );
+    }
+  }
 }

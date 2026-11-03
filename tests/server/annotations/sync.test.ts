@@ -20,6 +20,16 @@ vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) =
   };
 });
 
+// The store's first write in each test hardens its fresh `annotations/` with a
+// fire-and-forget icacls + pwsh run (`ensurePrivateStoreDir`), which nothing
+// awaits. On Windows that run held the directory while teardown removed it:
+// 4 of 12 solo runs failed EBUSY, and 0 of 12 with this mock (#2289). Nothing
+// here tests ACLs; the real icacls path is the `windows-acl-proof` job's.
+vi.mock(import("../../../src/server/integrations/acl-win.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { resetMigrationLog } from "../../../src/server/annotations/migration-log.js";
 import {
   type AnnotationRecordV1,

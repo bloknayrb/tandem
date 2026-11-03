@@ -7,13 +7,20 @@
  *
  * Neither helper runs resetForTesting() — each test file is responsible for
  * its own module-level state resets, as the required reset functions vary per
- * file (store only, sync only, or both).
+ * file (store only, sync only, or both). Both do wait, first thing in
+ * `afterEach`, for any store write still running (`quiesceForTesting`): the
+ * env restore and the `rm` below must not race one, or Windows refuses the
+ * rmdir with EBUSY and a late write lands in the restored directory (#2347).
+ * This `afterEach` runs after the test file's own, because vitest runs after
+ * hooks in reverse registration order, so a file-level reset that forgot a
+ * write has already happened; the quiesce still sees it.
  */
 
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
+import { quiesceForTesting } from "../../src/server/annotations/store.js";
 
 /**
  * Registers beforeEach/afterEach hooks that create a fresh tmpdir, point
@@ -36,6 +43,7 @@ export function useTmpAnnotationsEnv(prefix = "tandem-test-"): { tmpRoot: string
   });
 
   afterEach(async () => {
+    await quiesceForTesting();
     if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
     else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
     if (ref.tmpRoot) await fs.rm(ref.tmpRoot, { recursive: true, force: true });
@@ -66,6 +74,7 @@ export function useTmpAnnotationsEnvWithFlag(prefix = "tandem-test-"): { tmpRoot
   });
 
   afterEach(async () => {
+    await quiesceForTesting();
     if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
     else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
     if (prevFeatureFlag === undefined) delete process.env.TANDEM_ANNOTATION_STORE;

@@ -22,11 +22,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetForTesting as resetAnnotationStore } from "../../src/server/annotations/store.js";
+import {
+  quiesceForTesting as quiesceAnnotationStore,
+  resetForTesting as resetAnnotationStore,
+} from "../../src/server/annotations/store.js";
 import { stopAutoSave } from "../../src/server/session/manager.js";
 import { workerAppDataDir } from "./worker-app-data-dir.js";
 
 export async function teardownFileAppDataDir(): Promise<void> {
+  // A write already running cannot be cancelled, only waited for: removing the
+  // directory under it is EBUSY on Windows (#2347).
+  await quiesceAnnotationStore();
   resetAnnotationStore();
   stopAutoSave();
   const workerDir = workerAppDataDir();

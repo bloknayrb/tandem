@@ -12,6 +12,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Same reason as sync.test.ts (#2289): the store's fire-and-forget icacls +
+// pwsh run on each test's fresh `annotations/` held the directory at teardown
+// on Windows (EBUSY). This file's ACL-shaped specs are POSIX mode checks
+// (`describe.skipIf(win32)` below); the real icacls path is the
+// `windows-acl-proof` job's.
+vi.mock(import("../../../src/server/integrations/acl-win.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Notifications are a shared singleton buffer; reset between tests and spy
 // on pushNotification so we can assert on failure-mode behaviour.
 vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) => {
