@@ -28,6 +28,7 @@ describe("resolveActivityAction", () => {
   // Every non-save-error type has no safe production action in v1 (Undo deferred).
   const otherTypes: TandemNotification["type"][] = [
     "annotation-error",
+    "annotation-resolved",
     "session-restored",
     "general-error",
     "file-reloaded",

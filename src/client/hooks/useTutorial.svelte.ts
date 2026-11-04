@@ -192,7 +192,15 @@ export function createTutorial(
   // active. It is also page-load state: after a reload it starts empty.
   $effect(() => {
     if (!tutorialActive || reviewed) return;
+    const live = new Map(getAnnotations().map((a) => [a.id, a]));
     for (const id of getRecentlyResolved()) {
+      // The user resolving their OWN comment (#2360) is not reviewing Claude's.
+      // Keyed on user + dismissed, the only state Resolve produces, so a user's
+      // ACCEPT of a Claude reply rewrite on their own comment still ticks. An id
+      // not on this tab (a cross-tab resolve, per the contract above) is not
+      // found here and ticks as before.
+      const a = live.get(id);
+      if (a?.author === "user" && a.status === "dismissed") continue;
       if (!resolvedAtArm.has(id)) {
         reviewed = true;
         return;

@@ -29,6 +29,7 @@ import {
   canEdit,
   canRemove,
   canReply,
+  canResolve,
   canSendToClaude,
   copyTextFor,
   isAnnotationContextMenuActionId,
@@ -59,6 +60,7 @@ export function setAnnotationGesture(gesture: AnnotationGesture): void {
 export interface AnnotationActionHandlers {
   accept?: (id: string) => void;
   dismiss?: (id: string) => void;
+  resolve?: (id: string) => void;
   sendToClaude?: (id: string) => void;
   remove?: (id: string) => void;
   openEdit?: (id: string) => void;
@@ -88,6 +90,9 @@ export function runAnnotationAction(
       return;
     case "ctx:annotation:dismiss":
       if (canDismiss(ann)) handlers.dismiss?.(ann.id);
+      return;
+    case "ctx:annotation:resolve":
+      if (canResolve(ann)) handlers.resolve?.(ann.id);
       return;
     case "ctx:annotation:sendToClaude":
       if (canSendToClaude(ann, aiDisabled)) handlers.sendToClaude?.(ann.id);

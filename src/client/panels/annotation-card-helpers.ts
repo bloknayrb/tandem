@@ -111,11 +111,26 @@ export function truncate(text: string | undefined, max: number): string {
   return text.length > max ? text.slice(0, max - 3) + "..." : text;
 }
 
+/**
+ * The status word a card shows. A user closing their OWN comment (Resolve,
+ * #2360) stores `dismissed`, which the header would otherwise paint as the red
+ * "rejected" pill; it reads "resolved" instead. Keyed on `resolvedBy !== "claude"`
+ * because Claude may still dismiss a user's comment, and that must not read as
+ * the user's own act. Shared by the pill, the card's aria-label and the filter
+ * summary so the three cannot disagree.
+ */
+export function displayStatus(ann: Pick<Annotation, "author" | "status" | "resolvedBy">): string {
+  if (ann.author === "user" && ann.status === "dismissed" && ann.resolvedBy !== "claude") {
+    return "resolved";
+  }
+  return ann.status;
+}
+
 export function getCardLabel(ann: Annotation): string {
   const displayType = getDisplayType(ann);
   const trunc = truncate(ann.content, 60);
   const isPrivate = ann.type === "note";
-  return `${isPrivate ? "private " : ""}${displayType} annotation${trunc ? ": " + trunc : ""}, ${ann.status}`;
+  return `${isPrivate ? "private " : ""}${displayType} annotation${trunc ? ": " + trunc : ""}, ${displayStatus(ann)}`;
 }
 
 /**

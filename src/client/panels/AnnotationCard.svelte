@@ -33,6 +33,7 @@ interface Props {
   onEdit?: (id: string, newContent: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onRemove?: (id: string) => void;
+  onResolve?: (id: string) => void;
   onSendToClaude?: (id: string) => void;
   /** Whether this annotation was recently resolved and can be undone */
   undoable?: boolean;
@@ -102,6 +103,7 @@ let {
   onEdit,
   onReply,
   onRemove,
+  onResolve,
   onSendToClaude,
   undoable,
   onClick,
@@ -378,6 +380,7 @@ function onCardClick(event: MouseEvent) {
     {onDismiss}
     {onUndo}
     {onRemove}
+    {onResolve}
     {onSendToClaude}
     {aiDisabled}
     acceptBlocked={isAcceptBlocked(annotation, targetLost)}
