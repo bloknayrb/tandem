@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
+- **Accept a rewrite Claude proposes in a comment's replies from the margin too (#2360).** "Accept replacement" now also appears on margin cards, not only in the side panel. Your own comments are prepared for it too, for when Claude can answer them in their thread: there the button applies only when the comment records the text it was made on, and otherwise is disabled and says Tandem can't confirm that text.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 
 ### Fixed
 
+- **Undoing an accepted reply rewrite now gives the comment back its own suggestion (#2360).** Before, Undo restored the document but the comment kept the reply's text as its suggestion, so the comment's own Accept then offered a change it never proposed. A reply's suggestion also no longer gets an Accept button when someone other than Claude wrote it.
 - **The README now states the real Linux requirement (#2356).** It said the desktop app runs on glibc 2.31 (Ubuntu 20.04, Debian 11, Fedora 34). It needs glibc 2.34 and WebKitGTK 4.1, so in practice Ubuntu 22.04 or later. On Ubuntu 20.04, the AppImage exits at launch and the `.deb` cannot install; nothing changed in the app, the claim was wrong. The npm install should be unaffected, but it was not run on 20.04.
 
 ## [0.30.0] - 2026-11-02

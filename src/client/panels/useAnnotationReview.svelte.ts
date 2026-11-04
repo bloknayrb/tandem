@@ -1110,6 +1110,12 @@ export function useAnnotationReview({
         const reply = proposed.get(ann.id);
         if (!canAccept(ann) && !(reply && canAcceptReplySuggestion(ann, reply))) continue;
         if (ann.suggestedText === undefined && !reply) continue;
+        // Refused from the record alone — the common case on a user card, so
+        // it skips the document walk and range resolve the check would do.
+        if (isUnverifiableTarget(ann)) {
+          lost.add(ann.id);
+          continue;
+        }
         try {
           flat ??= pmDocFlatText(pmDoc);
           if (isTargetRefused(checkSuggestionTarget(ann, pmDoc, ydoc, flat))) lost.add(ann.id);
