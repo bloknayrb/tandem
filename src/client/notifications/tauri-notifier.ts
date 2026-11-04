@@ -28,15 +28,13 @@ export function createTauriNotifier(getInvoke: () => Promise<InvokeFn>): Notifie
   };
   return {
     notify(text: NotificationText, _onClick: () => void, kind: NotificationKind = "chat") {
-      if (kind === "comment") {
-        void getInvoke()
-          .then((invoke) => notifyCommentAnswer(invoke, text.title, text.body))
-          .catch(warn("notify_comment_answer"));
-        return;
-      }
+      const [send, name] =
+        kind === "comment"
+          ? [notifyCommentAnswer, "notify_comment_answer"]
+          : [notifyChatReply, "notify_chat_reply"];
       void getInvoke()
-        .then((invoke) => notifyChatReply(invoke, text.title, text.body))
-        .catch(warn("notify_chat_reply"));
+        .then((invoke) => send(invoke, text.title, text.body))
+        .catch(warn(name));
     },
     attention() {
       void getInvoke()

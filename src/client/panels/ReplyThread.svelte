@@ -101,6 +101,9 @@ const unseenIds = $derived.by(() => {
     ? threadAnswers.unseenAnswerIds(documentId, annotation.id)
     : [];
 });
+// A string, so effects keyed on it skip re-runs when the list is merely
+// rebuilt with the same newest answer.
+const newestUnseen = $derived(unseenIds.at(-1));
 
 // Opens for a new answer: on arrival at a mounted card, and on mount when an
 // unseen one is already waiting (it arrived while another document was
@@ -109,7 +112,7 @@ const unseenIds = $derived.by(() => {
 // for the same reason as `seeded` above.
 let autoOpenedFor: string | null = null;
 $effect(() => {
-  const newest = unseenIds.at(-1);
+  const newest = newestUnseen;
   if (newest === undefined || newest === autoOpenedFor) return;
   autoOpenedFor = newest;
   open = true;
@@ -125,7 +128,7 @@ let repliesEl: HTMLDivElement | null = $state(null);
 let inView = $state(false);
 $effect(() => {
   const el = repliesEl;
-  const newest = unseenIds.at(-1);
+  const newest = newestUnseen;
   if (!open || !el || newest === undefined) {
     inView = false;
     return;

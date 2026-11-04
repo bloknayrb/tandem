@@ -8,11 +8,10 @@ import type { AnnotationReply } from "../../shared/types";
  * notification-content setting.
  */
 export interface ThreadAnswer {
-  /** The `Y_MAP_REPLY_SEEN` key: the reply id, which is globally unique. */
-  key: string;
   /** The tab that observed the reply — never a field read off the reply. */
   documentId: string;
   annotationId: string;
+  /** Globally unique; also the `Y_MAP_REPLY_SEEN` key. */
   replyId: string;
   text: string;
   timestamp: number;
@@ -115,7 +114,6 @@ export function createThreadAnswerDetector(): ThreadAnswerDetector {
         known.add(reply.id);
         if (reply.timestamp < baseline.capturedAt) continue;
         fresh.push({
-          key: reply.id,
           documentId,
           annotationId: reply.annotationId,
           replyId: reply.id,

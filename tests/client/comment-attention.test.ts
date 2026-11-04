@@ -70,7 +70,6 @@ describe("toCommentAnswerItem", () => {
   it("keys the item by reply id and keeps the annotation to open", () => {
     expect(
       toCommentAnswerItem({
-        key: "rpl_1",
         documentId: "doc-1",
         annotationId: "ann_1",
         replyId: "rpl_1",
@@ -144,9 +143,8 @@ describe("routeNotificationActivation (#2360)", () => {
 });
 
 describe("resolvePendingReveal (#2360)", () => {
-  const pending: PendingReveal = { documentId: "d", annotationId: "a", until: 5_000 };
+  const pending: PendingReveal = { documentId: "d", annotationId: "a" };
   const state = (over: Partial<Parameters<typeof resolvePendingReveal>[1]> = {}) => ({
-    now: 1_000,
     activeDocumentId: "d",
     openDocumentIds: ["d", "e"],
     hasAnnotation: (id: string) => id === "a",
@@ -160,11 +158,8 @@ describe("resolvePendingReveal (#2360)", () => {
     expect(resolvePendingReveal(pending, state({ activeDocumentId: "e" }))).toBe("wait");
     expect(resolvePendingReveal(pending, state({ hasAnnotation: () => false }))).toBe("wait");
   });
-  it("drops when the document closed or the wait ran out", () => {
+  it("drops when the document closed", () => {
     expect(resolvePendingReveal(pending, state({ openDocumentIds: ["e"] }))).toBe("drop");
-    expect(resolvePendingReveal(pending, state({ now: 5_000, hasAnnotation: () => false }))).toBe(
-      "drop",
-    );
   });
 });
 
@@ -191,9 +186,8 @@ describe("createChatAttention as the comment-answer instance (#2360)", () => {
       isActive: () => false,
       isSeen,
       documentName: names,
-      backend,
+      backend: combineAttention(backend).comment,
       playChime: () => {},
-      kind: "comment",
       buildText: buildCommentNotificationText,
       openTarget,
     });

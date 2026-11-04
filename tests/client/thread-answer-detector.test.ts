@@ -186,7 +186,6 @@ describe("createThreadAnswerDetector (#2360)", () => {
       parents: PARENTS,
     });
     expect(answer).toEqual({
-      key: "a",
       documentId: DOC_ID,
       annotationId: "user-card",
       replyId: "a",

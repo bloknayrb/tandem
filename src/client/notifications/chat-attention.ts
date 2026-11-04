@@ -105,8 +105,6 @@ export interface ChatAttentionDeps<T extends ChatMessage = ChatMessage> {
    * once the click-target grace has passed.
    */
   openTarget?(target: T | undefined): void;
-  /** Passed to `backend.notify`; absent (chat) passes nothing. */
-  kind?: NotificationKind;
   /** The notification's wording; defaults to `buildNotificationText`. */
   buildText?(
     items: readonly T[],
@@ -226,8 +224,7 @@ export function createChatAttention<T extends ChatMessage = ChatMessage>(
       settings.chatNotificationContent,
       deps.documentName,
     );
-    if (deps.kind) deps.backend.notify(text, activate, deps.kind);
-    else deps.backend.notify(text, activate);
+    deps.backend.notify(text, activate);
   }
 
   function chime(settings: ChatAttentionSettings): void {

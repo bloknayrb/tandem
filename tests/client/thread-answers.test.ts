@@ -238,7 +238,6 @@ describe("createThreadAnswers (#2360)", () => {
         documentName: () => null,
         backend,
         playChime: () => {},
-        kind: "comment",
         buildText: buildCommentNotificationText,
         openTarget: () => {},
       });

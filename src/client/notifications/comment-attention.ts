@@ -27,7 +27,7 @@ export type CommentAnswerItem = ChatMessage & { annotationId: string };
 
 export function toCommentAnswerItem(answer: ThreadAnswer): CommentAnswerItem {
   return {
-    id: answer.key,
+    id: answer.replyId,
     author: "claude",
     text: answer.text,
     timestamp: answer.timestamp,
@@ -115,8 +115,6 @@ export function routeNotificationActivation(
 export interface PendingReveal {
   documentId: string;
   annotationId: string;
-  /** Give up after this time (ms epoch). */
-  until: number;
 }
 
 /** How long a click waits for its document's annotations to arrive. */
@@ -126,13 +124,13 @@ export const PENDING_REVEAL_MS = 5_000;
  * What to do with a parked reveal now. `wait` until the doc is active and the
  * annotation has arrived (switching tabs repopulates the active document's
  * annotations asynchronously); `reveal` once both hold; `drop` when the doc is
- * no longer open or the wait has run out (the comment was resolved, removed or
- * filtered away) — the user is still left on the annotations rail.
+ * no longer open. The caller also drops it after `PENDING_REVEAL_MS` (the
+ * comment was resolved, removed or filtered away) — the user is still left on
+ * the annotations rail.
  */
 export function resolvePendingReveal(
   pending: PendingReveal,
   state: {
-    now: number;
     activeDocumentId: string | null;
     openDocumentIds: readonly string[];
     hasAnnotation: (id: string) => boolean;
@@ -142,5 +140,5 @@ export function resolvePendingReveal(
   if (state.activeDocumentId === pending.documentId && state.hasAnnotation(pending.annotationId)) {
     return "reveal";
   }
-  return state.now >= pending.until ? "drop" : "wait";
+  return "wait";
 }

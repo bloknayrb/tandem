@@ -2280,7 +2280,6 @@ const commentAttention = createChatAttention<CommentAnswerItem>({
   documentName: (id) => openDocs.find((d) => d.id === id)?.fileName ?? null,
   backend: notifierBackends.comment,
   playChime,
-  kind: "comment",
   buildText: buildCommentNotificationText,
   openTarget: (target) => revealCommentAnswer(target),
 });
@@ -2330,32 +2329,22 @@ function revealCommentAnswer(target: CommentAnswerItem | undefined): void {
   const documentId = target?.documentId;
   if (!target || !documentId || !yjsSync.tabs.some((tab) => tab.id === documentId)) return;
   yjsSync.setActiveTabId(documentId);
-  pendingReveal = {
-    documentId,
-    annotationId: target.annotationId,
-    until: Date.now() + PENDING_REVEAL_MS,
-  };
+  const pending = { documentId, annotationId: target.annotationId };
+  pendingReveal = pending;
+  setTimeout(() => {
+    if (pendingReveal === pending) pendingReveal = null;
+  }, PENDING_REVEAL_MS);
 }
 $effect(() => {
   const pending = pendingReveal;
   if (!pending) return;
   const annotations = yjsSync.annotations;
   const decision = resolvePendingReveal(pending, {
-    now: Date.now(),
     activeDocumentId: yjsSync.activeTabId,
     openDocumentIds: yjsSync.tabs.map((tab) => tab.id),
     hasAnnotation: (id) => annotations.some((a) => a.id === id),
   });
-  if (decision === "wait") {
-    // Re-evaluate at the deadline even if nothing else changes.
-    const timer = setTimeout(
-      () => {
-        if (pendingReveal === pending) pendingReveal = { ...pending };
-      },
-      Math.max(0, pending.until - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }
+  if (decision === "wait") return;
   pendingReveal = null;
   if (decision !== "reveal") return;
   untrack(() => {

@@ -28,6 +28,8 @@ interface DocData {
   documentId: string;
   replies: AnnotationReply[];
   parents: Map<string, ParentInfo>;
+  /** The thread answers per annotation, oldest first — what cards look up. */
+  answers: Map<string, AnnotationReply[]>;
 }
 
 export interface ThreadAnswerTab {
@@ -109,6 +111,8 @@ export function createThreadAnswers(options: {
       const parents = new Map<string, ParentInfo>();
       annotationsMap.forEach((value) => {
         if (!value || typeof value !== "object") return;
+        // Silent: `yjsSync` already logs lossy records for the active tab,
+        // and this runs for every tab on every change.
         const ann = sanitizeAnnotation(value as Annotation, () => {});
         parents.set(ann.id, {
           author: ann.author,
@@ -117,7 +121,14 @@ export function createThreadAnswers(options: {
           status: ann.status,
         });
       });
-      docData = new Map(docData).set(ydoc, { documentId: id, replies, parents });
+      const answers = new Map<string, AnnotationReply[]>();
+      for (const reply of replies) {
+        if (!isThreadAnswer(reply, parents.get(reply.annotationId))) continue;
+        const list = answers.get(reply.annotationId);
+        if (list) list.push(reply);
+        else answers.set(reply.annotationId, [reply]);
+      }
+      docData = new Map(docData).set(ydoc, { documentId: id, replies, parents, answers });
     };
     repliesMap.observe(read);
     annotationsMap.observe(read);
@@ -222,14 +233,6 @@ export function createThreadAnswers(options: {
     return undefined;
   }
 
-  function answersOf(doc: DocData, annotationId: string): AnnotationReply[] {
-    const parent = doc.parents.get(annotationId);
-    if (!parent) return [];
-    return doc.replies.filter(
-      (reply) => reply.annotationId === annotationId && isThreadAnswer(reply, parent),
-    );
-  }
-
   function prune(map: Y.Map<unknown>): void {
     const entries: [string, number][] = [];
     map.forEach((value, key) => {
@@ -266,7 +269,7 @@ export function createThreadAnswers(options: {
       if (!doc || doc.parents.get(annotationId)?.status !== "pending") return [];
       const entries = seen;
       const mark = watermark;
-      return answersOf(doc, annotationId)
+      return (doc.answers.get(annotationId) ?? [])
         .filter((reply) => !readsSeen(entries, mark, reply.id, reply.timestamp))
         .map((reply) => reply.id);
     },
@@ -276,13 +279,15 @@ export function createThreadAnswers(options: {
       if (!ctrl || !options.getCtrlSynced() || replyIds.length === 0) return;
       const doc = findDoc(documentId);
       if (!doc) return;
+      // Re-validated here rather than trusted from the caller: a card left
+      // over from the previous tab during a switch passes ids that are not
+      // answers in `documentId`, and those must not be written.
       const wanted = new Set(replyIds);
-      const toWrite = doc.replies.filter(
-        (reply) =>
-          wanted.has(reply.id) &&
-          isThreadAnswer(reply, doc.parents.get(reply.annotationId)) &&
-          !readsSeen(seen, watermark, reply.id, reply.timestamp),
-      );
+      const toWrite = Array.from(doc.answers.values())
+        .flat()
+        .filter(
+          (reply) => wanted.has(reply.id) && !readsSeen(seen, watermark, reply.id, reply.timestamp),
+        );
       if (toWrite.length === 0) return;
       untrack(() => {
         const map = ctrl.getMap(Y_MAP_REPLY_SEEN);
