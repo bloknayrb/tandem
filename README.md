@@ -48,7 +48,7 @@ Prefer a different AI? Any MCP-capable client can connect to the same endpoint. 
 <details>
 <summary><b>System requirements</b></summary>
 
-Windows 10 version 22H2 or Windows 11; macOS 12 (Monterey) or later; Linux with glibc 2.31 or later (Ubuntu 20.04+, Debian 11+, Fedora 34+). On Windows the first launch may show a "Windows protected your PC" warning, which lasts until the installer's signing certificate accumulates SmartScreen reputation. [The troubleshooting entry](docs/troubleshooting.md#windows-smartscreen-warning) has how to dismiss it.
+Windows 10 version 22H2 or Windows 11; macOS 12 (Monterey) or later; Linux with glibc 2.34 or later and WebKitGTK 4.1, such as Ubuntu 22.04 or later (releases are built on Ubuntu 22.04; each release's `.deb` is install-checked on Ubuntu 22.04 and its `.rpm` on a current Fedora). On Windows the first launch may show a "Windows protected your PC" warning, which lasts until the installer's signing certificate accumulates SmartScreen reputation. [The troubleshooting entry](docs/troubleshooting.md#windows-smartscreen-warning) has how to dismiss it.
 
 </details>
 
