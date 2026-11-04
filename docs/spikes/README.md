@@ -55,10 +55,10 @@ One line per file, taken from its opening lines.
 - [2026-09-17-claude-merged-app-and-codex-mcp-probes.md](2026-09-17-claude-merged-app-and-codex-mcp-probes.md):
   compatibility probes against the merged Claude desktop app and the Codex CLI; the defects found
   were filed as issues.
-- [multi-session-ownership/](multi-session-ownership/README.md): the decided but unimplemented
-  design for documents shared between several sessions, with
-  [user stories](multi-session-ownership/stories.md) and five adversarial
-  [reviews](multi-session-ownership/reviews/).
+- [multi-session-ownership/](multi-session-ownership/README.md): design v5, unimplemented, for
+  documents shared between several sessions (Tandem's Claude answers by default; #2358), with the
+  v4.1 [user stories](multi-session-ownership/stories.md) and five adversarial
+  [reviews](multi-session-ownership/reviews/) kept as history.
 
 ## `.docx` engines (`.docx` ships dark)
 

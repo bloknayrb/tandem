@@ -14,6 +14,8 @@ One line per file, taken from its title.
 
 ## Current folder
 
+- [2358-ownership.md](2358-ownership.md): one Claude answers each ask; the approved plan (rev 7)
+  for document ownership, whose PR 0 is [design v5](../spikes/multi-session-ownership/README.md).
 - [2026-08-07-channel-flag-removal.md](2026-08-07-channel-flag-removal.md): removing an inert
   dev-channels flag and correcting what the docs said about push.
 - [2026-08-10-session-monitor-auto-arm.md](2026-08-10-session-monitor-auto-arm.md): arming the
