@@ -73,8 +73,9 @@ export interface ThreadAnswers {
  * does not turn every historical answer into a "new" one), and the cap raises
  * it to the newest entry it drops, so pruning never turns an answer back to
  * unseen (the converse is accepted: an older answer that was never shown
- * also reads seen once the cap passes it, at 500 newer marks). Never pruned by presence: a window cannot tell a closed document, or
- * its own stale copy, from a reply that is gone. Residuals, accepted: two
+ * also reads seen once the cap passes it, at 500 newer marks). Never pruned
+ * by presence: a window cannot tell a closed document, or its own stale copy,
+ * from a reply that is gone. Residuals, accepted: two
  * windows pruning at once is last-writer-wins on the watermark, which can move
  * it back and re-mark a few old answers new; CTRL is persisted at clean
  * shutdown, so seen marks written since are lost in a crash. Both cost only a
