@@ -71,10 +71,9 @@ export function buildCommentNotificationText(
  * One taskbar flash / `(N)` title count over two dispatchers. Each view's
  * `attention(n)` records its own count and shows the sum. A view's
  * `clearAttention` zeroes only its own count, so each count keeps matching
- * its instance's `pendingCount`; the real flash is withdrawn only once both
- * are zero, and is left alone in between — the two instances resetting one
- * after the other on focus never re-requests attention. `notify` passes
- * through with the view's kind, so the backend picks the tag or command.
+ * its instance's `pendingCount`, and shows what remains; the real flash is
+ * withdrawn once both are zero. `notify` passes through with the view's kind,
+ * so the backend picks the tag or command.
  */
 export function combineAttention(backend: NotifierBackend): {
   chat: NotifierBackend;
@@ -91,7 +90,12 @@ export function combineAttention(backend: NotifierBackend): {
     },
     clearAttention() {
       counts[kind] = 0;
-      if (counts.chat + counts.comment === 0) backend.clearAttention();
+      const remaining = counts.chat + counts.comment;
+      // The remaining count keeps the title honest; on desktop a request on
+      // the focused window it comes back to is a no-op, so this cannot
+      // re-flash when the two instances reset one after the other.
+      if (remaining > 0) backend.attention(remaining);
+      else backend.clearAttention();
     },
   });
   return { chat: view("chat"), comment: view("comment") };
@@ -109,6 +113,29 @@ export function routeNotificationActivation(
 ): void {
   if (payload === NOTIFICATION_KIND_COMMENT) targets.comment();
   else targets.chat();
+}
+
+/**
+ * A comment-answer notification click: switch to the answer's document (if it
+ * is still open) FIRST, then show the annotations rail, and return what to
+ * park for `resolvePendingReveal`. The order is load-bearing: the rail's
+ * reveal remembers the document active when it opened and closes itself on a
+ * document switch, so revealing first and switching second would open and
+ * shut it in one flush and leave a collapsed rail.
+ */
+export function startCommentReveal(
+  target: Pick<CommentAnswerItem, "documentId" | "annotationId"> | undefined,
+  deps: {
+    isOpen: (documentId: string) => boolean;
+    switchTo: (documentId: string) => void;
+    showAnnotationsRail: () => void;
+  },
+): PendingReveal | null {
+  const documentId = target?.documentId;
+  const reachable = target !== undefined && documentId !== undefined && deps.isOpen(documentId);
+  if (reachable) deps.switchTo(documentId);
+  deps.showAnnotationsRail();
+  return reachable ? { documentId, annotationId: target.annotationId } : null;
 }
 
 /** A comment a notification click is waiting to reveal. */

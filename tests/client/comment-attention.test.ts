@@ -11,6 +11,7 @@ import {
   type PendingReveal,
   resolvePendingReveal,
   routeNotificationActivation,
+  startCommentReveal,
   toCommentAnswerItem,
 } from "../../src/client/notifications/comment-attention";
 
@@ -105,15 +106,17 @@ describe("combineAttention (#2360)", () => {
   it.each([
     ["chat first", ["chat", "comment"] as const],
     ["comment first", ["comment", "chat"] as const],
-  ])("clears exactly once and never re-flashes when both reset (%s)", (_, order) => {
+  ])("when both reset, shows what remains, then clears exactly once (%s)", (_, order) => {
     const real = fakeBackend();
     const views = combineAttention(real);
     views.chat.attention(1);
     views.comment.attention(2);
     real.attention.mockClear();
     views[order[0]].clearAttention();
+    // The title shows the other kind's count, not the stale sum.
+    expect(real.attention).toHaveBeenCalledWith(order[0] === "chat" ? 2 : 1);
+    expect(real.clearAttention).not.toHaveBeenCalled();
     views[order[1]].clearAttention();
-    expect(real.attention).not.toHaveBeenCalled();
     expect(real.clearAttention).toHaveBeenCalledTimes(1);
   });
 
@@ -126,6 +129,33 @@ describe("combineAttention (#2360)", () => {
     expect(real.clearAttention).not.toHaveBeenCalled();
     chat.attention(3);
     expect(real.attention).toHaveBeenLastCalledWith(3);
+  });
+});
+
+describe("startCommentReveal (#2360)", () => {
+  it("switches to the answer's document BEFORE showing the rail, then parks the card", () => {
+    // The rail's reveal closes itself on a document switch, so the other
+    // order opens and shuts it in one flush.
+    const calls: string[] = [];
+    const pending = startCommentReveal(item("a", { documentId: "doc-2" }), {
+      isOpen: () => true,
+      switchTo: (id) => calls.push(`switch ${id}`),
+      showAnnotationsRail: () => calls.push("rail"),
+    });
+    expect(calls).toEqual(["switch doc-2", "rail"]);
+    expect(pending).toEqual({ documentId: "doc-2", annotationId: "ann-a" });
+  });
+
+  it("a closed document, or no target (an expired click), still shows the rail", () => {
+    const calls: string[] = [];
+    const deps = {
+      isOpen: () => false,
+      switchTo: (id: string) => calls.push(`switch ${id}`),
+      showAnnotationsRail: () => calls.push("rail"),
+    };
+    expect(startCommentReveal(item("a"), deps)).toBeNull();
+    expect(startCommentReveal(undefined, deps)).toBeNull();
+    expect(calls).toEqual(["rail", "rail"]);
   });
 });
 

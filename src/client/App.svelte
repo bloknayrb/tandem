@@ -130,6 +130,7 @@ import {
   type PendingReveal,
   resolvePendingReveal,
   routeNotificationActivation,
+  startCommentReveal,
   toCommentAnswerItem,
 } from "./notifications/comment-attention";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
@@ -2323,13 +2324,16 @@ setThreadAnswersContext(threadAnswers);
 // them asynchronously. The target is held here, never sent over IPC.
 let pendingReveal = $state<PendingReveal | null>(null);
 function revealCommentAnswer(target: CommentAnswerItem | undefined): void {
-  layoutModel.selectRailTab("annotations");
-  railContent.openReveal();
-  cancelFloatClose("right");
-  const documentId = target?.documentId;
-  if (!target || !documentId || !yjsSync.tabs.some((tab) => tab.id === documentId)) return;
-  yjsSync.setActiveTabId(documentId);
-  const pending = { documentId, annotationId: target.annotationId };
+  const pending = startCommentReveal(target, {
+    isOpen: (id) => yjsSync.tabs.some((tab) => tab.id === id),
+    switchTo: (id) => yjsSync.setActiveTabId(id),
+    showAnnotationsRail: () => {
+      layoutModel.selectRailTab("annotations");
+      railContent.openReveal();
+      cancelFloatClose("right");
+    },
+  });
+  if (!pending) return;
   pendingReveal = pending;
   setTimeout(() => {
     if (pendingReveal === pending) pendingReveal = null;
