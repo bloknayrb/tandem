@@ -879,7 +879,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
           onSendToClaude={canSendToClaude(ann, false) ? handleSendToClaude : undefined}
           onEdit={canEdit(ann) ? handleEdit : undefined}
           onReply={canReply(ann, false) ? handleReply : undefined}
-          onAcceptReplySuggestion={canAccept(ann) ? review.acceptReplySuggestion : undefined}
+          onAcceptReplySuggestion={ann.type === "comment" ? review.acceptReplySuggestion : undefined}
           targetLost={review.isTargetLost(ann.id)}
           openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
           onClick={() => review.scrollToAnnotation(ann)}

@@ -144,6 +144,14 @@ export function sanitizeAnnotation(
     ...(ann.resolvedBy === "user" || ann.resolvedBy === "claude"
       ? { resolvedBy: ann.resolvedBy }
       : {}),
+    // #2360: undo reads both off the SANITIZED record to give a reply-accepted
+    // parent back its own proposal (or none). Stripped here, undo would leave
+    // Claude's rewrite in the parent's `suggestedText` — on a user's comment,
+    // text the user never wrote. Shapes validated like `resolvedBy`.
+    ...(typeof ann.acceptedReplyId === "string" ? { acceptedReplyId: ann.acceptedReplyId } : {}),
+    ...(typeof ann.priorSuggestedText === "string" || ann.priorSuggestedText === null
+      ? { priorSuggestedText: ann.priorSuggestedText }
+      : {}),
     // #1123 M3: the authoring agent's identity (local-model collaborator only).
     // sanitize is a strict allowlist, so without this line agentIdentity is
     // stripped on EVERY Claude-facing read and the provider byline silently

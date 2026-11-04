@@ -130,15 +130,53 @@ describe("#1626: accepting a reply's suggestion", () => {
     // `undoResolveAnnotation` compares the span against
     // `appliedProjection(... ann.suggestedText ...)`. If the parent kept its own
     // original proposal, every reply accept would decline "text changed" — so
-    // superseding the field is required, not a side effect. Recorded as a
-    // decision: the original proposal is not archived.
+    // superseding the field is required, not a side effect. The original
+    // proposal is kept beside it (#2360) so Undo can put it back.
     seed();
     const api = review();
     api.acceptReplySuggestion(PARENT_ID, REPLY_ID);
 
-    expect((annotations.get(PARENT_ID) as Annotation).suggestedText).toBe(REPLY_PROPOSAL);
+    const accepted = annotations.get(PARENT_ID) as Annotation;
+    expect(accepted.suggestedText).toBe(REPLY_PROPOSAL);
+    expect(accepted.acceptedReplyId).toBe(REPLY_ID);
+    expect(accepted.priorSuggestedText).toBe(PARENT_PROPOSAL);
     expect(api.undoResolveAnnotation(PARENT_ID)).toBe(true);
     expect(docText(editor)).toBe(ORIGINAL);
+  });
+
+  it("Undo gives the parent its OWN proposal back (#2360)", () => {
+    // Before #2360 the parent came back pending still holding the reply's
+    // text, so its own Accept then offered a proposal it never made.
+    seed();
+    const api = review();
+    api.acceptReplySuggestion(PARENT_ID, REPLY_ID);
+    api.undoResolveAnnotation(PARENT_ID);
+
+    const parent = annotations.get(PARENT_ID) as Annotation;
+    expect(parent.status).toBe("pending");
+    expect(parent.suggestedText).toBe(PARENT_PROPOSAL);
+    expect("acceptedReplyId" in parent).toBe(false);
+    expect("priorSuggestedText" in parent).toBe(false);
+  });
+
+  it("an accept of the parent's OWN proposal drops stale reply-accept fields", () => {
+    // A pending record can carry leftovers (an older build's revert drops the
+    // fields it does not know only from its OWN reads). Undo of this accept
+    // must not "restore" a prior from that unrelated accept.
+    seed();
+    annotations.set(PARENT_ID, {
+      ...(annotations.get(PARENT_ID) as Annotation),
+      acceptedReplyId: "stale",
+      priorSuggestedText: "stale prior",
+    });
+    const api = review();
+    api.resolveAnnotation(PARENT_ID, "accepted");
+
+    const accepted = annotations.get(PARENT_ID) as Annotation;
+    expect(accepted.status).toBe("accepted");
+    expect("acceptedReplyId" in accepted).toBe(false);
+    api.undoResolveAnnotation(PARENT_ID);
+    expect((annotations.get(PARENT_ID) as Annotation).suggestedText).toBe(PARENT_PROPOSAL);
   });
 
   it("declines, leaving the document untouched, when the target text changed (#1629)", () => {

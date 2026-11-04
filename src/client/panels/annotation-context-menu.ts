@@ -13,7 +13,8 @@
 // `AnnotationCardActions.svelte` (whose if/else-if branch priority means, e.g., an
 // import-authored note renders Accept/Reject — not Send to Claude).
 
-import type { Annotation } from "../../shared/types";
+import { isSnapshotTruncated } from "../../shared/snapshot";
+import type { Annotation, AnnotationReply } from "../../shared/types";
 
 /**
  * Closed set of annotation action ids Rust may emit back over `context-menu-action`.
@@ -52,9 +53,76 @@ const isPending = (a: AnnotationGate): boolean => a.status === "pending";
 export const canAccept = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
 export const canDismiss = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
 
+/**
+ * The reply half of {@link canAcceptReplySuggestion}: a Claude-authored,
+ * non-private reply carrying a replacement proposal (#2360).
+ *
+ * `private` is matched against the two values that mean "not private" rather
+ * than `!== true`, the spelling `projection.ts`'s reply narrow warns against: a
+ * stored `"true"` or `1` arrives over a Y.Map any connected client can write.
+ */
+export const isAcceptableReplyRewrite = (
+  r: Pick<AnnotationReply, "author" | "private" | "suggestedText">,
+): boolean =>
+  r.author === "claude" &&
+  (r.private === undefined || r.private === false) &&
+  typeof r.suggestedText === "string";
+
+/**
+ * May the user accept the rewrite this REPLY proposes over its parent's range
+ * (#1626, #2360)? Unlike {@link canAccept} this holds for a USER-authored
+ * parent: Claude answers a user's comment inside its thread, and a rewrite there
+ * is the user's to take.
+ *
+ * Parent half: pending, a comment, and Claude-facing. `audience === "outbound"`
+ * is the client spelling of the server's `isClaudeFacing` (which the client
+ * cannot import); an absent audience is not consent. Read it on a SANITIZED
+ * record, which is what the rails render and what the hook builds, so a legacy
+ * shape is normalized before it is judged.
+ *
+ * The card's own Accept/Dismiss, Ctrl+Enter and the palette Accept all stay on
+ * {@link canAccept}: a reply rewrite is accepted by its own button only.
+ */
+export const canAcceptReplySuggestion = (
+  parent: Pick<Annotation, "id" | "type" | "status" | "audience">,
+  reply: Pick<AnnotationReply, "annotationId" | "author" | "private" | "suggestedText">,
+): boolean =>
+  parent.status === "pending" &&
+  parent.type === "comment" &&
+  parent.audience === "outbound" &&
+  reply.annotationId === parent.id &&
+  isAcceptableReplyRewrite(reply);
+
 /** The reason a blocked Accept shows (#1632). Generic per ADR-027: no annotation content. */
 export const ACCEPT_BLOCKED_REASON =
   "The text this suggestion was written against has changed, so it can't be applied.";
+
+/**
+ * Why a reply rewrite over a user comment with no `textSnapshot` is blocked
+ * (#2360). Nothing CHANGED, so {@link ACCEPT_BLOCKED_REASON} would be false:
+ * there is simply nothing to check the target against, or to restore on Undo.
+ */
+export const ACCEPT_UNVERIFIABLE_REASON =
+  "Tandem can't confirm the text this replacement was written for, so it can't be applied.";
+
+type UnverifiableGate = Pick<
+  Annotation,
+  "id" | "author" | "textSnapshot" | "textSnapshotTruncated"
+>;
+
+/**
+ * A rewrite over this record's range can be neither checked nor undone (#2360):
+ * a USER comment with no `textSnapshot` (every browser-made one) or a truncated
+ * one (undo declines those permanently). A fact about the record alone, so the
+ * thread can disable Accept without waiting for the document scan, and
+ * `checkSuggestionTarget`'s `"unverifiable"` verdict is this same function.
+ */
+export const isUnverifiableTarget = (a: UnverifiableGate): boolean =>
+  a.author === "user" && (a.textSnapshot === undefined || isSnapshotTruncated(a));
+
+/** The reason a blocked Accept over `parent`'s range shows. */
+export const acceptBlockedReason = (parent: UnverifiableGate): string =>
+  isUnverifiableTarget(parent) ? ACCEPT_UNVERIFIABLE_REASON : ACCEPT_BLOCKED_REASON;
 
 /**
  * Accept is OFFERED but cannot succeed (#1632): the record's target text is

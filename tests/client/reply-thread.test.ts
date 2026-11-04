@@ -25,6 +25,9 @@ function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
     id: "annotation-1",
     type: "comment",
     author: "claude",
+    // What `sanitizeAnnotation` gives every comment the rails render; the
+    // reply-Accept gate reads it (#2360).
+    audience: "outbound",
     status: "pending",
     content: "Body",
     range: { from: 0, to: 1 },

@@ -102,6 +102,18 @@ const annotationBaseShape = {
     .enum(["user", "claude"])
     .optional()
     .describe("Who resolved this record; absent means the user"),
+  // #2360. Declared because the sanitize allowlist carries them to every read.
+  acceptedReplyId: z
+    .string()
+    .optional()
+    .describe("Set while accepted: the reply whose replacement was applied"),
+  priorSuggestedText: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Set while accepted via a reply: this record's own suggestedText before (null: none)",
+    ),
   audience: z.enum(["private", "outbound"]),
   promotedFrom: z.literal("note").optional(),
   importSource: z
