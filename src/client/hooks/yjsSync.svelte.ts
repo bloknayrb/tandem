@@ -19,11 +19,13 @@ import {
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
+import type { ReplyBaseline } from "../notifications/thread-answer-detector";
 import type { AppInfoData, DocListEntry, OpenTab } from "../types";
 import { MCP_BASE_URL, WS_URL } from "../utils/backend-ports.js";
 import { installIdFromStoragePath } from "../utils/install-id.js";
 import { installUntaggedWriteWarning } from "../utils/untagged-write-warning.js";
 import { createRebuildScheduler } from "./rebuild-scheduler.js";
+import { captureReplyBaseline } from "./reply-baseline";
 import { resolveActiveTabId } from "./tab-reconcile.js";
 import type { SidecarRetryStrategy } from "./useTandemSettings";
 import { deduplicateDocList } from "./useYjsSync";
@@ -144,6 +146,13 @@ export interface YjsSyncState {
   readonly ctrlInitialSyncComplete: boolean;
   /** Claude message IDs present at the exact first-sync boundary for this CTRL doc. */
   readonly ctrlInitialClaudeMessageIds: readonly string[];
+  /**
+   * #2360: per open tab's Y.Doc, the reply ids present at that doc's first
+   * provider `synced`, and when — the thread-answer detector's baseline.
+   * Absent until the doc has synced. Keyed on the Y.Doc, so a rebuilt tab
+   * starts over.
+   */
+  readonly replyBaselines: ReadonlyMap<Y.Doc, ReplyBaseline>;
   readonly ready: boolean;
   /** Briefly true after the server restarts and the client reconnects. */
   readonly serverRestarted: boolean;
@@ -210,6 +219,13 @@ export function createYjsSync(opts?: {
   let bootstrapYdocState = $state<Y.Doc | null>(null);
   let ctrlInitialSyncComplete = $state(false);
   let ctrlInitialClaudeMessageIds = $state<readonly string[]>([]);
+  let replyBaselines = $state.raw<ReadonlyMap<Y.Doc, ReplyBaseline>>(new Map());
+  const dropReplyBaseline = (ydoc: Y.Doc) => {
+    if (!replyBaselines.has(ydoc)) return;
+    const next = new Map(replyBaselines);
+    next.delete(ydoc);
+    replyBaselines = next;
+  };
 
   // ---------- Refs (non-reactive mutable state) ----------
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -391,6 +407,7 @@ export function createYjsSync(opts?: {
       t.ydoc.destroy();
     }
     tabsState = [];
+    replyBaselines = new Map();
   };
 
   /**
@@ -457,6 +474,7 @@ export function createYjsSync(opts?: {
         tabMetaCleanups.get(id)?.();
         tabMetaCleanups.delete(id);
         pending.provider.destroy();
+        dropReplyBaseline(pending.ydoc);
         pending.ydoc.destroy();
         pendingProviders.delete(id);
         pendingIds.delete(id);
@@ -481,6 +499,12 @@ export function createYjsSync(opts?: {
         }),
       );
       provider.on("authenticationFailed", scheduleRebuild);
+      // #2360: the thread-answer baseline, captured synchronously in the
+      // provider callback (see `captureReplyBaseline`).
+      provider.on("synced", ({ state }: { state: boolean }) => {
+        const next = captureReplyBaseline(ydoc, replyBaselines, state, Date.now());
+        if (next) replyBaselines = next;
+      });
       pendingProviders.set(doc.id, { ydoc, provider });
 
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
@@ -517,6 +541,7 @@ export function createYjsSync(opts?: {
       pendingIds.delete(t.id);
       pendingProviders.delete(t.id);
       t.provider.destroy();
+      dropReplyBaseline(t.ydoc);
       t.ydoc.destroy();
     }
 
@@ -883,6 +908,9 @@ export function createYjsSync(opts?: {
     },
     get ctrlInitialClaudeMessageIds() {
       return ctrlInitialClaudeMessageIds;
+    },
+    get replyBaselines() {
+      return replyBaselines;
     },
     get ready() {
       return ready;

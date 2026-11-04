@@ -59,6 +59,17 @@ describe("createWebNotifier", () => {
     });
   });
 
+  it("a comment answer (#2360) posts under its own tag, so it never replaces a chat reply", () => {
+    const backend = createWebNotifier();
+    backend.notify({ title: "Claude replied", body: "" }, () => {});
+    backend.notify({ title: "Claude replied to your comment", body: "" }, () => {}, "comment");
+    expect(posted.map((p) => p.options.tag)).toEqual(["tandem-chat", "tandem-comment"]);
+    // Coming back closes the last one of each kind.
+    backend.clearAttention();
+    expect(posted[0].close).toHaveBeenCalledOnce();
+    expect(posted[1].close).toHaveBeenCalledOnce();
+  });
+
   it("posts nothing without permission", () => {
     stubNotification("default");
     createWebNotifier().notify({ title: "Claude replied", body: "" }, () => {});

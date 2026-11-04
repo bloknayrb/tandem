@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Claude's answers in your comment threads get noticed like chat replies (#2360).** This does nothing yet: Claude can't reply inside a comment you wrote until a later release. Once it can, an answer there plays the chime and, while Tandem is in the background, shows a notification ("Claude replied to your comment") and adds to the taskbar flash or tab-title count, under the same Notifications settings as chat. Clicking the notification opens that comment. The thread opens by itself when a new answer arrives and shows "1 new" until you've seen it, across all your Tandem windows.
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 

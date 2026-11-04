@@ -61,6 +61,22 @@ describe("inside Tauri, with window.Notification also defined", () => {
     expect(constructed).toHaveLength(0);
   });
 
+  it("a comment answer (#2360) reaches notify_comment_answer", async () => {
+    createNotifierBackend().notify(
+      { title: "Claude replied to your comment", body: "" },
+      () => {},
+      "comment",
+    );
+    await vi.waitFor(() =>
+      expect(invokeSpy).toHaveBeenCalledWith("notify_comment_answer", {
+        title: "Claude replied to your comment",
+        body: "",
+      }),
+    );
+    expect(invokeSpy).not.toHaveBeenCalledWith("notify_chat_reply", expect.anything());
+    expect(constructed).toHaveLength(0);
+  });
+
   it("clearAttention reaches clear_attention", async () => {
     createNotifierBackend().clearAttention();
     await vi.waitFor(() => expect(invokeSpy).toHaveBeenCalledWith("clear_attention"));
