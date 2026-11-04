@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveWithUndoToast } from "../../src/client/panels/resolve-with-undo-toast.js";
 import type { TandemNotification } from "../../src/shared/types.js";
 
-function setup(activeAtUndo: string | undefined) {
+function setup(activeAtUndo: string | undefined, landed = true) {
   const pushed: Array<{ n: TandemNotification; action?: { label: string; onClick: () => void } }> =
     [];
   const resolve = vi.fn();
@@ -11,6 +11,7 @@ function setup(activeAtUndo: string | undefined) {
     resolveWithUndoToast(id, {
       resolve,
       undo,
+      wasResolved: () => landed,
       push: (n, action) => pushed.push({ n, action }),
       docId: "doc-a",
       getActiveDocId: () => activeAtUndo,
@@ -38,6 +39,13 @@ describe("resolveWithUndoToast (#2360 margin Resolve)", () => {
     const ids = new Set(pushed.map((p) => p.n.id));
     expect(ids.size).toBe(3);
     expect(pushed.every((p) => p.n.dedupKey === undefined)).toBe(true);
+  });
+
+  it("offers no toast when the write did not land (no Undo for someone else's dismissal)", () => {
+    const { pushed, resolve, run } = setup("doc-a", false);
+    run("c1");
+    expect(resolve).toHaveBeenCalledWith("c1");
+    expect(pushed).toEqual([]);
   });
 
   it("declines after a tab switch and says so, instead of undoing in the wrong document", () => {

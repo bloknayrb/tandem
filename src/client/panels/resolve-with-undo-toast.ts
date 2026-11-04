@@ -6,6 +6,12 @@ interface Deps {
   /** Writes `dismissed` (the same path as Dismiss). */
   resolve: (id: string) => void;
   undo: (id: string) => boolean;
+  /**
+   * Did the write land? `resolve` is a silent no-op on a record that is no longer
+   * pending (Claude just dismissed it, say), and announcing "resolved" would then
+   * offer an Undo that reopens someone else's dismissal.
+   */
+  wasResolved: (id: string) => boolean;
   push: (notification: TandemNotification, action?: ToastAction) => void;
   /** Document the comment lives in, captured when the user clicked Resolve. */
   docId: string | undefined;
@@ -27,8 +33,9 @@ interface Deps {
  * toast declines instead, with a notice.
  */
 export function resolveWithUndoToast(id: string, deps: Deps): void {
-  const { resolve, undo, push, docId, getActiveDocId } = deps;
+  const { resolve, undo, wasResolved, push, docId, getActiveDocId } = deps;
   resolve(id);
+  if (!wasResolved(id)) return;
   push(
     {
       id: generateNotificationId(),

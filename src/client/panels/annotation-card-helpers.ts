@@ -116,8 +116,9 @@ export function truncate(text: string | undefined, max: number): string {
  * #2360) stores `dismissed`, which the header would otherwise paint as the red
  * "rejected" pill; it reads "resolved" instead. Keyed on `resolvedBy !== "claude"`
  * because Claude may still dismiss a user's comment, and that must not read as
- * the user's own act. Shared by the pill, the card's aria-label and the filter
- * summary so the three cannot disagree.
+ * the user's own act. Shared by the pill and the card's aria-label so the two
+ * cannot disagree. (The status filter's labels are static and say
+ * "Dismissed/resolved" by hand.)
  */
 export function displayStatus(ann: Pick<Annotation, "author" | "status" | "resolvedBy">): string {
   if (ann.author === "user" && ann.status === "dismissed" && ann.resolvedBy !== "claude") {

@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED, COWORK_ENABLED } from "../shared/constants";
+import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import type { Annotation, ChatMessage, TandemNotification } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
@@ -2495,6 +2495,9 @@ const marginHandlers = $derived.by(() => {
       resolveWithUndoToast(id, {
         resolve: review.handleDismiss,
         undo: review.undoResolveAnnotation,
+        wasResolved: (id) =>
+          (ydoc?.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation | undefined)?.status ===
+          "dismissed",
         push: notifications.push,
         docId,
         getActiveDocId: () => activeTab?.id,

@@ -890,7 +890,7 @@ Browser renders OnboardingTutorial as a strip in the top-of-shell banner stack (
     → Three items, ticked independently and in any order — no Next button:
         "Accept or dismiss a comment from Claude" — the user resolved an annotation
           (useAnnotationReview's recentlyResolved; Claude's MCP resolves never count, nor does
-          the user resolving their own comment, #2360),
+          the user resolving their own comment in the active document, #2360),
           or every Claude seed is already resolved, one by the user (replay keeps them)
         "Ask Claude something" — a Claude-visible user comment or a user chat
           message newer than the arm time (#1965)
