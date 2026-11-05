@@ -1,6 +1,6 @@
 # Plan: #2358, one Claude answers each ask (document ownership)
 
-**Plan rev 7, 2026-11-04.** Issue #2358.
+**Plan rev 8, 2026-11-05.** Issue #2358. Rev 8 applies Bryan's 2026-11-05 decisions (below) and the plan-text edits design v5 §14 listed, which he accepted.
 
 References:
 - Code cites are to origin/master `3b0c6943`.
@@ -21,6 +21,17 @@ References:
 9. The channel shim gets an identity, so its replies are ownership-checked (design §5.5-B, reversing §5.5-A).
 10. A chat, new comment or thread reply on a document held by a stopped Tandem's Claude starts it, even with a terminal attached. This overrides #2196's "Not if another AI is on" for that case only.
 11. Tandem's Claude holds documents only once it has started at least once since the server started.
+
+## Bryan's decisions (2026-11-05), on design v5's open items
+
+1. PR 1b lands now: "land the wakeurl fix now".
+2. Two Tandem toolsets per plugin terminal: "the bridge route". `tandem setup` writes Claude Code's `tandem` entry as the stdio bridge, which forwards the session id, so a terminal's two toolsets are one session (design §3.1, §3.6).
+3. The handle never goes in the transcript (option (b)): the supervisor puts it in the child's environment, and the child's bridge sends it at `initialize` (design §3.3).
+4. The owners exposure: "wider is fine".
+5. Rename stays dropped: "doc names in the assigned list is ok".
+6. `ownership-flag-on` is a required check while ownership is dark: "ok, as you recommend".
+7. R2.6 is narrowed to the poll route: "ok".
+8. The plan-text edits design v5 listed: "ok". Applied in this revision.
 
 ## Why two sessions answered
 
@@ -61,9 +72,10 @@ While present, it keeps its documents through idle-stop, restarts and respawns.
   - a chat, a new comment or a user thread reply on a document it holds;
   - a doc-less chat it owns;
   - an Assign to it with waiting items;
-  - a document returning to it with waiting items (a reaped terminal, a Release). Off→On moves no documents, so it starts nothing.
+  - a document returning to it with waiting items (a reaped terminal, a Release);
+  - at Off→On, waiting items on the unowned documents it gets back, or a waiting doc-less message it now owns. Off→On returns every **unowned** document to Tandem's Claude as `default`; `claimed` documents still wait for a run start (design v5 §4.2, §7.2, §8.4).
 
-  Take-back is never a start trigger: it happens **because** a run started. Chat on a document a terminal holds as `claimed` belongs to that terminal and starts nothing. Those documents come back only when a run starts for one of the reasons above.
+  Take-back is never a start trigger: it happens **because** a run started. Chat on a document a terminal holds as `claimed` belongs to that terminal and starts nothing. Those documents come back only when a run starts for one of the reasons above. A chat on a document another attached session holds, Claude Desktop included, starts nothing.
 
   This is wider than today in two ways:
   - **for documents it holds**, a new comment and any user thread reply also start it, beyond `isStartWorthy`'s chat and replies on Claude's own threads;
@@ -81,13 +93,15 @@ While present, it keeps its documents through idle-stop, restarts and respawns.
 | Terminal opened the doc with `tandem_open` | Terminal |
 | Bryan tells the terminal "work on foo.md" | Terminal, after its `tandem_open` takes foo.md |
 | Tandem's Claude never started this run, or Off | First session handed it; that session then holds the doc as `claimed` |
-| Tandem's Claude turned back On (no start) | Nothing moves; the terminal keeps answering its `claimed` docs until a Tandem's Claude run starts, which takes them back |
-| The terminal holding a doc dies | After the detach grace (or up to ~35 min with no `GET /mcp` stream), the doc returns to Tandem's Claude, which starts for what's waiting. The stale-owner hint covers the gap, and Assign shortens it. |
+| Tandem's Claude turned back On (no start) | Unowned docs return to Tandem's Claude, which starts if items on them, or a doc-less chat, are waiting; the terminal keeps answering its `claimed` docs until a Tandem's Claude run starts, which takes them back |
+| The terminal holding a doc dies | After the detach grace (or up to ~37 min with no `GET /mcp` stream), the doc returns to Tandem's Claude, which starts for what's waiting. The stale-owner hint covers the gap, and Assign shortens it. |
 | Bryan wants a particular session on a doc | Assign from the badge (offered only to sessions that can take it) |
 
 **What changes for a single session** (both go in CHANGELOG):
-1. Another AI client (a terminal or Claude Desktop) next to a present-but-idle Tandem's Claude is refused on Bryan's documents. The refusal tells it to `tandem_open`, and Claude starts for them.
+1. Another AI client (a terminal or Claude Desktop) next to a present-but-idle Tandem's Claude is refused on Bryan's documents. The refusal says `tandem_open` is right only when the user asked it directly, and Claude starts for them.
 2. Tandem's Claude alone and idle-stopped is now started by a new comment or a user thread reply on its documents, not only by chat.
+
+Design v5 §14 lists the rest, including that Claude Code's `tandem` entry becomes the stdio bridge, and a terminal's two toolsets one session.
 
 ## Requirements design v5 must meet
 
@@ -117,7 +131,7 @@ Each requirement comes with the acceptance test that proves it.
   All other starts are today's. Assign and a returning document with waiting items also start it. *Tests:* the decision-10 cases; Assign and Release with waiting items; single-session change #2; today's matrix for everything else.
 - R2.7: A running owner is woken when a document reaches it with items waiting. *Tests:* Assign to a running terminal, take-back while running, and a reap while running, each answered with no new event.
 - R2.5: A run that never binds strands nothing. Its documents' items stay owed after it exits. *Test:* a stub child that never presents its handle.
-- R2.6: Notices nobody answers (accept or dismiss) count as handled once they reach their owner by any route. *Test:* a handover doesn't hand over the old owner's notices.
+- R2.6: Notices nobody answers (accept or dismiss) count as handled once they reach their owner by poll (narrowed from "by any route", Bryan 2026-11-05; a notice seen only by push can reach the next owner as a duplicate notice, never a second answer). *Test:* a handover doesn't hand over the old owner's notices.
 
 **R3. Privacy, licence and security hold.**
 - R3.1: Ownership filtering never runs before the Solo hold, `hideFromAI` or the ADR-027/withheld predicates. "Waiting" is always counted after them, so a Solo-held item never starts or wakes Claude.
@@ -156,7 +170,7 @@ Each requirement comes with the acceptance test that proves it.
   - "waiting — Start to answer" where it applies;
   - Release hidden where it would do nothing;
   - Assign offered only to owners that can take a document.
-- R4.8: Design v5 settles how a `tandem setup` (direct-HTTP) terminal's shim is linked to its MCP record before PR 4 is built. Until it is linked, that shim keeps today's stream and its replies get the "use `tandem_reply`" refusal.
+- R4.8: Design v5 settles how a `tandem setup` (direct-HTTP) terminal's shim is linked to its MCP record before PR 4 is built. Until it is linked, that shim keeps today's stream and its replies get the "use `tandem_reply`" refusal. *Settled (2026-11-05):* setup writes the stdio bridge, so a migrated terminal's shim is linked; a direct-HTTP entry setup did not migrate keeps the refusal (design v5 §3.6, §9.3).
 
 **R5. Probes PR 0 or the first build step must answer:**
 - Does a resumed child keep `CLAUDE_CODE_SESSION_ID` equal to the resumed id? Both outcomes must be written into v5: the bind check and the child's shim matching.
@@ -173,7 +187,7 @@ Ownership lands **dark**, with the following requirements. PR 1a picks the mecha
   - `tools/list` carries no ownership argument, field or string;
   - the op queue and the start-rule change are bypassed;
   - nothing new is stamped.
-- A separate advisory CI job builds and tests with the flag on, pinned by a wiring test in `check` (ADR-051). It costs about 17–19 runner-minutes per push, in parallel.
+- A separate CI job builds and tests with the flag on, pinned by a wiring test in `check` (ADR-051), and is a **required** check while ownership is dark (Bryan, 2026-11-05). It costs about 17–19 runner-minutes per push, in parallel.
 - Existing tests that change are listed per PR, not promised "additive only".
 - The bound-launcher path is covered by a stub child, because CI has no `claude`.
 
@@ -181,13 +195,14 @@ Ownership lands **dark**, with the following requirements. PR 1a picks the mecha
 |---|---|
 | **0. Design v5** | Meets R1–R5. Tracked, with adversarial rounds until clean. PRs 1–4 are sized after it. |
 | **1a. Identity** | Owner records, kinds, the Tandem's Claude identity with a presence seam; registry `ownerId`, descriptor, `claudeSessionId` and per-record last-poll time; request context `ownerId`, and `peerIsLoopback` set ungated from the socket only; the bridge's client id; the stdio record; the flag; ADR-054; a CLAUDE.md "ships dark" entry. |
-| **1b. #1952 (conditional)** | Per-request `wakeUrl` suppression, ungated (a separate security fix), with its register and CLAUDE.md edits. **Conditional on Bryan** (reconciled in PR 0): #1952 is closed as not planned, `docs/security.md` records it as accepted and bounded by ADR-056's `LAN_BIND_ENABLED = false`, and ADR-056's re-enable checklist schedules the fix. Either this PR lands now (reopening #1952, amending ADR-056 and the register), or it is dropped here and done at the LAN re-enable. `peerIsLoopback` stays in 1a either way. |
+| **1b. #1952** | Per-request `wakeUrl` suppression reading `peerIsLoopback`, ungated (a separate security fix). Lands now (Bryan, 2026-11-05): it reopens #1952 and amends ADR-056, the `docs/security.md` register and CLAUDE.md's Security bullet. |
 | **1c. Enforcement** | Op queue, refusal placement, `NOT_DOC_OWNER` and the kind-based copy, the write-side default, the `tandem_open` take rule, the answered-once rule (R1.5), `switchDocument` owner-only. |
 | **2. Inbox and replies** | Scope, handover, chat ownership, reply acceptance, `getAnnotations` labels, the inbox pin amendment. |
-| **3. Launcher** | The probes; handle and bind; presence and its announcer; take-back; the start rules; waking a running owner; `requestWake`. Comes after PR 2 because "waiting" and doc-less ownership come from there. The Assign- and Release-triggered start and wake are a seam that PR 5 calls. |
+| **2b. Setup entry and migration** | Behind the flag: `tandem setup`, the wizard and `rotate-token` write Claude Code's `tandem` entry as the stdio bridge, and the boot sweep migrates the HTTP entry Tandem wrote; the doctor names any entry it leaves alone; the ADR-045 amendment. Lands before PR 3's bind (design v5 §3.6). |
+| **3. Launcher** | The probes; the handle in the child's environment and the bind at `initialize`; presence and its announcer; take-back; the start rules; waking a running owner; `requestWake`. Comes after PR 2 because "waiting" and doc-less ownership come from there. The Assign- and Release-triggered start and wake are a seam that PR 5 calls. |
 | **4. Push and shim identity** | SSE narrowing and `/api/channel-reply` permit, per R3.3, R3.4 and R4.8. |
 | **5. Controls** | The ownership routes, badge, popover and native menu; Assign and Release calling PR 3's start/wake seam. |
-| **6. Flip** | Flag on, `SKILL.md` bump, `SERVER_INSTRUCTIONS`, docs, CHANGELOG, a release-smoke row, dark pins removed. |
+| **6. Flip** | Waits for #2360's switch to merge. Flag on, `SKILL.md` bump, the plugin's pinned ref bumped to carry the new skill, `SERVER_INSTRUCTIONS`, docs, CHANGELOG (including the entry migration), release-smoke rows (probes and the first-boot migration), dark pins removed, `ownership-flag-on` dropped from the required checks. |
 
 After the flip comes the design's Phase 3 (scoping the `/api/wake` watch and the supervisor); Phase 2 is dropped with D5. Until Phase 3, a session armed on `/api/wake` is still woken for every event. So is a shim the server can't map to a session. Such a session finds nothing and ends its turn silently. That costs one turn per event, but produces no answer.
 
@@ -197,33 +212,40 @@ The comment-thread reply is the answered-link (decision 6), and #2360's switch w
 
 ## Manual check (after both flips, before release)
 
-Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lifetime, and a terminal `claude` with the plugin and the channel shim.
+Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lifetime, and a terminal `claude` started **after** the flipped build's first boot, with the plugin at the bumped ref (so it runs the new skill) and the channel shim. Claude Code's user-level `tandem` entry is the stdio bridge (row 17 checks the migration). The terminal then has two Tandem toolsets, the plugin's and setup's; both are bridges forwarding the same session id, so they are **one session**, and which toolset the model picks does not change any row.
 
 | # | Step | Expected |
 |---|---|---|
 | 1 | Comment on a doc you opened | One thread reply, from Tandem's Claude; the terminal silent |
-| 2 | The terminal `tandem_open`s a new doc; you comment on it | The terminal answers; Tandem's Claude silent |
-| 3 | Open a new doc X yourself; tell the terminal "comment on X" | The terminal takes X (the badge changes) and comments |
+| 2 | The terminal `tandem_open`s a new doc; you comment on it | The terminal answers in the thread, through either toolset; Tandem's Claude silent |
+| 3 | Open a new doc X yourself; tell the terminal "comment on X" | The terminal takes X with `tandem_open` (the badge changes) and comments, through either toolset |
 | 4 | Switch to step 1's doc, wait for idle-stop, comment | Tandem's Claude starts and answers |
-| 5 | Turn Tandem's Claude Off; comment on step 1's doc | The terminal answers once |
-| 6 | Turn it On (nothing moves yet); close all tabs and chat; reopen step 1's doc and comment | The chat starts Tandem's Claude, which answers it and takes step 1's doc back; it answers the new comment; step 5's comment is not answered again |
+| 5 | Turn Tandem's Claude Off; comment on step 1's doc | The terminal answers once, in the comment's thread |
+| 6 | Turn it On (no start). Keep step 1's tab open; open a new scratchpad and send a chat from it; then comment on step 1's doc | The chat (on a document Tandem's Claude holds by default) starts Tandem's Claude, which answers it and, starting, takes step 1's doc back from the terminal; it answers the new comment; step 5's comment is not answered again |
 | 7 | Kill the terminal while it holds X; comment on X | The stale-owner hint shows; Assign to Tandem's Claude → it answers. Without Assign, X returns to Tandem's Claude after the grace or reap, and Claude starts and answers. |
-| 8 | Release a doc the terminal holds | It returns to Tandem's Claude, and the copy said so |
-| 9 | Restart the server while the terminal holds a doc | The doc goes back to Tandem's Claude; the terminal's `tandem_open` re-takes it |
-| 10 | On-click mode, never pressed Start; the terminal works on your doc | As today |
-| 11 | Repeat 1, 2, 5 and 6 on the Linux VM AppImage, with the plugin ref bumped | Same |
+| 8 | Release a doc the terminal holds | It returns to Tandem's Claude; the Release entry said "Back to Tandem's Claude" |
+| 9 | Restart the server while the terminal holds a doc | The doc goes back to Tandem's Claude once it starts (if the terminal polled first, it claims the doc and take-back then takes it); asked again, the terminal's `tandem_open` re-takes it |
+| 10 | On-click mode, never pressed Start; the terminal works on your doc | As today for docs the terminal claimed; unowned docs go to Tandem's Claude when it is next present |
+| 11 | Repeat 1, 2, 5, 6 and 17 on the Linux VM AppImage, with the plugin ref bumped | Same |
+| 12 | Off→On with nothing claimed: turn Off, comment on a doc no session holds, turn On | The doc returns to Tandem's Claude, which starts and answers; a doc a terminal claimed while Off stays with it until a run starts |
+| 13 | Switch to Solo; comment on step 1's doc; wait a minute; switch back to Tandem | Nothing starts and nobody answers during Solo; after it, Tandem's Claude answers once |
+| 14 | Sign Tandem's Claude out (needs-login); comment on a doc it held | After about 5 seconds its docs go unowned; the terminal can pick the comment up; Start is not offered as a fix for sign-in |
+| 15 | A run that never binds: hand-edit the `tandem` entry back to direct-HTTP, restart Tandem, comment | `tandem doctor` names the entry; the comment waits; the stale hint shows after 5 minutes; Assign to the terminal → it answers |
+| 16 | Two terminals, Tandem's Claude Off; send one doc-less chat | Exactly one answer |
+| 17 | First-boot migration: before installing the flipped build, keep the direct-HTTP entry `tandem setup` wrote; install and start | The entry is now the bridge carrying the same token; `tandem doctor` shows only the duplicate-toolset warning; in a new terminal, `tandem_status` through each toolset shows the same label |
 
 ## Calls I made (documented, not asked)
 
-- **A document returning to a present Tandem's Claude with waiting items starts it.** A reaped terminal is not a radio click; Off→On itself moves nothing.
+- **A document returning to a present Tandem's Claude with waiting items starts it.** A reaped terminal is not a radio click. *Revised in rev 8:* Off→On returns unowned documents and starts for what waits on them (design v5 §4.2, accepted 2026-11-05).
 - **A per-message doc-less owner keeps its message when Tandem's Claude becomes present.** The answer is already in flight, and `answeredChatIds` covers the rest.
 - **"Present" excludes every staying-down state.** A child that can't answer doesn't hold documents.
 - **Take-back happens when a run starts, not at Off→On.** Decision 2 says "starts again". The terminal keeps answering until Tandem's Claude actually runs.
 - **A chat-started run from Off follows the 2026-10-13 behaviour** already in code (the mode becomes on-click).
-- **A chat on a doc held by Claude Desktop can start Tandem's Claude**, which finds nothing to do. Desktop isn't counted by `otherAiAttached` (`transport-registry.ts:284`). This is a wasted start but a silent one, and it is accepted.
+- ~~**A chat on a doc held by Claude Desktop can start Tandem's Claude.**~~ *Replaced in rev 8:* a chat on a document any other attached session holds, Desktop included, starts nothing (design v5 §8.3).
 - **`assigned` documents return to the default rule when their owner goes away.**
 - **The error code is `NOT_DOC_OWNER`.**
-- **#1952 is its own PR**, and since PR 0 it is conditional on Bryan (see PR 1b).
+- **#1952 is its own PR** (1b), landing now (Bryan, 2026-11-05).
+- **The setup entry's migration ships behind the flag**, in its own PR (2b); the reversible alternative, migrating live before the flip, is in design v5 §14.
 - **D5 is dropped.**
 
 ## Confirmed by Bryan (2026-11-04)
@@ -233,3 +255,5 @@ Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lif
 - Whether to accept two local exposures:
   - any page served from 127.0.0.1 can list the attached sessions' labels and kinds;
   - any local process (including a Claude session using curl) can Assign itself a document.
+
+On 2026-11-05 he widened the first ("wider is fine"): it also covers which session holds which document, the Assign list's document names, the Settings list of bound transports, and Release being as forgeable as Assign (design v5 §11.3).
