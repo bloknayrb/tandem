@@ -1,5 +1,9 @@
 /**
- * The listen/cancel dance for a PAYLOAD-FREE Tauri event listener.
+ * The listen/cancel dance for a Tauri event listener whose payload, if any, is
+ * a closed enum — never document content. `onEvent` receives the raw payload;
+ * a caller that has no use for it ignores the argument (the sidecar-restart
+ * pair does), and one that branches on it must treat any unrecognised value
+ * as its default (`notification-activated`'s kind, #2360).
  *
  * `@tauri-apps/api/event` is dynamically imported (the client also runs in a
  * plain browser, where the module must never load), so wiring a listener is
@@ -30,7 +34,7 @@
  */
 
 export interface TauriEventModule {
-  listen: (event: string, handler: () => void) => Promise<() => void>;
+  listen: (event: string, handler: (event?: { payload?: unknown }) => void) => Promise<() => void>;
 }
 
 export interface ListenTauriEventDeps {
@@ -39,12 +43,12 @@ export interface ListenTauriEventDeps {
   /** The event name to listen for. */
   event: string;
   /** Called for each occurrence, unless cleanup has already run. */
-  onEvent: () => void;
+  onEvent: (payload: unknown) => void;
   /** Injected for tests; defaults to `console.warn`. */
   warn?: (message: string, err: unknown) => void;
 }
 
-/** Wire a payload-free Tauri event listener and return its cleanup function. */
+/** Wire a Tauri event listener and return its cleanup function. */
 export function listenTauriEvent(deps: ListenTauriEventDeps): () => void {
   const warn = deps.warn ?? ((message: string, err: unknown) => console.warn(message, err));
   let cancelled = false;
@@ -53,8 +57,8 @@ export function listenTauriEvent(deps: ListenTauriEventDeps): () => void {
   deps
     .loadEvent()
     .then(({ listen }) =>
-      listen(deps.event, () => {
-        if (!cancelled) deps.onEvent();
+      listen(deps.event, (event) => {
+        if (!cancelled) deps.onEvent(event?.payload);
       }),
     )
     .then((un) => {

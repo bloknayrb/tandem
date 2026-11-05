@@ -433,6 +433,41 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     expect(app).toContain("event: NOTIFICATION_ACTIVATED_EVENT");
   });
 
+  it("agrees with the client on the notification-activated payload's kind strings (#2360)", () => {
+    // The click event's only payload is the kind. If Rust's `as_str()` arm
+    // and the client's literal disagree, every comment click silently falls
+    // back to chat and every suite stays green.
+    const rust = rustSourceDefining(/enum NotificationKind\b/, "NotificationKind");
+    const comment = rust.code.match(/NotificationKind::Comment => "([a-z-]+)",/);
+    const chat = rust.code.match(/NotificationKind::Chat => "([a-z-]+)",/);
+    expect(comment, "the Comment arm of as_str() is not a plain literal any more").not.toBeNull();
+    expect(chat, "the Chat arm of as_str() is not a plain literal any more").not.toBeNull();
+    expect(comment?.[1]).not.toBe(chat?.[1]);
+    // The emit site sends the kind, not a second literal and not `()`.
+    expect(rust.code).toMatch(/\.emit\(ACTIVATED_EVENT, kind\.as_str\(\)\)/);
+
+    const client = stripTsComments(
+      readFileSync(join(REPO_ROOT, "src", "client", "tauri", "notifications-invoke.ts"), "utf8"),
+    );
+    const listened = client.match(/export const NOTIFICATION_KIND_COMMENT = "([a-z-]+)";/);
+    expect(listened, "NOTIFICATION_KIND_COMMENT is not a plain literal any more").not.toBeNull();
+    expect(listened?.[1], "Rust emits one comment kind and the client matches another.").toBe(
+      comment?.[1],
+    );
+
+    // ...and the router compares against that constant, not a copy.
+    const router = stripTsComments(
+      readFileSync(
+        join(REPO_ROOT, "src", "client", "notifications", "comment-attention.ts"),
+        "utf8",
+      ),
+    );
+    expect(router).toMatch(
+      /import \{[^}]*\bNOTIFICATION_KIND_COMMENT\b[^}]*\} from "\.\.\/tauri\/notifications-invoke"/,
+    );
+    expect(router).toContain("payload === NOTIFICATION_KIND_COMMENT");
+  });
+
   it("gives every Rust wire code an explicit case in the client's message map", () => {
     const sources = rustSources();
     // Stripped once and shared: `routedIn` below asks about the same derived

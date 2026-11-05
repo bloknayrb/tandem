@@ -1735,6 +1735,7 @@ pub fn run() {
             autostart::autostart_get_status,
             autostart::autostart_set_enabled,
             notifications::notify_chat_reply,
+            notifications::notify_comment_answer,
             notifications::notify_test,
             notifications::request_attention,
             notifications::clear_attention,

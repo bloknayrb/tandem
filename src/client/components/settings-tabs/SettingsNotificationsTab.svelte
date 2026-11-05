@@ -70,9 +70,10 @@ function sendTest(): void {
 </script>
 
 <div>
-  <div class="settings-section-label">When Claude replies in chat</div>
+  <div class="settings-section-label">When Claude replies</div>
   <div class="settings-hint">
-    While Tandem isn't the window you're using, a reply shows a notification and
+    In chat, or in the thread of a comment you wrote. While Tandem isn't the window you're
+    using, a reply shows a notification and
     {desktop ? "flashes the taskbar icon" : "a count in the tab title"}. The sound plays either way.
   </div>
 </div>
@@ -155,7 +156,8 @@ function sendTest(): void {
     <span>I keep Tandem visible beside other apps</span>
   </label>
   <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
-    Replies count as read whenever Tandem is on screen with chat showing, even behind other windows.
+    Replies count as read whenever Tandem is on screen with chat (or the comment's open thread)
+    showing, even behind other windows.
     While it's on screen you'll hear the sound but get no notification.
   </div>
 </div>

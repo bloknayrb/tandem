@@ -1,5 +1,7 @@
 //! Chat-reply notifications (#2168): the OS notification and the taskbar flash
 //! the client asks for when a Claude reply arrives while Tandem is unfocused.
+//! Since #2360 the same machinery posts a second kind, "Claude answered your
+//! comment", for a Claude reply inside the user's own comment thread.
 //!
 //! App-defined commands over `tauri-plugin-notification` rather than its JS
 //! API, for the same reasons as `autostart.rs`, plus one of its own: the
@@ -20,9 +22,61 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, UserAttentionType};
 use tauri_plugin_notification::{Action, ActionType, NotificationExt};
 
-/// Payload-free nudge to the WebView: "a notification was clicked". The
-/// document to open is held client-side — no document id crosses IPC.
+/// Nudge to the WebView: "a notification was clicked". Its payload is the
+/// kind's `as_str()` and nothing else — an enum string, never a title, body,
+/// document id or annotation id. The document and comment to open are held
+/// client-side; nothing about them crosses IPC.
 pub const ACTIVATED_EVENT: &str = "notification-activated";
+
+/// Which notification a click came from, so the client can route it: chat
+/// opens chat, comment opens the answered comment's card (#2360).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationKind {
+    Chat,
+    Comment,
+}
+
+impl NotificationKind {
+    /// The `ACTIVATED_EVENT` payload. The client matches these literals
+    /// (`NOTIFICATION_KIND_COMMENT` in `notifications-invoke.ts`); anything it
+    /// does not recognise falls back to chat.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            NotificationKind::Chat => "chat",
+            NotificationKind::Comment => "comment",
+        }
+    }
+
+    const fn id(self) -> i32 {
+        match self {
+            NotificationKind::Chat => CHAT_REPLY_ID,
+            NotificationKind::Comment => COMMENT_ANSWER_ID,
+        }
+    }
+
+    const fn action_type(self) -> &'static str {
+        match self {
+            NotificationKind::Chat => CHAT_REPLY_ACTION_TYPE,
+            NotificationKind::Comment => COMMENT_ANSWER_ACTION_TYPE,
+        }
+    }
+
+    fn outstanding(self) -> &'static Mutex<Option<Instant>> {
+        match self {
+            NotificationKind::Chat => &MAC_ACTION_OUTSTANDING_CHAT,
+            NotificationKind::Comment => &MAC_ACTION_OUTSTANDING_COMMENT,
+        }
+    }
+
+    const fn what(self) -> &'static str {
+        match self {
+            NotificationKind::Chat => "chat-reply",
+            NotificationKind::Comment => "comment-answer",
+        }
+    }
+}
+
+const ALL_KINDS: [NotificationKind; 2] = [NotificationKind::Chat, NotificationKind::Comment];
 
 /// The one error string these commands return. There is no client contract on
 /// it: no client code branches on the value, and the callers in
@@ -38,6 +92,9 @@ pub const CHAT_REPLY_ID: i32 = 2168;
 /// The Settings "send a test notification" toast. Its click focuses the window
 /// but never reaches the chat dispatcher: there is no reply to open.
 pub const TEST_NOTIFICATION_ID: i32 = 2169;
+/// "Claude answered your comment" (#2360). Its click opens the answered
+/// comment, not chat.
+pub const COMMENT_ANSWER_ID: i32 = 2360;
 
 /// The action type a chat-reply notification references on macOS, and its one
 /// action: an "Open chat" button.
@@ -59,9 +116,17 @@ pub const CHAT_REPLY_ACTION_TYPE: &str = "tandem-chat-reply";
 pub const OPEN_CHAT_ACTION_ID: &str = "open-chat";
 /// macOS tells actions apart by their title, so it must be unique in the type.
 const OPEN_CHAT_ACTION_TITLE: &str = "Open chat";
+/// The comment-answer counterpart of `CHAT_REPLY_ACTION_TYPE`, for the same
+/// macOS reason, with one "Show comment" button.
+pub const COMMENT_ANSWER_ACTION_TYPE: &str = "tandem-comment-answer";
+pub const SHOW_COMMENT_ACTION_ID: &str = "show-comment";
+const SHOW_COMMENT_ACTION_TITLE: &str = "Show comment";
 
-/// When the chat-reply notification with the action button was claimed, while
-/// one is outstanding; `None` otherwise.
+/// When the notification of one kind with the action button was claimed, while
+/// one is outstanding; `None` otherwise. One claim per kind (#2360), so a
+/// comment answer posted after a chat reply in the same absence is still
+/// clickable on macOS: at most one waiter per kind, two in all (four inside
+/// the late-delivery race below).
 ///
 /// That notification is not free on macOS: mac-notification-sys parks a thread
 /// on it, plus a 0.5 s poll on the main run loop, until it is clicked or leaves
@@ -80,7 +145,8 @@ const OPEN_CHAT_ACTION_TITLE: &str = "Open chat";
 /// `LATE_DELIVERY_SWEEP_DELAY` (`sweeps_for_focus`).
 ///
 /// Never claimed off macOS (`should_attach_action`), so there it stays `None`.
-static MAC_ACTION_OUTSTANDING: Mutex<Option<Instant>> = Mutex::new(None);
+static MAC_ACTION_OUTSTANDING_CHAT: Mutex<Option<Instant>> = Mutex::new(None);
+static MAC_ACTION_OUTSTANDING_COMMENT: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Longer than mac-notification-sys's 2 s delivery wait, so a notification
 /// claimed this recently has been delivered by the time a sweep this long
@@ -120,6 +186,11 @@ fn should_attach_action(
 /// when the outstanding one was claimed, if one was.
 fn release_action(outstanding: &Mutex<Option<Instant>>) -> Option<Instant> {
     lock(outstanding).take()
+}
+
+/// The age of the youngest of the released claims, if any was outstanding.
+fn youngest(released: [Option<Instant>; 2]) -> Option<Duration> {
+    released.into_iter().flatten().map(|at| at.elapsed()).min()
 }
 
 /// What a focus does with a released claim: `(sweep now, sweep again after
@@ -275,42 +346,57 @@ fn post(
     })
 }
 
-/// Post a chat-reply notification. On macOS the first one of an absence
-/// carries the "Open chat" action, so its click is reported (see
-/// `CHAT_REPLY_ACTION_TYPE` and `MAC_ACTION_OUTSTANDING`).
+/// Post a notification of `kind` under its fixed id. On macOS the first one of
+/// each kind in an absence carries that kind's action, so its click is
+/// reported (see `CHAT_REPLY_ACTION_TYPE` and `MAC_ACTION_OUTSTANDING_CHAT`).
+fn post_kind(
+    app: &AppHandle,
+    kind: NotificationKind,
+    title: &str,
+    body: &str,
+) -> Result<(), &'static str> {
+    let with_action = should_attach_action(
+        cfg!(target_os = "macos"),
+        kind.outstanding(),
+        Instant::now(),
+    );
+    let action_type = with_action.then_some(kind.action_type());
+    let result = post(app, kind.id(), title, body, action_type, kind.what());
+    // Nothing was shown, so nothing waits: let the next post carry the button.
+    // A failure later, on the plugin's own thread, is not seen here; the claim
+    // then stays held until the window is focused, which only costs this
+    // absence its click reporting.
+    if with_action && result.is_err() {
+        let _ = release_action(kind.outstanding());
+    }
+    result
+}
+
+/// Post a chat-reply notification.
 #[tauri::command]
 pub async fn notify_chat_reply(
     app: AppHandle,
     title: String,
     body: String,
 ) -> Result<(), &'static str> {
-    let with_action = should_attach_action(
-        cfg!(target_os = "macos"),
-        &MAC_ACTION_OUTSTANDING,
-        Instant::now(),
-    );
-    let action_type = with_action.then_some(CHAT_REPLY_ACTION_TYPE);
-    let result = post(
-        &app,
-        CHAT_REPLY_ID,
-        &title,
-        &body,
-        action_type,
-        "chat-reply",
-    );
-    // Nothing was shown, so nothing waits: let the next post carry the button.
-    // A failure later, on the plugin's own thread, is not seen here; the claim
-    // then stays held until the window is focused, which only costs this
-    // absence its click reporting.
-    if with_action && result.is_err() {
-        let _ = release_action(&MAC_ACTION_OUTSTANDING);
-    }
-    result
+    post_kind(&app, NotificationKind::Chat, &title, &body)
+}
+
+/// Post a "Claude answered your comment" notification (#2360). Same cleaning,
+/// escaping, caps and macOS action rule as a chat reply, through the same
+/// `post`; only the id, the action and the click route differ.
+#[tauri::command]
+pub async fn notify_comment_answer(
+    app: AppHandle,
+    title: String,
+    body: String,
+) -> Result<(), &'static str> {
+    post_kind(&app, NotificationKind::Comment, &title, &body)
 }
 
 /// Post the Settings test notification: fixed text, through the same cleaning
 /// and escaping path as a real reply, with the test id so a reported click
-/// only focuses the window (see `routes_click`). It carries no action, so on
+/// only focuses the window (see `click_kind`). It carries no action, so on
 /// macOS no click on it is reported at all (see `CHAT_REPLY_ACTION_TYPE`).
 #[tauri::command]
 pub async fn notify_test(app: AppHandle) -> Result<(), &'static str> {
@@ -358,7 +444,7 @@ pub async fn clear_attention(app: AppHandle) -> Result<(), &'static str> {
 
 /// The main window gained focus: the user is back. Release the macOS action
 /// claim and, if a notification carrying it was outstanding, end the wait
-/// parked on it (see `MAC_ACTION_OUTSTANDING`). Called from the native window
+/// parked on it (see `MAC_ACTION_OUTSTANDING_CHAT`). Called from the native window
 /// event, so it holds however the client's own attention state stands.
 ///
 /// A claim younger than `LATE_DELIVERY_SWEEP_DELAY` may belong to a
@@ -367,7 +453,9 @@ pub async fn clear_attention(app: AppHandle) -> Result<(), &'static str> {
 /// skipped if a new claim exists by then: its notification is the new
 /// absence's, and the next focus sweeps both.
 pub fn on_main_window_focused(app: &AppHandle) {
-    let claimed_ago = release_action(&MAC_ACTION_OUTSTANDING).map(|at| at.elapsed());
+    // Both kinds' claims go. The youngest decides the delayed sweep: it is the
+    // one most likely still inside its delivery wait.
+    let claimed_ago = youngest(ALL_KINDS.map(|kind| release_action(kind.outstanding())));
     let (now, delayed) = sweeps_for_focus(claimed_ago);
     if now {
         remove_delivered_notifications(app);
@@ -376,7 +464,10 @@ pub fn on_main_window_focused(app: &AppHandle) {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(LATE_DELIVERY_SWEEP_DELAY).await;
-            if lock(&MAC_ACTION_OUTSTANDING).is_none() {
+            if ALL_KINDS
+                .iter()
+                .all(|kind| lock(kind.outstanding()).is_none())
+            {
                 remove_delivered_notifications(&app);
             }
         });
@@ -426,36 +517,53 @@ fn remove_delivered_notifications(_app: &AppHandle) {}
 
 /// Whether `action_id` asks to open Tandem: a click on the notification itself
 /// (`"tap"`, which the plugin also reports for a freedesktop `default` action)
-/// or the macOS "Open chat" button.
+/// or the macOS "Open chat" / "Show comment" button.
 fn is_open_action(action_id: &str) -> bool {
-    action_id == "tap" || action_id == OPEN_CHAT_ACTION_ID
+    action_id == "tap" || action_id == OPEN_CHAT_ACTION_ID || action_id == SHOW_COMMENT_ACTION_ID
 }
 
-/// Whether a click on the notification with `id` goes to the chat dispatcher.
-/// Everything but the test notification does — including a click whose
-/// notification the platform could not describe, which can only be a reply's.
-fn routes_click(id: Option<i32>) -> bool {
-    id != Some(TEST_NOTIFICATION_ID)
+/// Which dispatcher a click on the notification with `id` goes to: `None` for
+/// the test notification (focus only), `Comment` for a comment answer (by id,
+/// or by its "Show comment" button when the platform reports no id), and
+/// `Chat` for everything else. That includes a click whose notification the
+/// platform could not describe: the accepted fallback is that it opens chat,
+/// as every such click did before #2360.
+fn click_kind(id: Option<i32>, action_id: &str) -> Option<NotificationKind> {
+    match id {
+        Some(TEST_NOTIFICATION_ID) => None,
+        Some(COMMENT_ANSWER_ID) => Some(NotificationKind::Comment),
+        None if action_id == SHOW_COMMENT_ACTION_ID => Some(NotificationKind::Comment),
+        _ => Some(NotificationKind::Chat),
+    }
 }
 
 /// Register the click handler. Called once from `setup()`: notifications shown
 /// before the first handler exists report nothing, and a second registration
 /// would run the handler twice.
 ///
-/// Also registers the chat-reply action type, before any notification can
-/// reference it.
+/// Also registers the chat-reply and comment-answer action types, before any
+/// notification can reference them.
 ///
 /// Windows reports a click only while the toast is on screen, not from the
 /// Action Center. macOS reports one only for a notification with an action
 /// button (see `CHAT_REPLY_ACTION_TYPE`).
 pub fn register_click_handler(app: &AppHandle) {
-    let action_types = vec![ActionType::builder(CHAT_REPLY_ACTION_TYPE)
-        .actions(vec![Action::builder(
-            OPEN_CHAT_ACTION_ID,
-            OPEN_CHAT_ACTION_TITLE,
-        )
-        .build()])
-        .build()];
+    let action_types = vec![
+        ActionType::builder(CHAT_REPLY_ACTION_TYPE)
+            .actions(vec![Action::builder(
+                OPEN_CHAT_ACTION_ID,
+                OPEN_CHAT_ACTION_TITLE,
+            )
+            .build()])
+            .build(),
+        ActionType::builder(COMMENT_ANSWER_ACTION_TYPE)
+            .actions(vec![Action::builder(
+                SHOW_COMMENT_ACTION_ID,
+                SHOW_COMMENT_ACTION_TITLE,
+            )
+            .build()])
+            .build(),
+    ];
     if let Err(e) = app.notification().register_action_types(action_types) {
         log::warn!("notification action types not registered: {e}");
     }
@@ -468,13 +576,15 @@ pub fn register_click_handler(app: &AppHandle) {
         // A human clicked: this is a presence signal, not a mechanical show —
         // for the test notification too.
         crate::show_main_window_for_user(&handle);
-        if !routes_click(action.notification().map(|n| n.id())) {
+        let Some(kind) = click_kind(action.notification().map(|n| n.id()), action.action_id())
+        else {
             return;
-        }
-        // A reported chat-reply click on macOS is the actionable one, and its
-        // wait has just ended.
-        let _ = release_action(&MAC_ACTION_OUTSTANDING);
-        if let Err(e) = handle.emit(ACTIVATED_EVENT, ()) {
+        };
+        // A reported click on macOS is that kind's actionable one, and its
+        // wait has just ended. (The focus the click causes releases both
+        // kinds' claims anyway.)
+        let _ = release_action(kind.outstanding());
+        if let Err(e) = handle.emit(ACTIVATED_EVENT, kind.as_str()) {
             log::warn!("Failed to emit {ACTIVATED_EVENT}: {e}");
         }
     });
@@ -625,12 +735,15 @@ mod tests {
     fn only_a_body_click_or_the_open_chat_button_opens_tandem() {
         assert!(is_open_action("tap"));
         assert!(is_open_action(OPEN_CHAT_ACTION_ID));
+        assert!(is_open_action(SHOW_COMMENT_ACTION_ID));
         assert!(!is_open_action("default"));
         assert!(!is_open_action(""));
         assert!(!is_open_action(OPEN_CHAT_ACTION_TITLE));
+        assert!(!is_open_action(SHOW_COMMENT_ACTION_TITLE));
         assert!(!is_open_action("__closed"));
-        // The type id is not an action id the plugin reports as a click.
+        // The type ids are not action ids the plugin reports as a click.
         assert!(!is_open_action(CHAT_REPLY_ACTION_TYPE));
+        assert!(!is_open_action(COMMENT_ANSWER_ACTION_TYPE));
     }
 
     #[test]
@@ -639,11 +752,79 @@ mod tests {
     }
 
     #[test]
-    fn only_the_test_notification_skips_the_chat_dispatcher() {
+    fn the_three_notification_ids_are_distinct() {
         assert_ne!(CHAT_REPLY_ID, TEST_NOTIFICATION_ID);
-        assert!(!routes_click(Some(TEST_NOTIFICATION_ID)));
-        assert!(routes_click(Some(CHAT_REPLY_ID)));
-        assert!(routes_click(None));
+        assert_ne!(COMMENT_ANSWER_ID, TEST_NOTIFICATION_ID);
+        assert_ne!(COMMENT_ANSWER_ID, CHAT_REPLY_ID);
+    }
+
+    #[test]
+    fn the_kind_table() {
+        use NotificationKind::{Chat, Comment};
+        assert_eq!(Chat.as_str(), "chat");
+        assert_eq!(Comment.as_str(), "comment");
+        assert_eq!(Chat.id(), CHAT_REPLY_ID);
+        assert_eq!(Comment.id(), COMMENT_ANSWER_ID);
+        assert_eq!(Chat.action_type(), CHAT_REPLY_ACTION_TYPE);
+        assert_eq!(Comment.action_type(), COMMENT_ANSWER_ACTION_TYPE);
+        assert_ne!(CHAT_REPLY_ACTION_TYPE, COMMENT_ANSWER_ACTION_TYPE);
+        assert_ne!(OPEN_CHAT_ACTION_TITLE, SHOW_COMMENT_ACTION_TITLE);
+        assert!(!std::ptr::eq(Chat.outstanding(), Comment.outstanding()));
+        assert_eq!(ALL_KINDS, [Chat, Comment]);
+    }
+
+    #[test]
+    fn click_routing_by_kind() {
+        use NotificationKind::{Chat, Comment};
+        // The test toast only focuses.
+        assert_eq!(click_kind(Some(TEST_NOTIFICATION_ID), "tap"), None);
+        assert_eq!(click_kind(Some(CHAT_REPLY_ID), "tap"), Some(Chat));
+        assert_eq!(
+            click_kind(Some(CHAT_REPLY_ID), OPEN_CHAT_ACTION_ID),
+            Some(Chat)
+        );
+        assert_eq!(click_kind(Some(COMMENT_ANSWER_ID), "tap"), Some(Comment));
+        assert_eq!(
+            click_kind(Some(COMMENT_ANSWER_ID), SHOW_COMMENT_ACTION_ID),
+            Some(Comment)
+        );
+        // No id: the comment button still says which it was; anything else is
+        // the accepted chat fallback.
+        assert_eq!(click_kind(None, SHOW_COMMENT_ACTION_ID), Some(Comment));
+        assert_eq!(click_kind(None, "tap"), Some(Chat));
+        assert_eq!(click_kind(None, OPEN_CHAT_ACTION_ID), Some(Chat));
+        assert_eq!(click_kind(Some(12345), "tap"), Some(Chat));
+    }
+
+    #[test]
+    fn per_kind_claims_are_independent() {
+        let chat = Mutex::new(None);
+        let comment = Mutex::new(None);
+        let t0 = Instant::now();
+        assert!(should_attach_action(true, &chat, t0));
+        // A comment answer in the same absence still gets its own button.
+        assert!(should_attach_action(true, &comment, t0));
+        assert!(!should_attach_action(true, &chat, t0));
+        assert!(!should_attach_action(true, &comment, t0));
+        assert_eq!(release_action(&comment), Some(t0));
+        assert_eq!(*lock(&chat), Some(t0));
+    }
+
+    #[test]
+    fn focus_takes_the_youngest_released_claim() {
+        let now = Instant::now();
+        let older = now - Duration::from_secs(60);
+        assert_eq!(youngest([None, None]), None);
+        let only = youngest([Some(older), None]).unwrap();
+        assert!(only >= Duration::from_secs(60));
+        // A fresh comment claim beside an old chat one still earns the
+        // delayed sweep.
+        let both = youngest([Some(older), Some(now)]).unwrap();
+        assert!(both < Duration::from_secs(60));
+        assert_eq!(
+            sweeps_for_focus(Some(both)).1,
+            both < LATE_DELIVERY_SWEEP_DELAY
+        );
     }
 
     #[test]
