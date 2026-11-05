@@ -39,38 +39,37 @@ export function resolveWithUndoToast(id: string, deps: Deps): void {
   const before = getStatus(id);
   resolve(id);
   if (before !== "pending" || getStatus(id) !== "dismissed") return;
-  push(
-    {
-      id: generateNotificationId(),
-      type: "annotation-resolved",
-      severity: "info",
-      message: "Comment resolved.",
-      documentId: docId,
-      timestamp: Date.now(),
+  const notice = (message: string, documentId?: string): TandemNotification => ({
+    id: generateNotificationId(),
+    type: "annotation-resolved",
+    severity: "info",
+    message,
+    documentId,
+    timestamp: Date.now(),
+  });
+  push(notice("Comment resolved.", docId), {
+    label: "Undo",
+    onClick: () => {
+      // The toast container dismisses this toast after the click whatever it
+      // does, so a decline must name the Undo that is still left: the side
+      // panel's resolved list (the id stays in `recentlyResolved`).
+      if (getActiveDocId() !== docId) {
+        push(
+          notice("Switch back to that document to undo it from the side panel's resolved list."),
+        );
+        return;
+      }
+      if (!undo(id)) {
+        // `undo` also declines a record that is already pending again (reopened
+        // from the side panel); "changed" would misdescribe that one.
+        push(
+          notice(
+            getStatus(id) === "pending"
+              ? "That comment is already open again."
+              : "Couldn't undo — the comment has changed.",
+          ),
+        );
+      }
     },
-    {
-      label: "Undo",
-      onClick: () => {
-        if (getActiveDocId() !== docId) {
-          push({
-            id: generateNotificationId(),
-            type: "annotation-resolved",
-            severity: "info",
-            message: "Switch back to that document to undo.",
-            timestamp: Date.now(),
-          });
-          return;
-        }
-        if (!undo(id)) {
-          push({
-            id: generateNotificationId(),
-            type: "annotation-resolved",
-            severity: "info",
-            message: "Couldn't undo — the comment has changed.",
-            timestamp: Date.now(),
-          });
-        }
-      },
-    },
-  );
+  });
 }
