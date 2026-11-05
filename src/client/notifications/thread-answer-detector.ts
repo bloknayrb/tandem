@@ -82,7 +82,8 @@ export function isThreadAnswer(
  *   that doc's baseline. The same doc never re-seeds: a reconnect delta, or a
  *   reload that deletes and re-inserts the same reply id, is announced at most
  *   once.
- * - **Only an announced answer becomes known.** Anything else is judged again
+ * - **Only a thread answer becomes known** (announced, or skipped as history
+ *   by time). Anything else is judged again
  *   on the next pass, so a reply that lands before its parent annotation is
  *   announced once the parent arrives instead of being dropped.
  */

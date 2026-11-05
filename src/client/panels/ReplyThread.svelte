@@ -137,6 +137,10 @@ $effect(() => {
     inView = true;
     return;
   }
+  // A new target starts unseen: the observer's first report is async, and a
+  // stale `true` from the previous answer would let the markSeen effect below
+  // mark this one before anyone knows whether it is on screen.
+  inView = false;
   const target =
     Array.from(el.querySelectorAll<HTMLElement>(".ct-reply")).find(
       (node) => node.dataset.testid === `reply-${newest}`,
