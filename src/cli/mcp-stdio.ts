@@ -59,7 +59,9 @@ import {
   resolveAuthTokenCandidate,
   resolveClaudeSessionId,
   resolveTandemUrl,
+  VALID_TOKEN_RE,
 } from "../shared/cli-runtime.js";
+import { LAN_BIND_ENABLED } from "../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
 
@@ -391,8 +393,27 @@ process.once("unhandledRejection", (reason: unknown) => {
   process.exit(1);
 });
 
-/** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
-const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
+/**
+ * May the bearer token be sent to `baseUrl`? (#2358 PR 2b.)
+ *
+ * Claude Code's `tandem` entry is now this bridge with the token in its `env`,
+ * and the URL it connects to is resolved with `CLAUDE_PLUGIN_OPTION_SERVER_URL`
+ * ahead of the entry's own `TANDEM_URL` — so a variable inherited from Claude
+ * Code's environment could otherwise carry the token, in plaintext, to another
+ * host. While the non-loopback bind ships dark (ADR-056) no Tandem listens
+ * anywhere but loopback, so withholding the token there loses nothing. The
+ * re-enable revisits this with the bind.
+ */
+export function tokenMayGoTo(baseUrl: string): boolean {
+  if (LAN_BIND_ENABLED) return true;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return false;
+  }
+  return host === "localhost" || host === "[::1]" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
 
 /**
  * Validate the configured auth token if present.
@@ -434,7 +455,16 @@ export async function runMcpStdio(): Promise<void> {
   // No-op when not in a Claude Code launch — see resolveClaudeSessionId.
   const sessionId = resolveClaudeSessionId();
   const upstreamHeaders: Record<string, string> = {};
-  if (authToken) upstreamHeaders.Authorization = `Bearer ${authToken}`;
+  if (authToken) {
+    if (tokenMayGoTo(baseUrl)) {
+      upstreamHeaders.Authorization = `Bearer ${authToken}`;
+    } else {
+      process.stderr.write(
+        "[tandem mcp-stdio] Not sending the auth token: the server URL is not this computer, " +
+          "and Tandem only listens on this computer.\n",
+      );
+    }
+  }
   if (sessionId !== undefined) upstreamHeaders[CLAUDE_SESSION_HEADER] = sessionId;
 
   /**

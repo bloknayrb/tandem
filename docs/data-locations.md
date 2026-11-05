@@ -74,6 +74,8 @@ Inside either directory:
 | `autostart-seen` | Linux only, and only with start-at-login enabled — marks that a login launch has happened |
 | `update-pending.json` | **Desktop location only.** Marks an in-app update that was in flight, so the next launch can tell whether it landed. Removed once that is settled |
 | `sample/` | **Desktop location only.** The sample documents, including the welcome tutorial, copied in on first run |
+| `bin/<version>/` | **Linux AppImage desktop only** (#2358): a copy of Tandem's stdio bridge (`dist/stdio-bridge/index.js`, plus a `package.json` marking it an ES module) that Claude Code's `tandem` entry runs, because the AppImage's own files disappear when it quits. Re-checked against the bundled file on every start; older versions' copies are removed once no Claude config names them. Deleting it while Tandem is closed makes Claude Code's Tandem tools fail to start until Tandem's next launch recreates it |
+| `client-config-home/` | **Development and tests only**: when Tandem runs without a build (tsx, vitest), it treats this folder as your home for Claude client configs and the skill, so a development run never touches your real `~/.claude.json`. A release build never creates it. `npm run doctor` from a checkout still reads the real one, so it can disagree with what a development setup just wrote |
 | `models.json` | The bring-your-own-model registry. Normally absent: that feature ships dark and no shipped UI writes it |
 
 You may also see `.tandem-tmp-*` files inside `sessions/` and `annotations/`. These are

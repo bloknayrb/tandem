@@ -1,0 +1,446 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _setClaudeCodeBridgeForTests,
+  _setSweepBeforeCommitForTests,
+  applyConfig,
+  buildMcpEntries,
+  refreshAllMcpEntryBinaries,
+} from "../../../src/server/integrations/apply.js";
+
+/**
+ * #2358 PR 2b — Claude Code's `tandem` entry becomes the stdio bridge, and the
+ * boot sweep migrates the direct-HTTP entry Tandem wrote. Design:
+ * docs/spikes/multi-session-ownership/README.md §3.6.
+ *
+ * Under vitest the real installed-build gate is a checkout (refused), so every
+ * positive case pins the bridge pair with `_setClaudeCodeBridgeForTests`; the
+ * "gate refuses" cases pin it to `null`. Every refusal case compares the file's
+ * BYTES before and after, and each describe has a positive control in the same
+ * run, so a deleted feature cannot pass as a refusal.
+ */
+
+const MCP = "http://127.0.0.1:3479";
+const TOKEN = "A".repeat(43);
+
+let home: string;
+let bin: string;
+let node: string;
+let script: string;
+let errSpy: ReturnType<typeof vi.spyOn>;
+const stderr = () => errSpy.mock.calls.map((c: unknown[]) => c.map(String).join(" ")).join("\n");
+
+const claudeJson = () => join(home, ".claude.json");
+const writeConfig = (root: unknown) =>
+  writeFileSync(claudeJson(), `${JSON.stringify(root, null, 2)}\n`);
+const readConfig = () => JSON.parse(readFileSync(claudeJson(), "utf-8"));
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "tandem-cc-migrate-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  bin = join(home, "opt");
+  node = join(bin, "node");
+  script = join(home, "install", "dist", "stdio-bridge", "index.js");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(join(script, ".."), { recursive: true });
+  writeFileSync(node, "#!/bin/sh\n");
+  writeFileSync(script, "// bridge\n");
+  _setClaudeCodeBridgeForTests({ command: node, script });
+  errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  _setClaudeCodeBridgeForTests(undefined);
+  _setSweepBeforeCommitForTests(undefined);
+  errSpy.mockRestore();
+  rmSync(home, { recursive: true, force: true });
+});
+
+describe("the migration matches exactly the HTTP shape Tandem wrote", () => {
+  it("migrates the token-less entry onto the bridge", async () => {
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, other: 1 });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    const after = readConfig();
+    expect(after.mcpServers.tandem).toEqual({
+      command: node,
+      args: [script],
+      env: { TANDEM_URL: MCP },
+    });
+    expect(after.other).toBe(1);
+    expect(stderr()).toContain("Switched the tandem entry in Claude Code");
+    expect(stderr()).toContain(claudeJson());
+  });
+
+  it("moves the bearer token verbatim into env and never logs it", async () => {
+    writeConfig({
+      mcpServers: {
+        tandem: { type: "http", url: `${MCP}/mcp`, headers: { Authorization: `Bearer ${TOKEN}` } },
+      },
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.env).toEqual({
+      TANDEM_URL: MCP,
+      TANDEM_AUTH_TOKEN: TOKEN,
+    });
+    // Positive control first: the line WAS logged, so the absence below means something.
+    expect(stderr()).toContain("Switched the tandem entry");
+    expect(stderr()).not.toContain(TOKEN);
+  });
+
+  const refused: [string, unknown][] = [
+    ["an extra top-level key", { type: "http", url: `${MCP}/mcp`, timeout: 5 }],
+    [
+      "an extra header",
+      {
+        type: "http",
+        url: `${MCP}/mcp`,
+        headers: { Authorization: `Bearer ${TOKEN}`, "X-Mine": "1" },
+      },
+    ],
+    [
+      "a lowercase authorization key",
+      { type: "http", url: `${MCP}/mcp`, headers: { authorization: `Bearer ${TOKEN}` } },
+    ],
+    [
+      "a token the bridge would refuse",
+      { type: "http", url: `${MCP}/mcp`, headers: { Authorization: "Bearer short" } },
+    ],
+    [
+      "a double space after Bearer",
+      { type: "http", url: `${MCP}/mcp`, headers: { Authorization: `Bearer  ${TOKEN}` } },
+    ],
+    [
+      "an over-long token",
+      { type: "http", url: `${MCP}/mcp`, headers: { Authorization: `Bearer ${"a".repeat(600)}` } },
+    ],
+    ["another port", { type: "http", url: "http://127.0.0.1:9999/mcp" }],
+    ["localhost", { type: "http", url: "http://localhost:3479/mcp" }],
+    ["a trailing slash", { type: "http", url: `${MCP}/mcp/` }],
+    ["no type", { url: `${MCP}/mcp` }],
+    ["type sse", { type: "sse", url: `${MCP}/mcp` }],
+    ["an array", [{ type: "http", url: `${MCP}/mcp` }]],
+    ["null", null],
+    ["a headers string", { type: "http", url: `${MCP}/mcp`, headers: "x" }],
+  ];
+
+  it.each(refused)("leaves %s exactly as found", async (_name, tandem) => {
+    writeConfig({ mcpServers: { tandem } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+    expect(stderr()).not.toContain("Switched the tandem entry");
+  });
+
+  it("never touches a project-scope tandem entry", async () => {
+    const projectEntry = { type: "http", url: `${MCP}/mcp` };
+    writeConfig({
+      mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } },
+      projects: { "/p": { mcpServers: { tandem: projectEntry } } },
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    const after = readConfig();
+    expect(after.mcpServers.tandem.command).toBe(node); // positive control
+    expect(after.projects["/p"].mcpServers.tandem).toEqual(projectEntry);
+  });
+
+  it("is a no-op on the next boot", async () => {
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } } });
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+    const once = readFileSync(claudeJson());
+    const mtime = statSync(claudeJson()).mtimeMs;
+    errSpy.mockClear();
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(once)).toBe(true);
+    expect(statSync(claudeJson()).mtimeMs).toBe(mtime);
+    expect(stderr()).toBe("");
+  });
+});
+
+describe("scope and gates", () => {
+  it("never migrates a Claude Desktop config, in the same run that migrates Claude Code", async () => {
+    const desktop = join(home, ".config", "claude", "claude_desktop_config.json");
+    mkdirSync(join(desktop, ".."), { recursive: true });
+    const desktopBody = JSON.stringify({
+      mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } },
+    });
+    writeFileSync(desktop, desktopBody);
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+    expect(readFileSync(desktop, "utf-8")).toBe(desktopBody);
+  });
+
+  it("does nothing when this build cannot write a bridge (a checkout, no durable Node)", async () => {
+    _setClaudeCodeBridgeForTests(null);
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+
+  it("never repoints a bridge entry from a build that cannot write one (no checkout paths)", async () => {
+    _setClaudeCodeBridgeForTests(null);
+    writeConfig({
+      mcpServers: {
+        tandem: {
+          command: join(home, "gone", "node"),
+          args: [join(home, "gone", "dist", "stdio-bridge", "index.js")],
+        },
+      },
+    });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+});
+
+describe("the pre-rename re-check against Claude Code's own writes", () => {
+  // A whole-millisecond mtime, so `utimesSync(Date)` below can restore it
+  // EXACTLY: then only the byte comparison can see the same-size rewrite.
+  const WHOLE_MS = new Date(1_700_000_000_000);
+  const seed = () => {
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 1 });
+    utimesSync(claudeJson(), WHOLE_MS, WHOLE_MS);
+  };
+  const tempsLeft = () => readdirSync(home).filter((n) => n.startsWith(".tandem-setup-"));
+
+  it("skips the write when the file changed size", async () => {
+    seed();
+    _setSweepBeforeCommitForTests(async () => {
+      writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 12345 });
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().n).toBe(12345);
+    expect(readConfig().mcpServers.tandem.type).toBe("http");
+    expect(stderr()).toContain("changed while Tandem was updating it");
+    expect(tempsLeft()).toEqual([]);
+  });
+
+  it("skips the write on a same-size rewrite with the mtime put back", async () => {
+    seed();
+    const before = statSync(claudeJson(), { bigint: true });
+    _setSweepBeforeCommitForTests(async () => {
+      writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 2 });
+      utimesSync(claudeJson(), WHOLE_MS, WHOLE_MS);
+      const after = statSync(claudeJson(), { bigint: true });
+      // Metadata identical: size, mtime to the nanosecond, and (an in-place
+      // write) the inode. Only the bytes differ.
+      expect(after.size).toBe(before.size);
+      expect(after.mtimeNs).toBe(before.mtimeNs);
+      expect(after.ino).toBe(before.ino);
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().n).toBe(2);
+    expect(readConfig().mcpServers.tandem.type).toBe("http");
+    expect(tempsLeft()).toEqual([]);
+  });
+
+  it("writes when nothing changed (control)", async () => {
+    seed();
+    _setSweepBeforeCommitForTests(async () => {});
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+  });
+});
+
+describe("re-picking the Node of a Tandem-written bridge entry", () => {
+  it("repoints a dead Node to the current pick", async () => {
+    writeConfig({
+      mcpServers: { tandem: { command: join(home, "gone", "node"), args: [script], env: {} } },
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+  });
+
+  it("moves the desktop's bundled Node to a system Node once one qualifies", async () => {
+    const sidecar = join(home, "app", "node-sidecar-x86_64-unknown-linux-gnu");
+    mkdirSync(join(sidecar, ".."), { recursive: true });
+    writeFileSync(sidecar, "");
+    writeConfig({ mcpServers: { tandem: { command: sidecar, args: [script], env: {} } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+  });
+
+  it("never moves a live system Node, so two launch environments cannot flip it", async () => {
+    const other = join(home, "other", "node");
+    mkdirSync(join(other, ".."), { recursive: true });
+    writeFileSync(other, "");
+    writeConfig({ mcpServers: { tandem: { command: other, args: [script], env: {} } } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+
+  it("never moves a system Node back onto the bundled one", async () => {
+    const sidecar = join(home, "app", "node-sidecar-x86_64-unknown-linux-gnu");
+    mkdirSync(join(sidecar, ".."), { recursive: true });
+    writeFileSync(sidecar, "");
+    _setClaudeCodeBridgeForTests({ command: sidecar, script });
+    writeConfig({ mcpServers: { tandem: { command: node, args: [script], env: {} } } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+});
+
+describe("the writer", () => {
+  it("writes the bridge for Claude Code when both halves are durable", () => {
+    const entries = buildMcpEntries("/c", { targetKind: "claude-code", token: TOKEN });
+    expect(entries.tandem).toEqual({
+      command: node,
+      args: [script],
+      env: { TANDEM_URL: MCP, TANDEM_AUTH_TOKEN: TOKEN },
+    });
+  });
+
+  it("keeps direct HTTP, never npx, when no bridge can be built", () => {
+    _setClaudeCodeBridgeForTests(null);
+    const entries = buildMcpEntries("/c", { targetKind: "claude-code", token: TOKEN });
+    expect(entries.tandem).toEqual({
+      type: "http",
+      url: `${MCP}/mcp`,
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(JSON.stringify(entries.tandem)).not.toContain("npx");
+  });
+});
+
+describe("applyConfig never downgrades a working bridge to HTTP", () => {
+  const httpPlan = (token?: string) => {
+    _setClaudeCodeBridgeForTests(null); // this run cannot build a bridge
+    return {
+      create: { tandem: buildMcpEntries("/c", { targetKind: "claude-code", token }).tandem },
+      remove: [] as [],
+    };
+  };
+
+  it("keeps a live Tandem bridge and only updates its env (npx rotate-token)", async () => {
+    writeConfig({
+      mcpServers: { tandem: { command: node, args: [script], env: { TANDEM_URL: MCP } } },
+    });
+
+    await applyConfig(claudeJson(), httpPlan(TOKEN));
+
+    expect(readConfig().mcpServers.tandem).toEqual({
+      command: node,
+      args: [script],
+      env: { TANDEM_URL: MCP, TANDEM_AUTH_TOKEN: TOKEN },
+    });
+  });
+
+  it("writes the planned HTTP entry over a dead bridge", async () => {
+    writeConfig({
+      mcpServers: {
+        tandem: { command: join(home, "gone", "node"), args: [script], env: { TANDEM_URL: MCP } },
+      },
+    });
+
+    await applyConfig(claudeJson(), httpPlan(TOKEN));
+
+    expect(readConfig().mcpServers.tandem.type).toBe("http");
+  });
+
+  it("writes the planned HTTP entry over a foreign stdio entry", async () => {
+    const mine = join(home, "mine.js");
+    writeFileSync(mine, "");
+    writeConfig({ mcpServers: { tandem: { command: node, args: [mine] } } });
+
+    await applyConfig(claudeJson(), httpPlan());
+
+    expect(readConfig().mcpServers.tandem.type).toBe("http");
+    expect(existsSync(mine)).toBe(true);
+  });
+});
+
+describe("the Linux AppImage's bridge copies", () => {
+  const appData = () => process.env.TANDEM_APP_DATA_DIR as string;
+  const copy = (v: string) => join(appData(), "bin", v, "dist", "stdio-bridge", "index.js");
+  const makeCopy = (v: string) => {
+    mkdirSync(join(copy(v), ".."), { recursive: true });
+    writeFileSync(copy(v), "// copy\n");
+  };
+
+  it("moves an entry FORWARD from an older version's copy to this version's", async () => {
+    makeCopy("0.31.0");
+    makeCopy("0.32.0");
+    _setClaudeCodeBridgeForTests({ command: node, script: copy("0.32.0") });
+    writeConfig({ mcpServers: { tandem: { command: node, args: [copy("0.31.0")] } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.args).toEqual([copy("0.32.0")]);
+  });
+
+  it("never moves an entry BACK onto an older version's copy (two AppImages side by side)", async () => {
+    makeCopy("0.32.0");
+    makeCopy("0.33.0");
+    _setClaudeCodeBridgeForTests({ command: node, script: copy("0.32.0") });
+    writeConfig({ mcpServers: { tandem: { command: node, args: [copy("0.33.0")] } } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+});
+
+describe("the bridge repair leaves a hand-copied bridge alone", () => {
+  it.each([
+    ["an extra arg", { args: ["SCRIPT", "--x"] }],
+    ["its own env key", { args: ["SCRIPT"], env: { NODE_OPTIONS: "--x" } }],
+  ])("%s", async (_name, over) => {
+    const entry = {
+      command: join(home, "gone", "node"),
+      ...over,
+      args: (over.args as string[]).map((a) => (a === "SCRIPT" ? script : a)),
+    };
+    writeConfig({ mcpServers: { tandem: entry } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+});

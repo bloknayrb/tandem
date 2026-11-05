@@ -167,6 +167,16 @@ const WRITER_SITES: Record<
       "rather than here. Not covered by #1599; if it acquires a Claude-config " +
       "caller, that is a new finding.",
   },
+  "src/server/integrations/bridge-copy.ts": {
+    sites: 2,
+    disposition: "out-of-scope",
+    why:
+      "#2358 PR 2b: the Linux AppImage's copy of the stdio bridge, under Tandem's " +
+      "own app-data root (bin/<version>/), written through one `wx` temp file and " +
+      "its `rename` (the script and its package.json marker share the helper). No " +
+      "read-modify-write cycle and never a Claude config file — named in the #1599 " +
+      "entry in docs/security.md so the accepted scope is unchanged.",
+  },
   "src/server/integrations/walkthrough.ts": {
     sites: 1,
     disposition: "out-of-scope",
@@ -273,6 +283,7 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/integrations/install-claude-cli.ts": 2,
   "src/server/integrations/storage.ts": 8,
   // #2198: `v1-walkthrough.json`, same app-data root, never a Claude config.
+  "src/server/integrations/bridge-copy.ts": 2,
   "src/server/integrations/walkthrough.ts": 1,
   // #2195: `launcher-settings.json` (start mode and lifetime of Tandem's
   // Claude), through `atomicWriteConfigFile`. Tandem's OWN app-data root, never

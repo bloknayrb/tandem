@@ -34,6 +34,7 @@ import {
   chmod,
   copyFile,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -49,6 +50,14 @@ import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { isAppTranslocatedPath } from "../../shared/integrations/app-translocation.js";
 import {
+  bearerTokenOf,
+  classifyClaudeCodeTandemEntry,
+  hasOnlyTandemEnvKeys,
+  isOwnStdioBridgeScript,
+  isPlainObject,
+  STDIO_ENTRY_ENV_KEYS,
+} from "../../shared/integrations/claude-code-entry.js";
+import {
   claudeCodeConfigPath,
   claudeDesktopConfigPath,
 } from "../../shared/integrations/client-config-paths.js";
@@ -57,7 +66,10 @@ import {
   ERROR_CODE_CONFIG_TOO_LARGE,
   targetPushSupport,
 } from "../../shared/integrations/contract.js";
-import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import {
+  isBundledSidecarNode,
+  isValidNodeBinary,
+} from "../../shared/integrations/node-binary-name.js";
 import {
   buildNpxStdioArgs,
   isCanonicalNpxStdioArgs,
@@ -65,10 +77,29 @@ import {
 import { isFile } from "../../shared/integrations/path-lookup.js";
 import type { SkillRefreshError } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { resolveAppDataDir } from "../platform.js";
+import { isTauriSidecar, resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
-import { BARE_NODE, isRecordedPathGone, resolveNodeBinary } from "./node-binary.js";
+import {
+  bridgeCopyVersionOf,
+  isOlderVersion,
+  prepareBridgeCopy,
+  pruneBridgeCopies,
+} from "./bridge-copy.js";
+import { devClientConfigHome } from "./client-config-home.js";
+import {
+  BARE_NODE,
+  findSystemNode,
+  findSystemNodeAsync,
+  isAppImageMountPath,
+  isDurableNodeRealPath,
+  isRecordedPathAbsolute,
+  isRecordedPathGone,
+  isScratchPath,
+  probeNodeBinary,
+  resolveNodeBinary,
+  screenedRealPath,
+} from "./node-binary.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -112,9 +143,18 @@ function resolveBundledDist(
   consequence: string,
   env: NodeJS.ProcessEnv,
   exists: (p: string) => boolean,
+  argv: readonly string[],
 ): string {
   const bundled = resolve(PACKAGE_ROOT, relPath);
-  const injected = env[envVar];
+  // Honoured only in the desktop sidecar ITSELF, by argv (#2358 PR 2b). The
+  // Tauri shell sets the variable on the sidecar, and every descendant —
+  // Tandem's Claude's child, any shell it opens, a `npm run dev:server` or
+  // `tandem setup` typed there — inherits it. Before PR 2b that was harmless
+  // for Claude Code; now an inherited installed-desktop path would make a
+  // checkout look like an installed build and let it rewrite the user's
+  // `~/.claude.json`. `isTauriSidecar` reads argv, which grandchildren do not
+  // inherit (#1758).
+  const injected = isTauriSidecar(argv) ? env[envVar] : undefined;
   if (injected) {
     // macOS App Translocation: a quarantined `.app` on first launch runs from
     // `/private/var/folders/…/AppTranslocation/<uuid>/d/Tandem.app/…`, a
@@ -152,6 +192,7 @@ function resolveBundledDist(
 export function resolveChannelDist(
   env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = existsSync,
+  argv: readonly string[] = process.argv,
 ): string {
   return resolveBundledDist(
     "TANDEM_CHANNEL_DIST",
@@ -159,6 +200,7 @@ export function resolveChannelDist(
     "Real-time push may be unavailable.",
     env,
     exists,
+    argv,
   );
 }
 
@@ -174,6 +216,7 @@ const CHANNEL_DIST = resolveChannelDist();
 export function resolveStdioBridgeDist(
   env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = existsSync,
+  argv: readonly string[] = process.argv,
 ): string {
   return resolveBundledDist(
     "TANDEM_STDIO_BRIDGE_DIST",
@@ -181,6 +224,7 @@ export function resolveStdioBridgeDist(
     "The MCP entry will have to use npx, which the client must resolve on PATH.",
     env,
     exists,
+    argv,
   );
 }
 
@@ -218,6 +262,51 @@ export function resolveCliVersion(): string {
 // stale, pre-`mcp-stdio`) global copy is installed — the root cause of the
 // "Server disconnected"/"Could not attach" failure. See the plan/ADR notes.
 const CLI_VERSION = resolveCliVersion();
+
+/**
+ * `homeOverride`, else the development/test stand-in home (only when the build
+ * define is absent — see `client-config-home.ts`), else undefined: the real home.
+ */
+export function clientConfigHomeOverride(homeOverride?: string): string | undefined {
+  if (homeOverride !== undefined) return homeOverride;
+  const standIn = devClientConfigHome(process.env, () =>
+    join(resolveAppDataDir(), "client-config-home"),
+  );
+  if (standIn !== undefined && !createdStandIns.has(standIn)) {
+    // Created on first use, so `assertPathSafe`'s ancestor walk — which
+    // validates the nearest EXISTING ancestor against `[standIn]` — finds the
+    // stand-in itself rather than refusing its parent. Dev and tests only.
+    createdStandIns.add(standIn);
+    try {
+      mkdirSync(standIn, { recursive: true, mode: 0o700 });
+    } catch {
+      // The refusal downstream will say why.
+    }
+  }
+  return standIn;
+}
+
+const createdStandIns = new Set<string>();
+
+/**
+ * May this process's BOOT-TIME housekeeping (the MCP entry sweep and the skill
+ * refresh) touch the client configs at the default home? (#2358 PR 2b.)
+ *
+ * Yes for an installed build, and for a run with no build define (whose home is
+ * then the stand-in, never the real one). No for a built bundle run from a
+ * checkout — CI's E2E server, perf, `node dist/server/index.js`, `cargo tauri
+ * dev` — which would otherwise read and rewrite the developer's real
+ * `~/.claude.json` and `~/.claude/skills/` with checkout paths. Explicit
+ * `homeOverride` callers (tests) are not gated.
+ */
+export function mayTouchDefaultClientConfigs(
+  inputs: { standIn: string | undefined; installKind: ReturnType<typeof bridgeInstallKind> } = {
+    standIn: clientConfigHomeOverride(undefined),
+    installKind: bridgeInstallKind(),
+  },
+): boolean {
+  return inputs.standIn !== undefined || inputs.installKind !== null;
+}
 
 /**
  * Refuse to read a config larger than 16 MiB (#1801).
@@ -383,10 +472,12 @@ export interface BuildMcpEntriesOptions {
    *  mirroring `nodeBinary` — pass a path that does not exist to exercise the
    *  npx fallback tiers. */
   stdioBridgePath?: string;
-  /** Target kind controls entry shape. Claude Code uses HTTP (direct);
-   *  Claude Desktop uses stdio because Cowork sessions can only surface stdio
-   *  MCP servers. See {@link buildStdioTandemEntry} for which of the three
-   *  stdio shapes it gets. */
+  /** Target kind controls entry shape. Claude Desktop uses stdio because
+   *  Cowork sessions can only surface stdio MCP servers — see
+   *  {@link buildStdioTandemEntry} for which of the three stdio shapes it gets.
+   *  Claude Code gets the stdio bridge on an absolute, durable Node when
+   *  {@link resolveClaudeCodeBridge} can build one, else direct HTTP (#2358
+   *  PR 2b). An absent kind keeps the direct-HTTP shape. */
   targetKind?: TargetKind;
 }
 
@@ -476,23 +567,202 @@ function buildStdioTandemEntry(
   return { command: "npx", args: buildNpxStdioArgs(`tandem-editor@${CLI_VERSION}`), env };
 }
 
-/**
- * The env keys the desktop stdio `tandem` entry carries — the complete set.
- *
- * One declaration with two consumers that must not drift: `buildMcpEntries`
- * below WRITES exactly these, and the boot sweep's convergence gate REFUSES an
- * entry carrying anything else (an unrecognised key means Tandem did not write
- * it). Restating the set at the gate would drift in the dangerous direction
- * silently: add a third key here and the gate would start declining to converge
- * entries Tandem itself had just written, forever, with no log line.
- *
- * `tests/shared/npx-entry-spec.test.ts` pins the writer's output against it,
- * because sharing a constant only prevents TEXTUAL drift.
- */
-export const STDIO_ENTRY_ENV_KEYS = { url: "TANDEM_URL", token: "TANDEM_AUTH_TOKEN" } as const;
+// `STDIO_ENTRY_ENV_KEYS` lives in `shared/integrations/claude-code-entry.ts`
+// since #2358 PR 2b, beside the classifier that reads it; re-exported here
+// for the writer's existing importers.
+export { STDIO_ENTRY_ENV_KEYS };
 
-/** The same set as a lookup, for the convergence gate. */
-const STDIO_ENTRY_ENV_KEY_SET: ReadonlySet<string> = new Set(Object.values(STDIO_ENTRY_ENV_KEYS));
+/** The `env` every Tandem-written stdio `tandem` entry carries: exactly
+ *  {@link STDIO_ENTRY_ENV_KEYS}, the token only when one is known. */
+function bridgeEnv(token: string | undefined): Record<string, string> {
+  const env: Record<string, string> = { [STDIO_ENTRY_ENV_KEYS.url]: MCP_URL };
+  if (token) env[STDIO_ENTRY_ENV_KEYS.token] = token;
+  return env;
+}
+
+// ── Claude Code's bridge entry (#2358 PR 2b) ───────────────────────────────
+//
+// Design: docs/spikes/multi-session-ownership/README.md §3.6. The entry is an
+// absolute Node plus the bundled bridge script, and both halves must outlive
+// this process: a path that dies with it gives every terminal a dead entry.
+
+/** The two halves of Claude Code's stdio bridge entry. */
+export interface ClaudeCodeBridge {
+  /** Absolute Node: a system Node 22.12+ where one qualifies, else the durable running one. */
+  command: string;
+  /** Absolute bridge script in an installed layout (or the AppImage copy). */
+  script: string;
+}
+
+/**
+ * How this process was installed, as far as recording the bundled bridge goes.
+ *
+ * - `"installed"` — the bundled script is a file in an installed layout
+ *   ({@link isDurableInstallLayout}): an npm global, or a desktop bundle that is
+ *   not a checkout.
+ * - `"appimage"` — the desktop sidecar running from a Linux AppImage's per-run
+ *   mount: the bundled script dies with the mount, so the durable script is the
+ *   app-data copy ({@link prepareAppImageBridgeCopy}).
+ * - `null` — a checkout (`npm run dev:server`, `tsx`, `cargo tauri dev`, the E2E
+ *   server, vitest), an npx cache, a translocated `.app`, or a missing script.
+ *   Nothing is recorded and the boot migration does not run.
+ */
+export function bridgeInstallKind(
+  script: string = STDIO_BRIDGE_DIST,
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+): "installed" | "appimage" | null {
+  if (!isFile(script)) return null;
+  if (isDurableInstallLayout(script, env, existsSync, argv)) return "installed";
+  if (
+    isTauriSidecar(argv) &&
+    isAppImageMountPath(script, env) &&
+    !hasGitAncestor(dirname(script), existsSync)
+  ) {
+    return "appimage";
+  }
+  return null;
+}
+
+let installKindMemo: ReturnType<typeof bridgeInstallKind> | undefined;
+
+/** {@link bridgeInstallKind} for this process's own bundle, argv and env —
+ *  fixed for the process, so computed once (it stats and walks for `.git`). */
+function ownBridgeInstallKind(): ReturnType<typeof bridgeInstallKind> {
+  if (installKindMemo === undefined) installKindMemo = bridgeInstallKind();
+  return installKindMemo;
+}
+
+/** The AppImage copy prepared this process, or null. */
+let appImageBridgeCopy: string | null = null;
+
+/**
+ * On a Linux AppImage, copy the bundled bridge into the app-data root so the
+ * entry can name a path that outlives the mount. Awaited at boot before the
+ * sweep; a no-op everywhere else. Never throws.
+ */
+export async function prepareAppImageBridgeCopy(
+  opts: { appDataDir?: string; source?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string | null> {
+  const source = opts.source ?? STDIO_BRIDGE_DIST;
+  const kind =
+    opts.source === undefined && opts.env === undefined
+      ? ownBridgeInstallKind()
+      : bridgeInstallKind(source, opts.env);
+  if (kind !== "appimage") return null;
+  try {
+    appImageBridgeCopy = await prepareBridgeCopy({
+      source,
+      appDataDir: opts.appDataDir ?? resolveAppDataDir(),
+      version: CLI_VERSION,
+    });
+  } catch (err) {
+    console.error(
+      `[Tandem] Could not prepare the stdio bridge copy (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
+    appImageBridgeCopy = null;
+  }
+  return appImageBridgeCopy;
+}
+
+/** The bridge script Claude Code's entry may record, or null. */
+export function durableBridgeScript(): string | null {
+  const kind = ownBridgeInstallKind();
+  if (kind === "installed") return STDIO_BRIDGE_DIST;
+  if (kind === "appimage") return appImageBridgeCopy;
+  return null;
+}
+
+/**
+ * The running Node, if it may be recorded: not the bare name, not a
+ * translocated `.app` or an AppImage mount, and — for the desktop sidecar — not
+ * a checkout build; for any other process, the same durability rules as a
+ * system Node, on its screened real path.
+ */
+export function durableRunningNode(env: NodeJS.ProcessEnv = process.env): string | null {
+  const exec = resolveNodeBinary();
+  if (exec === BARE_NODE) return null;
+  if (isAppTranslocatedPath(exec) || isAppImageMountPath(exec, env)) return null;
+  if (isTauriSidecar() && isBundledSidecarNode(exec)) {
+    return hasGitAncestor(dirname(exec), existsSync) ? null : exec;
+  }
+  const real = screenedRealPath(exec);
+  return real !== null && isDurableNodeRealPath(real, { env }) ? real : null;
+}
+
+/** The Node Claude Code's entry should name: system first, then the durable running one. */
+export function resolveClaudeCodeNode(): string | null {
+  return findSystemNode() ?? durableRunningNode();
+}
+
+let claudeCodeBridgeForTests: ClaudeCodeBridge | null | undefined;
+
+/**
+ * Test seam: fix what {@link resolveClaudeCodeBridge} returns (`undefined`
+ * restores the real resolution). Refuses outside vitest, so no production path
+ * can pin it.
+ */
+export function _setClaudeCodeBridgeForTests(value: ClaudeCodeBridge | null | undefined): void {
+  if (process.env.VITEST !== "true") throw new Error("test seam");
+  claudeCodeBridgeForTests = value;
+}
+
+/**
+ * Claude Code's bridge pair, or null when either half cannot be recorded
+ * durably — then the entry stays direct HTTP.
+ */
+export function resolveClaudeCodeBridge(): ClaudeCodeBridge | null {
+  if (claudeCodeBridgeForTests !== undefined) return claudeCodeBridgeForTests;
+  const script = durableBridgeScript();
+  if (script === null) return null;
+  const command = resolveClaudeCodeNode();
+  if (command === null) return null;
+  return { command, script };
+}
+
+/**
+ * Fill the system-Node memo without blocking the event loop, when this build
+ * could write a bridge at all. Server callers await this before anything that
+ * resolves the bridge pair synchronously (the wizard's apply, the sweep); only
+ * the one-shot CLI resolves synchronously.
+ */
+export async function warmClaudeCodeBridge(): Promise<void> {
+  if (claudeCodeBridgeForTests === undefined && durableBridgeScript() !== null) {
+    await findSystemNodeAsync();
+  }
+}
+
+/** Why this process could, or could not, write Claude Code's bridge entry. */
+export type ClaudeCodeBridgeVerdict = "bridge" | "not-installed" | "translocated" | "no-node";
+
+/**
+ * Could THIS process write Claude Code's bridge entry, and if not, why? For
+ * `tandem doctor` (and Copy Diagnostics), so a remedy that would only write the
+ * direct-HTTP entry again is never offered. Async: it warms the system-Node
+ * memo first, so a diagnostics request never blocks on a `--version` run.
+ */
+export async function claudeCodeBridgeVerdict(): Promise<ClaudeCodeBridgeVerdict> {
+  if (isAppTranslocatedPath(STDIO_BRIDGE_DIST)) return "translocated";
+  if (durableBridgeScript() === null) return "not-installed";
+  await warmClaudeCodeBridge();
+  return resolveClaudeCodeBridge() === null ? "no-node" : "bridge";
+}
+
+let warnedClaudeCodeHttp = false;
+
+/** One line per process: why Claude Code's entry stayed direct HTTP. */
+function warnClaudeCodeHttpFallback(): void {
+  if (warnedClaudeCodeHttp) return;
+  warnedClaudeCodeHttp = true;
+  const why =
+    durableBridgeScript() === null
+      ? "this Tandem is not an installed build (a development checkout, an npx run, or a missing bundle)"
+      : "no Node 22.12 or newer qualified (none on PATH, and the running Node cannot be recorded)";
+  console.error(
+    `[Tandem] Claude Code's 'tandem' entry stays direct HTTP: ${why}. ` +
+      "Run 'tandem doctor' (desktop: Settings → About → Copy Diagnostics) for what that costs.",
+  );
+}
 
 export function buildMcpEntries(
   channelPath: string,
@@ -502,18 +772,26 @@ export function buildMcpEntries(
 
   let tandemEntry: McpEntry;
   if (isDesktop) {
-    const env: Record<string, string> = { [STDIO_ENTRY_ENV_KEYS.url]: MCP_URL };
-    if (opts.token) {
-      env[STDIO_ENTRY_ENV_KEYS.token] = opts.token;
-    }
-    // Resolution stays INSIDE this branch. Hoisting it above the `if` would
-    // start emitting a `command` for Claude Code too, breaking the direct-HTTP
-    // path — which has no subprocess at all (ADR-045).
+    const env = bridgeEnv(opts.token);
+    // Resolution stays INSIDE this branch. Claude Code's entry has its own,
+    // stricter resolver below (system Node first, durable halves only, never
+    // an npx floor), so the Desktop resolver must not be hoisted over both.
     tandemEntry = buildStdioTandemEntry(env, opts);
   } else {
-    tandemEntry = { type: "http", url: `${MCP_URL}/mcp` };
-    if (opts.token) {
-      tandemEntry.headers = { Authorization: `Bearer ${opts.token}` };
+    // Claude Code: the stdio bridge where both halves are durable, so the
+    // terminal's Claude Code session id reaches the server (ADR-045 decision
+    // 6, amended for #2358 PR 2b). Never an `npx` floor here: it would cost a
+    // registry round-trip per terminal start and fail offline, so a Claude
+    // Code entry that cannot be a durable bridge stays direct HTTP.
+    const bridge = opts.targetKind === "claude-code" ? resolveClaudeCodeBridge() : null;
+    if (bridge !== null) {
+      tandemEntry = { command: bridge.command, args: [bridge.script], env: bridgeEnv(opts.token) };
+    } else {
+      if (opts.targetKind === "claude-code") warnClaudeCodeHttpFallback();
+      tandemEntry = { type: "http", url: `${MCP_URL}/mcp` };
+      if (opts.token) {
+        tandemEntry.headers = { Authorization: `Bearer ${opts.token}` };
+      }
     }
   }
   const entries: McpEntries = { tandem: tandemEntry };
@@ -862,7 +1140,7 @@ function configFilePresentNoFollow(p: string, onRefused?: LeafRefusedCallback): 
  * {@link assertPathSafe}.
  */
 export function detectionRefusal(opts: DetectOptions = {}): string | null {
-  return rejectUnsafeWindowsPrefix(opts.homeOverride ?? homedir());
+  return rejectUnsafeWindowsPrefix(clientConfigHomeOverride(opts.homeOverride) ?? homedir());
 }
 
 /** Every config Tandem may WRITE its entries into. */
@@ -894,10 +1172,17 @@ export function detectRemovalTargets(
  * alone would leave that run reading `0 warning(s)` with an entry left behind.
  */
 function detectWith(
-  opts: DetectOptions,
+  rawOpts: DetectOptions,
   isMsixPackage: (name: string) => boolean,
   onLeafRefused?: LeafRefusedCallback,
 ): DetectedTarget[] {
+  // The test-only client-config home is folded in HERE, once, so every path
+  // below — Claude Code, Claude Desktop (where `homeOverride` beats
+  // `%APPDATA%`), and the MSIX walk — derives from it.
+  const opts: DetectOptions = {
+    ...rawOpts,
+    homeOverride: clientConfigHomeOverride(rawOpts.homeOverride),
+  };
   const home = opts.homeOverride ?? homedir();
   const targets: DetectedTarget[] = [];
 
@@ -951,8 +1236,15 @@ function detectWith(
   // reject such a name on most platforms but we belt-and-suspender). The
   // removal filter is wider; see `detectRemovalTargets`.
   if ((opts.platformOverride ?? process.platform) === "win32") {
+    // A home override (a test's, or the test-only client-config home) wins
+    // over `%LOCALAPPDATA%` exactly as it wins over `%APPDATA%` above:
+    // otherwise a redirected run would still walk the developer's REAL MSIX
+    // packages and write a fixture into a live Claude Desktop config.
     const localAppData =
-      opts.localAppDataOverride ?? process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+      opts.localAppDataOverride ??
+      (opts.homeOverride ? join(home, "AppData", "Local") : undefined) ??
+      process.env.LOCALAPPDATA ??
+      join(home, "AppData", "Local");
     // Verify LOCALAPPDATA resolves under home. An attacker who controls env
     // could otherwise redirect us to write under any directory.
     try {
@@ -1073,6 +1365,35 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
+ * What the boot sweep re-checks before it commits (#2358 PR 2b): the config's
+ * modification time (nanoseconds), size and inode, taken from the SAME file
+ * handle the sweep read through, and the bytes it read.
+ *
+ * Claude Code rewrites `~/.claude.json` itself (per-project history), and the
+ * sweep — which from PR 2b fires once on every install, to migrate the entry —
+ * writes back the whole root it read. Re-checking immediately before the rename
+ * narrows the lost-update window to the moment between that check and the
+ * rename; it does not close it (Node has no compare-and-swap rename). The bound
+ * is recorded on #1599 in `docs/security.md`.
+ */
+export interface FileStamp {
+  mtimeNs: bigint;
+  size: bigint;
+  ino: bigint;
+  /** The bytes read. Compared only when the metadata matches, to catch a
+   *  same-size rewrite inside one coarse timestamp tick. */
+  bytes: Buffer;
+}
+
+/** The config changed between the sweep's read and its commit; nothing was written. */
+export class ConfigChangedError extends Error {
+  override readonly name = "ConfigChangedError";
+  constructor(readonly path: string) {
+    super(`config changed while Tandem was updating it: ${path}`);
+  }
+}
+
+/**
  * **Callers of this helper race each other across processes, and that is an
  * ACCEPTED risk, not an oversight.** The read-modify-write cycles around it
  * take no cross-process lock, so a concurrent `tandem setup --apply`,
@@ -1092,6 +1413,12 @@ async function atomicWrite(
     signal?: AbortSignal;
     /** Refresh-only guard: do not recreate a destination removed mid-operation. */
     requireExistingDest?: boolean;
+    /**
+     * Sweep-only guard (#2358 PR 2b): the destination's stamp when it was read.
+     * Re-checked immediately before the rename; a mismatch abandons the write
+     * with {@link ConfigChangedError}. See {@link FileStamp}.
+     */
+    expectUnchanged?: FileStamp;
     /** Test-only seam immediately before the refresh commit guard. */
     beforeCommitForTests?: () => Promise<void>;
   } = {},
@@ -1135,6 +1462,18 @@ async function atomicWrite(
     if (process.env.VITEST === "true") await opts.beforeCommitForTests?.();
     throwIfAborted(signal);
     if (opts.requireExistingDest) await stat(dest);
+    if (opts.expectUnchanged !== undefined) {
+      // By PATH, never a retained handle: a rename-replace since the read is
+      // exactly what must be seen. One extra read, on boots that write at all.
+      const was = opts.expectUnchanged;
+      const st = await stat(dest, { bigint: true });
+      const unchanged =
+        st.mtimeNs === was.mtimeNs &&
+        st.size === was.size &&
+        st.ino === was.ino &&
+        (await readFile(dest)).equals(was.bytes);
+      if (!unchanged) throw new ConfigChangedError(dest);
+    }
     throwIfAborted(signal);
   } catch (commitGuardErr) {
     await unlinkOrLeak(tmp, commitGuardErr);
@@ -1260,7 +1599,8 @@ async function unlinkOrLeak(path: string, originalErr: unknown): Promise<void> {
  * is silent if the key was already absent. Callers state both intents
  * explicitly — no implicit "absent key implies remove".
  */
-export async function applyConfig(configPath: string, ops: ApplyOps): Promise<void> {
+export async function applyConfig(configPath: string, opsIn: ApplyOps): Promise<void> {
+  let ops = opsIn;
   // Security gate: refuse symlinks, refuse paths outside home/tmpdir.
   assertPathSafe(configPath);
 
@@ -1381,6 +1721,7 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   // the one backup the user actually needs. The write happens BEFORE the
   // rewrite — atomicity invariant: if backup throws, the original is
   // untouched.
+  ops = keepWorkingClaudeCodeBridge(ops, existing);
   const backupPath = await maybeBackupExistingConfig(configPath, existing, ops);
   if (backupPath && ops.onBackup) {
     // The onBackup callback is observational — a wizard push, a CLI
@@ -1441,7 +1782,13 @@ export type ConfigReadResult =
    *  a single `status !== "ok"` pass-through and makes "ok but no servers"
    *  unrepresentable. */
   | { status: "no-op" }
-  | { status: "ok"; root: Record<string, unknown>; servers: Record<string, unknown> };
+  | {
+      status: "ok";
+      root: Record<string, unknown>;
+      servers: Record<string, unknown>;
+      /** The file as read — see {@link FileStamp}. */
+      stamp: FileStamp;
+    };
 
 /**
  * Open a client config for a NON-DESTRUCTIVE mutation.
@@ -1476,11 +1823,24 @@ export type ConfigReadResult =
 export async function readConfigForMutation(configPath: string): Promise<ConfigReadResult> {
   assertPathSafe(configPath);
 
+  // ONE handle for the size check, the stamp and the read (#2358 PR 2b): the
+  // stamp must describe exactly the bytes parsed, or the sweep's pre-rename
+  // re-check would compare against a file it never read. A rename-replace by
+  // another writer after the `open` leaves this handle on the old inode, and
+  // the re-check's fresh `stat` then sees the new one.
   let raw: string;
+  let stamp: FileStamp;
   try {
-    const { size } = await stat(configPath);
-    if (size > MAX_CONFIG_BYTES) return { status: "skipped", reason: "oversize" };
-    raw = await readFile(configPath, "utf-8");
+    const handle = await open(configPath, "r");
+    try {
+      const st = await handle.stat({ bigint: true });
+      if (st.size > BigInt(MAX_CONFIG_BYTES)) return { status: "skipped", reason: "oversize" };
+      const bytes = await handle.readFile();
+      stamp = { mtimeNs: st.mtimeNs, size: st.size, ino: st.ino, bytes };
+      raw = bytes.toString("utf-8");
+    } finally {
+      await handle.close();
+    }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
     throw err;
@@ -1518,7 +1878,7 @@ export async function readConfigForMutation(configPath: string): Promise<ConfigR
   // clone or a normalizing pass here without updating them, or every caller
   // will silently write back an unmodified config while still reporting
   // success.
-  return { status: "ok", root, servers: servers as Record<string, unknown> };
+  return { status: "ok", root, servers: servers as Record<string, unknown>, stamp };
 }
 
 /**
@@ -1592,31 +1952,8 @@ export type RefreshNodeBinaryResult = ConfigReadRefusal | EntryRepairResult;
  */
 export type RefreshableEntryKey = "tandem" | "tandem-channel";
 
-/**
- * Is this recorded `args[0]` one of OUR script paths, and therefore ours to
- * repair?
- *
- * Only consulted for the `tandem` key, and it is the difference between a
- * repair and a clobber. `validateTandemEntry` accepts a Node-shaped command
- * with a single `.js` arg, which covers the bundled stdio bridge — but ALSO a
- * legacy sidecar invocation written by an older Tauri build, and any absolute
- * `.js` a user hand-pointed the entry at. Those are arity-identical to the
- * shape we emit, so "has a string command and a stale `args[0]`" is not enough
- * to justify overwriting: it would silently redirect a working hand-edited
- * entry at Tandem's bridge the moment the user's own script moved.
- *
- * Matching on the trailing path segments rather than equality with
- * `STDIO_BRIDGE_DIST` is the point — the recorded path we are being asked
- * about is, by construction, a *different* location from the current one (an
- * old install prefix, a pre-update `.app`). Separator-agnostic because a
- * Windows-shaped config is read on Linux in CI.
- *
- * `tandem-channel` needs no equivalent: nothing but Tandem has ever written
- * that key, so its pre-existing "any stale absolute `args[0]`" rule stays.
- */
-function isOwnStdioBridgeScript(recorded: string): boolean {
-  return /[/\\]dist[/\\]stdio-bridge[/\\]index\.js$/.test(recorded);
-}
+// `isOwnStdioBridgeScript` (whose argument is the difference between a repair
+// and a clobber) lives in `shared/integrations/claude-code-entry.ts`.
 
 /** What a refreshable key needs to know about itself. */
 interface RefreshDescriptor {
@@ -1703,7 +2040,9 @@ const REFRESHABLE_ENTRY_KEYS = Object.keys(REFRESHABLE) as RefreshableEntryKey[]
  *
  * Three shapes are deliberately left alone, and each would be a regression to
  * touch:
- *   - **HTTP entries** (Claude Code's `tandem`) have no `command` → `no-op`.
+ *   - **HTTP entries** (the direct-HTTP Claude Code `tandem`) have no
+ *     `command` → `no-op` here. Their migration onto the bridge is a separate
+ *     branch of the boot sweep (`migrateHttpEntryInPlace`, #2358 PR 2b).
  *   - **A bare-`npx` fallback OUTSIDE the convergence rule's scope.** For the
  *     `tandem-channel` key, and for any `tandem` entry that fails one of
  *     {@link convergeNpxEntry}'s gates, the entry is left exactly as found.
@@ -1754,6 +2093,15 @@ interface RefreshDeps {
    *  computed from a checkout, so every positive-path case would be unwritable
    *  and the suite would silently test only refusals. */
   durable?: boolean;
+  /**
+   * For the `tandem` key on a `claude-code` target only: the bridge pair this
+   * installed build would write ({@link resolveClaudeCodeBridge}), or null when
+   * it would write none. Only the sweep supplies it. A Claude Code bridge entry
+   * is repaired ONLY when this is non-null — a checkout or npx run never
+   * repoints the user's terminal entry at its own throwaway paths — and its
+   * Node is re-picked system-first (§3.6 "Re-picking Node").
+   */
+  claudeCodeBridge?: ClaudeCodeBridge | null;
 }
 
 /**
@@ -1796,18 +2144,34 @@ export function isDurableInstallLayout(
   script: string,
   env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = existsSync,
+  argv: readonly string[] = process.argv,
 ): boolean {
   // Translocation is THE durability failure this codebase has already been bitten
   // by, and it has a shared predicate. A quarantined `.app` runs from a randomized
   // read-only mount that is gone next launch, so a path recorded there works
   // exactly once.
   if (isAppTranslocatedPath(script)) return false;
+  // A Linux AppImage's per-run mount (#2358 PR 2b): gone when Tandem quits,
+  // so nothing may record a path inside it. `bridgeInstallKind` routes the
+  // AppImage to its app-data copy instead.
+  if (isAppImageMountPath(script, env)) return false;
   // Disposable one-shot caches, checked BEFORE the `node_modules` branch because
   // they live underneath one. This is the only blocklist here, and it is scoped
   // to a question the allowlist below cannot answer.
   if (/[/\\](_npx|dlx|\.bun)[/\\]/.test(script)) return false;
+  // #2358 PR 2b: more one-shot runners (yarn berry's `xfs-*/dlx-<pid>`, older
+  // pnpm's `dlx-<pid>`), and anything under a scratch root (`npm i --prefix
+  // /tmp/x`). Recording one now rewrites the user's TERMINAL entry, one-way,
+  // to a script that is deleted when the runner exits.
+  if (/[/\\](?:xfs-[^/\\]+|dlx-\d+)[/\\]/.test(script)) return false;
+  if (isScratchPath(script)) return false;
   if (/[/\\]node_modules[/\\]/.test(script)) return true;
-  if (env.TANDEM_TAURI_SIDECAR === "1") return !hasGitAncestor(dirname(script), exists);
+  // Desktop provenance needs the sidecar's own argv flag as well as the
+  // variable (#2358 PR 2b): the variable reaches every descendant, so alone it
+  // let a checkout run from Tandem's Claude's shell pass as the installed app.
+  if (env.TANDEM_TAURI_SIDECAR === "1" && isTauriSidecar(argv)) {
+    return !hasGitAncestor(dirname(script), exists);
+  }
   return false;
 }
 
@@ -1875,10 +2239,10 @@ function convergeNpxEntry(
 
   // GATE 1 — scope, and it is the one doing the real work.
   //
-  // `buildMcpEntries` emits the stdio pair ONLY for `claude-desktop`; Claude
-  // Code always gets `{type:"http", url}` with no command at all. So Tandem has
-  // never written a bare-npx `tandem` entry into `~/.claude.json`, and every one
-  // there is foreign by construction — a hand-copy of `.claude-plugin/plugin.json`,
+  // `buildMcpEntries` never emits the npx tuple for Claude Code: it gets the
+  // absolute bridge pair or, where that cannot be built durably, the direct-HTTP
+  // entry (#2358 PR 2b). So Tandem has never written a bare-npx `tandem` entry
+  // into `~/.claude.json`, and every one there is foreign by construction — a hand-copy of `.claude-plugin/plugin.json`,
   // a `claude mcp add`, or a pre-HTTP Tandem. Converting those would make Tandem
   // permanently adopt an entry it did not write (they satisfy
   // `isOwnStdioBridgeScript` ever after), and in `~/.claude.json` the bare name
@@ -1919,9 +2283,7 @@ function convergeNpxEntry(
   // Refusing rather than stripping is deliberate. Stripping silently mutates a
   // user's config; refusing leaves the inert entry inert, which is the same
   // direction as "bare-npx is the recoverable failure mode".
-  for (const key of Object.keys(envRecord)) {
-    if (!STDIO_ENTRY_ENV_KEY_SET.has(key)) return noOp;
-  }
+  if (!hasOnlyTandemEnvKeys(envRecord)) return noOp;
 
   // GATE 3 — the URL must be the one we write.
   //
@@ -2020,6 +2382,13 @@ function repairEntryInPlace(
     });
   }
 
+  // Claude Code's bridge entry (#2358 PR 2b) has its own repair rules: only an
+  // installed build may touch it, its Node is re-picked system-first, and on a
+  // Linux AppImage its script follows the current version's app-data copy.
+  if (entryKey === "tandem" && deps.targetKind === "claude-code") {
+    return repairClaudeCodeBridgeEntry(record, command, deps);
+  }
+
   // The script path is checked INDEPENDENTLY of the binary, and first.
   //
   // This block used to sit after an early `return` on a healthy `command`, so
@@ -2074,6 +2443,175 @@ function repairEntryInPlace(
 }
 
 /**
+ * Repair a Tandem-written Claude Code bridge entry (the `tandem` key, already
+ * classified `ours-node`). The rules, from §3.6 "Re-picking Node":
+ *
+ * - Nothing unless this is an installed build that would write a bridge
+ *   (`deps.claudeCodeBridge` non-null).
+ * - Script: a recorded script that is gone moves to the current durable one; on
+ *   a Linux AppImage, an app-data copy of another version moves to this
+ *   version's copy (so the older directory can be pruned).
+ * - Node: a recorded Node that is gone moves to the system Node, else the
+ *   durable running one; none → `skipped`, the dead path left visible. A
+ *   recorded bundled sidecar Node moves to a system Node once one qualifies —
+ *   never the other way, so two launch environments with different PATHs
+ *   cannot flip the entry back and forth.
+ */
+function repairClaudeCodeBridgeEntry(
+  record: Record<string, unknown>,
+  command: string,
+  deps: RefreshDeps,
+): { changed: boolean; result: EntryRepairResult } {
+  const noOp = { changed: false, result: { status: "no-op" } as const };
+  const bridge = deps.claudeCodeBridge;
+  if (bridge === undefined || bridge === null) return noOp;
+  // Exactly the shape Tandem writes — one arg, env keys only from
+  // STDIO_ENTRY_ENV_KEYS — by the classifier the migration, the doctor and
+  // `keepWorkingClaudeCodeBridge` share. A hand-copied bridge with an extra
+  // arg or its own `NODE_OPTIONS` is the user's, and is left alone.
+  if (classifyClaudeCodeTandemEntry(record, MCP_URL).kind !== "bridge") return noOp;
+
+  let scriptRefreshed = false;
+  const args = record.args;
+  if (Array.isArray(args) && typeof args[0] === "string" && args[0] !== bridge.script) {
+    const recorded = args[0];
+    const appData = resolveAppDataDir();
+    // Only FORWARD: two AppImage versions used side by side would otherwise
+    // repoint the entry on every alternate launch (each a #1599-class write).
+    const recordedVersion = bridgeCopyVersionOf(recorded, appData);
+    const currentVersion = bridgeCopyVersionOf(bridge.script, appData);
+    const staleCopy =
+      recordedVersion !== null &&
+      currentVersion !== null &&
+      isOlderVersion(recordedVersion, currentVersion);
+    if (staleCopy || isRecordedPathGone(recorded, deps.probe)) {
+      args[0] = bridge.script;
+      scriptRefreshed = true;
+    }
+  }
+
+  const gone = isRecordedPathGone(command, deps.probe);
+  const wantsRewrite =
+    gone || (isBundledSidecarNode(command) && !isBundledSidecarNode(bridge.command));
+  const commandRewrite =
+    wantsRewrite && bridge.command !== command ? { from: command, to: bridge.command } : null;
+  const noValidReplacement = gone && commandRewrite === null;
+
+  if (commandRewrite === null && !scriptRefreshed) {
+    return noValidReplacement
+      ? { changed: false, result: { status: "skipped", reason: "no-valid-replacement" } }
+      : noOp;
+  }
+  if (commandRewrite !== null) record.command = commandRewrite.to;
+  return {
+    changed: true,
+    result: {
+      status: "rewritten",
+      from: commandRewrite?.from ?? null,
+      to: commandRewrite?.to ?? null,
+      scriptRefreshed,
+    },
+  };
+}
+
+/**
+ * Never downgrade a working Claude Code bridge to direct HTTP (#2358 PR 2b).
+ *
+ * A writer that cannot build a durable bridge — `npx tandem-editor
+ * rotate-token` or `… setup --apply` running from the npx cache, a translocated
+ * `.app`, a checkout — would otherwise replace the bridge an installed Tandem
+ * wrote with HTTP, silently, until that Tandem's next start migrated it back.
+ * So when the planned entry is the HTTP shape and the existing `tandem` entry
+ * is Tandem's own bridge whose Node and script are both still there, keep its
+ * `command`/`args` and rewrite only its `env` (the URL and, from the planned
+ * header, the token). Anything else — no entry, a foreign entry, a dead bridge
+ * — gets the planned entry unchanged.
+ *
+ * Both probes screen UNC before touching the filesystem: the paths come out of
+ * a config file Tandem does not own.
+ */
+function keepWorkingClaudeCodeBridge(
+  ops: ApplyOps,
+  existing: { mcpServers?: Record<string, McpEntry> },
+): ApplyOps {
+  const planned = ops.create.tandem;
+  if (planned.type !== "http") return ops;
+  const shape = classifyClaudeCodeTandemEntry(existing.mcpServers?.tandem, MCP_URL);
+  if (shape.kind !== "bridge") return ops;
+  const { command, script } = shape;
+  if (!isRecordedPathAbsolute(command) || probeNodeBinary(command) !== true) return ops;
+  if (rejectUnsafeWindowsPrefix(script) !== null || probeNodeBinary(script) !== true) return ops;
+  const token = bearerTokenOf(planned.headers?.Authorization) ?? undefined;
+  console.error(
+    "[Tandem] Kept Claude Code's existing stdio-bridge tandem entry (this run cannot write one) " +
+      "and updated its connection settings.",
+  );
+  return {
+    ...ops,
+    create: { ...ops.create, tandem: { command, args: [script], env: bridgeEnv(token) } },
+  };
+}
+
+/**
+ * Does Claude Code's `tandem` entry need the bridge pair resolved at all? An
+ * HTTP entry Tandem wrote (to migrate), or a Tandem bridge whose Node is gone or
+ * is the bundled one, or whose script is gone or an older AppImage copy. Pure
+ * string tests plus the UNC-screened `isRecordedPathGone`.
+ */
+function claudeCodeEntryNeedsBridge(entry: unknown, currentScript: string | null): boolean {
+  const shape = classifyClaudeCodeTandemEntry(entry, MCP_URL);
+  if (shape.kind === "tandem-http") return true;
+  if (shape.kind !== "bridge") return false;
+  if (isRecordedPathGone(shape.command) || isBundledSidecarNode(shape.command)) return true;
+  if (isRecordedPathGone(shape.script)) return true;
+  if (currentScript === null) return false;
+  const appData = resolveAppDataDir();
+  const recorded = bridgeCopyVersionOf(shape.script, appData);
+  const current = bridgeCopyVersionOf(currentScript, appData);
+  return recorded !== null && current !== null && isOlderVersion(recorded, current);
+}
+
+/** What {@link migrateHttpEntryInPlace} did. */
+type MigrationResult = { status: "no-op" } | { status: "migrated" };
+
+/**
+ * Migrate the direct-HTTP `tandem` entry Tandem wrote into Claude Code's config
+ * onto the stdio bridge (#2358 PR 2b; design §3.6 "Rule: the migration").
+ *
+ * Its own branch, ahead of the `command`-keyed repair: an HTTP entry has no
+ * `command`, so the repair path returns before it could look. The match is
+ * EXACTLY the shape `buildMcpEntries` wrote — `{type: "http", url, headers?}`
+ * with no other key, `url` equal to `${MCP_URL}/mcp`, and `headers`, if
+ * present, exactly `{Authorization: "Bearer <token>"}` with a token the bridge
+ * accepts. Anything else — another host or port, an extra header, a lowercase
+ * key, a hand-added field — is left exactly as found. A hand-written entry
+ * identical to ours cannot be told apart and is migrated, the bound npx
+ * convergence also accepts.
+ *
+ * The token moves verbatim into `env.TANDEM_AUTH_TOKEN`; the token store is
+ * never read (a stale token stays stale until `tandem rotate-token`). The new
+ * entry carries exactly {@link STDIO_ENTRY_ENV_KEYS}, so the next boot reads it
+ * as ours. Mutates `servers` in place; the caller commits with one write.
+ */
+function migrateHttpEntryInPlace(
+  servers: Record<string, unknown>,
+  ctx: { targetKind: TargetKind; bridge: ClaudeCodeBridge | null },
+): { changed: boolean; result: MigrationResult } {
+  const noOp = { changed: false, result: { status: "no-op" } as const };
+  if (ctx.targetKind !== "claude-code" || ctx.bridge === null) return noOp;
+  const shape = classifyClaudeCodeTandemEntry(servers.tandem, MCP_URL);
+  if (shape.kind !== "tandem-http") return noOp;
+  const token = shape.token;
+
+  servers.tandem = {
+    command: ctx.bridge.command,
+    args: [ctx.bridge.script],
+    env: bridgeEnv(token),
+  };
+  return { changed: true, result: { status: "migrated" } };
+}
+
+/**
  * Boot-time sweep over every detected client config, for every entry key that
  * can carry an absolute path.
  *
@@ -2090,10 +2628,18 @@ function repairEntryInPlace(
  * this function. Repair is total — every foreign shape falls out as `no-op` —
  * so leaving it unfiltered costs nothing. Convergence is not a repair: it
  * replaces `args` wholesale, and in `~/.claude.json` it would be replacing an
- * entry Tandem never wrote (that file only ever gets the HTTP shape) which
- * usually WORKS there, because a terminal-launched client has a full PATH. So
+ * entry Tandem never wrote (Tandem writes the absolute bridge pair or direct
+ * HTTP there, never npx) which usually WORKS there, because a terminal-launched client has a full PATH. So
  * `target.kind` is threaded in and {@link convergeNpxEntry} declines unless it
  * is `claude-desktop`.
+ *
+ * **Claude Code (#2358 PR 2b).** Two more kind-scoped branches, both only from
+ * an installed build that would write a bridge: the HTTP→bridge migration
+ * ({@link migrateHttpEntryInPlace}), ahead of the repair loop, and the bridge
+ * entry's own repair ({@link repairClaudeCodeBridgeEntry}), which re-picks the
+ * Node system-first. The whole sweep is skipped for a built bundle run from a
+ * checkout ({@link mayTouchDefaultClientConfigs}), and its one write is
+ * re-checked against Claude Code's own writes before the rename.
  */
 export async function refreshAllMcpEntryBinaries(
   opts: { homeOverride?: string } = {},
@@ -2103,6 +2649,14 @@ export async function refreshAllMcpEntryBinaries(
   // synchronous (on Windows it readdirs %LOCALAPPDATA%\Packages), so the whole
   // sweep would otherwise run inline on the caller's startup stack.
   await Promise.resolve();
+
+  // A built bundle run from a checkout never touches the real client configs
+  // (#2358 PR 2b): see `mayTouchDefaultClientConfigs`.
+  if (opts.homeOverride === undefined && !mayTouchDefaultClientConfigs()) return;
+
+  // Linux AppImage: make the durable bridge copy before anything resolves the
+  // bridge pair, so the migration and repair can name it.
+  await prepareAppImageBridgeCopy();
 
   // `detectTargets` is inside the try: it stats and realpaths OS roots and can
   // throw (an unresolvable home, an EPERM on a redirected profile). Leaving it
@@ -2118,6 +2672,39 @@ export async function refreshAllMcpEntryBinaries(
     return;
   }
 
+  // Claude Code's bridge pair (#2358 PR 2b), resolved lazily: only a config
+  // whose entry actually needs it (an HTTP entry to migrate, a dead or bundled
+  // Node, a dead or older script) pays for the system-Node probe, so a healthy
+  // boot runs no `node --version` on the launcher's critical path. Null when
+  // this is not an installed build that would write a bridge — then neither the
+  // migration nor the Claude Code bridge repair runs.
+  let claudeCodeBridgeMemo: ClaudeCodeBridge | null | undefined;
+  const claudeCodeBridgeFor = async (
+    servers: Record<string, unknown>,
+  ): Promise<ClaudeCodeBridge | null> => {
+    if (claudeCodeBridgeMemo !== undefined) return claudeCodeBridgeMemo;
+    const currentScript =
+      claudeCodeBridgeForTests !== undefined
+        ? (claudeCodeBridgeForTests?.script ?? null)
+        : durableBridgeScript();
+    if (claudeCodeBridgeForTests === undefined && currentScript === null) return null;
+    if (!claudeCodeEntryNeedsBridge(servers.tandem, currentScript)) return null;
+    try {
+      await warmClaudeCodeBridge();
+      claudeCodeBridgeMemo = resolveClaudeCodeBridge();
+    } catch (err) {
+      console.error(
+        `[Tandem] Could not resolve Claude Code's bridge entry (non-fatal): ${err instanceof Error ? err.message : err}`,
+      );
+      claudeCodeBridgeMemo = null;
+    }
+    return claudeCodeBridgeMemo;
+  };
+  /** Every script path a config still names after this sweep, for the prune. */
+  const referencedScripts = new Set<string>();
+  /** A config whose write was skipped or failed: its on-disk scripts are unknown. */
+  let anyConfigUnsettled = false;
+
   for (const target of targets) {
     try {
       // ONE read and at most ONE write per config, however many keys we repair.
@@ -2129,6 +2716,8 @@ export async function refreshAllMcpEntryBinaries(
       const opened = await readConfigForMutation(target.configPath);
       if (opened.status !== "ok") {
         if (opened.status === "skipped") {
+          // A config Tandem could not read may still name an old bridge copy.
+          anyConfigUnsettled = true;
           // Every refusal was previously silent. `malformed-json` in particular
           // deserves to be loud: `~/.claude.json` is the whole MCP registry, so
           // if it does not parse then EVERY server the user has is broken — and
@@ -2144,6 +2733,15 @@ export async function refreshAllMcpEntryBinaries(
       }
 
       let dirty = false;
+      const claudeCodeBridge =
+        target.kind === "claude-code" ? await claudeCodeBridgeFor(opened.servers) : null;
+      // The migration is its own branch AHEAD of the repair loop: the HTTP
+      // entry has no `command`, so the repair would return before looking.
+      const migration = migrateHttpEntryInPlace(opened.servers, {
+        targetKind: target.kind,
+        bridge: claudeCodeBridge,
+      });
+      dirty ||= migration.changed;
       for (const entryKey of REFRESHABLE_ENTRY_KEYS) {
         // `targetKind` is threaded because convergence is scoped to Claude
         // Desktop and ONLY the sweep knows which config it is looking at. A
@@ -2151,6 +2749,7 @@ export async function refreshAllMcpEntryBinaries(
         const { changed, result } = repairEntryInPlace(opened.servers, {
           entryKey,
           targetKind: target.kind,
+          claudeCodeBridge,
         });
         dirty ||= changed;
         if (result.status === "converged") {
@@ -2196,11 +2795,36 @@ export async function refreshAllMcpEntryBinaries(
         // every other vendor's entries the user just removed. That window
         // matters more now than it did — before convergence this write
         // essentially never fired.
+        //
+        // `expectUnchanged` (#2358 PR 2b): Claude Code rewrites this same file,
+        // and from PR 2b this write fires once on every install. Re-checked
+        // immediately before the rename; a change abandons the write and the
+        // next start retries. The residual is the bound on #1599.
         await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", target.configPath, {
           requireExistingDest: true,
+          expectUnchanged: opened.stamp,
+          beforeCommitForTests: sweepBeforeCommitForTests,
         });
       }
+      if (migration.result.status === "migrated") {
+        // One distinct line per migrated config, naming the file — never the
+        // token. Logged only after the write landed.
+        console.error(
+          `[Tandem] Switched the tandem entry in ${target.label} (${target.configPath}) from ` +
+            "direct HTTP to Tandem's stdio bridge — Claude Code terminals opened before now keep " +
+            "the old entry until they restart.",
+        );
+      }
+      collectEntryScripts(opened.servers, referencedScripts);
     } catch (err) {
+      anyConfigUnsettled = true;
+      if (err instanceof ConfigChangedError) {
+        console.error(
+          `[Tandem] ${target.label} changed while Tandem was updating it (${target.configPath}); ` +
+            "left as found — Tandem will try again at its next start.",
+        );
+        continue;
+      }
       // Include the target — a Windows box can have Claude Code plus several
       // Desktop/MSIX configs, and an anonymous one-liner does not say which
       // failed. This is also where `assertPathSafe`'s rejection lands, i.e.
@@ -2209,6 +2833,43 @@ export async function refreshAllMcpEntryBinaries(
         `[Tandem] MCP entry refresh failed for ${target.label} (${target.configPath}, non-fatal): ${err instanceof Error ? err.message : err}`,
       );
     }
+  }
+
+  // Linux AppImage only: drop app-data bridge copies of other versions that no
+  // config names any more. Skipped whenever a config was left unsettled, since
+  // its on-disk entry may still name one.
+  if (!anyConfigUnsettled && ownBridgeInstallKind() === "appimage") {
+    try {
+      const removed = await pruneBridgeCopies({
+        appDataDir: resolveAppDataDir(),
+        keepVersion: CLI_VERSION,
+        referenced: referencedScripts,
+      });
+      if (removed.length > 0) {
+        console.error(`[Tandem] Removed old stdio bridge copies: ${removed.join(", ")}.`);
+      }
+    } catch {
+      // Best-effort; the next start retries.
+    }
+  }
+}
+
+/** Test seam: runs inside the sweep's commit guard, just before the re-check
+ *  (atomicWrite calls it only under vitest). */
+let sweepBeforeCommitForTests: (() => Promise<void>) | undefined;
+
+export function _setSweepBeforeCommitForTests(fn: (() => Promise<void>) | undefined): void {
+  if (process.env.VITEST !== "true") throw new Error("test seam");
+  sweepBeforeCommitForTests = fn;
+}
+
+/** Add every Tandem entry's script (`args[0]`) in `servers` to `out`. */
+function collectEntryScripts(servers: Record<string, unknown>, out: Set<string>): void {
+  for (const key of REFRESHABLE_ENTRY_KEYS) {
+    const entry = servers[key];
+    if (!isPlainObject(entry)) continue;
+    const args = entry.args;
+    if (Array.isArray(args) && typeof args[0] === "string") out.add(args[0]);
   }
 }
 
@@ -2281,9 +2942,10 @@ async function maybeBackupExistingConfig(
 export async function installSkill(
   opts: { homeOverride?: string } = {},
 ): Promise<SkillInstallResult> {
-  const home = opts.homeOverride ?? homedir();
+  const homeOverride = clientConfigHomeOverride(opts.homeOverride);
+  const home = homeOverride ?? homedir();
   const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
-  assertPathSafe(skillPath, { allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined });
+  assertPathSafe(skillPath, { allowedRoots: homeOverride ? [homeOverride] : undefined });
   await mkdir(dirname(skillPath), { recursive: true });
 
   // Strictly `>`, not the refresher's `>=`. That belongs to the silent
@@ -2403,11 +3065,13 @@ export async function refreshExistingSkillIfStale(
   } = {},
 ): Promise<void> {
   if (BUNDLED_SKILL_VERSION === 0) return; // Bundled skill has no version stamp — nothing to compare.
-  const home = opts.homeOverride ?? homedir();
+  if (opts.homeOverride === undefined && !mayTouchDefaultClientConfigs()) return;
+  const homeOverride = clientConfigHomeOverride(opts.homeOverride);
+  const home = homeOverride ?? homedir();
   const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
   try {
     assertPathSafe(skillPath, {
-      allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined,
+      allowedRoots: homeOverride ? [homeOverride] : undefined,
     });
   } catch (err) {
     lastSkillRefreshError = {

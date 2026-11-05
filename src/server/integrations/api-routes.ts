@@ -111,6 +111,7 @@ import {
   type RemovableEntry,
   recordSkillInstallOutcome,
   shouldRegisterChannelShim,
+  warmClaudeCodeBridge,
 } from "./apply.js";
 import {
   type EntryValidation,
@@ -1081,6 +1082,11 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           entry.kind,
           CHANNEL_DIST,
         );
+        // Claude Code's entry is the stdio bridge on a system Node (#2358 PR
+        // 2b). Probe for that Node asynchronously here: the builder's own
+        // fallback is a synchronous `--version` run, which must never block
+        // this server's event loop. Memoized, so only the first apply pays.
+        if (entry.kind === "claude-code") await warmClaudeCodeBridge();
         const create = buildMcpEntries(CHANNEL_DIST, {
           token,
           targetKind: entry.kind,

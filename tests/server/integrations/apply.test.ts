@@ -19,13 +19,17 @@ import {
 } from "../../../src/server/integrations/apply.js";
 
 const POSIX_ONLY = process.platform !== "win32";
+/** The desktop sidecar's own argv flag: the injected paths are honoured only with it (#2358 PR 2b). */
+const SIDECAR_ARGV = ["node", "server.js", "--tauri-sidecar"];
 
 describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c)", () => {
   // The Tauri desktop bundle injects TANDEM_CHANNEL_DIST on sidecar spawn
   // because the package-root derivation resolves outside the resource dir.
   it("prefers an injected env path when it points at an existing file", () => {
     const injected = "/app/Resources/dist/channel/index.js";
-    expect(resolveChannelDist({ TANDEM_CHANNEL_DIST: injected }, () => true)).toBe(injected);
+    expect(resolveChannelDist({ TANDEM_CHANNEL_DIST: injected }, () => true, SIDECAR_ARGV)).toBe(
+      injected,
+    );
   });
 
   it("falls back to the package-root derivation when env is unset", () => {
@@ -35,7 +39,11 @@ describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c
   });
 
   it("ignores a bogus env path that does not exist (degrades to derivation)", () => {
-    const resolved = resolveChannelDist({ TANDEM_CHANNEL_DIST: "/nope/channel.js" }, () => false);
+    const resolved = resolveChannelDist(
+      { TANDEM_CHANNEL_DIST: "/nope/channel.js" },
+      () => false,
+      SIDECAR_ARGV,
+    );
     expect(resolved).not.toBe("/nope/channel.js");
     expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
   });
@@ -43,7 +51,7 @@ describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c
   it("logs a diagnostic naming the bad path when env is set but the file is missing", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      resolveChannelDist({ TANDEM_CHANNEL_DIST: "/nope/channel.js" }, () => false);
+      resolveChannelDist({ TANDEM_CHANNEL_DIST: "/nope/channel.js" }, () => false, SIDECAR_ARGV);
       const logged = errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
       // The breadcrumb is the entire point of this branch — it must name the
       // bad path and the consequence (push degradation), not silently fall back.
@@ -65,9 +73,9 @@ describe("resolveStdioBridgeDist — TANDEM_STDIO_BRIDGE_DIST precedence", () =>
   // because the package-root derivation resolves outside the resource dir.
   it("prefers an injected env path when it points at an existing file", () => {
     const injected = "/app/Resources/dist/stdio-bridge/index.js";
-    expect(resolveStdioBridgeDist({ TANDEM_STDIO_BRIDGE_DIST: injected }, () => true)).toBe(
-      injected,
-    );
+    expect(
+      resolveStdioBridgeDist({ TANDEM_STDIO_BRIDGE_DIST: injected }, () => true, SIDECAR_ARGV),
+    ).toBe(injected);
   });
 
   it("falls back to the package-root derivation when env is unset", () => {
@@ -81,6 +89,7 @@ describe("resolveStdioBridgeDist — TANDEM_STDIO_BRIDGE_DIST precedence", () =>
       const resolved = resolveStdioBridgeDist(
         { TANDEM_STDIO_BRIDGE_DIST: "/nope/bridge.js" },
         () => false,
+        SIDECAR_ARGV,
       );
       expect(resolved).not.toBe("/nope/bridge.js");
       const logged = errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
@@ -102,6 +111,7 @@ describe("resolveStdioBridgeDist — TANDEM_STDIO_BRIDGE_DIST precedence", () =>
       const resolved = resolveStdioBridgeDist(
         { TANDEM_STDIO_BRIDGE_DIST: translocated },
         () => true, // the file genuinely exists right now — that is the trap
+        SIDECAR_ARGV,
       );
       expect(resolved).not.toBe(translocated);
       expect(errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n")).toMatch(
@@ -110,6 +120,17 @@ describe("resolveStdioBridgeDist — TANDEM_STDIO_BRIDGE_DIST precedence", () =>
     } finally {
       errSpy.mockRestore();
     }
+  });
+
+  it("ignores an INHERITED injection: a process without the sidecar's argv flag (#2358 PR 2b)", () => {
+    // Tandem's Claude's child and every shell under it inherit the variable;
+    // honouring it there let a checkout pass as the installed desktop app.
+    const injected = "/app/Resources/dist/stdio-bridge/index.js";
+    const resolved = resolveStdioBridgeDist({ TANDEM_STDIO_BRIDGE_DIST: injected }, () => true, [
+      "node",
+      "dist/server/index.js",
+    ]);
+    expect(resolved).not.toBe(injected);
   });
 
   it("ignores an empty-string env var", () => {

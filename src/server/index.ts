@@ -926,8 +926,10 @@ async function main() {
     // would spawn Claude Code against the config we are mid-repair of — which
     // is both halves of the failure at once (the session reads the stale entry,
     // AND our rename lands inside Claude Code's own startup write window). The
-    // Cost: normally a handful of `stat`s over detected config files, after the
-    // server is already listening. NOT bounded to that on a boot that actually
+    // Cost: normally a handful of `stat`s and one read per detected config file,
+    // after the server is already listening. A Claude Code entry that needs its
+    // Node picked (#2358 PR 2b: the HTTP→bridge migration, a dead or bundled
+    // Node) also costs a bounded `node --version` probe — never on a healthy boot. NOT bounded to that on a boot that actually
     // repairs something — an `atomicWrite` here was measured at ~524 ms on
     // Windows, almost all of it a `pwsh Get-Acl` spawn, and the loop is
     // sequential over targets (a Windows box can have Claude Desktop plus

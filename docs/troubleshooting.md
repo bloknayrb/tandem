@@ -594,7 +594,7 @@ Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-05
 
 Don't port-forward around the refusal. A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access.
 
-> **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.
+> **Note:** Since #2358, Tandem writes Claude Code's `tandem` entry as its stdio bridge, with the Bearer token in the entry's `env` (`TANDEM_AUTH_TOKEN`) rather than in a header. Claude Code CLI **≥ 2.1.141** redacts credential *headers* and URL secrets in `claude mcp get`/`list`, but whether it redacts an `env` value has not been checked, so treat that output as containing the token: redact it before pasting it anywhere. An older direct-HTTP entry still carries the token in its headers, which those versions redact and older CLIs print in plain text.
 
 ## Related
 

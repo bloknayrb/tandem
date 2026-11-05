@@ -31,3 +31,8 @@ export function isValidNodeBinary(nodeBinary: string): boolean {
   if (rejectUnsafeWindowsPrefix(nodeBinary) !== null) return false;
   return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
 }
+
+/** Is `command` the desktop app's bundled Node (`node-sidecar-<triple>`)? */
+export function isBundledSidecarNode(command: string): boolean {
+  return /^node-sidecar/.test(crossBasename(command));
+}
