@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import {
   sidecarEntries,
   UNRESOLVED,
 } from "../helpers/import-graph.js";
-import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
+import { readTree, SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 /**
  * The ownership flag's module seam (#2358, ADR-054; ownership design §12).
@@ -37,21 +37,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const FLAG = "src/server/ownership-flag.ts";
 const ANCHOR = "tests/server/ownership-anchor.test.ts";
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, out);
-    else if (/\.(ts|mts|js|mjs|svelte)$/.test(entry.name)) out.push(full);
-  }
-  return out;
-}
-
-/** Every code file under `tests/`, repo-relative → contents. */
-const TEST_FILES = new Map(
-  walk(path.join(ROOT, "tests")).map((f) => [
-    path.relative(ROOT, f).split(path.sep).join("/"),
-    readFileSync(f, "utf-8"),
-  ]),
+/** Every code file under `tests/`, repo-relative → contents, decode-checked. */
+const TEST_FILES = readTree(path.join(ROOT, "tests"), (name) =>
+  /\.(ts|mts|js|mjs|svelte)$/.test(name),
 );
 
 describe("ownership flag module seam", () => {

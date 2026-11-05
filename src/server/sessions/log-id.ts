@@ -17,15 +17,9 @@ import { ownershipEnabled } from "../ownership-flag.js";
 
 export function sessionIdForLog(id: string): string {
   if (!ownershipEnabled()) return id;
-  return `#${createHash("sha256").update(id).digest("hex").slice(0, 8)}`;
-}
-
-/**
- * `sessionIdForLog` for a Claude Code session id. Flag-on it hashes the id
- * case-folded, the fold `claudeIdKey` (`mcp/transport-registry.ts`) applies to
- * the owner record, so one session sent in two cases logs as one hash. Flag-off
- * the id is printed exactly as received, as before.
- */
-export function claudeSessionIdForLog(id: string): string {
-  return ownershipEnabled() ? sessionIdForLog(id.toLowerCase()) : id;
+  // Case-folded first — the fold `claudeIdKey` (mcp/transport-registry.ts)
+  // gives a `claude:` owner record — so one Claude session sent in two cases
+  // logs as one hash, at every call site. MCP session ids are lowercase
+  // UUIDs already. Not imported: the registry imports this module.
+  return `#${createHash("sha256").update(id.toLowerCase()).digest("hex").slice(0, 8)}`;
 }

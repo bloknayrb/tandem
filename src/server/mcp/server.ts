@@ -42,7 +42,7 @@ import { registerModelsRoutes } from "../models/api-routes.js";
 import { ownershipEnabled } from "../ownership-flag.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
-import { claudeSessionIdForLog, sessionIdForLog } from "../sessions/log-id.js";
+import { sessionIdForLog } from "../sessions/log-id.js";
 import {
   noteTransportChanged,
   noteTransportRegistered,
@@ -595,7 +595,7 @@ async function openSession(
         noteTransportRegistered(owner.ownerId, { recordKind: owner.recordKind, clientName });
       console.error(
         `[Tandem] MCP session established: ${sessionIdForLog(sessionId)}` +
-          `${claudeSessionId ? ` (claude session ${claudeSessionIdForLog(claudeSessionId)})` : ""}` +
+          `${claudeSessionId ? ` (claude session ${sessionIdForLog(claudeSessionId)})` : ""}` +
           `${clientName ? ` (client ${clientName})` : ""} — ${registry.size} live`,
       );
     },

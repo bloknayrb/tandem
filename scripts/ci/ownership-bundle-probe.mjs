@@ -61,7 +61,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** The 8-hex hash `src/server/sessions/log-id.ts` prints for an id while ownership is on. */
 export function hashForLog(id) {
-  return `#${createHash("sha256").update(id).digest("hex").slice(0, 8)}`;
+  return `#${createHash("sha256").update(String(id).toLowerCase()).digest("hex").slice(0, 8)}`;
 }
 
 /**
@@ -96,25 +96,21 @@ export function judgeProbe(stderrText, ids, expect) {
   const text = lines.join("\n");
   const raw = ids.filter((id) => text.includes(id));
   const hashed = ids.filter((id) => text.includes(hashForLog(id)));
-  if (expect === "on") {
-    if (raw.length === 0 && hashed.length === ids.length) {
-      return { code: EXIT_OK, reason: "every id is printed hashed and none raw" };
-    }
+  // How many of our ids each expectation wants printed raw, and hashed.
+  const want = { on: [0, ids.length], off: [ids.length, 0] }[expect];
+  if (want === undefined) {
+    return { code: EXIT_CANNOT_EVALUATE, reason: `unknown expectation ${JSON.stringify(expect)}` };
+  }
+  if (raw.length === want[0] && hashed.length === want[1]) {
     return {
-      code: EXIT_MISMATCH,
-      reason: `expected ownership ON: ${raw.length} id(s) printed raw, ${hashed.length}/${ids.length} hashed`,
+      code: EXIT_OK,
+      reason: `ownership is ${expect.toUpperCase()}: ${raw.length} id(s) raw, ${hashed.length} hashed`,
     };
   }
-  if (expect === "off") {
-    if (raw.length === ids.length && hashed.length === 0) {
-      return { code: EXIT_OK, reason: "every id is printed raw and none hashed" };
-    }
-    return {
-      code: EXIT_MISMATCH,
-      reason: `expected ownership OFF: ${raw.length}/${ids.length} id(s) printed raw, ${hashed.length} hashed`,
-    };
-  }
-  return { code: EXIT_CANNOT_EVALUATE, reason: `unknown expectation ${JSON.stringify(expect)}` };
+  return {
+    code: EXIT_MISMATCH,
+    reason: `expected ownership ${expect.toUpperCase()}: ${raw.length}/${ids.length} id(s) printed raw, ${hashed.length}/${ids.length} hashed`,
+  };
 }
 
 /**

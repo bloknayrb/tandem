@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { noCallerRefusalMessage } from "../../src/server/mcp/response.js";
 import { createMcpServer } from "../../src/server/mcp/server.js";
 import { resetOwnershipForTests } from "../../src/server/sessions/ownership.js";
+import { IMPORTS, resolveSpec } from "../helpers/import-graph.js";
 import { allMcpSource, registeredToolNames } from "../helpers/mcp-source.js";
 import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
@@ -35,9 +36,21 @@ const CONTEXT = "src/server/sessions/context.ts";
 /** Named imports from `context.ts`, per importing file, read off the AST. */
 function contextImports(): Map<string, { names: string[]; namespace: boolean }> {
   const out = new Map<string, { names: string[]; namespace: boolean }>();
-  for (const [file, text] of SRC_FILES) {
-    if (!/\.(ts|mts)$/.test(file) || file === CONTEXT) continue;
-    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  // Which files import context.ts at all comes from the shared walk
+  // (tests/helpers/import-graph.ts), which resolves every specifier shape and
+  // fails closed; only those files are parsed for WHAT they import.
+  for (const [file, targets] of IMPORTS) {
+    if (file === CONTEXT || !targets.includes(CONTEXT)) continue;
+    const sf = ts.createSourceFile(
+      file,
+      SRC_FILES.get(file) as string,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    // An import the AST cannot read as a static named import (a dynamic
+    // `import()`, a re-export, a namespace or default import) launders the
+    // getters, and is reported as such.
+    const entry = { names: [] as string[], namespace: true };
     for (const stmt of sf.statements) {
       const spec =
         (ts.isImportDeclaration(stmt) || ts.isExportDeclaration(stmt)) &&
@@ -45,24 +58,21 @@ function contextImports(): Map<string, { names: string[]; namespace: boolean }> 
         ts.isStringLiteral(stmt.moduleSpecifier)
           ? stmt.moduleSpecifier.text
           : undefined;
-      if (!spec?.startsWith(".")) continue;
-      const target = path.posix.normalize(
-        path.posix.join(path.posix.dirname(file), spec.replace(/\.js$/, ".ts")),
-      );
-      if (target !== CONTEXT) continue;
-      const entry = out.get(file) ?? { names: [], namespace: false };
+      if (spec === undefined || resolveSpec(file, spec) !== CONTEXT) continue;
       if (ts.isExportDeclaration(stmt)) {
-        entry.namespace = true; // a re-export would launder the getters
-      } else if (ts.isImportDeclaration(stmt)) {
-        const bindings = stmt.importClause?.namedBindings;
-        if (bindings && ts.isNamespaceImport(bindings)) entry.namespace = true;
-        else if (bindings && ts.isNamedImports(bindings)) {
-          for (const el of bindings.elements) entry.names.push((el.propertyName ?? el.name).text);
-        }
-        if (stmt.importClause?.name) entry.namespace = true;
+        entry.namespace = true;
+        break;
       }
-      out.set(file, entry);
+      const clause = (stmt as ts.ImportDeclaration).importClause;
+      const bindings = clause?.namedBindings;
+      if (clause?.name || !bindings || ts.isNamespaceImport(bindings)) {
+        entry.namespace = true;
+        break;
+      }
+      entry.namespace = false;
+      for (const el of bindings.elements) entry.names.push((el.propertyName ?? el.name).text);
     }
+    out.set(file, entry);
   }
   return out;
 }

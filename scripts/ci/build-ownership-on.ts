@@ -94,13 +94,16 @@ async function main(): Promise<void> {
   const config: unknown = (await import(pathToFileURL(configPath).href)).default;
   const plan = planOwnershipBuilds(config);
   const { build } = await import("tsup");
-  for (const { options, flipped } of plan) {
-    console.error(
-      `[build-ownership-on] ${String(options.outDir)}${flipped ? ` (${OWNERSHIP_DEFINE_KEY}: true)` : ""}`,
-    );
-    // biome-ignore lint/suspicious/noExplicitAny: tsup's Options type is not worth importing here; the block came from its own config file.
-    await build(options as any);
-  }
+  // Concurrently, as the tsup CLI builds a config array: each block writes
+  // (and cleans) its own outDir.
+  await Promise.all(
+    plan.map(({ options, flipped }) => {
+      console.error(
+        `[build-ownership-on] ${String(options.outDir)}${flipped ? ` (${OWNERSHIP_DEFINE_KEY}: true)` : ""}`,
+      );
+      return build(options as Parameters<typeof build>[0]);
+    }),
+  );
   console.error(`[build-ownership-on] built ${plan.length} bundle(s)`);
   // A developer who ran this locally now has a flag-on dist/ — which
   // `npm run dev:tauri` and `tandem start` would then run against real app

@@ -133,8 +133,12 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** At most one line per key per minute. Never carries a session id. */
-function logLimited(key: string, line: string): void {
+/**
+ * At most one line per key per minute; `resetOwnershipForTests` forgets the
+ * keys. Never pass it a session id. `withErrorBoundary`'s no-caller line uses
+ * it too, so there is one limiter.
+ */
+export function logLimited(key: string, line: string): void {
   const now = Date.now();
   const last = lastLogAt.get(key);
   if (last !== undefined && now - last < 60_000) return;
@@ -158,7 +162,7 @@ export function setOwnershipTransportMode(mode: "http" | "stdio"): void {
   total("setOwnershipTransportMode", undefined, () => {
     if (transportMode === undefined) {
       transportMode = mode;
-      if (mode === "stdio") ensureBuiltinRecord(LOCAL_OWNER_ID, "local");
+      if (mode === "stdio") ensureRecord(LOCAL_OWNER_ID, "local");
       return;
     }
     if (transportMode !== mode) {
@@ -237,17 +241,12 @@ export function noteTransportRegistered(
   info: { recordKind: RecordKind; clientName?: string },
 ): void {
   if (!ownershipEnabled() || ownerId === undefined) return;
-  total("noteTransportRegistered", undefined, () => {
-    let record = records.get(ownerId);
-    if (!record) {
-      record = { ownerId, recordKind: info.recordKind, label: mintLabel() };
-      records.set(ownerId, record);
-    }
-    record.clientName = info.clientName;
-    recompute(record);
-  });
-  const record = records.get(ownerId);
-  if (record) failTowardLapse(record);
+  const record = total("noteTransportRegistered", undefined, () =>
+    ensureRecord(ownerId, info.recordKind),
+  );
+  if (!record) return;
+  record.clientName = info.clientName;
+  rejudge(record);
 }
 
 /**
@@ -258,28 +257,22 @@ export function noteTransportRegistered(
 export function noteTransportChanged(ownerId: string | undefined): void {
   if (!ownershipEnabled() || ownerId === undefined) return;
   const record = records.get(ownerId);
-  if (!record) return;
-  total("noteTransportChanged", undefined, () => recompute(record));
-  failTowardLapse(record);
+  if (record) rejudge(record);
 }
 
 /**
- * After a re-judge that threw, a detached record must not be left with no
- * grace and no deletion: if it has neither a timer nor a reason to be kept,
- * arm one (its lapse re-checks attachment before moving anything).
+ * `recompute`, total. If it threw, a record must not be left with no grace and
+ * no deletion: fail toward a lapse by arming a grace (its expiry re-checks
+ * attachment before moving anything).
  */
-function failTowardLapse(record: OwnerRecord): void {
-  if (isBuiltin(record) || record.graceTimer !== undefined || record.lapsed) return;
-  if (records.get(record.ownerId) !== record) return;
-  total("failTowardLapse", undefined, () => {
-    let attached = false;
-    try {
-      attached = isAttached(record.ownerId);
-    } catch {
-      attached = false;
-    }
-    if (!attached) armGrace(record);
+function rejudge(record: OwnerRecord): void {
+  const judged = total("rejudge", false, () => {
+    recompute(record);
+    return true;
   });
+  if (judged || isBuiltin(record) || record.graceTimer !== undefined || record.lapsed) return;
+  if (records.get(record.ownerId) !== record) return;
+  total("failTowardLapse", undefined, () => armGrace(record));
 }
 
 /** Record that `ownerId` polled its inbox. A no-op for an unknown id. */
@@ -326,16 +319,15 @@ export function displayKindOf(record: Pick<OwnerRecord, "recordKind" | "clientNa
     case "local":
       return "terminal";
     case "bridge":
+      return record.clientName === CLAUDE_DESKTOP_CLIENT_NAME ? "Claude Desktop" : "other app";
     case "http":
       if (record.clientName === CLAUDE_DESKTOP_CLIENT_NAME) return "Claude Desktop";
-      if (record.recordKind === "http" && record.clientName === CLAUDE_CODE_CLIENT_NAME) {
-        return "terminal";
-      }
-      return "other app";
+      return record.clientName === CLAUDE_CODE_CLIENT_NAME ? "terminal" : "other app";
   }
 }
 
-function ensureBuiltinRecord(ownerId: string, recordKind: RecordKind): OwnerRecord {
+/** The record for `ownerId`, created (with a fresh label) if it is new. */
+function ensureRecord(ownerId: string, recordKind: RecordKind): OwnerRecord {
   let record = records.get(ownerId);
   if (!record) {
     record = { ownerId, recordKind, label: mintLabel() };
@@ -352,15 +344,16 @@ function randomChars(n: number): string {
   return out;
 }
 
-/** `owner-` plus 4 random base36 characters, unique among live records; 8 after 32 collisions. */
+/**
+ * `owner-` plus 4 random base36 characters, unique among live records. Live
+ * records are bounded (the registry's 16 plus 64 detached) against 36^4
+ * labels, so the retry loop ends at once in practice.
+ */
 function mintLabel(): string {
   const taken = new Set([...records.values()].map((r) => r.label));
-  for (let i = 0; i < 32; i++) {
-    const label = `owner-${randomChars(4)}`;
-    if (!taken.has(label)) return label;
-  }
-  let label = `owner-${randomChars(8)}`;
-  while (taken.has(label)) label = `owner-${randomChars(8)}`;
+  let label: string;
+  do label = `owner-${randomChars(4)}`;
+  while (taken.has(label));
   return label;
 }
 
@@ -370,15 +363,22 @@ function mintLabel(): string {
  * such stream is open. Judged from the registry's own counters, so there is
  * one count, not two. `tandem` and `local` are never judged this way.
  */
-function isAttached(ownerId: string): boolean {
-  const mine = transportView().filter((e) => e.ownerId === ownerId);
-  if (mine.length === 0) return false;
-  if (!mine.some((e) => e.streamEver === true)) return true;
-  return mine.some((e) => e.openStreams > 0);
+function readAttachment(): { registered: Set<string>; attached: Set<string> } {
+  const byOwner = new Map<string, { streamEver: boolean; open: boolean }>();
+  for (const e of transportView()) {
+    if (e.ownerId === undefined) continue;
+    const seen = byOwner.get(e.ownerId) ?? { streamEver: false, open: false };
+    seen.streamEver ||= e.streamEver === true;
+    seen.open ||= e.openStreams > 0;
+    byOwner.set(e.ownerId, seen);
+  }
+  const attached = new Set<string>();
+  for (const [ownerId, seen] of byOwner) if (!seen.streamEver || seen.open) attached.add(ownerId);
+  return { registered: new Set(byOwner.keys()), attached };
 }
 
-function hasRegisteredTransport(ownerId: string): boolean {
-  return transportView().some((e) => e.ownerId === ownerId);
+function isAttached(ownerId: string): boolean {
+  return readAttachment().attached.has(ownerId);
 }
 
 function isBuiltin(record: OwnerRecord): boolean {
@@ -395,13 +395,14 @@ function isBuiltin(record: OwnerRecord): boolean {
  */
 function recompute(record: OwnerRecord): void {
   if (isBuiltin(record)) return;
-  if (isAttached(record.ownerId)) {
+  const { registered, attached } = readAttachment();
+  if (attached.has(record.ownerId)) {
     clearGrace(record);
     record.lapsed = undefined;
     return;
   }
   if (record.lapsed && !recordHoldsState(record)) {
-    if (!hasRegisteredTransport(record.ownerId)) deleteRecord(record);
+    if (!registered.has(record.ownerId)) deleteRecord(record);
     return;
   }
   armGrace(record);
@@ -454,8 +455,9 @@ function enforceDetachedCap(): void {
   // A record attached again since its grace was armed (its new transport
   // landed in the registry before its own re-judge ran) is not detached: its
   // grace ends here instead of counting against the cap.
+  const { attached } = readAttachment();
   for (const r of records.values()) {
-    if (r.graceTimer !== undefined && isAttached(r.ownerId)) clearGrace(r);
+    if (r.graceTimer !== undefined && attached.has(r.ownerId)) clearGrace(r);
   }
   const inGrace = [...records.values()].filter((r) => r.graceTimer !== undefined);
   if (inGrace.length <= MAX_DETACHED_RECORDS) return;
@@ -485,7 +487,7 @@ function lapse(record: OwnerRecord): void {
   for (const [documentId, entry] of [...ownerByDoc]) {
     if (entry.ownerId === record.ownerId) setDocOwner(documentId, next, "lapse");
   }
-  if (!hasRegisteredTransport(record.ownerId)) deleteRecord(record);
+  if (!readAttachment().registered.has(record.ownerId)) deleteRecord(record);
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +533,7 @@ export function setDocOwner(
       ownerByDoc.delete(documentId);
       return;
     }
-    if (next.ownerId === TANDEM_OWNER_ID) ensureBuiltinRecord(TANDEM_OWNER_ID, "tandem");
+    if (next.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
     ownerByDoc.set(documentId, {
       ownerId: next.ownerId,
       kind: next.kind,

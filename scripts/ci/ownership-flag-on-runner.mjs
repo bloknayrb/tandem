@@ -81,27 +81,25 @@ export function evaluateAnchors(report, repoRoot) {
   return { code: EXIT_OK, reason: `${assertions.length} anchor assertion(s) passed flag-on` };
 }
 
-export function main(argv = process.argv.slice(2), repoRoot = process.cwd()) {
-  const file = argv[0];
-  let verdict;
+/** Read and judge one report file; an unreadable one cannot be evaluated. */
+function judgeFile(file, repoRoot) {
   if (!file) {
-    verdict = {
+    return {
       code: EXIT_CANNOT_EVALUATE,
       reason: "usage: ownership-flag-on-runner.mjs <report.json>",
     };
-  } else {
-    let report;
-    try {
-      report = JSON.parse(readFileSync(file, "utf8"));
-    } catch (err) {
-      report = undefined;
-      verdict = {
-        code: EXIT_CANNOT_EVALUATE,
-        reason: `cannot read ${file}: ${err?.message ?? err}`,
-      };
-    }
-    verdict ??= evaluateAnchors(report, repoRoot);
   }
+  let report;
+  try {
+    report = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    return { code: EXIT_CANNOT_EVALUATE, reason: `cannot read ${file}: ${err?.message ?? err}` };
+  }
+  return evaluateAnchors(report, repoRoot);
+}
+
+export function main(argv = process.argv.slice(2), repoRoot = process.cwd()) {
+  const verdict = judgeFile(argv[0], repoRoot);
   const tag =
     verdict.code === EXIT_OK ? "OK" : verdict.code === EXIT_FAILED ? "FAIL" : "CANNOT EVALUATE";
   const out = verdict.code === EXIT_OK ? console.log : console.error;

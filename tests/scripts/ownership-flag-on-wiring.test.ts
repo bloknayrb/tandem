@@ -72,9 +72,8 @@ function checkStep(predicate: (s: Step) => boolean, label: string): Step {
 const usesOf = (prefix: string) =>
   checkStep((s) => typeof s.uses === "string" && s.uses.startsWith(prefix), prefix).uses;
 /** `check`'s own step, whole: the owner of its shape is whichever test pins it there. */
-const sameAsCheck = (predicate: (s: Step) => boolean, label: string) => checkStep(predicate, label);
 const usesStep = (prefix: string) =>
-  sameAsCheck((s) => typeof s.uses === "string" && s.uses.startsWith(prefix), prefix);
+  checkStep((s) => typeof s.uses === "string" && s.uses.startsWith(prefix), prefix);
 const checkTestRun = checkStep((s) => s.name === "Test", "Test").run;
 
 const PROBE_ON = "node scripts/ci/ownership-bundle-probe.mjs --expect on";
@@ -104,7 +103,7 @@ describe("the ownership-flag-on job (ADR-051)", () => {
       usesStep("actions/checkout@"),
       usesStep("actions/setup-node@"),
       usesStep("actions/setup-python@"),
-      sameAsCheck((s) => s.run === "npm ci --ignore-scripts", "npm ci"),
+      checkStep((s) => s.run === "npm ci --ignore-scripts", "npm ci"),
       { name: "Typecheck", run: "npm run typecheck" },
       {
         name: "Build (ownership on)",
@@ -124,8 +123,8 @@ describe("the ownership-flag-on job (ADR-051)", () => {
         if: "${{ !cancelled() }}",
         run: "node scripts/ci/vitest-file-anchor.mjs .vitest-report.json",
       },
-      sameAsCheck((s) => s.name === "Drop the unused Google Chrome apt source", "apt drop"),
-      sameAsCheck((s) => s.name === "Install Playwright browsers", "Playwright install"),
+      checkStep((s) => s.name === "Drop the unused Google Chrome apt source", "apt drop"),
+      checkStep((s) => s.name === "Install Playwright browsers", "Playwright install"),
       { name: "E2E tests", run: "npm run test:e2e", env: { TANDEM_OWNERSHIP: "1" } },
       {
         name: "Upload Playwright report",
@@ -295,7 +294,9 @@ describe("scripts/ci/ownership-bundle-probe.mjs", () => {
 
   it("hashes exactly as src/server/sessions/log-id.ts does", () => {
     const src = readFileSync(path.join(ROOT, "src/server/sessions/log-id.ts"), "utf-8");
-    expect(src).toContain('createHash("sha256").update(id).digest("hex").slice(0, 8)');
+    expect(src).toContain(
+      'createHash("sha256").update(id.toLowerCase()).digest("hex").slice(0, 8)',
+    );
     expect(hashForLog(MCP)).toMatch(/^#[0-9a-f]{8}$/);
   });
 
@@ -360,10 +361,10 @@ describe("scripts/ci/ownership-bundle-probe.mjs", () => {
     const follower = path.join(fixtures, "env-following-server.mjs");
     const off = boot("off", follower);
     expect(off.status, off.stderr).toBe(1);
-    expect(off.stderr).toMatch(/expected ownership OFF: 0\/2 id\(s\) printed raw, 2 hashed/);
+    expect(off.stderr).toMatch(/expected ownership OFF: 0\/2 id\(s\) printed raw, 2\/2 hashed/);
     const on = boot("on", follower);
     expect(on.status, on.stderr).toBe(1);
-    expect(on.stderr).toMatch(/expected ownership ON: 2 id\(s\) printed raw, 0\/2 hashed/);
+    expect(on.stderr).toMatch(/expected ownership ON: 2\/2 id\(s\) printed raw, 0\/2 hashed/);
     const silent = boot("off", path.join(fixtures, "silent-server.mjs"));
     expect(silent.status, silent.stderr).toBe(3);
     expect(silent.stderr).toMatch(/no 'MCP session established' line/);

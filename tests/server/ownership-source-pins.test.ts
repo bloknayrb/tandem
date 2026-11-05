@@ -42,7 +42,7 @@ describe("each transport branch tells the ownership module its mode before servi
 describe("no server log line prints a raw session id", () => {
   /**
    * Under the flag every `Mcp-Session-Id` and Claude session id a server log
-   * line prints goes through `sessionIdForLog` / `claudeSessionIdForLog`
+   * line prints goes through `sessionIdForLog`
    * (ownership design §11.1). This walks every `console.*` call in the files
    * that log them and fails on a template span that interpolates an id-shaped
    * name unwrapped. The exemptions are reviewed: each prints no id.
@@ -54,7 +54,7 @@ describe("no server log line prints a raw session id", () => {
     "src/server/launcher/supervisor.ts",
   ];
   const ID_SHAPED = /(?:^|[^A-Za-z])(?:[a-z]*[sS]essionId|clientId|ownerId|sid|id)\b/;
-  const WRAPPED = /^(?:sessionIdForLog|claudeSessionIdForLog)\(/;
+  const WRAPPED = /^sessionIdForLog\(/;
 
   it("every id-shaped interpolation in a console call is wrapped", () => {
     const naked: string[] = [];

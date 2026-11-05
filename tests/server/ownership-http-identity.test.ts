@@ -5,7 +5,7 @@ import {
   mcpSessionOwnerIdsForTests,
   startMcpServerHttp,
 } from "../../src/server/mcp/server.js";
-import { claudeSessionIdForLog, sessionIdForLog } from "../../src/server/sessions/log-id.js";
+import { sessionIdForLog } from "../../src/server/sessions/log-id.js";
 import {
   getOwnerRecord,
   ownershipSnapshotForTests,
@@ -209,8 +209,8 @@ describe("flag on", () => {
     for (const raw of [a, b, CLAUDE, CLAUDE.toUpperCase(), CLIENT]) expect(text).not.toContain(raw);
     expect(text).toContain(sessionIdForLog(a));
     // One Claude session sent in two cases logs as one hash.
-    expect(claudeSessionIdForLog(CLAUDE)).toBe(claudeSessionIdForLog(CLAUDE.toUpperCase()));
-    expect(text.split(claudeSessionIdForLog(CLAUDE)).length - 1).toBe(2);
+    expect(sessionIdForLog(CLAUDE)).toBe(sessionIdForLog(CLAUDE.toUpperCase()));
+    expect(text.split(sessionIdForLog(CLAUDE)).length - 1).toBe(2);
   });
 });
 

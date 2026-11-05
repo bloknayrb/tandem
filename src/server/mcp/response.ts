@@ -6,7 +6,7 @@
 import type { ToolErrorCode } from "../../shared/types.js";
 import { getSubscriberCount } from "../events/queue.js";
 import { resolveToolCaller, type ToolCaller } from "../sessions/caller.js";
-import { noteRecordPoll } from "../sessions/ownership.js";
+import { logLimited, noteRecordPoll } from "../sessions/ownership.js";
 import { takeWakeAdvisory } from "./wake-advisory.js";
 
 type McpToolResult = {
@@ -158,9 +158,6 @@ export function noCallerRefusalMessage(toolName: string): string {
   );
 }
 
-/** Tools whose no-caller refusal was logged in the last minute. */
-const noCallerLoggedAt = new Map<string, number>();
-
 /**
  * Wrap an MCP tool handler with a try/catch that returns a structured error.
  * Catches unexpected throws so Claude gets a useful error message instead of
@@ -180,12 +177,10 @@ export function withErrorBoundary<TArgs extends Record<string, unknown>>(
     try {
       const caller = resolveToolCaller();
       if (caller === null) {
-        const now = Date.now();
-        const last = noCallerLoggedAt.get(toolName);
-        if (last === undefined || now - last >= 60_000) {
-          noCallerLoggedAt.set(toolName, now);
-          console.error(`[Tandem] Tool ${toolName} refused: no caller identity (wiring fault)`);
-        }
+        logLimited(
+          `no-caller:${toolName}`,
+          `[Tandem] Tool ${toolName} refused: no caller identity (wiring fault)`,
+        );
         return mcpError("INTERNAL_ERROR", noCallerRefusalMessage(toolName));
       }
       if (toolName === "tandem_checkInbox") noteRecordPoll(caller.ownerId);
