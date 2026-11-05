@@ -39,7 +39,7 @@ Second round, same day (design v5 §14):
 - B. "Prefer system Node" for Claude Code terminal entries; the desktop's bundled Node only as a documented fallback.
 - C. The handle's reach: "Probe, then narrow". The launcher passes its own `--mcp-config` carrying the handle if a probe shows that entry replaces the user-level `tandem` entry in the child; otherwise the handle goes in the child's environment, with its wider reach filed.
 - D. An entry the child cannot bind through: "Not present".
-- E. How that is judged: "By an actual bind". Tandem's Claude is present only if its latest run bound within a short window after starting; a run not yet judged does not count against it, a run that tears down unbound counts as not binding at once, and only the latest run is judged, and decision 11 still holds at boot. A run that never binds leaves its documents unowned, terminals can answer, and the badge, composer and doctor say why.
+- E. How that is judged: "By an actual bind". Tandem's Claude is present only if its latest run bound within a short window after starting and got past sign-in ("actually bound" read as able to answer); a run not yet judged does not count against it, a run that tears down unbound counts as not binding at once unless the stop was deliberate (Off, idle-stop, shutdown, relaunch) or the sign-in trip, and only the latest run is judged, and decision 11 still holds at boot. A run that never binds leaves its documents unowned, terminals can answer, and the badge, composer and doctor say why.
 
 ## Why two sessions answered
 
@@ -55,7 +55,7 @@ Since #2330, every session that passes its inbox cursor is handed the same new i
 
 **Tandem's Claude** is one identity across its child runs. It is **present** when all of these hold:
 - it is configured;
-- its latest run actually bound to Tandem's own connection within a short window after starting (decisions D and E; design v5 §8.1);
+- its latest run actually bound to Tandem's own connection within a short window after starting, and got past sign-in (decisions D and E; design v5 §8.1);
 - it is not Off;
 - it is not in a staying-down state (crash breaker tripped, sign-in or licence refused, CLI unusable or missing, spawn or stop failed with no restart pending).
 
