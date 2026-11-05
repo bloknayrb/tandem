@@ -14,6 +14,7 @@ import {
   canEdit,
   canRemove,
   canReply,
+  canResolve,
   canSendToClaude,
 } from "./annotation-context-menu";
 import {
@@ -73,6 +74,9 @@ interface Props {
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
   onRemove?: (id: string) => void;
+  /** #2360: close the user's own comment. The margin renders pending cards only, so the
+   *  caller owns the Undo affordance (a toast). */
+  onResolve?: (id: string) => void;
   onEdit?: (id: string, content: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onSendToClaude?: (id: string) => void;
@@ -82,6 +86,11 @@ interface Props {
    * leaves it out. Required, so the one App mount cannot forget it.
    */
   isTargetLost: (id: string) => boolean;
+  /**
+   * #1626/#2360: accept a reply's rewrite. Passed on comment cards; the thread
+   * gates each reply with `canAcceptReplySuggestion`, user cards included.
+   */
+  onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /** App `reduceMotion` setting, threaded to the A27 fly-to-margin transition. */
   reduceMotion?: boolean;
 }
@@ -104,10 +113,12 @@ let {
   onAccept,
   onDismiss,
   onRemove,
+  onResolve,
   onEdit,
   onReply,
   onSendToClaude,
   isTargetLost,
+  onAcceptReplySuggestion,
   reduceMotion = false,
 }: Props = $props();
 
@@ -374,6 +385,7 @@ function dispatchAnnotationAction(
       {
         accept: onAccept,
         dismiss: onDismiss,
+        resolve: onResolve,
         sendToClaude: onSendToClaude,
         remove: onRemove,
         openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
@@ -577,9 +589,11 @@ $effect(() => subscribeAnnotationActions());
         onAccept={canAccept(ann) ? onAccept : undefined}
         onDismiss={canDismiss(ann) ? onDismiss : undefined}
         onRemove={canRemove(ann) ? onRemove : undefined}
+        onResolve={canResolve(ann) ? onResolve : undefined}
         onSendToClaude={canSendToClaude(ann, false) ? onSendToClaude : undefined}
         onEdit={canEdit(ann) ? onEdit : undefined}
         onReply={canReply(ann, false) ? onReply : undefined}
+        onAcceptReplySuggestion={ann.type === "comment" ? onAcceptReplySuggestion : undefined}
         openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
         targetLost={isTargetLost(ann.id)}
         {aiDisabled}

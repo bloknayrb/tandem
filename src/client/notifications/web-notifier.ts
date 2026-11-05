@@ -1,4 +1,4 @@
-import type { NotificationText, NotifierBackend } from "./chat-attention";
+import type { NotificationKind, NotificationText, NotifierBackend } from "./chat-attention";
 
 /**
  * Browser / npm-install backend (#2168): the Web Notifications API plus an
@@ -14,8 +14,14 @@ import type { NotificationText, NotifierBackend } from "./chat-attention";
  * page-load prompt is both hostile and, in current browsers, auto-denied.
  */
 
-/** Same tag for every reply, so a newer notification replaces an older one. */
-const TAG = "tandem-chat";
+/**
+ * One tag per kind: a newer chat reply replaces an older one, a newer comment
+ * answer (#2360) replaces an older one, and neither replaces the other.
+ */
+const TAGS: Record<NotificationKind, string> = {
+  chat: "tandem-chat",
+  comment: "tandem-comment",
+};
 const TITLE_COUNT = /^\(\d+\+?\) /;
 
 export type WebNotificationPermission = NotificationPermission | "unsupported";
@@ -135,27 +141,28 @@ export function postWebNotification(
 }
 
 export function createWebNotifier(): NotifierBackend {
-  // The last notification this backend posted, closed once the user is back
-  // so a stale "Claude replied" does not linger in the notification centre.
-  let last: Notification | null = null;
+  // The last notification this backend posted of each kind, closed once the
+  // user is back so a stale "Claude replied" does not linger in the
+  // notification centre.
+  const last = new Map<NotificationKind, Notification>();
   return {
-    notify(text: NotificationText, onClick: () => void) {
-      const posted = postWebNotification(text, { tag: TAG, onClick });
-      if (posted) last = posted;
+    notify(text: NotificationText, onClick: () => void, kind: NotificationKind = "chat") {
+      const posted = postWebNotification(text, { tag: TAGS[kind], onClick });
+      if (posted) last.set(kind, posted);
     },
     attention(count: number) {
       document.title = withTitleCount(document.title, count);
     },
     clearAttention() {
       document.title = withTitleCount(document.title, 0);
-      if (last) {
+      for (const notification of last.values()) {
         try {
-          last.close();
+          notification.close();
         } catch {
           // Already gone, or the platform refuses — nothing to undo.
         }
-        last = null;
       }
+      last.clear();
     },
   };
 }

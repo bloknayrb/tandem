@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED, COWORK_ENABLED } from "../shared/constants";
+import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import type { Annotation, ChatMessage, TandemNotification } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
@@ -108,6 +108,7 @@ import {
 } from "./hooks/useTandemSettings.svelte";
 import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
+import { createThreadAnswers } from "./hooks/useThreadAnswers.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
 import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
 import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
@@ -121,6 +122,17 @@ import { createRailContentModel } from "./layout/rail-content.svelte";
 import { createNotifierBackend } from "./notifications/backend";
 import { createChatAttention } from "./notifications/chat-attention";
 import { armChimes, playChime } from "./notifications/chimes";
+import {
+  buildCommentNotificationText,
+  type CommentAnswerItem,
+  combineAttention,
+  PENDING_REVEAL_MS,
+  type PendingReveal,
+  resolvePendingReveal,
+  routeNotificationActivation,
+  startCommentReveal,
+  toCommentAnswerItem,
+} from "./notifications/comment-attention";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -136,6 +148,8 @@ import { insertChatMarkdown } from "./panels/chat-insert";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
+import { resolveWithUndoToast } from "./panels/resolve-with-undo-toast";
+import { setThreadAnswersContext } from "./panels/thread-answers-context";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { createChatResume } from "./panels/useChatResume.svelte";
 import FormattingBar from "./shell/FormattingBar.svelte";
@@ -2240,13 +2254,16 @@ const chatCanInsert = $derived(
 const windowAttention = createWindowAttention({
   visibleCountsAsActive: () => settingsState.settings.chatSeenWhenVisible,
 });
+// One platform backend under both dispatchers, so the flash / `(N)` title
+// count is the sum of chat replies and comment answers (#2360).
+const notifierBackends = combineAttention(createNotifierBackend());
 const chatAttention = createChatAttention({
   getSettings: () => settingsState.settings,
   isActive: () => windowAttention.active,
   isSeen: (id) => chatState.isSeen(id),
   documentName: (id) =>
     chatState.documentFileNames.get(id) ?? openDocs.find((d) => d.id === id)?.fileName ?? null,
-  backend: createNotifierBackend(),
+  backend: notifierBackends.chat,
   playChime,
   openChat: (documentId) => {
     if (documentId && yjsSync.tabs.some((tab) => tab.id === documentId)) {
@@ -2255,20 +2272,92 @@ const chatAttention = createChatAttention({
     focusChat();
   },
 });
+// #2360: a Claude answer in the user's own comment thread gets the same
+// attention as a chat reply — same settings, same away/visibility rules, its
+// own wording, notification tag / desktop id and click route.
+const commentAttention = createChatAttention<CommentAnswerItem>({
+  getSettings: () => settingsState.settings,
+  isActive: () => windowAttention.active,
+  isSeen: (id, item) => threadAnswers.isSeen(id, item.timestamp),
+  documentName: (id) => openDocs.find((d) => d.id === id)?.fileName ?? null,
+  backend: notifierBackends.comment,
+  playChime,
+  buildText: buildCommentNotificationText,
+  openTarget: (target) => revealCommentAnswer(target),
+});
 onDestroy(() => chatAttention.destroy());
+onDestroy(() => commentAttention.destroy());
 armChimes();
 $effect(() => {
-  if (windowAttention.active) untrack(() => chatAttention.windowActivated());
+  if (!windowAttention.active) return;
+  untrack(() => {
+    chatAttention.windowActivated();
+    commentAttention.windowActivated();
+  });
 });
 if (isTauriRuntime()) {
   onDestroy(
     listenTauriEvent({
       loadEvent: () => import("@tauri-apps/api/event"),
       event: NOTIFICATION_ACTIVATED_EVENT,
-      onEvent: () => chatAttention.notificationActivated(),
+      onEvent: (payload) =>
+        routeNotificationActivation(payload, {
+          chat: () => chatAttention.notificationActivated(),
+          comment: () => commentAttention.notificationActivated(),
+        }),
     }),
   );
 }
+const threadAnswers = createThreadAnswers({
+  getTabs: () => yjsSync.tabs,
+  getReplyBaselines: () => yjsSync.replyBaselines,
+  getCtrlYdoc: () => yjsSync.bootstrapYdoc,
+  getCtrlSynced: () => yjsSync.ctrlInitialSyncComplete,
+  getActiveDocumentId: () => yjsSync.activeTabId,
+  isWindowActive: () => windowAttention.active,
+  onAnswers: (answers) => commentAttention.push(answers.map(toCommentAnswerItem)),
+});
+setThreadAnswersContext(threadAnswers);
+
+// A comment-answer notification click: the annotations rail (as `focusChat`
+// does for chat), the answer's document if it is still open, then the card
+// once that document's annotations have arrived — switching tabs repopulates
+// them asynchronously. The target is held here, never sent over IPC.
+let pendingReveal = $state<PendingReveal | null>(null);
+function revealCommentAnswer(target: CommentAnswerItem | undefined): void {
+  const pending = startCommentReveal(target, {
+    isOpen: (id) => yjsSync.tabs.some((tab) => tab.id === id),
+    switchTo: (id) => yjsSync.setActiveTabId(id),
+    showAnnotationsRail: () => {
+      layoutModel.selectRailTab("annotations");
+      railContent.openReveal();
+      cancelFloatClose("right");
+    },
+  });
+  if (!pending) return;
+  pendingReveal = pending;
+  setTimeout(() => {
+    if (pendingReveal === pending) pendingReveal = null;
+  }, PENDING_REVEAL_MS);
+}
+$effect(() => {
+  const pending = pendingReveal;
+  if (!pending) return;
+  const annotations = yjsSync.annotations;
+  const decision = resolvePendingReveal(pending, {
+    activeDocumentId: yjsSync.activeTabId,
+    openDocumentIds: yjsSync.tabs.map((tab) => tab.id),
+    hasAnnotation: (id) => annotations.some((a) => a.id === id),
+  });
+  if (decision === "wait") return;
+  pendingReveal = null;
+  if (decision !== "reveal") return;
+  untrack(() => {
+    const ann = annotations.find((a) => a.id === pending.annotationId);
+    railContent.setActiveAnnotationId(pending.annotationId);
+    if (ann) review.scrollToAnnotation(ann);
+  });
+});
 const chatState = createChatState({
   getCtrlYdoc: () => yjsSync.bootstrapYdoc,
   getInitialSyncComplete: () => yjsSync.ctrlInitialSyncComplete,
@@ -2490,6 +2579,16 @@ const marginHandlers = $derived.by(() => {
     onEdit: (id: string, c: string) => marginEditAnnotation(ydoc, id, c),
     onReply: (id: string, t: string) => marginReplyToAnnotation(id, t, docId),
     onRemove: (id: string) => marginRemoveAnnotation(id, docId),
+    onResolve: (id: string) =>
+      resolveWithUndoToast(id, {
+        resolve: review.handleDismiss,
+        undo: review.undoResolveAnnotation,
+        getStatus: (id) =>
+          (ydoc?.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation | undefined)?.status,
+        push: notifications.push,
+        docId,
+        getActiveDocId: () => activeTab?.id,
+      }),
     onSendToClaude: (id: string) => marginSendNoteToClaude(ydoc, id, modeState.tandemMode),
   };
 });
@@ -3328,10 +3427,12 @@ const shouldShowModelPicker = $derived(
         onAccept={review.handleAccept}
         onDismiss={review.handleDismiss}
         onRemove={marginHandlers.onRemove}
+        onResolve={marginHandlers.onResolve}
         onEdit={marginHandlers.onEdit}
         onReply={marginHandlers.onReply}
         onSendToClaude={marginHandlers.onSendToClaude}
         isTargetLost={review.isTargetLost}
+        onAcceptReplySuggestion={review.acceptReplySuggestion}
       />
     {/snippet}
     {#if documentWorkspace.inSourceView && activeTab}

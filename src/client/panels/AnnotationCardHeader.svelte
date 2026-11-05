@@ -4,6 +4,7 @@ import type { Annotation } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentColor } from "../utils/agent-color";
 import {
+  displayStatus,
   formatRelativeTime,
   getAuthorLabel,
   getDisplayAuthor,
@@ -28,6 +29,8 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit, ex
 
 const agentLabel = createAgentLabel();
 const displayType = $derived(getDisplayType(annotation));
+// "resolved" for a user's own closed comment (#2360), else the raw status.
+const statusWord = $derived(displayStatus(annotation));
 // The DISPLAY author, not the stored one. A promoted import reads "user" here
 // and would say "You" over a colleague's unedited words (#1714).
 const authorLabel = $derived(
@@ -117,9 +120,10 @@ const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : 
       <span
         class="ach-status"
         class:is-accepted={annotation.status === "accepted"}
-        class:is-rejected={annotation.status !== "accepted"}
+        class:is-resolved={statusWord === "resolved"}
+        class:is-rejected={annotation.status !== "accepted" && statusWord !== "resolved"}
       >
-        {annotation.status}
+        {statusWord}
       </span>
     {/if}
     {#if isPending && canEdit && !isReviewTarget && !isEditing}
@@ -243,6 +247,10 @@ const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : 
   }
   .ach-status.is-rejected {
     color: var(--tandem-error);
+  }
+  /* A user closing their own comment is neither an acceptance nor a rejection. */
+  .ach-status.is-resolved {
+    color: var(--tandem-fg-muted);
   }
   .ach-edit-btn {
     padding: 1px 4px;

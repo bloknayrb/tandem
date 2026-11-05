@@ -54,10 +54,17 @@ export interface ChatAttentionSettings {
   chatSoundVolume: number;
 }
 
+/**
+ * Which announcement a notification is: a chat reply, or a Claude answer in
+ * the user's own comment thread (#2360). Picks the browser tag and the desktop
+ * command; absent means chat.
+ */
+export type NotificationKind = "chat" | "comment";
+
 /** The platform half: desktop (`tauri-notifier.ts`) or browser (`web-notifier.ts`). */
 export interface NotifierBackend {
   /** Post an OS notification. `onClick` runs if the platform reports a click to the page. */
-  notify(text: NotificationText, onClick: () => void): void;
+  notify(text: NotificationText, onClick: () => void, kind?: NotificationKind): void;
   /** Flash the taskbar (desktop) or show `count` in the tab title (browser). */
   attention(count: number): void;
   /** Undo `attention` once the user is back. */
@@ -69,7 +76,7 @@ export interface NotificationText {
   body: string;
 }
 
-export interface ChatAttentionDeps {
+export interface ChatAttentionDeps<T extends ChatMessage = ChatMessage> {
   getSettings(): ChatAttentionSettings;
   /**
    * Is the user looking at this window (focused, or visible when
@@ -77,14 +84,33 @@ export interface ChatAttentionDeps {
    * announcement fires.
    */
   isActive(): boolean;
-  /** Has any window acknowledged this message (shared `Y_MAP_CHAT_SEEN`)? */
-  isSeen(messageId: string): boolean;
+  /**
+   * Has any window acknowledged this message (shared `Y_MAP_CHAT_SEEN`, or
+   * `Y_MAP_REPLY_SEEN` for comment answers, whose check also reads the item's
+   * timestamp against the seen watermark)?
+   */
+  isSeen(messageId: string, item: T): boolean;
   /** Path-free file name for a document id, or null. */
   documentName(documentId: string): string | null;
   backend: NotifierBackend;
   playChime(sound: ChatSound, volume: number): void;
-  /** Bring the user to the reply: switch to its document if open, open chat. */
-  openChat(documentId: string | undefined): void;
+  /**
+   * Bring the user to the reply: switch to its document if open, open chat.
+   * Required unless `openTarget` is given.
+   */
+  openChat?(documentId: string | undefined): void;
+  /**
+   * #2360: the comment-answer instance's click. Called INSTEAD of `openChat`
+   * when given, with the newest item a notification announced — or undefined
+   * once the click-target grace has passed.
+   */
+  openTarget?(target: T | undefined): void;
+  /** The notification's wording; defaults to `buildNotificationText`. */
+  buildText?(
+    items: readonly T[],
+    content: ChatNotificationContent,
+    documentName: (documentId: string) => string | null,
+  ): NotificationText;
   coalesceMs?: number;
   /** Minimum gap between away-window announcements (chime + notification). */
   notifyIntervalMs?: number;
@@ -93,9 +119,9 @@ export interface ChatAttentionDeps {
   clearTimer?: (handle: unknown) => void;
 }
 
-export interface ChatAttention {
+export interface ChatAttention<T extends ChatMessage = ChatMessage> {
   /** Queue live replies; announced together after the coalescing window. */
-  push(replies: readonly ChatMessage[]): void;
+  push(replies: readonly T[]): void;
   /** The user is back on this window: clear the flash / title count. */
   windowActivated(): void;
   /** A desktop notification was clicked (payload-free event). */
@@ -119,14 +145,16 @@ const CLICK_TARGET_GRACE_MS = 5_000;
  */
 const MIN_ACTIVE_CHIME_GAP_MS = 2_000;
 
-export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
+export function createChatAttention<T extends ChatMessage = ChatMessage>(
+  deps: ChatAttentionDeps<T>,
+): ChatAttention<T> {
   const coalesceMs = deps.coalesceMs ?? 750;
   const notifyIntervalMs = deps.notifyIntervalMs ?? 30_000;
   const now = deps.now ?? (() => Date.now());
   const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer =
     deps.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
-  let queue: ChatMessage[] = [];
+  let queue: T[] = [];
   let coalesceTimer: unknown = null;
   // Replies counted into the flash / title count since the user was last here.
   let pendingCount = 0;
@@ -135,7 +163,7 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
   // would otherwise post one OS notification and one chime per coalescing
   // window. (The per-notification cost of macOS's actionable notification is
   // bounded on the Rust side, not here.)
-  let held: ChatMessage[] = [];
+  let held: T[] = [];
   let lastAnnouncedAt = Number.NEGATIVE_INFINITY;
   let trailingTimer: unknown = null;
   // When any chime last played, active or away. See `flush()`.
@@ -146,7 +174,7 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
   // notification has named yet. Held here, never sent over IPC. `until` is
   // +Infinity while the user has not come back since the post, then a deadline
   // (see `activate()`); null once consumed or never armed.
-  let clickTarget: { documentId: string | undefined; until: number } | null = null;
+  let clickTarget: { item: T; until: number } | null = null;
 
   function flush(): void {
     coalesceTimer = null;
@@ -164,7 +192,7 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
     }
     // Filter BEFORE touching the count: this is what lets an active sibling
     // acknowledge the reply first and keep this window quiet.
-    const replies = batch.filter((reply) => !deps.isSeen(reply.id));
+    const replies = batch.filter((reply) => !deps.isSeen(reply.id, reply));
     if (replies.length === 0) return;
     pendingCount += replies.length;
     held.push(...replies);
@@ -175,7 +203,7 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
 
   /** Announce everything held (one chime, one notification). Always empties `held`. */
   function announce(): void {
-    const remaining = held.filter((reply) => !deps.isSeen(reply.id));
+    const remaining = held.filter((reply) => !deps.isSeen(reply.id, reply));
     held = [];
     if (remaining.length === 0) return;
     lastAnnouncedAt = now();
@@ -190,14 +218,13 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
     const answers = remaining.filter((reply) => reply.greeting !== true);
     const target =
       answers.length > 0 ? answers[answers.length - 1] : remaining[remaining.length - 1];
-    clickTarget = {
-      documentId: target.documentId,
-      until: Number.POSITIVE_INFINITY,
-    };
-    deps.backend.notify(
-      buildNotificationText(remaining, settings.chatNotificationContent, deps.documentName),
-      activate,
+    clickTarget = { item: target, until: Number.POSITIVE_INFINITY };
+    const text = (deps.buildText ?? buildNotificationText)(
+      remaining,
+      settings.chatNotificationContent,
+      deps.documentName,
     );
+    deps.backend.notify(text, activate);
   }
 
   function chime(settings: ChatAttentionSettings): void {
@@ -235,9 +262,10 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
    * a stale jump, so it just opens chat. A target is consumed by one click.
    */
   function activate(): void {
-    const target = clickTarget && now() < clickTarget.until ? clickTarget.documentId : undefined;
+    const target = clickTarget && now() < clickTarget.until ? clickTarget.item : undefined;
     clickTarget = null;
-    deps.openChat(target);
+    if (deps.openTarget) deps.openTarget(target);
+    else deps.openChat?.(target?.documentId);
     reset();
   }
 

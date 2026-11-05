@@ -424,7 +424,9 @@ reply-input-{*}
 reply-send-btn-{*}
 reply-suggestion-{*}
 reply-toggle-{*}
+reply-unseen-{*}
 reply-{*}
+resolve-btn-{*}
 review-only-banner
 review-only-dismiss
 review-only-live

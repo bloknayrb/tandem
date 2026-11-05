@@ -4,7 +4,11 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
 import AnnotationBody from "./AnnotationBody.svelte";
 import { formatRelativeTime } from "./annotation-card-helpers";
-import { ACCEPT_BLOCKED_REASON } from "./annotation-context-menu";
+import {
+  acceptBlockedReason,
+  canAcceptReplySuggestion,
+  isUnverifiableTarget,
+} from "./annotation-context-menu";
 
 interface Props {
   replies: AnnotationReply[];
@@ -16,8 +20,10 @@ interface Props {
   annotation: Annotation;
   isPending: boolean;
   /**
-   * Presence IS the gate: SidePanel passes it only when its own `canAccept`
-   * says so, so a separate boolean prop would be the same fact spelled twice.
+   * Presence is the PANEL's half of the gate (it passes this for comment
+   * cards); each reply's button also needs `canAcceptReplySuggestion` (#2360),
+   * which only this component can ask because only it sees the reply — a
+   * user's own reply carrying `suggestedText` gets no button.
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /**
@@ -46,8 +52,17 @@ const uid = $props.id();
 // here, once per thread (under the first proposal; every disabled button points
 // at it), or a disabled button's `title` is all there is (never announced: a
 // disabled button cannot take focus).
-const showBlockedReason = $derived(targetLost && annotation.suggestedText === undefined);
-const firstProposalId = $derived(replies.find((r) => r.suggestedText !== undefined)?.id);
+//
+// #2360: a user comment with no usable snapshot is blocked from the record
+// alone, so the button is disabled even when the document scan has no verdict
+// (no editor, a tab switch caught half-way) — a live button there would end in
+// the "text has changed" toast, which is the wrong diagnosis.
+const blocked = $derived(targetLost || isUnverifiableTarget(annotation));
+const blockedReason = $derived(acceptBlockedReason(annotation));
+const showBlockedReason = $derived(blocked && annotation.suggestedText === undefined);
+const acceptable = (reply: AnnotationReply) =>
+  isPending && onAcceptReplySuggestion !== undefined && canAcceptReplySuggestion(annotation, reply);
+const firstProposalId = $derived(replies.find(acceptable)?.id);
 const blockedReasonId = `${uid}-accept-blocked`;
 </script>
 
@@ -109,24 +124,24 @@ const blockedReasonId = `${uid}-accept-blocked`;
           <div class="ct-suggestion" data-testid="reply-suggestion-{reply.id}">
             {reply.suggestedText}
           </div>
-          {#if isPending && onAcceptReplySuggestion}
+          {#if acceptable(reply)}
             <button
               type="button"
               class="ct-accept"
               data-testid="accept-reply-btn-{reply.id}"
-              disabled={targetLost}
-              title={targetLost ? ACCEPT_BLOCKED_REASON : undefined}
+              disabled={blocked}
+              title={blocked ? blockedReason : undefined}
               aria-describedby={showBlockedReason ? blockedReasonId : undefined}
               onclick={(e) => {
                 e.stopPropagation();
-                if (targetLost) return;
+                if (blocked) return;
                 onAcceptReplySuggestion?.(annotation.id, reply.id);
               }}
             >
               Accept replacement
             </button>
             {#if showBlockedReason && reply.id === firstProposalId}
-              <div id={blockedReasonId} class="ct-blocked">{ACCEPT_BLOCKED_REASON}</div>
+              <div id={blockedReasonId} class="ct-blocked">{blockedReason}</div>
             {/if}
           {/if}
         {/if}

@@ -6,6 +6,7 @@ import { AI_OFF_TITLE } from "../utils/license-ui";
 import CommentThread from "./CommentThread.svelte";
 import { discloseUnfold } from "./cardMotion";
 import { TEXTAREA_STYLE } from "./panel-styles";
+import { getThreadAnswersContext } from "./thread-answers-context";
 
 interface Props {
   annotation: Annotation;
@@ -22,8 +23,8 @@ interface Props {
   openNonce?: number;
   /**
    * #1626: accept the replacement a reply proposes over the parent's range.
-   * Absent ⇒ the card offers no accept affordance (the resolved list, the
-   * margin view, and any card SidePanel's `canAccept` gate declines).
+   * Absent ⇒ the card offers no accept affordance (the resolved list, and any
+   * non-comment card). Present, each reply is still gated in CommentThread.
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /** #1632: the parent's target text is gone. Forwarded to CommentThread. */
@@ -89,6 +90,83 @@ $effect(() => {
   seeded = true;
   open = true;
 });
+
+// #2360: a Claude answer in the user's own thread. `unseenIds` are the card's
+// answers no window has shown yet (oldest first), from App's `ThreadAnswers`
+// via context; without the context there are none and nothing below runs.
+const threadAnswers = getThreadAnswersContext();
+const unseenIds = $derived.by(() => {
+  const documentId = threadAnswers?.activeDocumentId;
+  return threadAnswers && documentId
+    ? threadAnswers.unseenAnswerIds(documentId, annotation.id)
+    : [];
+});
+// A string, so effects keyed on it skip re-runs when the list is merely
+// rebuilt with the same newest answer.
+const newestUnseen = $derived(unseenIds.at(-1));
+
+// Opens for a new answer: on arrival at a mounted card, and on mount when an
+// unseen one is already waiting (it arrived while another document was
+// active). Never for an answer already shown, and a thread the user closes
+// stays closed until a NEWER answer arrives. `autoOpenedFor` is a plain `let`
+// for the same reason as `seeded` above.
+let autoOpenedFor: string | null = null;
+$effect(() => {
+  const newest = newestUnseen;
+  if (newest === undefined || newest === autoOpenedFor) return;
+  autoOpenedFor = newest;
+  open = true;
+});
+
+// Seen = shown expanded: the newest unseen answer's element is on screen
+// (any part of it — a tall answer can never reach a ratio threshold) while
+// the thread is open. An IntersectionObserver reports nothing for a panel
+// that is `display:none` (SidePanel stays mounted behind a CSS toggle) or
+// clipped off screen. Where there is no IntersectionObserver the open thread
+// counts as shown.
+let repliesEl: HTMLDivElement | null = $state(null);
+let inView = $state(false);
+$effect(() => {
+  const el = repliesEl;
+  const newest = newestUnseen;
+  if (!open || !el || newest === undefined) {
+    inView = false;
+    return;
+  }
+  if (typeof IntersectionObserver === "undefined") {
+    inView = true;
+    return;
+  }
+  // A new target starts unseen: the observer's first report is async, and a
+  // stale `true` from the previous answer would let the markSeen effect below
+  // mark this one before anyone knows whether it is on screen.
+  inView = false;
+  const target =
+    Array.from(el.querySelectorAll<HTMLElement>(".ct-reply")).find(
+      (node) => node.dataset.testid === `reply-${newest}`,
+    ) ?? el;
+  const observer = new IntersectionObserver((entries) => {
+    inView = entries.some((entry) => entry.isIntersecting);
+  });
+  observer.observe(target);
+  return () => observer.disconnect();
+});
+$effect(() => {
+  const documentId = threadAnswers?.activeDocumentId;
+  if (!threadAnswers || !documentId || !open || !inView || unseenIds.length === 0) return;
+  threadAnswers.markSeen(documentId, unseenIds);
+});
+
+function acknowledgeByToggle(): void {
+  // A deliberate click on the toggle is attention, so the answers count as
+  // seen even when the thread is being closed — otherwise a thread closed
+  // unseen would re-open on every remount. `markSeen` still requires the
+  // window to be active.
+  const documentId = threadAnswers?.activeDocumentId;
+  if (threadAnswers && documentId && unseenIds.length > 0) {
+    threadAnswers.markSeen(documentId, unseenIds);
+  }
+}
 
 let isReplying = $state(false);
 let replyText = $state("");
@@ -160,18 +238,24 @@ async function handleSendReply() {
       aria-expanded={open}
       onclick={(e) => {
         e.stopPropagation();
+        acknowledgeByToggle();
         open = !open;
       }}
     >
       <span class="art-arrow" aria-hidden="true">›</span>
       {visibleReplies.length === 1 ? "1 reply" : `${visibleReplies.length} replies`}
+      {#if unseenIds.length > 0}
+        <!-- #2360: text, not a colour dot, so screen readers and forced
+             colours both get it. -->
+        <span class="art-new" data-testid="reply-unseen-{annotationId}">· {unseenIds.length} new</span>
+      {/if}
     </button>
     <!-- Nesting the replies block inside the outer guard means `transition:discloseUnfold`
          only fires when `open` changes (user gesture), not when `visibleReplies.length`
          changes (data update). Without this structure, deleting the last reply while the
          disclosure is open would trigger an uninvited closing animation. -->
     {#if open}
-      <div class="art-replies" transition:discloseUnfold={{ reduceMotion }}>
+      <div class="art-replies" bind:this={repliesEl} transition:discloseUnfold={{ reduceMotion }}>
         <CommentThread
           replies={visibleReplies}
           {annotation}
@@ -263,6 +347,10 @@ async function handleSendReply() {
   }
   .art-toggle:hover {
     color: var(--tandem-fg-muted);
+  }
+  .art-new {
+    color: var(--tandem-accent-fg-strong);
+    font-weight: 600;
   }
   .art-arrow {
     display: inline-block;

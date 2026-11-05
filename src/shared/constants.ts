@@ -352,6 +352,21 @@ export const Y_MAP_CHAT = "chat";
 /** User-facing chat acknowledgement state. Separate from ChatMessage.read (AI inbox state). */
 export const Y_MAP_CHAT_SEEN = "chatSeen";
 export const Y_MAP_CHAT_SEEN_INITIALIZED = "initialized";
+/**
+ * #2360: which Claude answers in the user's own comment threads have been
+ * shown, on CTRL_ROOM so every window shares it and so it stays out of each
+ * document's Y.Doc (whose change epoch the inbox quiet-skip reads, and whose
+ * annotations persist in the envelope). Keyed by reply id, valued with the
+ * reply's timestamp so the cap can drop the oldest. Client-only: no server
+ * observer reads it.
+ */
+export const Y_MAP_REPLY_SEEN = "replySeen";
+/**
+ * Entry in `Y_MAP_REPLY_SEEN`: an answer stamped before this time reads seen
+ * without an entry of its own. Set when a window first finds CTRL synced
+ * without one (rollout, or a lost CTRL session), and raised by the cap.
+ */
+export const Y_MAP_REPLY_SEEN_WATERMARK = "watermark";
 /** Path-free document-id → filename history used by durable chat exports. */
 export const Y_MAP_CHAT_DOCUMENT_NAMES = "chatDocumentNames";
 /**
