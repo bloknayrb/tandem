@@ -111,9 +111,10 @@ tauri-plugin-decorum = "1"
 # the graph through it), so the probe and the crate's lazy `LIB` dlopen the same
 # names the same way. `libappindicator-sys` is not called directly: the exact
 # pin plus `backcompat` exist so feature unification keeps the crate's soname
-# list identical to the probe's (without `backcompat` it would drop the two
-# unversioned names, and a host with only those would pass the probe and then
-# panic in the tray build). Bumping either needs the crate source re-read; the
+# list identical to the probe's. `backcompat` is on today through the default
+# features of the crates above; naming it here keeps it on if one of them ever
+# goes `default-features = false` (it would drop the two unversioned names, and
+# a host with only those would pass the probe and then panic in the tray build). Bumping either needs the crate source re-read; the
 # tests in tray_probe.rs fail until then.
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = "0.7"

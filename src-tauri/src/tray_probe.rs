@@ -16,11 +16,13 @@
 //!   (`RTLD_LAZY | RTLD_LOCAL`).
 //! - Same search path: both calls are statically linked into `tandem-desktop`,
 //!   so glibc searches on behalf of the same calling object, in its order:
-//!   `LD_LIBRARY_PATH`, then the main executable's DT_RUNPATH (which is how
-//!   the AppImage's bundled `usr/lib/libappindicator3.so.1` is found; its
-//!   `AppRun` sets no `LD_LIBRARY_PATH`), the ld.so cache and the default
-//!   directories. **Do not move this probe into a separate shared object**:
-//!   it would search that object's RUNPATH instead.
+//!   `LD_LIBRARY_PATH`, then the main executable's DT_RUNPATH, the ld.so
+//!   cache and the default directories. The AppImage's bundled
+//!   `usr/lib/libappindicator3.so.1` is reachable both ways: `AppRun.wrapped`
+//!   puts `$APPDIR/usr/lib` on `LD_LIBRARY_PATH`, and `tandem-desktop`'s
+//!   RUNPATH is `$ORIGIN/../lib` (both measured on the v0.30.0 AppImage).
+//!   **Do not move this probe into a separate shared object**: it would
+//!   search that object's RUNPATH instead.
 //! - The probe keeps the library it loaded (`mem::forget`), so `LIB`'s later
 //!   `dlopen` of the same name is answered from the already-loaded object.
 //! - The invariant that actually prevents the panic is that every name the

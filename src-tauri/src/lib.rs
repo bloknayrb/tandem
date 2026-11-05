@@ -1744,7 +1744,8 @@ pub fn run() {
                         }
                     }
                 } else {
-                    // No tray (Linux without libappindicator): exit cleanly so
+                    // No tray (Linux with no loadable appindicator library, or
+                    // a failed tray build): exit cleanly so
                     // RunEvent::Exit fires and the sidecar is killed
                     // `warn`, not `info`: release builds log at `Warn` and up,
                     // and this line is the release smoke's evidence that the
