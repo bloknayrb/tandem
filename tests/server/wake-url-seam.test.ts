@@ -34,8 +34,9 @@
  * `listTools()` completeness net.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WAKE_URL_PRODUCERS, wakeUrlField } from "../../src/server/mcp/wake-url.js";
+import { runWithMcpContext } from "../../src/server/sessions/context.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 const WAKE_URL = "src/server/mcp/wake-url.ts";
@@ -50,11 +51,72 @@ describe("the wakeUrl seam", () => {
   // present). It is still a real invariant: `structuredContent` exposes the raw object for any
   // `mcpStructured` producer, where an undefined key reads to a strict client as a live
   // transport that is not running. Pin it on the helper, once.
+  // #1952: outside a request context the helper fails closed even with a LIVE endpoint.
+  it("yields NO key outside a request context, even with a wake transport running", async () => {
+    const wakeSocket = await import("../../src/server/events/wake-socket.js");
+    const spy = vi
+      .spyOn(wakeSocket, "getWakeEndpoint")
+      .mockReturnValue("ws://127.0.0.1:1/api/wake");
+    try {
+      expect(Object.keys(wakeUrlField())).toStrictEqual([]);
+      expect(runWithMcpContext({ peerIsLoopback: true }, () => wakeUrlField())).toStrictEqual({
+        wakeUrl: "ws://127.0.0.1:1/api/wake",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // The narrow read §11.6 promises, and the one ownership PR 1a's context-getter seam test will
+  // allowlist: wake-url.ts takes exactly one name from the context module, and it is the
+  // boolean getter — never `getMcpContext` (which would hand it the session ids) or a direct
+  // `peerIsLoopback` property read it could get wrong.
+  it("reads the context module through isCurrentPeerLoopback alone", () => {
+    const wu = stripComments(SRC_FILES.get(WAKE_URL) ?? "");
+    const imports = [...wu.matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)];
+    const fromContext = imports.filter(([, , from]) => /sessions\/context(\.js)?$/.test(from));
+    expect(fromContext, "wake-url.ts must import from sessions/context exactly once").toHaveLength(
+      1,
+    );
+    expect(
+      fromContext[0][1]
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean),
+    ).toStrictEqual(["isCurrentPeerLoopback"]);
+    expect(wu).not.toMatch(/\bgetMcpContext\b|\bpeerIsLoopback\b/);
+    expect(wu.match(/\bisCurrentPeerLoopback\s*\(/g) ?? []).toHaveLength(1);
+  });
+
+  // The initialize branch and GET/DELETE never carry a tool response, so no behavioural spec can
+  // observe `peerIsLoopback` there; this source pin is the only check on those paths. Both
+  // places `server.ts` enters the request context must derive the field from the SOCKET.
+  it("server.ts sets peerIsLoopback from the socket at every context entry", () => {
+    const server = stripComments(SRC_FILES.get("src/server/mcp/server.ts") ?? "");
+    const entries = server.match(/\brunWithMcpContext\s*\(/g) ?? [];
+    const derived =
+      server.match(/peerIsLoopback:\s*isLoopback\(req\.socket\.remoteAddress\)/g) ?? [];
+    expect(entries.length, "control: no runWithMcpContext call found in server.ts").toBeGreaterThan(
+      0,
+    );
+    expect(
+      derived,
+      "every runWithMcpContext entry must set peerIsLoopback from the socket",
+    ).toHaveLength(entries.length);
+    expect(server.match(/\bpeerIsLoopback\b/g) ?? [], "no other write of the field").toHaveLength(
+      entries.length,
+    );
+  });
+
   it("yields NO key at all when there is no transport", async () => {
     const { getWakeEndpoint } = await import("../../src/server/events/wake-socket.js");
-    // No wake socket is attached in this suite, so the real endpoint is null.
+    // No wake socket is attached in this suite, so the real endpoint is null. Called as a
+    // LOOPBACK peer: outside a context the helper is empty anyway (#1952), which would make
+    // this spec pass for the wrong reason.
     expect(getWakeEndpoint()).toBeNull();
-    expect(Object.keys(wakeUrlField())).toStrictEqual([]);
+    expect(
+      Object.keys(runWithMcpContext({ peerIsLoopback: true }, () => wakeUrlField())),
+    ).toStrictEqual([]);
   });
 
   // Positive control. Every static guard in this repo carries one, because a sweep that read

@@ -347,6 +347,10 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
     why: "FIXED at the source: the shim's permission capability was withdrawn and the relay routes deleted (#1885); entry kept for the mechanism",
   },
   {
+    issue: 1952,
+    why: "FIXED per request: wakeUrlField() returns the address only to a loopback TCP peer (peerIsLoopback), failing closed; moved out of Accepted 2026-11-05, the loopback-arriving forwarder residual carried uncounted",
+  },
+  {
     issue: 2266,
     why: "FIXED on POSIX (save keeps the mode; 0700 app-data dirs, 0600 store files, derived-file ceiling); the Windows DACL / ownership residue is counted as accepted under #2278",
   },
