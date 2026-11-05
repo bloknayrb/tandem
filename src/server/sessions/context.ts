@@ -57,14 +57,9 @@ export interface McpRequestContext {
    */
   mcpSessionId?: string;
   /**
-   * Whether the request's TCP peer is loopback: `isLoopback(req.socket.remoteAddress)`,
-   * computed where the context is entered in `src/server/mcp/server.ts`. Never derived from
-   * the `Host` header or any other client-supplied header, which a remote peer controls.
-   *
-   * Absent means unknown, and unknown must be read as NOT loopback — read it only through
-   * {@link isCurrentPeerLoopback}, which folds absent, a missing context and any non-`true`
-   * value to `false`. Its one consumer is `wakeUrlField()` (#1952): a `wakeUrl` naming
-   * `127.0.0.1` is only true for a caller on this machine.
+   * Whether the request's TCP peer is loopback: `isLoopback(req.socket.remoteAddress)`, set
+   * where `server.ts` enters the context — never from the `Host` header or any other
+   * client-supplied header. Read it only through {@link isCurrentPeerLoopback} (#1952).
    */
   peerIsLoopback?: boolean;
 }
@@ -96,8 +91,8 @@ export function getCurrentSessionId(): string | undefined {
 
 /**
  * True only inside an MCP request whose TCP peer was loopback. Fails closed: outside a
- * request (server-internal work, a direct handler call), or in a context entered without
- * the field, this is `false`.
+ * request (server-internal work, a direct handler call), in a context entered without the
+ * field, or for any value but `true`, this is `false`.
  *
  * Deliberately narrow — one boolean, not the context — so the module that reads it
  * (`src/server/mcp/wake-url.ts`) cannot reach the session ids through it.

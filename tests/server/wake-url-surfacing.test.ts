@@ -82,20 +82,19 @@ async function tempMarkdown(): Promise<string> {
   return filePath;
 }
 
-describe("wakeUrl surfacing — the session-opening tools", () => {
-  /**
-   * Driven off `WAKE_URL_PRODUCERS` rather than a hand-written spec per tool, so a fourth
-   * producer added to the constant with no row here fails immediately instead of shipping
-   * untested. The hand-written form also hid a gap: `tandem_status` had a "carries" spec
-   * and no "omits" spec, which is invisible until the cases are lined up.
-   */
-  const CASES: Record<(typeof WAKE_URL_PRODUCERS)[number], () => Promise<Record<string, unknown>>> =
-    {
-      tandem_status: async () => ({}),
-      tandem_scratchpad: async () => ({ content: "# Draft" }),
-      tandem_open: async () => ({ filePath: await tempMarkdown() }),
-    };
+/**
+ * Arguments per producer. Driven off `WAKE_URL_PRODUCERS` rather than a hand-written spec per
+ * tool, so a fourth producer added to the constant with no row here fails immediately instead
+ * of shipping untested. The hand-written form also hid a gap: `tandem_status` had a "carries"
+ * spec and no "omits" spec, which is invisible until the cases are lined up.
+ */
+const CASES: Record<(typeof WAKE_URL_PRODUCERS)[number], () => Promise<Record<string, unknown>>> = {
+  tandem_status: async () => ({}),
+  tandem_scratchpad: async () => ({ content: "# Draft" }),
+  tandem_open: async () => ({ filePath: await tempMarkdown() }),
+};
 
+describe("wakeUrl surfacing — the session-opening tools", () => {
   it("every declared producer has a case — a new one cannot ship untested", () => {
     expect(Object.keys(CASES).sort()).toEqual([...WAKE_URL_PRODUCERS].sort());
   });
@@ -188,13 +187,6 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
  * `server.ts` sets the field from the socket is `wake-url-peer-wiring.test.ts`'s job.
  */
 describe("wakeUrl is handed only to a loopback peer (#1952)", () => {
-  const ARGS: Record<(typeof WAKE_URL_PRODUCERS)[number], () => Promise<Record<string, unknown>>> =
-    {
-      tandem_status: async () => ({}),
-      tandem_scratchpad: async () => ({ content: "# Draft" }),
-      tandem_open: async () => ({ filePath: await tempMarkdown() }),
-    };
-
   const WITHHELD: Array<[string, McpRequestContext | undefined]> = [
     ["a non-loopback peer", { peerIsLoopback: false }],
     ["a context entered without the peer fact", { claudeSessionId: "s-1", mcpSessionId: "m-1" }],
@@ -216,7 +208,7 @@ describe("wakeUrl is handed only to a loopback peer (#1952)", () => {
 
   for (const [label, ctx] of WITHHELD) {
     it.each(WAKE_URL_PRODUCERS)(`%s omits the key for ${label}`, async (tool) => {
-      const raw = await callAs(ctx, tool, await ARGS[tool]());
+      const raw = await callAs(ctx, tool, await CASES[tool]());
       const res = parsed(raw);
 
       expect(res.error, `${tool} did not succeed: ${JSON.stringify(res)}`).toBe(false);
@@ -227,12 +219,6 @@ describe("wakeUrl is handed only to a loopback peer (#1952)", () => {
       }
     });
   }
-
-  it.each(WAKE_URL_PRODUCERS)("%s still carries it for a loopback peer", async (tool) => {
-    const res = parsed(await callAs(LOOPBACK, tool, await ARGS[tool]()));
-    expect(res.error).toBe(false);
-    expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
-  });
 
   it("does not read a truthy non-boolean as loopback", async () => {
     // A context is typed, but the getter's `=== true` is the guarantee, not the type.

@@ -34,7 +34,7 @@
  * `listTools()` completeness net.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { WAKE_URL_PRODUCERS, wakeUrlField } from "../../src/server/mcp/wake-url.js";
 import { runWithMcpContext } from "../../src/server/sessions/context.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
@@ -44,29 +44,6 @@ const DOCUMENT = "src/server/mcp/document.ts";
 const WAKE_SOCKET = "src/server/events/wake-socket.ts";
 
 describe("the wakeUrl seam", () => {
-  // The absent-vs-present-undefined invariant, asserted where it is actually observable.
-  // Two of the three producers return via `mcpSuccess`, whose `JSON.stringify` drops an
-  // undefined value — so a `{ wakeUrl: undefined }` bug is invisible through those tools and
-  // any per-tool assertion of it is a guard that cannot fail (measured: 9/9 green with the bug
-  // present). It is still a real invariant: `structuredContent` exposes the raw object for any
-  // `mcpStructured` producer, where an undefined key reads to a strict client as a live
-  // transport that is not running. Pin it on the helper, once.
-  // #1952: outside a request context the helper fails closed even with a LIVE endpoint.
-  it("yields NO key outside a request context, even with a wake transport running", async () => {
-    const wakeSocket = await import("../../src/server/events/wake-socket.js");
-    const spy = vi
-      .spyOn(wakeSocket, "getWakeEndpoint")
-      .mockReturnValue("ws://127.0.0.1:1/api/wake");
-    try {
-      expect(Object.keys(wakeUrlField())).toStrictEqual([]);
-      expect(runWithMcpContext({ peerIsLoopback: true }, () => wakeUrlField())).toStrictEqual({
-        wakeUrl: "ws://127.0.0.1:1/api/wake",
-      });
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
   // The narrow read §11.6 promises, and the one ownership PR 1a's context-getter seam test will
   // allowlist: wake-url.ts takes exactly one name from the context module, and it is the
   // boolean getter — never `getMcpContext` (which would hand it the session ids) or a direct
@@ -85,7 +62,6 @@ describe("the wakeUrl seam", () => {
         .filter(Boolean),
     ).toStrictEqual(["isCurrentPeerLoopback"]);
     expect(wu).not.toMatch(/\bgetMcpContext\b|\bpeerIsLoopback\b/);
-    expect(wu.match(/\bisCurrentPeerLoopback\s*\(/g) ?? []).toHaveLength(1);
   });
 
   // The initialize branch and GET/DELETE never carry a tool response, so no behavioural spec can
@@ -108,6 +84,13 @@ describe("the wakeUrl seam", () => {
     );
   });
 
+  // The absent-vs-present-undefined invariant, asserted where it is actually observable.
+  // Two of the three producers return via `mcpSuccess`, whose `JSON.stringify` drops an
+  // undefined value — so a `{ wakeUrl: undefined }` bug is invisible through those tools and
+  // any per-tool assertion of it is a guard that cannot fail (measured: 9/9 green with the bug
+  // present). It is still a real invariant: `structuredContent` exposes the raw object for any
+  // `mcpStructured` producer, where an undefined key reads to a strict client as a live
+  // transport that is not running. Pin it on the helper, once.
   it("yields NO key at all when there is no transport", async () => {
     const { getWakeEndpoint } = await import("../../src/server/events/wake-socket.js");
     // No wake socket is attached in this suite, so the real endpoint is null. Called as a

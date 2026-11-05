@@ -60,10 +60,8 @@ export const WAKE_URL_PRODUCERS = ["tandem_status", "tandem_open", "tandem_scrat
  * it names the CLIENT's own loopback, where whatever unrelated service holds that
  * port accepts a `Monitor` socket that sits there looking armed. So the field is
  * returned only when the calling request's TCP peer was loopback
- * (`isCurrentPeerLoopback()`, from `req.socket.remoteAddress` — never the `Host`
- * header). It fails closed: no request context, or a context entered without the
- * peer fact, omits it. Every HTTP MCP request enters a context in `server.ts`, so
- * the only callers that lose it are ones that were never an MCP client.
+ * (`isCurrentPeerLoopback()`, which fails closed). Every HTTP MCP request enters a
+ * context in `server.ts`, so the only callers that lose it were never an MCP client.
  *
  * What this cannot see: a port forwarder (`ssh -L`) that connects from
  * `127.0.0.1` IS a loopback peer, so a forwarded client still receives the URL,

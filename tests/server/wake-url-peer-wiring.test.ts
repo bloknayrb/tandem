@@ -18,9 +18,11 @@
  */
 
 import { request as httpRequest, type Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import { parseResult } from "../helpers/mcp-harness.js";
+import { parseRpc } from "../helpers/mcp-http-tools-list.js";
 
 const TOKEN = "test-token-1952-wakeurl-peer";
 const MCP_ACCEPT = "application/json, text/event-stream";
@@ -28,14 +30,15 @@ const MCP_ACCEPT = "application/json, text/event-stream";
 let port: number;
 let httpServer: Server;
 
-beforeEach(async () => {
+// One server for the file: every spec opens its own session and asserts nothing global.
+beforeAll(async () => {
   port = await allocPort();
   // A token, so the non-loopback peer can authenticate and reach the tool at all: the
   // assertion is about what an AUTHENTICATED remote client is handed, not about auth.
   httpServer = await startMcpServerHttp(port, "127.0.0.1", TOKEN);
 });
 
-afterEach(async () => {
+afterAll(async () => {
   await new Promise<void>((resolve, reject) => {
     httpServer.close((err) => (err ? reject(err) : resolve()));
   });
@@ -92,20 +95,6 @@ function post(
   });
 }
 
-/** The JSON-RPC frame with `id`, from an SSE or plain-JSON body. */
-function rpcFrame(text: string, id: number): Record<string, unknown> {
-  const frames = text.trimStart().startsWith("{")
-    ? [JSON.parse(text) as Record<string, unknown>]
-    : text
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l.startsWith("data:"))
-        .map((l) => JSON.parse(l.slice("data:".length).trim()) as Record<string, unknown>);
-  const match = frames.find((f) => f.id === id);
-  expect(match, `no JSON-RPC frame with id ${id} in ${text}`).toBeDefined();
-  return match as Record<string, unknown>;
-}
-
 /** Initialize a session as this peer and return `tandem_status`'s parsed `data`. */
 async function statusAs(opts: PeerOpts): Promise<Record<string, unknown>> {
   return statusOn(await openSession(opts), opts);
@@ -147,16 +136,17 @@ async function statusOn(sid: string, opts: PeerOpts): Promise<Record<string, unk
     sid,
   );
   expect(call.status, `tools/call failed: ${call.text}`).toBe(200);
-  const result = rpcFrame(call.text, 2).result as {
+  const result = parseRpc(call.text, 2).result as Parameters<typeof parseResult>[0] & {
     isError?: boolean;
-    content: Array<{ type: string; text?: string }>;
   };
   expect(result, `tools/call returned no result: ${call.text}`).toBeDefined();
   expect(result.isError ?? false, `tandem_status errored: ${call.text}`).toBe(false);
-  const envelope = JSON.parse(result.content.find((c) => c.type === "text")?.text ?? "null") as {
-    data: Record<string, unknown>;
-  };
-  return envelope.data;
+  const data = parseResult(result).data as Record<string, unknown>;
+  expect(
+    Object.keys(data),
+    `tandem_status returned an empty payload: ${call.text}`,
+  ).not.toHaveLength(0);
+  return data;
 }
 
 describe("wakeUrl over real HTTP — a loopback peer (#1952)", () => {
@@ -181,17 +171,6 @@ describe.skipIf(process.platform !== "linux")(
       expect(res.status).toBe(401);
     });
 
-    it("an authenticated remote client is not handed wakeUrl", async () => {
-      // Same-server loopback control, so a broken wake socket cannot make the absence vacuous.
-      expect((await statusAs({})).wakeUrl).toBe(`ws://127.0.0.1:${port}/api/wake`);
-      const data = await statusAs(REMOTE);
-      expect(
-        Object.keys(data),
-        "control: tandem_status returned an empty payload",
-      ).not.toHaveLength(0);
-      expect(Object.keys(data)).not.toContain("wakeUrl");
-    });
-
     it("a loopback-looking Host header does not make the peer loopback", async () => {
       // The peer fact comes from req.socket.remoteAddress; a remote client controls the Host
       // header. Every request here already sends `Host: 127.0.0.1:<port>`, so this adds the
@@ -202,8 +181,9 @@ describe.skipIf(process.platform !== "linux")(
 
     it("is decided per request, not per session: the same session flips with its peer", async () => {
       // A session id is a bearer value any peer holding it can present, so the peer fact must
-      // be read on every request. A change that cached it on the registry entry at initialize
-      // would pass every other spec here.
+      // be read on every request; a value cached on the registry entry at initialize would
+      // fail this. Its loopback rows double as the same-server control that the wake socket
+      // is live, so no absence here is vacuous.
       const local = await openSession({});
       expect(Object.keys(await statusOn(local, REMOTE))).not.toContain("wakeUrl");
       expect((await statusOn(local, {})).wakeUrl).toBe(`ws://127.0.0.1:${port}/api/wake`);
