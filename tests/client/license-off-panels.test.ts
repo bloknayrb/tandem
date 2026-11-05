@@ -39,12 +39,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 // not the real functions behind a spy.
 const sendNoteToClaude = vi.fn();
 const promoteNotesToComments = vi.fn();
+const removeAnnotation = vi.fn(async () => {});
 vi.mock("../../src/client/panels/annotation-actions", () => ({
   heldInSoloOnCreate: vi.fn(() => false),
   editAnnotation: vi.fn(),
   sendNoteToClaude,
   promoteNotesToComments,
-  removeAnnotation: vi.fn(async () => {}),
+  removeAnnotation,
   replyToAnnotation: vi.fn(async () => true),
 }));
 
@@ -116,7 +117,7 @@ afterEach(() => {
   licenseStore.set(DARK);
 });
 
-function mountSidePanel(annotations: Annotation[]) {
+function mountSidePanel(annotations: Annotation[], reviewOverrides: Record<string, unknown> = {}) {
   return render(SidePanel, {
     props: {
       annotations,
@@ -138,6 +139,7 @@ function mountSidePanel(annotations: Annotation[]) {
         getReviewIndex: () => 0,
         getReviewTargets: () => [],
         isTargetLost: () => false,
+        ...reviewOverrides,
       },
     },
   });
@@ -214,6 +216,7 @@ describe.each([
 function mountMarginColumn(annotations: Annotation[]) {
   const onSendToClaude = vi.fn();
   const onReply = vi.fn(async () => true);
+  const onResolve = vi.fn();
   const r = render(MarginColumn, {
     props: {
       annotations,
@@ -230,9 +233,10 @@ function mountMarginColumn(annotations: Annotation[]) {
       reduceMotion: true,
       onSendToClaude,
       onReply,
+      onResolve,
     },
   });
-  return { ...r, onSendToClaude };
+  return { ...r, onSendToClaude, onResolve };
 }
 
 describe.each([
@@ -261,5 +265,61 @@ describe.each([
     expect(noteReq.canSendToClaude).toBe(!aiOff);
     await fireMenuAction("ctx:annotation:sendToClaude");
     expect(onSendToClaude).toHaveBeenCalledTimes(aiOff ? 0 : 1);
+  });
+});
+
+// #2360: Resolve closes the user's own comment. It is not an AI write, so the
+// licence has no say: it must work with the AI off, and it is offered on user
+// comments only.
+describe.each([
+  { licence: "off", status: RESTRICTED },
+  { licence: "on (twin)", status: DARK },
+])("Resolve (#2360) with the licence $licence", ({ status }) => {
+  beforeEach(() => licenseStore.set(status));
+
+  const USER_COMMENT = ann("u1", "user", "comment");
+  const USER_HIGHLIGHT = ann("h1", "user", "highlight");
+
+  it("SidePanel offers Resolve on a user comment only, and it dismisses (not removes)", async () => {
+    const handleDismiss = vi.fn();
+    removeAnnotation.mockClear();
+    const { container } = mountSidePanel([USER_COMMENT, NOTE, COMMENT, USER_HIGHLIGHT], {
+      handleDismiss,
+    });
+    await tick();
+    expect(byTestId(container, "resolve-btn-u1")).not.toBeNull();
+    for (const id of ["n1", "c1", "h1"]) {
+      expect(byTestId(container, `resolve-btn-${id}`)).toBeNull();
+    }
+    // Remove is still offered beside it, unchanged.
+    expect(byTestId(container, "remove-btn-u1")).not.toBeNull();
+    byTestId(container, "resolve-btn-u1")?.click();
+    await tick();
+    expect(handleDismiss).toHaveBeenCalledWith("u1");
+    expect(removeAnnotation).not.toHaveBeenCalled();
+  });
+
+  it("SidePanel's native menu offers and dispatches resolve", async () => {
+    const handleDismiss = vi.fn();
+    const { container } = mountSidePanel([USER_COMMENT], { handleDismiss });
+    await tick();
+    expect((await menuRequestFor(container, "u1")).canResolve).toBe(true);
+    await fireMenuAction("ctx:annotation:resolve");
+    expect(handleDismiss).toHaveBeenCalledWith("u1");
+  });
+
+  it("MarginColumn offers Resolve on a user comment only, and dispatches it", async () => {
+    const { container, onResolve } = mountMarginColumn([USER_COMMENT, NOTE, COMMENT]);
+    await tick();
+    for (const id of ["n1", "c1"]) {
+      expect(byTestId(container, `resolve-btn-${id}`)).toBeNull();
+    }
+    byTestId(container, "resolve-btn-u1")?.click();
+    await tick();
+    expect(onResolve).toHaveBeenCalledWith("u1");
+    expect((await menuRequestFor(container, "c1")).canResolve).toBe(false);
+    expect((await menuRequestFor(container, "u1")).canResolve).toBe(true);
+    await fireMenuAction("ctx:annotation:resolve");
+    expect(onResolve).toHaveBeenCalledTimes(2);
   });
 });

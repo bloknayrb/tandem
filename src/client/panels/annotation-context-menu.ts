@@ -26,6 +26,7 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 export const ANNOTATION_CONTEXT_MENU_ACTION_IDS = [
   "ctx:annotation:accept",
   "ctx:annotation:dismiss",
+  "ctx:annotation:resolve",
   "ctx:annotation:reply",
   "ctx:annotation:edit",
   "ctx:annotation:sendToClaude",
@@ -52,6 +53,15 @@ const isPending = (a: AnnotationGate): boolean => a.status === "pending";
 /** Accept/Reject — review actions on non-user annotations (claude comments, import notes/comments). */
 export const canAccept = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
 export const canDismiss = (a: AnnotationGate): boolean => a.author !== "user" && isPending(a);
+
+/**
+ * Resolve: a user closing their OWN comment (#2360). Writes `dismissed`, applies
+ * nothing and tells Claude nothing (the observer's dismiss arm needs a Claude
+ * author). Not an AI write, so it is not licence-gated. Comments only: a note is
+ * Archived and a highlight Removed, and neither has a conversation to close.
+ */
+export const canResolve = (a: AnnotationGate): boolean =>
+  a.author === "user" && a.type === "comment" && isPending(a);
 
 /**
  * The reply half of {@link canAcceptReplySuggestion}: a Claude-authored,
@@ -187,6 +197,7 @@ export const canCopy = (_a: AnnotationGate): boolean => true;
 export interface AnnotationContextMenuRequest {
   canAccept: boolean;
   canDismiss: boolean;
+  canResolve: boolean;
   canReply: boolean;
   canEdit: boolean;
   canSendToClaude: boolean;
@@ -212,6 +223,7 @@ export function buildAnnotationMenuContext(
   return {
     canAccept: canAccept(a) && !isAcceptBlocked(a, targetLost),
     canDismiss: canDismiss(a),
+    canResolve: canResolve(a),
     canReply: canReply(a, aiDisabled),
     canEdit: canEdit(a),
     canSendToClaude: canSendToClaude(a, aiDisabled),

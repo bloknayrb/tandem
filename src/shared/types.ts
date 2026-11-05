@@ -752,6 +752,8 @@ export interface TandemNotification {
   id: string;
   type:
     | "annotation-error"
+    // Client-originated (#2360): the margin's Resolve toast, which carries Undo.
+    | "annotation-resolved"
     | "save-error"
     | "session-restored"
     | "general-error"

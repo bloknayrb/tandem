@@ -29,6 +29,7 @@ import {
   canEdit,
   canRemove,
   canReply,
+  canResolve,
   canSendToClaude,
 } from "./annotation-context-menu";
 import {
@@ -388,7 +389,8 @@ const filterLabel = $derived.by(() => {
       all: "Any status",
       pending: "Pending",
       accepted: "Accepted",
-      dismissed: "Dismissed",
+      // A user's resolved comment is stored as `dismissed` (#2360).
+      dismissed: "Dismissed/resolved",
     };
     parts.push(labels[filterStatus]);
   }
@@ -490,6 +492,12 @@ function handleDismissAnimated(id: string) {
   exitModes.set(id, "dismiss");
   review.handleDismiss(id);
 }
+// Resolve (#2360) is the user closing their own comment: same write as Dismiss,
+// but it settles upward like a completion rather than sliding off as a rejection.
+function handleResolveAnimated(id: string) {
+  exitModes.set(id, "accept");
+  review.handleDismiss(id);
+}
 
 // ---- Native annotation context menu (#999 / #923 Phase 3) ----------------
 // Tauri-only; in the browser the native WebView menu is left alone. A single
@@ -534,6 +542,7 @@ function dispatchAnnotationAction(
       {
         accept: handleAcceptAnimated,
         dismiss: handleDismissAnimated,
+        resolve: handleResolveAnimated,
         sendToClaude: handleSendToClaude,
         remove: handleRemove,
         openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
@@ -876,6 +885,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
           onAccept={canAccept(ann) ? handleAcceptAnimated : undefined}
           onDismiss={canDismiss(ann) ? handleDismissAnimated : undefined}
           onRemove={canRemove(ann) ? handleRemove : undefined}
+          onResolve={canResolve(ann) ? handleResolveAnimated : undefined}
           onSendToClaude={canSendToClaude(ann, false) ? handleSendToClaude : undefined}
           onEdit={canEdit(ann) ? handleEdit : undefined}
           onReply={canReply(ann, false) ? handleReply : undefined}

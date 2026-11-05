@@ -164,6 +164,24 @@ describe("Accept or dismiss a comment from Claude", () => {
       ]);
       expect(tut.reviewed).toBe(false);
     }));
+
+  it("does not tick when the user resolves their OWN comment (#2360)", () =>
+    withTutorial(({ tut, setAnnotations, setResolved }) => {
+      setAnnotations([
+        makeAnnotation({ id: "mine", author: "user", type: "comment", status: "dismissed" }),
+      ]);
+      setResolved(["mine"]);
+      expect(tut.reviewed).toBe(false);
+    }));
+
+  it("still ticks when the user ACCEPTS something on their own comment (a Claude rewrite)", () =>
+    withTutorial(({ tut, setAnnotations, setResolved }) => {
+      setAnnotations([
+        makeAnnotation({ id: "mine", author: "user", type: "comment", status: "accepted" }),
+      ]);
+      setResolved(["mine"]);
+      expect(tut.reviewed).toBe(true);
+    }));
 });
 
 describe("Ask Claude something (#1965 baseline)", () => {

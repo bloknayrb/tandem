@@ -6,7 +6,7 @@ import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions.js";
 import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte.js";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { isReviewTarget } from "../../src/shared/types.js";
@@ -477,5 +477,46 @@ describe("useAnnotationReview — no silent divergence after a failed Accept (#1
     editor.destroy();
 
     expect(seen).toEqual(["accepted"]);
+  });
+});
+
+/**
+ * #2360: Resolve on a user comment reuses `handleDismiss`. These are pins, not red-first:
+ * the resolve path has no author gate, which is exactly what lets the feature be a
+ * client-only change. They guard the properties the feature leans on.
+ */
+describe("useAnnotationReview: resolving a user comment (#2360)", () => {
+  it("writes dismissed with no resolvedBy, keeps the replies, and Undo restores pending", () => {
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const replies = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const ann = makeAnnotation({ id: "mine", author: "user", type: "comment", status: "pending" });
+    map.set(ann.id, ann);
+    replies.set("r1", {
+      id: "r1",
+      annotationId: "mine",
+      author: "claude",
+      content: "hi",
+      timestamp: 1,
+    });
+
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => null,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+    });
+
+    review.handleDismiss(ann.id);
+    const resolved = map.get(ann.id) as Annotation;
+    expect(resolved.status).toBe("dismissed");
+    expect(resolved.resolvedBy, "the user resolved it; no stamp").toBeUndefined();
+    expect(replies.get("r1"), "Resolve keeps the thread").toBeDefined();
+    expect(review.getRecentlyResolved().has(ann.id)).toBe(true);
+
+    expect(review.undoResolveAnnotation(ann.id)).toBe(true);
+    expect((map.get(ann.id) as Annotation).status).toBe("pending");
+    expect(replies.get("r1")).toBeDefined();
   });
 });
