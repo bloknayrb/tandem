@@ -60,6 +60,7 @@ import { withInternal } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 vi.mock("../../src/server/annotations/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/annotations/store.js")>();
@@ -87,7 +88,9 @@ beforeEach(async () => {
     ctrl.getMap(Y_MAP_CHAT).clear();
   });
   setCtrlMode("tandem");
-  ({ client, close } = await setupMcpServer([registerAwarenessTools]));
+  ({ client, close } = await setupMcpServer([registerAwarenessTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

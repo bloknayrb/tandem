@@ -44,6 +44,7 @@ import {
 import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
 import { timeoutMs } from "../helpers/timing.js";
 
 /**
@@ -1388,7 +1389,8 @@ describe("applyChangesCore — a mid-apply doc swap", () => {
     const handlers = new Map<string, ToolHandler>();
     registerApplyTools({
       tool: (name: string, _desc: string, _schema: unknown, handler: ToolHandler) => {
-        handlers.set(name, handler);
+        // Run as a dispatched caller (#2358: flag-on, a call with none is refused).
+        handlers.set(name, (args) => asTestCaller(() => handler(args)));
       },
     } as unknown as McpServer);
 

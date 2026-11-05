@@ -156,17 +156,38 @@ describe("tests and the flag", () => {
     expect(filesMatching(/vi\.(?:do)?[mM]ock\(\s*["'][^"']*ownership-flag/)).toEqual([]);
   });
 
+  // Every file that stubs the variable, by any argument: a stub through a
+  // variable would slip past the two literal sets below.
+  const OWNERSHIP_TEST_FILES = [
+    "tests/server/mcp-context-seam.test.ts",
+    "tests/server/ownership-default-rule.test.ts",
+    "tests/server/ownership-flag.test.ts",
+    "tests/server/ownership-http-identity.test.ts",
+    "tests/server/ownership-records.test.ts",
+  ];
+
+  it("the files that stub the variable at all are a reviewed set", () => {
+    expect(filesMatching(/stubEnv\(\s*["'`]TANDEM_OWNERSHIP["'`]/)).toEqual(OWNERSHIP_TEST_FILES);
+  });
+
   it("the files that turn the flag OFF for themselves are a reviewed set", () => {
-    // A file stubbing "" runs flag-off even in the ownership-flag-on job: it
-    // pins dark behaviour, and the series lists each one (design §12).
+    // A file stubbing "" runs that test flag-off even in the ownership-flag-on
+    // job: it pins dark behaviour, and the series lists each one (design §12).
+    // Every one of these also stubs "1": none opts a whole file out.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
+      "tests/server/mcp-context-seam.test.ts",
+      "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-flag.test.ts",
+      "tests/server/ownership-records.test.ts",
     ]);
   });
 
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
+      "tests/server/mcp-context-seam.test.ts",
+      "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-flag.test.ts",
+      "tests/server/ownership-records.test.ts",
     ]);
   });
 
