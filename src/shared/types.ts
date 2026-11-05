@@ -294,6 +294,19 @@ interface AnnotationBase {
    * resolves out of `tandem_checkInbox`'s `userResponses` bucket.
    */
   resolvedBy?: "user" | "claude";
+  /**
+   * #2360: set when the CURRENT acceptance applied a reply's rewrite rather than
+   * this record's own proposal — the id of that reply. Lives exactly as long as
+   * the acceptance: every revert to `pending` strips it.
+   */
+  acceptedReplyId?: string;
+  /**
+   * #2360: this record's own `suggestedText` from before a reply accept
+   * overwrote it (the accept has to store what it applied there, because undo's
+   * span compare reads it). `null` means the record had none — a user comment
+   * never does. Undo restores from it; present only beside `acceptedReplyId`.
+   */
+  priorSuggestedText?: string | null;
   /** Audience: 'private' = personal (note/highlight), 'outbound' = visible to Claude. Derived by AR1 migration on read for legacy annotations. */
   audience?: "private" | "outbound";
   /** Set when this annotation was promoted from a note via "Send to Claude". */

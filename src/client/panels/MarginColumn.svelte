@@ -86,6 +86,11 @@ interface Props {
    * leaves it out. Required, so the one App mount cannot forget it.
    */
   isTargetLost: (id: string) => boolean;
+  /**
+   * #1626/#2360: accept a reply's rewrite. Passed on comment cards; the thread
+   * gates each reply with `canAcceptReplySuggestion`, user cards included.
+   */
+  onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /** App `reduceMotion` setting, threaded to the A27 fly-to-margin transition. */
   reduceMotion?: boolean;
 }
@@ -113,6 +118,7 @@ let {
   onReply,
   onSendToClaude,
   isTargetLost,
+  onAcceptReplySuggestion,
   reduceMotion = false,
 }: Props = $props();
 
@@ -587,6 +593,7 @@ $effect(() => subscribeAnnotationActions());
         onSendToClaude={canSendToClaude(ann, false) ? onSendToClaude : undefined}
         onEdit={canEdit(ann) ? onEdit : undefined}
         onReply={canReply(ann, false) ? onReply : undefined}
+        onAcceptReplySuggestion={ann.type === "comment" ? onAcceptReplySuggestion : undefined}
         openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
         targetLost={isTargetLost(ann.id)}
         {aiDisabled}

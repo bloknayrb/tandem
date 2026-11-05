@@ -50,6 +50,9 @@ function comment(extras: Extras = {}): Annotation {
     id: "a1",
     type: "comment",
     author: "claude",
+    // What `sanitizeAnnotation` gives every comment the rails render; the
+    // reply-Accept gate reads it (#2360).
+    audience: "outbound",
     status: "pending",
     content: "why",
     timestamp: 0,
