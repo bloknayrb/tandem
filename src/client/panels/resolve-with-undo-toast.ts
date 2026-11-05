@@ -7,11 +7,13 @@ interface Deps {
   resolve: (id: string) => void;
   undo: (id: string) => boolean;
   /**
-   * Did the write land? `resolve` is a silent no-op on a record that is no longer
-   * pending (Claude just dismissed it, say), and announcing "resolved" would then
-   * offer an Undo that reopens someone else's dismissal.
+   * The record's current status, read fresh. `resolve` is a silent no-op on a
+   * record that is no longer pending (Claude just dismissed it, or a double
+   * click), and announcing "resolved" would then offer an Undo that reopens
+   * someone else's dismissal. Read before AND after: only pending -> dismissed
+   * is a write this click made.
    */
-  wasResolved: (id: string) => boolean;
+  getStatus: (id: string) => string | undefined;
   push: (notification: TandemNotification, action?: ToastAction) => void;
   /** Document the comment lives in, captured when the user clicked Resolve. */
   docId: string | undefined;
@@ -33,9 +35,10 @@ interface Deps {
  * toast declines instead, with a notice.
  */
 export function resolveWithUndoToast(id: string, deps: Deps): void {
-  const { resolve, undo, wasResolved, push, docId, getActiveDocId } = deps;
+  const { resolve, undo, getStatus, push, docId, getActiveDocId } = deps;
+  const before = getStatus(id);
   resolve(id);
-  if (!wasResolved(id)) return;
+  if (before !== "pending" || getStatus(id) !== "dismissed") return;
   push(
     {
       id: generateNotificationId(),
@@ -58,7 +61,15 @@ export function resolveWithUndoToast(id: string, deps: Deps): void {
           });
           return;
         }
-        undo(id);
+        if (!undo(id)) {
+          push({
+            id: generateNotificationId(),
+            type: "annotation-resolved",
+            severity: "info",
+            message: "Couldn't undo — the comment has changed.",
+            timestamp: Date.now(),
+          });
+        }
       },
     },
   );

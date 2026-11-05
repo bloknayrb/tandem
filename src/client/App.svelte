@@ -2495,9 +2495,8 @@ const marginHandlers = $derived.by(() => {
       resolveWithUndoToast(id, {
         resolve: review.handleDismiss,
         undo: review.undoResolveAnnotation,
-        wasResolved: (id) =>
-          (ydoc?.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation | undefined)?.status ===
-          "dismissed",
+        getStatus: (id) =>
+          (ydoc?.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation | undefined)?.status,
         push: notifications.push,
         docId,
         getActiveDocId: () => activeTab?.id,
