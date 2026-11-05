@@ -65,23 +65,31 @@ describe("the wakeUrl seam", () => {
   });
 
   // The initialize branch and GET/DELETE never carry a tool response, so no behavioural spec can
-  // observe `peerIsLoopback` there; this source pin is the only check on those paths. Both
-  // places `server.ts` enters the request context must derive the field from the SOCKET.
-  it("server.ts sets peerIsLoopback from the socket at every context entry", () => {
-    const server = stripComments(SRC_FILES.get("src/server/mcp/server.ts") ?? "");
-    const entries = server.match(/\brunWithMcpContext\s*\(/g) ?? [];
-    const derived =
-      server.match(/peerIsLoopback:\s*isLoopback\(req\.socket\.remoteAddress\)/g) ?? [];
-    expect(entries.length, "control: no runWithMcpContext call found in server.ts").toBeGreaterThan(
-      0,
-    );
-    expect(
-      derived,
-      "every runWithMcpContext entry must set peerIsLoopback from the socket",
-    ).toHaveLength(entries.length);
-    expect(server.match(/\bpeerIsLoopback\b/g) ?? [], "no other write of the field").toHaveLength(
-      entries.length,
-    );
+  // observe `peerIsLoopback` there; this source pin is the only check on those paths. All
+  // places the tree enters the request context must derive the field from the SOCKET.
+  it("every context entry in src/ sets peerIsLoopback from the socket", () => {
+    // Swept across the whole tree, not just server.ts: an entry added in another module without
+    // the field would fail closed and withhold the URL from every caller it serves, and the
+    // behavioural specs only see paths that carry a tool call.
+    const CONTEXT = "src/server/sessions/context.ts";
+    let entries = 0;
+    for (const file of filesMentioning("runWithMcpContext").filter((f) => f !== CONTEXT)) {
+      const src = stripComments(SRC_FILES.get(file) ?? "");
+      const here = (src.match(/\brunWithMcpContext\s*\(/g) ?? []).length;
+      const derived = (
+        src.match(/peerIsLoopback:\s*isLoopback\(req\.socket\.remoteAddress\)/g) ?? []
+      ).length;
+      expect(
+        derived,
+        `${file}: every runWithMcpContext entry must set peerIsLoopback from the socket`,
+      ).toBe(here);
+      expect(
+        (src.match(/\bpeerIsLoopback\b/g) ?? []).length,
+        `${file}: no other write of the field`,
+      ).toBe(here);
+      entries += here;
+    }
+    expect(entries, "control: found no runWithMcpContext entry in src/").toBeGreaterThan(0);
   });
 
   // The absent-vs-present-undefined invariant, asserted where it is actually observable.
