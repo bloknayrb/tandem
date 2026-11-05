@@ -971,12 +971,12 @@ The window hides (rather than closes) when the user clicks the OS close button â
 | Item | Action |
 |------|--------|
 | Open Editor | Show + focus the main window |
-| Setup AI Assistant | Re-run MCP config (with result dialog) |
+| Setup AI Assistant | Show the window and open the integration wizard (wizard-driven since #477) |
 | Check for Updates | Manual update check |
 | About Tandem | Version dialog |
 | Quit | Graceful sidecar stop, then hard kill (see Shutdown below) |
 
-Left-clicking the tray icon shows the main window. On Linux, `libappindicator3-dev` is required; if unavailable the app continues without a tray icon (not a hard failure).
+Left-clicking the tray icon shows the main window. On Linux the tray needs an appindicator library at runtime (`libayatana-appindicator3` or `libappindicator3`, which `libappindicator-sys` `dlopen`s rather than links; every shipped package carries one). If none loads, `src-tauri/src/tray_probe.rs` notices before the tray is built, the app logs `System tray unavailable` and continues without a tray icon, and closing the window quits (#2359; before that fix the missing library panicked at startup). The `-dev` package is only for building.
 
 ### Shutdown
 
