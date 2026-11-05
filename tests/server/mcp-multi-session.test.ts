@@ -245,25 +245,38 @@ describe("tandem_reply sees its own caller's Claude session id (#2358 PR 1a)", (
    */
   it("delivers each concurrent reply's id to the listener and the classifier", async () => {
     const heard: Array<string | undefined> = [];
-    const classified: Array<string | undefined> = [];
+    const classified: Array<{ sessionId: string | undefined; replyTo: string | undefined }> = [];
     const offListener = onTandemReply((id) => heard.push(id));
     const offClassifier = setGreetingReplyClassifier((q) => {
-      classified.push(q.sessionId);
+      classified.push({ sessionId: q.sessionId, replyTo: q.replyTo });
       return false;
     });
     try {
       const a = await openSession("client-a", "claude-reply-a");
       const b = await openSession("client-b", "claude-reply-b");
       const [ra, rb] = await Promise.all([
-        callTool(a.sessionId, "claude-reply-a", "tandem_reply", { text: "from a" }),
-        callTool(b.sessionId, "claude-reply-b", "tandem_reply", { text: "from b" }),
+        callTool(a.sessionId, "claude-reply-a", "tandem_reply", {
+          text: "from a",
+          replyTo: "msg-a",
+        }),
+        callTool(b.sessionId, "claude-reply-b", "tandem_reply", {
+          text: "from b",
+          replyTo: "msg-b",
+        }),
       ]);
       expect(ra.status).toBe(200);
       expect(rb.status).toBe(200);
       expect(ra.body).toContain('\\"sent\\":true');
       expect(rb.body).toContain('\\"sent\\":true');
       expect([...heard].sort()).toEqual(["claude-reply-a", "claude-reply-b"]);
-      expect([...classified].sort()).toEqual(["claude-reply-a", "claude-reply-b"]);
+      // Paired with each call's own replyTo, so ids swapped between the two
+      // concurrent calls fail here, not only ids lost.
+      expect(classified.sort((x, y) => String(x.replyTo).localeCompare(String(y.replyTo)))).toEqual(
+        [
+          { sessionId: "claude-reply-a", replyTo: "msg-a" },
+          { sessionId: "claude-reply-b", replyTo: "msg-b" },
+        ],
+      );
     } finally {
       offListener();
       offClassifier();

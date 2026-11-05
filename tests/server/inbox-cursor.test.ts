@@ -1067,13 +1067,21 @@ describe("no per-client state", () => {
         expect(source, file).not.toMatch(/getCurrentSessionId|Mcp-Session-Id"/);
       }
     }
-    // awareness.ts imports `getCurrentSessionId` for tandem_reply's
-    // supervisor notification only; the inbox handler must not read it.
+    // Since #2358, awareness.ts reads no request context at all: tandem_reply
+    // takes its session id from the caller `withErrorBoundary` passes it. The
+    // inbox handler must not take that caller either — its cursors are not
+    // per-client state (the pin #2358's PR 2 amends, ownership design §6.8).
     const awareness = readFileSync("src/server/mcp/awareness.ts", "utf8");
-    const handler = awareness.slice(
-      awareness.indexOf('"tandem_checkInbox",'),
-      awareness.indexOf('"tandem_reply",'),
-    );
-    expect(handler).not.toContain("getCurrentSessionId");
+    expect(awareness).not.toMatch(/from "[^"]*sessions\/context/);
+    const start = awareness.indexOf('"tandem_checkInbox",');
+    const end = awareness.indexOf('"tandem_reply",');
+    // Both markers present, in order: a missing one would slice "" and pass.
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const handler = awareness.slice(start, end);
+    expect(handler).not.toMatch(/getCurrentSessionId|getMcpContext/);
+    // Its wrapped handler takes one parameter, never the caller.
+    expect(handler).toMatch(/withErrorBoundary\("tandem_checkInbox", async \(\{/);
+    expect(handler).not.toMatch(/withErrorBoundary\("tandem_checkInbox", async \([^)]*\},\s*\w/);
   });
 });
