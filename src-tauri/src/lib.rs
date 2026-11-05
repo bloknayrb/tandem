@@ -9,6 +9,8 @@ mod sentry_reporting;
 mod sidecar;
 mod startup_rejection;
 mod token_store;
+#[cfg(target_os = "linux")]
+mod tray_probe;
 mod uninstall_scrub;
 
 // #1371: both of these are deliberately UNGATED even though their only consumer
@@ -281,6 +283,24 @@ impl TrayAvailable {
     }
 }
 
+/// `Some(reasons)` when the tray backend cannot be loaded, so `setup()` must
+/// skip `TrayIconBuilder::build` rather than let it panic (#2359). Linux only:
+/// macOS and Windows link their tray APIs and never take this branch.
+#[cfg(target_os = "linux")]
+fn tray_backend_unavailable() -> Option<String> {
+    match tray_probe::probe_appindicator() {
+        Ok(soname) => {
+            log::debug!("Tray backend: loaded {soname}");
+            None
+        }
+        Err(reasons) => Some(reasons),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tray_backend_unavailable() -> Option<String> {
+    None
+}
 
 /// Queue of file paths that arrived (via macOS `RunEvent::Opened` Apple Events,
 /// or in principle any pre-health second-instance launch) BEFORE the sidecar's
@@ -1454,7 +1474,7 @@ pub fn run() {
                 .cloned()
                 .expect("No window icon configured — check bundle.icon in tauri.conf.json");
 
-            let tray_result = TrayIconBuilder::new()
+            let tray_builder = TrayIconBuilder::new()
                 .icon(icon)
                 .tooltip("Tandem")
                 .menu(&menu)
@@ -1504,19 +1524,45 @@ pub fn run() {
                     {
                         show_main_window_for_user(tray.app_handle());
                     }
-                })
-                .build(app);
+                });
+
+            // Linux: `build()` would `dlopen` the appindicator library lazily
+            // and PANIC if none loads (#2359), so ask first and skip the build.
+            // The tray flag then stays false and the close handler below takes
+            // its no-tray exit. See `tray_probe` for why the probe agrees with
+            // the crate's own load.
+            let tray_result = match tray_backend_unavailable() {
+                Some(reasons) => {
+                    log::error!(
+                        "System tray unavailable: no appindicator library could be loaded \
+                         ({reasons}). Tandem will continue without a tray icon; closing \
+                         the window quits Tandem. For a tray icon, install \
+                         libayatana-appindicator3-1 (Debian/Ubuntu), \
+                         libayatana-appindicator-gtk3 (Fedora) or \
+                         libayatana-appindicator (Arch)."
+                    );
+                    None
+                }
+                None => Some(tray_builder.build(app)),
+            };
 
             match tray_result {
-                Ok(_tray) => {
+                None => {}
+                Some(Ok(_tray)) => {
                     tray_flag_for_setup.store(true, Ordering::Release);
                 }
-                Err(e) => {
+                // With the library loaded, what `build()` can still return on
+                // Linux is tray-icon's own I/O: creating `$XDG_RUNTIME_DIR/
+                // tray-icon` (or `/tmp/tray-icon`) and writing the icon PNG
+                // there, plus Tauri's main-thread hand-off. A missing library
+                // never reaches here (see above), and a library missing a
+                // symbol still panics inside `build()` (a wrong library, not a
+                // missing one; deliberately not wrapped in `catch_unwind`).
+                Some(Err(e)) => {
                     if cfg!(target_os = "linux") {
                         log::error!(
-                            "System tray unavailable: {e}. \
-                             On Linux, install libappindicator3-dev. \
-                             Tandem will continue without a tray icon."
+                            "System tray unavailable: {e}. Tandem will continue without a \
+                             tray icon; closing the window quits Tandem."
                         );
                     } else {
                         return Err(e.into());
@@ -1700,7 +1746,10 @@ pub fn run() {
                 } else {
                     // No tray (Linux without libappindicator): exit cleanly so
                     // RunEvent::Exit fires and the sidecar is killed
-                    log::info!("No tray icon — exiting on window close");
+                    // `warn`, not `info`: release builds log at `Warn` and up,
+                    // and this line is the release smoke's evidence that the
+                    // no-tray branch ran (docs/release-smoke-checklist.md §3).
+                    log::warn!("No tray icon — exiting on window close");
                     window.app_handle().exit(0);
                 }
             }
