@@ -2125,7 +2125,9 @@ Three reasons, in ascending order of force:
 > *(2026-11-05: fixed by #1952's per-request check. The address still names `127.0.0.1`, but
 > `wakeUrlField()` now returns it only when the calling request's TCP peer is loopback
 > (`McpRequestContext.peerIsLoopback`, set from `req.socket.remoteAddress` through `isLoopback`),
-> and omits it with no request context at all. A remote MCP client is never handed it.)*
+> and omits it with no request context at all. A remote MCP client is not handed it — except
+> through a forwarder or relay that connects from `127.0.0.1`, which is indistinguishable from a
+> local caller; see #1952's entry in security.md.)*
 >
 > One consequence worth stating, because no commit message does: for the common
 > `tandem_open`-first flow the arm moment now lands on the session's FIRST tool call rather than
