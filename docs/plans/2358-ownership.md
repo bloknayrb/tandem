@@ -227,10 +227,10 @@ Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lif
 | 9 | Restart the server while the terminal holds a doc | The doc goes back to Tandem's Claude once it starts (if the terminal polled first, it claims the doc and take-back then takes it); asked again, the terminal's `tandem_open` re-takes it |
 | 10 | On-click mode, never pressed Start; the terminal works on your doc | As today for docs the terminal claimed; unowned docs go to Tandem's Claude when it is next present |
 | 11 | Repeat 1, 2, 5, 6 and 17 on the Linux VM AppImage, with the plugin ref bumped | Same |
-| 12 | Off→On with nothing claimed: turn Off, comment on a doc no session holds, turn On | The doc returns to Tandem's Claude, which starts and answers; a doc a terminal claimed while Off stays with it until a run starts |
+| 12 | Off→On with nothing claimed: close the terminal, turn Off, comment on a doc no session holds, turn On | The doc returns to Tandem's Claude, which starts and answers (row 6 covers a doc a terminal claimed while Off, which stays with it until a run starts) |
 | 13 | Switch to Solo; comment on step 1's doc; wait a minute; switch back to Tandem | Nothing starts and nobody answers during Solo; after it, Tandem's Claude answers once |
 | 14 | Sign Tandem's Claude out (needs-login); comment on a doc it held | After about 5 seconds its docs go unowned; the terminal can pick the comment up; Start is not offered as a fix for sign-in |
-| 15 | A run that never binds: hand-edit the `tandem` entry back to direct-HTTP, restart Tandem, comment | `tandem doctor` names the entry; the comment waits; the stale hint shows after 5 minutes; Assign to the terminal → it answers |
+| 15 | A run that never binds: hand-edit the `tandem` entry back to direct-HTTP **with an extra header** (so the boot sweep reads it as not Tandem's and leaves it), restart Tandem, comment | `tandem doctor` names the entry; the comment waits; the stale hint shows after 5 minutes; Assign to the terminal → it answers |
 | 16 | Two terminals, Tandem's Claude Off; send one doc-less chat | Exactly one answer |
 | 17 | First-boot migration: before installing the flipped build, keep the direct-HTTP entry `tandem setup` wrote; install and start | The entry is now the bridge carrying the same token; `tandem doctor` shows only the duplicate-toolset warning; in a new terminal, `tandem_status` through each toolset shows the same label |
 
