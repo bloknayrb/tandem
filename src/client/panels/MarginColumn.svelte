@@ -14,6 +14,7 @@ import {
   canEdit,
   canRemove,
   canReply,
+  canResolve,
   canSendToClaude,
 } from "./annotation-context-menu";
 import {
@@ -73,6 +74,9 @@ interface Props {
   onAccept?: (id: string) => void;
   onDismiss?: (id: string) => void;
   onRemove?: (id: string) => void;
+  /** #2360: close the user's own comment. The margin renders pending cards only, so the
+   *  caller owns the Undo affordance (a toast). */
+  onResolve?: (id: string) => void;
   onEdit?: (id: string, content: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onSendToClaude?: (id: string) => void;
@@ -104,6 +108,7 @@ let {
   onAccept,
   onDismiss,
   onRemove,
+  onResolve,
   onEdit,
   onReply,
   onSendToClaude,
@@ -374,6 +379,7 @@ function dispatchAnnotationAction(
       {
         accept: onAccept,
         dismiss: onDismiss,
+        resolve: onResolve,
         sendToClaude: onSendToClaude,
         remove: onRemove,
         openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
@@ -577,6 +583,7 @@ $effect(() => subscribeAnnotationActions());
         onAccept={canAccept(ann) ? onAccept : undefined}
         onDismiss={canDismiss(ann) ? onDismiss : undefined}
         onRemove={canRemove(ann) ? onRemove : undefined}
+        onResolve={canResolve(ann) ? onResolve : undefined}
         onSendToClaude={canSendToClaude(ann, false) ? onSendToClaude : undefined}
         onEdit={canEdit(ann) ? onEdit : undefined}
         onReply={canReply(ann, false) ? onReply : undefined}

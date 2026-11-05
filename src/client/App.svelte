@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED, COWORK_ENABLED } from "../shared/constants";
+import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import type { Annotation, ChatMessage, TandemNotification } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
@@ -136,6 +136,7 @@ import { insertChatMarkdown } from "./panels/chat-insert";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
+import { resolveWithUndoToast } from "./panels/resolve-with-undo-toast";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { createChatResume } from "./panels/useChatResume.svelte";
 import FormattingBar from "./shell/FormattingBar.svelte";
@@ -2490,6 +2491,16 @@ const marginHandlers = $derived.by(() => {
     onEdit: (id: string, c: string) => marginEditAnnotation(ydoc, id, c),
     onReply: (id: string, t: string) => marginReplyToAnnotation(id, t, docId),
     onRemove: (id: string) => marginRemoveAnnotation(id, docId),
+    onResolve: (id: string) =>
+      resolveWithUndoToast(id, {
+        resolve: review.handleDismiss,
+        undo: review.undoResolveAnnotation,
+        getStatus: (id) =>
+          (ydoc?.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation | undefined)?.status,
+        push: notifications.push,
+        docId,
+        getActiveDocId: () => activeTab?.id,
+      }),
     onSendToClaude: (id: string) => marginSendNoteToClaude(ydoc, id, modeState.tandemMode),
   };
 });
@@ -3328,6 +3339,7 @@ const shouldShowModelPicker = $derived(
         onAccept={review.handleAccept}
         onDismiss={review.handleDismiss}
         onRemove={marginHandlers.onRemove}
+        onResolve={marginHandlers.onResolve}
         onEdit={marginHandlers.onEdit}
         onReply={marginHandlers.onReply}
         onSendToClaude={marginHandlers.onSendToClaude}

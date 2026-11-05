@@ -889,7 +889,8 @@ Server opens sample/welcome.md (first run, no restored sessions)
 Browser renders OnboardingTutorial as a strip in the top-of-shell banner stack (#1711)
     → Three items, ticked independently and in any order — no Next button:
         "Accept or dismiss a comment from Claude" — the user resolved an annotation
-          (useAnnotationReview's recentlyResolved; Claude's MCP resolves never count),
+          (useAnnotationReview's recentlyResolved; Claude's MCP resolves never count, nor does
+          the user resolving their own comment in the active document, #2360),
           or every Claude seed is already resolved, one by the user (replay keeps them)
         "Ask Claude something" — a Claude-visible user comment or a user chat
           message newer than the arm time (#1965)
@@ -1287,7 +1288,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `panels/FilterBar.svelte` -- Filter controls row: type/author/status chip groups (ChipGroup.svelte, A15) + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
 - `panels/useAnnotationReview.svelte.ts` -- Annotation review state (the `.svelte.ts` suffix is load-bearing; it is a rune-based hook): the auto-advance of the active annotation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
-- `panels/AnnotationCardActions.svelte` -- An annotation card's action row: Accept/Dismiss on pending review items, Archive and Send to the AI on pending notes, Remove on other pending items, Undo once resolved (extracted from AnnotationCard; Edit sits outside this row)
+- `panels/AnnotationCardActions.svelte` -- An annotation card's action row: Accept/Dismiss on pending review items, Archive and Send to the AI on pending notes, Resolve plus Remove on a pending user comment (Resolve writes `dismissed`, labelled "resolved", and is silent to Claude; #2360), Remove on other pending items, Undo once resolved (extracted from AnnotationCard; Edit sits outside this row)
 - `panels/AnnotationEditForm.svelte` -- Inline edit form for pending annotations (extracted from AnnotationCard)
 - `panels/ReplyThread.svelte` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
 - `panels/MarginColumn.svelte` -- One margin column of annotation cards beside the editor (left or right), with collision resolution, crowding by track width (`full` / `narrow` / `stub`) and Bézier leader lines to each anchor; mounted only when its side is visible

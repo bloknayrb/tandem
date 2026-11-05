@@ -14,6 +14,8 @@ interface Props {
   onDismiss?: (id: string) => void;
   onUndo?: (id: string) => boolean;
   onRemove?: (id: string) => void;
+  /** #2360: close the user's own comment (status `dismissed`) without deleting it. */
+  onResolve?: (id: string) => void;
   onSendToClaude?: (id: string) => void;
   /**
    * The licence refuses the AI (#1521). "Send to Claude" still renders (the
@@ -39,6 +41,7 @@ let {
   onDismiss,
   onUndo,
   onRemove,
+  onResolve,
   onSendToClaude,
   aiDisabled,
   acceptBlocked = false,
@@ -157,6 +160,35 @@ onDestroy(clearUndoTimer);
       </button>
     {/if}
   </div>
+{:else if isPending && !isEditing && onResolve}
+  <!-- #2360: the user's own comment. Resolve is the primary, reversible close;
+       Remove is a hard delete with no undo, so it is pushed to the far edge and
+       kept quieter, away from where a Resolve click lands. Same .aca-row as the
+       other branches so clamped-density bubbles hide it with them. -->
+  <div class="aca-row">
+    <button
+      data-testid="resolve-btn-{annotationId}"
+      class="aca-btn aca-btn--resolve"
+      onclick={(e) => {
+        e.stopPropagation();
+        onResolve!(annotationId);
+      }}
+    >
+      Resolve
+    </button>
+    {#if onRemove}
+      <button
+        data-testid="remove-btn-{annotationId}"
+        class="aca-btn aca-btn--ghost aca-push-end"
+        onclick={(e) => {
+          e.stopPropagation();
+          onRemove!(annotationId);
+        }}
+      >
+        Remove
+      </button>
+    {/if}
+  </div>
 {:else if isPending && !isEditing && onRemove}
   <button
     data-testid="remove-btn-{annotationId}"
@@ -233,6 +265,20 @@ onDestroy(clearUndoTimer);
   .aca-btn--ghost {
     background: var(--tandem-surface-muted);
     color: var(--tandem-fg-muted);
+  }
+  /* #2360: Resolve reads as the stronger of the two neutral pills (full-strength
+     bold text on the muted ground), so it is not a twin of Remove.
+     Deliberately not the success tint: that colour means "Accept". */
+  .aca-btn--resolve {
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg);
+    font-weight: 600;
+  }
+  .aca-btn--resolve:hover {
+    background: var(--tandem-surface-sunk);
+  }
+  .aca-push-end {
+    margin-left: auto;
   }
   .aca-btn--ghost:hover {
     background: var(--tandem-surface-sunk);

@@ -145,6 +145,24 @@ describe("channel projection — user edit and promotion", () => {
     h.dispose();
   });
 
+  it("#2360: a user resolving (and un-resolving) their own comment emits nothing", () => {
+    // Resolve is the browser writing `dismissed` over the user's own record. The
+    // status arms need a Claude author and the edit arm needs editedAt to move,
+    // so closing your own comment asks nothing of Claude. Pinned, not assumed.
+    const h = harness();
+    add(h, "a1", { author: "user", type: "comment" });
+    h.annotations.set(
+      "a1",
+      annotation("a1", { author: "user", type: "comment", status: "dismissed" }),
+    );
+    h.annotations.set(
+      "a1",
+      annotation("a1", { author: "user", type: "comment", status: "pending" }),
+    );
+    expect(h.types()).toEqual(["annotation:created"]);
+    h.dispose();
+  });
+
   it("DELTA (was: emitted nothing): promoting a legacy flag now emits annotation:created", () => {
     // A bug on master, fixed here because the branch was in this code anyway.
     // The client promoter sanitizes before deciding something is a note, and

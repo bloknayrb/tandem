@@ -375,6 +375,10 @@ pub(crate) fn show_tab_context_menu(
 pub(crate) struct AnnotationContextMenuRequest {
     can_accept: bool,
     can_dismiss: bool,
+    /// #2360: close the user's own comment. `default` so a webview that predates
+    /// the field still opens the menu instead of failing to deserialize.
+    #[serde(default)]
+    can_resolve: bool,
     can_reply: bool,
     can_edit: bool,
     can_send_to_claude: bool,
@@ -390,6 +394,7 @@ fn build_annotation_context_menu_spec(req: &AnnotationContextMenuRequest) -> Vec
     let review: Vec<CtxItem> = [
         (req.can_accept, "ctx:annotation:accept", "Accept"),
         (req.can_dismiss, "ctx:annotation:dismiss", "Dismiss"),
+        (req.can_resolve, "ctx:annotation:resolve", "Resolve"),
     ]
     .into_iter()
     .filter_map(|(on, id, label)| on.then_some(CtxItem::Custom(id, label, true)))
@@ -801,6 +806,7 @@ mod annotation_context_menu_tests {
         AnnotationContextMenuRequest {
             can_accept: false,
             can_dismiss: false,
+            can_resolve: false,
             can_reply: false,
             can_edit: false,
             can_send_to_claude: false,
@@ -968,6 +974,50 @@ mod annotation_context_menu_tests {
     }
 
     #[test]
+    fn user_comment_shows_resolve_in_the_review_group_and_keeps_remove() {
+        // author=user, type=comment, pending, AI on:
+        // Resolve | Reply… · Edit… | Copy | Remove.
+        let mut r = none();
+        r.can_resolve = true;
+        r.can_reply = true;
+        r.can_edit = true;
+        r.can_copy = true;
+        r.can_remove = true;
+        let spec = build_annotation_context_menu_spec(&r);
+        assert_eq!(
+            ids(&spec),
+            vec![
+                "ctx:annotation:resolve",
+                "ctx:annotation:reply",
+                "ctx:annotation:edit",
+                "ctx:annotation:copy",
+                "ctx:annotation:remove",
+            ]
+        );
+        assert_eq!(label_of(&spec, "ctx:annotation:resolve"), Some("Resolve"));
+        assert_eq!(label_of(&spec, "ctx:annotation:remove"), Some("Remove"));
+        assert!(separators_well_formed(&spec));
+    }
+
+    /// `#[serde(default)]` pin (#2360): a request without `canResolve` must still
+    /// deserialize, as `false`, or the menu silently never opens.
+    #[test]
+    fn missing_can_resolve_defaults_to_false() {
+        let r: AnnotationContextMenuRequest = serde_json::from_value(serde_json::json!({
+            "canAccept": false,
+            "canDismiss": false,
+            "canReply": false,
+            "canEdit": false,
+            "canSendToClaude": false,
+            "canCopy": true,
+            "canRemove": false,
+            "isNote": false,
+        }))
+        .expect("a request without canResolve should deserialize");
+        assert!(!r.can_resolve);
+    }
+
+    #[test]
     fn request_deserializes_from_camel_case() {
         let r: AnnotationContextMenuRequest = serde_json::from_value(serde_json::json!({
             "canAccept": false,
@@ -1071,9 +1121,10 @@ mod context_menu_id_space_tests {
             }
         }
 
-        for flags in 0u16..256 {
+        for flags in 0u16..512 {
             walk(
                 &build_annotation_context_menu_spec(&AnnotationContextMenuRequest {
+                    can_resolve: flags & 256 != 0,
                     can_accept: flags & 1 != 0,
                     can_dismiss: flags & 2 != 0,
                     can_reply: flags & 4 != 0,

@@ -59,7 +59,7 @@ const statusOptions: ChipOption[] = [
   { value: "all", label: "Any status", kind: "text" },
   { value: "pending", label: "Pending", kind: "icon", icon: "pending" },
   { value: "accepted", label: "Accepted", kind: "icon", icon: "check" },
-  { value: "dismissed", label: "Dismissed", kind: "icon", icon: "dismiss" },
+  { value: "dismissed", label: "Dismissed/resolved", kind: "icon", icon: "dismiss" },
 ];
 </script>
 

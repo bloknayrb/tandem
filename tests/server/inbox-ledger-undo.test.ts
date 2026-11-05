@@ -346,3 +346,54 @@ describe("#1826: the userActions bucket has a status gate", () => {
     expect(poll(surfaced).userActions).toEqual([]);
   });
 });
+
+/**
+ * #2360: Resolve on a user comment is the browser writing `dismissed` over its own
+ * record. By design it asks nothing of Claude: no push (the observer needs a Claude
+ * author for a status event) and no pull (the record is settled). These rows pin
+ * that, including the accepted bound: a comment resolved before its first poll is
+ * never surfaced by pull; the `annotation:created` push already carried it.
+ */
+describe("#2360: a user resolving their own comment is silent to Claude", () => {
+  function seedPending(id: string): void {
+    withBrowser(doc, () =>
+      map().set(id, {
+        id,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "please fix",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      }),
+    );
+  }
+
+  it("surfaced while pending, then resolved: the next poll yields neither bucket", () => {
+    const surfaced = new Map<string, number>();
+    seedPending("u1");
+    expect(poll(surfaced).userActions.map((a) => a.id)).toEqual(["u1"]);
+    userDecides("u1", "dismissed");
+    const after = poll(surfaced);
+    expect(after.userActions).toEqual([]);
+    expect(after.userResponses, "a user comment is never a userResponse").toEqual([]);
+  });
+
+  it("resolved before the first poll is never surfaced (accepted bound)", () => {
+    const surfaced = new Map<string, number>();
+    seedPending("u2");
+    userDecides("u2", "dismissed");
+    expect(poll(surfaced).userActions).toEqual([]);
+  });
+
+  it("resolved then undone before the first poll surfaces exactly once", () => {
+    const surfaced = new Map<string, number>();
+    seedPending("u3");
+    userDecides("u3", "dismissed");
+    userDecides("u3", "pending");
+    expect(poll(surfaced).userActions.map((a) => a.id)).toEqual(["u3"]);
+    expect(poll(surfaced).userActions).toEqual([]);
+  });
+});

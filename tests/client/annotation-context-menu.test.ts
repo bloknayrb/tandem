@@ -108,6 +108,7 @@ describe("buildAnnotationMenuContext", () => {
     expect(req).toEqual({
       canAccept: false,
       canDismiss: false,
+      canResolve: false,
       canReply: true,
       canEdit: true,
       canSendToClaude: true,
@@ -146,6 +147,7 @@ describe("buildAnnotationMenuContext", () => {
     expect(req).toEqual({
       canAccept: false,
       canDismiss: false,
+      canResolve: false,
       canReply: false,
       canEdit: false,
       canSendToClaude: false,
