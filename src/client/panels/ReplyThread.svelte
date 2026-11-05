@@ -23,8 +23,8 @@ interface Props {
   openNonce?: number;
   /**
    * #1626: accept the replacement a reply proposes over the parent's range.
-   * Absent ⇒ the card offers no accept affordance (the resolved list, the
-   * margin view, and any card SidePanel's `canAccept` gate declines).
+   * Absent ⇒ the card offers no accept affordance (the resolved list, and any
+   * non-comment card). Present, each reply is still gated in CommentThread.
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
   /** #1632: the parent's target text is gone. Forwarded to CommentThread. */

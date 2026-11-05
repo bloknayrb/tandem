@@ -133,6 +133,13 @@ export const AnnotationRecordSchemaV1 = z
     // (see `src/shared/types.ts`). Here we only gate shape.
     color: HighlightColorSchema.optional(),
     suggestedText: z.string().optional(),
+    // #2360: reply-accept provenance, kept on the accepted record so it reaches
+    // undo and Claude's reads. Undo itself is offered only within the page load
+    // that accepted (`recentlyResolved`), so after a reload nothing reads these
+    // to restore. Passthrough would keep them; declared so the `null` marker is
+    // a validated shape.
+    acceptedReplyId: z.string().optional(),
+    priorSuggestedText: z.string().nullable().optional(),
     // New for v1 envelope: monotonically-increasing revision counter used for
     // last-writer-wins merge between in-memory Y.Map state and on-disk state.
     rev: z.number().int().nonnegative(),

@@ -19,7 +19,12 @@ import { literalInlineContent, literalRestoreContent } from "../editor/utils/lit
 import { annotationToPmRange, flatTextForPmRange, pmDocFlatText } from "../positions";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { setsEqual } from "../utils/sets";
-import { canAccept } from "./annotation-context-menu";
+import {
+  canAccept,
+  canAcceptReplySuggestion,
+  isAcceptableReplyRewrite,
+  isUnverifiableTarget,
+} from "./annotation-context-menu";
 
 /** Why undo refused, permanently. See `onUndoFailed`. */
 export type UndoDeclineReason = "truncated-snapshot" | "block-structure";
@@ -295,7 +300,7 @@ function applyAsBlocks(
 
 export type SuggestionTargetCheck =
   | { kind: "unresolvable" }
-  | { kind: "unverified" | "contradicted" | "ok"; resolved: PmRangeResult };
+  | { kind: "unverifiable" | "unverified" | "contradicted" | "ok"; resolved: PmRangeResult };
 
 /**
  * What a suggestion's target reads as, against the document as it is now.
@@ -312,6 +317,19 @@ export type SuggestionTargetCheck =
  *
  * `flat` is `pmDocFlatText(pmDoc)`, passed when checking many records against
  * one document.
+ *
+ * **`unverifiable` (#2360)** is a USER comment whose rewrite could not be
+ * checked or could not be undone: no `textSnapshot`, or a truncated one. A
+ * browser-made comment never has a snapshot, and the only thing that rewrites
+ * its range is a Claude reply rewrite — which then has nothing to verify the
+ * target against (the probe in `reply-rewrite-user-card.test.ts` overwrote a
+ * shifted span) and nothing for Undo to put back (undo restores from the
+ * snapshot, and declines a truncated one permanently). Its anchor is no help:
+ * the server's lazy attach mints a `relRange` over the stored flat range on
+ * Claude's first read, and with no snapshot to gate on it mints over whatever
+ * the stale offsets cover by then. A Claude record with no snapshot stays
+ * `unverified` — legacy, applied unchecked by a recorded decision (see
+ * `applySuggestion`).
  */
 export function checkSuggestionTarget(
   ann: Annotation,
@@ -321,6 +339,7 @@ export function checkSuggestionTarget(
 ): SuggestionTargetCheck {
   const resolved = annotationToPmRange(ann, pmDoc, ydoc);
   if (!resolved) return { kind: "unresolvable" };
+  if (isUnverifiableTarget(ann)) return { kind: "unverifiable", resolved };
   if (ann.textSnapshot === undefined) return { kind: "unverified", resolved };
   const actual = flatTextForPmRange(pmDoc, resolved.from, resolved.to, flat);
   return { kind: snapshotContradicts(ann, actual) ? "contradicted" : "ok", resolved };
@@ -328,7 +347,7 @@ export function checkSuggestionTarget(
 
 /** The target alone makes Accept fail. `unverified` (legacy, no snapshot) applies. */
 export const isTargetRefused = (check: SuggestionTargetCheck): boolean =>
-  check.kind === "unresolvable" || check.kind === "contradicted";
+  check.kind === "unresolvable" || check.kind === "contradicted" || check.kind === "unverifiable";
 
 /**
  * Apply an annotation's replacement text in the editor.
@@ -382,7 +401,11 @@ export function applySuggestion(
       return false;
     }
     const { resolved } = target;
-    if (target.kind === "unverified") {
+    if (target.kind === "unverifiable") {
+      console.warn(
+        `[SidePanel] User comment ${ann.id} has no usable textSnapshot, refusing to apply a rewrite over it`,
+      );
+    } else if (target.kind === "unverified") {
       // Not refused: legacy records predate `textSnapshot`, and refusing every
       // one of them would break accept for documents that are perfectly fine.
       // But "we do not refuse" and "we do not mention it" are separate calls,
@@ -398,8 +421,11 @@ export function applySuggestion(
       console.warn(
         `[SidePanel] Text changed since the suggestion was written, refusing to apply ${ann.id} (resolved via ${resolved.method})`,
       );
-      return false;
     }
+    // The refusal is ONE positive gate on the shared verdict, not an arm per
+    // kind above: a kind the chain forgot to name would otherwise fall through
+    // to the write. The arms only choose the warning.
+    if (isTargetRefused(target)) return false;
 
     const inCode = isCodeContext(editor, resolved.from);
     const marks = marksAcrossRange(editor, resolved.from, resolved.to);
@@ -589,8 +615,49 @@ export function useAnnotationReview({
    * record already stamped `claude`.
    */
   function revertedToPending(ann: Annotation): Annotation {
-    const { resolvedBy: _resolvedBy, ...rest } = ann;
-    return { ...rest, status: "pending" };
+    return { ...withoutReplyAccept(ann), status: "pending" };
+  }
+
+  /**
+   * #2360: `ann` minus everything that describes a PAST resolution —
+   * `resolvedBy` (#1770) and the reply-accept provenance. Every revert and every
+   * accept write goes through it, so provenance only ever describes the
+   * acceptance it was written with: a stale `acceptedReplyId` riding into a
+   * later accept of the parent's own proposal would make Undo "restore" a prior
+   * from an unrelated accept.
+   */
+  function withoutReplyAccept(ann: Annotation): Annotation {
+    const {
+      resolvedBy: _resolvedBy,
+      acceptedReplyId: _acceptedReplyId,
+      priorSuggestedText: _priorSuggestedText,
+      ...rest
+    } = ann;
+    return rest as Annotation;
+  }
+
+  /**
+   * #2360: put back what a reply accept overwrote in the parent's
+   * `suggestedText` — the parent's own proposal, or nothing. Without it the
+   * parent keeps the reply's text after Undo: on a user's own comment, Claude's
+   * rewrite stored as though the user had proposed it. Undo's job ALONE, and
+   * applied only after undo's span compare, which reads the applied text off
+   * `suggestedText`. (The accept failure arm also reverts, but on a record that
+   * was never accepted.)
+   */
+  function restoredFromReplyAccept(ann: Annotation): Annotation {
+    // Only an ACCEPTED record's provenance describes a rewrite to undo; on a
+    // dismissed one it can only be a leftover.
+    if (ann.status !== "accepted" || ann.acceptedReplyId === undefined) return ann;
+    // Only an explicit `null` means "the parent had no proposal". An absent
+    // prior (a writer that set the id alone, or a bad-typed value sanitize
+    // dropped) says nothing, and reading it as `null` would delete a Claude
+    // parent's own suggestion; keep the applied text, the pre-#2360 outcome.
+    if (ann.priorSuggestedText === undefined) return ann;
+    const { suggestedText: _applied, ...rest } = ann;
+    return typeof ann.priorSuggestedText === "string"
+      ? ({ ...rest, suggestedText: ann.priorSuggestedText } as Annotation)
+      : (rest as Annotation);
   }
 
   /**
@@ -614,7 +681,7 @@ export function useAnnotationReview({
    * accept must not leave the reply's text on the parent as though it had been
    * chosen.
    */
-  function applyAcceptedSuggestion(id: string, suggestedText: string) {
+  function applyAcceptedSuggestion(id: string, suggestedText: string, replyId?: string) {
     const y = getYdoc();
     if (!y) return;
     const map = y.getMap(Y_MAP_ANNOTATIONS);
@@ -637,7 +704,16 @@ export function useAnnotationReview({
       onApplyFailed?.(stored, editor ? "range" : "no-editor");
       return;
     }
-    withBrowser(y, () => map.set(id, { ...ann, status: "accepted" }));
+    // #2360: a reply accept records which reply it took and what it overwrote,
+    // in the SAME write as the status, so no accepted record exists without the
+    // provenance Undo needs. `null` marks "the parent had no proposal".
+    const provenance =
+      replyId === undefined
+        ? {}
+        : { acceptedReplyId: replyId, priorSuggestedText: stored.suggestedText ?? null };
+    withBrowser(y, () =>
+      map.set(id, { ...withoutReplyAccept(ann), ...provenance, status: "accepted" }),
+    );
 
     lastResolvedId = id;
     recentlyResolved = new Set(recentlyResolved).add(id);
@@ -647,17 +723,21 @@ export function useAnnotationReview({
    * Accept the replacement a REPLY proposes over its parent's range (#1626).
    *
    * The reply carries no range of its own; the parent's is what gets rewritten,
-   * and the parent's stored `suggestedText` is overwritten by what was applied.
+   * and the parent's stored `suggestedText` is overwritten by what was applied
+   * (Undo puts the original back, #2360).
    */
   function acceptReplySuggestion(annotationId: string, replyId: string) {
     const y = getYdoc();
     if (!y) return;
     const reply = y.getMap(Y_MAP_ANNOTATION_REPLIES).get(replyId) as AnnotationReply | undefined;
-    // The pairing is checked rather than assumed: the ids come from the card's
-    // own props, but both maps are CRDT state any connected client can write.
-    if (!reply || reply.annotationId !== annotationId) return;
-    if (typeof reply.suggestedText !== "string") return;
-    applyAcceptedSuggestion(annotationId, reply.suggestedText);
+    const raw = y.getMap(Y_MAP_ANNOTATIONS).get(annotationId) as Annotation | undefined;
+    // The whole predicate is re-checked rather than trusted from the button:
+    // the ids come from the card's own props, but both maps are CRDT state any
+    // connected client can write. Judged on the SANITIZED parent, as the rails
+    // render it, so a legacy shape cannot pass here and fail there.
+    if (!reply || !raw) return;
+    if (!canAcceptReplySuggestion(sanitizeAnnotation(raw, devSanitizeWarn), reply)) return;
+    applyAcceptedSuggestion(annotationId, reply.suggestedText as string, replyId);
   }
 
   function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
@@ -705,7 +785,9 @@ export function useAnnotationReview({
       applyAcceptedSuggestion(id, ann.suggestedText);
       return;
     }
-    withBrowser(y, () => map.set(id, { ...ann, status }));
+    // Through `withoutReplyAccept` like the accept write: provenance left on a
+    // pending record must not ride into this resolution, or Undo would read it.
+    withBrowser(y, () => map.set(id, { ...withoutReplyAccept(ann), status }));
 
     lastResolvedId = id;
     recentlyResolved = new Set(recentlyResolved).add(id);
@@ -896,7 +978,7 @@ export function useAnnotationReview({
       }
     }
 
-    withBrowser(y, () => map.set(id, revertedToPending(ann)));
+    withBrowser(y, () => map.set(id, revertedToPending(restoredFromReplyAccept(ann))));
     removeFromResolved(id);
     if (lastResolvedId === id) {
       lastResolvedId = null;
@@ -1022,14 +1104,27 @@ export function useAnnotationReview({
       // suggestion, or a reply's proposal over their range. Plain comments are
       // most of Claude's, and each check is several document walks. The
       // replies map is not a signal; the observer above bumps `docTick` on it.
-      const proposed = new Set<string>();
+      //
+      // Only replies the thread will offer Accept on count (#2360), indexed
+      // once per pass: a user's own reply carrying `suggestedText` gets no
+      // button, so it needs no verdict.
+      const proposed = new Map<string, AnnotationReply>();
       for (const reply of ydoc?.getMap<AnnotationReply>(Y_MAP_ANNOTATION_REPLIES).values() ?? []) {
-        if (typeof reply.suggestedText === "string") proposed.add(reply.annotationId);
+        if (isAcceptableReplyRewrite(reply)) proposed.set(reply.annotationId, reply);
       }
       let flat: string | undefined;
       for (const ann of getAnnotations()) {
-        if (!canAccept(ann)) continue;
-        if (ann.suggestedText === undefined && !proposed.has(ann.id)) continue;
+        // A user card's own Accept never shows, but a Claude rewrite in its
+        // thread does (#2360), and that button needs the verdict too.
+        const reply = proposed.get(ann.id);
+        if (!canAccept(ann) && !(reply && canAcceptReplySuggestion(ann, reply))) continue;
+        if (ann.suggestedText === undefined && !reply) continue;
+        // Refused from the record alone — the common case on a user card, so
+        // it skips the document walk and range resolve the check would do.
+        if (isUnverifiableTarget(ann)) {
+          lost.add(ann.id);
+          continue;
+        }
         try {
           flat ??= pmDocFlatText(pmDoc);
           if (isTargetRefused(checkSuggestionTarget(ann, pmDoc, ydoc, flat))) lost.add(ann.id);
