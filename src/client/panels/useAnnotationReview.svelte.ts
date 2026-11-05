@@ -649,6 +649,11 @@ export function useAnnotationReview({
     // Only an ACCEPTED record's provenance describes a rewrite to undo; on a
     // dismissed one it can only be a leftover.
     if (ann.status !== "accepted" || ann.acceptedReplyId === undefined) return ann;
+    // Only an explicit `null` means "the parent had no proposal". An absent
+    // prior (a writer that set the id alone, or a bad-typed value sanitize
+    // dropped) says nothing, and reading it as `null` would delete a Claude
+    // parent's own suggestion; keep the applied text, the pre-#2360 outcome.
+    if (ann.priorSuggestedText === undefined) return ann;
     const { suggestedText: _applied, ...rest } = ann;
     return typeof ann.priorSuggestedText === "string"
       ? ({ ...rest, suggestedText: ann.priorSuggestedText } as Annotation)
