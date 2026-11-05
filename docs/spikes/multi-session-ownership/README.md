@@ -211,7 +211,7 @@ One error code, `NOT_DOC_OWNER`, with `details: {reason, documentId, holder: {la
 
 Every message whose holder is Tandem's Claude, except `answered`, ends with §3.3's conditional handle sentence; `held`, `claimed`, `switch` and `chat` messages whose holder is a terminal end with §3.1's two-toolsets clause. No copy names the developer: it says "the user". A recipient that **is** Tandem's Claude gets, for `lost`: "A session the user is working with has this document now; leave it."
 
-**Loss records.** A record keeps, per document it lost this run, the cause and the new holder, until that document changes owner again. Causes `released`, `taken back`, `assigned` and `taken` are **blocking**: while one stands, the record cannot implicitly claim the document (a write, a post or a poll), and its polls do not read it even when it is unowned; `tandem_open` still takes it under §4.2, and the copy above says when. This makes Release last while Tandem's Claude is not present. A lapse records nothing blocking. The `tandem` record gets no loss record when it stops being present.
+**Loss records.** A record keeps, per document it lost this run, the cause and the new holder, until that document changes owner again — and going to unowned counts as a change, so a terminal whose document was taken back can claim it again once Tandem's Claude stops being present. Causes `released`, `taken back`, `assigned` and `taken` are **blocking**: while one stands, the record cannot implicitly claim the document (a write, a post or a poll), and its polls do not read it even when it is unowned; `tandem_open` still takes it under §4.2, and the copy above says when. This makes Release last while Tandem's Claude is not present. A lapse records nothing blocking. The `tandem` record gets no loss record when it stops being present.
 
 ### 5.4 `tandem_open`
 
@@ -352,7 +352,7 @@ A post answers nothing; claiming is what keeps two sessions from both posting ab
 - `configured === true` (a tri-state today);
 - its in-memory `standby` is not `"off"` (`supervisor.ts:1069`) — the supervisor's live state, not the saved `lastGoodSettings.startMode`, which can disagree when saving Off fails;
 - `breakerTripped` is false;
-- `lastError` is unset, or a restart is underway: `restartTimer` is set or `launching > 0`. Today's `lastError` values are `needs-login`, `unlicensed`, `cli-unusable`, `binary-not-found`, `spawn-failed`, `stop-failed`, `circuit-open` and `wake-delivery-failed`; any of them with no restart underway is staying down. A new value counts as staying down; an exhaustive-switch test makes adding one a decision.
+- `lastError` is unset, or a restart is underway: `restartTimer` is set or `launching > 0`. Today's `lastError` values are `needs-login`, `unlicensed`, `cli-unusable`, `binary-not-found`, `spawn-failed`, `stop-failed`, `circuit-open` and `wake-delivery-failed`; any of them with no restart underway is staying down. A new value counts as staying down; an exhaustive-switch test makes adding one a decision. `status-check-failed` (`src/shared/launcher/contract.ts:240`) is a `LauncherErrorCode` the status **route** returns when it cannot read the supervisor (`src/server/launcher/api-routes.ts:286`); the supervisor never sets it as `lastError`, so the switch's input type excludes it rather than classifying it.
 
 It keeps its documents through idle-stop, resume, crash-resume and relaunch (decision 7).
 
@@ -625,6 +625,7 @@ Item 1's "your documents" means the user's: the CHANGELOG says "your documents",
    - step 9 depends on timing: a terminal that polls before Tandem's Claude's post-spawn point claims the document, which take-back then takes, so its own `tandem_open` needs the user to ask again;
    - "Calls I made" says a chat on a Claude Desktop document can start Tandem's Claude; v5 replaces that call: an attached Desktop holder's chat starts nothing (§8.3; single-session change 14). And the "Who answers" table's ~35 minutes is about 37 (§3.4);
    - the plan's call "Off→On moves no documents" is reversed by a v5 call: unowned documents become `default` at Off→On, `claimed` ones still wait for a run start (§4.2). The "Who answers" row "Tandem's Claude turned back On (no start)" and manual-check step 6 change to match;
+   - the plan's "Off→On … starts nothing" also changes: Off→On starts Tandem's Claude for a waiting doc-less message it now owns, and for waiting items on the unowned documents it gets back (§7.2, §8.4, single-session change 13);
    - R2.6 is met for the poll route only: a notice an owner saw only by push can reach the next owner as a duplicate accept or dismiss notice — never a second answer (§15). Bryan confirms narrowing R2.6's "by any route" to "by poll";
    - manual-check row 1 should name the plugin-ref skill; row 10 ("as today") holds only for documents a terminal claimed, since unowned documents go to Tandem's Claude at its next presence; and a new row should cover Off→On (unowned documents return, claimed ones stay);
    - it would gain rows for Solo, needs-login, a run that never binds, and two terminals given one doc-less chat.
