@@ -646,7 +646,9 @@ export function useAnnotationReview({
    * was never accepted.)
    */
   function restoredFromReplyAccept(ann: Annotation): Annotation {
-    if (ann.acceptedReplyId === undefined) return ann;
+    // Only an ACCEPTED record's provenance describes a rewrite to undo; on a
+    // dismissed one it can only be a leftover.
+    if (ann.status !== "accepted" || ann.acceptedReplyId === undefined) return ann;
     const { suggestedText: _applied, ...rest } = ann;
     return typeof ann.priorSuggestedText === "string"
       ? ({ ...rest, suggestedText: ann.priorSuggestedText } as Annotation)
@@ -778,7 +780,9 @@ export function useAnnotationReview({
       applyAcceptedSuggestion(id, ann.suggestedText);
       return;
     }
-    withBrowser(y, () => map.set(id, { ...ann, status }));
+    // Through `withoutReplyAccept` like the accept write: provenance left on a
+    // pending record must not ride into this resolution, or Undo would read it.
+    withBrowser(y, () => map.set(id, { ...withoutReplyAccept(ann), status }));
 
     lastResolvedId = id;
     recentlyResolved = new Set(recentlyResolved).add(id);

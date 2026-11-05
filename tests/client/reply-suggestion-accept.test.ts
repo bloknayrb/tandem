@@ -159,6 +159,35 @@ describe("#1626: accepting a reply's suggestion", () => {
     expect("priorSuggestedText" in parent).toBe(false);
   });
 
+  it("Undo of a DISMISS leaves suggestedText alone, even with leftover provenance", () => {
+    seed();
+    annotations.set(PARENT_ID, {
+      ...(annotations.get(PARENT_ID) as Annotation),
+      acceptedReplyId: "stale",
+      priorSuggestedText: "stale prior",
+    });
+    const api = review();
+    api.resolveAnnotation(PARENT_ID, "dismissed");
+
+    const dismissed = annotations.get(PARENT_ID) as Annotation;
+    expect(dismissed.status).toBe("dismissed");
+    expect("acceptedReplyId" in dismissed).toBe(false);
+    expect("priorSuggestedText" in dismissed).toBe(false);
+
+    // Even if a writer puts the fields back on the dismissed record, Undo
+    // restores only an ACCEPTED record's provenance.
+    annotations.set(PARENT_ID, {
+      ...dismissed,
+      acceptedReplyId: "stale",
+      priorSuggestedText: "stale prior",
+    });
+    expect(api.undoResolveAnnotation(PARENT_ID)).toBe(true);
+    const parent = annotations.get(PARENT_ID) as Annotation;
+    expect(parent.status).toBe("pending");
+    expect(parent.suggestedText).toBe(PARENT_PROPOSAL);
+    expect("acceptedReplyId" in parent).toBe(false);
+  });
+
   it("an accept of the parent's OWN proposal drops stale reply-accept fields", () => {
     // A pending record can carry leftovers (an older build's revert drops the
     // fields it does not know only from its OWN reads). Undo of this accept
