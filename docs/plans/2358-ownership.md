@@ -1,9 +1,9 @@
 # Plan: #2358, one Claude answers each ask (document ownership)
 
-**Plan rev 8, 2026-11-05.** Issue #2358. Rev 8 applies Bryan's 2026-11-05 decisions (below) and the plan-text edits design v5 §14 listed, which he accepted.
+**Plan rev 9, 2026-11-05.** Issue #2358. Rev 8 applied Bryan's first 2026-11-05 decisions and the plan-text edits design v5 §14 listed; rev 9 applies his second round (A–D below): the setup migration ships live a release early, Claude Code entries prefer a system Node, the handle's reach is probed and narrowed, and Tandem's Claude is not present while it cannot connect its own Tandem tools.
 
 References:
-- Code cites are to origin/master `3b0c6943`.
+- Code cites were written against origin/master `3b0c6943` and re-checked against `32c55352` on 2026-11-05 (they still hold). The design of record carries the verified cites for everything added since.
 - Design of record: `docs/spikes/multi-session-ownership/README.md` (v4.1, Bryan 2026-09-17, unimplemented). Below, "the design" means this doc, and "design v5" means its revision, which is PR 0 of this plan.
 
 **How to read this plan.** It fixes the rules and the shipping order, and lists the **requirements** design v5 must meet. It does not choose mechanisms; design v5 does that, with its own adversarial review rounds. Six review rounds showed that mechanism sketched here only produced seams.
@@ -31,7 +31,14 @@ References:
 5. Rename stays dropped: "doc names in the assigned list is ok".
 6. `ownership-flag-on` is a required check while ownership is dark: "ok, as you recommend".
 7. R2.6 is narrowed to the poll route: "ok".
-8. The plan-text edits design v5 listed: "ok". Applied in this revision.
+8. The plan-text edits design v5 listed: "ok". Applied in rev 8.
+
+Second round, same day (design v5 §14):
+
+- A. Migration timing: "One release early". The bridge setup entry and its boot-sweep migration (PR 2b) ship live, not behind the ownership flag, in a release before the flip. Ownership still ships dark.
+- B. "Prefer system Node" for Claude Code terminal entries; the desktop's bundled Node only as a documented fallback.
+- C. The handle's reach: "Probe, then narrow". The launcher passes its own `--mcp-config` carrying the handle if a probe shows it overrides the user-level entry; otherwise the handle goes in the child's environment and its wider reach is filed.
+- D. An entry the child cannot bind through: "Not present". Tandem's Claude counts as not present while it cannot connect a Tandem-built bridge.
 
 ## Why two sessions answered
 
@@ -48,6 +55,7 @@ Since #2330, every session that passes its inbox cursor is handed the same new i
 **Tandem's Claude** is one identity across its child runs. It is **present** when all of these hold:
 - it has started at least once this server run;
 - it is configured;
+- it can connect its own Tandem tools (decision D: a bridge Tandem built for it; design v5 §8.1);
 - it is not Off;
 - it is not in a staying-down state (crash breaker tripped, sign-in or licence refused, CLI unusable or missing, spawn or stop failed with no restart pending).
 
@@ -101,7 +109,7 @@ While present, it keeps its documents through idle-stop, restarts and respawns.
 1. Another AI client (a terminal or Claude Desktop) next to a present-but-idle Tandem's Claude is refused on Bryan's documents. The refusal says `tandem_open` is right only when the user asked it directly, and Claude starts for them.
 2. Tandem's Claude alone and idle-stopped is now started by a new comment or a user thread reply on its documents, not only by chat.
 
-Design v5 §14 lists the rest, including that Claude Code's `tandem` entry becomes the stdio bridge, and a terminal's two toolsets one session.
+Design v5 §14 lists the rest. The `tandem` entry's change to the stdio bridge (so a terminal's two toolsets are one session) ships a release earlier, with its own CHANGELOG lines.
 
 ## Requirements design v5 must meet
 
@@ -179,7 +187,7 @@ Each requirement comes with the acceptance test that proves it.
 
 ## Shipping
 
-Ownership lands **dark**, with the following requirements. PR 1a picks the mechanism.
+Ownership lands **dark**, with the following requirements. PR 1a picks the mechanism. Two PRs are deliberately **not** dark: 1b (#1952) and 2b (the setup entry), which ship live before the flip.
 - Release builds never carry the flag, pinned by a test.
 - A shell export can't produce a half-on build.
 - Tests can run with the flag on, proven by a positive-anchor test that runs only in the flag-on job. The root `test.env` beats the shell, so the flag's test variable can't live there.
@@ -194,15 +202,16 @@ Ownership lands **dark**, with the following requirements. PR 1a picks the mecha
 | PR | Contents |
 |---|---|
 | **0. Design v5** | Meets R1–R5. Tracked, with adversarial rounds until clean. PRs 1–4 are sized after it. |
-| **1a. Identity** | Owner records, kinds, the Tandem's Claude identity with a presence seam; registry `ownerId`, descriptor, `claudeSessionId` and per-record last-poll time; request context `ownerId`, and `peerIsLoopback` set ungated from the socket only; the bridge's client id; the stdio record; the flag; ADR-054; a CLAUDE.md "ships dark" entry. |
-| **1b. #1952** | Per-request `wakeUrl` suppression reading `peerIsLoopback`, ungated (a separate security fix). Lands now (Bryan, 2026-11-05): it reopens #1952 and amends ADR-056, the `docs/security.md` register and CLAUDE.md's Security bullet. |
+| **1a. Identity** | Owner records, kinds, the Tandem's Claude identity with a presence seam; registry `ownerId`, descriptor, `claudeSessionId` and per-record last-poll time; request context `ownerId`; the bridge's client id; the stdio record; the flag; ADR-054; a CLAUDE.md "ships dark" entry; `ownership-flag-on` made a required check. |
+| **1b. #1952** (live) | Per-request `wakeUrl` suppression, ungated (a separate security fix). It adds `peerIsLoopback` to the request context itself, so it does not wait for 1a, and fails closed when the context is missing. Lands now (Bryan, 2026-11-05): it reopens #1952 and amends ADR-056, the `docs/security.md` register and CLAUDE.md's Security bullet. |
 | **1c. Enforcement** | Op queue, refusal placement, `NOT_DOC_OWNER` and the kind-based copy, the write-side default, the `tandem_open` take rule, the answered-once rule (R1.5), `switchDocument` owner-only. |
 | **2. Inbox and replies** | Scope, handover, chat ownership, reply acceptance, `getAnnotations` labels, the inbox pin amendment. |
-| **2b. Setup entry and migration** | Behind the flag: `tandem setup`, the wizard and `rotate-token` write Claude Code's `tandem` entry as the stdio bridge, and the boot sweep migrates the HTTP entry Tandem wrote; the doctor names any entry it leaves alone; the ADR-045 amendment. Lands before PR 3's bind (design v5 §3.6). |
-| **3. Launcher** | The probes; the handle in the child's environment and the bind at `initialize`; presence and its announcer; take-back; the start rules; waking a running owner; `requestWake`. Comes after PR 2 because "waiting" and doc-less ownership come from there. The Assign- and Release-triggered start and wake are a seam that PR 5 calls. |
+| **2b. Setup entry and migration** (live, a release before the flip) | `tandem setup`, the wizard and `rotate-token` write Claude Code's `tandem` entry as the stdio bridge on a system Node where one exists, and the boot sweep migrates the HTTP entry Tandem wrote, only from an installed build; dev and test runs use a scratch config home. The doctor names any entry left alone. Amends ADR-045 and #1599's register entry. Not behind the flag, and independent of the dark series; it has its own pre-flip smoke (below). |
+| **3a. Handle and bind (inert)** | Build steps first: the probes design v5 §13 owes (does the launcher's own `--mcp-config` override the user-level entry; can the plugin be disabled for the child). The handle reaches only the child's Tandem bridge, through that config or, failing the probe, the child's environment; the bind at `initialize`; per-spawn teardown; the greeting classification. Inert until 3b. |
+| **3b. Presence, take-back, starts, wakes** | Presence (including decision D) and its announcer; take-back; the start rules; waking a running owner; `requestWake`. Comes after PR 2 because "waiting" and doc-less ownership come from there. The Assign- and Release-triggered start and wake are a seam that PR 5 calls. |
 | **4. Push and shim identity** | SSE narrowing and `/api/channel-reply` permit, per R3.3, R3.4 and R4.8. |
-| **5. Controls** | The ownership routes, badge, popover and native menu; Assign and Release calling PR 3's start/wake seam. |
-| **6. Flip** | Waits for #2360's switch to merge. Flag on, `SKILL.md` bump, the plugin's pinned ref bumped to carry the new skill, `SERVER_INSTRUCTIONS`, docs, CHANGELOG (including the entry migration), release-smoke rows (probes and the first-boot migration), dark pins removed, `ownership-flag-on` dropped from the required checks. |
+| **5. Controls** | The ownership routes, badge, popover and native menu; Assign and Release calling PR 3b's start/wake seam. |
+| **6. Flip** | Waits for #2360's switch to merge and for PR 2b to have shipped in an earlier release. Flag on, `SKILL.md` bump, the plugin's pinned ref bumped to carry the new skill, `SERVER_INSTRUCTIONS`, docs, CHANGELOG (no config change; the entry change was in 2b's release), release-smoke rows (the probes), dark pins removed, `ownership-flag-on` dropped from the required checks. |
 
 After the flip comes the design's Phase 3 (scoping the `/api/wake` watch and the supervisor); Phase 2 is dropped with D5. Until Phase 3, a session armed on `/api/wake` is still woken for every event. So is a shim the server can't map to a session. Such a session finds nothing and ends its turn silently. That costs one turn per event, but produces no answer.
 
@@ -210,9 +219,27 @@ After the flip comes the design's Phase 3 (scoping the `/api/wake` watch and the
 
 The comment-thread reply is the answered-link (decision 6), and #2360's switch waits for ownership (decision 5). So **#2360's switch merges immediately before this flip, and both ship in the same release.** #2360's PRs 1–3 proceed now. The refusal order is pinned: `NOT_DOC_OWNER` before `NOT_OWNED`.
 
+## Pre-flip release smoke (PR 2b's release)
+
+Run before that release ships, on Windows (desktop build and an npm-global install) and the Linux VM AppImage. macOS is recorded as a skip: no hardware.
+
+| # | Step | Expected |
+|---|---|---|
+| P1 | Before installing, copy the `tandem` entry from the user-level Claude Code config (`claude mcp get tandem` shows it). Install and start Tandem | The entry is now a stdio bridge. The value after `Bearer ` in the old entry's `Authorization` header equals the new entry's `env.TANDEM_AUTH_TOKEN`. Its `command` is a system Node if one is on `PATH`, else the bundled one. `tandem doctor` shows only the duplicate-toolset warning |
+| P2 | Leave a terminal `claude` open across that first boot; use a Tandem tool in it; then restart it | Before the restart it still works on the old entry; after it, `tandem_status` through either Tandem toolset shows the same session |
+| P3 | npm-global install: `tandem setup` on a machine with no prior entry | It writes the bridge on the system Node |
+| P4 | A terminal with no plugin, only setup's entry | Tandem tools work through the bridge |
+| P5 | `tandem rotate-token`, then restart a terminal | The entry's `env.TANDEM_AUTH_TOKEN` is the new token and the terminal's tools work |
+| P6 | Windows desktop: with a terminal open, install a desktop update | With a system-Node entry, the terminal's tools keep working; with a bundled-Node entry (no system Node), they stop until the terminal restarts, as the CHANGELOG says |
+| P7 | Linux AppImage: quit Tandem, relaunch it | The entry's paths still exist; the config is not rewritten on relaunch |
+| P8 | Move or uninstall the Node the entry names | `tandem doctor` names the dead command; the next Tandem start repoints it |
+| P9 | Roll back: install the previous release | Tandem tools still work through the bridge; that release's `tandem setup` writes the HTTP entry back |
+| P10 | Hand-edit the entry to HTTP with an extra header; restart Tandem; afterwards run `tandem setup` to restore it | The sweep leaves the hand edit alone and `tandem doctor` names it; `tandem setup` restores the bridge |
+| P11 | Run `npm run dev:server` from a checkout | The user-level Claude Code config is not touched |
+
 ## Manual check (after both flips, before release)
 
-Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lifetime, and a terminal `claude` started **after** the flipped build's first boot, with the plugin at the bumped ref (so it runs the new skill) and the channel shim. Claude Code's user-level `tandem` entry is the stdio bridge (row 17 checks the migration). The terminal then has two Tandem toolsets, the plugin's and setup's; both are bridges forwarding the same session id, so they are **one session**, and which toolset the model picks does not change any row.
+Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lifetime, and a terminal `claude` with the plugin at the bumped ref (so it runs the new skill) and the channel shim. Claude Code's user-level `tandem` entry is the stdio bridge, migrated by PR 2b's release (P1). The terminal has two Tandem toolsets, the plugin's and setup's; both are bridges forwarding the same session id, so they are **one session**, and which toolset the model picks does not change any row.
 
 | # | Step | Expected |
 |---|---|---|
@@ -226,13 +253,13 @@ Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lif
 | 8 | Release a doc the terminal holds | It returns to Tandem's Claude; the Release entry said "Back to Tandem's Claude" |
 | 9 | Restart the server while the terminal holds a doc | The doc goes back to Tandem's Claude once it starts (if the terminal polled first, it claims the doc and take-back then takes it); asked again, the terminal's `tandem_open` re-takes it |
 | 10 | On-click mode, never pressed Start; the terminal works on your doc | As today for docs the terminal claimed; unowned docs go to Tandem's Claude when it is next present |
-| 11 | Repeat 1, 2, 5, 6 and 17 on the Linux VM AppImage, with the plugin ref bumped | Same |
+| 11 | Repeat 1, 2, 5 and 6 on the Linux VM AppImage, with the plugin ref bumped | Same |
 | 12 | Off→On with nothing claimed: close the terminal, turn Off, comment on a doc no session holds, turn On | The doc returns to Tandem's Claude, which starts and answers (row 6 covers a doc a terminal claimed while Off, which stays with it until a run starts) |
 | 13 | Switch to Solo; comment on step 1's doc; wait a minute; switch back to Tandem | Nothing starts and nobody answers during Solo; after it, Tandem's Claude answers once |
 | 14 | Sign Tandem's Claude out (needs-login); comment on a doc it held | After about 5 seconds its docs go unowned; the terminal can pick the comment up; Start is not offered as a fix for sign-in |
-| 15 | A run that never binds: hand-edit the `tandem` entry back to direct-HTTP **with an extra header** (so the boot sweep reads it as not Tandem's and leaves it), restart Tandem, comment | `tandem doctor` names the entry; the comment waits; the stale hint shows after 5 minutes; Assign to the terminal → it answers |
+| 15 | Tandem's Claude cannot connect its tools. If the launcher-config route shipped: rename the bundled bridge script (terminals using it lose their Tandem tools too, until the undo), restart Tandem. If the environment route shipped: hand-edit the `tandem` entry to HTTP with an extra header, restart Tandem. Comment, then undo the change (rename back, or `tandem setup`) | Settings says Tandem's Claude can't connect its Tandem tools; it holds nothing, so the composer names no Tandem's Claude and the terminal can answer; after the undo and a restart it is present again |
 | 16 | Two terminals, Tandem's Claude Off; send one doc-less chat | Exactly one answer |
-| 17 | First-boot migration: before installing the flipped build, keep the direct-HTTP entry `tandem setup` wrote; install and start | The entry is now the bridge carrying the same token; `tandem doctor` shows only the duplicate-toolset warning; in a new terminal, `tandem_status` through each toolset shows the same label |
+| 17 | A terminal that has been open since before PR 2b's release (still on the HTTP entry); have it write to a doc Tandem's Claude holds | The refusal ends "restart this terminal"; after a restart it is one session with its plugin toolset |
 
 ## Calls I made (documented, not asked)
 
@@ -245,7 +272,7 @@ Setup: Windows desktop build, Tandem's Claude in Auto mode with an idle-stop lif
 - **`assigned` documents return to the default rule when their owner goes away.**
 - **The error code is `NOT_DOC_OWNER`.**
 - **#1952 is its own PR** (1b), landing now (Bryan, 2026-11-05).
-- **The setup entry's migration ships behind the flag**, in its own PR (2b); the reversible alternative, migrating live before the flip, is in design v5 §14.
+- **The setup entry's migration is its own PR (2b)**, live a release before the flip (Bryan's decision A).
 - **D5 is dropped.**
 
 ## Confirmed by Bryan (2026-11-04)
