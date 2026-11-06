@@ -480,7 +480,7 @@ export function assertOriginAllowlisted(
  * is same-origin, so it may send `application/json` with no preflight. Two
  * other things stop rebinding: `isHostAllowed` in `apiMiddleware`
  * (`src/server/mcp/api-routes.ts`), which refuses a Host that is not
- * 127.0.0.1 or the Tauri WebView, and the Origin the rebinding page's browser
+ * 127.0.0.1, `[::1]` or the Tauri WebView, and the Origin the rebinding page's browser
  * does send, which (a) refuses. Do not conclude from the JSON-body requirement
  * alone that an absent-Origin route is safe.
  *
