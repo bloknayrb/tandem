@@ -24,7 +24,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
@@ -51,6 +51,7 @@ import {
 import {
   type ClaudeCliPresence,
   INTEGRATIONS_SCHEMA_VERSION,
+  MAX_CLIENT_CONFIG_BYTES,
 } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isBundledSidecarNode } from "../shared/integrations/node-binary-name.js";
@@ -1482,7 +1483,8 @@ async function reportDirectHttpEntry(
   if (verdict === "no-node") {
     r.warn(
       message,
-      "Tandem found no Node 22.12 or newer it can record for this entry, so it stays as it is. " +
+      "When Tandem last looked, it found no Node 22.12 or newer it can record for this entry, " +
+        "so it stays as it is. " +
         "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
         "temporary or removable location, or is owned by another user. Install Node 22.12 or " +
         "newer system-wide (an app started from the dock or a menu cannot see a Node that only " +
@@ -1490,12 +1492,35 @@ async function reportDirectHttpEntry(
     );
     return;
   }
+  // "bridge", "unprobed" (nothing in this process has looked for a system
+  // Node yet; the next start or `tandem setup` does) and an unknown verdict.
   r.warn(
     message,
     `Restart Tandem (it switches this entry when it starts), or ${setupStep(cliAvailable())}; ` +
       "then restart any Claude Code terminal that was open. Until it switches, Tandem can't " +
       "confirm its own Claude is connected unless the Tandem plugin is installed, and may " +
       "decline to start it while that Claude's earlier connection lingers.",
+  );
+}
+
+/** The pre-#686 base Tandem's setup once wrote (`localhost`, not 127.0.0.1). */
+const LEGACY_LOCALHOST_MCP_BASE = `http://localhost:${DEFAULT_MCP_PORT}`;
+
+/** `statSync(...).size`, or 0 when the file cannot be stat'ed (already read). */
+function fileSizeOrZero(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Tandem's direct-HTTP entry in a config too large for any Tandem writer. */
+function reportOversizeHttpEntry(r: Recorder): void {
+  r.warn(
+    "tandem in ~/.claude.json is the older direct-HTTP entry, so Tandem can't tell which Claude Code session is calling",
+    "Tandem's startup switch skips it because ~/.claude.json is too large to rewrite (see the " +
+      "line above); `tandem setup` refuses the file for the same reason. The entry still works.",
   );
 }
 
@@ -1604,6 +1629,18 @@ async function checkUserMcpConfig(
   }
 
   const servers = (read.value as { mcpServers?: Record<string, unknown> }).mcpServers ?? {};
+  // Tandem's writers — setup, the wizard, rotation and the startup switch and
+  // repairs — refuse a client config over `MAX_CLIENT_CONFIG_BYTES` unread
+  // (#1801), so on a file that large nothing Tandem prescribes below can land.
+  const oversize = fileSizeOrZero(claudeCodePath) > MAX_CLIENT_CONFIG_BYTES;
+  if (oversize) {
+    r.warn(
+      `~/.claude.json is over ${MAX_CLIENT_CONFIG_BYTES / (1024 * 1024)} MiB, so Tandem will not rewrite it`,
+      "Tandem's setup, token rotation and its startup switch and repairs all leave a client " +
+        "config this large untouched. Claude Code keeps per-project history in this file; once " +
+        "it is smaller, restart Tandem.",
+    );
+  }
   if (!servers.tandem) {
     r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
   } else {
@@ -1622,7 +1659,21 @@ async function checkUserMcpConfig(
         // the plugin.
         r.warn(invalid.message, invalid.fix);
       } else if (shape.kind === "tandem-http") {
-        await reportDirectHttpEntry(r, cliAvailable, bridgeVerdict);
+        if (oversize) reportOversizeHttpEntry(r);
+        else await reportDirectHttpEntry(r, cliAvailable, bridgeVerdict);
+      } else if (
+        classifyClaudeCodeTandemEntry(servers.tandem, LEGACY_LOCALHOST_MCP_BASE).kind ===
+        "tandem-http"
+      ) {
+        // The entry Tandem wrote before #686 moved setup to 127.0.0.1. It is
+        // Tandem's, so not "foreign", but the startup switch matches only the
+        // current shape and leaves it alone.
+        r.warn(
+          "tandem in ~/.claude.json is the direct-HTTP entry an older Tandem wrote (on localhost), " +
+            "which Tandem's startup switch to its bridge does not recognise",
+          `It still works. To replace it with the current entry: ${setupStep(cliAvailable())}; ` +
+            "then restart any Claude Code terminal that was open.",
+        );
       } else if (shape.kind === "npx-bridge") {
         r.pass(
           "tandem registered in ~/.claude.json (through Tandem's bridge, started by npx)",
@@ -1639,9 +1690,13 @@ async function checkUserMcpConfig(
             "session is calling through it.",
         );
       } else {
+        // Design §3.6's cost sentence: what keeping a hand-made entry means.
         r.warn(
           "tandem in ~/.claude.json is not an entry Tandem wrote, so Tandem leaves it alone",
-          `To replace it with Tandem's own (this discards your edits): ${setupStep(cliAvailable())}.`,
+          "While it stays, Tandem can't tell which Claude Code session is calling through it: " +
+            "with the Tandem plugin installed, its tools are a separate connection from the " +
+            "plugin's, and a channel shim beside it is not linked to that session. " +
+            `To replace it with Tandem's own (this discards your edits): ${setupStep(cliAvailable())}.`,
         );
       }
       // A stdio entry here that is not Tandem's bridge is a hand-edit or a
@@ -3879,7 +3934,9 @@ export interface RunDoctorOptions {
    * Could this install write Claude Code's bridge entry (#2358 PR 2b)? Asked
    * only for a direct-HTTP entry, to pick a remedy that works. Test seam;
    * production imports `claudeCodeBridgeVerdict` from `integrations/apply.ts`
-   * lazily, so a healthy run never loads it.
+   * lazily, so a healthy run never loads it. That verdict NEVER probes a Node
+   * (Bryan, 2026-11-06): the doctor is reachable by the AI through
+   * `tandem_diagnostics`, so it reports what the last boot's probe left.
    */
   claudeCodeBridgeVerdict?: () => Promise<ClaudeCodeBridgeVerdict | null>;
 }

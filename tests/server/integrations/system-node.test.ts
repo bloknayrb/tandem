@@ -16,12 +16,15 @@ import {
   findSystemNode,
   findSystemNodeAsync,
   isAppImageMountPath,
+  isDurableNodeRealPath,
+  isUnderWindowsInstallRoot,
   isWalkablePathEntry,
   type LinkStat,
   meetsSystemNodeFloor,
   SYSTEM_NODE_MAX_PROBES,
   SYSTEM_NODE_MIN_VERSION,
   screenedRealPath,
+  stableManagerPath,
   systemNodeCandidates,
 } from "../../../src/server/integrations/node-binary.js";
 import { NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
@@ -82,6 +85,8 @@ describe("which PATH entries are walked at all (no filesystem call before this)"
     ["mise shims", "/home/u/.local/share/mise/shims", "linux"],
     ["fnm per-shell", "/run/user/1000/fnm_multishells/123_456/bin", "linux"],
     ["a project's node_modules", "/home/u/proj/node_modules/.bin", "linux"],
+    ["Scoop shims", "C:\\Users\\u\\scoop\\shims", "win32"],
+    ["Scoop global shims", "C:\\ProgramData\\scoop\\shims", "win32"],
   ] as const)("refuses a %s entry (%s)", (_name, entry, platform) => {
     expect(isWalkablePathEntry(entry, platform)).toBe(false);
   });
@@ -237,27 +242,6 @@ describe("the PATH walk on a real filesystem (POSIX)", () => {
     ).toBe(good);
   });
 
-  it("really runs --version, bounded, and skips a binary that hangs", () => {
-    const slow = join(root, "slow");
-    mkdirSync(slow);
-    writeFileSync(join(slow, "node"), "#!/bin/sh\nsleep 10\n");
-    chmodSync(join(slow, "node"), 0o755);
-    const fast = join(root, "fast");
-    mkdirSync(fast);
-    writeFileSync(join(fast, "node"), "#!/bin/sh\necho v22.13.0\n");
-    chmodSync(join(fast, "node"), 0o755);
-    const started = Date.now();
-    expect(
-      findSystemNode({
-        pathVar: `${slow}:${fast}`,
-        platform: "linux",
-        scratchRoots: [],
-        env: {},
-      }),
-    ).toBe(join(fast, "node"));
-    expect(Date.now() - started).toBeLessThan(8000);
-  }, 15_000);
-
   it("the async default probe is bounded too, and kills a binary that hangs", async () => {
     const slow = join(root, "slow");
     mkdirSync(slow);
@@ -286,7 +270,7 @@ describe("the PATH walk on a real filesystem (POSIX)", () => {
     await a; // no probe left running past the test
   });
 
-  it("strips NODE_OPTIONS and the server's secrets from the probe's environment", () => {
+  it("strips NODE_OPTIONS and the server's secrets from the probe's environment", async () => {
     const n = join(root, "envnode");
     mkdirSync(n);
     // Prints a version only when the environment is clean.
@@ -298,9 +282,9 @@ describe("the PATH walk on a real filesystem (POSIX)", () => {
     vi.stubEnv("NODE_OPTIONS", "--require /nope.js");
     vi.stubEnv("TANDEM_AUTH_TOKEN", "x".repeat(40));
     try {
-      expect(findSystemNode({ pathVar: n, platform: "linux", scratchRoots: [], env: {} })).toBe(
-        join(n, "node"),
-      );
+      expect(
+        await findSystemNodeAsync({ pathVar: n, platform: "linux", scratchRoots: [], env: {} }),
+      ).toBe(join(n, "node"));
     } finally {
       vi.unstubAllEnvs();
     }
@@ -313,5 +297,137 @@ describe("isAppImageMountPath", () => {
     expect(isAppImageMountPath("/opt/app/usr/lib/x.js", { APPDIR: "/opt/app" })).toBe(true);
     expect(isAppImageMountPath("/opt/apple/x.js", { APPDIR: "/opt/app" })).toBe(false);
     expect(isAppImageMountPath("/usr/lib/tandem/x.js", {})).toBe(false);
+  });
+});
+
+describe("Windows: only Program Files and the user's profile (Bryan, 2026-11-06)", () => {
+  const env = {
+    ProgramFiles: "C:\\Program Files",
+    "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    USERPROFILE: "C:\\Users\\bryan",
+  };
+  const file = { isSymbolicLink: () => false, isFile: () => true };
+  const durable = (real: string, e: NodeJS.ProcessEnv = env) =>
+    isDurableNodeRealPath(real, { platform: "win32", env: e, lstat: () => file, scratchRoots: [] });
+
+  it.each([
+    ["the Node installer", "C:\\Program Files\\nodejs\\node.exe"],
+    ["a 32-bit install", "C:\\Program Files (x86)\\nodejs\\node.exe"],
+    ["nvm-windows", "C:\\Users\\bryan\\AppData\\Roaming\\nvm\\v22.12.0\\node.exe"],
+    ["Scoop", "C:\\Users\\bryan\\scoop\\apps\\nodejs\\current\\node.exe"],
+    ["a different case", "c:\\program files\\NodeJS\\node.exe"],
+  ])("accepts %s", (_label, real) => {
+    expect(durable(real)).toBe(true);
+  });
+
+  it.each([
+    ["a folder under the drive root", "C:\\tools\\bin\\node.exe"],
+    ["another drive", "D:\\nodejs\\node.exe"],
+    ["a sibling sharing the prefix", "C:\\Program Files Evil\\node.exe"],
+    ["another user's profile", "C:\\Users\\mallory\\node\\node.exe"],
+    ["ProgramData (Chocolatey's shims)", "C:\\ProgramData\\chocolatey\\bin\\node.exe"],
+  ])("refuses %s", (_label, real) => {
+    expect(durable(real)).toBe(false);
+  });
+
+  it("an unset, relative or drive-root variable contributes no root", () => {
+    expect(durable("C:\\Program Files\\nodejs\\node.exe", {})).toBe(false);
+    expect(isUnderWindowsInstallRoot("C:\\x\\node.exe", { USERPROFILE: "C:\\" })).toBe(false);
+    expect(isUnderWindowsInstallRoot("C:\\x\\node.exe", { USERPROFILE: "x" })).toBe(false);
+    expect(
+      isUnderWindowsInstallRoot("C:\\Users\\b\\n.exe", { USERPROFILE: "C:\\Users\\b\\" }),
+    ).toBe(true);
+  });
+
+  it("POSIX is unaffected (ownership decides there)", () => {
+    expect(
+      isDurableNodeRealPath("/usr/bin/node", {
+        platform: "linux",
+        env: {},
+        lstat: () => file,
+        scratchRoots: [],
+        ownerStat: () => ({ uid: 0, mode: 0o755 }),
+        uid: 1000,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("version managers that delete old versions: record their stable link (Bryan, 2026-11-06)", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "tandem-stable-"));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  /** A Homebrew prefix: Cellar/node/<v>/bin/node, bin/node → it, opt/node → Cellar/node/<v>. */
+  const brew = (versions: string[], optAt: string | null) => {
+    const prefix = join(base, "homebrew");
+    for (const v of versions) {
+      const bin = join(prefix, "Cellar", "node", v, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "node"), `#!/bin/sh\necho v${v}\n`);
+      chmodSync(join(bin, "node"), 0o755);
+    }
+    const newest = versions[versions.length - 1] as string;
+    mkdirSync(join(prefix, "bin"), { recursive: true });
+    symlinkSync(`../Cellar/node/${newest}/bin/node`, join(prefix, "bin", "node"));
+    if (optAt !== null) {
+      mkdirSync(join(prefix, "opt"), { recursive: true });
+      symlinkSync(`../Cellar/node/${optAt}`, join(prefix, "opt", "node"));
+    }
+    return prefix;
+  };
+  const walk = (pathVar: string) =>
+    findSystemNodeAsync({ pathVar, platform: "linux", scratchRoots: [], env: {} });
+
+  it("Homebrew: records <prefix>/opt/node/bin/node, not the Cellar version directory", async () => {
+    const prefix = brew(["23.1.0"], "23.1.0");
+    expect(await walk(join(prefix, "bin"))).toBe(join(prefix, "opt", "node", "bin", "node"));
+  });
+
+  it("Homebrew: keeps the real path when no opt link exists, or it names another version", async () => {
+    const none = brew(["23.1.0"], null);
+    expect(await walk(join(none, "bin"))).toBe(
+      join(none, "Cellar", "node", "23.1.0", "bin", "node"),
+    );
+    rmSync(none, { recursive: true, force: true });
+    const other = brew(["22.12.0", "23.1.0"], "22.12.0");
+    expect(await walk(join(other, "bin"))).toBe(
+      join(other, "Cellar", "node", "23.1.0", "bin", "node"),
+    );
+  });
+
+  it("nvm keeps the real, versioned path (it keeps old versions)", async () => {
+    const v = join(base, ".nvm", "versions", "node", "v22.12.0", "bin");
+    mkdirSync(v, { recursive: true });
+    writeFileSync(join(v, "node"), "#!/bin/sh\necho v22.12.0\n");
+    chmodSync(join(v, "node"), 0o755);
+    expect(await walk(v)).toBe(join(v, "node"));
+  });
+
+  it("Scoop: records apps\\nodejs\\current, not the version directory", () => {
+    const real = "C:\\Users\\u\\scoop\\apps\\nodejs\\22.12.0\\node.exe";
+    const isLink = (p: string) => p.toLowerCase() === "c:\\users\\u\\scoop\\apps\\nodejs\\current";
+    const deps = {
+      platform: "win32" as const,
+      env: { USERPROFILE: "C:\\Users\\u" },
+      scratchRoots: [],
+      lstat: (p: string) => ({ isSymbolicLink: () => isLink(p), isFile: () => p.endsWith(".exe") }),
+      readlink: () => "C:\\Users\\u\\scoop\\apps\\nodejs\\22.12.0",
+    };
+    expect(stableManagerPath(real, deps)).toBe(
+      "C:\\Users\\u\\scoop\\apps\\nodejs\\current\\node.exe",
+    );
+    // `current` pointing elsewhere: the real path stays.
+    expect(
+      stableManagerPath(real, {
+        ...deps,
+        readlink: () => "C:\\Users\\u\\scoop\\apps\\nodejs\\23.0.0",
+      }),
+    ).toBe(real);
+    // Already `current`: nothing to do.
+    const cur = "C:\\Users\\u\\scoop\\apps\\nodejs\\current\\node.exe";
+    expect(stableManagerPath(cur, deps)).toBe(cur);
   });
 });

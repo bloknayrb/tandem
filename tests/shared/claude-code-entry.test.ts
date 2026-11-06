@@ -74,8 +74,8 @@ describe("classifyClaudeCodeTandemEntry", () => {
 describe("tokenMayGoTo — the bridge sends its token to this computer only", () => {
   it.each([
     ["http://127.0.0.1:3479", true],
-    ["http://127.5.6.7:3479", true],
-    ["http://localhost:3479", true],
+    ["http://127.5.6.7:3479", false],
+    ["http://localhost:3479", false],
     ["http://[::1]:3479", true],
     ["http://192.168.1.20:3479", false],
     ["http://[::ffff:127.0.0.1]:3479", false],

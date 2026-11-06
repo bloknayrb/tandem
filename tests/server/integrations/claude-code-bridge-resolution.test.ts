@@ -23,7 +23,7 @@ vi.mock("../../../src/server/integrations/node-binary.js", async (importOriginal
     await importOriginal<typeof import("../../../src/server/integrations/node-binary.js")>();
   return {
     ...real,
-    findSystemNode: () => mocks.systemNode,
+    peekSystemNode: () => mocks.systemNode,
     resolveNodeBinary: () => mocks.execPath,
     isScratchPath: (p: string, d?: Parameters<typeof real.isScratchPath>[1]) =>
       mocks.fixturesAreNotScratch && p.startsWith(tmpdir()) ? false : real.isScratchPath(p, d),

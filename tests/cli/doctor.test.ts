@@ -2920,7 +2920,39 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       const messages = results.map((x) => x.message).join("\n");
       expect(messages).not.toContain("unexpected config");
       expect(messages).not.toContain("non-loopback");
-      expect(messages).toMatch(/older direct-HTTP entry|not an entry Tandem wrote/);
+      expect(messages).toMatch(
+        /older direct-HTTP entry|not an entry Tandem wrote|an older Tandem wrote \(on localhost\)/,
+      );
+    });
+
+    it("names the pre-#686 localhost entry as Tandem's own, not foreign", async () => {
+      writeEntry({ type: "http", url: "http://localhost:3479/mcp" });
+      const messages = (await userMcpAll()).map((x) => `${x.message} ${x.fix ?? ""}`).join("\n");
+      expect(messages).toContain("an older Tandem wrote (on localhost)");
+      expect(messages).not.toContain("not an entry Tandem wrote");
+    });
+
+    it("names the >16 MiB skip instead of promising a switch that cannot land", async () => {
+      writeFileSync(
+        claudeCodeConfigPath({ homeOverride: home }),
+        JSON.stringify({
+          mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+          projects: "x".repeat(16 * 1024 * 1024),
+        }),
+      );
+      const rows = await userMcpAll();
+      const text = rows.map((x) => `${x.message} ${x.fix ?? ""}`).join("\n");
+      expect(text).toContain("is over 16 MiB, so Tandem will not rewrite it");
+      expect(text).toContain("too large to rewrite");
+      expect(text).not.toContain("it switches this entry when it starts");
+    });
+
+    it("a foreign entry carries the cost of keeping it (design §3.6)", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp", headers: { "X-Mine": "1" } });
+      const row = (await userMcpAll()).find((x) => x.message.includes("not an entry Tandem wrote"));
+      expect(row?.fix).toContain("can't tell which Claude Code session is calling");
+      expect(row?.fix).toContain("separate connection from the plugin's");
+      expect(row?.fix).toContain("this discards your edits");
     });
 
     it.each([

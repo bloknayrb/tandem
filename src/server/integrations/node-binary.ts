@@ -39,7 +39,7 @@
  * see that; `refreshMcpEntryBinary` in `./apply.ts` is the boot-time
  * counterpart that can, gated by `isRecordedPathGone` below.
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { posix as posixPath, resolve, win32 as win32Path } from "node:path";
@@ -230,7 +230,9 @@ export function isRecordedPathAbsolute(command: string): boolean {
 // This walk EXECUTES a binary found on an environment-supplied path (its
 // `--version`), which widens #1609's accepted `runDoctor` path reads; the
 // register entry in docs/security.md records it. The input is Tandem's own
-// `PATH`, which no document, tool argument or browser request can steer.
+// `PATH`, which no document, tool argument or browser request can steer, and
+// only boot, `tandem setup`, `tandem rotate-token` and the wizard's apply run
+// it — never the doctor, so never `tandem_diagnostics` (Bryan, 2026-11-06).
 
 /**
  * The oldest Node the bridge entry may name: `package.json`'s `engines.node`.
@@ -266,6 +268,10 @@ const NON_DURABLE_NODE_DIR_PATTERNS: readonly RegExp[] = [
   /[/\\](?:mise|rtx)[/\\]shims(?:[/\\]|$)/i, // mise (formerly rtx)
   /[/\\]\.nodenv[/\\]shims(?:[/\\]|$)/i, // nodenv
   /fnm_multishells/i, // fnm's per-shell links
+  // Scoop's shim launchers (`<scoop>\\shims\\node.exe` reads `node.shim` and
+  // starts the real Node). The real Node behind it is `apps\\nodejs\\current`,
+  // which `stableManagerPath` records when that directory is on PATH.
+  /[/\\]scoop[/\\]shims(?:[/\\]|$)/i,
   /[/\\](?:_npx|dlx|\.bun)[/\\]/i, // one-shot package-runner caches
   // A project's own dependencies: `npm run`, `npm exec` and direnv put
   // `<project>/node_modules/.bin` on PATH, and the `node` npm package ships a
@@ -368,9 +374,8 @@ function isUnderRoot(p: string, root: string, platform: NodeJS.Platform): boolea
  * POSIX only: may another user have put this file here, or replace it later?
  * The file and every ancestor directory must be owned by root or the current
  * user, and none may be world-writable — except a sticky directory
- * (`/tmp`'s shape is refused separately). Windows is not checked: its ACLs
- * are not visible through `stat`, and its Node installers write under
- * `Program Files` or the user's own profile.
+ * (`/tmp`'s shape is refused separately). Windows ACLs are not visible through
+ * `stat`, so Windows takes {@link isUnderWindowsInstallRoot} instead.
  */
 function ownedSafely(real: string, deps: SystemNodeDeps): boolean {
   const ownerStat =
@@ -393,11 +398,38 @@ function ownedSafely(real: string, deps: SystemNodeDeps): boolean {
     // World-writable only: a group-writable `/usr/local` is Homebrew's normal
     // shape on Intel macOS (group `admin`), and refusing it would refuse the
     // commonest system Node there.
-    if ((st.mode & 0o002) !== 0 && !(current !== real && sticky)) return false;
+    // A symlink's own permission bits are not a write grant (Linux ignores
+    // them; it can only be replaced through its directory, checked next), and
+    // they read 0777 — so a stable link (`stableManagerPath`) is judged by its
+    // owner and its directory, not its mode.
+    const isLink = (st.mode & 0o170000) === 0o120000;
+    if (!isLink && (st.mode & 0o002) !== 0 && !(current !== real && sticky)) return false;
     const parent = posixPath.dirname(current);
     if (parent === current) return true;
     current = parent;
   }
+}
+
+/**
+ * Windows only: is this real path under `%ProgramFiles%`, `%ProgramFiles(x86)%`
+ * or the user's profile (`%USERPROFILE%`)? (Bryan, 2026-11-06.) Those are where
+ * the Node installer, nvm-windows, Scoop and fnm put Node, and by default
+ * another local user cannot write into them. A folder made directly under a
+ * drive root (`C:\tools\bin`) grants Modify to Authenticated Users by
+ * default, and this walk runs the binary's `--version` at boot and records it
+ * as every terminal's command, so anything else falls back to the bundled
+ * Node (desktop) or the direct-HTTP entry (npm). Each root must itself be
+ * drive-absolute; an unset or relative variable contributes nothing.
+ */
+export function isUnderWindowsInstallRoot(real: string, env: NodeJS.ProcessEnv): boolean {
+  const roots = [env.ProgramFiles, env["ProgramFiles(x86)"], env.USERPROFILE].filter(
+    // A drive-absolute directory below the drive root: `C:\` itself would
+    // admit the whole drive.
+    (r): r is string => typeof r === "string" && /^[A-Za-z]:[\\/]+[^\\/]/.test(r),
+  );
+  return roots.some((root) =>
+    isUnderRoot(real, win32Path.normalize(root).replace(/[\\/]+$/, ""), "win32"),
+  );
 }
 
 function pathFlavour(platform: NodeJS.Platform): typeof posixPath {
@@ -548,21 +580,6 @@ function probeEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function runVersionSync(p: string): string | null {
-  try {
-    return execFileSync(p, ["--version"], {
-      encoding: "utf8",
-      timeout: SYSTEM_NODE_VERSION_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
-      env: probeEnv(),
-    });
-  } catch {
-    return null;
-  }
-}
-
 function runVersionAsyncDefault(p: string): Promise<string | null> {
   return new Promise((resolveOut) => {
     let settled = false;
@@ -634,8 +651,58 @@ function* iterateSystemNodeCandidates(deps: SystemNodeDeps = {}): Generator<stri
     if (real === null || seen.has(real)) continue;
     seen.add(real);
     if (!isDurableNodeRealPath(real, { ...deps, platform, env, lstat })) continue;
-    yield real;
+    yield stableManagerPath(real, { ...deps, platform, env, lstat });
   }
+}
+
+/**
+ * For a version manager that DELETES the old version on upgrade, the stable
+ * link it maintains in front of the versioned directory, when that link
+ * currently resolves to exactly `real` and passes the same durability rules;
+ * otherwise `real` unchanged.
+ *
+ * `screenedRealPath` follows Homebrew's `/opt/homebrew/bin/node` into
+ * `Cellar/node/<version>/bin/node`, and Scoop's `apps\nodejs\current` into
+ * `apps\nodejs\<version>\`. `brew upgrade` (with its default cleanup) and
+ * `scoop update` / `scoop cleanup` then delete that directory, and every
+ * terminal's entry would be dead until Tandem's next start re-picked a Node.
+ * So for those two the entry records the link: Homebrew's
+ * `<prefix>/opt/<formula>/bin/node` and Scoop's `apps\<app>\current\…`.
+ * Both are repointed by the manager itself, and only forward (an `opt/node@22`
+ * link stays on 22.x).
+ *
+ * Every other manager keeps the real, versioned path, on purpose: nvm,
+ * nvm-windows, fnm and n keep old versions until the user removes them, and a
+ * real path means a later version switch cannot swap a different Node under
+ * every terminal's entry.
+ *
+ * Matched on the path shape alone, so it is tested on Linux with fixtures;
+ * Homebrew on macOS and Scoop on Windows are unmeasured here.
+ */
+export function stableManagerPath(real: string, deps: SystemNodeDeps = {}): string {
+  const platform = deps.platform ?? process.platform;
+  for (const stable of stableLinkCandidates(real, platform)) {
+    if (screenedRealPath(stable, deps) !== real) continue;
+    if (!isDurableNodeRealPath(stable, deps)) continue;
+    return stable;
+  }
+  return real;
+}
+
+function stableLinkCandidates(real: string, platform: NodeJS.Platform): string[] {
+  const out: string[] = [];
+  if (platform !== "win32") {
+    // Homebrew (macOS and Linux): <prefix>/Cellar/<formula>/<version>/bin/node.
+    const brew = /^(.+)\/Cellar\/([^/]+)\/[^/]+\/bin\/(node)$/.exec(real);
+    if (brew) out.push(`${brew[1]}/opt/${brew[2]}/bin/${brew[3]}`);
+  } else {
+    // Scoop: <root>\apps\<app>\<version>\…\node.exe (never `current` itself).
+    const scoop = /^(.+[\\/]apps[\\/][^\\/]+[\\/])([^\\/]+)([\\/].*node\.exe)$/i.exec(real);
+    if (scoop && scoop[2]?.toLowerCase() !== "current") {
+      out.push(`${scoop[1]}current${scoop[3]}`);
+    }
+  }
+  return out;
 }
 
 /**
@@ -659,7 +726,7 @@ export function isDurableNodeRealPath(real: string, deps: SystemNodeDeps = {}): 
   } catch {
     return false;
   }
-  return platform === "win32" || ownedSafely(real, deps);
+  return platform === "win32" ? isUnderWindowsInstallRoot(real, env) : ownedSafely(real, deps);
 }
 
 /**
@@ -724,39 +791,46 @@ export function _resetSystemNodeCacheForTests(): void {
 }
 
 /**
- * The first Node on Tandem's `PATH` that is durable and at least
- * {@link SYSTEM_NODE_MIN_VERSION}, by its real path; null if none qualifies.
- *
- * Memoized per process when called without `deps`: the boot sweep fills it
- * asynchronously ({@link findSystemNodeAsync}) before the wizard can apply, and
- * a one-shot CLI computes it once. A Node installed while Tandem runs is
- * picked up at the next start.
+ * The memoized system Node, WITHOUT walking: the string or null a probe
+ * already decided for the current `PATH`, or `undefined` when nothing has
+ * probed yet. Every production synchronous caller reads this, so no
+ * synchronous path ever runs `--version` (Bryan, 2026-11-06: only boot,
+ * `tandem setup` and `tandem rotate-token` may probe, and they do it through
+ * {@link findSystemNodeAsync}; `tandem_diagnostics` and `tandem doctor` read
+ * what the last probe left).
  */
-export function findSystemNode(deps?: SystemNodeDeps): string | null {
-  if (deps === undefined) {
-    const cached = readMemo();
-    if (cached !== undefined) return cached;
-  }
-  const run = deps?.runVersion ?? runVersionSync;
-  let found: string | null = null;
+export function peekSystemNode(): string | null | undefined {
+  return readMemo();
+}
+
+/**
+ * The first Node a SYNCHRONOUS walk with injected `runVersion` finds — for
+ * tests of the walk's ordering and refusals. Production code never runs a
+ * synchronous probe: an `execFileSync` waits for every holder of the child's
+ * stdout, so a planted `node` that leaves a grandchild holding it would hang
+ * the caller past the timeout. Use {@link findSystemNodeAsync}.
+ */
+export function findSystemNode(
+  deps: SystemNodeDeps & { runVersion: (p: string) => string | null },
+): string | null {
   let probes = 0;
   for (const candidate of iterateSystemNodeCandidates(deps)) {
     if (probes++ >= SYSTEM_NODE_MAX_PROBES) break;
-    const out = run(candidate);
-    if (out !== null && meetsSystemNodeFloor(out)) {
-      found = candidate;
-      break;
-    }
+    const out = deps.runVersion(candidate);
+    if (out !== null && meetsSystemNodeFloor(out)) return candidate;
   }
-  if (deps === undefined) systemNodeMemo = { key: memoKey(), value: found };
-  return found;
+  return null;
 }
 
 let inFlight: { key: string; promise: Promise<string | null> } | undefined;
 
 /**
- * {@link findSystemNode} without blocking the event loop on the probes.
- * Concurrent default-argument callers share one walk.
+ * The first Node on Tandem's `PATH` that is durable and at least
+ * {@link SYSTEM_NODE_MIN_VERSION}, by its real path; null if none qualifies.
+ * The only production probe. Memoized per process when called without `deps`
+ * ({@link peekSystemNode} reads the memo), keyed by `PATH`, so a Node
+ * installed while Tandem runs is picked up at the next start. Concurrent
+ * default-argument callers share one walk.
  */
 export function findSystemNodeAsync(deps?: SystemNodeDeps): Promise<string | null> {
   if (deps !== undefined) return findSystemNodeAsyncUncached(deps);

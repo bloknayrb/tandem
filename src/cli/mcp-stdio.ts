@@ -403,6 +403,11 @@ process.once("unhandledRejection", (reason: unknown) => {
  * host. While the non-loopback bind ships dark (ADR-056) no Tandem listens
  * anywhere but loopback, so withholding the token there loses nothing. The
  * re-enable revisits this with the bind.
+ *
+ * This is the same bridge the Claude Code plugin runs, so the rule covers the
+ * plugin's entry too (whose `TANDEM_URL` is `http://127.0.0.1:3479`). A
+ * plugin user who pointed `server_url` at `localhost` keeps connecting, without
+ * the token, which loopback Tandem does not require.
  */
 export function tokenMayGoTo(baseUrl: string): boolean {
   if (LAN_BIND_ENABLED) return true;
@@ -412,7 +417,10 @@ export function tokenMayGoTo(baseUrl: string): boolean {
   } catch {
     return false;
   }
-  return host === "localhost" || host === "[::1]" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  // Exactly the two addresses a loopback Tandem listens on — not `localhost`
+  // (resolved by whatever the system's resolver says, hosts file included) and
+  // not the rest of 127/8, which Tandem never binds.
+  return host === "127.0.0.1" || host === "[::1]";
 }
 
 /**

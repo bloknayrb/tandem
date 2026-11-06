@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -19,6 +20,8 @@ import {
   buildMcpEntries,
   refreshAllMcpEntryBinaries,
 } from "../../../src/server/integrations/apply.js";
+import { backupDir, listBackups } from "../../../src/server/integrations/backup.js";
+import { resolveAppDataDir } from "../../../src/server/platform.js";
 
 /**
  * #2358 PR 2b — Claude Code's `tandem` entry becomes the stdio bridge, and the
@@ -279,6 +282,55 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
   });
 });
 
+describe("the sweep backs up Claude Code's config before rewriting it", () => {
+  const dir = () => backupDir(resolveAppDataDir());
+  const names = async () => (existsSync(dir()) ? await listBackups(dir()) : []);
+
+  it("writes the exact pre-image as a backup, then switches the entry", async () => {
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, keep: "me" });
+    const preImage = readFileSync(claudeJson());
+    const before = new Set(await names());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+    const added = (await names()).filter((n) => !before.has(n));
+    expect(added).toHaveLength(1);
+    const backup = readFileSync(join(dir(), added[0] as string));
+    expect(backup.equals(preImage)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(statSync(join(dir(), added[0] as string)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("takes no backup when nothing is written (a healthy boot)", async () => {
+    writeConfig({ mcpServers: { tandem: { command: node, args: [script], env: {} } } });
+    const before = await names();
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+    expect(await names()).toEqual(before);
+  });
+
+  it("no backup, no write: a backup that fails leaves the config byte-identical", async () => {
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } } });
+    const preImage = readFileSync(claudeJson());
+    // Put a FILE where the backup directory goes, so the backup cannot land.
+    const aside = `${dir()}.aside-${process.pid}`;
+    const hadDir = existsSync(dir());
+    if (hadDir) renameSync(dir(), aside);
+    mkdirSync(join(dir(), ".."), { recursive: true });
+    writeFileSync(dir(), "not a directory");
+    try {
+      await refreshAllMcpEntryBinaries({ homeOverride: home });
+    } finally {
+      rmSync(dir(), { force: true });
+      if (hadDir) renameSync(aside, dir());
+    }
+    expect(readFileSync(claudeJson()).equals(preImage)).toBe(true);
+    expect(stderr()).toContain("could not back it up first");
+    expect(stderr()).not.toContain("Switched the tandem entry");
+  });
+});
+
 describe("re-picking the Node of a Tandem-written bridge entry", () => {
   it("repoints a dead Node to the current pick", async () => {
     writeConfig({
@@ -403,6 +455,65 @@ describe("applyConfig never downgrades a working bridge to HTTP", () => {
 
     expect(readConfig().mcpServers.tandem.type).toBe("http");
     expect(existsSync(mine)).toBe(true);
+  });
+});
+
+describe("an older install's bridge script moves forward (nvm: the old prefix stays on disk)", () => {
+  /** An npm package prefix holding `tandem-editor@<version>`'s bridge. */
+  const prefix = (name: string, version: string, pkgName = "tandem-editor") => {
+    const pkg = join(home, name, "lib", "node_modules", "tandem-editor");
+    const s = join(pkg, "dist", "stdio-bridge", "index.js");
+    mkdirSync(join(s, ".."), { recursive: true });
+    writeFileSync(s, "// bridge\n");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: pkgName, version }));
+    const n = join(home, name, "bin", "node");
+    mkdirSync(join(n, ".."), { recursive: true });
+    writeFileSync(n, "#!/bin/sh\n");
+    return { script: s, node: n };
+  };
+
+  it("repoints an older prefix's entry to this install's whole pair", async () => {
+    const old = prefix("v22", "0.30.0");
+    const cur = prefix("v24", "0.31.0");
+    _setClaudeCodeBridgeForTests({ command: cur.node, script: cur.script });
+    writeConfig({ mcpServers: { tandem: { command: old.node, args: [old.script], env: {} } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem).toMatchObject({
+      command: cur.node,
+      args: [cur.script],
+    });
+    expect(stderr()).toContain("Repaired the tandem entry");
+  });
+
+  it.each([
+    ["a NEWER install's script (never backwards)", "0.32.0", "tandem-editor"],
+    ["a package.json that is not Tandem's", "0.1.0", "some-other-package"],
+  ])("leaves %s alone, byte for byte", async (_label, version, pkgName) => {
+    const rec = prefix("v22", version, pkgName);
+    const cur = prefix("v24", "0.31.0");
+    _setClaudeCodeBridgeForTests({ command: cur.node, script: cur.script });
+    writeConfig({ mcpServers: { tandem: { command: rec.node, args: [rec.script], env: {} } } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+
+  it("leaves a script whose version cannot be told alone (the desktop bundle ships no package.json)", async () => {
+    const desktop = join(home, "Tandem", "dist", "stdio-bridge", "index.js");
+    mkdirSync(join(desktop, ".."), { recursive: true });
+    writeFileSync(desktop, "// bridge\n");
+    const cur = prefix("v24", "0.31.0");
+    _setClaudeCodeBridgeForTests({ command: cur.node, script: cur.script });
+    writeConfig({ mcpServers: { tandem: { command: node, args: [desktop], env: {} } } });
+    const before = readFileSync(claudeJson());
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson()).equals(before)).toBe(true);
   });
 });
 
