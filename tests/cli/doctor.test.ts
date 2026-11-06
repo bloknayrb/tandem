@@ -3607,7 +3607,22 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
 
     expect(result?.status).toBe("pass");
     expect(result?.message).toContain("bundled with the desktop app");
-    expect(result?.fix).toContain("desktop app updates");
+    // The update caveat is Windows-only (the NSIS hook ends the bridges); the
+    // PATH note is macOS-specific there. Both judged by the doctor's platform.
+    const real = process.platform;
+    const fixFor = async (platform: NodeJS.Platform) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      try {
+        return (await userMcp())[0]?.fix ?? "";
+      } finally {
+        Object.defineProperty(process, "platform", { value: real });
+      }
+    };
+    expect(await fixFor("win32")).toContain("desktop app updates");
+    expect(await fixFor("linux")).not.toContain("desktop app updates");
+    const mac = await fixFor("darwin");
+    expect(mac).not.toContain("desktop app updates");
+    expect(mac).toContain("/usr/bin:/bin:/usr/sbin:/sbin");
   });
 
   it("warns ONCE for a dead Node or script, and promises only an attempt", async () => {

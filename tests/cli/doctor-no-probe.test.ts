@@ -5,17 +5,31 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 /**
  * #2358 PR 2b, Bryan's decision 2 (2026-11-06): `tandem_diagnostics` never
- * probes. It is reachable by the AI through MCP, so it reports the last boot's
- * cached verdict and must never run a found `node --version` itself; only boot,
- * `tandem setup` and `tandem rotate-token` may.
+ * runs the system-Node `--version` walk. It is reachable by the AI through
+ * MCP, so it reports the last boot's cached verdict; only boot, `tandem
+ * setup`, `tandem rotate-token` and the wizard's apply may walk.
  *
- * Everything here is the real code except two things: the temp-dir fixtures
+ * That is NOT "diagnostics spawns nothing": a release build's `runDoctor`
+ * also runs `npm ls -g` through a shell (`checkStaleGlobal`, filed as #2379
+ * and fixed in its own PR) and, on POSIX, may run `ps` for the annotation
+ * store's lock holder. So the runDoctor cases run the stale-global check as a
+ * release build does (`bundledVersionForTests`) and assert that EVERY spawn is
+ * on an explicit allowlist — a new spawn on the diagnostics path fails here.
+ *
+ * Everything else is the real code except two things: the temp-dir fixtures
  * are not treated as scratch (so an "installed" layout can live under
- * `os.tmpdir()`), and `child_process` is wrapped so every spawn is recorded.
- * The fixture is a desktop-shaped install (the injected bridge path, honoured
- * only with `--tauri-sidecar` in argv) plus a qualifying fake `node` on PATH
- * that the probe WOULD pick — the positive control at the end proves it.
+ * `os.tmpdir()`), and `child_process` is wrapped so every spawn is recorded
+ * (`npm` is answered at once with empty output rather than run). The fixture
+ * is a desktop-shaped install (the injected bridge path, honoured only with
+ * `--tauri-sidecar` in argv) plus a qualifying fake `node` on PATH that the
+ * probe WOULD pick — the positive control proves it.
  */
+
+/** Every program the diagnostics path may spawn, and why. */
+const DIAGNOSTICS_SPAWN_ALLOWLIST = new Set([
+  "npm", // checkStaleGlobal's `npm ls -g` — predates PR 2b; #2379
+  "ps", // probeProcessIdentity, the annotation-store lock holder (POSIX)
+]);
 
 const root = mkdtempSync(join(tmpdir(), "tandem-doctor-noprobe-"));
 const spawned: string[] = [];
@@ -28,9 +42,21 @@ vi.mock("node:child_process", async (importOriginal) => {
       spawned.push(String(args[0]));
       return fn(...args);
     };
+  // `npm ls -g` is recorded and answered with empty output, not run.
+  const execFile = (...args: unknown[]) => {
+    if (args[0] === "npm") {
+      spawned.push("npm");
+      const cb = args.find((a) => typeof a === "function") as
+        | ((e: Error | null, out: string, err: string) => void)
+        | undefined;
+      queueMicrotask(() => cb?.(null, "", ""));
+      return undefined;
+    }
+    return record(actual.execFile as never)(...(args as never[]));
+  };
   return {
     ...actual,
-    execFile: record(actual.execFile as never),
+    execFile,
     execFileSync: record(actual.execFileSync as never),
     spawn: record(actual.spawn as never),
     spawnSync: record(actual.spawnSync as never),
@@ -38,10 +64,6 @@ vi.mock("node:child_process", async (importOriginal) => {
     execSync: record(actual.execSync as never),
   };
 });
-vi.mock(import("../../src/server/annotations/process-identity.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  probeProcessIdentity: vi.fn(),
-}));
 const mocks = vi.hoisted(() => ({ runningNode: undefined as string | undefined }));
 vi.mock("../../src/server/integrations/node-binary.js", async (importOriginal) => {
   const real =
@@ -118,6 +140,9 @@ afterEach(() => {
 });
 
 const probed = () => spawned.filter((f) => f.startsWith(root) || f.startsWith(fixtureRoot));
+/** Spawns the diagnostics path made that are not on the allowlist. */
+const unlisted = () => spawned.filter((f) => !DIAGNOSTICS_SPAWN_ALLOWLIST.has(f));
+const runDoctorAsReleased = () => runDoctor({ bundledVersionForTests: "9.9.9" });
 
 describe.skipIf(process.platform === "win32")("the diagnostics path never probes a Node", () => {
   it("the fixture really is an installed layout (so the verdict reaches the Node question)", () => {
@@ -131,11 +156,14 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     expect(probed()).toEqual([]);
   });
 
-  it("runDoctor (tandem_diagnostics' collector) explains a direct-HTTP entry without spawning the Node", async () => {
+  it("runDoctor (tandem_diagnostics' collector), as released, spawns only what the allowlist names", async () => {
     mocks.runningNode = "node";
-    const report = await runDoctor();
+    const report = await runDoctorAsReleased();
     const row = report.results.find((x) => x.message.includes("older direct-HTTP entry"));
     expect(row, JSON.stringify(report.results.map((x) => x.message))).toBeDefined();
+    // The release-build path really ran: its `npm ls` was seen.
+    expect(spawned).toContain("npm");
+    expect(unlisted(), `unlisted spawns: ${JSON.stringify(spawned)}`).toEqual([]);
     expect(probed()).toEqual([]);
     expect(nodeBinary.peekSystemNode()).toBeUndefined();
   });
@@ -147,7 +175,8 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     expect(apply.resolveClaudeCodeBridge()).toEqual({ command: fakeNode, script });
     spawned.length = 0;
     expect(apply.claudeCodeBridgeVerdict()).toBe("bridge");
-    await runDoctor();
+    await runDoctorAsReleased();
+    expect(unlisted()).toEqual([]);
     expect(probed()).toEqual([]);
   });
 
@@ -218,3 +247,24 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+describe.skipIf(process.platform === "win32")("durableRunningNode (the npm fallback)", () => {
+  it("records Homebrew's stable opt link for a Cellar Node, not the version folder", async () => {
+    const { symlinkSync } = await import("node:fs");
+    const prefix = join(fixtureRoot, "homebrew");
+    const cellarBin = join(prefix, "Cellar", "node", "23.1.0", "bin");
+    mkdirSync(cellarBin, { recursive: true });
+    writeFileSync(join(cellarBin, "node"), "");
+    mkdirSync(join(prefix, "opt"), { recursive: true });
+    symlinkSync("../Cellar/node/23.1.0", join(prefix, "opt", "node"));
+    // `process.execPath` names the real Cellar path, as Homebrew's Node reports it.
+    mocks.runningNode = join(cellarBin, "node");
+    expect(apply.durableRunningNode()).toBe(join(prefix, "opt", "node", "bin", "node"));
+  });
+
+  it("refuses a running Node below the 22.12 floor, as the PATH walk does", () => {
+    mocks.runningNode = fakeNode;
+    expect(apply.durableRunningNode(process.env, "v22.13.0")).toBe(fakeNode);
+    expect(apply.durableRunningNode(process.env, "v22.11.0")).toBeNull();
+  });
+});

@@ -306,7 +306,9 @@ when run as administrator, the firewall rules). It **deliberately
 leaves your data**: the app-data directory (your sessions, annotations, and
 document backups) and the keychain entries stay until you delete them
 yourself — uninstalling must never be the thing that destroys a backup you
-need next week. The one exception is `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`,
+need next week. That includes `.backups/`: its `claude-json-*` and `sweep-claude-json-*` files are
+copies of `~/.claude.json` and the Claude Desktop config, so they can hold tokens and other
+MCP servers' credentials. Delete that folder too if you want those copies gone. The one exception is `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`,
 which the Windows desktop uninstaller's own scrub deletes; this command leaves it.
 
 ### Full manual cleanup

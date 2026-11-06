@@ -83,7 +83,16 @@ describe("tokenMayGoTo — the bridge sends its token to this computer only", ()
     ["http://example.com:3479", false],
     ["http://127.0.0.1.evil.example:3479", false],
     ["not a url", false],
+    ["http://127.0.0.1:4000", false],
+    ["http://127.0.0.1", false],
   ])("%s → %s", (url, ok) => {
-    expect(tokenMayGoTo(url)).toBe(ok);
+    expect(tokenMayGoTo(url, {})).toBe(ok);
+  });
+
+  it("follows a moved TANDEM_MCP_PORT, and only that one", () => {
+    expect(tokenMayGoTo("http://127.0.0.1:4000", { TANDEM_MCP_PORT: "4000" })).toBe(true);
+    expect(tokenMayGoTo("http://127.0.0.1:3479", { TANDEM_MCP_PORT: "4000" })).toBe(true);
+    expect(tokenMayGoTo("http://127.0.0.1:4001", { TANDEM_MCP_PORT: "4000" })).toBe(false);
+    expect(tokenMayGoTo("http://127.0.0.1:4000", { TANDEM_MCP_PORT: "nope" })).toBe(false);
   });
 });

@@ -1424,13 +1424,15 @@ function reportBridgeEntry(
     return;
   }
   if (isBundledSidecarNode(shape.command)) {
+    const update =
+      process.platform === "win32"
+        ? " When the desktop app updates, terminals already open lose their Tandem tools until " +
+          "you restart them (running /mcp may reconnect them; untested)."
+        : "";
     r.pass(
       "tandem registered in ~/.claude.json (through Tandem's bridge, on the Node bundled with the desktop app)",
-      `${RESTART_TERMINALS_NOTE} When the desktop app updates, terminals already open lose their ` +
-        "Tandem tools until you restart them (running /mcp may reconnect them; untested). Tandem " +
-        "moves the entry onto a Node 22.12 or newer it finds on its own PATH; an app started from " +
-        "the dock or a menu cannot see a Node that only a shell profile (nvm, Homebrew) adds, so " +
-        "that needs a system-wide install.",
+      `${RESTART_TERMINALS_NOTE}${update} Tandem moves the entry onto a Node 22.12 or newer it ` +
+        `finds on its own PATH. ${desktopPathNote()}`,
     );
     return;
   }
@@ -1487,9 +1489,10 @@ async function reportDirectHttpEntry(
         "so it stays as it is. " +
         "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
         "temporary or removable location, is owned by another user, or on Windows is installed " +
-        "anywhere but Program Files or your user folder. Install Node 22.12 or " +
-        "newer system-wide (an app started from the dock or a menu cannot see a Node that only " +
-        "a shell profile such as nvm adds), then restart Tandem.",
+        "anywhere but Program Files or your user folder. " +
+        (process.platform === "darwin"
+          ? desktopPathNote()
+          : "Install Node 22.12 or newer system-wide, then restart Tandem. " + desktopPathNote()),
     );
     return;
   }
@@ -1503,7 +1506,8 @@ async function reportDirectHttpEntry(
         "22.12 or newer it can record on its own PATH (not an older one, a version manager's " +
         "shim, one in a temporary location or owned by another user, or on Windows one outside " +
         "Program Files or your user folder); the desktop app can also use the Node it ships " +
-        `with. Restart Tandem, or ${setupStep(cliAvailable())}, which looks too. If the entry is ` +
+        `with. ${desktopPathNote()} Restart Tandem, or ${setupStep(cliAvailable())}, which looks ` +
+        "too. If the entry is " +
         "still direct HTTP afterwards, Tandem's log says why, on a line containing " +
         "\"Claude Code's 'tandem' entry stays direct HTTP\".",
     );
@@ -1529,6 +1533,21 @@ function fileSizeOrZero(path: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * What PATH a desktop app started from the GUI sees. On macOS a Dock or Finder
+ * launch gets `/usr/bin:/bin:/usr/sbin:/sbin` (launchd's default), so no Node
+ * the user installs is visible to it — "install Node system-wide" would be a
+ * remedy that cannot work there.
+ */
+function desktopPathNote(): string {
+  return process.platform === "darwin"
+    ? "On macOS, the desktop app opened from the Dock or Finder sees only " +
+        "/usr/bin:/bin:/usr/sbin:/sbin, which holds no Node, so its entry stays on the Node it " +
+        "ships with unless Tandem is started from a shell that has Node on its PATH."
+    : "A desktop app started from a menu cannot see a Node that only a shell profile (nvm, " +
+        "Homebrew) adds.";
 }
 
 /** Tandem's direct-HTTP entry in a config too large for any Tandem writer. */
@@ -3900,8 +3919,8 @@ export function evaluateStaleGlobal(
   };
 }
 
-async function checkStaleGlobal(r: Recorder): Promise<void> {
-  const bundled = BUNDLED_VERSION;
+async function checkStaleGlobal(r: Recorder, bundledOverride?: string): Promise<void> {
+  const bundled = bundledOverride ?? BUNDLED_VERSION;
   // Without a known bundled version (tsx dev / vitest) there's nothing to
   // compare against — skip silently rather than guess.
   if (!bundled) return;
@@ -3956,6 +3975,12 @@ export interface RunDoctorOptions {
    * `tandem_diagnostics`, so it reports what the last boot's probe left.
    */
   claudeCodeBridgeVerdict?: () => Promise<ClaudeCodeBridgeVerdict | null>;
+  /**
+   * Test seam: the bundled version a release build has (`__TANDEM_VERSION__`,
+   * absent under vitest), so a test can run `checkStaleGlobal`'s real spawn as
+   * the shipped `tandem_diagnostics` does. Never set in production.
+   */
+  bundledVersionForTests?: string;
 }
 
 /**
@@ -4033,7 +4058,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("integrations-file", () => checkIntegrationsFile(r));
-  await r.check("stale-global", () => checkStaleGlobal(r));
+  await r.check("stale-global", () => checkStaleGlobal(r, opts.bundledVersionForTests));
 
   // `check` returns undefined when the check crashed (it records its own
   // fail). Treating both ports as down is the honest reading: we did not

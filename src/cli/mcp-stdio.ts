@@ -61,7 +61,7 @@ import {
   resolveTandemUrl,
   VALID_TOKEN_RE,
 } from "../shared/cli-runtime.js";
-import { LAN_BIND_ENABLED } from "../shared/constants.js";
+import { DEFAULT_MCP_PORT, LAN_BIND_ENABLED } from "../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
 
@@ -409,18 +409,27 @@ process.once("unhandledRejection", (reason: unknown) => {
  * plugin user who pointed `server_url` at `localhost` keeps connecting, without
  * the token, which loopback Tandem does not require.
  */
-export function tokenMayGoTo(baseUrl: string): boolean {
+export function tokenMayGoTo(baseUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (LAN_BIND_ENABLED) return true;
-  let host: string;
+  let url: URL;
   try {
-    host = new URL(baseUrl).hostname;
+    url = new URL(baseUrl);
   } catch {
     return false;
   }
-  // Exactly the two addresses a loopback Tandem listens on — not `localhost`
-  // (resolved by whatever the system's resolver says, hosts file included) and
-  // not the rest of 127/8, which Tandem never binds.
-  return host === "127.0.0.1" || host === "[::1]";
+  // The two loopback addresses: `127.0.0.1`, Tandem's default bind, and
+  // `[::1]`, the other loopback bind `TANDEM_BIND_HOST` accepts — not
+  // `localhost` (resolved by whatever the system's resolver says, hosts file
+  // included) and not the rest of 127/8, which Tandem never binds.
+  if (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") return false;
+  // And Tandem's MCP port: the default, or the `TANDEM_MCP_PORT` this bridge
+  // was started with. Another local process on another port gets no token;
+  // a loopback Tandem accepts a request without one, so nothing breaks.
+  const port = url.port === "" ? 80 : Number(url.port);
+  const allowed = new Set<number>([DEFAULT_MCP_PORT]);
+  const moved = Number.parseInt(env.TANDEM_MCP_PORT ?? "", 10);
+  if (Number.isInteger(moved) && moved > 0 && moved < 65536) allowed.add(moved);
+  return allowed.has(port);
 }
 
 /**
@@ -468,8 +477,9 @@ export async function runMcpStdio(): Promise<void> {
       upstreamHeaders.Authorization = `Bearer ${authToken}`;
     } else {
       process.stderr.write(
-        "[tandem mcp-stdio] Not sending the auth token: the server URL is not this computer, " +
-          "and Tandem only listens on this computer.\n",
+        "[tandem mcp-stdio] Not sending the auth token: the server URL is not Tandem's MCP " +
+          "address on this computer (127.0.0.1 or [::1], on its MCP port). A Tandem on this " +
+          "computer does not need it.\n",
       );
     }
   }

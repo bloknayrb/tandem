@@ -498,6 +498,27 @@ describe("an older install's bridge script moves forward (nvm: the old prefix st
     expect(stderr()).toContain("Repaired the tandem entry");
   });
 
+  it("moves forward to a desktop bundle with no package.json, by this build's own version", async () => {
+    // The real desktop case: its resource dir ships no package.json, so the
+    // current side's version is this build's (`CLI_VERSION`), and the bundled
+    // Node does not displace a live system Node.
+    const old = prefix("v22", "0.0.1");
+    const desktopScript = join(home, "Desktop", "dist", "stdio-bridge", "index.js");
+    mkdirSync(join(desktopScript, ".."), { recursive: true });
+    writeFileSync(desktopScript, "// bridge\n");
+    const bundled = join(home, "Desktop", "node-sidecar-x86_64-pc-windows-msvc.exe");
+    writeFileSync(bundled, "");
+    _setClaudeCodeBridgeForTests({ command: bundled, script: desktopScript });
+    writeConfig({ mcpServers: { tandem: { command: old.node, args: [old.script], env: {} } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem).toMatchObject({
+      command: old.node,
+      args: [desktopScript],
+    });
+  });
+
   it("a forward move never trades a live system Node for the desktop's bundled one", async () => {
     const old = prefix("v22", "0.30.0");
     const desktop = prefix("Tandem", "0.31.0");

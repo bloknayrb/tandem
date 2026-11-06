@@ -45,6 +45,14 @@ To proceed: click **More info**, then **Run anyway**. The warning stops appearin
 
 This is a SmartScreen-side delay, not a code-signing failure — the installer is signed and the publisher name will be shown in the dialog. If the publisher reads as *"Unknown publisher"* instead of the Tandem signing-cert identity, that's a real signature problem; please [file an issue](https://github.com/bloknayrb/tandem/issues).
 
+## Claude Code's `tandem` entry and Node (since #2358)
+
+Tandem's `tandem` entry in `~/.claude.json` runs a small bridge on a Node it recorded (`command`) and a script it recorded (`args`). `tandem doctor` (desktop: Settings → About → Copy Diagnostics) says which entry you have and, if it did not switch to the bridge, why.
+
+- **A Node upgrade or removal fails while terminals are open.** Every open Claude Code terminal runs that bridge, so it holds the recorded Node open. Scoop skips updating an app with a running process (its source prints "Running process detected, skip updating."). A Windows Node installer or winget upgrade, or `nvm uninstall` of the version in use, can fail on files in use (inferred, not measured). Close Claude Code terminals first, then upgrade.
+- **Terminals lose their Tandem tools after you removed a Node or a Tandem install.** Uninstalling the nvm version the entry names, or a `pnpm up -g` that prunes pnpm's versioned global folder, leaves the entry pointing at a path that is gone. Tandem's next start repoints it; until then `tandem doctor` reports a Node or bridge script that no longer exists. Restart open terminals afterwards.
+- **The desktop app's entry stays on the Node it ships with.** Tandem only takes a Node 22.12 or newer from its own `PATH`. On macOS an app opened from the Dock or Finder sees only `/usr/bin:/bin:/usr/sbin:/sbin`, so it never sees a Node you install, unless Tandem is started from a shell that has Node on its `PATH`. On Windows only a Node under Program Files or your user folder counts, and a `PATH` entry in 8.3 short form (`C:\PROGRA~1\nodejs`) is skipped. On the shipped Node, a Windows desktop update ends every terminal's bridge, so restart them after updating.
+
 ## Claude Code says "MCP failed to connect"
 
 The server must be running before Claude Code probes the MCP URL. Start it first:

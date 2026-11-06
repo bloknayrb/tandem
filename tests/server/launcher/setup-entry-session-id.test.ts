@@ -8,19 +8,34 @@
  *    no plugin installed;
  * 3. the greeting classifier sees an id on every reply, so it is exact.
  *
- * Driven end to end: the REAL bridge (`tandem mcp-stdio`, the entry `tandem
- * setup` now writes) against the REAL HTTP MCP server and its registry, with
- * the environment Claude Code gives an MCP server it spawns
- * (`CLAUDECODE=1`, `CLAUDE_CODE_SESSION_ID`). The contrast in each case is the
- * direct-HTTP entry Tandem used to write, which sends no id. The
+ * Driven end to end from the WRITER: the entry is what `buildMcpEntries(…,
+ * {targetKind: "claude-code"})` produces, and the test spawns that entry's own
+ * `command`, `args` and `env` — so on a build whose writer still emits the
+ * direct-HTTP shape, there is no `command` and this file fails. The bridge
+ * pair is pinned to this checkout (Node = this process's, script = a fixture
+ * at a `dist/stdio-bridge/index.js` path that loads `src/stdio-bridge/index.ts`
+ * through tsx), against the REAL HTTP MCP server and its registry, with the
+ * environment Claude Code adds for an MCP server it spawns (`CLAUDECODE=1`,
+ * `CLAUDE_CODE_SESSION_ID`). One deviation, stated: the entry's `TANDEM_URL`
+ * names the product port, so its port is moved to the test server's. The
+ * contrast in each case is the direct-HTTP entry Tandem used to write, which
+ * sends no id. The
  * supervisor-side half of (3) — an id that is not its child's is never tagged —
  * is `supervisor-turn-delivery.test.ts`'s "#2227" block.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
-import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  _setClaudeCodeBridgeForTests,
+  buildMcpEntries,
+  CHANNEL_DIST,
+} from "../../../src/server/integrations/apply.js";
 import { setGreetingReplyClassifier } from "../../../src/server/mcp/greeting-reply.js";
 import {
   closeMcpSession,
@@ -30,7 +45,21 @@ import {
 } from "../../../src/server/mcp/server.js";
 import { allocPort } from "../../helpers/alloc-port.js";
 
-const CLI_ENTRY = resolve(import.meta.dirname, "../../../src/cli/index.ts");
+const BRIDGE_SRC = resolve(import.meta.dirname, "../../../src/stdio-bridge/index.ts");
+const TSX_API = resolve(import.meta.dirname, "../../../node_modules/tsx/dist/esm/api/index.mjs");
+const fixture = mkdtempSync(join(tmpdir(), "tandem-setup-entry-"));
+const BRIDGE_SCRIPT = join(fixture, "Tandem", "dist", "stdio-bridge", "index.js");
+mkdirSync(join(BRIDGE_SCRIPT, ".."), { recursive: true });
+writeFileSync(join(BRIDGE_SCRIPT, "..", "package.json"), '{ "type": "module" }\n');
+writeFileSync(
+  BRIDGE_SCRIPT,
+  `import { register } from ${JSON.stringify(pathToFileURL(TSX_API).href)};\n` +
+    `register();\nawait import(${JSON.stringify(pathToFileURL(BRIDGE_SRC).href)});\n`,
+);
+afterAll(() => {
+  _setClaudeCodeBridgeForTests(undefined);
+  rmSync(fixture, { recursive: true, force: true });
+});
 const CHILD_ID = "0b6f3c1e-5d2a-4c8e-9f17-2a4b6c8d0e1f";
 const ACCEPT = "application/json, text/event-stream";
 
@@ -50,16 +79,31 @@ afterEach(async () => {
   await new Promise<void>((r) => httpServer.close(() => r()));
 });
 
-/** Start the bridge as Claude Code starts the setup entry, for session `id`. */
+/** Start Claude Code's `tandem` entry, exactly as the writer built it, for session `id`. */
 function startBridge(id: string): {
   send: (msg: unknown) => void;
   reply: (id: number, timeoutMs?: number) => Promise<Record<string, unknown>>;
 } {
-  const env: NodeJS.ProcessEnv = { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` };
+  _setClaudeCodeBridgeForTests({ command: process.execPath, script: BRIDGE_SCRIPT });
+  const entry = buildMcpEntries(CHANNEL_DIST, { targetKind: "claude-code" }).tandem as {
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+  };
+  expect(entry.command, `the writer did not emit a stdio entry: ${JSON.stringify(entry)}`).toBe(
+    process.execPath,
+  );
+  expect(entry.args).toEqual([BRIDGE_SCRIPT]);
+  const entryEnv = { ...entry.env };
+  expect(Object.keys(entryEnv).sort()).toEqual(["TANDEM_URL"]);
+  const url = new URL(entryEnv.TANDEM_URL as string);
+  url.port = String(port);
+  entryEnv.TANDEM_URL = url.origin;
+  const env: NodeJS.ProcessEnv = { ...process.env, ...entryEnv };
   env.CLAUDECODE = "1";
   env.CLAUDE_CODE_SESSION_ID = id;
   delete env.TANDEM_AUTH_TOKEN;
-  const child = spawn(process.execPath, ["--import", "tsx", CLI_ENTRY, "mcp-stdio"], {
+  const child = spawn(entry.command as string, entry.args as string[], {
     env,
     stdio: ["pipe", "pipe", "pipe"],
   });

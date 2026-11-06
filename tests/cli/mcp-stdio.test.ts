@@ -1359,7 +1359,13 @@ describe("mcp-stdio token forwarding integration", () => {
     const token = "abcdefghijklmnopqrstuvwxyz012345"; // 32 chars
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
-      env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}`, TANDEM_AUTH_TOKEN: token },
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        TANDEM_AUTH_TOKEN: token,
+        // The token goes only to Tandem's MCP port (`tokenMayGoTo`).
+        TANDEM_MCP_PORT: String(port),
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -1397,7 +1403,13 @@ describe("mcp-stdio token forwarding integration", () => {
     const token = "abcdefghijklmnopqrstuvwxyz012345";
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
-      env: { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}`, TANDEM_AUTH_TOKEN: token },
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        TANDEM_AUTH_TOKEN: token,
+        // The token goes only to Tandem's MCP port (`tokenMayGoTo`).
+        TANDEM_MCP_PORT: String(port),
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -2125,6 +2137,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     const fake = await makeSessionServer();
     child = spawnBridge(fake.port, {
       TANDEM_AUTH_TOKEN: token,
+      TANDEM_MCP_PORT: String(fake.port),
       // resolveClaudeSessionId only trusts the id inside a real Claude Code
       // launch, which CLAUDECODE=1 is what marks.
       CLAUDECODE: "1",

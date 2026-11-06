@@ -110,6 +110,7 @@ import {
   isRecordedPathAbsolute,
   isRecordedPathGone,
   isScratchPath,
+  meetsSystemNodeFloor,
   peekSystemNode,
   probeNodeBinary,
   resolveNodeBinary,
@@ -695,7 +696,13 @@ export function durableBridgeScript(): string | null {
  * a checkout build; for any other process, the same durability rules as a
  * system Node, on its screened real path.
  */
-export function durableRunningNode(env: NodeJS.ProcessEnv = process.env): string | null {
+export function durableRunningNode(
+  env: NodeJS.ProcessEnv = process.env,
+  runningVersion: string = process.version,
+): string | null {
+  // The same 22.12 floor a PATH Node must meet. This one needs no probe: the
+  // running Node is this process.
+  if (!meetsSystemNodeFloor(runningVersion)) return null;
   const exec = resolveNodeBinary();
   if (exec === BARE_NODE) return null;
   if (isAppTranslocatedPath(exec) || isAppImageMountPath(exec, env)) return null;
@@ -781,9 +788,10 @@ export type ClaudeCodeBridgeVerdict =
  *
  * **Never probes** (Bryan, 2026-11-06): `tandem_diagnostics` is reachable by
  * the AI through MCP, so it reports what the last probe in this process left
- * — the boot sweep's, in the server — and never runs a `--version` itself.
- * `tests/cli/doctor-no-probe.test.ts` pins that the diagnostics path spawns
- * nothing.
+ * — the boot sweep's, in the server — and never runs the system-Node
+ * `--version` walk itself. `tests/cli/doctor-no-probe.test.ts` pins that every
+ * spawn on the diagnostics path is on its allowlist (the pre-existing `npm ls`
+ * of #2379, and `ps`), which the walk is not.
  */
 export function claudeCodeBridgeVerdict(): ClaudeCodeBridgeVerdict {
   if (isAppTranslocatedPath(STDIO_BRIDGE_DIST)) return "translocated";
@@ -2639,7 +2647,9 @@ function keepWorkingClaudeCodeBridge(
  * none qualifying re-walks `PATH` at every start: `stat`s only when `PATH`
  * holds no `node`, else one `--version` per candidate (at most
  * `SYSTEM_NODE_MAX_PROBES`, each bounded at 2 s — a too-old Node answers in
- * milliseconds; only one that hangs costs the full bound).
+ * milliseconds; only one that hangs costs the full bound). The `stat`s are not
+ * always cheap: a mapped drive letter on `PATH` (`Z:\tools`) whose share is
+ * disconnected can make one `lstat` wait for the network redirector's timeout.
  */
 function claudeCodeEntryNeedsBridge(entry: unknown, currentScript: string | null): boolean {
   const shape = classifyClaudeCodeTandemEntry(entry, MCP_URL);
@@ -2954,8 +2964,9 @@ export async function refreshAllMcpEntryBinaries(
         // (#2358 PR 2b): the migration fires once on every install, and Claude
         // Code writes this file too. The backup is the pre-image the re-check
         // below compares against, so it is exactly what this write replaces.
-        // It does not close #1599; it leaves a rollback or a lost-update victim
-        // something to recover from. No backup, no write: the next start
+        // It does not close #1599: it undoes TANDEM's write. A Claude Code
+        // write that lands between the re-check and the rename is in neither
+        // this copy nor the result. No backup, no write: the next start
         // retries.
         try {
           await backupConfigBytes(opened.stamp.bytes, SWEEP_BACKUP_PREFIX);

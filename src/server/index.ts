@@ -933,9 +933,10 @@ async function main() {
     // probe. That includes every boot of a desktop whose entry is on the
     // bundled Node: it is asked to move to a system Node each time, so with
     // none qualifying it re-walks PATH at every start — only `stat`s when PATH
-    // holds no `node`, else one probe per candidate (at most four, each
-    // bounded at 2 s; a too-old Node answers in milliseconds, only a hanging
-    // one costs the bound). A boot whose entry is already on a live system
+    // holds no `node` (though a disconnected mapped drive such as `Z:\tools` on
+    // PATH can make one wait for the network redirector's timeout), else one
+    // probe per candidate (at most four, each bounded at 2 s; a too-old Node
+    // answers in milliseconds, only a hanging one costs the bound). A boot whose entry is already on a live system
     // Node probes nothing. The writes are NOT bounded to that on a boot that actually
     // repairs something — an `atomicWrite` here was measured at ~524 ms on
     // Windows, almost all of it a `pwsh Get-Acl` spawn, and the loop is
