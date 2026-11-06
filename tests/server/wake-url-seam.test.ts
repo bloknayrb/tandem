@@ -36,6 +36,7 @@
 
 import { describe, expect, it } from "vitest";
 import { WAKE_URL_PRODUCERS, wakeUrlField } from "../../src/server/mcp/wake-url.js";
+import { runWithMcpContext } from "../../src/server/sessions/context.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 const WAKE_URL = "src/server/mcp/wake-url.ts";
@@ -43,6 +44,54 @@ const DOCUMENT = "src/server/mcp/document.ts";
 const WAKE_SOCKET = "src/server/events/wake-socket.ts";
 
 describe("the wakeUrl seam", () => {
+  // The narrow read §11.6 promises, and the one ownership PR 1a's context-getter seam test will
+  // allowlist: wake-url.ts takes exactly one name from the context module, and it is the
+  // boolean getter — never `getMcpContext` (which would hand it the session ids) or a direct
+  // `peerIsLoopback` property read it could get wrong.
+  it("reads the context module through isCurrentPeerLoopback alone", () => {
+    const wu = stripComments(SRC_FILES.get(WAKE_URL) ?? "");
+    const imports = [...wu.matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)];
+    const fromContext = imports.filter(([, , from]) => /sessions\/context(\.js)?$/.test(from));
+    expect(fromContext, "wake-url.ts must import from sessions/context exactly once").toHaveLength(
+      1,
+    );
+    expect(
+      fromContext[0][1]
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean),
+    ).toStrictEqual(["isCurrentPeerLoopback"]);
+    expect(wu).not.toMatch(/\bgetMcpContext\b|\bpeerIsLoopback\b/);
+  });
+
+  // The initialize branch and GET/DELETE never carry a tool response, so no behavioural spec can
+  // observe `peerIsLoopback` there; this source pin is the only check on those paths. All
+  // places the tree enters the request context must derive the field from the SOCKET.
+  it("every context entry in src/ sets peerIsLoopback from the socket", () => {
+    // Swept across the whole tree, not just server.ts: an entry added in another module without
+    // the field would fail closed and withhold the URL from every caller it serves, and the
+    // behavioural specs only see paths that carry a tool call.
+    const CONTEXT = "src/server/sessions/context.ts";
+    let entries = 0;
+    for (const file of filesMentioning("runWithMcpContext").filter((f) => f !== CONTEXT)) {
+      const src = stripComments(SRC_FILES.get(file) ?? "");
+      const here = (src.match(/\brunWithMcpContext\s*\(/g) ?? []).length;
+      const derived = (
+        src.match(/peerIsLoopback:\s*isLoopback\(req\.socket\.remoteAddress\)/g) ?? []
+      ).length;
+      expect(
+        derived,
+        `${file}: every runWithMcpContext entry must set peerIsLoopback from the socket`,
+      ).toBe(here);
+      expect(
+        (src.match(/\bpeerIsLoopback\b/g) ?? []).length,
+        `${file}: no other write of the field`,
+      ).toBe(here);
+      entries += here;
+    }
+    expect(entries, "control: found no runWithMcpContext entry in src/").toBeGreaterThan(0);
+  });
+
   // The absent-vs-present-undefined invariant, asserted where it is actually observable.
   // Two of the three producers return via `mcpSuccess`, whose `JSON.stringify` drops an
   // undefined value — so a `{ wakeUrl: undefined }` bug is invisible through those tools and
@@ -52,9 +101,13 @@ describe("the wakeUrl seam", () => {
   // transport that is not running. Pin it on the helper, once.
   it("yields NO key at all when there is no transport", async () => {
     const { getWakeEndpoint } = await import("../../src/server/events/wake-socket.js");
-    // No wake socket is attached in this suite, so the real endpoint is null.
+    // No wake socket is attached in this suite, so the real endpoint is null. Called as a
+    // LOOPBACK peer: outside a context the helper is empty anyway (#1952), which would make
+    // this spec pass for the wrong reason.
     expect(getWakeEndpoint()).toBeNull();
-    expect(Object.keys(wakeUrlField())).toStrictEqual([]);
+    expect(
+      Object.keys(runWithMcpContext({ peerIsLoopback: true }, () => wakeUrlField())),
+    ).toStrictEqual([]);
   });
 
   // Positive control. Every static guard in this repo carries one, because a sweep that read

@@ -28,7 +28,7 @@ export interface ListedTool {
  * be parsed as the response and surface as a TypeError on `.tools` instead of a
  * readable failure.
  */
-function parseRpc(body: string, id: number): Record<string, unknown> {
+export function parseRpc(body: string, id: number): Record<string, unknown> {
   const frames = body
     .split("\n")
     .map((l) => l.trim())

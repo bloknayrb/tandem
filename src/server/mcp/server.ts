@@ -21,7 +21,7 @@ import {
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
-import { createAuthMiddleware } from "../auth/middleware.js";
+import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
 import { getDeliveryState } from "../events/delivery-state.js";
@@ -873,7 +873,13 @@ export async function startMcpServerHttp(
     registry.touch(entry.sessionId);
     onEntry?.(entry);
     await runWithMcpContext(
-      { claudeSessionId: entry.claudeSessionId, mcpSessionId: entry.sessionId },
+      {
+        claudeSessionId: entry.claudeSessionId,
+        mcpSessionId: entry.sessionId,
+        // The TCP peer, never the Host header (#1952). Per request, not per session:
+        // a session id is a bearer value any peer holding it can present.
+        peerIsLoopback: isLoopback(req.socket.remoteAddress),
+      },
       () => entry.transport.handleRequest(req, res, body),
     );
     return entry;
@@ -927,7 +933,10 @@ export async function startMcpServerHttp(
         // handleRequest is what mints the session id and fires
         // onsessioninitialized, so the registry entry appears during this call.
         await openSession(registry, buildServer, claudeSessionId, clientName, (transport) =>
-          runWithMcpContext({ claudeSessionId }, () => transport.handleRequest(req, res, body)),
+          runWithMcpContext(
+            { claudeSessionId, peerIsLoopback: isLoopback(req.socket.remoteAddress) },
+            () => transport.handleRequest(req, res, body),
+          ),
         );
       } catch (err) {
         console.error("[Tandem] Failed to create new MCP session:", err);
