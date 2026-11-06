@@ -1499,12 +1499,13 @@ async function reportDirectHttpEntry(
     // a restart switches the entry is not known here — say what decides it.
     r.warn(
       message,
-      "Tandem switches this entry when it starts only if it finds a Node 22.12 or newer it can " +
-        "record on its own PATH (not an older one, a version manager's shim, one in a temporary " +
-        "location or owned by another user, or on Windows one outside Program Files or your " +
-        `user folder). Restart Tandem, or ${setupStep(cliAvailable())}, which looks too. If the ` +
-        "entry is still direct HTTP afterwards, Tandem's log names the reason on a line " +
-        "starting \"Claude Code's 'tandem' entry stays direct HTTP\".",
+      "An npm install of Tandem switches this entry when it starts only if it finds a Node " +
+        "22.12 or newer it can record on its own PATH (not an older one, a version manager's " +
+        "shim, one in a temporary location or owned by another user, or on Windows one outside " +
+        "Program Files or your user folder); the desktop app can also use the Node it ships " +
+        `with. Restart Tandem, or ${setupStep(cliAvailable())}, which looks too. If the entry is ` +
+        "still direct HTTP afterwards, Tandem's log says why, on a line containing " +
+        "\"Claude Code's 'tandem' entry stays direct HTTP\".",
     );
     return;
   }

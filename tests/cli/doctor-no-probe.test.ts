@@ -180,7 +180,31 @@ describe.skipIf(process.platform === "win32")(
       const { readFileSync } = await import("node:fs");
       const src = (rel: string) =>
         readFileSync(join(import.meta.dirname, "..", "..", rel), "utf-8");
-      for (const rel of ["src/cli/setup.ts", "src/server/integrations/api-routes.ts"]) {
+      // Every caller of `buildMcpEntries` in src/, found rather than listed, so a
+      // new writer that skips the warm-up fails here. `apply.ts` (rotate-token)
+      // is covered behaviourally above.
+      const { readdirSync, statSync } = await import("node:fs");
+      const callers: string[] = [];
+      const walk = (dir: string) => {
+        for (const name of readdirSync(dir)) {
+          const p = join(dir, name);
+          if (statSync(p).isDirectory()) walk(p);
+          else if (
+            /\.ts$/.test(name) &&
+            readFileSync(p, "utf-8").includes("buildMcpEntries(CHANNEL_DIST")
+          )
+            callers.push(
+              p.slice(join(import.meta.dirname, "..", "..").length + 1).replace(/\\/g, "/"),
+            );
+        }
+      };
+      walk(join(import.meta.dirname, "..", "..", "src"));
+      expect(callers.sort()).toEqual([
+        "src/cli/setup.ts",
+        "src/server/integrations/api-routes.ts",
+        "src/server/integrations/apply.ts",
+      ]);
+      for (const rel of callers) {
         const text = src(rel);
         const warm = text.search(
           /if \(\w+\.kind === "claude-code"\) await warmClaudeCodeBridge\(\);/,

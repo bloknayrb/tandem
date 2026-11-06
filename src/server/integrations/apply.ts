@@ -794,14 +794,33 @@ export function claudeCodeBridgeVerdict(): ClaudeCodeBridgeVerdict {
 
 let warnedClaudeCodeHttp = false;
 
-/** One line per process: why Claude Code's entry stayed direct HTTP. */
+/** Test seam: let the once-per-process line below print again. */
+export function _resetClaudeCodeHttpWarningForTests(): void {
+  if (process.env.VITEST !== "true") throw new Error("test seam");
+  warnedClaudeCodeHttp = false;
+}
+
+/** One line per process: why Claude Code's entry stayed direct HTTP. The
+ *  reason follows `claudeCodeBridgeVerdict`'s arms, so the log and the doctor
+ *  name the same cause. */
 function warnClaudeCodeHttpFallback(): void {
   if (warnedClaudeCodeHttp) return;
   warnedClaudeCodeHttp = true;
-  const why =
-    durableBridgeScript() === null
-      ? "this Tandem is not an installed build (a development checkout, an npx run, or a missing bundle)"
-      : "no Node 22.12 or newer qualified (none on PATH, and the running Node cannot be recorded)";
+  let why: string;
+  if (isAppTranslocatedPath(STDIO_BRIDGE_DIST)) {
+    why =
+      "Tandem is running from macOS's quarantine copy, which moves on every launch (move it to Applications and open it from there)";
+  } else if (ownBridgeInstallKind() === "appimage" && appImageBridgeCopy === null) {
+    why = "the AppImage's own copy of the bridge could not be made (see the line above)";
+  } else if (durableBridgeScript() === null) {
+    why =
+      "this Tandem is not an installed build (a development checkout, an npx run, or a missing bundle)";
+  } else if (peekSystemNode() === undefined) {
+    why = "the search for a Node did not complete (see the line above)";
+  } else {
+    why =
+      "no Node 22.12 or newer qualified (none on PATH, and the running Node cannot be recorded)";
+  }
   console.error(
     `[Tandem] Claude Code's 'tandem' entry stays direct HTTP: ${why}. ` +
       "Run 'tandem doctor' (desktop: Settings → About → Copy Diagnostics) for what that costs.",
@@ -2538,9 +2557,9 @@ function repairClaudeCodeBridgeEntry(
   }
 
   const gone = isRecordedPathGone(command, deps.probe);
-  // A forward move takes this install's whole pair: the entry becomes exactly
-  // what this install would write, and the move is one-directional, so the
-  // Node it brings cannot flip back either.
+  // A forward move also takes this install's Node — except that a live system
+  // Node is never traded for the bundled one (`keepsLiveSystemNode`). The move
+  // is one-directional, so the Node it brings cannot flip back either.
   const keepsLiveSystemNode =
     isBundledSidecarNode(bridge.command) && !isBundledSidecarNode(command);
   const wantsRewrite =

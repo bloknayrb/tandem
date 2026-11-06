@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetClaudeCodeHttpWarningForTests,
   _setClaudeCodeBridgeForTests,
   _setSweepBeforeCommitForTests,
   applyConfig,
@@ -204,6 +205,7 @@ describe("scope and gates", () => {
 
   it("does nothing when this build cannot write a bridge (a checkout, no durable Node)", async () => {
     _setClaudeCodeBridgeForTests(null);
+    _resetClaudeCodeHttpWarningForTests();
     writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } } });
     const before = readFileSync(claudeJson());
 
@@ -211,7 +213,7 @@ describe("scope and gates", () => {
 
     expect(readFileSync(claudeJson()).equals(before)).toBe(true);
     // The reason is logged — the line `tandem doctor`'s "unprobed" remedy
-    // points at. (Once per process: this is the file's first case to hit it.)
+    // points at. (Once per process; the seam above re-arms it.)
     expect(stderr()).toContain("Claude Code's 'tandem' entry stays direct HTTP");
   });
 
