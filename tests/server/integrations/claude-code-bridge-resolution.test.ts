@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   systemNode: null as string | null,
   execPath: "/usr/local/bin/node",
   sidecar: false,
+  /** Treat the temp-dir fixtures as non-scratch, so a case can isolate another rule. */
+  fixturesAreNotScratch: false,
 }));
 
 vi.mock("../../../src/server/integrations/node-binary.js", async (importOriginal) => {
@@ -23,6 +25,8 @@ vi.mock("../../../src/server/integrations/node-binary.js", async (importOriginal
     ...real,
     findSystemNode: () => mocks.systemNode,
     resolveNodeBinary: () => mocks.execPath,
+    isScratchPath: (p: string, d?: Parameters<typeof real.isScratchPath>[1]) =>
+      mocks.fixturesAreNotScratch && p.startsWith(tmpdir()) ? false : real.isScratchPath(p, d),
   };
 });
 vi.mock("../../../src/server/platform.js", async (importOriginal) => {
@@ -40,6 +44,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "tandem-cc-resolve-"));
   mocks.systemNode = null;
   mocks.sidecar = false;
+  mocks.fixturesAreNotScratch = false;
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -77,12 +82,21 @@ describe("durableRunningNode", () => {
     );
     expect(durableRunningNode({})).toBeNull();
 
-    // An install has no `.git` above it. (Under `os.tmpdir()`, so judged by
-    // provenance alone: the sidecar branch does not apply the scratch rule.)
+    // An install has no `.git` above it. (The fixture sits under `os.tmpdir()`,
+    // which the scratch rule refuses on its own; that rule has its own case.)
+    mocks.fixturesAreNotScratch = true;
     const install = join(root, "opt", "tandem");
     mkdirSync(install, { recursive: true });
     mocks.execPath = join(install, "node-sidecar-x86_64-unknown-linux-gnu");
     expect(durableRunningNode({})).toBe(mocks.execPath);
+  });
+
+  it("refuses the desktop sidecar's Node on a mounted volume or under a scratch root", () => {
+    mocks.sidecar = true;
+    mocks.execPath = "/Volumes/Tandem/Tandem.app/Contents/MacOS/node-sidecar-aarch64-apple-darwin";
+    expect(durableRunningNode({})).toBeNull();
+    mocks.execPath = join(root, "extracted", "node-sidecar-x86_64-unknown-linux-gnu");
+    expect(durableRunningNode({})).toBeNull();
   });
 
   it("refuses an npm-run Node under a scratch root", () => {

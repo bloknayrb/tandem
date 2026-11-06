@@ -3714,6 +3714,20 @@ describe("a moved TANDEM_MCP_PORT (#2358 PR 2b round-2 review)", () => {
     expect(results.some((x) => x.status === "warn")).toBe(false);
   });
 
+  it("names port 80, not 'not this computer', for a loopback URL with no port", async () => {
+    const node = join(home, "node");
+    const script = join(home, "dist", "stdio-bridge", "index.js");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(node, "");
+    writeFileSync(script, "");
+    write({ command: node, args: [script], env: { TANDEM_URL: "http://127.0.0.1" } });
+
+    const warn = (await userMcp(3479)).find((x) => x.status === "warn");
+
+    expect(warn?.message).toContain("port 80");
+    expect(warn?.message).not.toContain("not this computer");
+  });
+
   it("does not certify a bridge pointed at the default port when Tandem moved", async () => {
     const node = join(home, "node");
     const script = join(home, "dist", "stdio-bridge", "index.js");

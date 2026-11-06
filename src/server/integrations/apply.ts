@@ -302,7 +302,7 @@ const createdStandIns = new Set<string>();
 export function mayTouchDefaultClientConfigs(
   inputs: { standIn: string | undefined; installKind: ReturnType<typeof bridgeInstallKind> } = {
     standIn: clientConfigHomeOverride(undefined),
-    installKind: bridgeInstallKind(),
+    installKind: ownBridgeInstallKind(),
   },
 ): boolean {
   return inputs.standIn !== undefined || inputs.installKind !== null;
@@ -684,6 +684,10 @@ export function durableRunningNode(env: NodeJS.ProcessEnv = process.env): string
   if (exec === BARE_NODE) return null;
   if (isAppTranslocatedPath(exec) || isAppImageMountPath(exec, env)) return null;
   if (isTauriSidecar() && isBundledSidecarNode(exec)) {
+    // The same scratch / removable-volume refusal as every other recorded path:
+    // a desktop app run from a mounted disk image or an extracted copy under
+    // /tmp has a Node that disappears with it.
+    if (isScratchPath(exec)) return null;
     return hasGitAncestor(dirname(exec), existsSync) ? null : exec;
   }
   const real = screenedRealPath(exec);

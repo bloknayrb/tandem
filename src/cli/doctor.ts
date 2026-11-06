@@ -1381,7 +1381,8 @@ function bridgeEntryPort(entry: unknown): number | null {
   try {
     const url = new URL(raw);
     if (url.protocol !== "http:" || !LOOPBACK_MCP_HOSTNAMES.has(url.hostname)) return null;
-    return url.port === "" ? null : Number(url.port);
+    // No explicit port means http's default, 80 — on this computer, but not Tandem.
+    return url.port === "" ? 80 : Number(url.port);
   } catch {
     return null;
   }
