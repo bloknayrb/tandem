@@ -106,6 +106,21 @@ tauri-plugin-updater = "2"
 tauri-plugin-prevent-default = "6"
 tauri-plugin-decorum = "1"
 
+# Linux-only: the tray backend pre-check (#2359, src/tray_probe.rs).
+# `libloading` 0.7 is the loader `libappindicator-sys` itself uses (already in
+# the graph through it), so the probe and the crate's lazy `LIB` dlopen the same
+# names the same way. `libappindicator-sys` is not called directly: the exact
+# pin plus `backcompat` exist so feature unification keeps the crate's soname
+# list identical to the probe's. `backcompat` is on today through the default
+# features of the crates above; naming it here keeps it on if one of them ever
+# goes `default-features = false` (it would drop the two unversioned names, and
+# a host with only those would pass the probe and then panic in the tray build).
+# Bumping libappindicator-sys, libappindicator or tray-icon needs the crate
+# source re-read; the tests in tray_probe.rs fail until then.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.7"
+libappindicator-sys = { version = "=0.9.0", features = ["backcompat"] }
+
 # macOS-only: removes Tandem's delivered notifications through
 # NSUserNotificationCenter when the window is focused, to release a parked
 # notification thread (see MAC_ACTION_OUTSTANDING in src/notifications.rs).

@@ -4171,14 +4171,17 @@ mod shutdown_guard_tests {
         let lib_src = include_str!("lib.rs");
         let checklist = include_str!("../../docs/release-smoke-checklist.md");
 
-        // (literal, doc name, doc text, source name, source text)
-        let pairs: [(&str, &str, &str, &str, &str); 3] = [
+        // (literal, doc name, doc text, source name, source text, log macro).
+        // The macro is `warn!` unless the line is worse than a warning; either
+        // way it must clear the release `LevelFilter::Warn` floor.
+        let pairs: [(&str, &str, &str, &str, &str, &str); 5] = [
             (
                 concat!("start_sidecar: shutdown in progress", " — not spawning"),
                 "release-smoke-checklist.md",
                 checklist,
                 "sidecar.rs",
                 sidecar_src,
+                "log::warn!(",
             ),
             (
                 concat!(
@@ -4189,6 +4192,7 @@ mod shutdown_guard_tests {
                 checklist,
                 "sidecar.rs",
                 sidecar_src,
+                "log::warn!(",
             ),
             (
                 concat!("Pre-install: graceful sidecar", " shutdown complete"),
@@ -4196,10 +4200,28 @@ mod shutdown_guard_tests {
                 checklist,
                 "lib.rs",
                 lib_src,
+                "log::warn!(",
+            ),
+            // #2359's no-tray row greps these two in an installed build.
+            (
+                concat!("System tray unavailable: no appindicator", " library could be loaded"),
+                "release-smoke-checklist.md",
+                checklist,
+                "lib.rs",
+                lib_src,
+                "log::error!(",
+            ),
+            (
+                concat!("No tray icon", " — exiting on window close"),
+                "release-smoke-checklist.md",
+                checklist,
+                "lib.rs",
+                lib_src,
+                "log::warn!(",
             ),
         ];
 
-        for (line, doc_name, doc, src_name, src) in pairs {
+        for (line, doc_name, doc, src_name, src, log_macro) in pairs {
             assert!(
                 doc.contains(line),
                 "{doc_name} no longer greps for {line:?} — the row and the code have drifted"
@@ -4221,10 +4243,9 @@ mod shutdown_guard_tests {
                 "{line:?} in {src_name} is not the start of a string literal"
             );
             let before_quote = before[..before.len() - 1].trim_end();
-            const MACRO: &str = "log::warn!(";
             assert!(
-                before_quote.ends_with(MACRO),
-                "{line:?} must be the first argument of a log::warn!( in {src_name} — the release \
+                before_quote.ends_with(log_macro),
+                "{line:?} must be the first argument of a {log_macro} in {src_name} — the release \
                  floor is LevelFilter::Warn and {doc_name} greps an installed build; found {:?}",
                 &before_quote[before_quote
                     .char_indices()
@@ -4238,11 +4259,11 @@ mod shutdown_guard_tests {
             // the one survivor of the first four mutations this guard was
             // attacked with, and it is the exact anchor failure (guard pinned to
             // a comment, real call gone) that the previous mechanism died of.
-            let macro_at = before_quote.len() - MACRO.len();
+            let macro_at = before_quote.len() - log_macro.len();
             let line_start = src[..macro_at].rfind('\n').map_or(0, |i| i + 1);
             assert!(
                 !src[line_start..macro_at].contains("//"),
-                "the log::warn! carrying {line:?} in {src_name} is commented out — the literal is \
+                "the {log_macro} carrying {line:?} in {src_name} is commented out — the literal is \
                  still present but nothing emits it"
             );
         }
