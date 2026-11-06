@@ -66,7 +66,8 @@ export function removeDocument(name: string): boolean {
 /**
  * Reject WebSocket upgrades whose Origin is not 127.0.0.1 / tauri.localhost /
  * the Linux `tauri://localhost`. Narrowed in #477 PR 2: bare `localhost` is no
- * longer accepted. Mirrors `isHostAllowed` / CORS in api-routes.ts. Exported for
+ * longer accepted. Mirrors the CORS allowlist in api-routes.ts (`isHostAllowed`
+ * additionally admits a `[::1]` Host, which is not an Origin this accepts). Exported for
  * direct unit coverage — the early exact-match return (before `new URL()`) is
  * the load-bearing correctness detail and must stay pinned.
  */
