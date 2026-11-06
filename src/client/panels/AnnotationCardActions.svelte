@@ -56,8 +56,14 @@ let {
 }: Props = $props();
 
 /** How long an armed Remove waits for its confirming click. */
-const REMOVE_CONFIRM_MS = 4000;
+const REMOVE_CONFIRM_MS = 5000;
+/**
+ * A confirming click this soon after arming is ignored: a double-click, or a held
+ * Enter key's auto-repeat, would otherwise arm and delete in one gesture.
+ */
+const REMOVE_CONFIRM_MIN_MS = 400;
 let removeArmed = $state(false);
+let removeArmedAt = 0;
 let removeArmTimer: ReturnType<typeof setTimeout> | null = null;
 
 function disarmRemove() {
@@ -73,20 +79,37 @@ function handleRemoveClick(e: MouseEvent) {
   if (!onRemove) return;
   if (confirmRemove && !removeArmed) {
     removeArmed = true;
+    removeArmedAt = Date.now();
     removeArmTimer = setTimeout(disarmRemove, REMOVE_CONFIRM_MS);
     return;
+  }
+  if (confirmRemove && (e.detail > 1 || Date.now() - removeArmedAt < REMOVE_CONFIRM_MIN_MS)) {
+    return; // the same gesture as the arming click: stay armed
   }
   disarmRemove();
   onRemove(annotationId);
 }
 
+function handleRemoveKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" && removeArmed) {
+    e.stopPropagation();
+    disarmRemove();
+  }
+}
+
 const removeLabel = $derived(removeArmed ? "Delete thread?" : "Remove");
+// The accessible name starts with the visible text (WCAG 2.5.3, label in name).
 const removeAria = $derived(
   removeArmed
-    ? "Click again to delete this comment and its replies"
+    ? "Delete thread? Activate again to delete this comment and its replies"
     : confirmRemove
       ? "Remove comment and its replies"
       : undefined,
+);
+// Announced through a polite live region, since a name change on a focused
+// button is not reliably re-read.
+const removeStatus = $derived(
+  removeArmed ? "Activate Remove again to delete this comment and its replies." : "",
 );
 
 const agentLabel = createAgentLabel();
@@ -229,6 +252,8 @@ onDestroy(() => {
         aria-label={removeAria}
         title={removeAria}
         onclick={handleRemoveClick}
+        onkeydown={handleRemoveKeydown}
+        onblur={disarmRemove}
       >
         {removeLabel}
       </button>
@@ -242,6 +267,8 @@ onDestroy(() => {
     aria-label={removeAria}
     title={removeAria}
     onclick={handleRemoveClick}
+    onkeydown={handleRemoveKeydown}
+    onblur={disarmRemove}
   >
     {removeLabel}
   </button>
@@ -265,17 +292,22 @@ onDestroy(() => {
         aria-label={removeAria}
         title={removeAria}
         onclick={handleRemoveClick}
+        onkeydown={handleRemoveKeydown}
+        onblur={disarmRemove}
       >
         {removeLabel}
       </button>
     {/if}
+    {#if undoError}
+      <!-- Inside the row (it wraps to its own line) so the density hide rules
+           that cover `.aca-undo-row` cover it too. -->
+      <div class="aca-undo-error">
+        Can't undo — text has changed.
+      </div>
+    {/if}
   </div>
-  {#if undoError}
-    <div class="aca-undo-error">
-      Can't undo — text has changed.
-    </div>
-  {/if}
 {/if}
+<span class="aca-sr" role="status" aria-live="polite">{removeStatus}</span>
 
 <style>
   /* Action-row family. All variants share the pill recipe (4×12, r-pill,
@@ -424,9 +456,21 @@ onDestroy(() => {
 
   .aca-undo-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 4px;
     margin-top: 4px;
+  }
+  .aca-undo-row .aca-undo-error {
+    flex-basis: 100%;
+  }
+  .aca-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .aca-undo {
     padding: 1px 6px;

@@ -19,7 +19,7 @@ import * as Y from "yjs";
 
 vi.mock("../../src/client/panels/annotation-actions", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../src/client/panels/annotation-actions")>();
-  return { ...real, removeAnnotation: vi.fn() };
+  return { ...real, removeAnnotation: vi.fn(async () => true) };
 });
 
 import AnnotationCardActions from "../../src/client/panels/AnnotationCardActions.svelte";
@@ -31,6 +31,7 @@ import {
 import { runAnnotationAction } from "../../src/client/panels/annotation-context-menu-host";
 import SidePanel from "../../src/client/panels/SidePanel.svelte";
 import type { UseAnnotationReviewReturn } from "../../src/client/panels/useAnnotationReview.svelte";
+import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants";
 import type { Annotation, AnnotationStatus } from "../../src/shared/types";
 import { range } from "../helpers/positions";
 
@@ -116,10 +117,52 @@ describe("AnnotationCardActions: inline confirm", () => {
     await tick();
     expect(onRemove).not.toHaveBeenCalled();
     expect(btn()?.textContent?.trim()).toBe("Delete thread?");
-    expect(btn()?.getAttribute("aria-label")).toMatch(/click again/i);
+    expect(btn()?.getAttribute("aria-label")).toMatch(/activate again/i);
+    vi.advanceTimersByTime(500); // past the double-click guard
     btn()?.click();
     await tick();
     expect(onRemove).toHaveBeenCalledWith("u1");
+    unmount();
+  });
+
+  it("a double-click (or key repeat) arms but does not delete", async () => {
+    const { container, unmount, onRemove } = mount();
+    const btn = () => byTestId(container, "remove-btn-u1");
+    btn()?.click();
+    await tick();
+    btn()?.click(); // same instant: under the minimum gap
+    await tick();
+    await fireEvent.click(btn() as HTMLElement, { detail: 2 });
+    expect(onRemove).not.toHaveBeenCalled();
+    expect(btn()?.textContent?.trim()).toBe("Delete thread?");
+    unmount();
+  });
+
+  it("Escape and blur disarm", async () => {
+    const { container, unmount, onRemove } = mount();
+    const btn = () => byTestId(container, "remove-btn-u1");
+    btn()?.click();
+    await tick();
+    await fireEvent.keyDown(btn() as HTMLElement, { key: "Escape" });
+    expect(btn()?.textContent?.trim()).toBe("Remove");
+    btn()?.click();
+    await tick();
+    await fireEvent.blur(btn() as HTMLElement);
+    expect(btn()?.textContent?.trim()).toBe("Remove");
+    expect(onRemove).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("the armed state is announced, and the name keeps the visible text", async () => {
+    const { container, unmount } = mount();
+    const status = container.querySelector("[role='status']");
+    expect(status?.textContent?.trim()).toBe("");
+    byTestId(container, "remove-btn-u1")?.click();
+    await tick();
+    expect(status?.textContent).toMatch(/again to delete/);
+    expect(byTestId(container, "remove-btn-u1")?.getAttribute("aria-label")).toMatch(
+      /^Delete thread\?/,
+    );
     unmount();
   });
 
@@ -128,7 +171,7 @@ describe("AnnotationCardActions: inline confirm", () => {
     const btn = () => byTestId(container, "remove-btn-u1");
     btn()?.click();
     await tick();
-    vi.advanceTimersByTime(4000);
+    vi.advanceTimersByTime(5000);
     await tick();
     expect(btn()?.textContent?.trim()).toBe("Remove");
     btn()?.click();
@@ -185,8 +228,71 @@ describe("SidePanel: the resolved list offers Remove, and Remove forgets the res
     expect(remove, "a resolved user comment offers Remove").not.toBeNull();
     remove?.click();
     await tick();
-    expect(review.forgetResolved).toHaveBeenCalledWith("r1");
     expect(removeAnnotation).toHaveBeenCalledWith("r1", "doc-a");
+    await vi.waitFor(() => expect(review.forgetResolved).toHaveBeenCalledWith("r1"));
+    unmount();
+  });
+
+  it("a failed remove keeps the id (and so its Undo)", async () => {
+    vi.mocked(removeAnnotation).mockResolvedValueOnce(false);
+    const review = makeReview();
+    const { container, unmount } = render(SidePanel, {
+      props: {
+        annotations: [ann("comment", "user", "dismissed", "r2")],
+        editor: null,
+        ydoc: new Y.Doc(),
+        documentId: "doc-a",
+        activeAnnotationId: null,
+        onActiveAnnotationChange: vi.fn(),
+        review,
+      },
+    });
+    await fireEvent.click(container.querySelector<HTMLElement>("details summary") as HTMLElement);
+    await tick();
+    byTestId(container, "remove-btn-r2")?.click();
+    await tick();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(review.forgetResolved).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  // The count reaches the card from the panel's own replies map: drop
+  // `confirmRemove={needsRemoveConfirm(...)}` from AnnotationCard and this reds.
+  it.each([
+    ["resolved", "dismissed" as AnnotationStatus],
+    ["closed by an accepted rewrite", "accepted" as AnnotationStatus],
+    ["open", "pending" as AnnotationStatus],
+  ])("a %s user comment with a reply arms first instead of removing", async (_n, status) => {
+    vi.mocked(removeAnnotation).mockClear();
+    const ydoc = new Y.Doc();
+    ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("rep1", {
+      id: "rep1",
+      annotationId: "t1",
+      author: "claude",
+      text: "an answer",
+      timestamp: 1,
+    });
+    const { container, unmount } = render(SidePanel, {
+      props: {
+        annotations: [ann("comment", "user", status, "t1")],
+        editor: null,
+        ydoc,
+        documentId: "doc-a",
+        activeAnnotationId: null,
+        onActiveAnnotationChange: vi.fn(),
+        review: makeReview(),
+      },
+    });
+    const summary = container.querySelector<HTMLElement>("details summary");
+    if (status !== "pending") await fireEvent.click(summary as HTMLElement);
+    await tick();
+    const btn = byTestId(container, "remove-btn-t1");
+    expect(btn, "Remove renders").not.toBeNull();
+    btn?.click();
+    await tick();
+    expect(removeAnnotation).not.toHaveBeenCalled();
+    expect(byTestId(container, "remove-btn-t1")?.textContent?.trim()).toBe("Delete thread?");
     unmount();
   });
 

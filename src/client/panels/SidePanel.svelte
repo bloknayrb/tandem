@@ -475,9 +475,11 @@ const handleEdit = (id: string, newContent: string) => editAnnotation(ydoc, id, 
 const handleSendToClaude = (id: string) => sendNoteToClaude(ydoc, id, tandemMode);
 const handleRemove = (id: string) => {
   // A removed id must leave the resolved set, or the tutorial reads it as a
-  // review made on another tab (see `forgetResolved`).
-  review.forgetResolved(id);
-  removeAnnotation(id, documentId);
+  // review made on another tab (see `forgetResolved`). Only once the remove
+  // succeeded: a failed one leaves the record, and it keeps its Undo.
+  void removeAnnotation(id, documentId).then((ok) => {
+    if (ok) review.forgetResolved(id);
+  });
 };
 const handleReply = (id: string, text: string) => replyToAnnotation(id, text, documentId);
 

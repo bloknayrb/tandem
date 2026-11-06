@@ -141,7 +141,7 @@ export function promoteNotesToComments(
 export async function removeAnnotation(
   annotationId: string,
   documentId: string | undefined,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const resp = await fetch(`${API_BASE}${API_REMOVE_ANNOTATION}`, {
       method: "POST",
@@ -151,9 +151,12 @@ export async function removeAnnotation(
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ message: "Unknown error" }));
       console.error("[Tandem] Remove annotation failed:", err);
+      return false;
     }
+    return true;
   } catch (e) {
     console.error("[Tandem] Remove annotation failed:", e);
+    return false;
   }
 }
 
