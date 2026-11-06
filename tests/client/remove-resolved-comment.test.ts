@@ -132,9 +132,31 @@ describe("AnnotationCardActions: inline confirm", () => {
     await tick();
     btn()?.click(); // same instant: under the minimum gap
     await tick();
+    expect(onRemove).not.toHaveBeenCalled();
+    // A slow double-click: past the time guard, but `detail` 2 says same gesture.
+    vi.advanceTimersByTime(500);
     await fireEvent.click(btn() as HTMLElement, { detail: 2 });
     expect(onRemove).not.toHaveBeenCalled();
     expect(btn()?.textContent?.trim()).toBe("Delete thread?");
+    unmount();
+  });
+
+  it("a held Enter's repeats are dropped, so only a fresh press confirms", async () => {
+    const { container, unmount } = mount();
+    const btn = byTestId(container, "remove-btn-u1") as HTMLElement;
+    const repeat = new KeyboardEvent("keydown", {
+      key: "Enter",
+      repeat: true,
+      cancelable: true,
+      bubbles: true,
+    });
+    // happy-dom drops `repeat` from the init dict; real browsers set it.
+    Object.defineProperty(repeat, "repeat", { value: true });
+    btn.dispatchEvent(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+    const fresh = new KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true });
+    btn.dispatchEvent(fresh);
+    expect(fresh.defaultPrevented).toBe(false);
     unmount();
   });
 

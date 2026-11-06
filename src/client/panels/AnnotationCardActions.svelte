@@ -91,6 +91,13 @@ function handleRemoveClick(e: MouseEvent) {
 }
 
 function handleRemoveKeydown(e: KeyboardEvent) {
+  // A held Enter auto-repeats a click per repeat, and Windows' default repeat
+  // delay (~500 ms) outlasts the time guard: drop repeats, so a confirm takes
+  // a fresh press.
+  if (e.repeat && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    return;
+  }
   if (e.key === "Escape" && removeArmed) {
     e.stopPropagation();
     disarmRemove();
