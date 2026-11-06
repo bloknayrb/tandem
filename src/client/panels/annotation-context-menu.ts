@@ -187,8 +187,16 @@ export const canEdit = (a: AnnotationGate): boolean => a.author === "user" && is
 export const canSendToClaude = (a: AnnotationGate, aiDisabled: boolean): boolean =>
   !aiDisabled && a.author === "user" && a.type === "note" && isPending(a);
 
-/** Archive (note) / Remove (highlight/comment) — user-authored only, pending. */
-export const canRemove = (a: AnnotationGate): boolean => a.author === "user" && isPending(a);
+/**
+ * Archive (note) / Remove (highlight/comment) — user-authored only. Pending, or a
+ * comment of the user's that is no longer pending: resolved (`dismissed`, #2360) or
+ * closed by accepting Claude's reply rewrite (`accepted`). Without the second arm a
+ * resolved comment has no action at all once Undo's window ends or the page
+ * reloads (Bryan, 2026-11-05: "allow remove"). Notes and highlights never leave
+ * pending through the UI, so they keep the pending rule.
+ */
+export const canRemove = (a: AnnotationGate): boolean =>
+  a.author === "user" && (isPending(a) || a.type === "comment");
 
 /** Copy text — available on any card (incl. resolved); a pure clipboard read of the body. */
 export const canCopy = (_a: AnnotationGate): boolean => true;

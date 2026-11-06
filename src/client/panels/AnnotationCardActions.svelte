@@ -200,17 +200,38 @@ onDestroy(clearUndoTimer);
   >
     Remove
   </button>
-{:else if !isPending && undoable && onUndo}
+{:else if !isPending && ((undoable && onUndo) || onRemove)}
+  <!-- A closed card: Undo while its window lasts, and Remove for the user's own
+       resolved comment (#2360), which otherwise has no action once Undo ends or
+       the page reloads. One flex row, Undo at the start and Remove at the far
+       edge, so a click aimed at Undo can't land on Remove and nothing shifts
+       when Undo expires. The error sits under the row, not inside it. -->
   <div class="aca-undo-row">
-    <button data-testid="undo-btn" class="aca-undo" onclick={handleUndo}>
-      Undo
-    </button>
-    {#if undoError}
-      <div class="aca-undo-error">
-        Can't undo — text has changed.
-      </div>
+    {#if undoable && onUndo}
+      <button data-testid="undo-btn" class="aca-undo" onclick={handleUndo}>
+        Undo
+      </button>
+    {/if}
+    {#if onRemove}
+      <button
+        data-testid="remove-btn-{annotationId}"
+        class="aca-btn aca-btn--ghost aca-push-end"
+        aria-label="Remove comment and its replies"
+        title="Remove comment and its replies"
+        onclick={(e) => {
+          e.stopPropagation();
+          onRemove!(annotationId);
+        }}
+      >
+        Remove
+      </button>
     {/if}
   </div>
+  {#if undoError}
+    <div class="aca-undo-error">
+      Can't undo — text has changed.
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -351,6 +372,9 @@ onDestroy(clearUndoTimer);
   }
 
   .aca-undo-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     margin-top: 4px;
   }
   .aca-undo {
