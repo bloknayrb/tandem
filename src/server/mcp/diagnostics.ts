@@ -9,9 +9,12 @@
  * the HTTP route is unreachable there; the MCP transport is the only channel
  * back to the host, and this tool rides it.
  *
- * Security: adds NO new HTTP surface. `runDoctor()` writes nothing; it does
- * spawn one process, a static `npm ls -g --depth=0 --json tandem-editor`, and
- * makes loopback-only HTTP probes, none of it steerable by the tool's (empty)
+ * Security: adds NO new HTTP surface. `runDoctor()` writes nothing and makes
+ * loopback-only HTTP probes. Its spawns are a closed set, each by absolute path
+ * and with no shell (#2379): Tandem's own Node running the `npm-cli.js` beside
+ * it (a static `ls -g --depth=0 --json tandem-editor`), `/bin/ps` on POSIX and
+ * `System32\tasklist.exe` on Windows (the store-lock owner probe). None is
+ * found on PATH or in the cwd, and none is steerable by the tool's (empty)
  * input — which is why a launched session pre-approves it (#2286). The MCP transport is already loopback-gated, the same posture
  * that lets `/api/diagnostics` return the full report (paths/PIDs/config URLs)
  * loopback-only. Like every MCP tool it is unreachable while Tandem is

@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Undoing an accepted reply rewrite now gives the comment back its own suggestion (#2360).** Before, Undo restored the document but the comment kept the reply's text as its suggestion, so the comment's own Accept then offered a change it never proposed. A reply's suggestion also no longer gets an Accept button when someone other than Claude wrote it.
 - **The README now states the real Linux requirement (#2356).** It said the desktop app runs on glibc 2.31 (Ubuntu 20.04, Debian 11, Fedora 34). It needs glibc 2.34 and WebKitGTK 4.1, so in practice Ubuntu 22.04 or later. On Ubuntu 20.04, the AppImage exits at launch and the `.deb` cannot install; nothing changed in the app, the claim was wrong. The npm install should be unaffected, but it was not run on 20.04.
 
+### Security
+
+- **Diagnostics no longer runs whatever `npm` comes first on PATH (#2379).** The diagnostics report, which Claude can request through `tandem_diagnostics`, checked for a stale global `tandem-editor` by running `npm` through a shell. On Windows that shell looks in Tandem's working folder before PATH, so an `npm.cmd` left there would have run each time diagnostics ran. The check now runs npm's own script with the Node that is already running Tandem, with no shell. On macOS and Linux, the process probe it uses now runs `/bin/ps` rather than the first `ps` on PATH. What changes for you: the stale-global warning now reports the global install of the npm that came with Tandem's Node. With Volta, and on the desktop app for Windows and macOS, no npm sits beside that Node, so the check is skipped.
+
 ## [0.30.0] - 2026-11-02
 
 ### What's New
