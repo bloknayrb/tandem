@@ -2672,6 +2672,9 @@ export function bridgeScriptVersion(script: string): string | null {
   // path the screen above never saw. Tandem never records such a path.
   if (script.split(/[/\\]/).some((seg) => seg === "." || seg === "..")) return null;
   const flavour = process.platform === "win32" ? win32Path : posixPath;
+  // Absolute in THIS host's flavour, or the dirname chain below ends at `.`
+  // and the read would be of the working directory's `package.json`.
+  if (!flavour.isAbsolute(script)) return null;
   const pkg = flavour.join(
     flavour.dirname(flavour.dirname(flavour.dirname(script))),
     "package.json",

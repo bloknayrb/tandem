@@ -535,6 +535,10 @@ describe("an older install's bridge script moves forward (nvm: the old prefix st
     expect(bridgeScriptVersion(cur.script)).toBe("0.31.0");
     // On Windows, `posix.join` of this would come out as `/\\evil.example/share/...`.
     expect(bridgeScriptVersion("/./\\evil.example/share/x/dist/stdio-bridge/index.js")).toBeNull();
+    if (process.platform !== "win32") {
+      // A Windows-shaped path on POSIX never reads the working directory's file.
+      expect(bridgeScriptVersion("C:\\tandem\\dist\\stdio-bridge\\index.js")).toBeNull();
+    }
     expect(
       bridgeScriptVersion(
         `${home}/x/../v24/lib/node_modules/tandem-editor/dist/stdio-bridge/index.js`,
