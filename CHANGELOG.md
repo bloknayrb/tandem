@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Claude Code plugin's Node.js requirement is now stated, and Claude names it (#2357).** Every part of the plugin starts through `npx`, so without Node.js 22.12.0 or newer on the PATH Claude Code starts with, the plugin's tools never appear, including on a machine with only the desktop app. The README's Plugin install section, the troubleshooting guide (a new "Plugin tools missing: Node.js not found" entry) and `tandem doctor` now say so, and the bundled skill tells Claude to name this cause instead of saying Tandem isn't running. Bound: the plugin still needs Node; a desktop-only user can connect through **Settings → AI Assistant** instead.
 - **Undoing an accepted reply rewrite now gives the comment back its own suggestion (#2360).** Before, Undo restored the document but the comment kept the reply's text as its suggestion, so the comment's own Accept then offered a change it never proposed. A reply's suggestion also no longer gets an Accept button when someone other than Claude wrote it.
 - **The README now states the real Linux requirement (#2356).** It said the desktop app runs on glibc 2.31 (Ubuntu 20.04, Debian 11, Fedora 34). It needs glibc 2.34 and WebKitGTK 4.1, so in practice Ubuntu 22.04 or later. On Ubuntu 20.04, the AppImage exits at launch and the `.deb` cannot install; nothing changed in the app, the claim was wrong. The npm install should be unaffected, but it was not run on 20.04.
 

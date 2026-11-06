@@ -172,7 +172,10 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // `ambiguous` on a hit). Outside the wake section.
   // 37 also carries #1997: the Reacting to Document Events paragraph's background-tab caveat
   // becomes the null rule. Outside the wake section; every wake assertion below was re-read.
-  expect(skill).toMatch(/^version:\s*38$/m);
+  // 39 adds the fourth absent-tools cause (#2357): the plugin starts through `npx`, so a
+  // Claude Code with no Node.js on its PATH gets no tools while Tandem is running. Keyed in
+  // the lead-in, with a carve-out at the head of step 3. Outside the wake section.
+  expect(skill).toMatch(/^version:\s*39$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -562,7 +565,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "38", bodyHash: "a5464cd660f7" });
+    ).toEqual({ version: "39", bodyHash: "e9b5325118c0" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -605,12 +608,40 @@ describe("shipped Tandem skill instruction contract", () => {
       // The rendering Claude Code was measured to use, not the SDK's `MCP error …` string.
       expect(absent).toContain(`(${code}): "…"`);
       expect(absent).not.toContain("MCP error");
-      expect(absent).toMatch(/Three causes/);
-      expect(absent).not.toMatch(/Two causes|Those two are/);
+      expect(absent).toMatch(/Four causes/);
+      expect(absent).toMatch(/Those four are the whole set/);
+      expect(absent).not.toMatch(/Two causes|Those two are|Three causes|Those three are/);
       // Positive evidence is read before the default remedy, or "not running" is said first.
       const leadIn = absent.indexOf("First, read the failure");
+      const step2 = absent.indexOf("**2. Tandem is not running");
       expect(leadIn).toBeGreaterThan(-1);
-      expect(leadIn).toBeLessThan(absent.indexOf("**2. Tandem is not running"));
+      expect(leadIn).toBeLessThan(step2);
+    });
+
+    // #2357: the plugin starts all its parts through `npx`. With no Node.js on Claude Code's
+    // PATH, the tools are absent while Tandem is running, and step 2 ("not running") and step 3
+    // ("run `tandem setup --apply`") would both be wrong. So the Node.js branch must sit in the
+    // lead-in, before step 2, keyed on the spawn failure's own text on every platform, and
+    // step 3 must carry the plugin carve-out.
+    it("keys the missing-Node.js cause in the lead-in, before the not-running step", () => {
+      const leadIn = absent.indexOf("First, read the failure");
+      const step2 = absent.indexOf("**2. Tandem is not running");
+      const nodeBranch = absent.indexOf("If that failure names `npx`");
+      expect(nodeBranch).toBeGreaterThan(leadIn);
+      expect(nodeBranch).toBeLessThan(step2);
+      const branch = absent.slice(nodeBranch, step2);
+      // POSIX shells, Windows cmd, a spawn error, and the exit code.
+      for (const tell of ["command not found", "is not recognized", "ENOENT", "127"]) {
+        expect(branch).toContain(tell);
+      }
+      expect(branch).toContain("22.12.0");
+      // The bridge's own unreachable error means Tandem is down, not Node: step 2.
+      expect(branch).toMatch(/`-32000`[^\n]*unreachable/);
+      const step3 = absent.slice(absent.indexOf("**3. If the tools are still absent"));
+      expect(step3).toMatch(/`tandem:tandem`[\s\S]*do\s+not suggest `tandem setup --apply`/);
+    });
+
+    it("keeps the licence routing after the missing-Node.js branch", () => {
       expect(recovery).toContain(code);
       expect(recovery).toContain("LICENSE_REQUIRED");
       // The no-opening fallback, which names no case: the shape a bare code takes.

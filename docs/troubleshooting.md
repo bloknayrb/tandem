@@ -7,7 +7,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 **Contents**
 
 - **Setup and connection:** [Quick diagnostic](#quick-diagnostic) · [Windows SmartScreen warning](#windows-smartscreen-warning) · ["MCP failed to connect"](#claude-code-says-mcp-failed-to-connect) · [Connected but tools fail](#mcp-shows-connected-but-tandem-tools-fail) · [Claude doesn't know Tandem](#claude-doesnt-seem-to-know-what-tandem-is) · [Tandem can't start Claude on Windows](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal) · ["Set up Claude Code" when it is installed](#tandem-says-set-up-claude-code-but-claude-code-is-already-installed) · [Port already in use](#port-already-in-use) · [`TANDEM_BIND_HOST` refused](#tandem_bind_host-is-not-supported-in-this-version)
-- **Claude isn't reacting:** [A message or comment got no response](#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) · [No hello from Tandem's Claude](#tandems-claude-didnt-say-hello) · [Channel shim fails to start](#channel-shim-fails-to-start) · [Plugin install: "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory) · [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127) · [Claude Desktop: failed to spawn](#failed-to-spawn-process-no-such-file-or-directory-claude-desktop) · [Plugin install fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https) · [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version)
+- **Claude isn't reacting:** [A message or comment got no response](#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) · [No hello from Tandem's Claude](#tandems-claude-didnt-say-hello) · [Channel shim fails to start](#channel-shim-fails-to-start) · [Plugin install: "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory) · [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127) · [Plugin tools missing: Node.js not found](#plugin-tools-missing-nodejs-not-found) · [Claude Desktop: failed to spawn](#failed-to-spawn-process-no-such-file-or-directory-claude-desktop) · [Plugin install fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https) · [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version)
 - **Editor and documents:** [Server unavailable / lost connection](#editor-shows-server-unavailable-or-weve-lost-the-connection-to-the-tandem-server) · [Empty editor](#empty-editor-with-no-document) · [A link won't open](#a-link-in-the-document-wont-open) · [Double-clicking a file does nothing](#double-clicking-a-file-does-nothing) · [Settings are read-only](#settings-say-they-are-read-only) · ["May not have finished updating"](#tandem-may-not-have-finished-updating) · [A document will not open](#a-document-will-not-open--a-tab-did-not-come-back) · [Recovering a previous version](#recovering-a-previous-version-of-a-document)
 - **Resetting and reporting:** [Reset session state](#reset-session-state) · [Reading server logs](#reading-server-logs) · [Sharing diagnostics](#sharing-diagnostics)
 
@@ -341,15 +341,52 @@ Two things worth knowing:
    installed under `/usr/local/bin`.
 3. **Remove the plugin** (`claude plugin uninstall tandem@tandem-editor`). Claude Code
    exposes no per-monitor disable, so this is the only way to stop the message — and it
-   also removes the Tandem skill the plugin ships. Note the plugin's MCP entries use `npx`
-   too, so on a machine where the monitor cannot start they are unlikely to be working
-   either.
+   also removes the Tandem skill the plugin ships.
+
+The plugin's MCP entries use `npx` too, so on a machine where the monitor cannot start they
+are not working either: see [Plugin tools missing: Node.js not found](#plugin-tools-missing-nodejs-not-found),
+which also covers a machine with no Node.js at all.
 
 There is no fix Tandem can ship in the plugin manifest for this: the monitor command is one
 static string used on every platform, and a form that picks up a login shell's PATH
 (`sh -lc '…'`) does not exist on Windows, where the same `shell: true` resolves to
 `cmd.exe`. The entries Tandem's *own* setup writes are a different story — those no longer
-go through `npx` at all; see the next section.
+go through `npx` at all; see [the Claude Desktop section](#failed-to-spawn-process-no-such-file-or-directory-claude-desktop).
+
+## Plugin tools missing: Node.js not found
+
+You installed the Tandem plugin (`claude plugin install tandem@tandem-editor`), Tandem is
+running (its editor opens and `http://127.0.0.1:3479/health` answers), but Claude Code has no
+`tandem_*` tools. Claude may wrongly tell you Tandem isn't running.
+
+**Cause:** every part of the plugin (its `tandem` MCP server, its `tandem-channel` entry and
+its monitor) starts through `npx -y tandem-editor@<version> …`, so it needs Node.js 22.12.0 or
+newer on the PATH Claude Code was started with. Two ways to lack it:
+
+- **No Node.js at all.** The desktop app ships its own Node, but it is not on a PATH Claude
+  Code can reach, and the desktop app does not install a `tandem` command either. With only
+  the desktop app installed, the plugin cannot start.
+- **Node.js installed, but not on that PATH.** A Claude Code launched from a desktop icon,
+  the Dock or Spotlight never reads your shell profile, so a Node installed through nvm or a
+  profile-only PATH entry is invisible to it. See [the exit-127 section](#plugin-monitor-reports-script-failed-exit-127).
+
+**What you see:**
+
+- In Claude Code's `/mcp` list, the plugin's `tandem` server failed. After the first failure,
+  Claude Code may show only that it skipped the connection because of a recent cached failure,
+  with no real error.
+- Once Claude uses the Tandem skill, the monitor reports `script failed (exit 127)` with
+  `npx: command not found` on macOS and Linux, or `'npx' is not recognized as an internal or
+  external command` on Windows.
+
+**Fixes:**
+
+1. **Install Node.js 22.12.0 or newer**, then start Claude Code again from a new terminal
+   window, so it picks up the new PATH.
+2. **Desktop app only, and you'd rather not install Node:** remove the plugin
+   (`claude plugin uninstall tandem@tandem-editor`), then connect Claude Code through Tandem's
+   **Settings → AI Assistant**. Restart Claude Code. Real-time updates then come from the
+   [built-in Monitor watch](../README.md#real-time-updates) where your Claude Code offers one.
 
 ## `Failed to spawn process: No such file or directory` (Claude Desktop)
 

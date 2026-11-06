@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 38
+version: 39
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -161,9 +161,9 @@ connects to Tandem's MCP server once, at session start, so the whole toolset is 
 that connection was not made. There is no failing tool call to read, because there is no tool.
 There may still be a failure reported for the Tandem server itself, and that is worth one look.
 
-**Three causes, and they take different fixes.** Read the server's failure first (below the hard
-rule). Without a licence refusal, step 2 is almost always the right one, and step 3 tells you when it
-was not, without guessing.
+**Four causes, and they take different fixes.** Read the server's failure first (below the hard
+rule). Without a licence refusal or a missing Node.js, step 2 is almost always the right one, and
+step 3 tells you when it was not, without guessing.
 
 **1. Do not edit the target file by any other means.** Not `Edit`, not `Write`, not "I'll just make
 the change directly," and do not offer to. The user asked for their document in Tandem: an edit
@@ -174,6 +174,22 @@ toolset means stop.** This holds even when the file is right there and the chang
 `-32003` (Claude Code lists it as `<server name> (-32003): "…"`, for example `tandem (-32003): "…"`),
 or its message begins with one of the two sentences quoted under "Licence refusal" below, Tandem *is*
 running and has turned its AI features off. Skip steps 2 and 3 and follow "Licence refusal".
+
+**If that failure names `npx` (`command not found`, `is not recognized`, `ENOENT`, or exit code
+`127`), or a notice in this session says the Tandem plugin's monitor failed with exit 127,** Tandem
+may well be running: the Tandem plugin starts through `npx`, and Claude Code could not find Node.js.
+Skip steps 2 and 3 and say:
+
+> Claude Code couldn't start the Tandem plugin because Node.js isn't on the PATH it was started
+> with. Install Node.js 22.12.0 or newer, then restart Claude Code (on macOS, start `claude` from a
+> terminal). If you use only the Tandem desktop app, you can instead run
+> `claude plugin uninstall tandem@tandem-editor`, connect through Tandem's **Settings → AI
+> Assistant** (it needs no separate Node.js), and restart Claude Code.
+
+A `-32000` saying Tandem's upstream is unreachable is the opposite case: the plugin started and
+Tandem did not answer. That is step 2. A line saying only that Claude Code skipped the connection
+because of a recent cached failure tells you neither; go to step 2.
+
 Anything else, or no message at all: step 2.
 
 **2. Tandem is not running (the common cause). Tell the user, in these terms:**
@@ -185,8 +201,10 @@ Say all three parts. Naming Tandem without naming the remedy leaves the user gue
 remedy has a second half people miss: **launching Tandem does not repair a session already
 running.** Connection state is fixed at session start, so `/mcp` is required.
 
-**3. If the tools are still absent after that, Tandem was never configured for this client.** The
-skill installs on any `tandem setup --apply`, including runs that wrote no MCP config at all, so it
+**3. If the tools are still absent after that, Tandem was never configured for this client.** One
+exception first: if this skill was loaded from the Tandem plugin (its name is `tandem:tandem`) and
+Tandem is running, the plugin *is* the configuration. Give the Node.js message above instead, and do
+not suggest `tandem setup --apply`. Otherwise: the skill installs on any `tandem setup --apply`, including runs that wrote no MCP config at all, so it
 can be loaded in a session whose `~/.claude.json` has no `mcpServers.tandem` entry to resolve. Step
 2 cannot fix that — there is nothing to reconnect to. Say:
 
@@ -204,7 +222,7 @@ how it begins:
 
 The hard rule above applies here too: do not edit the file another way, or offer to.
 
-Those three are the whole set. Do not invent a fourth — there is no per-chat connector toggle to
+Those four are the whole set. Do not invent a fifth — there is no per-chat connector toggle to
 enable and no MCP setting to hand-edit.
 
 **Do not go looking for the tools first.** No amount of `ToolSearch`, connector listing, or plugin
