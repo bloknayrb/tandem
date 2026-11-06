@@ -372,9 +372,8 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      - name: Typecheck
-        run: npm run typecheck
-
+      # No Typecheck step: the define is a `declare const` boolean, so the types
+      # are the same either way and `check` already typechecks this head.
       - name: Build (ownership on)
         run: node node_modules/tsx/dist/cli.mjs scripts/ci/build-ownership-on.ts
 

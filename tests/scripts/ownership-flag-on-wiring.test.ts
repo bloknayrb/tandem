@@ -104,7 +104,6 @@ describe("the ownership-flag-on job (ADR-051)", () => {
       usesStep("actions/setup-node@"),
       usesStep("actions/setup-python@"),
       checkStep((s) => s.run === "npm ci --ignore-scripts", "npm ci"),
-      { name: "Typecheck", run: "npm run typecheck" },
       {
         name: "Build (ownership on)",
         run: "node node_modules/tsx/dist/cli.mjs scripts/ci/build-ownership-on.ts",
