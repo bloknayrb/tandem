@@ -2417,7 +2417,9 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
         "the plugin's two MCP servers, with a different symptom: no tandem_* tools at all, and " +
         '"Failed to spawn process: No such file or directory" in the client\'s MCP log. Neither ' +
         "can be fixed from Tandem's side — the manifest is one static string for every machine. " +
-        `Start Claude from a terminal, or ${uninstallStep(installedKey)}.`,
+        "It also needs Node.js 22.12.0 or newer installed at all: the desktop app's own Node is " +
+        "not on that PATH, so a machine with only the desktop app cannot start the plugin. " +
+        `Install Node and start Claude from a terminal, or ${uninstallStep(installedKey)}.`,
     },
   ];
 
