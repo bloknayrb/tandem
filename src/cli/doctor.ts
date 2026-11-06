@@ -3637,8 +3637,8 @@ const NPM_CLI_RELATIVE: Record<"win32" | "posix", readonly (readonly string[])[]
 
 /**
  * The npm CLI script that ships with the Node at `execPath`, or null when there
- * is none (the desktop sidecar on Windows/macOS, Volta's shim layout, a Node
- * installed without npm). Screens with {@link rejectUnsafeWindowsPrefix} on the
+ * is none (the desktop sidecar on Windows/macOS, a Node installed without
+ * npm). Screens with {@link rejectUnsafeWindowsPrefix} on the
  * raw and resolved forms before any filesystem call, after stripping the
  * extended-length DRIVE prefix that `process.execPath` can legitimately carry
  * (`\\?\UNC\…` is left in place, so it is refused).

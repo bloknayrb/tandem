@@ -9,7 +9,8 @@
  * the HTTP route is unreachable there; the MCP transport is the only channel
  * back to the host, and this tool rides it.
  *
- * Security: adds NO new HTTP surface. `runDoctor()` writes nothing and makes
+ * Security: adds NO new HTTP surface. `runDoctor()` writes nothing of its own
+ * (npm may write its debug log and update-check cache) and makes
  * loopback-only HTTP probes. Its spawns are a closed set, each by absolute path
  * and with no shell (#2379): Tandem's own Node running the `npm-cli.js` beside
  * it (a static `ls -g --depth=0 --json tandem-editor`), `/bin/ps` on POSIX and

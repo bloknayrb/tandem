@@ -29,6 +29,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * the bare `child_process`. A spawn through the unmocked one would escape the
  * recorder.
  *
+ * **What this does not see.** Only spawns on the path the test reaches, on the
+ * runner's OS: CI's `check` is Linux, with no live prior-boot store lock, so
+ * the `tasklist` branch never runs there. And `vi.mock` intercepts only
+ * modules Vite transforms, so a spawn through an externalized dependency
+ * (`execa`, `cross-spawn`) or a `createRequire`d `child_process` would not be
+ * recorded. Neither exists under `runDoctor` today.
+ *
  * **Why `ps` gets its own test.** `runDoctor` reaches the store-lock owner
  * probe only for a live lock left from a prior boot, and on Linux that probe
  * reads `/proc` and never runs `ps`. So the `/bin/ps` anchor is pinned by
@@ -118,10 +125,14 @@ describe("runDoctor's spawns (#2379)", () => {
       npm,
       "the stale-global check never spawned — the allowlist below would be vacuous",
     ).toHaveLength(1);
-    expect((npm[0].args as string[])[0]).toBe(fakeCli);
-
     const allowed = new Set([fakeNode, PS_BIN, systemBin("tasklist.exe")]);
     for (const c of calls) {
+      // `exec`/`execSync` always run through a shell, with or without an option.
+      expect(["exec", "execSync"], `${c.fn}(${String(c.cmd)}) always uses a shell`).not.toContain(
+        c.fn,
+      );
+      // Tandem's own Node is allowed only to run the npm script, not `-e …`.
+      if (c.cmd === fakeNode) expect((c.args as string[] | undefined)?.[0]).toBe(fakeCli);
       expect(allowed.has(c.cmd as string), `unexpected spawn: ${c.fn}(${String(c.cmd)})`).toBe(
         true,
       );
