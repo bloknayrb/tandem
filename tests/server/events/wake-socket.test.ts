@@ -113,6 +113,19 @@ describe("verifyWakeUpgrade", () => {
     }
   });
 
+  it("accepts a native client on an IPv6-loopback bind", () => {
+    // Under `TANDEM_BIND_HOST=::1` the published URL is `ws://[::1]:<port>`, so
+    // the consumer's Host is `[::1]:<port>` and its peer address is `::1`.
+    expect(
+      verifyWakeUpgrade({
+        url: "/api/wake",
+        host: "[::1]:3479",
+        origin: undefined,
+        remoteAddress: "::1",
+      }),
+    ).toBe("accept");
+  });
+
   it("rejects bare localhost, which the allowlist deliberately dropped", () => {
     expect(
       verifyWakeUpgrade({ url: "/api/wake", origin: "http://localhost:5173", ...LOOPBACK }),
@@ -229,6 +242,24 @@ describe("the wake socket end to end", () => {
     const ws = new WebSocket(getWakeEndpoint() as string);
     sockets.push(ws);
     await opened(ws);
+  });
+
+  it("names [::1] when the server is bound to IPv6 loopback", async () => {
+    // A `::1`-bound server listens on `[::1]` only; publishing `127.0.0.1` there
+    // names an address nothing of ours listens on. `address()` is stubbed so
+    // this runs where IPv6 loopback is unavailable — `wake-url-ipv6-bind.test.ts`
+    // proves the real upgrade where it is.
+    const v6 = createServer();
+    const port = 4242; // never bound: `address()` is stubbed
+    v6.address = () => ({ address: "::1", family: "IPv6", port });
+    const detachV6 = attachWakeSocket(v6);
+    try {
+      await new Promise<void>((resolve) => v6.listen(0, "127.0.0.1", resolve));
+      expect(getWakeEndpoint()).toBe(`ws://[::1]:${port}/api/wake`);
+    } finally {
+      detachV6();
+      await new Promise<void>((resolve) => v6.close(() => resolve()));
+    }
   });
 
   it("reports nothing once the transport is gone", async () => {

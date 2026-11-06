@@ -1035,7 +1035,7 @@ export async function startMcpServerHttp(
   // so on those routes the body is read only after BOTH Host checks.
   // The SDK check fires first and answers with a JSON-RPC body ("Invalid Host: evil.com");
   // lanAwareApiMiddleware narrows it further per route, rejecting hosts the SDK's list
-  // admits (e.g. "localhost:PORT" and "[::1]:PORT") with {"error":"FORBIDDEN"}. Reading a
+  // admits (e.g. "localhost:PORT") with {"error":"FORBIDDEN"}. Reading a
   // 403 on /api without checking the body will attribute it to the wrong middleware.
   //
   // Loopback is always exempt from auth (Claude Code zero-config), so this ordering has no
