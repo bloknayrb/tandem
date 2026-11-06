@@ -60,13 +60,24 @@ export const DEFAULT_GRACE_MS = 2 * 60 * 1000;
  * At most this many records may be detached (in their grace) at once. Each
  * `initialize` with a new identity header creates a record, and any local
  * process can send those, so without a bound the records and their timers
- * would grow at the `initialize` rate for two minutes. Past it, the record
- * detached longest lapses at once. Live records are already bounded by the
- * transport registry's session cap.
+ * would grow at the `initialize` rate for two minutes. Past it, the excess
+ * lapses at once: records holding nothing first, then the one detached
+ * longest. Live records are already bounded by the transport registry's
+ * session cap.
  */
 export const MAX_DETACHED_RECORDS = 64;
 
 export interface OwnerRecord {
+  /**
+   * The record's key: `claude:<id>`, `bridge:<client id>`, `http:<Mcp-Session-Id>`,
+   * `local` or `tandem`. The first three carry a raw header value, and an
+   * `Mcp-Session-Id` is a bearer value for its transport, so **an `ownerId` is
+   * never published**: not in the ctrl room (`broadcastOpenDocs`), not in a tool
+   * result, an `/api` response or diagnostics. Anything a person or another
+   * session sees names the record by its `label`. Log lines pass it through
+   * `sessionIdForLog`. `tests/server/ownership-source-pins.test.ts` pins which
+   * `src` files may mention it.
+   */
   readonly ownerId: string;
   readonly recordKind: RecordKind;
   /** `owner-` plus random characters. Never derived from a session id. */

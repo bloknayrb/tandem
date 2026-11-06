@@ -128,3 +128,27 @@ describe("the identity headers stay out of CORS (ownership design §11.1)", () =
     expect(mcp.headers.get("access-control-allow-headers")).toBeNull();
   });
 });
+
+describe("an ownerId is never published (ADR-054; OwnerRecord.ownerId)", () => {
+  // An ownerId carries a raw header value (an `Mcp-Session-Id` is a bearer
+  // value for its transport), so whatever a person or another session sees
+  // names the record by its label. The files that may mention `ownerId` at all
+  // are the identity plumbing; a new one (PR 5's `broadcastOpenDocs`, a
+  // diagnostics route) joins this list only after review shows it publishes
+  // the label instead.
+  it("only the identity plumbing mentions ownerId in src", () => {
+    const files = [...SRC_FILES]
+      .filter(([f]) => /\.(ts|svelte)$/.test(f))
+      .filter(([, src]) => /\bownerId\b/.test(src))
+      .map(([f]) => f)
+      .sort();
+    expect(files).toEqual([
+      "src/server/mcp/response.ts",
+      "src/server/mcp/server.ts",
+      "src/server/mcp/transport-registry.ts",
+      "src/server/sessions/caller.ts",
+      "src/server/sessions/context.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+});

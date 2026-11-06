@@ -28,9 +28,9 @@ import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
  * This pins that from both sides:
  *
  * - **Source:** the context getters of `src/server/sessions/context.ts` are
- *   imported only by the caller resolver (`sessions/caller.ts`), plus one
- *   reserved slot for `src/server/mcp/wake-url.ts`, which PR 1b (#1952) gives a
- *   getter for `peerIsLoopback` and nothing else. Every `.handleRequest(` in
+ *   imported only by the caller resolver (`sessions/caller.ts`), plus
+ *   `src/server/mcp/wake-url.ts`'s `isCurrentPeerLoopback` (PR 1b, #1952), and
+ *   the resolver is imported only by the wrapper (`mcp/response.ts`). Every `.handleRequest(` in
  *   `src` runs inside `runWithMcpContext(`, so every dispatched request has a
  *   context to resolve from.
  * - **Runtime:** flag-on, every tool `createMcpServer` registers refuses a call
@@ -110,22 +110,32 @@ describe("the context getters have one reader (ownership design §3.1)", () => {
     for (const [file, e] of imports)
       expect(e.namespace, `${file} namespace/default import`).toBe(false);
     const named = Object.fromEntries([...imports].map(([f, e]) => [f, [...e.names].sort()]));
-    // The reserved slot: PR 1b (#1952) gives wake-url.ts one getter for
-    // `peerIsLoopback`. Until it lands, wake-url.ts imports nothing from here;
-    // when it does, it may import only that.
-    const wake = named["src/server/mcp/wake-url.ts"];
-    if (wake !== undefined) {
-      expect(
-        wake.every((n) => /peerIsLoopback/i.test(n)),
-        `wake-url.ts imports ${wake}`,
-      ).toBe(true);
-      delete named["src/server/mcp/wake-url.ts"];
-    }
+    // wake-url.ts's one getter, from PR 1b (#1952): whether the TCP peer is
+    // loopback, and nothing that names a caller.
     expect(named).toEqual({
       "src/server/mcp/server.ts": ["runWithMcpContext"],
+      "src/server/mcp/wake-url.ts": ["isCurrentPeerLoopback"],
       "src/server/sessions/caller.ts": ["getMcpContext"],
       "src/server/sessions/ownership.ts": ["runOutsideMcpContext"],
     });
+  });
+
+  // The resolver itself is the other half: a second caller of
+  // `resolveToolCaller` would be a second place the caller is resolved, outside
+  // the wrapper, so caller.ts has exactly one importer and the name appears
+  // nowhere else in src.
+  it("caller.ts is imported only by the wrapper (mcp/response.ts)", () => {
+    const CALLER = "src/server/sessions/caller.ts";
+    const importers = [...IMPORTS]
+      .filter(([file, targets]) => file !== CALLER && targets.includes(CALLER))
+      .map(([file]) => file)
+      .sort();
+    expect(importers).toEqual(["src/server/mcp/response.ts"]);
+    const named = [...SRC_FILES]
+      .filter(([f]) => f !== CALLER && f !== "src/server/mcp/response.ts")
+      .filter(([, src]) => /\bresolveToolCaller\b/.test(stripComments(src)))
+      .map(([f]) => f);
+    expect(named).toEqual([]);
   });
 
   it("no tool handler reads the session id itself", () => {

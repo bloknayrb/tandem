@@ -180,10 +180,20 @@ describe("tests and the flag", () => {
   });
 
   it("no test writes the variable except through vi.stubEnv", () => {
+    // An assignment, a bracket access, or a `delete` (which turns the flag off
+    // for the rest of the file in the flag-on job, past every stubEnv pin).
     expect(
       filesMatching(
-        /process\.env\.TANDEM_OWNERSHIP\s*=(?!=)|process\.env\[\s*["']TANDEM_OWNERSHIP/,
+        /process\.env\.TANDEM_OWNERSHIP\s*=(?!=)|process\.env\[\s*["'`]TANDEM_OWNERSHIP|\bdelete\s+process\.env\.TANDEM_OWNERSHIP\b/,
       ),
     ).toEqual([]);
+  });
+
+  it("no test passes vi.stubEnv a key that is not a string literal", () => {
+    // The stubEnv pins above read the key as a literal, so a stubEnv of `K` to ""
+    // with `K` a constant (here or imported) would turn the flag off unseen.
+    // No test needs a computed key today, so none is allowed: a new one names
+    // its variable in place.
+    expect(filesMatching(/\bstubEnv\(\s*(?!["'`])/)).toEqual([]);
   });
 });
