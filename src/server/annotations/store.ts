@@ -23,7 +23,11 @@ import * as crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWrite, runSerialized } from "../file-io/index.js";
-import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
+import {
+  ensurePrivateStoreDir,
+  PRIVATE_FILE_MODE,
+  settlePrivateDirAclsForTests,
+} from "../file-io/private-dir.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
@@ -925,7 +929,12 @@ export async function quiesceForTesting(): Promise<void> {
     for (const entry of pending.values()) clearTimeout(entry.timer);
     pending.clear();
     const running = [...diskWrites.values(), ...abandonedWrites];
-    if (running.length === 0) return;
+    if (running.length === 0) {
+      // A write's directory setup fires an icacls run nobody awaits; on
+      // Windows it holds the directory, so the teardown's rmdir would EBUSY.
+      await settlePrivateDirAclsForTests();
+      return;
+    }
     const left = deadline - Date.now();
     let timer: NodeJS.Timeout | undefined;
     const timedOut = await Promise.race([

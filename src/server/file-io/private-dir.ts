@@ -67,6 +67,16 @@ export function _resetPrivateDirAclForTests(): void {
 }
 
 /**
+ * Test-only: settle every ACL application started so far. The store callers
+ * fire it without awaiting, and on Windows a still-running icacls holds the
+ * directory, so a teardown that removes it fails EBUSY under load. Store
+ * teardown (`quiesceForTesting`) awaits this. The promises never reject.
+ */
+export async function settlePrivateDirAclsForTests(): Promise<void> {
+  await Promise.all(aclMemo.values());
+}
+
+/**
  * Create `dir` (`0700` on create) and, on POSIX, remove its group and other
  * permission bits if it already existed wider.
  *
