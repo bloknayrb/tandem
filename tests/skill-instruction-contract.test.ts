@@ -565,7 +565,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "39", bodyHash: "e9b5325118c0" });
+    ).toEqual({ version: "39", bodyHash: "3d48fe72c163" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -629,19 +629,32 @@ describe("shipped Tandem skill instruction contract", () => {
       const nodeBranch = absent.indexOf("If that failure names `npx`");
       expect(nodeBranch).toBeGreaterThan(leadIn);
       expect(nodeBranch).toBeLessThan(step2);
-      const branch = absent.slice(nodeBranch, step2);
-      // POSIX shells, Windows cmd, a spawn error, and the exit code.
-      for (const tell of ["command not found", "is not recognized", "ENOENT", "127"]) {
+      // Prose wraps, so compare on collapsed whitespace.
+      const branch = absent.slice(nodeBranch, step2).replace(/\s+/g, " ");
+      // POSIX shells, Windows cmd, a spawn error (both renderings), and the exit code.
+      for (const tell of [
+        "command not found",
+        "is not recognized",
+        "ENOENT",
+        "No such file or directory",
+        "127",
+      ]) {
         expect(branch).toContain(tell);
       }
+      expect(branch).toContain("Skip steps 2 and 3");
       expect(branch).toContain("22.12.0");
       // The bridge's own unreachable error means Tandem is down, not Node: step 2.
-      expect(branch).toMatch(/`-32000`[^\n]*unreachable/);
+      expect(branch).toMatch(/`-32000` saying Tandem's upstream is unreachable/);
+      // The measured #2357 case: only a cached-failure line. It cannot be told apart, so a
+      // plugin session gives step 2's message AND names Node.js in the same answer.
+      expect(branch).toMatch(
+        /cached failure[^.]*\.[\s\S]*`tandem:tandem`[\s\S]*Node\.js 22\.12\.0/,
+      );
       const step3 = absent.slice(absent.indexOf("**3. If the tools are still absent"));
       expect(step3).toMatch(/`tandem:tandem`[\s\S]*do\s+not suggest `tandem setup --apply`/);
     });
 
-    it("keeps the licence routing after the missing-Node.js branch", () => {
+    it("keeps the licence refusal's evidence and its no-opening fallback", () => {
       expect(recovery).toContain(code);
       expect(recovery).toContain("LICENSE_REQUIRED");
       // The no-opening fallback, which names no case: the shape a bare code takes.

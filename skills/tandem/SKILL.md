@@ -175,22 +175,25 @@ toolset means stop.** This holds even when the file is right there and the chang
 or its message begins with one of the two sentences quoted under "Licence refusal" below, Tandem *is*
 running and has turned its AI features off. Skip steps 2 and 3 and follow "Licence refusal".
 
-**If that failure names `npx` (`command not found`, `is not recognized`, `ENOENT`, or exit code
-`127`), or a notice in this session says the Tandem plugin's monitor failed with exit 127,** Tandem
-may well be running: the Tandem plugin starts through `npx`, and Claude Code could not find Node.js.
-Skip steps 2 and 3 and say:
+**If that failure names `npx` (`command not found`, `is not recognized`, `ENOENT`, `No such file or
+directory`, or exit code `127`), or a notice in this session says the Tandem plugin's monitor failed
+with exit 127,** Tandem may well be running: the Tandem plugin starts through `npx`, and Claude Code
+could not find Node.js. Skip steps 2 and 3 and say:
 
 > Claude Code couldn't start the Tandem plugin because Node.js isn't on the PATH it was started
-> with. Install Node.js 22.12.0 or newer, then restart Claude Code (on macOS, start `claude` from a
-> terminal). If you use only the Tandem desktop app, you can instead run
+> with. Install Node.js 22.12.0 or newer, then restart Claude Code, starting `claude` from a
+> terminal rather than a desktop icon. If you use only the Tandem desktop app, you can instead run
 > `claude plugin uninstall tandem@tandem-editor`, connect through Tandem's **Settings → AI
 > Assistant** (it needs no separate Node.js), and restart Claude Code.
 
 A `-32000` saying Tandem's upstream is unreachable is the opposite case: the plugin started and
-Tandem did not answer. That is step 2. A line saying only that Claude Code skipped the connection
-because of a recent cached failure tells you neither; go to step 2.
+Tandem did not answer. That is step 2.
 
-Anything else, or no message at all: step 2.
+Anything else, or no message at all: step 2. Claude Code often shows only a line saying it skipped
+the connection because of a recent cached failure, which could be either cause. **If this skill was
+loaded from the Tandem plugin (its name is `tandem:tandem`) and that is all you have,** give step 2's
+message and add one sentence: "If Tandem is already running, the plugin itself may not have
+started: it needs Node.js 22.12.0 or newer on the PATH Claude Code was started with."
 
 **2. Tandem is not running (the common cause). Tell the user, in these terms:**
 
@@ -203,8 +206,10 @@ running.** Connection state is fixed at session start, so `/mcp` is required.
 
 **3. If the tools are still absent after that, Tandem was never configured for this client.** One
 exception first: if this skill was loaded from the Tandem plugin (its name is `tandem:tandem`) and
-Tandem is running, the plugin *is* the configuration. Give the Node.js message above instead, and do
-not suggest `tandem setup --apply`. Otherwise: the skill installs on any `tandem setup --apply`, including runs that wrote no MCP config at all, so it
+Tandem is running, the plugin *is* the configuration and it did not start. Say that the plugin starts
+through `npx`, so Node.js 22.12.0 or newer must be on the PATH Claude Code was started with and npm
+must be able to reach its registry; offer the desktop-app alternative from the Node.js message above,
+and do not suggest `tandem setup --apply`. Otherwise: the skill installs on any `tandem setup --apply`, including runs that wrote no MCP config at all, so it
 can be loaded in a session whose `~/.claude.json` has no `mcpServers.tandem` entry to resolve. Step
 2 cannot fix that — there is nothing to reconnect to. Say:
 

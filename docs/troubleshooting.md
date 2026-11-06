@@ -372,9 +372,9 @@ newer on the PATH Claude Code was started with. Two ways to lack it:
 
 **What you see:**
 
-- In Claude Code's `/mcp` list, the plugin's `tandem` server failed. After the first failure,
-  Claude Code may show only that it skipped the connection because of a recent cached failure,
-  with no real error.
+- In Claude Code's `/mcp` list, the plugin's `tandem` server failed. The first failure may
+  read `Failed to spawn process: No such file or directory`; after that, Claude Code may show
+  only that it skipped the connection because of a recent cached failure, with no real error.
 - Once Claude uses the Tandem skill, the monitor reports `script failed (exit 127)` with
   `npx: command not found` on macOS and Linux, or `'npx' is not recognized as an internal or
   external command` on Windows.
