@@ -1,5 +1,6 @@
 import type { Response } from "express";
 import { type OpenSuccess, toWireResult } from "../../documents/open.js";
+import { applyUserOpenDefault } from "../../sessions/ownership.js";
 
 /**
  * Send a successful open to an HTTP caller.
@@ -29,5 +30,11 @@ import { type OpenSuccess, toWireResult } from "../../documents/open.js";
  * (`tests/server/open-result-consumption.test.ts`).
  */
 export function sendOpenResult(res: Response, result: OpenSuccess): void {
+  // The three routes that call this are the user's own opens (`POST /api/open`,
+  // which the desktop's file association also uses, upload and scratchpad), so
+  // this one site applies ownership's default rule for all three (#2358,
+  // ownership design §4.2). A no-op while ownership is off. `sessions/ownership.ts`
+  // is a leaf — no `documents/` import — so this module stays one too.
+  applyUserOpenDefault(result.documentId);
   res.json({ data: toWireResult(result) });
 }

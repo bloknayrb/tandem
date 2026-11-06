@@ -27,6 +27,7 @@ import {
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { assertReplyOk } from "../helpers/reply-results.js";
 import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -518,7 +519,9 @@ describe("#1626: a reply's replacement proposal", () => {
       ),
     );
 
-    const { client, close } = await setupMcpServer([registerAnnotationTools]);
+    const { client, close } = await setupMcpServer([registerAnnotationTools], {
+      dispatch: ownershipTestDispatch,
+    });
     try {
       const raw = await client.callTool({ name: "tandem_getAnnotations", arguments: {} });
       const data = (

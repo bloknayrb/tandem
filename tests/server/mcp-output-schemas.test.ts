@@ -57,6 +57,7 @@ import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
@@ -129,18 +130,21 @@ beforeEach(async () => {
   resetInbox();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
-  ({ client, close } = await setupMcpServer([
-    registerDocumentTools,
-    registerAnnotationTools,
-    registerNavigationTools,
-    registerAwarenessTools,
-    (s) =>
-      registerDiagnosticsTools(s, {
-        version: "9.9.9-test",
-        transport: "http",
-        collect: async () => STUB_DOCTOR_REPORT,
-      }),
-  ]));
+  ({ client, close } = await setupMcpServer(
+    [
+      registerDocumentTools,
+      registerAnnotationTools,
+      registerNavigationTools,
+      registerAwarenessTools,
+      (s) =>
+        registerDiagnosticsTools(s, {
+          version: "9.9.9-test",
+          transport: "http",
+          collect: async () => STUB_DOCTOR_REPORT,
+        }),
+    ],
+    { dispatch: ownershipTestDispatch },
+  ));
 });
 
 afterEach(async () => {
@@ -196,26 +200,29 @@ describe("tandem_diagnostics structured output (#1174 gap #2)", () => {
     // `node-modules` since its sibling fix — so this is noise-suppression, not
     // failure-suppression: a desktop/global install's cwd is someone else's
     // directory, and answers about it do not belong in the report at all.
-    const { client: c, close: closeC } = await setupMcpServer([
-      (s) =>
-        registerDiagnosticsTools(s, {
-          version: "9.9.9-test",
-          transport: "http",
-          collect: async () => ({
-            ok: false,
-            crashed: false,
-            failures: 1,
-            warnings: 0,
-            summary: "1 issue(s) found.",
-            error: null,
-            results: [
-              { check: "node-modules", status: "fail", message: "deps missing" },
-              { check: "mcp-json", status: "fail", message: "no .mcp.json" },
-              { check: "health", status: "pass", message: "ok" },
-            ],
+    const { client: c, close: closeC } = await setupMcpServer(
+      [
+        (s) =>
+          registerDiagnosticsTools(s, {
+            version: "9.9.9-test",
+            transport: "http",
+            collect: async () => ({
+              ok: false,
+              crashed: false,
+              failures: 1,
+              warnings: 0,
+              summary: "1 issue(s) found.",
+              error: null,
+              results: [
+                { check: "node-modules", status: "fail", message: "deps missing" },
+                { check: "mcp-json", status: "fail", message: "no .mcp.json" },
+                { check: "health", status: "pass", message: "ok" },
+              ],
+            }),
           }),
-        }),
-    ]);
+      ],
+      { dispatch: ownershipTestDispatch },
+    );
 
     try {
       const result = (await c.callTool({

@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  CODE_FILES,
+  closure,
+  IMPORTS,
+  sidecarEntries,
+  specifiers,
+  UNRESOLVED,
+} from "../helpers/import-graph.js";
 import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 /**
@@ -19,10 +27,11 @@ import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
  * fall back to the env var there, and esbuild leaves an absent define as a bare
  * free global. They key on the wire payload `error === "LICENSE_REQUIRED"`.
  *
- * **The walk fails closed.** A relative specifier it cannot resolve is
- * collected and asserted empty, rather than silently dropped from the graph —
- * a dropped edge is exactly how a forbidden import would read as absent. A path
- * alias (`@server/…`) is refused outright for the same reason.
+ * The import walk lives in `tests/helpers/import-graph.ts` (shared with the
+ * ownership flag's seam test since #2358) and fails closed: an unresolvable
+ * relative specifier is collected and asserted empty below. A path alias
+ * (`@server/…`) is refused outright for the same reason. The walk's own
+ * positive controls are in `tests/helpers/import-graph.test.ts`.
  *
  * Reachability of the refusals themselves is the armed probe's job
  * (`license-armed-restricted.test.ts`), not this one's.
@@ -30,55 +39,6 @@ import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const LICENSE_PREFIX = "src/server/license/";
-const CODE = /\.(ts|mts|svelte|js|mjs)$/;
-
-/**
- * Every module specifier in a file. The `import|export … from` arm spans lines
- * (`[^;'"]` matches newlines), so a multi-line `export { a, b } from "…"` and
- * an `import type { T } from "…"` both count; pattern borrowed from
- * `tests/docs/documents-boundary.test.ts`.
- *
- * **Comments are deliberately NOT stripped.** A regex comment stripper that
- * removes block comments first reads a line comment holding `src/*` as the
- * opening of a block, and silently deletes every import up to the next `*\/` —
- * neither resolved nor reported (live in `annotations/lifecycle.ts`). Over-
- * reading a commented-out import errs safe: it can only ADD an edge, or fail
- * the UNRESOLVED check loudly, never hide one.
- */
-function specifiers(src: string): string[] {
-  const out: string[] = [];
-  const pattern =
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^;'"]*?\s+)?from\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const m of src.matchAll(pattern)) out.push(m[1] ?? m[2] ?? m[3]);
-  return out;
-}
-
-/** Resolve a relative specifier to a known `src/` file, mapping `.js` to `.ts`; `null` if none. */
-function resolveSpec(fromRel: string, spec: string): string | null {
-  const base = posix.normalize(posix.join(posix.dirname(fromRel), spec.replace(/\?.*$/, "")));
-  const candidates = [
-    base.replace(/\.js$/, ".ts"),
-    base.replace(/\.mjs$/, ".mts"),
-    base,
-    `${base}.ts`,
-    `${base}/index.ts`,
-  ];
-  return candidates.find((c) => SRC_FILES.has(c)) ?? null;
-}
-
-const CODE_FILES = [...SRC_FILES.keys()].filter((f) => CODE.test(f));
-const IMPORTS = new Map<string, string[]>();
-const UNRESOLVED: string[] = [];
-for (const file of CODE_FILES) {
-  const targets: string[] = [];
-  for (const spec of specifiers(SRC_FILES.get(file) as string)) {
-    if (!spec.startsWith(".")) continue;
-    const resolved = resolveSpec(file, spec);
-    if (resolved) targets.push(resolved);
-    else UNRESOLVED.push(`${file} -> ${spec}`);
-  }
-  IMPORTS.set(file, targets);
-}
 
 /** module (path under src/server/license, no `.ts`) → sorted importers outside it. */
 function importerMap(): Record<string, string[]> {
@@ -96,19 +56,6 @@ function importerMap(): Record<string, string[]> {
   }
   for (const k of Object.keys(map)) map[k].sort();
   return map;
-}
-
-/** Every file reachable from `entry` by relative imports. */
-function closure(entry: string): Set<string> {
-  const seen = new Set<string>();
-  const stack = [entry];
-  while (stack.length) {
-    const f = stack.pop() as string;
-    if (seen.has(f)) continue;
-    seen.add(f);
-    for (const t of IMPORTS.get(f) ?? []) stack.push(t);
-  }
-  return seen;
 }
 
 describe("licence module seam (#1521)", () => {
@@ -179,11 +126,7 @@ describe("licence module seam (#1521)", () => {
 
   /** Every `sidecarBundle("<name>")` in tsup.config.ts — the bundles that carry
    * no licence `define`. Derived, so a new sidecar joins the check by itself. */
-  const SIDECAR_ENTRIES = [
-    ...readFileSync(join(ROOT, "tsup.config.ts"), "utf-8").matchAll(
-      /sidecarBundle\(\s*"([\w-]+)"\s*\)/g,
-    ),
-  ].map((m) => `src/${m[1]}/index.ts`);
+  const SIDECAR_ENTRIES = sidecarEntries(readFileSync(join(ROOT, "tsup.config.ts"), "utf-8"));
 
   const DEFINE_LESS_ROOTS = [
     ...SIDECAR_ENTRIES,

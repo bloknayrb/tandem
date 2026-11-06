@@ -82,7 +82,8 @@ Every ADR lives in [decisions.md](../decisions.md). Grouped by what they govern:
   [ADR-011](../decisions.md#adr-011-optional-documentid-on-all-mcp-tools) document IDs,
   [ADR-024](../decisions.md#adr-024-bearer_methods_supported-is-advisory-metadata-claude-code-ignores-it-phase-2-spike).
 - **Transport and multi-session:** [ADR-012](../decisions.md#adr-012-streamable-http-transport-replacing-stdio) HTTP transport,
-  [ADR-045](../decisions.md#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) one MCP server per client session.
+  [ADR-045](../decisions.md#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) one MCP server per client session,
+  [ADR-054](../decisions.md#adr-054-multi-session-document-ownership--identity-and-shipping-dark) multi-session document ownership (ships dark).
 - **Push, wake and chat:** [ADR-019](../decisions.md#adr-019-channel-shim-for-push-notifications-issue-106--claude-default-integration) channel shim,
   [ADR-020](../decisions.md#adr-020-sse-for-ephemeral-toast-notifications-issue-101) toasts over SSE,
   [ADR-028](../decisions.md#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default) plugin monitor,
@@ -95,6 +96,7 @@ Every ADR lives in [decisions.md](../decisions.md). Grouped by what they govern:
 - **Dark gates:** [ADR-040](../decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) licensing,
   [ADR-039](../decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) local models,
   [ADR-053](../decisions.md#adr-053-docx-ships-dark) `.docx`,
+  [ADR-054](../decisions.md#adr-054-multi-session-document-ownership--identity-and-shipping-dark) document ownership,
   [ADR-055](../decisions.md#adr-055-cowork-setup-ships-dark) Cowork setup,
   [ADR-056](../decisions.md#adr-056-the-non-loopback-bind-ships-dark) the LAN bind. Earlier `.docx`
   and Cowork records: [ADR-004](../decisions.md#adr-004-docx-review-only-by-default),

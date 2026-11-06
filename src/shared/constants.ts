@@ -160,6 +160,23 @@ export const COWORK_ENABLED = false;
  */
 export const LAN_BIND_ENABLED = false;
 
+/**
+ * Multi-session document ownership ships DARK (#2358, ADR-054): while it is
+ * off, Tandem behaves exactly as it did before the ownership series began.
+ *
+ * This literal is the release truth. `tsup.config.ts` injects it into the
+ * server and cli bundles as `__OWNERSHIP_ENABLED__` (read by
+ * `src/server/ownership-flag.ts`, where the define wins and the
+ * `TANDEM_OWNERSHIP=1` env fallback exists only for tsx and vitest), so no
+ * environment variable can turn ownership on in a release. The client reads no
+ * flag: everything it would show rides on fields a dark server never writes.
+ *
+ * `tests/server/ownership-flag.test.ts` pins this literal, and the
+ * `ownership-flag-on` CI job builds with the define forced on and runs the
+ * suites flag-on. Flipping it is the series' last PR (design v5 §17, PR 6).
+ */
+export const OWNERSHIP_ENABLED = false;
+
 export const DOCX_EXTENSION = ".docx";
 
 /** What a flag-refused `.docx` tells the user, on every surface that refuses one. */

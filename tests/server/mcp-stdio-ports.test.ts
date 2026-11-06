@@ -17,6 +17,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDoctor } from "../../src/cli/doctor.js";
 import { startMcpServerStdio } from "../../src/server/mcp/server.js";
+import { useStdioOwnershipMode } from "../helpers/ownership-caller.js";
 
 vi.mock(import("../../src/cli/doctor.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/cli/doctor.js")>();
@@ -33,6 +34,9 @@ vi.mock(import("../../src/cli/doctor.js"), async (importOriginal) => {
 });
 
 describe("startMcpServerStdio port threading", () => {
+  // main()'s stdio branch tells the ownership module its mode; booting the
+  // stdio server in-process here must too (#2358).
+  useStdioOwnershipMode();
   let client: Client | null = null;
 
   afterEach(async () => {

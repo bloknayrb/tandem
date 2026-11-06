@@ -43,7 +43,7 @@ on:
 # tagless. `permissions: {}` would 403 there, and the failure would look like a
 # harness bug rather than a permissions one.
 #
-# Declared at workflow level rather than per job, deliberately: all six jobs need
+# Declared at workflow level rather than per job, deliberately: all seven jobs need
 # the identical minimum, and inheritance means a job added later is least-privileged
 # by default instead of silently reacquiring the repo default. A future job needing
 # more takes a job-level block — which REPLACES rather than merges, so such an
@@ -329,6 +329,91 @@ jobs:
         run: node scripts/ci/node-sidecar-pin.mjs
         timeout-minutes: 5
 
+  # Multi-session ownership ships dark (#2358, ADR-054; ownership design §12).
+  # This job runs everything flag-on, so the dark code is exercised on every
+  # push while a release build stays byte-for-byte flag-off.
+  #
+  # It is a REQUIRED check on master while ownership is dark, once an admin adds
+  # it to branch protection (Bryan, 2026-11-05) — until then it is advisory and
+  # its guarantees are enforced only by the wiring test in `check`. It is
+  # dropped from the required set at the flip (PR 6).
+  #
+  #  - The build forces __OWNERSHIP_ENABLED__ on through tsup's API
+  #    (scripts/ci/build-ownership-on.ts); tsup.config.ts itself reads no
+  #    environment, so nothing else can.
+  #  - The probe boots that bundle with NO TANDEM_OWNERSHIP and checks it is
+  #    ownership-ON, so the define, not the env fallback, did it.
+  #  - The Test and E2E steps carry TANDEM_OWNERSHIP=1, so the suites run
+  #    flag-on whether the code under test is bundled or loaded by tsx/vitest.
+  #  - The anchor runner refuses unless tests/server/ownership-anchor.test.ts —
+  #    which runs only flag-on — passed, so a run whose variable never reached
+  #    the workers reads red. The file anchor catches lost test files, as in
+  #    `check`.
+  #
+  # No `needs`, `strategy`, job `name`, `if`, `env` or `continue-on-error`: a
+  # skipped job reports success to branch protection, and a renamed one never
+  # reports at all. tests/scripts/ownership-flag-on-wiring.test.ts parses this
+  # job inside `check` and fails if any of that changes (ADR-051).
+  ownership-flag-on:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          check-latest: true
+          cache: npm
+
+      # The Test step needs a Python, exactly as in `check` (see the comment there).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - run: npm ci --ignore-scripts
+
+      # No Typecheck step: the define is a `declare const` boolean, so the types
+      # are the same either way and `check` already typechecks this head.
+      - name: Build (ownership on)
+        run: node node_modules/tsx/dist/cli.mjs scripts/ci/build-ownership-on.ts
+
+      - name: Built bundle is ownership-on
+        run: node scripts/ci/ownership-bundle-probe.mjs --expect on
+        timeout-minutes: 2
+
+      - name: Test
+        run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+        env:
+          TANDEM_OWNERSHIP: "1"
+
+      - name: Ownership anchor ran flag-on
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/ownership-flag-on-runner.mjs .vitest-report.json
+
+      - name: Every collected test file actually ran
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/vitest-file-anchor.mjs .vitest-report.json
+
+      - name: Drop the unused Google Chrome apt source
+        run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        run: npm run test:e2e
+        env:
+          TANDEM_OWNERSHIP: "1"
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-report-ownership-flag-on
+          path: |
+            playwright-report/
+            test-results/
+
   check:
     runs-on: ubuntu-latest
     steps:
@@ -400,6 +485,18 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Multi-session ownership ships dark (#2358, ADR-054). This boots the
+      # bundle just built with TANDEM_OWNERSHIP=1 in its environment and checks
+      # it still behaves ownership-OFF (session ids printed raw in its log): a
+      # release must ignore the variable, and a define dropped from
+      # tsup.config.ts, or an identifier ownership-flag.ts reads under another
+      # name, would let it through. The probe builds the child's environment
+      # itself, so this step sets none. Its `ownership-flag-on` twin expects ON.
+      # tests/scripts/ownership-flag-on-wiring.test.ts pins this step whole.
+      - name: Release bundle ignores TANDEM_OWNERSHIP
+        run: node scripts/ci/ownership-bundle-probe.mjs --expect off
+        timeout-minutes: 2
 
       # The build generated dist/THIRD_PARTY_NOTICES.txt (and failed if it could
       # not). This checks the other half: that the file actually reaches the npm

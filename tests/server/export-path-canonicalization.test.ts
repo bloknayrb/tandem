@@ -32,6 +32,7 @@ import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const POSIX = process.platform !== "win32";
 
@@ -86,7 +87,9 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
     async function exportEnvelope(outputPath: string): Promise<Record<string, unknown>> {
       // One client per call, closed here: `exportEnvelope` runs several times
       // inside a single test, so a module-level handle would close only the last.
-      const { client, close } = await setupMcpServer([registerAnnotationTools]);
+      const { client, close } = await setupMcpServer([registerAnnotationTools], {
+        dispatch: ownershipTestDispatch,
+      });
       try {
         const result = (await client.callTool({
           name: "tandem_exportAnnotations",

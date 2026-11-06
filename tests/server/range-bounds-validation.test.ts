@@ -41,6 +41,7 @@ import { withInternal } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { off } from "../helpers/positions.js";
 
 // The clamp notification is asserted by what it PUSHES, so the sink is mocked
@@ -69,11 +70,10 @@ function setupDoc(id: string, text: string) {
 
 describe("MCP tool boundary rejects out-of-range offsets", () => {
   beforeEach(async () => {
-    ({ client, close } = await setupMcpServer([
-      registerDocumentTools,
-      registerAnnotationTools,
-      registerNavigationTools,
-    ]));
+    ({ client, close } = await setupMcpServer(
+      [registerDocumentTools, registerAnnotationTools, registerNavigationTools],
+      { dispatch: ownershipTestDispatch },
+    ));
   });
 
   afterEach(async () => {

@@ -59,6 +59,7 @@ import {
   resolveAuthTokenCandidate,
   resolveClaudeSessionId,
   resolveTandemUrl,
+  TANDEM_CLIENT_ID_HEADER,
 } from "../shared/cli-runtime.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
@@ -436,10 +437,15 @@ export async function runMcpStdio(): Promise<void> {
   const upstreamHeaders: Record<string, string> = {};
   if (authToken) upstreamHeaders.Authorization = `Bearer ${authToken}`;
   if (sessionId !== undefined) upstreamHeaders[CLAUDE_SESSION_HEADER] = sessionId;
+  // One id per bridge process, reused by every reconnect through
+  // `createUpstream` below, so a server with ownership on keeps this bridge on
+  // one owner record (#2358). Unconditional: this bundle reads no flags.
+  upstreamHeaders[TANDEM_CLIENT_ID_HEADER] = randomUUID();
 
   /**
    * Build an upstream transport. Extracted so a reconnect cannot drift from
-   * the original construction (auth header, `X-Claude-Session-Id`).
+   * the original construction (auth header, `X-Claude-Session-Id`,
+   * `X-Tandem-Client-Id`).
    *
    * Deliberately passes no `sessionId`: the server mints a fresh one, which is
    * the entire point. The SDK never clears `_sessionId` on a 404 — it is set
@@ -451,8 +457,7 @@ export async function runMcpStdio(): Promise<void> {
    */
   function createUpstream(): StreamableHTTPClientTransport {
     return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
-      requestInit:
-        Object.keys(upstreamHeaders).length > 0 ? { headers: upstreamHeaders } : undefined,
+      requestInit: { headers: upstreamHeaders },
     });
   }
 

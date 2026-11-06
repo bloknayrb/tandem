@@ -67,6 +67,7 @@ import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js"
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -124,12 +125,15 @@ beforeEach(async () => {
   // Clear CTRL_ROOM mode so a Solo-hold test can't bleed into the next test.
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
-  ({ client, close } = await setupMcpServer([
-    registerDocumentTools,
-    registerAnnotationTools,
-    registerNavigationTools,
-    registerAwarenessTools,
-  ]));
+  ({ client, close } = await setupMcpServer(
+    [
+      registerDocumentTools,
+      registerAnnotationTools,
+      registerNavigationTools,
+      registerAwarenessTools,
+    ],
+    { dispatch: ownershipTestDispatch },
+  ));
 });
 
 // File-level, beside `afterAll` below. The describe-scoped `afterEach`s further

@@ -26,6 +26,7 @@ import { MODE_RELEASE_ORIGIN, transactForTest, withMcp } from "../../src/shared/
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const DOC_ID = "held-in-solo-stamp-doc";
 
@@ -210,10 +211,10 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     setCtrlMode(null);
     resetInbox();
 
-    const { client: mcpClient, close } = await setupMcpServer([
-      registerAnnotationTools,
-      registerAwarenessTools,
-    ]);
+    const { client: mcpClient, close } = await setupMcpServer(
+      [registerAnnotationTools, registerAwarenessTools],
+      { dispatch: ownershipTestDispatch },
+    );
 
     // `mcpSuccess` wraps every payload as `{ error: false, data }` (`response.ts`)
     // and both buckets are `Annotation & { textSnippet }`, keyed `id`. Reading
