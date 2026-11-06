@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Undoing an accepted reply rewrite now gives the comment back its own suggestion (#2360).** Before, Undo restored the document but the comment kept the reply's text as its suggestion, so the comment's own Accept then offered a change it never proposed. A reply's suggestion also no longer gets an Accept button when someone other than Claude wrote it.
 - **The README now states the real Linux requirement (#2356).** It said the desktop app runs on glibc 2.31 (Ubuntu 20.04, Debian 11, Fedora 34). It needs glibc 2.34 and WebKitGTK 4.1, so in practice Ubuntu 22.04 or later. On Ubuntu 20.04, the AppImage exits at launch and the `.deb` cannot install; nothing changed in the app, the claim was wrong. The npm install should be unaffected, but it was not run on 20.04.
 
+### Security
+
+- **The Windows desktop updater's `zip` library is now a fixed version (GHSA-m665-v7pm-7grj, GHSA-q7v9-x93c-xqv3, GHSA-8hxf-qr8p-62x4).** v0.30.0 listed these three as not fixed, because no updater release allowed a fixed `zip` at the time. tauri-plugin-updater 2.14.1 does, so the Windows build now ships zip 9.4.1; the macOS and Linux builds never contained `zip`. They were not reachable in practice before either: the updater unpacks an update only after it passes the signature check, and Tandem's update packages are not zip files.
+
 ## [0.30.0] - 2026-11-02
 
 ### What's New
