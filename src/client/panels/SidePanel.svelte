@@ -473,7 +473,14 @@ $effect(() => {
 
 const handleEdit = (id: string, newContent: string) => editAnnotation(ydoc, id, newContent);
 const handleSendToClaude = (id: string) => sendNoteToClaude(ydoc, id, tandemMode);
-const handleRemove = (id: string) => removeAnnotation(id, documentId);
+const handleRemove = (id: string) => {
+  // A removed id must leave the resolved set, or the tutorial reads it as a
+  // review made on another tab (see `forgetResolved`). Only once the remove
+  // succeeded: a failed one leaves the record, and it keeps its Undo.
+  void removeAnnotation(id, documentId).then((ok) => {
+    if (ok) review.forgetResolved(id);
+  });
+};
 const handleReply = (id: string, text: string) => replyToAnnotation(id, text, documentId);
 
 // A1/A10 (Phase 4 / #798). Exit-direction ledger: a card resolved via Accept
@@ -549,6 +556,7 @@ function dispatchAnnotationAction(
         openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
       },
       aiDisabled,
+      repliesMap.get(id)?.length ?? 0,
     );
   };
 }
@@ -568,6 +576,7 @@ async function handleAnnotationContextMenu(e: MouseEvent) {
     dispatchAnnotationAction(id),
     aiDisabled,
     review.isTargetLost(ann.id),
+    repliesMap.get(ann.id)?.length ?? 0,
   );
 }
 
@@ -915,6 +924,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
                 {reduceMotion}
                 onUndo={review.undoResolveAnnotation}
                 undoable={review.getRecentlyResolved().has(ann.id)}
+                onRemove={canRemove(ann) ? handleRemove : undefined}
                 onClick={() => review.scrollToAnnotation(ann)}
                 aiDisabled={false}
               />

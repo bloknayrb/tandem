@@ -187,8 +187,25 @@ export const canEdit = (a: AnnotationGate): boolean => a.author === "user" && is
 export const canSendToClaude = (a: AnnotationGate, aiDisabled: boolean): boolean =>
   !aiDisabled && a.author === "user" && a.type === "note" && isPending(a);
 
-/** Archive (note) / Remove (highlight/comment) — user-authored only, pending. */
-export const canRemove = (a: AnnotationGate): boolean => a.author === "user" && isPending(a);
+/**
+ * Archive (note) / Remove (highlight/comment) — user-authored only. Pending, or a
+ * comment of the user's that is no longer pending: resolved (`dismissed`, #2360) or
+ * closed by accepting Claude's reply rewrite (`accepted`). Without the second arm a
+ * resolved comment has no action at all once Undo's window ends or the page
+ * reloads (Bryan, 2026-11-05: "allow remove"). Notes and highlights never leave
+ * pending through the UI, so they keep the pending rule.
+ */
+export const canRemove = (a: AnnotationGate): boolean =>
+  a.author === "user" && (isPending(a) || a.type === "comment");
+
+/**
+ * Remove sweeps every reply on the record, Claude's included, with no undo. So a
+ * comment that has replies asks once, inline, before it goes (Bryan, 2026-11-05:
+ * "yes, inline confirmation"). The native menu cannot ask twice, so it leaves
+ * Remove out for such a comment and the card's two-step is the only route.
+ */
+export const needsRemoveConfirm = (a: Pick<Annotation, "type">, replyCount: number): boolean =>
+  a.type === "comment" && replyCount > 0;
 
 /** Copy text — available on any card (incl. resolved); a pure clipboard read of the body. */
 export const canCopy = (_a: AnnotationGate): boolean => true;
@@ -219,6 +236,7 @@ export function buildAnnotationMenuContext(
   a: AnnotationGate & Pick<Annotation, "suggestedText">,
   aiDisabled: boolean,
   targetLost: boolean,
+  replyCount = 0,
 ): AnnotationContextMenuRequest {
   return {
     canAccept: canAccept(a) && !isAcceptBlocked(a, targetLost),
@@ -228,7 +246,7 @@ export function buildAnnotationMenuContext(
     canEdit: canEdit(a),
     canSendToClaude: canSendToClaude(a, aiDisabled),
     canCopy: canCopy(a),
-    canRemove: canRemove(a),
+    canRemove: canRemove(a) && !needsRemoveConfirm(a, replyCount),
     isNote: a.type === "note",
   };
 }

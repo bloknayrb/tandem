@@ -179,8 +179,9 @@ Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the fal
 A watcher shipped in Tandem's Claude Code plugin. It starts the first time Claude uses Tandem's
 skill in a session, not before, so ask for Tandem by name. It shares the wake watch's per-account
 Monitor gate (and its 2.1.310 floor on those setups) but does not need Git Bash on Windows. It needs Claude Code 2.1.212 or newer; on an
-older version the plugin installs but the monitor never runs. Start `claude` from a terminal so it
-can find Node. Where Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the
+older version the plugin installs but the monitor never runs. Like the rest of the plugin it starts
+through `npx`, so it needs Node.js 22.12.0 or newer installed (the desktop app's own Node does not
+count); start `claude` from a terminal so it can find it. Where Claude Code offers no Monitor tool, the [channel shim](#channel-shim) is the
 fallback. See [Plugin install](../README.md#plugin-install) and
 [Plugin monitor](architecture.md#plugin-monitor).
 

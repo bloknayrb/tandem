@@ -6,7 +6,7 @@ import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
 import { getCardLabel, getCardTint, getDisplayAuthor } from "./annotation-card-helpers";
-import { isAcceptBlocked } from "./annotation-context-menu";
+import { isAcceptBlocked, needsRemoveConfirm } from "./annotation-context-menu";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
 import { cardEnter, cardExit } from "./cardMotion";
@@ -384,6 +384,7 @@ function onCardClick(event: MouseEvent) {
     {onSendToClaude}
     {aiDisabled}
     acceptBlocked={isAcceptBlocked(annotation, targetLost)}
+    confirmRemove={needsRemoveConfirm(annotation, replies.length)}
   />
   <!-- A13 (#798): the inline disclosure in ReplyThread is now the reply reader;
        it replaced the former "Expand thread" → portaled ReplyThreadOverlay
