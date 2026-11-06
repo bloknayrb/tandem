@@ -565,7 +565,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "39", bodyHash: "3d48fe72c163" });
+    ).toEqual({ version: "39", bodyHash: "956a3a64a648" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -648,7 +648,12 @@ describe("shipped Tandem skill instruction contract", () => {
       // The measured #2357 case: only a cached-failure line. It cannot be told apart, so a
       // plugin session gives step 2's message AND names Node.js in the same answer.
       expect(branch).toMatch(
-        /cached failure[^.]*\.[\s\S]*`tandem:tandem`[\s\S]*Node\.js 22\.12\.0/,
+        /cached failure[^.]*\.[^*]*\*\*If this skill was loaded from the Tandem plugin \(its name is `tandem:tandem`\) and that is all you have,\*\* give step 2's message and add one sentence: "If Tandem is already running[^"]*Node\.js 22\.12\.0/,
+      );
+      // The bare spawn error is keyed on the plugin, so an npm user's moved install is not
+      // told to uninstall a plugin they do not have.
+      expect(branch).toMatch(
+        /`tandem:tandem`\) and the failure reads `Failed to spawn process: No such file or directory`/,
       );
       const step3 = absent.slice(absent.indexOf("**3. If the tools are still absent"));
       expect(step3).toMatch(/`tandem:tandem`[\s\S]*do\s+not suggest `tandem setup --apply`/);

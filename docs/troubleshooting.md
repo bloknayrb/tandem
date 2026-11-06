@@ -382,7 +382,9 @@ newer on the PATH Claude Code was started with. Two ways to lack it:
 **Fixes:**
 
 1. **Install Node.js 22.12.0 or newer**, then start Claude Code again from a new terminal
-   window, so it picks up the new PATH.
+   window, so it picks up the new PATH. If Node is already there and the plugin still fails,
+   `npx` may be unable to download `tandem-editor` (offline, or a proxy or firewall blocking
+   the npm registry).
 2. **Desktop app only, and you'd rather not install Node:** remove the plugin
    (`claude plugin uninstall tandem@tandem-editor`), then connect Claude Code through Tandem's
    **Settings → AI Assistant**. Restart Claude Code. Real-time updates then come from the

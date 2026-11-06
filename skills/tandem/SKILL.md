@@ -175,10 +175,12 @@ toolset means stop.** This holds even when the file is right there and the chang
 or its message begins with one of the two sentences quoted under "Licence refusal" below, Tandem *is*
 running and has turned its AI features off. Skip steps 2 and 3 and follow "Licence refusal".
 
-**If that failure names `npx` (`command not found`, `is not recognized`, `ENOENT`, `No such file or
-directory`, or exit code `127`), or a notice in this session says the Tandem plugin's monitor failed
-with exit 127,** Tandem may well be running: the Tandem plugin starts through `npx`, and Claude Code
-could not find Node.js. Skip steps 2 and 3 and say:
+**If that failure names `npx` (`command not found`, `is not recognized`, `ENOENT`, or exit code
+`127`), or a notice in this session says the Tandem plugin's monitor failed with exit 127, or this
+skill was loaded from the Tandem plugin (its name is `tandem:tandem`) and the failure reads `Failed
+to spawn process: No such file or directory`,** Tandem may well be running: the Tandem plugin starts
+through `npx` (Tandem's own setup never does), and Claude Code could not find Node.js. Skip steps 2
+and 3 and say:
 
 > Claude Code couldn't start the Tandem plugin because Node.js isn't on the PATH it was started
 > with. Install Node.js 22.12.0 or newer, then restart Claude Code, starting `claude` from a
@@ -193,7 +195,8 @@ Anything else, or no message at all: step 2. Claude Code often shows only a line
 the connection because of a recent cached failure, which could be either cause. **If this skill was
 loaded from the Tandem plugin (its name is `tandem:tandem`) and that is all you have,** give step 2's
 message and add one sentence: "If Tandem is already running, the plugin itself may not have
-started: it needs Node.js 22.12.0 or newer on the PATH Claude Code was started with."
+started: it needs Node.js 22.12.0 or newer on the PATH Claude Code was started with." If running
+`/mcp` then reports `-32003`, follow "Licence refusal".
 
 **2. Tandem is not running (the common cause). Tell the user, in these terms:**
 
