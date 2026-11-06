@@ -136,6 +136,7 @@ function mountSidePanel(annotations: Annotation[], reviewOverrides: Record<strin
         handleDismiss: vi.fn(),
         scrollToAnnotation: vi.fn(),
         getRecentlyResolved: () => new Set<string>(),
+        forgetResolved: vi.fn(),
         getReviewIndex: () => 0,
         getReviewTargets: () => [],
         isTargetLost: () => false,

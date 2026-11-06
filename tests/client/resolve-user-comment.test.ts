@@ -67,9 +67,28 @@ describe("canResolve", () => {
     expect(canResolve(ann("comment", "user", "accepted"))).toBe(false);
   });
 
-  it("leaves Remove exactly as it was for the same record", () => {
+  // This pinned Remove as pending-only when Resolve shipped (#2365). It is inverted on
+  // purpose: after a reload a resolved comment had no action at all, and Bryan chose
+  // "allow remove" (2026-11-05) over adding Reopen.
+  it("lets Remove reach the user's own resolved comment", () => {
     expect(canRemove(ann("comment", "user"))).toBe(true);
-    expect(canRemove(ann("comment", "user", "dismissed"))).toBe(false);
+    expect(canRemove(ann("comment", "user", "dismissed"))).toBe(true);
+    // Closed by accepting Claude's reply rewrite: the same resolved list, same dead end.
+    expect(canRemove(ann("comment", "user", "accepted"))).toBe(true);
+  });
+
+  it("does not let Remove reach anyone else's closed comment", () => {
+    expect(canRemove(ann("comment", "claude", "dismissed"))).toBe(false);
+    expect(canRemove(ann("comment", "claude", "accepted"))).toBe(false);
+    expect(canRemove(ann("comment", "import", "dismissed"))).toBe(false);
+    expect(canRemove(ann("note", "import", "accepted"))).toBe(false);
+  });
+
+  it("the native menu offers Remove on a resolved user comment", () => {
+    const req = buildAnnotationMenuContext(ann("comment", "user", "dismissed"), false, false);
+    expect(req.canRemove).toBe(true);
+    expect(req.isNote).toBe(false);
+    expect(req.canResolve).toBe(false);
   });
 });
 
@@ -166,6 +185,50 @@ describe("AnnotationCardActions: Resolve + Remove branch", () => {
       expect(byTestId(container, "resolve-btn-u1")).toBeNull();
       unmount();
     }
+  });
+
+  it("a resolved card shows Remove with no Undo, and it calls only onRemove", async () => {
+    const { container, unmount, onRemove } = mount({ isPending: false, onResolve: undefined });
+    expect(byTestId(container, "undo-btn")).toBeNull();
+    const remove = byTestId(container, "remove-btn-u1");
+    // No replies here, so no confirm; the threaded case is in remove-resolved-comment.test.ts.
+    expect(remove?.textContent?.trim()).toBe("Remove");
+    remove?.click();
+    await tick();
+    expect(onRemove).toHaveBeenCalledWith("u1");
+    unmount();
+  });
+
+  it("while undoable, Undo and Remove share one row, Undo first", async () => {
+    const onUndo = vi.fn(() => true);
+    const { container, unmount, onRemove } = mount({
+      isPending: false,
+      onResolve: undefined,
+      undoable: true,
+      onUndo,
+    });
+    const undo = byTestId(container, "undo-btn");
+    const remove = byTestId(container, "remove-btn-u1");
+    expect(undo?.parentElement).toBe(remove?.parentElement);
+    expect(undo?.compareDocumentPosition(remove as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    undo?.click();
+    await tick();
+    expect(onUndo).toHaveBeenCalledWith("u1");
+    expect(onRemove).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("a resolved card without onRemove keeps the Undo-only row", () => {
+    const { container, unmount } = mount({
+      isPending: false,
+      onResolve: undefined,
+      onRemove: undefined,
+      undoable: true,
+      onUndo: vi.fn(() => true),
+    });
+    expect(byTestId(container, "undo-btn")).not.toBeNull();
+    expect(byTestId(container, "remove-btn-u1")).toBeNull();
+    unmount();
   });
 
   it("a note still takes the note branch even if a caller passes onResolve", () => {
