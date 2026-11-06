@@ -143,8 +143,6 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
    * count negative and pin the session forever. No-op for an unknown id.
    */
   noteStreamClosed(sessionId: string): void;
-  /** Mark that an established stream was held on this session (`streamEver`). No-op for an unknown id. */
-  noteStreamEstablished(sessionId: string): void;
   /** Close and drop one session. Safe to call for an unknown id. */
   close(sessionId: string): Promise<void>;
   /**
@@ -406,11 +404,6 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
     noteStreamClosed(sessionId) {
       const entry = sessions.get(sessionId);
       if (entry) entry.openStreams = Math.max(0, entry.openStreams - 1);
-    },
-
-    noteStreamEstablished(sessionId) {
-      const entry = sessions.get(sessionId);
-      if (entry) entry.streamEver = true;
     },
 
     async close(sessionId) {

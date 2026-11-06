@@ -1059,7 +1059,7 @@ export async function startMcpServerHttp(
       res.once("close", () => {
         registry.noteStreamClosed(entry.sessionId);
         if (ownershipEnabled() && res.statusCode === 200 && res.headersSent) {
-          registry.noteStreamEstablished(entry.sessionId);
+          entry.streamEver = true;
         }
         noteTransportChanged(entry.ownerId);
       });

@@ -199,7 +199,10 @@ describe("flag on", () => {
 
   it("a request on a detached record's transport starts a fresh grace", async () => {
     await boot("1");
-    setGraceMsForTests(400);
+    // Real timers under express, so every check is measured from the moment
+    // the grace was armed, with wide margins: a slow runner must not decide it.
+    const GRACE = 2000;
+    setGraceMsForTests(GRACE);
     const id = await initialize({ "X-Tandem-Client-Id": CLIENT });
     const ctrl = new AbortController();
     const stream = await fetch(`${baseUrl}/mcp`, {
@@ -210,13 +213,22 @@ describe("flag on", () => {
     expect(stream.status).toBe(200);
     ctrl.abort();
     expect(await waitFor(() => ownershipSnapshotForTests().timers === 1)).toBe(true);
-    await new Promise((r) => setTimeout(r, 250));
-    // A request through the real dispatch path, partway into the grace…
+    const armedAt = Date.now();
+    const sleepUntil = (t: number) =>
+      new Promise((r) => setTimeout(r, Math.max(0, t - Date.now())));
+    await sleepUntil(armedAt + GRACE * 0.4);
+    // A request through the real dispatch path, well inside the grace…
     await callTool(id, "tandem_listDocuments");
-    // …so at the original expiry the record has not lapsed.
-    await new Promise((r) => setTimeout(r, 250));
+    const requestDone = Date.now();
+    expect(requestDone, "the request itself outlived the grace; nothing to judge").toBeLessThan(
+      armedAt + GRACE - 400,
+    );
+    // …so past the original expiry the record has not lapsed: it got a fresh grace.
+    await sleepUntil(armedAt + GRACE + 300);
     expect(getOwnerRecord(`bridge:${CLIENT}`)?.lapsed).toBeUndefined();
-    expect(await waitFor(() => getOwnerRecord(`bridge:${CLIENT}`)?.lapsed === true)).toBe(true);
+    expect(
+      await waitFor(() => getOwnerRecord(`bridge:${CLIENT}`)?.lapsed === true, 3 * GRACE),
+    ).toBe(true);
   });
 
   it("an LRU eviction of the record's own transport inside initialize keeps the record", async () => {

@@ -183,15 +183,24 @@ describe("the bridge's X-Tandem-Client-Id", () => {
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(new Set(up.seen.map((s) => s.method))).toEqual(new Set(["POST", "GET"]));
 
-    // A second bridge process mints its own.
-    child.kill();
+    // A second bridge process mints its own. The first is gone before the
+    // second starts, and the id is read from the second's own initialize, not
+    // from whatever request happens to land next (the first bridge's shutdown
+    // could send one).
+    const first = child;
+    await new Promise<void>((r) => {
+      first.once("exit", () => r());
+      first.kill();
+    });
     const before = up.seen.length;
     const second = spawnBridge(up.port);
     child = second.c;
     await new Promise((r) => setTimeout(r, 700));
     second.send(INITIALIZE);
     await waitFor(() => second.responded(1), "the second bridge's initialize");
-    const secondId = up.seen[before]?.headers["x-tandem-client-id"];
+    const secondId = up.seen.slice(before).find((s) => s.rpc === "initialize")?.headers[
+      "x-tandem-client-id"
+    ];
     expect(secondId).toMatch(/^[0-9a-f-]{36}$/);
     expect(secondId).not.toBe(id);
   }, 60_000);
