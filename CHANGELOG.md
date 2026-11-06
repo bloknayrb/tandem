@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Accept a rewrite Claude proposes in a comment's replies from the margin too (#2360).** "Accept replacement" now also appears on margin cards, not only in the side panel. Your own comments are prepared for it too, for when Claude can answer them in their thread: there the button applies only when the comment records the text it was made on, and otherwise is disabled and says Tandem can't confirm that text.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 
+### Changed
+
+- **The Linux `.deb` is now install-checked on Debian 12 and 13 and Ubuntu 24.04 as well as Ubuntu 22.04.** Each release also checks that the system tray's library can be found on each of them. Nothing in the package changed. It already installed on Debian, where the `libappindicator3-1` it asks for is supplied by `libayatana-appindicator3-1`, but nothing checked that before. The README now lists Debian 12 or later alongside Ubuntu 22.04 or later.
+
 ### Fixed
 
 - **Undoing an accepted reply rewrite now gives the comment back its own suggestion (#2360).** Before, Undo restored the document but the comment kept the reply's text as its suggestion, so the comment's own Accept then offered a change it never proposed. A reply's suggestion also no longer gets an Accept button when someone other than Claude wrote it.
