@@ -85,6 +85,8 @@ describe("tokenMayGoTo — the bridge sends its token to this computer only", ()
     ["not a url", false],
     ["http://127.0.0.1:4000", false],
     ["http://127.0.0.1", false],
+    ["https://127.0.0.1:3479", false],
+    ["ws://127.0.0.1:3479", false],
   ])("%s → %s", (url, ok) => {
     expect(tokenMayGoTo(url, {})).toBe(ok);
   });

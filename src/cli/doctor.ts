@@ -1432,7 +1432,8 @@ function reportBridgeEntry(
     r.pass(
       "tandem registered in ~/.claude.json (through Tandem's bridge, on the Node bundled with the desktop app)",
       `${RESTART_TERMINALS_NOTE}${update} Tandem moves the entry onto a Node 22.12 or newer it ` +
-        `finds on its own PATH. ${desktopPathNote()}`,
+        `finds on its own PATH${process.platform === "win32" ? WINDOWS_ROOTS_CLAUSE : ""}. ` +
+        desktopPathNote(),
     );
     return;
   }
@@ -1489,10 +1490,9 @@ async function reportDirectHttpEntry(
         "so it stays as it is. " +
         "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
         "temporary or removable location, is owned by another user, or on Windows is installed " +
-        "anywhere but Program Files or your user folder. " +
-        (process.platform === "darwin"
-          ? desktopPathNote()
-          : "Install Node 22.12 or newer system-wide, then restart Tandem. " + desktopPathNote()),
+        "anywhere but Program Files or your user folder. Install Node 22.12 or newer where " +
+        "Tandem's PATH can see it (for an npm install, on the PATH of the shell you start " +
+        `Tandem from), then restart Tandem. ${desktopPathNote()}`,
     );
     return;
   }
@@ -1542,13 +1542,27 @@ function fileSizeOrZero(path: string): number {
  * remedy that cannot work there.
  */
 function desktopPathNote(): string {
-  return process.platform === "darwin"
-    ? "On macOS, the desktop app opened from the Dock or Finder sees only " +
-        "/usr/bin:/bin:/usr/sbin:/sbin, which holds no Node, so its entry stays on the Node it " +
-        "ships with unless Tandem is started from a shell that has Node on its PATH."
-    : "A desktop app started from a menu cannot see a Node that only a shell profile (nvm, " +
-        "Homebrew) adds.";
+  if (process.platform === "darwin") {
+    return (
+      "On macOS, the desktop app opened from the Dock or Finder (or with `open -a`) sees only " +
+      "/usr/bin:/bin:/usr/sbin:/sbin, which holds no Node, so a desktop entry stays on the " +
+      "Node the app ships with unless the app's own binary is started from a shell that has " +
+      "Node on its PATH."
+    );
+  }
+  if (process.platform === "win32") {
+    return (
+      "The desktop app sees the PATH Windows gives programs started from the Start menu, not " +
+      "one a terminal changed; restart Tandem after changing it."
+    );
+  }
+  return "A desktop app started from a menu cannot see a Node that only a shell profile adds.";
 }
+
+/** The Windows install-root rule, as a clause after "on its own PATH". */
+const WINDOWS_ROOTS_CLAUSE =
+  ", and on Windows only one installed under Program Files or your user folder (a PATH entry " +
+  "in 8.3 short form, such as C:\\PROGRA~1\\nodejs, is skipped)";
 
 /** Tandem's direct-HTTP entry in a config too large for any Tandem writer. */
 function reportOversizeHttpEntry(r: Recorder): void {
@@ -4058,7 +4072,13 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("integrations-file", () => checkIntegrationsFile(r));
-  await r.check("stale-global", () => checkStaleGlobal(r, opts.bundledVersionForTests));
+  await r.check("stale-global", () =>
+    checkStaleGlobal(
+      r,
+      // Honoured only under vitest, so "never set in production" is enforced.
+      process.env.VITEST === "true" ? opts.bundledVersionForTests : undefined,
+    ),
+  );
 
   // `check` returns undefined when the check crashed (it records its own
   // fail). Treating both ports as down is the honest reading: we did not

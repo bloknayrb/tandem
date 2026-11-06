@@ -10,11 +10,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
  * setup`, `tandem rotate-token` and the wizard's apply may walk.
  *
  * That is NOT "diagnostics spawns nothing": a release build's `runDoctor`
- * also runs `npm ls -g` through a shell (`checkStaleGlobal`, filed as #2379
- * and fixed in its own PR) and, on POSIX, may run `ps` for the annotation
- * store's lock holder. So the runDoctor cases run the stale-global check as a
- * release build does (`bundledVersionForTests`) and assert that EVERY spawn is
- * on an explicit allowlist — a new spawn on the diagnostics path fails here.
+ * also runs `npm ls -g` through a shell (`checkStaleGlobal`: the open finding
+ * #2379, to be fixed in its own PR) and may run the annotation store's
+ * lock-holder probe (`ps` on POSIX, `tasklist.exe` on Windows). So the
+ * runDoctor cases run the stale-global check as a release build does
+ * (`bundledVersionForTests`) and assert that every spawn they SEE is on an
+ * explicit allowlist. What they can see is bounded: POSIX only (this file
+ * skips Windows, and CI's `check` is Ubuntu), only the branches this fixture
+ * reaches (no lock exists, so the lock-holder probe does not run), and only
+ * spawns made through `child_process` from transformed code.
  *
  * Everything else is the real code except two things: the temp-dir fixtures
  * are not treated as scratch (so an "installed" layout can live under
@@ -61,6 +65,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     execFileSync: record(actual.execFileSync as never),
     spawn: record(actual.spawn as never),
     spawnSync: record(actual.spawnSync as never),
+    fork: record(actual.fork as never),
     exec: record(actual.exec as never),
     execSync: record(actual.execSync as never),
   };

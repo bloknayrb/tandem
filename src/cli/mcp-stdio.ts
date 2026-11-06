@@ -421,10 +421,18 @@ export function tokenMayGoTo(baseUrl: string, env: NodeJS.ProcessEnv = process.e
   // `[::1]`, the other loopback bind `TANDEM_BIND_HOST` accepts — not
   // `localhost` (resolved by whatever the system's resolver says, hosts file
   // included) and not the rest of 127/8, which Tandem never binds.
+  // Plain `http:` only: Tandem's MCP server speaks nothing else, and an
+  // `https:` URL with no port means 443, not the port checked below.
+  if (url.protocol !== "http:") return false;
   if (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") return false;
   // And Tandem's MCP port: the default, or the `TANDEM_MCP_PORT` this bridge
   // was started with. Another local process on another port gets no token;
-  // a loopback Tandem accepts a request without one, so nothing breaks.
+  // a loopback Tandem accepts a request without one, so nothing breaks. What
+  // this guards against is a misconfigured URL, not a hostile environment:
+  // `TANDEM_MCP_PORT` arrives the same way `CLAUDE_PLUGIN_OPTION_SERVER_URL`
+  // does, and whoever sets those could set `NODE_OPTIONS` too. The default
+  // port stays allowed after Tandem moves off it, so a URL naming 3479 still
+  // sends the token to whatever holds 3479.
   const port = url.port === "" ? 80 : Number(url.port);
   const allowed = new Set<number>([DEFAULT_MCP_PORT]);
   const moved = Number.parseInt(env.TANDEM_MCP_PORT ?? "", 10);
