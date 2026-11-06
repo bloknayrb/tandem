@@ -118,7 +118,7 @@ tauri-plugin-decorum = "1"
 # Bumping libappindicator-sys, libappindicator or tray-icon needs the crate
 # source re-read; the tests in tray_probe.rs fail until then.
 [target.'cfg(target_os = "linux")'.dependencies]
-libloading = "0.7"
+libloading = "0.8"
 libappindicator-sys = { version = "=0.9.0", features = ["backcompat"] }
 
 # macOS-only: removes Tandem's delivered notifications through
