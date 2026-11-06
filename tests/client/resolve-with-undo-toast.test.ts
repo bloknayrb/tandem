@@ -69,6 +69,14 @@ describe("resolveWithUndoToast (#2360 margin Resolve)", () => {
     expect(pushed).toHaveLength(1);
   });
 
+  it("Undo after the comment was removed says so, not that it changed", () => {
+    const { pushed, run, status } = setup("doc-a");
+    run("c1");
+    status.delete("c1"); // removed from the side panel's resolved list
+    pushed[0].action?.onClick();
+    expect(pushed[1].n.message).toBe("That comment was removed.");
+  });
+
   it("a missing record yields no toast", () => {
     const { pushed, run } = setup("doc-a");
     run("gone");
@@ -85,9 +93,11 @@ describe("resolveWithUndoToast (#2360 margin Resolve)", () => {
   });
 
   it("a failed Undo says so instead of closing silently", () => {
-    const { pushed, status, run } = setup("doc-a");
+    const { pushed, undo, run } = setup("doc-a");
     run("c1");
-    status.delete("c1"); // removed in the meantime
+    // Still resolved, but the undo itself declines (its text changed). A removed
+    // record has its own message, pinned above.
+    undo.mockReturnValueOnce(false);
     pushed[0].action?.onClick();
     expect(pushed).toHaveLength(2);
     expect(pushed[1].n.message).toMatch(/couldn't undo/i);

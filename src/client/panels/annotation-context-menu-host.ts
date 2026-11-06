@@ -33,6 +33,7 @@ import {
   canSendToClaude,
   copyTextFor,
   isAnnotationContextMenuActionId,
+  needsRemoveConfirm,
 } from "./annotation-context-menu";
 
 /** The live gesture: its `run` is bound to the most-recent right-click's id + handlers. */
@@ -83,6 +84,7 @@ export function runAnnotationAction(
   ann: Annotation,
   handlers: AnnotationActionHandlers,
   aiDisabled: boolean,
+  replyCount = 0,
 ): void {
   switch (action) {
     case "ctx:annotation:accept":
@@ -98,7 +100,9 @@ export function runAnnotationAction(
       if (canSendToClaude(ann, aiDisabled)) handlers.sendToClaude?.(ann.id);
       return;
     case "ctx:annotation:remove":
-      if (canRemove(ann)) handlers.remove?.(ann.id);
+      // A threaded comment's Remove goes through the card's two-step only; a menu
+      // held open while a reply arrived is refused here too.
+      if (canRemove(ann) && !needsRemoveConfirm(ann, replyCount)) handlers.remove?.(ann.id);
       return;
     case "ctx:annotation:edit":
       if (canEdit(ann)) handlers.openEdit?.(ann.id);
@@ -126,12 +130,13 @@ export async function openAnnotationContextMenu(
   run: (action: AnnotationContextMenuActionId) => void,
   aiDisabled: boolean,
   targetLost: boolean,
+  replyCount = 0,
 ): Promise<void> {
   setAnnotationGesture({ run });
   try {
     const invoke = await loadInvoke();
     await invoke("show_annotation_context_menu", {
-      req: buildAnnotationMenuContext(ann, aiDisabled, targetLost),
+      req: buildAnnotationMenuContext(ann, aiDisabled, targetLost, replyCount),
     });
   } catch {
     /* Tauri unavailable or command error — native menu already suppressed. */

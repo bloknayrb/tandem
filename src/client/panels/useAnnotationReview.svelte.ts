@@ -560,6 +560,13 @@ export interface UseAnnotationReviewReturn {
   handleDismiss: (id: string) => void;
   scrollToAnnotation: (ann: Annotation) => void;
   getRecentlyResolved: () => Set<string>;
+  /**
+   * Drop a removed record's id from `recentlyResolved`. Remove deletes the record,
+   * and an id with no live record reads to the tutorial as a cross-tab resolve,
+   * so a user who resolved their own comment and then removed it would tick
+   * "review Claude's comment" without reviewing anything.
+   */
+  forgetResolved: (id: string) => void;
   getReviewIndex: () => number;
   getReviewTargets: () => Annotation[];
   /**
@@ -1148,6 +1155,7 @@ export function useAnnotationReview({
     handleDismiss,
     scrollToAnnotation,
     getRecentlyResolved: () => recentlyResolved,
+    forgetResolved: removeFromResolved,
     getReviewIndex: () => reviewIndex,
     getReviewTargets,
     isTargetLost: (id) => lostTargetIds.has(id),
