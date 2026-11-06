@@ -1083,9 +1083,9 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           CHANNEL_DIST,
         );
         // Claude Code's entry is the stdio bridge on a system Node (#2358 PR
-        // 2b). Probe for that Node asynchronously here: the builder's own
-        // fallback is a synchronous `--version` run, which must never block
-        // this server's event loop. Memoized, so only the first apply pays.
+        // 2b). Probe for that Node here, asynchronously: the builder itself
+        // never probes (it reads what a probe left, else takes the running
+        // Node). Memoized, so only the first apply pays.
         if (entry.kind === "claude-code") await warmClaudeCodeBridge();
         const create = buildMcpEntries(CHANNEL_DIST, {
           token,

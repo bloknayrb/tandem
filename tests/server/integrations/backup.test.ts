@@ -9,6 +9,7 @@ import {
   listBackups,
   MAX_BACKUPS,
   pruneOldBackups,
+  SWEEP_BACKUP_PREFIX,
   shouldBackup,
   sweepBackupsOnStartup,
   writeBackup,
@@ -186,6 +187,30 @@ describe("backup filename + write + prune", () => {
     expect(removed.length).toBe(2);
     const remaining = await listBackups(dir);
     expect(remaining.length).toBe(MAX_BACKUPS);
+  });
+
+  it("pruneOldBackups never removes the protected backup, however it sorts", async () => {
+    // Same second, random id: the just-written one can sort last.
+    const names = ["ffff", "eeee", "dddd", "0000"].map(
+      (id) => `claude-json-20260601-000000-${id}0000.json`,
+    );
+    for (const n of names) fs.writeFileSync(path.join(dir, n), n);
+    const protect = names[3] as string;
+    const removed = await pruneOldBackups(dir, undefined, undefined, undefined, protect);
+    const remaining = await listBackups(dir);
+    expect(remaining).toContain(protect);
+    expect(remaining.length).toBe(MAX_BACKUPS);
+    expect(removed.map((p) => path.basename(p))).toEqual([names[2]]);
+  });
+
+  it("the sweep's backups are capped separately and never evict applyConfig's", async () => {
+    fs.writeFileSync(path.join(dir, "claude-json-20260101-000000-aaaa0000.json"), "user");
+    for (let i = 0; i < MAX_BACKUPS + 2; i++) {
+      await writeBackup(dir, Buffer.from(`s${i}`), SWEEP_BACKUP_PREFIX);
+    }
+    await pruneOldBackups(dir, SWEEP_BACKUP_PREFIX);
+    expect(await listBackups(dir)).toEqual(["claude-json-20260101-000000-aaaa0000.json"]);
+    expect((await listBackups(dir, SWEEP_BACKUP_PREFIX)).length).toBe(MAX_BACKUPS);
   });
 
   it("writeBackup with `wx` exclusive-create rejects a pre-existing symlink at the predicted path", async () => {

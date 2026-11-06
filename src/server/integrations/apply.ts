@@ -43,7 +43,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, posix as posixPath, resolve, sep, win32 as win32Path } from "node:path";
+import {
+  basename,
+  dirname,
+  join,
+  posix as posixPath,
+  resolve,
+  sep,
+  win32 as win32Path,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
@@ -80,7 +88,13 @@ import type { SkillRefreshError } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { isTauriSidecar, resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
-import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
+import {
+  backupDir,
+  pruneOldBackups,
+  SWEEP_BACKUP_PREFIX,
+  shouldBackup,
+  writeBackup,
+} from "./backup.js";
 import {
   bridgeCopyVersionOf,
   isOlderVersion,
@@ -2478,14 +2492,19 @@ function repairEntryInPlace(
  *
  * - Nothing unless this is an installed build that would write a bridge
  *   (`deps.claudeCodeBridge` non-null).
- * - Script: a recorded script that is gone moves to the current durable one; on
- *   a Linux AppImage, an app-data copy of another version moves to this
- *   version's copy (so the older directory can be pruned).
+ * - Script: a recorded script that is gone moves to the current durable one,
+ *   and so does one that belongs to an OLDER install (`isOlderBridgeScript`:
+ *   an AppImage copy of an older version, or an older npm prefix nvm kept on
+ *   disk). Forward only.
  * - Node: a recorded Node that is gone moves to the system Node, else the
  *   durable running one; none → `skipped`, the dead path left visible. A
  *   recorded bundled sidecar Node moves to a system Node once one qualifies —
  *   never the other way, so two launch environments with different PATHs
- *   cannot flip the entry back and forth.
+ *   cannot flip the entry back and forth. A forward script move also takes
+ *   this install's Node, EXCEPT that a live system Node is never traded for
+ *   the bundled one (a desktop started from the dock usually sees no system
+ *   Node on its PATH; taking its pick would put every terminal on the Node a
+ *   desktop update replaces).
  */
 function repairClaudeCodeBridgeEntry(
   record: Record<string, unknown>,
@@ -2522,9 +2541,11 @@ function repairClaudeCodeBridgeEntry(
   // A forward move takes this install's whole pair: the entry becomes exactly
   // what this install would write, and the move is one-directional, so the
   // Node it brings cannot flip back either.
+  const keepsLiveSystemNode =
+    isBundledSidecarNode(bridge.command) && !isBundledSidecarNode(command);
   const wantsRewrite =
     gone ||
-    movedForward ||
+    (movedForward && !keepsLiveSystemNode) ||
     (isBundledSidecarNode(command) && !isBundledSidecarNode(bridge.command));
   const commandRewrite =
     wantsRewrite && bridge.command !== command ? { from: command, to: bridge.command } : null;
@@ -2623,15 +2644,31 @@ const MAX_PACKAGE_JSON_BYTES = 256 * 1024;
  * updates, so it never goes stale this way. The path came out of a config file,
  * so UNC is screened before any filesystem call.
  */
-function bridgeScriptVersion(script: string): string | null {
+export function bridgeScriptVersion(script: string): string | null {
   const copy = bridgeCopyVersionOf(script, resolveAppDataDir());
   if (copy !== null) return copy;
   if (rejectUnsafeWindowsPrefix(script) !== null || !isRecordedPathAbsolute(script)) return null;
-  const flavour = win32Path.isAbsolute(script) && !script.startsWith("/") ? win32Path : posixPath;
+  // No `.`/`..` segment: `path.join` normalises them away, and on Windows a
+  // posix-joined `/./\\host/share` would come out as `/\\host/share`, a UNC
+  // path the screen above never saw. Tandem never records such a path.
+  if (script.split(/[/\\]/).some((seg) => seg === "." || seg === "..")) return null;
+  const flavour = process.platform === "win32" ? win32Path : posixPath;
   const pkg = flavour.join(
     flavour.dirname(flavour.dirname(flavour.dirname(script))),
     "package.json",
   );
+  // Screened again as derived and as resolved — the same pair
+  // `resolveNodeBinaryUncached` uses — so no spelling reaches the redirector.
+  if (rejectUnsafeWindowsPrefix(pkg) !== null) return null;
+  if (process.platform === "win32" && rejectUnsafeWindowsPrefix(win32Path.resolve(pkg)) !== null) {
+    return null;
+  }
+  // A stat and then a read, not one descriptor: an `openSync` here would be
+  // counted as a durable writer by `config-writer-set-claims.test.ts` (it
+  // matches the call, not its flags), and #2358 PR 2b keeps `apply.ts` at 9
+  // sites. The residual — a FIFO swapped in between the two blocks the boot —
+  // needs write access to the recorded install directory, which already
+  // controls the bridge code Claude Code runs.
   try {
     const st = statSync(pkg, { throwIfNoEntry: false });
     if (st === undefined || !st.isFile() || st.size > MAX_PACKAGE_JSON_BYTES) return null;
@@ -2825,6 +2862,15 @@ export async function refreshAllMcpEntryBinaries(
       let dirty = false;
       const claudeCodeBridge =
         target.kind === "claude-code" ? await claudeCodeBridgeFor(opened.servers) : null;
+      if (
+        target.kind === "claude-code" &&
+        claudeCodeBridge === null &&
+        classifyClaudeCodeTandemEntry(opened.servers.tandem, MCP_URL).kind === "tandem-http"
+      ) {
+        // Say why the switch did not happen — the line `tandem doctor` points
+        // at, since the doctor itself never probes.
+        warnClaudeCodeHttpFallback();
+      }
       // The migration is its own branch AHEAD of the repair loop: the HTTP
       // entry has no `command`, so the repair would return before looking.
       const migration = migrateHttpEntryInPlace(opened.servers, {
@@ -2890,7 +2936,7 @@ export async function refreshAllMcpEntryBinaries(
         // something to recover from. No backup, no write: the next start
         // retries.
         try {
-          await backupConfigBytes(opened.stamp.bytes);
+          await backupConfigBytes(opened.stamp.bytes, SWEEP_BACKUP_PREFIX);
         } catch (err) {
           anyConfigUnsettled = true;
           console.error(
@@ -3014,7 +3060,7 @@ async function maybeBackupExistingConfig(
  *
  * Atomicity contract: if this throws, the caller MUST NOT write the config.
  */
-async function backupConfigBytes(content: Buffer): Promise<string> {
+async function backupConfigBytes(content: Buffer, prefix?: string): Promise<string> {
   const dir = backupDir(resolveAppDataDir());
   // assertPathSafe defeats app-data-dir poisoning: `resolveAppDataDir()` is
   // env-derived (`TANDEM_APP_DATA_DIR`, else `env-paths`, which reads
@@ -3042,10 +3088,10 @@ async function backupConfigBytes(content: Buffer): Promise<string> {
     }
   }
 
-  const backupPath = await writeBackup(dir, content);
+  const backupPath = await writeBackup(dir, content, prefix);
   // Prune AFTER successful write so we never delete the previous backup
-  // before its replacement is on disk.
-  await pruneOldBackups(dir);
+  // before its replacement is on disk — and never the one just written.
+  await pruneOldBackups(dir, prefix, undefined, undefined, basename(backupPath));
   return backupPath;
 }
 

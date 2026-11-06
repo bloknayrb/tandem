@@ -159,3 +159,38 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     expect(probed()).toEqual([]);
   });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "the writers that may probe do (#2358 PR 2b rework)",
+  () => {
+    it("rotate-token's applyConfigWithToken warms first, so the entry names the system Node", async () => {
+      mocks.runningNode = "node"; // without the warm-up, nothing could be recorded
+      const writeHome = join(root, "writer-home");
+      mkdirSync(writeHome, { recursive: true });
+      writeFileSync(join(writeHome, ".claude.json"), JSON.stringify({ mcpServers: {} }));
+      const result = await apply.applyConfigWithToken("t".repeat(40), { homeOverride: writeHome });
+      expect(result.errors).toEqual([]);
+      expect(probed()).toEqual([fakeNode]);
+      const { readFileSync } = await import("node:fs");
+      const written = JSON.parse(readFileSync(join(writeHome, ".claude.json"), "utf-8"));
+      expect(written.mcpServers.tandem).toMatchObject({ command: fakeNode, args: [script] });
+    });
+
+    it("setup and the wizard's apply warm before they build Claude Code's entry (source pin)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const src = (rel: string) =>
+        readFileSync(join(import.meta.dirname, "..", "..", rel), "utf-8");
+      for (const rel of ["src/cli/setup.ts", "src/server/integrations/api-routes.ts"]) {
+        const text = src(rel);
+        const warm = text.search(
+          /if \(\w+\.kind === "claude-code"\) await warmClaudeCodeBridge\(\);/,
+        );
+        const build = text.indexOf("buildMcpEntries(CHANNEL_DIST", warm);
+        expect(warm, `${rel} no longer warms`).toBeGreaterThan(-1);
+        expect(build - warm, `${rel}: the warm-up must sit right before the build`).toBeLessThan(
+          200,
+        );
+      }
+    });
+  },
+);

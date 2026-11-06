@@ -334,6 +334,10 @@ describe("Windows: only Program Files and the user's profile (Bryan, 2026-11-06)
     expect(durable("C:\\Program Files\\nodejs\\node.exe", {})).toBe(false);
     expect(isUnderWindowsInstallRoot("C:\\x\\node.exe", { USERPROFILE: "C:\\" })).toBe(false);
     expect(isUnderWindowsInstallRoot("C:\\x\\node.exe", { USERPROFILE: "x" })).toBe(false);
+    // Values that only normalise to the drive root.
+    for (const v of ["C:\\.", "C:\\x\\..", "C:/./"]) {
+      expect(isUnderWindowsInstallRoot("C:\\tools\\bin\\node.exe", { USERPROFILE: v })).toBe(false);
+    }
     expect(
       isUnderWindowsInstallRoot("C:\\Users\\b\\n.exe", { USERPROFILE: "C:\\Users\\b\\" }),
     ).toBe(true);

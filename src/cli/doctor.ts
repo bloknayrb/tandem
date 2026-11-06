@@ -1486,14 +1486,29 @@ async function reportDirectHttpEntry(
       "When Tandem last looked, it found no Node 22.12 or newer it can record for this entry, " +
         "so it stays as it is. " +
         "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
-        "temporary or removable location, or is owned by another user. Install Node 22.12 or " +
+        "temporary or removable location, is owned by another user, or on Windows is installed " +
+        "anywhere but Program Files or your user folder. Install Node 22.12 or " +
         "newer system-wide (an app started from the dock or a menu cannot see a Node that only " +
         "a shell profile such as nvm adds), then restart Tandem.",
     );
     return;
   }
-  // "bridge", "unprobed" (nothing in this process has looked for a system
-  // Node yet; the next start or `tandem setup` does) and an unknown verdict.
+  if (verdict === "unprobed") {
+    // This process never looked for a system Node (the doctor never probes,
+    // Bryan 2026-11-06), and the Node it runs on can't be recorded. So whether
+    // a restart switches the entry is not known here — say what decides it.
+    r.warn(
+      message,
+      "Tandem switches this entry when it starts only if it finds a Node 22.12 or newer it can " +
+        "record on its own PATH (not an older one, a version manager's shim, one in a temporary " +
+        "location or owned by another user, or on Windows one outside Program Files or your " +
+        `user folder). Restart Tandem, or ${setupStep(cliAvailable())}, which looks too. If the ` +
+        "entry is still direct HTTP afterwards, Tandem's log names the reason on a line " +
+        "starting \"Claude Code's 'tandem' entry stays direct HTTP\".",
+    );
+    return;
+  }
+  // "bridge" and an unknown verdict.
   r.warn(
     message,
     `Restart Tandem (it switches this entry when it starts), or ${setupStep(cliAvailable())}; ` +
@@ -1693,9 +1708,10 @@ async function checkUserMcpConfig(
         // Design §3.6's cost sentence: what keeping a hand-made entry means.
         r.warn(
           "tandem in ~/.claude.json is not an entry Tandem wrote, so Tandem leaves it alone",
-          "While it stays, Tandem can't tell which Claude Code session is calling through it: " +
-            "with the Tandem plugin installed, its tools are a separate connection from the " +
-            "plugin's, and a channel shim beside it is not linked to that session. " +
+          "Unless it runs Tandem's bridge, Tandem can't tell which Claude Code session is " +
+            "calling through it: with the Tandem plugin installed, its tools are a separate " +
+            "connection from the plugin's, and a channel shim beside it is not linked to that " +
+            "session. " +
             `To replace it with Tandem's own (this discards your edits): ${setupStep(cliAvailable())}.`,
         );
       }

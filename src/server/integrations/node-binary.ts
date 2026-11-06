@@ -422,14 +422,15 @@ function ownedSafely(real: string, deps: SystemNodeDeps): boolean {
  * drive-absolute; an unset or relative variable contributes nothing.
  */
 export function isUnderWindowsInstallRoot(real: string, env: NodeJS.ProcessEnv): boolean {
-  const roots = [env.ProgramFiles, env["ProgramFiles(x86)"], env.USERPROFILE].filter(
-    // A drive-absolute directory below the drive root: `C:\` itself would
-    // admit the whole drive.
-    (r): r is string => typeof r === "string" && /^[A-Za-z]:[\\/]+[^\\/]/.test(r),
-  );
-  return roots.some((root) =>
-    isUnderRoot(real, win32Path.normalize(root).replace(/[\\/]+$/, ""), "win32"),
-  );
+  const roots: string[] = [];
+  for (const r of [env.ProgramFiles, env["ProgramFiles(x86)"], env.USERPROFILE]) {
+    if (typeof r !== "string" || !/^[A-Za-z]:[\\/]/.test(r)) continue;
+    // Judged AFTER normalising: `C:\.` or `C:\x\..` would pass a raw
+    // test and normalise to the drive root, admitting the whole drive.
+    const root = win32Path.normalize(r).replace(/[\\/]+$/, "");
+    if (/^[A-Za-z]:\\[^\\]/.test(root)) roots.push(root);
+  }
+  return roots.some((root) => isUnderRoot(real, root, "win32"));
 }
 
 function pathFlavour(platform: NodeJS.Platform): typeof posixPath {
@@ -475,7 +476,7 @@ function stripExtendedDrivePrefix(p: string): string {
  * target. Returns null on any refusal, any unreadable component, or more than
  * {@link MAX_LINK_HOPS} links.
  *
- * Exported for tests; production callers use {@link findSystemNode}.
+ * Exported for tests; production callers reach it through {@link findSystemNodeAsync}.
  */
 export function screenedRealPath(p: string, deps: SystemNodeDeps = {}): string | null {
   const platform = deps.platform ?? process.platform;

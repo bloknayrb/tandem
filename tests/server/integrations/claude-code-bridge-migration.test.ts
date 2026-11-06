@@ -17,10 +17,15 @@ import {
   _setClaudeCodeBridgeForTests,
   _setSweepBeforeCommitForTests,
   applyConfig,
+  bridgeScriptVersion,
   buildMcpEntries,
   refreshAllMcpEntryBinaries,
 } from "../../../src/server/integrations/apply.js";
-import { backupDir, listBackups } from "../../../src/server/integrations/backup.js";
+import {
+  backupDir,
+  listBackups,
+  SWEEP_BACKUP_PREFIX,
+} from "../../../src/server/integrations/backup.js";
 import { resolveAppDataDir } from "../../../src/server/platform.js";
 
 /**
@@ -205,6 +210,9 @@ describe("scope and gates", () => {
     await refreshAllMcpEntryBinaries({ homeOverride: home });
 
     expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+    // The reason is logged — the line `tandem doctor`'s "unprobed" remedy
+    // points at. (Once per process: this is the file's first case to hit it.)
+    expect(stderr()).toContain("Claude Code's 'tandem' entry stays direct HTTP");
   });
 
   it("never repoints a bridge entry from a build that cannot write one (no checkout paths)", async () => {
@@ -284,7 +292,8 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
 
 describe("the sweep backs up Claude Code's config before rewriting it", () => {
   const dir = () => backupDir(resolveAppDataDir());
-  const names = async () => (existsSync(dir()) ? await listBackups(dir()) : []);
+  const names = async () =>
+    existsSync(dir()) ? await listBackups(dir(), SWEEP_BACKUP_PREFIX) : [];
 
   it("writes the exact pre-image as a backup, then switches the entry", async () => {
     writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, keep: "me" });
@@ -487,6 +496,23 @@ describe("an older install's bridge script moves forward (nvm: the old prefix st
     expect(stderr()).toContain("Repaired the tandem entry");
   });
 
+  it("a forward move never trades a live system Node for the desktop's bundled one", async () => {
+    const old = prefix("v22", "0.30.0");
+    const desktop = prefix("Tandem", "0.31.0");
+    const bundled = join(home, "Tandem", "node-sidecar-aarch64-apple-darwin");
+    writeFileSync(bundled, "");
+    _setClaudeCodeBridgeForTests({ command: bundled, script: desktop.script });
+    writeConfig({ mcpServers: { tandem: { command: old.node, args: [old.script], env: {} } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    // The script moves forward; the live system Node stays.
+    expect(readConfig().mcpServers.tandem).toMatchObject({
+      command: old.node,
+      args: [desktop.script],
+    });
+  });
+
   it.each([
     ["a NEWER install's script (never backwards)", "0.32.0", "tandem-editor"],
     ["a package.json that is not Tandem's", "0.1.0", "some-other-package"],
@@ -500,6 +526,18 @@ describe("an older install's bridge script moves forward (nvm: the old prefix st
     await refreshAllMcpEntryBinaries({ homeOverride: home });
 
     expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+
+  it("refuses a script with a dot segment before deriving a path from it (UNC by normalisation)", () => {
+    const cur = prefix("v24", "0.31.0");
+    expect(bridgeScriptVersion(cur.script)).toBe("0.31.0");
+    // On Windows, `posix.join` of this would come out as `/\\evil.example/share/...`.
+    expect(bridgeScriptVersion("/./\\evil.example/share/x/dist/stdio-bridge/index.js")).toBeNull();
+    expect(
+      bridgeScriptVersion(
+        `${home}/x/../v24/lib/node_modules/tandem-editor/dist/stdio-bridge/index.js`,
+      ),
+    ).toBeNull();
   });
 
   it("leaves a script whose version cannot be told alone (the desktop bundle ships no package.json)", async () => {
