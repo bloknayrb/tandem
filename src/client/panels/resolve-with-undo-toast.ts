@@ -66,7 +66,9 @@ export function resolveWithUndoToast(id: string, deps: Deps): void {
           notice(
             getStatus(id) === "pending"
               ? "That comment is already open again."
-              : "Couldn't undo — the comment has changed.",
+              : getStatus(id) === undefined
+                ? "That comment was removed."
+                : "Couldn't undo — the comment has changed.",
           ),
         );
       }

@@ -56,6 +56,12 @@ export interface McpRequestContext {
    * as optional; it is not a stable identity.
    */
   mcpSessionId?: string;
+  /**
+   * Whether the request's TCP peer is loopback: `isLoopback(req.socket.remoteAddress)`, set
+   * where `server.ts` enters the context — never from the `Host` header or any other
+   * client-supplied header. Read it only through {@link isCurrentPeerLoopback} (#1952).
+   */
+  peerIsLoopback?: boolean;
 }
 
 const storage = new AsyncLocalStorage<McpRequestContext>();
@@ -81,4 +87,16 @@ export function getMcpContext(): McpRequestContext | undefined {
  */
 export function getCurrentSessionId(): string | undefined {
   return storage.getStore()?.claudeSessionId;
+}
+
+/**
+ * True only inside an MCP request whose TCP peer was loopback. Fails closed: outside a
+ * request (server-internal work, a direct handler call), in a context entered without the
+ * field, or for any value but `true`, this is `false`.
+ *
+ * Deliberately narrow — one boolean, not the context — so the module that reads it
+ * (`src/server/mcp/wake-url.ts`) cannot reach the session ids through it.
+ */
+export function isCurrentPeerLoopback(): boolean {
+  return storage.getStore()?.peerIsLoopback === true;
 }

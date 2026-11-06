@@ -37,6 +37,7 @@ import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
+import { type McpRequestContext, runWithMcpContext } from "../../src/server/sessions/context.js";
 import { parseResult as parsed, setupMcpServer } from "../helpers/mcp-harness.js";
 
 const mockedGetWakeEndpoint = vi.mocked(getWakeEndpoint);
@@ -60,6 +61,19 @@ afterEach(async () => {
   for (const f of tempFiles.splice(0)) await fs.rm(f, { force: true });
 });
 
+/**
+ * Call a tool as a LOOPBACK peer (#1952). Since `wakeUrlField()` fails closed outside a request
+ * context, every "carries" spec has to run inside one. `InMemoryTransport` delivers the request
+ * to the server's `onmessage` inside the client's `send`, so the AsyncLocalStorage run around
+ * `callTool` is the run the handler sees — the control spec at the bottom proves that rather
+ * than assuming it, because without it every ABSENT spec below would be vacuous.
+ */
+function callAs(ctx: McpRequestContext | undefined, name: string, args: Record<string, unknown>) {
+  const call = () => client.callTool({ name, arguments: args });
+  return ctx === undefined ? call() : runWithMcpContext(ctx, call);
+}
+const LOOPBACK: McpRequestContext = { peerIsLoopback: true };
+
 /** A real file on disk for `tandem_open`, cleaned up in `afterEach`. */
 async function tempMarkdown(): Promise<string> {
   const filePath = join(tmpdir(), `wake-url-${Date.now()}-${tempFiles.length}.md`);
@@ -68,20 +82,19 @@ async function tempMarkdown(): Promise<string> {
   return filePath;
 }
 
-describe("wakeUrl surfacing — the session-opening tools", () => {
-  /**
-   * Driven off `WAKE_URL_PRODUCERS` rather than a hand-written spec per tool, so a fourth
-   * producer added to the constant with no row here fails immediately instead of shipping
-   * untested. The hand-written form also hid a gap: `tandem_status` had a "carries" spec
-   * and no "omits" spec, which is invisible until the cases are lined up.
-   */
-  const CASES: Record<(typeof WAKE_URL_PRODUCERS)[number], () => Promise<Record<string, unknown>>> =
-    {
-      tandem_status: async () => ({}),
-      tandem_scratchpad: async () => ({ content: "# Draft" }),
-      tandem_open: async () => ({ filePath: await tempMarkdown() }),
-    };
+/**
+ * Arguments per producer. Driven off `WAKE_URL_PRODUCERS` rather than a hand-written spec per
+ * tool, so a fourth producer added to the constant with no row here fails immediately instead
+ * of shipping untested. The hand-written form also hid a gap: `tandem_status` had a "carries"
+ * spec and no "omits" spec, which is invisible until the cases are lined up.
+ */
+const CASES: Record<(typeof WAKE_URL_PRODUCERS)[number], () => Promise<Record<string, unknown>>> = {
+  tandem_status: async () => ({}),
+  tandem_scratchpad: async () => ({ content: "# Draft" }),
+  tandem_open: async () => ({ filePath: await tempMarkdown() }),
+};
 
+describe("wakeUrl surfacing — the session-opening tools", () => {
   it("every declared producer has a case — a new one cannot ship untested", () => {
     expect(Object.keys(CASES).sort()).toEqual([...WAKE_URL_PRODUCERS].sort());
   });
@@ -91,7 +104,7 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     async (tool) => {
       mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
 
-      const res = parsed(await client.callTool({ name: tool, arguments: await CASES[tool]() }));
+      const res = parsed(await callAs(LOOPBACK, tool, await CASES[tool]()));
 
       expect(res.error).toBe(false);
       expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
@@ -101,7 +114,8 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
   it.each(WAKE_URL_PRODUCERS)("%s OMITS the key entirely in stdio mode", async (tool) => {
     mockedGetWakeEndpoint.mockReturnValue(null);
 
-    const raw = await client.callTool({ name: tool, arguments: await CASES[tool]() });
+    // A loopback peer, so the absence here is attributable to stdio mode alone.
+    const raw = await callAs(LOOPBACK, tool, await CASES[tool]());
     const res = parsed(raw);
 
     expect(res.error).toBe(false);
@@ -126,9 +140,7 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     // self-sufficient rather than merely correct.
     mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
 
-    const res = parsed(
-      await client.callTool({ name: "tandem_scratchpad", arguments: { content: "# Draft" } }),
-    );
+    const res = parsed(await callAs(LOOPBACK, "tandem_scratchpad", { content: "# Draft" }));
     expect(res.data.documentId).toBeTruthy();
     expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
   });
@@ -148,9 +160,10 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     // answers NO_DOCUMENT with no `data` — against which `Object.keys(res.data ?? {})` is
     // vacuously true. Measured: without this open, a `wakeUrl` deliberately added to the
     // checkInbox payload left this spec green. Assert the success envelope before the absence.
-    await client.callTool({ name: "tandem_scratchpad", arguments: { content: "# Draft" } });
+    await callAs(LOOPBACK, "tandem_scratchpad", { content: "# Draft" });
 
-    const raw = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+    // As a loopback peer: the exclusion must hold where the field WOULD otherwise be handed out.
+    const raw = await callAs(LOOPBACK, "tandem_checkInbox", {});
     const res = parsed(raw);
     expect(res.error, `checkInbox did not succeed: ${JSON.stringify(res)}`).toBe(false);
     expect(Object.keys(res.data ?? {}), "control: the payload was empty").toContain("summary");
@@ -160,5 +173,57 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     if (structured !== undefined) {
       expect(Object.keys(structured)).not.toContain("wakeUrl");
     }
+  });
+});
+
+/**
+ * #1952: the address names `127.0.0.1`, which is this machine only for a caller on it. A remote
+ * MCP client handed it would arm a watch against its OWN loopback. So `wakeUrlField()` returns
+ * the field only when the request context says the TCP peer was loopback, and fails closed
+ * everywhere else. Every row runs with the wake transport LIVE, so an absence can only come
+ * from the peer check — in stdio mode the key is missing for an unrelated reason.
+ *
+ * These specs prove the helper's logic through the real registered handlers; that
+ * `server.ts` sets the field from the socket is `wake-url-peer-wiring.test.ts`'s job.
+ */
+describe("wakeUrl is handed only to a loopback peer (#1952)", () => {
+  const WITHHELD: Array<[string, McpRequestContext | undefined]> = [
+    ["a non-loopback peer", { peerIsLoopback: false }],
+    ["a context entered without the peer fact", { claudeSessionId: "s-1", mcpSessionId: "m-1" }],
+    ["no request context at all", undefined],
+  ];
+
+  beforeEach(() => {
+    mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
+  });
+
+  it("control: the context set around callTool reaches the handler", async () => {
+    // Without this, every ABSENT row below could pass because the context never arrived,
+    // not because the check refused it. The same tool flips on the context alone.
+    const present = parsed(await callAs(LOOPBACK, "tandem_status", {}));
+    const absent = parsed(await callAs({ peerIsLoopback: false }, "tandem_status", {}));
+    expect(present.data.wakeUrl).toBe(LIVE_WAKE_URL);
+    expect(Object.keys(absent.data)).not.toContain("wakeUrl");
+  });
+
+  for (const [label, ctx] of WITHHELD) {
+    it.each(WAKE_URL_PRODUCERS)(`%s omits the key for ${label}`, async (tool) => {
+      const raw = await callAs(ctx, tool, await CASES[tool]());
+      const res = parsed(raw);
+
+      expect(res.error, `${tool} did not succeed: ${JSON.stringify(res)}`).toBe(false);
+      expect(Object.keys(res.data)).not.toContain("wakeUrl");
+      const structured = raw.structuredContent as Record<string, unknown> | undefined;
+      if (structured !== undefined) {
+        expect(Object.keys(structured)).not.toContain("wakeUrl");
+      }
+    });
+  }
+
+  it("does not read a truthy non-boolean as loopback", async () => {
+    // A context is typed, but the getter's `=== true` is the guarantee, not the type.
+    const ctx = { peerIsLoopback: "true" } as unknown as McpRequestContext;
+    const res = parsed(await callAs(ctx, "tandem_status", {}));
+    expect(Object.keys(res.data)).not.toContain("wakeUrl");
   });
 });
