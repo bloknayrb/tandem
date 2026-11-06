@@ -42,8 +42,37 @@ describe("isHostAllowed (DNS rebinding protection)", () => {
     expect(isHostAllowed("")).toBe(false);
   });
 
-  it("rejects IPv6 loopback", () => {
-    expect(isHostAllowed("[::1]")).toBe(false);
+  it("accepts the canonical IPv6 loopback literal, with or without a port", () => {
+    // Why this is safe: see `isHostAllowed`. Before, `split(":")` reduced it to
+    // "[" and every `/api` route plus the wake upgrade 403'd on a `::1` bind.
+    expect(isHostAllowed("[::1]")).toBe(true);
+    expect(isHostAllowed("[::1]:3479")).toBe(true);
+  });
+
+  it("refuses malformed or non-canonical bracketed hosts", () => {
+    for (const host of [
+      "[::1",
+      "[::1]:",
+      "[::1]x",
+      "[::1]:3479x",
+      "[::1]@evil.com",
+      "[::1]:80:evil.com",
+      "[[::1]]",
+      "[::1%25lo]",
+      "[0:0:0:0:0:0:0:1]",
+      "[::ffff:127.0.0.1]",
+      "[::2]:3479",
+      "[127.0.0.1]",
+      "::1",
+    ]) {
+      expect(isHostAllowed(host), host).toBe(false);
+    }
+  });
+
+  it("matches a bracketed literal only against an IPv6 extra host", () => {
+    expect(isHostAllowed("[fe80::1]:3479", ["fe80::1"])).toBe(true);
+    expect(isHostAllowed("[192.168.1.50]:3479", ["192.168.1.50"])).toBe(false);
+    expect(isHostAllowed("[]:3479", [""])).toBe(false);
   });
 
   it("rejects case variations (LOCALHOST)", () => {

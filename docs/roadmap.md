@@ -207,7 +207,7 @@ deferred table are in the history file.
 - **Server auto-stop on idle.** Never wired.
 - **Review mode:** a threshold banner and document dimming.
 - **Platform follow-ups:** #552 (KDE titlebar), #317 (firewall rule scoping for Cowork on macOS/Linux), #630 (a `startup-file-error` event for `request_open_file` POST failures, plus its HTTP tests).
-- **Linux tray fallback** when libappindicator is absent. Today the app exits cleanly with no tray.
+- **Linux tray on GNOME without a StatusNotifier host** (stock GNOME without the AppIndicator extension, e.g. Fedora Workstation). The library loads and the tray builds, but the icon may show nowhere, closing the window hides Tandem, and Quit is tray-only, so relaunching from the app grid is the only way back. Untested; noted in #2359. (A missing library is handled: Tandem runs without a tray and closing the window quits, #2359.)
 - **Flag annotations on externally changed text.** Degraded anchors are surfaced to Claude (`anchor: "degraded"`), but the user sees no flag.
 - **Design decisions deferred by D2, D5 and D7–D9:**
   - an authorship gutter and its pulses (D2 picked per-character)
@@ -218,7 +218,7 @@ deferred table are in the history file.
 - **Desktop shell:** frameless window, vibrancy, multi-window, and a file-explorer sidebar are out of scope per HANDOFF.
 - **Re-enabling `.docx`** (#2110).
 - **Re-enabling Tandem's Cowork setup** (#2134), with Cowork on macOS/Linux (#316) and the pre-flight enum decision (#1373) behind it.
-- **Re-enabling the non-loopback bind** (#2141, ADR-056), with the #1906 decision and the #1952 fix behind it.
+- **Re-enabling the non-loopback bind** (#2141, ADR-056), with the #1906 decision behind it (the #1952 `wakeUrl` fix landed live, independent of the bind, on 2026-11-05).
 
 ## Known Limitations (v1)
 

@@ -626,9 +626,10 @@ pub(crate) fn resolve_autostart_launch(args: &[String], disable_env: Option<&str
 
 /// Whether a boot launch should stay hidden in the tray.
 ///
-/// The tray guard is load-bearing, not cosmetic: on Linux without
-/// libappindicator `TrayIconBuilder::build()` fails and `CloseRequested` exits
-/// the process instead of hiding. A hidden window with no tray icon would be an
+/// The tray guard is load-bearing, not cosmetic: on Linux with no loadable
+/// appindicator library `setup()` skips the tray build (`tray_probe`, #2359),
+/// or `TrayIconBuilder::build()` fails, and `CloseRequested` exits the process
+/// instead of hiding. A hidden window with no tray icon would be an
 /// unreachable zombie still holding :3478/:3479 with no way to quit it short of
 /// a task manager.
 pub(crate) fn should_start_hidden(autostart: bool, tray_available: bool) -> bool {

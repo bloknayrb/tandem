@@ -21,7 +21,7 @@ import {
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
-import { createAuthMiddleware } from "../auth/middleware.js";
+import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
 import { getDeliveryState } from "../events/delivery-state.js";
@@ -873,7 +873,13 @@ export async function startMcpServerHttp(
     registry.touch(entry.sessionId);
     onEntry?.(entry);
     await runWithMcpContext(
-      { claudeSessionId: entry.claudeSessionId, mcpSessionId: entry.sessionId },
+      {
+        claudeSessionId: entry.claudeSessionId,
+        mcpSessionId: entry.sessionId,
+        // The TCP peer, never the Host header (#1952). Per request, not per session:
+        // a session id is a bearer value any peer holding it can present.
+        peerIsLoopback: isLoopback(req.socket.remoteAddress),
+      },
       () => entry.transport.handleRequest(req, res, body),
     );
     return entry;
@@ -927,7 +933,10 @@ export async function startMcpServerHttp(
         // handleRequest is what mints the session id and fires
         // onsessioninitialized, so the registry entry appears during this call.
         await openSession(registry, buildServer, claudeSessionId, clientName, (transport) =>
-          runWithMcpContext({ claudeSessionId }, () => transport.handleRequest(req, res, body)),
+          runWithMcpContext(
+            { claudeSessionId, peerIsLoopback: isLoopback(req.socket.remoteAddress) },
+            () => transport.handleRequest(req, res, body),
+          ),
         );
       } catch (err) {
         console.error("[Tandem] Failed to create new MCP session:", err);
@@ -1026,7 +1035,7 @@ export async function startMcpServerHttp(
   // so on those routes the body is read only after BOTH Host checks.
   // The SDK check fires first and answers with a JSON-RPC body ("Invalid Host: evil.com");
   // lanAwareApiMiddleware narrows it further per route, rejecting hosts the SDK's list
-  // admits (e.g. "localhost:PORT" and "[::1]:PORT") with {"error":"FORBIDDEN"}. Reading a
+  // admits (e.g. "localhost:PORT") with {"error":"FORBIDDEN"}. Reading a
   // 403 on /api without checking the body will attribute it to the wrong middleware.
   //
   // Loopback is always exempt from auth (Claude Code zero-config), so this ordering has no

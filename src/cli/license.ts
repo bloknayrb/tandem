@@ -421,7 +421,9 @@ type LoopbackPostResult =
  * Only a literal `http://127.0.0.1:<port>` URL is ever contacted:
  * - the route refuses a non-loopback caller anyway, and the server binds
  *   127.0.0.1;
- * - `isHostAllowed` 403s `Host: localhost` and `[::1]`;
+ * - `isHostAllowed` 403s `Host: localhost`. It admits `[::1]` (for a `::1`
+ *   bind), but this transport still refuses a `[::1]` `TANDEM_URL`, so these
+ *   commands do not reach a `::1`-bound server;
  * - a `localhost` name goes through getaddrinfo and can be remapped off this
  *   machine by a hosts file;
  * - `resolveTandemUrl`'s default is `http://127.0.0.1:<port>`;
