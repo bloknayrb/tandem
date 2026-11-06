@@ -1,5 +1,6 @@
 /**
- * `ws://127.0.0.1:<api-port>/api/wake` — the self-armed wake transport.
+ * `ws://127.0.0.1:<api-port>/api/wake` (`ws://[::1]:…` on an IPv6-loopback
+ * bind) — the self-armed wake transport.
  *
  * ADR-049 decision 1 makes this required rather than preferred. A Claude Code
  * session can arm its own watch with the host's `Monitor` tool, and `Monitor`'s
@@ -321,16 +322,28 @@ export function attachWakeSocket(httpServer: Server, extraHosts: string[] = []):
 
   httpServer.on("upgrade", onUpgrade);
 
-  // Always 127.0.0.1 regardless of what the server bound to: `verifyWakeUpgrade`
-  // rejects every non-loopback peer, so any other host in this URL would name an
-  // address that cannot connect. Deferred until `listening` when attached to a
-  // server that has not bound yet — `address()` is null before then, and
-  // publishing null would report "no wake transport" for one that is merely
-  // still starting.
+  // The host is the loopback address the server actually bound, never the
+  // configured name: `[::1]` on an IPv6-loopback bind, `127.0.0.1` otherwise.
+  // ADR-056 accepts `TANDEM_BIND_HOST=::1`, and `localhost` resolves to either
+  // family; publishing `127.0.0.1` for a server listening only on `[::1]` named
+  // an address nothing of ours listens on, so a `Monitor` watch connected to
+  // nothing (or to an unrelated service) and looked armed — #1952's silent
+  // failure by another road. Never a non-loopback host: `verifyWakeUpgrade`
+  // rejects every non-loopback peer, so it would name an address that cannot
+  // connect (a wildcard bind still answers on `127.0.0.1`; a concrete LAN IP is
+  // #1952 itself, dark under ADR-056).
+  //
+  // Deferred until `listening` when attached to a server that has not bound
+  // yet — `address()` is null before then, and publishing null would report
+  // "no wake transport" for one that is merely still starting.
   const publishEndpoint = () => {
     const address = httpServer.address();
-    wakeEndpoint =
-      address && typeof address === "object" ? `ws://127.0.0.1:${address.port}${API_WAKE}` : null;
+    if (!address || typeof address !== "object") {
+      wakeEndpoint = null;
+      return;
+    }
+    const host = address.address === "::1" ? "[::1]" : "127.0.0.1";
+    wakeEndpoint = `ws://${host}:${address.port}${API_WAKE}`;
   };
   if (httpServer.listening) publishEndpoint();
   else httpServer.once("listening", publishEndpoint);
