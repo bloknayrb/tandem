@@ -25,6 +25,17 @@ vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   unwatchFile: vi.fn(),
 }));
 
+// The annotation store's first write in each test hardens its fresh
+// `annotations/` with a fire-and-forget icacls run (`ensurePrivateStoreDir`)
+// that nothing awaits. Under full-suite load on Windows that run still held the
+// directory when teardown removed it: EBUSY in 1 of 12 runs with four copies in
+// parallel, and twice in pre-push. Same class and same fix as #2355. Nothing
+// here tests ACLs; the real icacls path is the `windows-acl-proof` job's.
+vi.mock(import("../../src/server/integrations/acl-win.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Failure-isolation twin (#1800): the open-path recovery must survive a
 // throwing eviction. Flag-gated so every other case gets the real helper.
 let evictShouldThrow = false;
