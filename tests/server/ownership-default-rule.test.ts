@@ -29,6 +29,7 @@ import {
   applyUserOpenDefault,
   applyUserOpenDefaultToDocuments,
   getDocOwner,
+  getOwnerRecord,
   onDocumentClosed,
   resetOwnershipForTests,
   setDocOwner,
@@ -87,6 +88,9 @@ afterEach(async () => {
 
 const expectDefault = (documentId: string | undefined) => {
   expect(documentId).toBeTypeOf("string");
+  // No entry may name a record that does not exist (PR 1c's enforcement
+  // reads the holder's record).
+  expect(getOwnerRecord(TANDEM_OWNER_ID)?.recordKind).toBe("tandem");
   expect(getDocOwner(documentId as string)).toMatchObject({
     ownerId: TANDEM_OWNER_ID,
     kind: "default",

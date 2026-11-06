@@ -19,9 +19,12 @@ import {
   resetOwnershipForTests,
   resolveTransportRecord,
   setDocOwner,
+  setOwnershipSeqSource,
   setOwnershipTransportMode,
   setTandemPresenceSource,
   setTransportView,
+  setWaitingProbe,
+  TANDEM_OWNER_ID,
   type TransportViewEntry,
 } from "../../src/server/sessions/ownership.js";
 
@@ -277,7 +280,10 @@ describe("the cap on detached records", () => {
     noteTransportChanged("bridge:b0");
     expect(ownershipSnapshotForTests().timers).toBe(MAX_DETACHED_RECORDS);
     expect(getDocOwner("doc-0")?.ownerId).toBe("bridge:b0");
+    // A newcomer that also holds a document, so every grace holds state and
+    // expiry order alone decides.
     const e = register("bridge:new", "bridge");
+    setDocOwner("doc-new", { ownerId: "bridge:new", kind: "claimed" }, "user-open");
     remove(e);
     // b0 was re-armed most recently but one, so b1 expires first and goes.
     expect(getOwnerRecord("bridge:b1")).toBeUndefined();
@@ -392,5 +398,129 @@ describe("flag off: nothing is ever created", () => {
       handoverSeq: [],
       timers: 0,
     });
+  });
+});
+
+describe("review gaps (#2371): behaviours a mutation could remove unnoticed", () => {
+  /** A record holding `doc`, its one transport having streamed and closed: detached, in its grace. */
+  function detachedHolder(ownerId: string, doc: string) {
+    const e = register(ownerId);
+    setDocOwner(doc, { ownerId, kind: "claimed" }, "user-open");
+    e.streamEver = true;
+    noteTransportChanged(ownerId);
+    return e;
+  }
+
+  it("a lapse while Tandem's Claude is present hands the documents to it as default", () => {
+    setTandemPresenceSource(() => true);
+    detachedHolder("claude:a", "doc-1");
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS);
+    expect(getDocOwner("doc-1")).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(getOwnerRecord(TANDEM_OWNER_ID)?.recordKind).toBe("tandem");
+  });
+
+  it("a re-judge that throws still fails toward a lapse", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    register("claude:a");
+    setDocOwner("doc-1", { ownerId: "claude:a", kind: "claimed" }, "user-open");
+    // The view throws once, mid-judgement, and then recovers showing the
+    // record's transport gone.
+    let calls = 0;
+    setTransportView(() => {
+      calls++;
+      if (calls === 1) throw new Error("view failed");
+      return [];
+    });
+    noteTransportChanged("claude:a");
+    expect(ownershipSnapshotForTests().timers).toBe(1);
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS);
+    expect(getDocOwner("doc-1")).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("the cap re-checks attachment before counting a grace against it", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const entries: TransportViewEntry[] = [];
+    for (let i = 0; i < MAX_DETACHED_RECORDS; i++) {
+      entries.push(detachedHolder(`bridge:b${i}`, `doc-${i}`));
+      vi.advanceTimersByTime(10);
+    }
+    // b0 (the oldest grace) is attached again in the registry, but nothing
+    // re-judged it yet: the cap must not lapse it as if it were detached.
+    entries[0].openStreams = 1;
+    detachedHolder("bridge:new", "doc-new");
+    expect(getDocOwner("doc-0")?.ownerId).toBe("bridge:b0");
+    expect(getOwnerRecord("bridge:b0")?.lapsed).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("the cap lapses records that hold nothing before any that hold documents", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The oldest grace belongs to a record that holds a document…
+    detachedHolder("bridge:holder", "doc-held");
+    vi.advanceTimersByTime(10);
+    // …then 64 forged records that hold nothing fill the cap and overflow it.
+    for (let i = 0; i < MAX_DETACHED_RECORDS; i++) {
+      const e = register(`bridge:empty${i}`, "bridge");
+      e.streamEver = true;
+      noteTransportChanged(`bridge:empty${i}`);
+      vi.advanceTimersByTime(10);
+    }
+    expect(getDocOwner("doc-held")?.ownerId).toBe("bridge:holder");
+    expect(getOwnerRecord("bridge:holder")?.lapsed).toBeUndefined();
+    expect(getOwnerRecord("bridge:empty0")?.lapsed).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("a cap lapse runs outside the request context that triggered it", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < MAX_DETACHED_RECORDS; i++) {
+      detachedHolder(`bridge:b${i}`, `doc-${i}`);
+      vi.advanceTimersByTime(10);
+    }
+    const seen: unknown[] = [];
+    setTandemPresenceSource(() => {
+      seen.push(getMcpContext());
+      return false;
+    });
+    runWithMcpContext({ ownerId: "claude:stranger", claudeSessionId: "stranger" }, () =>
+      detachedHolder("bridge:new", "doc-new"),
+    );
+    expect(getDocOwner("doc-0")).toBeUndefined(); // the cap did lapse b0
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((ctx) => ctx === undefined)).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("re-attaching after a lapse clears the lapse", () => {
+    const e = detachedHolder("claude:a", "doc-1");
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS);
+    expect(getOwnerRecord("claude:a")?.lapsed).toBe(true);
+    e.openStreams = 1;
+    noteTransportChanged("claude:a");
+    expect(getOwnerRecord("claude:a")?.lapsed).toBeUndefined();
+  });
+
+  it("an entry's sinceSeq comes from the seq source", () => {
+    setOwnershipSeqSource(() => 7);
+    setDocOwner("d", { ownerId: "claude:a", kind: "claimed" }, "user-open");
+    expect(getDocOwner("d")?.sinceSeq).toBe(7);
+  });
+
+  it("step 5 asks whether items wait only for Tandem's Claude, not on its own change or a take-back", () => {
+    const probe = vi.fn(() => false);
+    setWaitingProbe(probe);
+    setDocOwner("d1", { ownerId: "claude:a", kind: "claimed" }, "user-open");
+    setDocOwner("d2", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open", TANDEM_OWNER_ID);
+    setDocOwner("d3", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take-back");
+    expect(probe).not.toHaveBeenCalled();
+    setDocOwner("d4", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
+    expect(probe).toHaveBeenCalledExactlyOnceWith("d4", TANDEM_OWNER_ID);
+  });
+
+  it("an http record whose client calls itself Claude Desktop is Claude Desktop", () => {
+    expect(displayKindOf({ recordKind: "http", clientName: CLAUDE_DESKTOP_CLIENT_NAME })).toBe(
+      "Claude Desktop",
+    );
   });
 });

@@ -3,9 +3,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { noCallerRefusalMessage } from "../../src/server/mcp/response.js";
+import {
+  mcpSuccess,
+  noCallerRefusalMessage,
+  withErrorBoundary,
+} from "../../src/server/mcp/response.js";
 import { createMcpServer } from "../../src/server/mcp/server.js";
-import { resetOwnershipForTests } from "../../src/server/sessions/ownership.js";
+import { runWithMcpContext } from "../../src/server/sessions/context.js";
+import {
+  resetOwnershipForTests,
+  setOwnershipTransportMode,
+} from "../../src/server/sessions/ownership.js";
 import { IMPORTS, resolveSpec } from "../helpers/import-graph.js";
 import { allMcpSource, registeredToolNames } from "../helpers/mcp-source.js";
 import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
@@ -210,6 +218,28 @@ describe("every registered tool goes through the wrapper (flag on)", () => {
       content: Array<{ text: string }>;
     };
     expect(result.content[0].text).not.toContain("no caller identity");
+  });
+});
+
+describe("a request context without an owner record is refused (flag on)", () => {
+  // In production every request dispatched to a registered transport carries
+  // its ownerId; one that does not (a dispatch that lost the field, a tool
+  // call riding the initialize context) is a wiring fault, refused — in HTTP
+  // mode, and in stdio mode too, where only a context-free call is `local`.
+  afterEach(() => {
+    resetOwnershipForTests();
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["http", "stdio"] as const)("%s mode", async (mode) => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    setOwnershipTransportMode(mode);
+    const body = vi.fn(async () => mcpSuccess({ ran: true }));
+    const result = await runWithMcpContext({ claudeSessionId: "x", mcpSessionId: "m" }, () =>
+      withErrorBoundary("tandem_probe", body)({}),
+    );
+    expect(body).not.toHaveBeenCalled();
+    expect(JSON.parse(result.content[0].text).message).toBe(noCallerRefusalMessage("tandem_probe"));
   });
 });
 

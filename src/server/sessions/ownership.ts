@@ -444,9 +444,9 @@ function onGraceExpired(ownerId: string, timer: ReturnType<typeof setTimeout>): 
 }
 
 /**
- * Past `MAX_DETACHED_RECORDS` graces, lapse the ones that would expire first
- * (expiry order, so a record that keeps making requests while detached is not
- * the first to go). Re-arming a record already in its grace does not grow the
+ * Past `MAX_DETACHED_RECORDS` graces, lapse early first the records that hold
+ * nothing, then the ones that would expire first (expiry order, so a record
+ * that keeps making requests while detached is not the first to go). Re-arming a record already in its grace does not grow the
  * count, so it cannot trigger this. A local process can trigger it on purpose —
  * a lapse accelerator, within the design's D4 (coordination, not security) —
  * and ADR-054 says so. Run outside any request context, like the timer path.
@@ -461,7 +461,14 @@ function enforceDetachedCap(): void {
   }
   const inGrace = [...records.values()].filter((r) => r.graceTimer !== undefined);
   if (inGrace.length <= MAX_DETACHED_RECORDS) return;
-  inGrace.sort((a, b) => (a.graceArmedAt ?? 0) - (b.graceArmedAt ?? 0));
+  // Records that hold nothing go first: lapsing one early costs nothing, so
+  // `initialize` churn cannot push out a record that holds documents while
+  // empty ones remain. Within each group, expiry order.
+  const holds = new Map(inGrace.map((r) => [r, recordHoldsState(r)]));
+  inGrace.sort(
+    (a, b) =>
+      Number(holds.get(a)) - Number(holds.get(b)) || (a.graceArmedAt ?? 0) - (b.graceArmedAt ?? 0),
+  );
   const excess = inGrace.slice(0, inGrace.length - MAX_DETACHED_RECORDS);
   logLimited(
     "cap",

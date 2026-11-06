@@ -197,6 +197,45 @@ describe("flag on", () => {
     expect(getOwnerRecord(`bridge:${CLIENT}`)).toBeDefined();
   });
 
+  it("a request on a detached record's transport starts a fresh grace", async () => {
+    await boot("1");
+    setGraceMsForTests(400);
+    const id = await initialize({ "X-Tandem-Client-Id": CLIENT });
+    const ctrl = new AbortController();
+    const stream = await fetch(`${baseUrl}/mcp`, {
+      method: "GET",
+      headers: { Accept: "text/event-stream", "mcp-session-id": id },
+      signal: ctrl.signal,
+    });
+    expect(stream.status).toBe(200);
+    ctrl.abort();
+    expect(await waitFor(() => ownershipSnapshotForTests().timers === 1)).toBe(true);
+    await new Promise((r) => setTimeout(r, 250));
+    // A request through the real dispatch path, partway into the grace…
+    await callTool(id, "tandem_listDocuments");
+    // …so at the original expiry the record has not lapsed.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(getOwnerRecord(`bridge:${CLIENT}`)?.lapsed).toBeUndefined();
+    expect(await waitFor(() => getOwnerRecord(`bridge:${CLIENT}`)?.lapsed === true)).toBe(true);
+  });
+
+  it("an LRU eviction of the record's own transport inside initialize keeps the record", async () => {
+    await boot("1");
+    const first = await initialize({ "X-Claude-Session-Id": CLAUDE });
+    const label = getOwnerRecord(`claude:${CLAUDE}`)?.label;
+    expect(label).toMatch(/^owner-/);
+    // Fill the registry's 16-session cap with transports of the same record;
+    // the 17th evicts the oldest — its own — while `add` runs.
+    for (let i = 0; i < 16; i++) await initialize({ "X-Claude-Session-Id": CLAUDE });
+    expect(mcpSessionOwnerIdsForTests()).not.toContain(undefined);
+    expect(mcpSessionOwnerIdsForTests().length).toBe(16);
+    expect(getOwnerRecord(`claude:${CLAUDE}`)?.label).toBe(label);
+    for (const ownerId of mcpSessionOwnerIdsForTests()) {
+      expect(getOwnerRecord(ownerId as string)).toBeDefined();
+    }
+    expect(first).toBeTruthy();
+  });
+
   it("no log line carries a raw session id; the hash is stable; the client id is never logged", async () => {
     await boot("1");
     const a = await initialize({ "X-Claude-Session-Id": CLAUDE, "X-Tandem-Client-Id": CLIENT });
