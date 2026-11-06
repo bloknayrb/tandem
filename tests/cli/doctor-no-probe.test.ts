@@ -52,7 +52,8 @@ vi.mock("node:child_process", async (importOriginal) => {
       queueMicrotask(() => cb?.(null, "", ""));
       return undefined;
     }
-    return record(actual.execFile as never)(...(args as never[]));
+    spawned.push(String(args[0]));
+    return (actual.execFile as (...a: unknown[]) => unknown)(...args);
   };
   return {
     ...actual,
