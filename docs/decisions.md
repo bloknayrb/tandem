@@ -2122,6 +2122,13 @@ Three reasons, in ascending order of force:
 > pre-existing and tracked in [security.md](security.md#open-findings); widening the producer set
 > multiplies its reach without altering its shape.
 >
+> *(2026-11-05: fixed by #1952's per-request check. The address still names `127.0.0.1`, but
+> `wakeUrlField()` now returns it only when the calling request's TCP peer is loopback
+> (`McpRequestContext.peerIsLoopback`, set from `req.socket.remoteAddress` through `isLoopback`),
+> and omits it with no request context at all. A remote MCP client is not handed it — except
+> through a forwarder or relay that connects from `127.0.0.1`, which is indistinguishable from a
+> local caller; see #1952's entry in security.md.)*
+>
 > One consequence worth stating, because no commit message does: for the common
 > `tandem_open`-first flow the arm moment now lands on the session's FIRST tool call rather than
 > after a status read. That widens the window in which the plugin monitor has not yet connected
@@ -2893,7 +2900,7 @@ So v1.0 would have shipped a Windows toggle, a wizard row and an onboarding step
 - **This supersedes the "Core" mark on #316** in `docs/v10-triage.md`, whose rows are frozen and so still show it. Cowork on macOS and Linux is no longer a v1.0 item.
 - **#1455 and #1727, both dated gates, are retired** into the checklist below rather than kept. #1727's own text says a descope means "consolidate now"; with all three confirmation flows dark there is nothing live to consolidate, so that work moves to re-enable. That overrides one carve-out #1727 marked "NOT deferred", the duplicated `cowork-enable-confirm-btn` testid: neither copy is reachable while dark (`CoworkSettings` is not mounted, and the wizard's Cowork sub-view cannot be opened), so it moves too. Both issues are closed when this ADR's PR merges.
 - **#1952, #1884 and #1906 are not dormant.** They are properties of a non-loopback bind, which `TANDEM_BIND_HOST` produces on an npm-started server with or without Cowork. (The desktop sidecar pins loopback, so they were never reachable there.) `NON_LOOPBACK_ALLOWED` stays for the same reason: the channel shim and the plugin monitor use it.
-  - **Amended 2026-10-05 ([ADR-056](#adr-056-the-non-loopback-bind-ships-dark)).** That bind now ships dark too, so #1952 and #1906 moved to Accepted (bounded) and #1884 stays open for its local-caller half only. The sentence above was true when written: Cowork never set the bind, and ADR-056 is what removes it. (#1884's `GET` later began refusing a non-loopback peer, so the LAN half that ADR-056's re-enable item 3 still owes is the `POST` carve-out alone.)
+  - **Amended 2026-10-05 ([ADR-056](#adr-056-the-non-loopback-bind-ships-dark)).** That bind now ships dark too, so #1952 and #1906 moved to Accepted (bounded) and #1884 stays open for its local-caller half only. The sentence above was true when written: Cowork never set the bind, and ADR-056 is what removes it. (#1884's `GET` later began refusing a non-loopback peer, so the LAN half that ADR-056's re-enable item 3 still owes is the `POST` carve-out alone.) *(2026-11-05: #1952 is fixed, not accepted — `wakeUrl` is now withheld per request from any non-loopback peer, so it no longer depends on the bind staying dark. #1884 was closed by #1885 on 2026-10-28. Of the three, only #1906 remains, accepted under this ADR.)*
   - **Amended 2026-10-28 (#1885).** #1884 is closed at the source: the shim no longer declares the permission capability and the relay routes are deleted. Neither its local-caller half nor its LAN half remains.
 - User-facing docs no longer describe a Cowork setup. Internal docs (`architecture.md`, `gotchas.md`) keep describing the code under a ships-dark banner.
 - ADR-038's canonical paragraph listed "cowork" among what the Claude integration ships with. It no longer does; see the amendment there.
@@ -2920,7 +2927,7 @@ So v1.0 would have shipped a Windows toggle, a wizard row and an onboarding step
 - It was built in v0.7.0 (2026-04-20) as part of the "Cowork foundation", so a Cowork VM could reach the server. The half that would have set it ("Cowork mode binds `0.0.0.0`") never shipped. Nothing in the product sets it to a non-loopback value: the desktop sidecar passes `SIDECAR_BIND_HOST = "127.0.0.1"` explicitly, and nothing else sets it at all.
 - What it gives is narrower than "sharing a session on a LAN", which is what `docs/configuration.md` called it. Hocuspocus is hardcoded to `127.0.0.1`, so nobody on the LAN can open the editor. A token holder on the LAN can read `/api` and call every MCP tool over `POST /mcp`.
 - The one plausible user is Claude Code in a VM, a container or WSL2 with NAT networking, driving a Tandem on the host. That is unverified: no issue or report records anyone doing it.
-- It is where three open findings lived (#1952, #1884's LAN half, #1906; #1884 was closed at the source by #1885 on 2026-10-28), and every security audit has had to reason about the LAN Host allowlist, the `NON_LOOPBACK_ALLOWED` carve-outs and the token-on-LAN checks.
+- It is where three open findings lived (#1952, #1884's LAN half, #1906; #1884 was closed at the source by #1885 on 2026-10-28, and #1952 was fixed per request on 2026-11-05, leaving #1906), and every security audit has had to reason about the LAN Host allowlist, the `NON_LOOPBACK_ALLOWED` carve-outs and the token-on-LAN checks.
 
 Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, keeping the code, and by approving the plan for this ADR decided the two acceptances recorded below.
 
@@ -2936,7 +2943,7 @@ Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, k
 - **Kept, unreachable from another machine:** `NON_LOOPBACK_ALLOWED`, the `resolvedLanIP` Host allowlist, the `/health` and `/api` non-loopback scrubbing, `TANDEM_LAN_IP` and `TANDEM_ALLOW_UNAUTHENTICATED_LAN`. "Unreachable from another machine" is the precise claim: a same-machine process connecting from another 127/8 source address still counts as non-loopback, needs the token, and reaches strictly less than it would from `127.0.0.1`.
 
 **Consequences.**
-- **Findings.** #1952 and #1906 move to Accepted (bounded), decided by Bryan 2026-10-05, each void if the flag flips. #1952's remaining reach needs a user-built port forwarder with a port mismatch. #1906's hole-or-intended decision is still owed and becomes re-enable item 2; its tracker issue was closed by #2059, which scoped the docs without making it. #1884 stays open: its `GET` half is a local-caller exposure that never needed the bind. *(2026-10-28: #1885 deleted the relay, closing #1884 entirely.)*
+- **Findings.** #1952 and #1906 move to Accepted (bounded), decided by Bryan 2026-10-05, each void if the flag flips. #1952's remaining reach needs a user-built port forwarder with a port mismatch. #1906's hole-or-intended decision is still owed and becomes re-enable item 2; its tracker issue was closed by #2059, which scoped the docs without making it. #1884 stays open: its `GET` half is a local-caller exposure that never needed the bind. *(2026-10-28: #1885 deleted the relay, closing #1884 entirely.)* *(2026-11-05: #1952 is fixed and leaves Accepted: `wakeUrlField()` returns the address only when the request's TCP peer is loopback, independent of the flag, which also settles re-enable item 3.)*
 - **Port forwarding is the new thing to warn about.** A user who needs VM or WSL2-NAT access will reach for a forwarder. One that connects with a loopback `Host` (an `ssh -L` tunnel, for instance) arrives from `127.0.0.1` and can look like a local program: no token needed, and write access, which is more than LAN mode gave. (A forwarder that passes the client's LAN `Host` through is refused by the `/api` and `/mcp` Host checks.) `docs/configuration.md` and `docs/troubleshooting.md` say not to do it.
 - **Docs.** User-facing docs (`configuration.md`, `troubleshooting.md`, `CONTRIBUTING.md`, `.env.example`, `cli.md`) no longer describe LAN exposure; `configuration.md` keeps its `## LAN exposure` heading because `cli.md` links to it. Internal docs (`security.md`, `architecture.md`, `mcp-tools.md`, ADR-050) keep describing the code under a ships-dark note. `tests/docs/mcp-mutation-asymmetry-claims.test.ts` no longer reads the two user-facing files.
 - **`tandem doctor`** no longer conditions its non-loopback-url warning on `TANDEM_BIND_HOST`: in this version that url can never be this Tandem.
@@ -2947,11 +2954,11 @@ Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, k
 **Re-enable checklist** (tracked in #2141).
 1. Flip `LAN_BIND_ENABLED`, and retire `tests/server/lan-bind-ship-dark.test.ts`'s dark assertions. Lit, an empty `TANDEM_BIND_HOST` still reaches the IP validation and exits there, as before this ADR; decide whether that should stay.
 2. Decide #1906: gate mutating MCP tools on loopback, carve out an MCP equivalent of `NON_LOOPBACK_ALLOWED`, or record remote writes as intended.
-3. Fix #1952 (suppress `wakeUrl` under a non-loopback bind). *(#1884's LAN half, the `POST` carve-out, was retired by #1885 on 2026-10-28, which deleted the route and its `NON_LOOPBACK_ALLOWED` entry.)*
+3. ~~Fix #1952 (suppress `wakeUrl` under a non-loopback bind).~~ **Done 2026-11-05**, per request rather than per bind: `wakeUrl` is withheld from any non-loopback peer, so nothing is owed here at the re-enable. *(#1884's LAN half, the `POST` carve-out, was retired by #1885 on 2026-10-28, which deleted the route and its `NON_LOOPBACK_ALLOWED` entry.)*
 4. Restore the user-facing docs from the PR that shipped this ADR, and put `docs/configuration.md` and `docs/troubleshooting.md` back on the asymmetry test's lists.
 5. Un-suspend the five ownership stories.
 6. Restore `tandem doctor`'s `TANDEM_BIND_HOST` condition on its non-loopback-url warning.
-7. Move #1952 and #1906 back out of Accepted in `docs/security.md` and `CLAUDE.md`.
+7. Move #1906 back out of Accepted in `docs/security.md` and `CLAUDE.md`. (#1952 already left Accepted when it was fixed, 2026-11-05.)
 
 **Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059, #2141.
 
