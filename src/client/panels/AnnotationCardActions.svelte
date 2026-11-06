@@ -29,6 +29,13 @@ interface Props {
    * Accept reads as a bug) but disabled, with the reason beside it.
    */
   acceptBlocked?: boolean;
+  /**
+   * Remove deletes the whole thread, Claude's replies included, with no undo.
+   * When the record has replies the first click only arms the button ("Delete
+   * thread?") and a second click within a few seconds deletes (Bryan,
+   * 2026-11-05: "yes, inline confirmation"). `needsRemoveConfirm` decides.
+   */
+  confirmRemove?: boolean;
 }
 
 let {
@@ -45,7 +52,72 @@ let {
   onSendToClaude,
   aiDisabled,
   acceptBlocked = false,
+  confirmRemove = false,
 }: Props = $props();
+
+/** How long an armed Remove waits for its confirming click. */
+const REMOVE_CONFIRM_MS = 5000;
+/**
+ * A confirming click this soon after arming is ignored: a double-click, or a held
+ * Enter key's auto-repeat, would otherwise arm and delete in one gesture.
+ */
+const REMOVE_CONFIRM_MIN_MS = 400;
+let removeArmed = $state(false);
+let removeArmedAt = 0;
+let removeArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+function disarmRemove() {
+  if (removeArmTimer) {
+    clearTimeout(removeArmTimer);
+    removeArmTimer = null;
+  }
+  removeArmed = false;
+}
+
+function handleRemoveClick(e: MouseEvent) {
+  e.stopPropagation();
+  if (!onRemove) return;
+  if (confirmRemove && !removeArmed) {
+    removeArmed = true;
+    removeArmedAt = Date.now();
+    removeArmTimer = setTimeout(disarmRemove, REMOVE_CONFIRM_MS);
+    return;
+  }
+  if (confirmRemove && (e.detail > 1 || Date.now() - removeArmedAt < REMOVE_CONFIRM_MIN_MS)) {
+    return; // the same gesture as the arming click: stay armed
+  }
+  disarmRemove();
+  onRemove(annotationId);
+}
+
+function handleRemoveKeydown(e: KeyboardEvent) {
+  // A held Enter auto-repeats a click per repeat, and Windows' default repeat
+  // delay (~500 ms) outlasts the time guard: drop repeats, so a confirm takes
+  // a fresh press.
+  if (e.repeat && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && removeArmed) {
+    e.stopPropagation();
+    disarmRemove();
+  }
+}
+
+const removeLabel = $derived(removeArmed ? "Delete thread?" : "Remove");
+// The accessible name starts with the visible text (WCAG 2.5.3, label in name).
+const removeAria = $derived(
+  removeArmed
+    ? "Delete thread? Activate again to delete this comment and its replies"
+    : confirmRemove
+      ? "Remove comment and its replies"
+      : undefined,
+);
+// Announced through a polite live region, since a name change on a focused
+// button is not reliably re-read.
+const removeStatus = $derived(
+  removeArmed ? "Activate Remove again to delete this comment and its replies." : "",
+);
 
 const agentLabel = createAgentLabel();
 // Per-instance: the same record's card can be mounted in the side panel and a
@@ -82,7 +154,10 @@ function handleUndo(e: MouseEvent) {
   }
 }
 
-onDestroy(clearUndoTimer);
+onDestroy(() => {
+  clearUndoTimer();
+  disarmRemove();
+});
 </script>
 
 {#if isPending && !isEditing && (onAccept || onDismiss)}
@@ -180,12 +255,14 @@ onDestroy(clearUndoTimer);
       <button
         data-testid="remove-btn-{annotationId}"
         class="aca-btn aca-btn--ghost aca-push-end"
-        onclick={(e) => {
-          e.stopPropagation();
-          onRemove!(annotationId);
-        }}
+        class:aca-btn--armed={removeArmed}
+        aria-label={removeAria}
+        title={removeAria}
+        onclick={handleRemoveClick}
+        onkeydown={handleRemoveKeydown}
+        onblur={disarmRemove}
       >
-        Remove
+        {removeLabel}
       </button>
     {/if}
   </div>
@@ -193,25 +270,51 @@ onDestroy(clearUndoTimer);
   <button
     data-testid="remove-btn-{annotationId}"
     class="aca-btn aca-btn--ghost aca-standalone"
-    onclick={(e) => {
-      e.stopPropagation();
-      onRemove!(annotationId);
-    }}
+    class:aca-btn--armed={removeArmed}
+    aria-label={removeAria}
+    title={removeAria}
+    onclick={handleRemoveClick}
+    onkeydown={handleRemoveKeydown}
+    onblur={disarmRemove}
   >
-    Remove
+    {removeLabel}
   </button>
-{:else if !isPending && undoable && onUndo}
+{:else if !isPending && ((undoable && onUndo) || onRemove)}
+  <!-- A closed card: Undo while its window lasts, and Remove for the user's own
+       resolved comment (#2360), which otherwise has no action once Undo ends or
+       the page reloads. One flex row, Undo at the start and Remove at the far
+       edge, so a click aimed at Undo can't land on Remove and nothing shifts
+       when Undo expires. The error sits under the row, not inside it. -->
   <div class="aca-undo-row">
-    <button data-testid="undo-btn" class="aca-undo" onclick={handleUndo}>
-      Undo
-    </button>
+    {#if undoable && onUndo}
+      <button data-testid="undo-btn" class="aca-undo" onclick={handleUndo}>
+        Undo
+      </button>
+    {/if}
+    {#if onRemove}
+      <button
+        data-testid="remove-btn-{annotationId}"
+        class="aca-btn aca-btn--ghost aca-push-end"
+        class:aca-btn--armed={removeArmed}
+        aria-label={removeAria}
+        title={removeAria}
+        onclick={handleRemoveClick}
+        onkeydown={handleRemoveKeydown}
+        onblur={disarmRemove}
+      >
+        {removeLabel}
+      </button>
+    {/if}
     {#if undoError}
+      <!-- Inside the row (it wraps to its own line) so the density hide rules
+           that cover `.aca-undo-row` cover it too. -->
       <div class="aca-undo-error">
         Can't undo — text has changed.
       </div>
     {/if}
   </div>
 {/if}
+<span class="aca-sr" role="status" aria-live="polite">{removeStatus}</span>
 
 <style>
   /* Action-row family. All variants share the pill recipe (4×12, r-pill,
@@ -279,6 +382,14 @@ onDestroy(clearUndoTimer);
   }
   .aca-push-end {
     margin-left: auto;
+  }
+  /* Armed Remove (a thread is about to be deleted): the error family, so the
+     second click reads as the destructive one. */
+  .aca-btn--ghost.aca-btn--armed,
+  .aca-btn--ghost.aca-btn--armed:hover {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
+    border-color: var(--tandem-error-border);
   }
   .aca-btn--ghost:hover {
     background: var(--tandem-surface-sunk);
@@ -351,7 +462,22 @@ onDestroy(clearUndoTimer);
   }
 
   .aca-undo-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
     margin-top: 4px;
+  }
+  .aca-undo-row .aca-undo-error {
+    flex-basis: 100%;
+  }
+  .aca-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .aca-undo {
     padding: 1px 6px;

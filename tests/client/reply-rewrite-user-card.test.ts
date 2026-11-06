@@ -343,6 +343,7 @@ describe("the panels wire Accept onto a user card", () => {
       handleDismiss: vi.fn(),
       scrollToAnnotation: vi.fn(),
       getRecentlyResolved: () => new Set<string>(),
+      forgetResolved: vi.fn(),
       getReviewIndex: () => 0,
       getReviewTargets: () => [],
       isTargetLost: () => false,

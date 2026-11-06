@@ -93,7 +93,8 @@ sooner (push), and none of them is the authority on what it sees.
 - [Tandem's Claude didn't say hello](../troubleshooting.md#tandems-claude-didnt-say-hello)
 - [Tandem can't start Claude on Windows](../troubleshooting.md#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal)
   and [Tandem says set up Claude Code, but it is installed](../troubleshooting.md#tandem-says-set-up-claude-code-but-claude-code-is-already-installed)
-- [Plugin monitor reports exit 127](../troubleshooting.md#plugin-monitor-reports-script-failed-exit-127)
+- [Plugin monitor reports exit 127](../troubleshooting.md#plugin-monitor-reports-script-failed-exit-127),
+  [Plugin tools missing: Node.js not found](../troubleshooting.md#plugin-tools-missing-nodejs-not-found)
   and [the plugin install fails to clone](../troubleshooting.md#claude-plugin-install-fails-to-clone-ssh-vs-https)
 - [The channel shim fails to start](../troubleshooting.md#channel-shim-fails-to-start)
 - [Claude Desktop: failed to spawn process](../troubleshooting.md#failed-to-spawn-process-no-such-file-or-directory-claude-desktop)

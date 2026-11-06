@@ -41,6 +41,7 @@
  */
 
 import { getWakeEndpoint } from "../events/wake-socket.js";
+import { isCurrentPeerLoopback } from "../sessions/context.js";
 
 /** The MCP tools whose successful responses carry `wakeUrl`. */
 export const WAKE_URL_PRODUCERS = ["tandem_status", "tandem_open", "tandem_scratchpad"] as const;
@@ -53,8 +54,24 @@ export const WAKE_URL_PRODUCERS = ["tandem_status", "tandem_open", "tandem_scrat
  * and a strict client both see it, and a present-but-undefined `wakeUrl` reads
  * as a live transport where there is none. In stdio mode no wake transport is
  * attached, `getWakeEndpoint()` is null, and reporting no address is the truth.
+ *
+ * **Only for a loopback peer (#1952).** The address names `127.0.0.1`, which is
+ * this machine only for a caller on this machine. Handed to a remote MCP client
+ * it names the CLIENT's own loopback, where whatever unrelated service holds that
+ * port accepts a `Monitor` socket that sits there looking armed. So the field is
+ * returned only when the calling request's TCP peer was loopback
+ * (`isCurrentPeerLoopback()`, which fails closed). Every HTTP MCP request enters a
+ * context in `server.ts`; a stdio-mode client enters none, which costs nothing only
+ * because stdio mode attaches no wake socket. Give stdio a wake endpoint and its
+ * (local by construction) clients would lose the field here.
+ *
+ * What this cannot see: a port forwarder (`ssh -L`) that connects from
+ * `127.0.0.1` IS a loopback peer, so a forwarded client still receives the URL,
+ * naming the server-side port. The server cannot tell that connection from a
+ * local one; `docs/configuration.md` warns against forwarding.
  */
 export function wakeUrlField(): { wakeUrl?: string } {
+  if (!isCurrentPeerLoopback()) return {};
   const wakeUrl = getWakeEndpoint();
   return wakeUrl ? { wakeUrl } : {};
 }
