@@ -1412,6 +1412,33 @@ describe("mcp-stdio token forwarding integration", () => {
     expect(receivedHeaders[0]?.["content-type"]).toMatch(/application\/json/i);
     expect(receivedHeaders[0]?.authorization).toBe(`Bearer ${token}`);
   }, 30_000);
+
+  it("withholds the token from a server URL that is not this computer (#2358 PR 2b)", async () => {
+    // Since PR 2b Claude Code's entry IS this bridge with the token in its env,
+    // and an inherited CLAUDE_PLUGIN_OPTION_SERVER_URL outranks TANDEM_URL. The
+    // guard runs before any connection, so an unroutable TEST-NET address is
+    // enough to observe it; the positive control is the test above.
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        CLAUDE_PLUGIN_OPTION_SERVER_URL: "http://192.0.2.1:9",
+        TANDEM_AUTH_TOKEN: token,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const output = outputOf(child);
+    const deadline = Date.now() + 15_000;
+    while (!output.stderr().includes("Not sending the auth token") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(output.stderr()).toContain("Not sending the auth token");
+    expect(output.stderr()).not.toContain(token);
+    // Nothing reached the loopback server either: the plugin URL won.
+    expect(receivedHeaders.some((h) => h.authorization !== undefined)).toBe(false);
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------

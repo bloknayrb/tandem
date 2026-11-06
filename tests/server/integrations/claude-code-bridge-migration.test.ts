@@ -243,6 +243,8 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
     expect(readConfig().n).toBe(12345);
     expect(readConfig().mcpServers.tandem.type).toBe("http");
     expect(stderr()).toContain("changed while Tandem was updating it");
+    // A write that was abandoned is never also reported as made.
+    expect(stderr()).not.toContain("Switched the tandem entry");
     expect(tempsLeft()).toEqual([]);
   });
 
@@ -286,6 +288,16 @@ describe("re-picking the Node of a Tandem-written bridge entry", () => {
     await refreshAllMcpEntryBinaries({ homeOverride: home });
 
     expect(readConfig().mcpServers.tandem.command).toBe(node);
+  });
+
+  it("repoints a dead script to the current one, keeping a live Node", async () => {
+    const dead = join(home, "gone", "dist", "stdio-bridge", "index.js");
+    writeConfig({ mcpServers: { tandem: { command: node, args: [dead], env: {} } } });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().mcpServers.tandem).toMatchObject({ command: node, args: [script] });
+    expect(stderr()).toContain("Repaired the tandem entry");
   });
 
   it("moves the desktop's bundled Node to a system Node once one qualifies", async () => {

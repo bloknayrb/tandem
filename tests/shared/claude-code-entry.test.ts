@@ -78,6 +78,8 @@ describe("tokenMayGoTo — the bridge sends its token to this computer only", ()
     ["http://localhost:3479", true],
     ["http://[::1]:3479", true],
     ["http://192.168.1.20:3479", false],
+    ["http://[::ffff:127.0.0.1]:3479", false],
+    ["http://0.0.0.0:3479", false],
     ["http://example.com:3479", false],
     ["http://127.0.0.1.evil.example:3479", false],
     ["not a url", false],

@@ -1461,9 +1461,11 @@ async function reportDirectHttpEntry(
   if (verdict === "not-installed") {
     r.warn(
       message,
-      "This copy of Tandem (a development checkout, or an npx run) never switches it. The entry " +
-        "still works. An installed Tandem (`npm install -g tandem-editor`, or the desktop app) " +
-        "switches it when it starts; then restart any Claude Code terminal that was open.",
+      "This copy of Tandem can't record a lasting path for the bridge (a development checkout, " +
+        "an npx run, or a desktop app whose own copy of the bridge could not be made), so it " +
+        "never switches the entry. The entry still works. An installed Tandem " +
+        "(`npm install -g tandem-editor`, or the desktop app installed normally) switches it " +
+        "when it starts; then restart any Claude Code terminal that was open.",
     );
     return;
   }
@@ -1480,8 +1482,10 @@ async function reportDirectHttpEntry(
     r.warn(
       message,
       "Tandem found no Node 22.12 or newer it can record for this entry, so it stays as it is. " +
-        "Install Node 22.12 or newer system-wide (an app started from the dock or a menu cannot " +
-        "see a Node that only a shell profile such as nvm adds), then restart Tandem.",
+        "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
+        "temporary or removable location, or is owned by another user. Install Node 22.12 or " +
+        "newer system-wide (an app started from the dock or a menu cannot see a Node that only " +
+        "a shell profile such as nvm adds), then restart Tandem.",
     );
     return;
   }

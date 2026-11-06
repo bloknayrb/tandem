@@ -335,8 +335,20 @@ export interface SystemNodeDeps {
   uid?: number;
 }
 
-/** Directories no recorded Node may live under: per-boot or shared scratch space. */
-const SCRATCH_ROOTS_POSIX = ["/tmp", "/private/tmp", "/var/tmp", "/dev/shm"];
+/** Directories no recorded Node or bridge script may live under: per-boot or
+ *  shared scratch space, and removable volumes. */
+const SCRATCH_ROOTS_POSIX = [
+  "/tmp",
+  "/private/tmp",
+  "/var/tmp",
+  "/dev/shm",
+  // Removable and mounted volumes: a path there names whatever is mounted
+  // under that name next, so a recorded executable becomes "anything the user
+  // mounts later" (a disk image run without being copied to Applications).
+  "/Volumes",
+  "/media",
+  "/run/media",
+];
 
 /**
  * Is `p` under `root`? Case-insensitive where the filesystem usually is

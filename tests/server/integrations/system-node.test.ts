@@ -258,6 +258,34 @@ describe("the PATH walk on a real filesystem (POSIX)", () => {
     expect(Date.now() - started).toBeLessThan(8000);
   }, 15_000);
 
+  it("the async default probe is bounded too, and kills a binary that hangs", async () => {
+    const slow = join(root, "slow");
+    mkdirSync(slow);
+    writeFileSync(join(slow, "node"), "#!/bin/sh\nsleep 10\n");
+    chmodSync(join(slow, "node"), 0o755);
+    const fast = join(root, "fast");
+    mkdirSync(fast);
+    writeFileSync(join(fast, "node"), "#!/bin/sh\necho v22.13.0\n");
+    chmodSync(join(fast, "node"), 0o755);
+    const started = Date.now();
+    expect(
+      await findSystemNodeAsync({
+        pathVar: `${slow}:${fast}`,
+        platform: "linux",
+        scratchRoots: [],
+        env: {},
+      }),
+    ).toBe(join(fast, "node"));
+    expect(Date.now() - started).toBeLessThan(8000);
+  }, 15_000);
+
+  it("concurrent default-argument callers share one walk", async () => {
+    const a = findSystemNodeAsync();
+    const b = findSystemNodeAsync();
+    expect(a).toBe(b);
+    await a; // no probe left running past the test
+  });
+
   it("strips NODE_OPTIONS and the server's secrets from the probe's environment", () => {
     const n = join(root, "envnode");
     mkdirSync(n);

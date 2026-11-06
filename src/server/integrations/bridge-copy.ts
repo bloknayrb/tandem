@@ -58,7 +58,7 @@ async function readOrNull(path: string): Promise<Buffer | null> {
   }
 }
 
-/** POSIX: is this directory entry ours alone (owned by us, not group/world-writable)? */
+/** POSIX: is this directory entry owned by the current user? (Modes are tightened separately.) */
 function ownedByUs(st: { uid: number; mode: number }): boolean {
   if (process.platform === "win32" || typeof process.getuid !== "function") return true;
   return st.uid === process.getuid();
@@ -209,8 +209,8 @@ export async function prepareBridgeCopy(opts: {
 }
 
 /**
- * Remove `bin/<v>/` for every `v` other than `keepVersion` whose bridge copy is
- * not named by any config (`referenced`, the `args[0]` values the sweep left on
+ * Remove `bin/<v>/` for every `v` older than both `keepVersion` and the newest
+ * older version, whose bridge copy is not named by any config (`referenced`, the `args[0]` values the sweep left on
  * disk). Never follows a link; anchored on the version-name shape. Best-effort.
  */
 export async function pruneBridgeCopies(opts: {
@@ -229,10 +229,19 @@ export async function pruneBridgeCopies(opts: {
     return removed;
   }
   const referenced = new Set([...opts.referenced].map(normalizeSeparators));
-  for (const name of names) {
-    if (name === opts.keepVersion || !VERSION_DIR_RE.test(name)) continue;
-    // Never a NEWER version's copy: a newer AppImage used side by side owns it.
-    if (!isOlderVersion(name, opts.keepVersion)) continue;
+  // Never a NEWER version's copy: a newer AppImage used side by side owns it.
+  const older = names.filter(
+    (name) => VERSION_DIR_RE.test(name) && isOlderVersion(name, opts.keepVersion),
+  );
+  // And never the newest OLDER one: the boot that repoints the entry away from
+  // it is when a terminal opened earlier may still write the old entry back
+  // (or respawn its bridge from memory). It goes on a later upgrade.
+  const previous = older.reduce<string | null>(
+    (best, name) => (best === null || isOlderVersion(best, name) ? name : best),
+    null,
+  );
+  for (const name of older) {
+    if (name === previous) continue;
     const versionDir = join(binDir, name);
     if (referenced.has(normalizeSeparators(join(versionDir, BRIDGE_COPY_REL)))) continue;
     try {

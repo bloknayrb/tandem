@@ -2528,7 +2528,9 @@ function repairClaudeCodeBridgeEntry(
  * — gets the planned entry unchanged.
  *
  * Both probes screen UNC before touching the filesystem: the paths come out of
- * a config file Tandem does not own.
+ * a config file Tandem does not own. A bridge-shaped entry someone else planted
+ * is kept and handed the new token like Tandem's own — planting it already
+ * needs write access to `~/.claude.json`, i.e. code execution as the user.
  */
 function keepWorkingClaudeCodeBridge(
   ops: ApplyOps,
@@ -2742,6 +2744,9 @@ export async function refreshAllMcpEntryBinaries(
         bridge: claudeCodeBridge,
       });
       dirty ||= migration.changed;
+      // Lines describing a change are printed only once the write has landed:
+      // a write the re-check abandons must not also be reported as made.
+      const afterWrite: string[] = [];
       for (const entryKey of REFRESHABLE_ENTRY_KEYS) {
         // `targetKind` is threaded because convergence is scoped to Claude
         // Desktop and ONLY the sweep knows which config it is looking at. A
@@ -2758,7 +2763,7 @@ export async function refreshAllMcpEntryBinaries(
           // rather than refreshed. This string is what a user pastes into a bug
           // report, so it has to describe what actually happened, including the
           // restart they have not been prompted for by anything else.
-          console.error(
+          afterWrite.push(
             `[Tandem] Converged the ${entryKey} entry in ${target.label} from 'npx' onto a ` +
               "bundled Node path — restart the client for it to take effect.",
           );
@@ -2772,7 +2777,7 @@ export async function refreshAllMcpEntryBinaries(
               ? "script path refreshed"
               : `${result.from} → ${result.to}` +
                 (result.scriptRefreshed ? ", script path also refreshed" : "");
-          console.error(`[Tandem] Repaired stale ${entryKey} entry in ${target.label} (${what}).`);
+          afterWrite.push(`[Tandem] Repaired the ${entryKey} entry in ${target.label} (${what}).`);
         } else if (result.status === "skipped") {
           console.error(
             `[Tandem] Left the ${entryKey} entry in ${target.label} untouched (${result.reason}). ` +
@@ -2806,6 +2811,7 @@ export async function refreshAllMcpEntryBinaries(
           beforeCommitForTests: sweepBeforeCommitForTests,
         });
       }
+      for (const line of afterWrite) console.error(line);
       if (migration.result.status === "migrated") {
         // One distinct line per migrated config, naming the file — never the
         // token. Logged only after the write landed.

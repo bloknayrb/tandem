@@ -3610,7 +3610,7 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
   });
 
   it.each([
-    ["not-installed", "never switches it"],
+    ["not-installed", "never switches the entry"],
     ["translocated", "Move Tandem to Applications"],
     ["no-node", "Node 22.12 or newer"],
     ["bridge", "Restart Tandem"],

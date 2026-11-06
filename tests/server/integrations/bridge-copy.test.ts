@@ -147,6 +147,23 @@ describe("pruneBridgeCopies", () => {
     }
   });
 
+  it("keeps the newest OLDER copy for one more upgrade, even unreferenced", async () => {
+    // The boot that repoints the entry away from it is when a terminal opened
+    // earlier may write the old entry back or respawn its bridge from memory.
+    await make("0.29.0");
+    await make("0.30.0");
+    await make("0.31.0");
+
+    const removed = await pruneBridgeCopies({
+      appDataDir: appData,
+      keepVersion: "0.31.0",
+      referenced: new Set(),
+    });
+
+    expect(removed).toEqual(["0.29.0"]);
+    expect(existsSync(join(appData, "bin", "0.30.0"))).toBe(true);
+  });
+
   it("never touches a directory that is not version-shaped", async () => {
     mkdirSync(join(appData, "bin", "mine"), { recursive: true });
     await make("0.31.0");

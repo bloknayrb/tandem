@@ -203,3 +203,47 @@ describe("the other gates (#2358 PR 2b round 2)", () => {
     expect(bridgeInstallKind(script, { TANDEM_TAURI_SIDECAR: "1" }, ["node", "x"])).toBe(null);
   });
 });
+
+describe("the boot gate is wired at both call sites (#2358 PR 2b code review)", () => {
+  const apply = readFileSync(join(ROOT, "src", "server", "integrations", "apply.ts"), "utf-8");
+  const body = (signature: string) => {
+    const start = apply.indexOf(signature);
+    expect(start, `${signature} not found`).toBeGreaterThan(-1);
+    return apply.slice(start, start + 4000);
+  };
+  const GATE = "if (opts.homeOverride === undefined && !mayTouchDefaultClientConfigs()) return;";
+
+  it("the sweep returns on the gate before it detects or prepares anything", () => {
+    const fn = body("export async function refreshAllMcpEntryBinaries(");
+    const gate = fn.indexOf(GATE);
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(fn.indexOf("prepareAppImageBridgeCopy("));
+    expect(gate).toBeLessThan(fn.indexOf("detectTargets("));
+  });
+
+  it("the skill refresh returns on the gate before it resolves or screens a path", () => {
+    const fn = body("export async function refreshExistingSkillIfStale(");
+    const gate = fn.indexOf(GATE);
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(fn.indexOf("assertPathSafe("));
+  });
+});
+
+describe("the uninstall scrub's skill removal uses the stand-in too", () => {
+  it("removes the stand-in's skill, not the real one", async () => {
+    const { removeSkillDir } = await import("../../src/cli/uninstall-scrub.js");
+    const standIn = process.env.TANDEM_CLIENT_CONFIG_HOME as string;
+    await installSkill();
+    const skill = join(standIn, ".claude", "skills", "tandem", "SKILL.md");
+    expect(statSync(skill).isFile()).toBe(true);
+    const logger = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      warnings: () => 0,
+      close: async () => {},
+    };
+    await removeSkillDir(logger);
+    expect(() => statSync(skill)).toThrow();
+  });
+});
