@@ -772,6 +772,10 @@ export function findSystemNodeAsync(deps?: SystemNodeDeps): Promise<string | nul
 }
 
 async function findSystemNodeAsyncUncached(deps?: SystemNodeDeps): Promise<string | null> {
+  // Yield first. With no candidate on PATH the loop below never awaits, so
+  // without this the memo would be written before the caller had registered
+  // the in-flight promise — and a concurrent caller would start a second walk.
+  await Promise.resolve();
   const run = deps?.runVersionAsync ?? runVersionAsyncDefault;
   let found: string | null = null;
   let probes = 0;
