@@ -119,7 +119,8 @@ async function openSession(opts: PeerOpts): Promise<string> {
   const sid = init.sessionId;
   expect(sid, "initialize minted no session id").toBeTruthy();
 
-  await post({ jsonrpc: "2.0", method: "notifications/initialized" }, opts, sid);
+  const ack = await post({ jsonrpc: "2.0", method: "notifications/initialized" }, opts, sid);
+  expect(ack.status, `notifications/initialized failed: ${ack.text}`).toBe(202);
   return sid as string;
 }
 

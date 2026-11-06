@@ -348,7 +348,7 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
   },
   {
     issue: 1952,
-    why: "FIXED per request: wakeUrlField() returns the address only to a loopback TCP peer (peerIsLoopback), failing closed; moved out of Accepted 2026-11-05, the loopback-arriving forwarder residual carried uncounted",
+    why: "FIXED per request: wakeUrlField() returns the address only to a loopback TCP peer (peerIsLoopback), failing closed; moved out of Accepted 2026-11-05; whether the loopback-arriving forwarder residual needs its own Accepted entry is open for Bryan (#2368)",
   },
   {
     issue: 2266,
