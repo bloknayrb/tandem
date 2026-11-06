@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **The desktop updater's `zip` library is now a fixed version (GHSA-m665-v7pm-7grj, GHSA-q7v9-x93c-xqv3, GHSA-8hxf-qr8p-62x4).** v0.30.0 listed these three as not fixed, because no updater release allowed a fixed `zip` at the time. tauri-plugin-updater 2.14.1 does, so Tandem now ships zip 9.4.1. They were not reachable in practice before either: the updater unpacks an update only after it passes the signature check.
+- **The Windows desktop updater's `zip` library is now a fixed version (GHSA-m665-v7pm-7grj, GHSA-q7v9-x93c-xqv3, GHSA-8hxf-qr8p-62x4).** v0.30.0 listed these three as not fixed, because no updater release allowed a fixed `zip` at the time. tauri-plugin-updater 2.14.1 does, so the Windows build now ships zip 9.4.1; the macOS and Linux builds never contained `zip`. They were not reachable in practice before either: the updater unpacks an update only after it passes the signature check, and Tandem's update packages are not zip files.
 
 ## [0.30.0] - 2026-11-02
 
