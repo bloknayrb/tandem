@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Accept a rewrite Claude proposes in a comment's replies from the margin too (#2360).** "Accept replacement" now also appears on margin cards, not only in the side panel. Your own comments are prepared for it too, for when Claude can answer them in their thread: there the button applies only when the comment records the text it was made on, and otherwise is disabled and says Tandem can't confirm that text.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 
+### Changed
+
+- **The Linux `.deb` is now install-checked on Debian 12 and 13 and Ubuntu 24.04 as well as Ubuntu 22.04.** Each release also checks that the system tray's library can be found on each of them. Nothing in the package changed. It already installed on Debian, where the `libappindicator3-1` it asks for is supplied by `libayatana-appindicator3-1`, but nothing checked that before. The README now lists Debian 12 or later alongside Ubuntu 22.04 or later.
+
 ### Fixed
 
 - **The wake address is now reachable when Tandem listens on IPv6 loopback (`TANDEM_BIND_HOST=::1`).** The wake address Tandem hands Claude always named `127.0.0.1`, which a server listening only on `::1` never answers, so Claude's wake watch connected to nothing and looked armed. It now names `[::1]` on that bind (and whichever address `localhost` resolved to). Tandem also stopped refusing requests addressed to `[::1]`, which had blocked every `/api` route on that bind, including the `/api/events` fallback. This helps a Claude Code already pointed at `[::1]`: `tandem setup` still writes a `127.0.0.1` address, the editor still connects to `127.0.0.1`, and `tandem activate` / `deactivate` do not reach a `::1` bind. A `127.0.0.1` bind is unchanged.

@@ -125,7 +125,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 - Windows 10 22H2 and Windows 11 23H2. Only Windows 11 build 26200 has been observed. On it, a fresh install passed on the v0.22.1 run. The updater and file association (cold and warm) passed on the v0.22.1 and v0.23.0 runs, and the updater passed again on v0.25.0.
 - macOS 14 Sonoma, on both Intel and Apple Silicon, as a notarized `.app` with no Gatekeeper warning. The v0.25.0 build notarized with "Accepted". Two real-hardware observations exist (Gatekeeper silent, updater v0.19.0→v0.20.0), but the OS and CPU went unrecorded, so neither ticks this row.
 - macOS 26.1 on Apple Silicon (M1). Unobserved.
-- Ubuntu 22.04 LTS (`.AppImage` and `.deb`). `.deb` install-and-load is automated per tag in an `ubuntu:22.04` container. The AppImage is unobserved.
+- Ubuntu 22.04 LTS (`.AppImage` and `.deb`). `.deb` install-and-load is automated per tag in an `ubuntu:22.04` container (and in `ubuntu:24.04`, `debian:12` and `debian:13`, beyond the exit criteria). The AppImage is unobserved.
 - Fedora 39 (`.rpm`). The per-tag container is **Fedora 44**, not 39. Either change the criterion or run 39.
 - Windows `.msi`. `bundle.targets` is `"all"`, so an MSI ships, but no smoke row covers it.
 

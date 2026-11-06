@@ -11,6 +11,9 @@
 #   docker run --rm -v "<dir-with-artifacts>:/art" fedora:44 \
 #     bash /art/linux-package-smoke.sh rpm
 #
+# The release workflow runs the .deb on ubuntu:22.04, ubuntu:24.04, debian:12
+# and debian:13, and the .rpm on fedora:44.
+#
 # Exit codes are distinct on purpose, because this is meant to gate CI and a
 # gate that cannot tell "the package is broken" from "the network is down"
 # will be muted the first week it flakes:
@@ -58,8 +61,13 @@ case "$MODE" in
     #   curl -4 -o /dev/null -w '%{http_code}' \
     #     http://<mirror>/ubuntu/dists/jammy/Release
     # and override, rather than reading apt's dependency errors as real.
+    # Ubuntu-only: Debian images name deb.debian.org, which this leaves alone.
+    # Ubuntu 24.04 moved its sources to deb822 (sources.list.d/ubuntu.sources)
+    # and left sources.list a comment, so both forms are rewritten.
     if [ -n "${TANDEM_APT_MIRROR:-}" ]; then
-      sed -i "s|http://archive.ubuntu.com|${TANDEM_APT_MIRROR}|g" /etc/apt/sources.list
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] && sed -i "s|http://archive.ubuntu.com|${TANDEM_APT_MIRROR}|g" "$f"
+      done
       echo "apt mirror override: $TANDEM_APT_MIRROR"
     fi
     [ -n "$ART" ] || ART=$(ls /art/*.deb 2>/dev/null | head -1)
@@ -91,7 +99,12 @@ echo "=== [2] install ==="
 # from a genuinely missing dependency and is how this harness first lied.
 if [ "$MODE" = deb ]; then
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq 2>&1 | tail -2
+  # Error-Mode=any: by default apt-get update exits 0 when every index fails
+  # to download (it only prints W: lines), so the envfail below never fired
+  # and an unreachable mirror was reported as a packaging defect after all.
+  # Cost: a flake in any one pocket (e.g. -security) now also reads as an
+  # environment fault, i.e. "not evaluated", which is the honest answer.
+  apt-get update -qq -o APT::Update::Error-Mode=any 2>&1 | tail -2
   [ "${PIPESTATUS[0]}" -eq 0 ] || envfail "apt-get update failed (mirror unreachable?). Try TANDEM_APT_MIRROR=<mirror>."
   apt-get install -y --no-install-recommends "$ART" 2>&1 | tail -8
   rc=${PIPESTATUS[0]}
@@ -134,6 +147,41 @@ for b in tandem-desktop node-sidecar tandem-reaper; do
   missing=$(ldd "$p" 2>/dev/null | grep -i 'not found')
   if [ -n "$missing" ]; then fail "$b has unresolved libs:"; echo "$missing"; else pass "$b: all libs resolved"; fi
 done
+
+echo
+echo "=== [4b] tray library (dlopen'd, invisible to ldd) ==="
+# The tray does not link its appindicator library: libappindicator-sys
+# dlopen()s it when the tray is built, so [4] passes a package whose tray
+# library is absent. What the package must guarantee is that the loader can
+# find one of the names libappindicator-sys tries -- this list is its 0.9.0
+# list, in its order (backcompat on; src-tauri/Cargo.lock pins 0.9.0, and
+# tests/scripts/linux-package-smoke-wiring.test.ts fails if that moves). Exact field
+# match, never a substring: the ayatana soname contains "appindicator3.so.1".
+#
+# The .deb's `Depends: libappindicator3-1` is met by the real package on
+# Ubuntu, and on Debian -- which has none -- by libayatana-appindicator3-1,
+# which declares `Provides: libappindicator3-1`. So which package and soname
+# satisfied it differs per distro, and is printed rather than asserted.
+TRAY_SONAMES="libayatana-appindicator3.so.1 libappindicator3.so.1 libayatana-appindicator3.so libappindicator3.so"
+CACHE=$(ldconfig -p 2>/dev/null | awk '{print $1}')
+if [ -z "$CACHE" ]; then
+  fail "ldconfig -p listed nothing (is ldconfig on PATH?) -- tray library not evaluated"
+else
+  found=""
+  for so in $TRAY_SONAMES; do
+    echo "$CACHE" | grep -qxF "$so" && found="$found $so"
+  done
+  if [ -n "$found" ]; then
+    pass "tray library resolvable:$found"
+    first=${found# }; first=${first%% *}
+    path=$(ldconfig -p | awk -v n="$first" '$1 == n {print $NF; exit}')
+    if [ "$MODE" = deb ]; then owner=$(dpkg -S "$(readlink -f "$path")" 2>/dev/null | cut -d: -f1)
+    else owner=$(rpm -qf "$path" 2>/dev/null); fi
+    echo "  first match $first -> $path (package: ${owner:-unknown})"
+  else
+    fail "no appindicator library resolvable -- the tray cannot load (tried: $TRAY_SONAMES)"
+  fi
+fi
 
 echo
 echo "=== [5] desktop integration ==="
