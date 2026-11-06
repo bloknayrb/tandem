@@ -320,7 +320,7 @@ describe("refreshAllMcpEntryBinaries", () => {
     const out = stderr();
     // The sweep now visits both refreshable keys, so the message names which
     // one it repaired rather than saying "channel" unconditionally.
-    expect(out).toContain("Repaired stale tandem-channel entry");
+    expect(out).toContain("Repaired the tandem-channel entry");
     expect(out).toContain("Claude Code");
   });
 

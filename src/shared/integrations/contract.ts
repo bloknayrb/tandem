@@ -259,6 +259,13 @@ export const ERROR_CODE_SECRET_MISSING = "SECRET_MISSING";
 export const ERROR_CODE_OTHER_MCP_NOT_APPLICABLE = "OTHER_MCP_NOT_APPLICABLE";
 export const ERROR_CODE_PATH_REJECTED = "PATH_REJECTED";
 export const ERROR_CODE_WRITE_FAILED = "WRITE_FAILED";
+/**
+ * The largest client config any Tandem writer reads (#1801): `applyConfig`,
+ * the boot sweep's `readConfigForMutation`, and `tandem doctor`'s note that a
+ * larger one is left alone. `apply.ts` re-exports it as `MAX_CONFIG_BYTES`.
+ */
+export const MAX_CLIENT_CONFIG_BYTES = 16 * 1024 * 1024;
+
 /** The config exceeded `MAX_CONFIG_BYTES` and was left untouched (#1801). */
 export const ERROR_CODE_CONFIG_TOO_LARGE = "CONFIG_TOO_LARGE";
 /** The config was not a JSON object Tandem can rewrite — it did not parse, or

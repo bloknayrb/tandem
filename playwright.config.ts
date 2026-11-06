@@ -128,6 +128,23 @@ export default defineConfig({
         // stdio-smoke step (or any previous run) can't delay startup. Wiped
         // by scripts/e2e-server.mjs at server start — see the rationale there.
         TANDEM_APP_DATA_DIR: E2E_APP_DATA_DIR,
+        // The stand-in for the user's home for Claude client configs and the
+        // skill (#2358 PR 2b), so the E2E server never reads or rewrites the
+        // real `~/.claude.json`. Honoured only without the build define, i.e.
+        // the local tsx server; CI's built server is kept off the real config
+        // by the installed-build gate in `src/server/index.ts` instead.
+        TANDEM_CLIENT_CONFIG_HOME: resolve(E2E_APP_DATA_DIR, "client-config-home"),
+        // CI (and any local `CI=1` run) serves the BUILT bundle, which ignores
+        // the variable above. Its boot sweep and skill refresh are already
+        // refused from a checkout, but routes such as `GET /api/integrations`
+        // still read Claude configs from the home directory — so point the
+        // home itself at the stand-in for that arm.
+        ...(process.env.CI
+          ? {
+              HOME: resolve(E2E_APP_DATA_DIR, "client-config-home"),
+              USERPROFILE: resolve(E2E_APP_DATA_DIR, "client-config-home"),
+            }
+          : {}),
         // The server half of #1492's port move; the client half is the
         // VITE_TANDEM_* pair set at the top of this file.
         TANDEM_PORT: String(E2E_WS_PORT),

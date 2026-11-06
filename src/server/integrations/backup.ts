@@ -76,11 +76,20 @@ export function formatTimestamp(d: Date): string {
  * Build a backup filename. UUID suffix defeats predictable-path attacks
  * where an attacker pre-creates a symlink at the predicted name.
  */
-export function backupFilename(now: Date = new Date()): string {
+export function backupFilename(now: Date = new Date(), prefix: string = BACKUP_PREFIX): string {
   const ts = formatTimestamp(now);
   const uuid8 = randomUUID().slice(0, 8);
-  return `${BACKUP_PREFIX}${ts}-${uuid8}${BACKUP_SUFFIX}`;
+  return `${prefix}${ts}-${uuid8}${BACKUP_SUFFIX}`;
 }
+
+/**
+ * The boot sweep's backups of `~/.claude.json` (#2358 PR 2b) carry their own
+ * prefix, so they are capped separately: a run of sweep backups (one per
+ * migration or forward repoint) never evicts the backup `applyConfig` took of
+ * an entry the user had customised. Not a `claude-json-` prefix extension,
+ * which `listBackups`' `startsWith` would also match.
+ */
+export const SWEEP_BACKUP_PREFIX = "sweep-claude-json-";
 
 /**
  * Write `content` as a backup under `backupDir(appDataDir)`. Caller
@@ -94,8 +103,12 @@ export function backupFilename(now: Date = new Date()): string {
  * with the rewrite. The atomic-failure-leaves-original-intact guarantee
  * depends on this.
  */
-export async function writeBackup(dir: string, content: Buffer): Promise<string> {
-  const backupPath = join(dir, backupFilename());
+export async function writeBackup(
+  dir: string,
+  content: Buffer,
+  prefix: string = BACKUP_PREFIX,
+): Promise<string> {
+  const backupPath = join(dir, backupFilename(new Date(), prefix));
 
   // `wx` is exclusive-create: fails if the path already exists (UUID
   // collision is astronomically rare but a symlinked predictable path
@@ -185,9 +198,15 @@ export async function pruneOldBackups(
   prefix: string = BACKUP_PREFIX,
   suffix: string = BACKUP_SUFFIX,
   max: number = MAX_BACKUPS,
+  /** A backup name never to remove — the one the caller just wrote. Names
+   *  sort by a SECOND-resolution timestamp and then a random id, so several
+   *  backups in one second sort arbitrarily, and the newest could otherwise be
+   *  the one pruned. */
+  protect?: string,
 ): Promise<string[]> {
   const all = await listBackups(dir, prefix, suffix);
-  const toRemove = all.slice(max);
+  const kept = protect !== undefined && all.includes(protect) ? 1 : 0;
+  const toRemove = all.filter((n) => n !== protect).slice(Math.max(0, max - kept));
   const failures: Array<{ path: string; err: unknown }> = [];
   for (const name of toRemove) {
     const fullPath = join(dir, name);
@@ -216,6 +235,7 @@ export async function pruneOldBackups(
  */
 export async function sweepBackupsOnStartup(appDataDir: string): Promise<void> {
   await pruneOldBackups(backupDir(appDataDir));
+  await pruneOldBackups(backupDir(appDataDir), SWEEP_BACKUP_PREFIX);
 }
 
 /**

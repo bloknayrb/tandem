@@ -24,7 +24,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
@@ -34,13 +34,16 @@ import {
   isTandemLikeProcessName,
   probeProcessIdentity,
 } from "../server/annotations/process-identity.js";
+import type { ClaudeCodeBridgeVerdict } from "../server/integrations/apply.js";
 import {
   isRecordedPathAbsolute,
   isRecordedPathGone,
   probeNodeBinary,
+  SYSTEM_NODE_MIN_VERSION,
 } from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT, TANDEM_SUPPORT_EMAIL } from "../shared/constants.js";
 import { isAppTranslocatedPath } from "../shared/integrations/app-translocation.js";
+import { classifyClaudeCodeTandemEntry } from "../shared/integrations/claude-code-entry.js";
 import {
   claudeCodeConfigPath,
   claudeDesktopConfigTarget,
@@ -48,10 +51,13 @@ import {
 import {
   type ClaudeCliPresence,
   INTEGRATIONS_SCHEMA_VERSION,
+  MAX_CLIENT_CONFIG_BYTES,
 } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
+import { isBundledSidecarNode } from "../shared/integrations/node-binary-name.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 import { formatGraceEndDate } from "../shared/license-copy.js";
+import { isOlderSemver } from "../shared/semver-order.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
 import {
   ANNOTATION_SCAN_MAX_FILE_BYTES,
@@ -215,7 +221,7 @@ class Recorder {
  * below-floor version is a warn or a fail, so the two files can never drift
  * into disagreeing about which versions actually RUN.
  */
-export const MIN_NODE_VERSION = "22.12.0";
+export const MIN_NODE_VERSION = SYSTEM_NODE_MIN_VERSION;
 
 interface ParsedNodeVersion {
   major: number;
@@ -1332,7 +1338,247 @@ function validateUserTandemEntry(
   return null;
 }
 
-function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability, mcpPort: number): void {
+/** The base URL Tandem writes into Claude Code's entry: always the default port. */
+const TANDEM_WRITTEN_MCP_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
+
+/** Said wherever the entry is one Tandem wrote: Claude Code reads it at terminal start. */
+const RESTART_TERMINALS_NOTE =
+  "Claude Code reads this entry when a terminal starts, so a terminal opened before it last " +
+  "changed keeps the old one until you restart it.";
+
+/** The setup step for this install, as a clause. Never a filesystem path. */
+function setupStep(cliAvailable: boolean): string {
+  return cliAvailable
+    ? "run `tandem setup --apply`"
+    : `open ${WIZARD_LOCATION} and run the integration wizard`;
+}
+
+/** An HTTP entry on loopback at `mcpPort`, when that is not the default port. */
+function isMovedPortHttpEntry(entry: unknown, mcpPort: number): boolean {
+  if (mcpPort === DEFAULT_MCP_PORT) return false;
+  const e = entry as { type?: unknown; url?: unknown };
+  if (e.type !== "http" || typeof e.url !== "string") return false;
+  try {
+    const url = new URL(e.url);
+    return LOOPBACK_MCP_HOSTNAMES.has(url.hostname) && url.port === String(mcpPort);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The port a bridge entry will connect to: its `env.TANDEM_URL`, else the
+ * bridge's own default. `null` when the URL is not a loopback http URL at all.
+ * Never returned to the report: only the port number is.
+ */
+function bridgeEntryPort(entry: unknown): number | null {
+  const env = (entry as { env?: unknown }).env;
+  const raw =
+    env !== null &&
+    typeof env === "object" &&
+    typeof (env as { TANDEM_URL?: unknown }).TANDEM_URL === "string"
+      ? (env as { TANDEM_URL: string }).TANDEM_URL
+      : TANDEM_WRITTEN_MCP_BASE;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" || !LOOPBACK_MCP_HOSTNAMES.has(url.hostname)) return null;
+    // No explicit port means http's default, 80 — on this computer, but not Tandem.
+    return url.port === "" ? 80 : Number(url.port);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A Tandem-written bridge entry. Both halves are probed through
+ * `isRecordedPathGone`, which refuses a UNC path before any `stat`: this value
+ * came out of a config file a model can write with `claude mcp add`, and the
+ * doctor is reachable through `tandem_diagnostics`. One warning for a dead
+ * entry, never two.
+ */
+function reportBridgeEntry(
+  r: Recorder,
+  shape: { command: string; script: string },
+  entry: unknown,
+  mcpPort: number,
+  cliAvailable: CliAvailability,
+): void {
+  // The bridge connects to `env.TANDEM_URL`. Setup always writes the default
+  // port, so on a moved `TANDEM_MCP_PORT` a Tandem-written bridge points at the
+  // wrong one — say so, never certify it.
+  const port = bridgeEntryPort(entry);
+  if (port !== mcpPort) {
+    r.warn(
+      `tandem in ~/.claude.json reaches Tandem through its bridge on port ${port ?? "(not this computer)"}, but Tandem's MCP port is ${mcpPort}`,
+      `Edit TANDEM_URL in the tandem entry's env in ${HOME_CLAUDE_JSON} to http://127.0.0.1:${mcpPort}, or unset TANDEM_MCP_PORT and restart Tandem.`,
+    );
+    return;
+  }
+  if (isRecordedPathGone(shape.command) || isRecordedPathGone(shape.script)) {
+    r.warn(
+      "tandem in ~/.claude.json runs a Node or bridge script that no longer exists",
+      "Restart Tandem: when it starts it tries to repoint the entry at a Node and script that " +
+        `exist. If this is still here afterwards, ${setupStep(cliAvailable())}. Then restart ` +
+        "any Claude Code terminal that was open.",
+    );
+    return;
+  }
+  if (isBundledSidecarNode(shape.command)) {
+    const update =
+      process.platform === "win32"
+        ? " When the desktop app updates, terminals already open lose their Tandem tools until " +
+          "you restart them (running /mcp may reconnect them; untested)."
+        : "";
+    r.pass(
+      "tandem registered in ~/.claude.json (through Tandem's bridge, on the Node bundled with the desktop app)",
+      `${RESTART_TERMINALS_NOTE}${update} Tandem moves the entry onto a Node 22.12 or newer it ` +
+        `finds on its own PATH${process.platform === "win32" ? WINDOWS_ROOTS_CLAUSE : ""}. ` +
+        desktopPathNote(),
+    );
+    return;
+  }
+  r.pass("tandem registered in ~/.claude.json (through Tandem's bridge)", RESTART_TERMINALS_NOTE);
+}
+
+/**
+ * The direct-HTTP entry Tandem used to write. Whether the next start switches
+ * it depends on whether this install can write the bridge at all, so the fix
+ * never offers a step that would write the same entry again.
+ *
+ * The cost is stated for a release where ownership is still dark: the server
+ * cannot tell which Claude Code session is calling, which today means Tandem's
+ * own Claude cannot be confirmed connected without the plugin, and its earlier
+ * connection can be mistaken for another AI.
+ */
+async function reportDirectHttpEntry(
+  r: Recorder,
+  cliAvailable: CliAvailability,
+  bridgeVerdict: () => Promise<ClaudeCodeBridgeVerdict | null>,
+): Promise<void> {
+  const message =
+    "tandem in ~/.claude.json is the older direct-HTTP entry, so Tandem can't tell which Claude Code session is calling";
+  let verdict: ClaudeCodeBridgeVerdict | null = null;
+  try {
+    verdict = await bridgeVerdict();
+  } catch {
+    verdict = null;
+  }
+  if (verdict === "not-installed") {
+    r.warn(
+      message,
+      "This copy of Tandem can't record a lasting path for the bridge (a development checkout, " +
+        "an npx run, or a desktop app whose own copy of the bridge could not be made), so it " +
+        "never switches the entry. The entry still works. An installed Tandem " +
+        "(`npm install -g tandem-editor`, or the desktop app installed normally) switches it " +
+        "when it starts; then restart any Claude Code terminal that was open.",
+    );
+    return;
+  }
+  if (verdict === "translocated") {
+    r.warn(
+      message,
+      "Tandem is running from macOS's quarantine copy, which moves on every launch, so it keeps " +
+        "this entry. Move Tandem to Applications, open it from there, and it switches the entry " +
+        "when it starts.",
+    );
+    return;
+  }
+  if (verdict === "no-node") {
+    r.warn(
+      message,
+      "When Tandem last looked, it found no Node 22.12 or newer it can record for this entry, " +
+        "so it stays as it is. " +
+        "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
+        "temporary or removable location, is owned by another user, or on Windows is installed " +
+        "anywhere but Program Files or your user folder. Install Node 22.12 or newer where " +
+        "Tandem's PATH can see it (for an npm install, on the PATH of the shell you start " +
+        `Tandem from), then restart Tandem. ${desktopPathNote()}`,
+    );
+    return;
+  }
+  if (verdict === "unprobed") {
+    // This process never looked for a system Node (the doctor never probes,
+    // Bryan 2026-11-06), and the Node it runs on can't be recorded. So whether
+    // a restart switches the entry is not known here — say what decides it.
+    r.warn(
+      message,
+      "An npm install of Tandem switches this entry when it starts only if it finds a Node " +
+        "22.12 or newer it can record on its own PATH (not an older one, a version manager's " +
+        "shim, one in a temporary location or owned by another user, or on Windows one outside " +
+        "Program Files or your user folder); the desktop app can also use the Node it ships " +
+        `with. ${desktopPathNote()} Restart Tandem, or ${setupStep(cliAvailable())}, which looks ` +
+        "too. If the entry is " +
+        "still direct HTTP afterwards, Tandem's log says why, on a line containing " +
+        "\"Claude Code's 'tandem' entry stays direct HTTP\".",
+    );
+    return;
+  }
+  // "bridge" and an unknown verdict.
+  r.warn(
+    message,
+    `Restart Tandem (it switches this entry when it starts), or ${setupStep(cliAvailable())}; ` +
+      "then restart any Claude Code terminal that was open. Until it switches, Tandem can't " +
+      "confirm its own Claude is connected unless the Tandem plugin is installed, and may " +
+      "decline to start it while that Claude's earlier connection lingers.",
+  );
+}
+
+/** The pre-#686 base Tandem's setup once wrote (`localhost`, not 127.0.0.1). */
+const LEGACY_LOCALHOST_MCP_BASE = `http://localhost:${DEFAULT_MCP_PORT}`;
+
+/** `statSync(...).size`, or 0 when the file cannot be stat'ed (already read). */
+function fileSizeOrZero(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * What PATH a desktop app started from the GUI sees. On macOS a Dock or Finder
+ * launch gets `/usr/bin:/bin:/usr/sbin:/sbin` (launchd's default), so no Node
+ * the user installs is visible to it — "install Node system-wide" would be a
+ * remedy that cannot work there.
+ */
+function desktopPathNote(): string {
+  if (process.platform === "darwin") {
+    return (
+      "On macOS, the desktop app opened from the Dock or Finder (or with `open -a`) sees only " +
+      "/usr/bin:/bin:/usr/sbin:/sbin, which holds no Node, so a desktop entry stays on the " +
+      "Node the app ships with unless the app's own binary is started from a shell that has " +
+      "Node on its PATH."
+    );
+  }
+  if (process.platform === "win32") {
+    return (
+      "The desktop app sees the PATH Windows gives programs started from the Start menu, not " +
+      "one a terminal changed; restart Tandem after changing it."
+    );
+  }
+  return "A desktop app started from a menu cannot see a Node that only a shell profile adds.";
+}
+
+/** The Windows install-root rule, as a clause after "on its own PATH". */
+const WINDOWS_ROOTS_CLAUSE =
+  ", and on Windows only one installed under Program Files or your user folder (a PATH entry " +
+  "in 8.3 short form, such as C:\\PROGRA~1\\nodejs, is skipped)";
+
+/** Tandem's direct-HTTP entry in a config too large for any Tandem writer. */
+function reportOversizeHttpEntry(r: Recorder): void {
+  r.warn(
+    "tandem in ~/.claude.json is the older direct-HTTP entry, so Tandem can't tell which Claude Code session is calling",
+    "Tandem's startup switch skips it because ~/.claude.json is too large to rewrite (see the " +
+      "line above); `tandem setup` refuses the file for the same reason. The entry still works.",
+  );
+}
+
+async function checkUserMcpConfig(
+  r: Recorder,
+  cliAvailable: CliAvailability,
+  mcpPort: number,
+  bridgeVerdict: () => Promise<ClaudeCodeBridgeVerdict | null>,
+): Promise<void> {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   // Claude Code reads global MCP servers from ~/.claude.json (under
   // `mcpServers`), which is exactly where `tandem setup` writes them. The
@@ -1432,22 +1678,81 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability, mcpPort:
   }
 
   const servers = (read.value as { mcpServers?: Record<string, unknown> }).mcpServers ?? {};
+  // Tandem's writers — setup, the wizard, rotation and the startup switch and
+  // repairs — refuse a client config over `MAX_CLIENT_CONFIG_BYTES` unread
+  // (#1801), so on a file that large nothing Tandem prescribes below can land.
+  const oversize = fileSizeOrZero(claudeCodePath) > MAX_CLIENT_CONFIG_BYTES;
+  if (oversize) {
+    r.warn(
+      `~/.claude.json is over ${MAX_CLIENT_CONFIG_BYTES / (1024 * 1024)} MiB, so Tandem will not rewrite it`,
+      "Tandem's setup, token rotation and its startup switch and repairs all leave a client " +
+        "config this large untouched. Claude Code keeps per-project history in this file; once " +
+        "it is smaller, restart Tandem.",
+    );
+  }
   if (!servers.tandem) {
     r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
   } else {
-    const invalid = validateUserTandemEntry(servers.tandem, mcpPort, cliAvailable);
-    if (invalid) {
-      // `warn`, never `fail` — parity with the project-level twin. `tandem
-      // doctor` must not start exiting 1 on a machine whose tools arrive via
-      // the plugin.
-      r.warn(invalid.message, invalid.fix);
+    // #2358 PR 2b: Tandem now writes the stdio bridge here, and its boot sweep
+    // switches the direct-HTTP entry it used to write. The classifier is the
+    // SAME one the sweep migrates by, so what this says about the next start is
+    // what the next start does.
+    const shape = classifyClaudeCodeTandemEntry(servers.tandem, TANDEM_WRITTEN_MCP_BASE);
+    if (shape.kind === "bridge") {
+      reportBridgeEntry(r, shape, servers.tandem, mcpPort, cliAvailable);
     } else {
-      r.pass("tandem registered in ~/.claude.json");
+      const invalid = validateUserTandemEntry(servers.tandem, mcpPort, cliAvailable);
+      if (invalid) {
+        // `warn`, never `fail` — parity with the project-level twin. `tandem
+        // doctor` must not start exiting 1 on a machine whose tools arrive via
+        // the plugin.
+        r.warn(invalid.message, invalid.fix);
+      } else if (shape.kind === "tandem-http") {
+        if (oversize) reportOversizeHttpEntry(r);
+        else await reportDirectHttpEntry(r, cliAvailable, bridgeVerdict);
+      } else if (
+        classifyClaudeCodeTandemEntry(servers.tandem, LEGACY_LOCALHOST_MCP_BASE).kind ===
+        "tandem-http"
+      ) {
+        // The entry Tandem wrote before #686 moved setup to 127.0.0.1. It is
+        // Tandem's, so not "foreign", but the startup switch matches only the
+        // current shape and leaves it alone.
+        r.warn(
+          "tandem in ~/.claude.json is the direct-HTTP entry an older Tandem wrote (on localhost), " +
+            "which Tandem's startup switch to its bridge does not recognise",
+          `It still works. To replace it with the current entry: ${setupStep(cliAvailable())}; ` +
+            "then restart any Claude Code terminal that was open.",
+        );
+      } else if (shape.kind === "npx-bridge") {
+        r.pass(
+          "tandem registered in ~/.claude.json (through Tandem's bridge, started by npx)",
+          RESTART_TERMINALS_NOTE,
+        );
+      } else if (isMovedPortHttpEntry(servers.tandem, mcpPort)) {
+        // The user's own edit for a moved `TANDEM_MCP_PORT`, which the port
+        // check above prescribes. It works. Setup would write the DEFAULT port
+        // into a bridge and break it, so setup is not offered here.
+        r.pass(
+          `tandem registered in ~/.claude.json (direct HTTP on port ${mcpPort})`,
+          "Tandem's setup and its switch to the bridge use the default port, so they leave an " +
+            "entry on a moved port alone. It works, but Tandem can't tell which Claude Code " +
+            "session is calling through it.",
+        );
+      } else {
+        // Design §3.6's cost sentence: what keeping a hand-made entry means.
+        r.warn(
+          "tandem in ~/.claude.json is not an entry Tandem wrote, so Tandem leaves it alone",
+          "Unless it runs Tandem's bridge, Tandem can't tell which Claude Code session is " +
+            "calling through it: with the Tandem plugin installed, its tools are a separate " +
+            "connection from the plugin's, and a channel shim beside it is not linked to that " +
+            "session. " +
+            `To replace it with Tandem's own (this discards your edits): ${setupStep(cliAvailable())}.`,
+        );
+      }
+      // A stdio entry here that is not Tandem's bridge is a hand-edit or a
+      // plugin-managed shape, and both can carry the failure modes it reports.
+      reportEntryCommand(r, servers.tandem, "tandem", "~/.claude.json", { cliAvailable });
     }
-    // Normally an HTTP entry here, which the helper ignores. A stdio entry in
-    // this file means a hand-edit or a plugin-managed shape, and both can carry
-    // the failure modes it reports.
-    reportEntryCommand(r, servers.tandem, "tandem", "~/.claude.json", { cliAvailable });
   }
   if (!servers["tandem-channel"]) {
     r.pass(evaluateAbsentChannelEntry("~/.claude.json"));
@@ -2150,6 +2455,10 @@ export interface TandemPluginInput {
   wizardTandemEntry: boolean;
   /** Whether `~/.claude.json` also carries `mcpServers["tandem-channel"]`. */
   wizardChannelEntry: boolean;
+  /** Whether that `tandem` entry is Tandem's stdio bridge (#2358 PR 2b). Then
+   *  both toolsets reach Tandem as the same Claude Code session and the
+   *  duplicate list is only cosmetic; absent means not known to be. */
+  wizardTandemIsBridge?: boolean;
   /** Read Claude Code's plugin registry (`installed_plugins.json`), returning
    *  the parsed object or `null` when it could not be read — again not evidence
    *  either way. A thunk, not a value (PR #2225 review): `evaluateTandemPlugin`
@@ -2227,50 +2536,6 @@ export function pluginVersionFromRegistry(registry: unknown, key: string): strin
   return oldest;
 }
 
-interface ParsedPluginVersion extends ParsedNodeVersion {
-  /** Prerelease identifiers (`rc.1` → `["rc", "1"]`); empty for a release. */
-  prerelease: string[];
-}
-
-function parsePluginVersion(version: string): ParsedPluginVersion | null {
-  if (!isWellFormedPluginVersion(version)) return null;
-  // Build metadata (after `+`) carries no precedence in SemVer, so it is
-  // dropped before anything is split.
-  const [core, ...pre] = version.split("+")[0].split("-");
-  const [major, minor, patch] = core.split(".").map(Number);
-  // Re-join: a prerelease may itself contain `-` (`1.0.0-alpha-2`).
-  const prerelease = pre.length > 0 ? pre.join("-").split(".") : [];
-  return { major, minor, patch, prerelease };
-}
-
-/** `a < b` for two digit strings, exactly — no `Number` rounding past 2^53. */
-function isSmallerNumeral(a: string, b: string): boolean {
-  const x = a.replace(/^0+(?=\d)/, "");
-  const y = b.replace(/^0+(?=\d)/, "");
-  return x.length !== y.length ? x.length < y.length : x < y;
-}
-
-/**
- * SemVer §11 identifier precedence: numeric identifiers compare numerically
- * and sit below alphanumeric ones, alphanumeric ones compare by ASCII, and a
- * list that is a strict prefix of the other is the lower.
- */
-function isOlderPrerelease(a: string[], b: string[]): boolean {
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    if (a[i] === b[i]) continue;
-    const aNumeric = /^\d+$/.test(a[i]);
-    const bNumeric = /^\d+$/.test(b[i]);
-    if (aNumeric && bNumeric) {
-      if (isSmallerNumeral(a[i], b[i])) return true;
-      if (isSmallerNumeral(b[i], a[i])) return false;
-      continue; // `01` and `1`: same number, look further.
-    }
-    if (aNumeric !== bNumeric) return aNumeric;
-    return a[i] < b[i];
-  }
-  return a.length < b.length;
-}
-
 /**
  * `a < b` under SemVer precedence, prereleases included; `false` when either
  * fails {@link PLUGIN_VERSION_SHAPE}, so an unparseable version stays silent.
@@ -2282,15 +2547,8 @@ function isOlderPrerelease(a: string[], b: string[]): boolean {
  * supported, and must not become "below the floor" by this stricter ordering.
  */
 function isOlderPluginVersion(a: string, b: string): boolean {
-  const pa = parsePluginVersion(a);
-  const pb = parsePluginVersion(b);
-  if (pa === null || pb === null) return false;
-  if (isOlderTriplet(pa, pb)) return true;
-  if (isOlderTriplet(pb, pa)) return false;
-  // Equal triplets: a release outranks any of its prereleases.
-  if (pa.prerelease.length === 0) return false;
-  if (pb.prerelease.length === 0) return true;
-  return isOlderPrerelease(pa.prerelease, pb.prerelease);
+  if (!isWellFormedPluginVersion(a) || !isWellFormedPluginVersion(b)) return false;
+  return isOlderSemver(a, b);
 }
 
 /**
@@ -2461,7 +2719,12 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
       message:
         "Both the Tandem plugin and a tandem MCP entry in ~/.claude.json are present — the tandem_* tools will appear twice",
       fix:
-        "Plugin MCP servers load alongside your own, under a plugin_ prefix. Keep one: " +
+        "Plugin MCP servers load alongside your own, under a plugin_ prefix. " +
+        (input.wizardTandemIsBridge && !input.wizardChannelEntry
+          ? "Both reach Tandem as the same Claude Code session, so this is only cosmetic. To list them once: "
+          : input.wizardTandemIsBridge
+            ? "Both reach Tandem as the same Claude Code session. Keep one: "
+            : "Keep one: ") +
         `${uninstallStep(installedKey)} — that leaves the Tandem-managed config in place.` +
         // Both register a channel shim too, and every shim counts as a push
         // subscriber whether or not its host listens (#2186).
@@ -2534,12 +2797,15 @@ function checkTandemPlugin(r: Recorder): void {
       ? (wizardRead.value as { mcpServers?: Record<string, unknown> }).mcpServers
       : undefined;
   const wizardTandemEntry = wizardServers?.tandem !== undefined;
+  const wizardShape = classifyClaudeCodeTandemEntry(wizardServers?.tandem, TANDEM_WRITTEN_MCP_BASE);
+  const wizardTandemIsBridge = wizardShape.kind === "bridge" || wizardShape.kind === "npx-bridge";
   const wizardChannelEntry = wizardServers?.["tandem-channel"] !== undefined;
 
   for (const outcome of evaluateTandemPlugin({
     enabledPlugins,
     wizardTandemEntry,
     wizardChannelEntry,
+    wizardTandemIsBridge,
     // A thunk: the evaluator calls it only once it has found an enabled key
     // (PR #2225 review). Same home and same screened reader as the two reads
     // above (#1417), so an unsafe path is already refused by the screens; any
@@ -3667,8 +3933,8 @@ export function evaluateStaleGlobal(
   };
 }
 
-async function checkStaleGlobal(r: Recorder): Promise<void> {
-  const bundled = BUNDLED_VERSION;
+async function checkStaleGlobal(r: Recorder, bundledOverride?: string): Promise<void> {
+  const bundled = bundledOverride ?? BUNDLED_VERSION;
   // Without a known bundled version (tsx dev / vitest) there's nothing to
   // compare against — skip silently rather than guess.
   if (!bundled) return;
@@ -3714,6 +3980,21 @@ export interface RunDoctorOptions {
    * alone would have passed throughout.
    */
   homeOverride?: string;
+  /**
+   * Could this install write Claude Code's bridge entry (#2358 PR 2b)? Asked
+   * only for a direct-HTTP entry, to pick a remedy that works. Test seam;
+   * production imports `claudeCodeBridgeVerdict` from `integrations/apply.ts`
+   * lazily, so a healthy run never loads it. That verdict NEVER probes a Node
+   * (Bryan, 2026-11-06): the doctor is reachable by the AI through
+   * `tandem_diagnostics`, so it reports what the last boot's probe left.
+   */
+  claudeCodeBridgeVerdict?: () => Promise<ClaudeCodeBridgeVerdict | null>;
+  /**
+   * Test seam: the bundled version a release build has (`__TANDEM_VERSION__`,
+   * absent under vitest), so a test can run `checkStaleGlobal`'s real spawn as
+   * the shipped `tandem_diagnostics` does. Never set in production.
+   */
+  bundledVersionForTests?: string;
 }
 
 /**
@@ -3777,7 +4058,12 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     recordEvaluation(r, evaluateAppTranslocation(process.execPath)),
   );
   await r.check("mcp-json", () => checkMcpJson(r, cwd, cliAvailable));
-  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable, mcpPort));
+  const bridgeVerdict =
+    opts.claudeCodeBridgeVerdict ??
+    (async () => (await import("../server/integrations/apply.js")).claudeCodeBridgeVerdict());
+  await r.check("user-mcp-config", () =>
+    checkUserMcpConfig(r, cliAvailable, mcpPort, bridgeVerdict),
+  );
   await r.check("desktop-mcp-config", () =>
     checkDesktopMcpConfig(r, cliAvailable, opts.homeOverride),
   );
@@ -3786,7 +4072,13 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("integrations-file", () => checkIntegrationsFile(r));
-  await r.check("stale-global", () => checkStaleGlobal(r));
+  await r.check("stale-global", () =>
+    checkStaleGlobal(
+      r,
+      // Honoured only under vitest, so "never set in production" is enforced.
+      process.env.VITEST === "true" ? opts.bundledVersionForTests : undefined,
+    ),
+  );
 
   // `check` returns undefined when the check crashed (it records its own
   // fail). Treating both ports as down is the honest reading: we did not
