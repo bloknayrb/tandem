@@ -10,26 +10,40 @@
  * upgrade, every `/api` route, and the `GET /api/events?filter=wake` fallback
  * SKILL.md derives from the same host and port.
  *
- * This file stands up the real server on `::1` and drives a real upgrade,
- * so it is skipped where IPv6 loopback cannot be bound (some containers).
+ * This file stands up the real server on `::1`, asks the production
+ * `tandem_status` for `wakeUrl` over a real MCP session from a `::1` peer (so
+ * #1952's per-request loopback check sees a genuine IPv6-loopback
+ * `remoteAddress`), and drives a real upgrade against the answer. It is skipped
+ * where IPv6 loopback cannot be bound (some containers).
  * `wake-socket.test.ts` covers the URL derivation without IPv6.
  */
 
 import type { Server } from "node:http";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
-import { wakeUrlField } from "../../src/server/mcp/wake-url.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import { parseResult } from "../helpers/mcp-harness.js";
 
 // Null where IPv6 loopback cannot be bound, which skips the suite.
 const port = await allocPort("::1").catch(() => null);
 
 describe.skipIf(port === null)("wakeUrl on an IPv6-loopback (::1) bind", () => {
   let httpServer: Server;
+  let wakeUrl: unknown;
 
   beforeAll(async () => {
     httpServer = await startMcpServerHttp(port as number, "::1");
+    const client = new Client({ name: "wake-ipv6-test", version: "1.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://[::1]:${port}/mcp`)));
+    try {
+      const result = await client.callTool({ name: "tandem_status", arguments: {} });
+      wakeUrl = parseResult(result)?.data?.wakeUrl;
+    } finally {
+      await client.close();
+    }
   });
 
   afterAll(async () => {
@@ -38,13 +52,12 @@ describe.skipIf(port === null)("wakeUrl on an IPv6-loopback (::1) bind", () => {
     );
   });
 
-  it("publishes the [::1] address the server is listening on", () => {
-    expect(wakeUrlField().wakeUrl).toBe(`ws://[::1]:${port}/api/wake`);
+  it("hands a ::1 peer the [::1] address the server is listening on", () => {
+    expect(wakeUrl).toBe(`ws://[::1]:${port}/api/wake`);
   });
 
   it("accepts a real WebSocket upgrade against that wakeUrl", async () => {
-    const wakeUrl = wakeUrlField().wakeUrl as string;
-    const ws = new WebSocket(wakeUrl);
+    const ws = new WebSocket(wakeUrl as string);
     try {
       await new Promise<void>((resolve, reject) => {
         ws.once("open", () => resolve());

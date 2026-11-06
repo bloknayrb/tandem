@@ -55,8 +55,9 @@ export const WAKE_URL_PRODUCERS = ["tandem_status", "tandem_open", "tandem_scrat
  * as a live transport where there is none. In stdio mode no wake transport is
  * attached, `getWakeEndpoint()` is null, and reporting no address is the truth.
  *
- * **Only for a loopback peer (#1952).** The address names `127.0.0.1`, which is
- * this machine only for a caller on this machine. Handed to a remote MCP client
+ * **Only for a loopback peer (#1952).** The address names `127.0.0.1` (`[::1]` on
+ * an IPv6-loopback bind), which is this machine only for a caller on this
+ * machine. Handed to a remote MCP client
  * it names the CLIENT's own loopback, where whatever unrelated service holds that
  * port accepts a `Monitor` socket that sits there looking armed. So the field is
  * returned only when the calling request's TCP peer was loopback
