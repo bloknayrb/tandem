@@ -78,18 +78,38 @@ export type { Handler } from "./routes/_shared.js";
 export { errorCodeToHttpStatus } from "./routes/_shared.js";
 
 /**
- * Check if a Host header value is allowed (127.0.0.1 + tauri.localhost + optional extra hosts).
+ * Check if a Host header value is allowed (127.0.0.1 + `[::1]` + tauri.localhost +
+ * optional extra hosts).
  *
  * Narrowed in #477 PR 2: the `localhost` hostname is no longer accepted on its own.
  * Tauri sends `Host: tauri.localhost`; the sidecar health checks use `127.0.0.1`.
  * Exported for testing.
+ *
+ * `[::1]` is admitted because ADR-056 accepts `TANDEM_BIND_HOST=::1`, and on that
+ * bind `[::1]` is the only address the server answers on — the published
+ * `wakeUrl` names it. Why that is safe: this check exists to stop DNS rebinding,
+ * which needs the browser to send a Host naming a DOMAIN the attacker controls.
+ * An IP literal cannot be rebound, so `[::1]` is exactly as safe as `127.0.0.1`,
+ * already admitted. Only the canonical form is accepted; `[0:0:0:0:0:0:0:1]`,
+ * zone ids and IPv4-mapped literals fail closed (browsers normalise to `[::1]`).
+ * The Origin allowlist (`isLocalhostOrigin`) is deliberately NOT widened with it.
  *
  * @param host - The Host header value (may include port).
  * @param extraHosts - Additional hosts to allow (e.g. a LAN IP when
  *   TANDEM_BIND_HOST is non-loopback). Always empty for loopback binds.
  */
 export function isHostAllowed(host: string | undefined, extraHosts: string[] = []): boolean {
-  const reqHost = (host ?? "").split(":")[0];
+  const raw = host ?? "";
+  if (raw.startsWith("[")) {
+    // Malformed (anything but `[addr]` or `[addr]:digits`) is refused here,
+    // never handed on as a parsed sentinel.
+    const inner = /^\[([^\]]*)\](?::\d+)?$/.exec(raw)?.[1];
+    if (inner === undefined) return false;
+    // Only an IPv6 extra host (stored bare, `fe80::1`) may match a bracketed
+    // literal, so `[192.168.1.50]` never matches an IPv4 entry.
+    return inner === "::1" || (inner.includes(":") && extraHosts.includes(inner));
+  }
+  const reqHost = raw.split(":")[0];
   if (reqHost === "127.0.0.1" || reqHost === TAURI_HOSTNAME) {
     return true;
   }

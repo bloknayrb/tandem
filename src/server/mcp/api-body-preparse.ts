@@ -33,7 +33,7 @@
  * identical check one layer later anyway: no Host refusal changes. Then each
  * route runs `lanAwareApiMiddleware` before its parser. The two accept sets
  * cannot be compared: the SDK's `localhostHostValidation` rejects
- * `tauri.localhost`, while `isHostAllowed` rejects `localhost` and `[::1]`.
+ * `tauri.localhost`, while `isHostAllowed` rejects `localhost`.
  * Neither is redundant — do not "simplify" one away.
  *
  * **Who can impose the larger ceilings.** A foreign-origin `application/json`

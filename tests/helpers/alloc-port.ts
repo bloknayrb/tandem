@@ -6,11 +6,11 @@ import { createServer } from "node:net";
  * `reference_windows_reserved_port_range`). The port is free at resolution
  * time but unreserved — bind it promptly.
  */
-export function allocPort(): Promise<number> {
+export function allocPort(host = "127.0.0.1"): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const probe = createServer();
     probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
+    probe.listen(0, host, () => {
       const addr = probe.address();
       if (!addr || typeof addr === "string") {
         probe.close();
