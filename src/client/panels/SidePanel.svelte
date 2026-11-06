@@ -554,6 +554,7 @@ function dispatchAnnotationAction(
         openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
       },
       aiDisabled,
+      repliesMap.get(id)?.length ?? 0,
     );
   };
 }
@@ -573,6 +574,7 @@ async function handleAnnotationContextMenu(e: MouseEvent) {
     dispatchAnnotationAction(id),
     aiDisabled,
     review.isTargetLost(ann.id),
+    repliesMap.get(ann.id)?.length ?? 0,
   );
 }
 

@@ -198,6 +198,15 @@ export const canSendToClaude = (a: AnnotationGate, aiDisabled: boolean): boolean
 export const canRemove = (a: AnnotationGate): boolean =>
   a.author === "user" && (isPending(a) || a.type === "comment");
 
+/**
+ * Remove sweeps every reply on the record, Claude's included, with no undo. So a
+ * comment that has replies asks once, inline, before it goes (Bryan, 2026-11-05:
+ * "yes, inline confirmation"). The native menu cannot ask twice, so it leaves
+ * Remove out for such a comment and the card's two-step is the only route.
+ */
+export const needsRemoveConfirm = (a: Pick<Annotation, "type">, replyCount: number): boolean =>
+  a.type === "comment" && replyCount > 0;
+
 /** Copy text — available on any card (incl. resolved); a pure clipboard read of the body. */
 export const canCopy = (_a: AnnotationGate): boolean => true;
 
@@ -227,6 +236,7 @@ export function buildAnnotationMenuContext(
   a: AnnotationGate & Pick<Annotation, "suggestedText">,
   aiDisabled: boolean,
   targetLost: boolean,
+  replyCount = 0,
 ): AnnotationContextMenuRequest {
   return {
     canAccept: canAccept(a) && !isAcceptBlocked(a, targetLost),
@@ -236,7 +246,7 @@ export function buildAnnotationMenuContext(
     canEdit: canEdit(a),
     canSendToClaude: canSendToClaude(a, aiDisabled),
     canCopy: canCopy(a),
-    canRemove: canRemove(a),
+    canRemove: canRemove(a) && !needsRemoveConfirm(a, replyCount),
     isNote: a.type === "note",
   };
 }

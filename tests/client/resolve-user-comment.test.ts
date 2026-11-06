@@ -191,7 +191,8 @@ describe("AnnotationCardActions: Resolve + Remove branch", () => {
     const { container, unmount, onRemove } = mount({ isPending: false, onResolve: undefined });
     expect(byTestId(container, "undo-btn")).toBeNull();
     const remove = byTestId(container, "remove-btn-u1");
-    expect(remove?.getAttribute("aria-label")).toBe("Remove comment and its replies");
+    // No replies here, so no confirm; the threaded case is in remove-resolved-comment.test.ts.
+    expect(remove?.textContent?.trim()).toBe("Remove");
     remove?.click();
     await tick();
     expect(onRemove).toHaveBeenCalledWith("u1");

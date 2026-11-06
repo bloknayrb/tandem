@@ -29,6 +29,13 @@ interface Props {
    * Accept reads as a bug) but disabled, with the reason beside it.
    */
   acceptBlocked?: boolean;
+  /**
+   * Remove deletes the whole thread, Claude's replies included, with no undo.
+   * When the record has replies the first click only arms the button ("Delete
+   * thread?") and a second click within a few seconds deletes (Bryan,
+   * 2026-11-05: "yes, inline confirmation"). `needsRemoveConfirm` decides.
+   */
+  confirmRemove?: boolean;
 }
 
 let {
@@ -45,7 +52,42 @@ let {
   onSendToClaude,
   aiDisabled,
   acceptBlocked = false,
+  confirmRemove = false,
 }: Props = $props();
+
+/** How long an armed Remove waits for its confirming click. */
+const REMOVE_CONFIRM_MS = 4000;
+let removeArmed = $state(false);
+let removeArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+function disarmRemove() {
+  if (removeArmTimer) {
+    clearTimeout(removeArmTimer);
+    removeArmTimer = null;
+  }
+  removeArmed = false;
+}
+
+function handleRemoveClick(e: MouseEvent) {
+  e.stopPropagation();
+  if (!onRemove) return;
+  if (confirmRemove && !removeArmed) {
+    removeArmed = true;
+    removeArmTimer = setTimeout(disarmRemove, REMOVE_CONFIRM_MS);
+    return;
+  }
+  disarmRemove();
+  onRemove(annotationId);
+}
+
+const removeLabel = $derived(removeArmed ? "Delete thread?" : "Remove");
+const removeAria = $derived(
+  removeArmed
+    ? "Click again to delete this comment and its replies"
+    : confirmRemove
+      ? "Remove comment and its replies"
+      : undefined,
+);
 
 const agentLabel = createAgentLabel();
 // Per-instance: the same record's card can be mounted in the side panel and a
@@ -82,7 +124,10 @@ function handleUndo(e: MouseEvent) {
   }
 }
 
-onDestroy(clearUndoTimer);
+onDestroy(() => {
+  clearUndoTimer();
+  disarmRemove();
+});
 </script>
 
 {#if isPending && !isEditing && (onAccept || onDismiss)}
@@ -180,12 +225,12 @@ onDestroy(clearUndoTimer);
       <button
         data-testid="remove-btn-{annotationId}"
         class="aca-btn aca-btn--ghost aca-push-end"
-        onclick={(e) => {
-          e.stopPropagation();
-          onRemove!(annotationId);
-        }}
+        class:aca-btn--armed={removeArmed}
+        aria-label={removeAria}
+        title={removeAria}
+        onclick={handleRemoveClick}
       >
-        Remove
+        {removeLabel}
       </button>
     {/if}
   </div>
@@ -193,12 +238,12 @@ onDestroy(clearUndoTimer);
   <button
     data-testid="remove-btn-{annotationId}"
     class="aca-btn aca-btn--ghost aca-standalone"
-    onclick={(e) => {
-      e.stopPropagation();
-      onRemove!(annotationId);
-    }}
+    class:aca-btn--armed={removeArmed}
+    aria-label={removeAria}
+    title={removeAria}
+    onclick={handleRemoveClick}
   >
-    Remove
+    {removeLabel}
   </button>
 {:else if !isPending && ((undoable && onUndo) || onRemove)}
   <!-- A closed card: Undo while its window lasts, and Remove for the user's own
@@ -216,14 +261,12 @@ onDestroy(clearUndoTimer);
       <button
         data-testid="remove-btn-{annotationId}"
         class="aca-btn aca-btn--ghost aca-push-end"
-        aria-label="Remove comment and its replies"
-        title="Remove comment and its replies"
-        onclick={(e) => {
-          e.stopPropagation();
-          onRemove!(annotationId);
-        }}
+        class:aca-btn--armed={removeArmed}
+        aria-label={removeAria}
+        title={removeAria}
+        onclick={handleRemoveClick}
       >
-        Remove
+        {removeLabel}
       </button>
     {/if}
   </div>
@@ -300,6 +343,14 @@ onDestroy(clearUndoTimer);
   }
   .aca-push-end {
     margin-left: auto;
+  }
+  /* Armed Remove (a thread is about to be deleted): the error family, so the
+     second click reads as the destructive one. */
+  .aca-btn--ghost.aca-btn--armed,
+  .aca-btn--ghost.aca-btn--armed:hover {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
+    border-color: var(--tandem-error-border);
   }
   .aca-btn--ghost:hover {
     background: var(--tandem-surface-sunk);
