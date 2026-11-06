@@ -70,22 +70,25 @@ where
 /// `libappindicator-sys` will load it. `Ok` carries the soname that loaded,
 /// `Err` the `dlopen` error for each candidate.
 pub(crate) fn probe_appindicator() -> Result<&'static str, String> {
-    probe_with(&APPINDICATOR_SONAMES, |name| {
-        // SAFETY: loading runs the library's ELF initializers. This is the
-        // same library, by the same name and loader, that `libappindicator-sys`
-        // loads unconditionally as soon as the tray is built, so the probe adds
-        // no initializer that would not have run anyway.
-        match unsafe { libloading::Library::new(name) } {
-            Ok(lib) => {
-                // Keep it loaded: `LIB` keeps it for the life of the process
-                // anyway, and `dlclose` on a GObject-type library is unsafe
-                // once any of its types are registered.
-                std::mem::forget(lib);
-                Ok(())
-            }
-            Err(e) => Err(e.to_string()),
+    probe_with(&APPINDICATOR_SONAMES, load_and_keep)
+}
+
+/// `dlopen` `name` the way `libappindicator-sys` does and keep it loaded.
+fn load_and_keep(name: &str) -> Result<(), String> {
+    // SAFETY: loading runs the library's ELF initializers. This is the same
+    // library, by the same name and loader, that `libappindicator-sys` loads
+    // unconditionally as soon as the tray is built, so the probe adds no
+    // initializer that would not have run anyway.
+    match unsafe { libloading::Library::new(name) } {
+        Ok(lib) => {
+            // Keep it loaded: `LIB` keeps it for the life of the process
+            // anyway, and `dlclose` on a GObject-type library is unsafe once
+            // any of its types are registered.
+            std::mem::forget(lib);
+            Ok(())
         }
-    })
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -127,15 +130,7 @@ mod tests {
 
     #[test]
     fn a_real_missing_library_is_an_error_not_a_panic() {
-        let got = probe_with(&["libtandem-no-such-library-2359.so.1"], |name| {
-            match unsafe { libloading::Library::new(name) } {
-                Ok(lib) => {
-                    std::mem::forget(lib);
-                    Ok(())
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        });
+        let got = probe_with(&["libtandem-no-such-library-2359.so.1"], load_and_keep);
         let err = got.expect_err("a nonexistent soname must not load");
         assert!(err.contains("libtandem-no-such-library-2359.so.1"), "{err}");
     }

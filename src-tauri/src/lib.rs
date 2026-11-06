@@ -1745,8 +1745,10 @@ pub fn run() {
                     }
                 } else {
                     // No tray (Linux with no loadable appindicator library, or
-                    // a failed tray build): exit cleanly so
-                    // RunEvent::Exit fires and the sidecar is killed
+                    // a failed tray build): exit, so RunEvent::Exit runs the
+                    // graceful sidecar shutdown that flushes unsaved edits
+                    // (#1756) before the hard kill fallback.
+                    //
                     // `warn`, not `info`: release builds log at `Warn` and up,
                     // and this line is the release smoke's evidence that the
                     // no-tray branch ran (docs/release-smoke-checklist.md §3).

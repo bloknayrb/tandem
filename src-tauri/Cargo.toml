@@ -114,8 +114,9 @@ tauri-plugin-decorum = "1"
 # list identical to the probe's. `backcompat` is on today through the default
 # features of the crates above; naming it here keeps it on if one of them ever
 # goes `default-features = false` (it would drop the two unversioned names, and
-# a host with only those would pass the probe and then panic in the tray build). Bumping either needs the crate source re-read; the
-# tests in tray_probe.rs fail until then.
+# a host with only those would pass the probe and then panic in the tray build).
+# Bumping libappindicator-sys, libappindicator or tray-icon needs the crate
+# source re-read; the tests in tray_probe.rs fail until then.
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = "0.7"
 libappindicator-sys = { version = "=0.9.0", features = ["backcompat"] }
