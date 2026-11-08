@@ -12,7 +12,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
  * That is NOT "diagnostics spawns nothing": a release build's `runDoctor`
  * also runs `npm ls -g` (since #2391, Tandem's own Node running the
  * `npm-cli.js` beside it, with no shell) and may run the annotation store's
- * lock-holder probe (`/bin/ps`, or `tasklist.exe` on Windows).
+ * lock-holder probe (`/bin/ps` on macOS — Linux reads `/proc` instead — or
+ * `tasklist.exe` on Windows).
  * `tests/cli/doctor-spawn-allowlist.test.ts` owns that allowlist; this file
  * adds the Node walk's half, so its runDoctor cases run as a release build
  * does — the same seam #2391 uses: `__TANDEM_VERSION__` stubbed, modules
@@ -27,8 +28,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
  * Everything else is the real code except two things: the temp-dir fixtures
  * are not treated as scratch (so an "installed" layout can live under
  * `os.tmpdir()`), and both `child_process` specifiers are wrapped so every
- * spawn is recorded (the npm and `ps` spawns are answered at once with empty
- * output rather than run; everything else really runs, which is how the
+ * spawn is recorded (the npm and `ps` spawns are answered at once — an error
+ * and empty output, which every caller reads as "skip" — rather than run; everything else really runs, which is how the
  * positive control's probe is seen). The fixture is a desktop-shaped install
  * (the injected bridge path, honoured only with `--tauri-sidecar` in argv)
  * plus a qualifying fake `node` on PATH that the walk WOULD pick.
@@ -228,6 +229,9 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     const report = await runDoctorAsReleased();
     const row = report.results.find((x) => x.message.includes("older direct-HTTP entry"));
     expect(row, JSON.stringify(report.results.map((x) => x.message))).toBeDefined();
+    // The fresh `apply` the doctor imported reached the Node question (the
+    // "unprobed" arm), not an earlier verdict such as "no durable script".
+    expect(row?.fix).toContain("An npm install of Tandem switches this entry");
     // The release-build path really ran: its `npm ls` was seen, through Tandem's Node.
     expect(npmSpawns(), "the stale-global check never spawned").toHaveLength(1);
     expect(spawnProblems()).toEqual([]);
@@ -242,7 +246,10 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     expect(apply.resolveClaudeCodeBridge()).toEqual({ command: fakeNode, script });
     spawns.length = 0;
     expect(apply.claudeCodeBridgeVerdict()).toBe("bridge");
-    await runDoctorAsReleased();
+    const report = await runDoctorAsReleased();
+    // The doctor's fresh `apply` read the warmed walk: the "bridge" arm.
+    const row = report.results.find((x) => x.message.includes("older direct-HTTP entry"));
+    expect(row?.fix).toContain("Restart Tandem (it switches this entry when it starts)");
     expect(npmSpawns(), "the stale-global check never spawned").toHaveLength(1);
     expect(spawnProblems()).toEqual([]);
     expect(probed()).toEqual([]);
