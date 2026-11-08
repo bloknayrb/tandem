@@ -10,66 +10,73 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
  * setup`, `tandem rotate-token` and the wizard's apply may walk.
  *
  * That is NOT "diagnostics spawns nothing": a release build's `runDoctor`
- * also runs `npm ls -g` through a shell (`checkStaleGlobal`: the open finding
- * #2379, to be fixed in its own PR) and may run the annotation store's
- * lock-holder probe (`ps` on POSIX, `tasklist.exe` on Windows). So the
- * runDoctor cases run the stale-global check as a release build does
- * (`bundledVersionForTests`) and assert that every spawn they SEE is on an
- * explicit allowlist. What they can see is bounded: POSIX only (this file
- * skips Windows, and CI's `check` is Ubuntu), only the branches this fixture
- * reaches (no lock exists, so the lock-holder probe does not run), and only
- * spawns made through `child_process` from transformed code.
+ * also runs `npm ls -g` (since #2391, Tandem's own Node running the
+ * `npm-cli.js` beside it, with no shell) and may run the annotation store's
+ * lock-holder probe (`/bin/ps`, or `tasklist.exe` on Windows).
+ * `tests/cli/doctor-spawn-allowlist.test.ts` owns that allowlist; this file
+ * adds the Node walk's half, so its runDoctor cases run as a release build
+ * does — the same seam #2391 uses: `__TANDEM_VERSION__` stubbed, modules
+ * reset, `doctor.ts` imported afresh — with `process.execPath` pointed at a
+ * fixture that has `npm-cli.js` beside it, and require every spawn they see to
+ * be on that allowlist, with no shell. What they can see is bounded: POSIX
+ * only (this file skips Windows, and CI's `check` is Ubuntu), only the
+ * branches this fixture reaches (no lock exists, so the lock-holder probe
+ * does not run), and only spawns made through `child_process` from
+ * transformed code.
  *
  * Everything else is the real code except two things: the temp-dir fixtures
  * are not treated as scratch (so an "installed" layout can live under
- * `os.tmpdir()`), and `child_process` is wrapped so every spawn is recorded
- * (`npm` is answered at once with empty output rather than run). The fixture
- * is a desktop-shaped install (the injected bridge path, honoured only with
- * `--tauri-sidecar` in argv) plus a qualifying fake `node` on PATH that the
- * probe WOULD pick — the positive control proves it.
+ * `os.tmpdir()`), and both `child_process` specifiers are wrapped so every
+ * spawn is recorded (the npm and `ps` spawns are answered at once with empty
+ * output rather than run; everything else really runs, which is how the
+ * positive control's probe is seen). The fixture is a desktop-shaped install
+ * (the injected bridge path, honoured only with `--tauri-sidecar` in argv)
+ * plus a qualifying fake `node` on PATH that the walk WOULD pick.
  */
 
-/** Every program the diagnostics path may spawn, and why. */
-const DIAGNOSTICS_SPAWN_ALLOWLIST = new Set([
-  "npm", // checkStaleGlobal's `npm ls -g` — predates PR 2b; #2379
-  "ps", // probeProcessIdentity, the annotation-store lock holder (POSIX)
-]);
+type Spawn = { fn: string; cmd: string; args: unknown; opts: unknown };
+const { spawns, answered } = vi.hoisted(() => ({
+  spawns: [] as Spawn[],
+  /** Commands answered with empty output instead of being run. */
+  answered: new Set<string>(),
+}));
 
-const root = mkdtempSync(join(tmpdir(), "tandem-doctor-noprobe-"));
-const spawned: string[] = [];
+vi.mock("node:child_process", async (importOriginal) =>
+  recorderFor(await importOriginal<typeof import("node:child_process")>()),
+);
+vi.mock("child_process", async (importOriginal) =>
+  recorderFor(await importOriginal<typeof import("child_process")>()),
+);
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  const record =
-    <F extends (...a: never[]) => unknown>(fn: F) =>
-    (...args: Parameters<F>) => {
-      spawned.push(String(args[0]));
-      return fn(...args);
+function recorderFor<T extends object>(actual: T): T {
+  const wrap =
+    (fn: string) =>
+    (cmd: unknown, ...rest: unknown[]) => {
+      const args = Array.isArray(rest[0]) ? rest[0] : undefined;
+      const opts = rest.find((r) => r !== null && typeof r === "object" && !Array.isArray(r));
+      spawns.push({ fn, cmd: String(cmd), args, opts });
+      if (answered.has(String(cmd))) {
+        const cb = rest.find((r) => typeof r === "function") as
+          | ((e: Error | null, out: string, err: string) => void)
+          | undefined;
+        if (cb) queueMicrotask(() => cb(new Error("recorded, not run"), "", ""));
+        if (fn.endsWith("Sync")) throw new Error("recorded, not run");
+        return undefined;
+      }
+      return (actual[fn as keyof T] as (...a: unknown[]) => unknown)(cmd, ...rest);
     };
-  // `npm ls -g` is recorded and answered with empty output, not run.
-  const execFile = (...args: unknown[]) => {
-    if (args[0] === "npm") {
-      spawned.push("npm");
-      const cb = args.find((a) => typeof a === "function") as
-        | ((e: Error | null, out: string, err: string) => void)
-        | undefined;
-      queueMicrotask(() => cb?.(null, "", ""));
-      return undefined;
-    }
-    spawned.push(String(args[0]));
-    return (actual.execFile as (...a: unknown[]) => unknown)(...args);
-  };
   return {
     ...actual,
-    execFile,
-    execFileSync: record(actual.execFileSync as never),
-    spawn: record(actual.spawn as never),
-    spawnSync: record(actual.spawnSync as never),
-    fork: record(actual.fork as never),
-    exec: record(actual.exec as never),
-    execSync: record(actual.execSync as never),
+    execFile: wrap("execFile"),
+    execFileSync: wrap("execFileSync"),
+    spawn: wrap("spawn"),
+    spawnSync: wrap("spawnSync"),
+    fork: wrap("fork"),
+    exec: wrap("exec"),
+    execSync: wrap("execSync"),
   };
-});
+}
+const root = mkdtempSync(join(tmpdir(), "tandem-doctor-noprobe-"));
 const mocks = vi.hoisted(() => ({ runningNode: undefined as string | undefined }));
 vi.mock("../../src/server/integrations/node-binary.js", async (importOriginal) => {
   const real =
@@ -125,7 +132,20 @@ vi.stubEnv("TANDEM_TAURI_SIDECAR", "1");
 
 const apply = await import("../../src/server/integrations/apply.js");
 const nodeBinary = await import("../../src/server/integrations/node-binary.js");
-const { runDoctor } = await import("../../src/cli/doctor.js");
+const { PS_BIN } = await import("../../src/server/annotations/process-identity.js");
+const { systemBin } = await import("../../src/server/platform.js");
+
+// Tandem's own Node, as the stale-global check resolves it: a fixture with
+// `npm-cli.js` beside it, so the npm anchor does not depend on the runner's
+// Node layout.
+const npmNode = join(root, "npm-node", "bin", "node");
+const npmCli = join(root, "npm-node", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+mkdirSync(join(npmCli, ".."), { recursive: true });
+writeFileSync(npmCli, "// npm");
+answered.add(npmNode);
+answered.add(PS_BIN);
+/** Every program the diagnostics path may start (`doctor-spawn-allowlist.test.ts`'s set). */
+const DIAGNOSTICS_SPAWN_ALLOWLIST = new Set([npmNode, PS_BIN, systemBin("tasklist.exe")]);
 
 afterAll(() => {
   process.argv.splice(0, process.argv.length, ...savedArgv);
@@ -135,7 +155,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  spawned.length = 0;
+  spawns.length = 0;
   nodeBinary._resetSystemNodeCacheForTests();
   vi.stubEnv("PATH", `${nodeDir}:/usr/bin:/bin`);
   vi.stubEnv("HOME", home);
@@ -145,10 +165,51 @@ afterEach(() => {
   mocks.runningNode = undefined;
 });
 
-const probed = () => spawned.filter((f) => f.startsWith(root) || f.startsWith(fixtureRoot));
-/** Spawns the diagnostics path made that are not on the allowlist. */
-const unlisted = () => spawned.filter((f) => !DIAGNOSTICS_SPAWN_ALLOWLIST.has(f));
-const runDoctorAsReleased = () => runDoctor({ bundledVersionForTests: "9.9.9" });
+/** Spawns of anything under the fixture roots except Tandem's own npm Node: the walk's probes. */
+const probed = () =>
+  spawns
+    .map((s) => s.cmd)
+    .filter((f) => f !== npmNode && (f.startsWith(root) || f.startsWith(fixtureRoot)));
+/** What a spawn on the diagnostics path did wrong, if anything. */
+function spawnProblems(): string[] {
+  const out: string[] = [];
+  for (const s of spawns) {
+    const what = `${s.fn}(${s.cmd})`;
+    if (s.fn === "exec" || s.fn === "execSync") out.push(`${what} always uses a shell`);
+    if (!DIAGNOSTICS_SPAWN_ALLOWLIST.has(s.cmd)) out.push(`${what} is not allowlisted`);
+    if (s.cmd === npmNode && (s.args as string[] | undefined)?.[0] !== npmCli) {
+      out.push(`${what} ran something other than npm-cli.js`);
+    }
+    if (s.opts && typeof s.opts === "object" && "shell" in s.opts) {
+      out.push(`${what} passed a shell option`);
+    }
+  }
+  return out;
+}
+/** The stale-global check's npm spawns, through Tandem's own Node. */
+const npmSpawns = () => spawns.filter((s) => s.cmd === npmNode);
+
+/**
+ * `runDoctor` as the shipped server runs it — the seam #2391 uses: the
+ * bundled-version define stubbed, modules reset and `doctor.ts` imported
+ * afresh (it reads the define into a module-level const), and
+ * `process.execPath` pointed at the npm fixture for the call.
+ */
+async function runDoctorAsReleased() {
+  const realExecPath = process.execPath;
+  vi.stubGlobal("__TANDEM_VERSION__", "9.9.9-noprobe");
+  vi.resetModules();
+  Object.defineProperty(process, "execPath", { value: npmNode, configurable: true });
+  try {
+    const { runDoctor } = await import("../../src/cli/doctor.js");
+    // The default MCP port: the fixture's entry names 3479, and the port
+    // check would otherwise answer before the entry's own arm.
+    return await runDoctor({ wsPort: 1, vitePort: 1 });
+  } finally {
+    Object.defineProperty(process, "execPath", { value: realExecPath, configurable: true });
+    vi.unstubAllGlobals();
+  }
+}
 
 describe.skipIf(process.platform === "win32")("the diagnostics path never probes a Node", () => {
   it("the fixture really is an installed layout (so the verdict reaches the Node question)", () => {
@@ -167,9 +228,9 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     const report = await runDoctorAsReleased();
     const row = report.results.find((x) => x.message.includes("older direct-HTTP entry"));
     expect(row, JSON.stringify(report.results.map((x) => x.message))).toBeDefined();
-    // The release-build path really ran: its `npm ls` was seen.
-    expect(spawned).toContain("npm");
-    expect(unlisted(), `unlisted spawns: ${JSON.stringify(spawned)}`).toEqual([]);
+    // The release-build path really ran: its `npm ls` was seen, through Tandem's Node.
+    expect(npmSpawns(), "the stale-global check never spawned").toHaveLength(1);
+    expect(spawnProblems()).toEqual([]);
     expect(probed()).toEqual([]);
     expect(nodeBinary.peekSystemNode()).toBeUndefined();
   });
@@ -179,10 +240,11 @@ describe.skipIf(process.platform === "win32")("the diagnostics path never probes
     await apply.warmClaudeCodeBridge();
     expect(probed()).toEqual([fakeNode]);
     expect(apply.resolveClaudeCodeBridge()).toEqual({ command: fakeNode, script });
-    spawned.length = 0;
+    spawns.length = 0;
     expect(apply.claudeCodeBridgeVerdict()).toBe("bridge");
     await runDoctorAsReleased();
-    expect(unlisted()).toEqual([]);
+    expect(npmSpawns(), "the stale-global check never spawned").toHaveLength(1);
+    expect(spawnProblems()).toEqual([]);
     expect(probed()).toEqual([]);
   });
 

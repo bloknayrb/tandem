@@ -790,8 +790,8 @@ export type ClaudeCodeBridgeVerdict =
  * the AI through MCP, so it reports what the last probe in this process left
  * — the boot sweep's, in the server — and never runs the system-Node
  * `--version` walk itself. `tests/cli/doctor-no-probe.test.ts` pins that every
- * spawn on the diagnostics path is on its allowlist (the pre-existing `npm ls`
- * of #2379, and `ps`), which the walk is not.
+ * spawn on the diagnostics path is on its allowlist (Tandem's own Node running
+ * `npm-cli.js`, and `/bin/ps` or `tasklist.exe`), which the walk is not.
  */
 export function claudeCodeBridgeVerdict(): ClaudeCodeBridgeVerdict {
   if (isAppTranslocatedPath(STDIO_BRIDGE_DIST)) return "translocated";

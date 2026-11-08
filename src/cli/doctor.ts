@@ -1493,7 +1493,7 @@ async function reportDirectHttpEntry(
         "temporary or removable location, is owned by another user, or on Windows is installed " +
         "anywhere but Program Files or your user folder. Install Node 22.12 or newer where " +
         "Tandem's PATH can see it (for an npm install, on the PATH of the shell you start " +
-        `Tandem from), then restart Tandem. ${desktopPathNote()}`,
+        `Tandem from), then restart Tandem. ${desktopPathAside()}`,
     );
     return;
   }
@@ -1507,7 +1507,7 @@ async function reportDirectHttpEntry(
         "22.12 or newer it can record on its own PATH (not an older one, a version manager's " +
         "shim, one in a temporary location or owned by another user, or on Windows one outside " +
         "Program Files or your user folder); the desktop app can also use the Node it ships " +
-        `with. ${desktopPathNote()} Restart Tandem, or ${setupStep(cliAvailable())}, which looks ` +
+        `with. ${desktopPathAside()} Restart Tandem, or ${setupStep(cliAvailable())}, which looks ` +
         "too. If the entry is " +
         "still direct HTTP afterwards, Tandem's log says why, on a line containing " +
         "\"Claude Code's 'tandem' entry stays direct HTTP\".",
@@ -1558,6 +1558,29 @@ function desktopPathNote(): string {
     );
   }
   return "A desktop app started from a menu cannot see a Node that only a shell profile adds.";
+}
+
+/**
+ * {@link desktopPathNote}, worded for a reader who may not use the desktop
+ * app at all: the direct-HTTP arms are reached by npm installs too, and an
+ * npm user on macOS must not read "the Node the app ships with" as theirs.
+ */
+function desktopPathAside(): string {
+  if (process.platform === "darwin") {
+    return (
+      "If you use the desktop app: opened from the Dock or Finder (or with `open -a`) it sees " +
+      "only /usr/bin:/bin:/usr/sbin:/sbin, which holds no Node, so its entry stays on the Node " +
+      "it ships with unless the app's own binary is started from a shell that has Node on its " +
+      "PATH."
+    );
+  }
+  if (process.platform === "win32") {
+    return (
+      "If you use the desktop app: it sees the PATH Windows gives programs started from the " +
+      "Start menu, not one a terminal changed."
+    );
+  }
+  return "If you use the desktop app: started from a menu, it cannot see a Node that only a shell profile adds.";
 }
 
 /** The Windows install-root rule, as a clause after "on its own PATH". */
@@ -4012,8 +4035,8 @@ export function evaluateStaleGlobal(
   };
 }
 
-async function checkStaleGlobal(r: Recorder, bundledOverride?: string): Promise<void> {
-  const bundled = bundledOverride ?? BUNDLED_VERSION;
+async function checkStaleGlobal(r: Recorder): Promise<void> {
+  const bundled = BUNDLED_VERSION;
   // Without a known bundled version (tsx dev / vitest) there's nothing to
   // compare against — skip silently rather than guess.
   if (!bundled) return;
@@ -4068,12 +4091,6 @@ export interface RunDoctorOptions {
    * `tandem_diagnostics`, so it reports what the last boot's probe left.
    */
   claudeCodeBridgeVerdict?: () => Promise<ClaudeCodeBridgeVerdict | null>;
-  /**
-   * Test seam: the bundled version a release build has (`__TANDEM_VERSION__`,
-   * absent under vitest), so a test can run `checkStaleGlobal`'s real spawn as
-   * the shipped `tandem_diagnostics` does. Never set in production.
-   */
-  bundledVersionForTests?: string;
 }
 
 /**
@@ -4151,13 +4168,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("integrations-file", () => checkIntegrationsFile(r));
-  await r.check("stale-global", () =>
-    checkStaleGlobal(
-      r,
-      // Honoured only under vitest, so "never set in production" is enforced.
-      process.env.VITEST === "true" ? opts.bundledVersionForTests : undefined,
-    ),
-  );
+  await r.check("stale-global", () => checkStaleGlobal(r));
 
   // `check` returns undefined when the check crashed (it records its own
   // fail). Treating both ports as down is the honest reading: we did not

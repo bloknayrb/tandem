@@ -3764,6 +3764,25 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
     },
   );
 
+  it.each(["no-node", "unprobed"] as const)(
+    "on macOS the %s arm marks the Dock note as desktop-only, since npm users reach it too",
+    async (verdict) => {
+      writeTandem({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+      const real = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      let fix = "";
+      try {
+        const results = await userMcp({ claudeCodeBridgeVerdict: async () => verdict });
+        fix = results.find((x) => x.status === "warn")?.fix ?? "";
+      } finally {
+        Object.defineProperty(process, "platform", { value: real });
+      }
+      expect(fix).toContain("If you use the desktop app: opened from the Dock");
+      // Never the unqualified desktop sentence an npm user would read as theirs.
+      expect(fix).not.toContain("so a desktop entry stays on the Node the app ships with");
+    },
+  );
+
   it("names a hand-edited HTTP entry and warns that replacing it discards the edit (P11)", async () => {
     writeTandem({
       type: "http",

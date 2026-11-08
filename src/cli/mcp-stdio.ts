@@ -433,7 +433,10 @@ export function tokenMayGoTo(baseUrl: string, env: NodeJS.ProcessEnv = process.e
   // `TANDEM_MCP_PORT` arrives the same way `CLAUDE_PLUGIN_OPTION_SERVER_URL`
   // does, and whoever sets those could set `NODE_OPTIONS` too. The default
   // port stays allowed after Tandem moves off it, so a URL naming 3479 still
-  // sends the token to whatever holds 3479.
+  // sends the token to whatever holds 3479. On a moved port whose
+  // `TANDEM_MCP_PORT` does not reach Claude Code's environment, the token is
+  // withheld and the bridge prints its "Not sending the auth token" line on
+  // every start; that is noise, not a failure, since loopback needs no token.
   const port = url.port === "" ? 80 : Number(url.port);
   const allowed = new Set<number>([DEFAULT_MCP_PORT]);
   const moved = Number.parseInt(env.TANDEM_MCP_PORT ?? "", 10);

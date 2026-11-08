@@ -103,6 +103,11 @@ function startBridge(id: string): {
   env.CLAUDECODE = "1";
   env.CLAUDE_CODE_SESSION_ID = id;
   delete env.TANDEM_AUTH_TOKEN;
+  // The plugin's variables outrank the entry's own (`resolveTandemUrlCandidate`),
+  // so one inherited from the developer's shell would point the bridge at the
+  // real :3479 instead of the test server.
+  delete env.CLAUDE_PLUGIN_OPTION_SERVER_URL;
+  delete env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
   const child = spawn(entry.command as string, entry.args as string[], {
     env,
     stdio: ["pipe", "pipe", "pipe"],
