@@ -46,7 +46,7 @@ import { fileURLToPath } from "node:url";
 export const EXIT_CANNOT_EVALUATE = 3;
 
 /** Resolved absolute, forward-slashed. Guards a future disagreement on either axis. */
-const normalize = (repoRoot, p) => path.resolve(repoRoot, String(p)).replace(/\\/g, "/");
+export const normalize = (repoRoot, p) => path.resolve(repoRoot, String(p)).replace(/\\/g, "/");
 
 const cannot = (message) => ({
   ok: false,

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import { join } from "node:path";
 import { defineConfig } from "tsup";
-import { DOCX_ENABLED } from "./src/shared/constants.js";
+import { DOCX_ENABLED, OWNERSHIP_ENABLED } from "./src/shared/constants.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("./package.json") as { version: string };
@@ -24,6 +24,16 @@ const LICENSE_GATE_ENABLED = false;
 // because the client reads it there directly; this only carries it into the
 // server + cli bundles as __DOCX_ENABLED__ so a release ignores TANDEM_DOCX.
 const DOCX_DEFINE = JSON.stringify(DOCX_ENABLED);
+
+// Multi-session document ownership (#2358, ADR-054): ships DARK. Like `.docx`, the
+// value lives in src/shared/constants.ts and is only carried into the server and
+// cli bundles here, as __OWNERSHIP_ENABLED__, so a release ignores TANDEM_OWNERSHIP.
+// Derived from the literal and nothing else: no environment variable is read for
+// it, so a shell export cannot build a half-on bundle. The `ownership-flag-on` CI
+// job overrides it per block through scripts/ci/build-ownership-on.ts instead.
+// Only the server bundle reaches src/server/ownership-flag.ts today; the cli
+// block carries it too so a future cli import cannot read a bare free global.
+const OWNERSHIP_DEFINE = JSON.stringify(OWNERSHIP_ENABLED);
 
 // Node builtins must stay external — CJS deps that call require("fs") etc.
 // fail with "Dynamic require not supported" if bundled into ESM.
@@ -90,6 +100,7 @@ export default defineConfig([
       __TANDEM_VERSION__: JSON.stringify(pkg.version),
       __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
       __DOCX_ENABLED__: DOCX_DEFINE,
+      __OWNERSHIP_ENABLED__: OWNERSHIP_DEFINE,
     },
   },
   sidecarBundle("channel"),
@@ -100,7 +111,8 @@ export default defineConfig([
   //
   // No `define` block, like its siblings: nothing in this entry's import
   // closure reads `__TANDEM_VERSION__` / `__APP_VERSION__` /
-  // `__LICENSE_GATE_ENABLED__` / `__DOCX_ENABLED__`. If that changes, add them — esbuild leaves an
+  // `__LICENSE_GATE_ENABLED__` / `__DOCX_ENABLED__` / `__OWNERSHIP_ENABLED__`.
+  // If that changes, add them — esbuild leaves an
   // absent define as a bare free global, a runtime ReferenceError with no
   // build error.
   sidecarBundle("stdio-bridge"),
@@ -127,6 +139,7 @@ export default defineConfig([
       __TANDEM_VERSION__: JSON.stringify(pkg.version),
       __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
       __DOCX_ENABLED__: DOCX_DEFINE,
+      __OWNERSHIP_ENABLED__: OWNERSHIP_DEFINE,
     },
   },
 ]);

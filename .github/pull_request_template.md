@@ -3,5 +3,6 @@ documents, how a real upgrade behaves, what a specific OS or Claude Code build d
 "nothing — it's all derivable from the code" if that is the answer.
 
 - [ ] Adversarial agents reviewed the plan before implementation
+- [ ] Green flag-off **and** flag-on: `ownership-flag-on` passes (multi-session ownership ships dark, ADR-054; that job is required while it does, once branch protection lists it)
 
 Problem/solution, commands run, screenshots, `Closes #N`: see CONTRIBUTING.md.

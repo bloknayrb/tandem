@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { API_CONVERT } from "../../../shared/api-paths.js";
 import { assertOriginAllowlisted } from "../../integrations/api-routes.js";
+import { applyUserOpenDefault } from "../../sessions/ownership.js";
 import { convertToMarkdown } from "../convert.js";
 import { scrubPathForCaller, sendApiError } from "./_shared.js";
 
@@ -41,6 +42,10 @@ export async function handleConvert(req: Request, res: Response): Promise<void> 
       documentId as string | undefined,
       outputPath as string | undefined,
     );
+    // The user's own convert opens its output: ownership's default rule, as
+    // for the other user-side opens (#2358). Here in the route, never in
+    // `convertToMarkdown`, which `tandem_convertToMarkdown` also runs.
+    applyUserOpenDefault(result.documentId);
     // #1294: when the caller omits `outputPath`, `convertToMarkdown` derives it
     // from the open document's directory — so the response returns an absolute
     // path the caller never supplied. `findAvailablePath` can also rename it

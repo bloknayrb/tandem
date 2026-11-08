@@ -14,6 +14,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
@@ -30,7 +31,9 @@ function setupDoc(id: string, text: string) {
 beforeEach(async () => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
-  ({ client, close } = await setupMcpServer([registerAnnotationTools]));
+  ({ client, close } = await setupMcpServer([registerAnnotationTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

@@ -54,6 +54,7 @@ import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js"
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 // Pass-through mocks: each behaves exactly as the real function until a row
 // overrides it for one call. `isStoreReadOnly` is the server-built field the
@@ -84,7 +85,9 @@ beforeEach(async () => {
     ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
     ctrl.getMap(Y_MAP_CHAT).clear();
   });
-  ({ client, close } = await setupMcpServer([registerAwarenessTools]));
+  ({ client, close } = await setupMcpServer([registerAwarenessTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

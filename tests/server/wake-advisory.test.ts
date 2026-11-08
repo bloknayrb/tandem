@@ -12,6 +12,7 @@ import {
   WAKE_ADVISORY_TEXT,
 } from "../../src/server/mcp/wake-advisory.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
 
 /**
  * The wake advisory (Track D-3).
@@ -138,8 +139,11 @@ describe("withErrorBoundary decoration", () => {
   });
   afterEach(resetWakeAdvisoryForTests);
 
-  const wrap = (fn: () => Promise<ReturnType<typeof mcpSuccess>>) =>
-    withErrorBoundary("tandem_test", fn);
+  const wrap =
+    (fn: () => Promise<ReturnType<typeof mcpSuccess>>) =>
+    // Run as a dispatched caller: flag-on (#2358) the wrapper refuses one with none.
+    (args: Record<string, unknown>) =>
+      asTestCaller(() => withErrorBoundary("tandem_test", fn)(args));
 
   it("appends the advisory as a TRAILING block", async () => {
     const result = await wrap(async () => mcpSuccess({ ok: true }))({});

@@ -99,6 +99,7 @@ import {
 } from "../../src/shared/origins.js";
 import type { ExternalConflictState } from "../../src/shared/types.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
 
 /** Build a minimal one-paragraph .docx buffer with the given text. */
 async function buildSimpleDocx(text: string): Promise<Buffer> {
@@ -150,7 +151,9 @@ async function callTool(
 ): Promise<Record<string, unknown>> {
   if (toolHandlers.size === 0) {
     const capture = (n: string, ...rest: unknown[]) => {
-      toolHandlers.set(n, rest[rest.length - 1] as ToolHandler);
+      // Run as a dispatched caller (#2358: flag-on, a call with none is refused).
+      const handler = rest[rest.length - 1] as ToolHandler;
+      toolHandlers.set(n, (args) => asTestCaller(() => handler(args)));
     };
     registerDocumentTools({ tool: capture, registerTool: capture } as never);
   }
