@@ -437,6 +437,24 @@ jobs:
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pins the Linux tray library tauri-cli writes into the .deb/.rpm
+          # metadata and copies into the AppImage. "false" means FORCE
+          # libappindicator: tauri-cli (crates/tauri-cli/src/interface/rust.rs,
+          # tauri_config_to_bundle_settings) treats "true"/"1" as ayatana and any
+          # other value as libappindicator, failing the build if the
+          # appindicator3-0.1 pkg-config file is missing. Unset, it prefers
+          # ayatana whenever that .pc exists -- so a runner image that gained
+          # libayatana-appindicator3-dev would silently flip the package to
+          # `Depends: libayatana-appindicator3-1`. That flip breaks existing
+          # Ubuntu installs: the updater applies a .deb with `dpkg -i`, which
+          # resolves nothing, those users hold the real libappindicator3-1, and
+          # ayatana Conflicts with it -- measured 2026-11-06, tandem is left
+          # unconfigured and apt refuses every operation until --fix-broken.
+          # The .deb still installs on Debian, which has no libappindicator3-1,
+          # because libayatana-appindicator3-1 Provides it (see the package
+          # smoke below). Linux-only code path; inert on the other legs.
+          # Pinned by tests/scripts/linux-package-smoke-wiring.test.ts.
+          TAURI_LINUX_AYATANA_APPINDICATOR: "false"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Apple code signing + notarization (issue #428 / macOS 26.1 Tahoe Gatekeeper).
@@ -560,6 +578,9 @@ jobs:
               # nothing. Failing a release on that would be blaming the package
               # for the network, and is how a gate earns its way to being muted.
               3) echo "::warning::Linux smoke ($mode/$image): ENVIRONMENT fault (repo metadata unreachable). The package was NOT evaluated -- re-run before trusting this build." ;;
+              # 125 is docker's own failure (image pull, daemon), before the
+              # harness ran: also nothing learned about the package.
+              125) echo "::warning::Linux smoke ($mode/$image): ENVIRONMENT fault (docker could not start the container). The package was NOT evaluated -- re-run before trusting this build." ;;
               *) echo "::error::Linux smoke ($mode/$image): $rc packaging defect(s)"; errors=1 ;;
             esac
           }
@@ -575,7 +596,21 @@ jobs:
           # that the harness runs clean on 44's dnf5 and that `libxdo` is still
           # the right package name there (same soname as on 39, which is why
           # tauri.conf.json pins no version).
+          #
+          # ubuntu:24.04, debian:12 and debian:13 cover the current LTS and
+          # Debian's oldstable and stable. The appindicator dependency resolves
+          # differently on each: the .deb says `Depends: libappindicator3-1`
+          # (tauri-cli injects it; TAURI_LINUX_AYATANA_APPINDICATOR on the
+          # tauri-action step pins that), Ubuntu has that real package, and Debian has
+          # none -- there apt satisfies it with libayatana-appindicator3-1,
+          # which declares `Provides: libappindicator3-1`. That Provides is the
+          # only reason the .deb installs on Debian, so a distro dropping it
+          # must fail here, not in a user's terminal. Rotate these images as they
+          # leave support; the dated review is #2373.
           run_smoke deb ubuntu:22.04
+          run_smoke deb ubuntu:24.04
+          run_smoke deb debian:12
+          run_smoke deb debian:13
           run_smoke rpm fedora:44
           exit "$errors"
 

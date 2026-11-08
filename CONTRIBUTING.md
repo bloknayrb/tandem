@@ -205,6 +205,13 @@ On Debian/Ubuntu also install:
 apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
 ```
 
+Debian has no `libappindicator3-dev`; install `libayatana-appindicator3-dev` in its place. Neither
+is linked (the tray `dlopen`s its library), so `cargo build` and `cargo test` work with either. What
+differs is a local `cargo tauri build`: tauri-cli reads whichever pkg-config file is present to pick
+the `.deb`'s tray dependency, so a package built against ayatana depends on
+`libayatana-appindicator3-1`. Release builds pin libappindicator on purpose; the reason is at
+`TAURI_LINUX_AYATANA_APPINDICATOR` in `.github/workflows/tauri-release.yml`.
+
 `libxdo-dev` is the one people miss. It is pulled in by a Cargo feature, so omitting it surfaces as
 a bare `rust-lld: error: unable to find library -lxdo` thousands of lines into linker output, long
 after the GTK packages everyone remembers are already installed.
