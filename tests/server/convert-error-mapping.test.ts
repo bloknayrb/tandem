@@ -17,6 +17,7 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const convertToMarkdown = vi.fn();
 vi.mock(import("../../src/server/mcp/convert.js"), () => ({ convertToMarkdown }));
@@ -33,7 +34,9 @@ describe("tandem_convertToMarkdown error mapping — shape test (#1796)", () => 
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    ({ client, close } = await setupMcpServer([registerDocumentTools]));
+    ({ client, close } = await setupMcpServer([registerDocumentTools], {
+      dispatch: ownershipTestDispatch,
+    }));
   });
 
   afterEach(async () => {

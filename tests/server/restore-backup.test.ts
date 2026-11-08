@@ -83,6 +83,7 @@ import {
 import { INTERNAL_ORIGIN, RELOAD_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
 // `mkfifo` (coreutils) is how a test plants a FIFO — Node has no binding for
@@ -103,7 +104,8 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
 const toolHandlers = new Map<string, ToolHandler>();
 registerApplyTools({
   tool: (name: string, _desc: string, _schema: unknown, handler: ToolHandler) => {
-    toolHandlers.set(name, handler);
+    // Run as a dispatched caller (#2358: flag-on, a call with none is refused).
+    toolHandlers.set(name, (args) => asTestCaller(() => handler(args)));
   },
 } as unknown as McpServer);
 const restoreTool = toolHandlers.get("tandem_restoreBackup")!;

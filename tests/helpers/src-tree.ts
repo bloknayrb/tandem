@@ -43,6 +43,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/** Throws on invalid UTF-8 instead of substituting U+FFFD. */
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+
 /**
  * Every file under `src/`, repo-relative POSIX path → contents. Read once.
  *
@@ -53,22 +56,44 @@ function walk(dir: string, out: string[] = []): string[] {
  * and each guard built on this helper would report "no new callers" — a false
  * green precisely in the suites whose job is to catch one. The loud failures
  * need no help: a `readdirSync`/`readFileSync` error carries its path and aborts
- * module evaluation, which vitest reports against this file.
+ * module evaluation, which vitest reports against this file. The decode is
+ * strict (`TextDecoder` with `fatal: true`, in `readTree`), so a file that
+ * legitimately contains U+FFFD still reads.
  */
-export const SRC_FILES: ReadonlyMap<string, string> = new Map(
-  walk(SRC)
-    .map((f) => path.relative(ROOT, f).split(path.sep).join("/"))
-    .map((rel) => {
-      const contents = readFileSync(path.join(ROOT, rel), "utf8");
-      if (contents.includes("\uFFFD")) {
-        throw new Error(
-          `${rel} did not decode as UTF-8 (U+FFFD present). Every src/ guard reads this map, ` +
-            "and a mangled file silently matches nothing — so this fails loudly instead.",
-        );
-      }
-      return [rel, contents] as const;
-    }),
-);
+export const SRC_FILES: ReadonlyMap<string, string> = readTree(SRC);
+
+/**
+ * Every file under `dir`, repo-relative POSIX path → contents, with the same
+ * fail-closed decode check as `SRC_FILES` (which is `readTree` of `src/`).
+ * `filter` narrows by file name. For a guard over a tree other than `src/`
+ * (`tests/server/ownership-module-seam.test.ts` reads `tests/`).
+ */
+export function readTree(
+  dir: string,
+  filter: (name: string) => boolean = () => true,
+): ReadonlyMap<string, string> {
+  return new Map(
+    walk(dir)
+      .filter((f) => filter(path.basename(f)))
+      .map((f) => path.relative(ROOT, f).split(path.sep).join("/"))
+      .map((rel) => {
+        // A strict decode, not a U+FFFD search: invalid bytes throw here, while
+        // a file that legitimately contains U+FFFD (a test about sanitizing it)
+        // reads as written.
+        let contents: string;
+        try {
+          contents = STRICT_UTF8.decode(readFileSync(path.join(ROOT, rel)));
+        } catch (err) {
+          if ((err as { code?: string }).code !== "ERR_ENCODING_INVALID_ENCODED_DATA") throw err;
+          throw new Error(
+            `${rel} did not decode as UTF-8. Every guard reading this tree would silently ` +
+              "match nothing in it — so this fails loudly instead.",
+          );
+        }
+        return [rel, contents] as const;
+      }),
+  );
+}
 
 /**
  * Comments removed, so prose *about* a symbol is not counted as a use of it.

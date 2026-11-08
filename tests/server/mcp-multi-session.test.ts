@@ -12,6 +12,8 @@
 
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onTandemReply } from "../../src/server/mcp/awareness.js";
+import { setGreetingReplyClassifier } from "../../src/server/mcp/greeting-reply.js";
 import {
   closeMcpSession,
   getPinnedMcpSessionCount,
@@ -199,6 +201,113 @@ describe("concurrent MCP sessions", () => {
   it("accepts an initialize carrying X-Claude-Session-Id (stdio-bridge path)", async () => {
     const a = await openSession("client-a", "claude-session-uuid-1");
     expect((await toolsList(a.sessionId)).status).toBe(200);
+  });
+});
+
+/** Issue a tools/call against a given session id; resolves once the response body is read. */
+async function callTool(
+  sessionId: string,
+  claudeSessionId: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ status: number; body: string }> {
+  const res = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: MCP_ACCEPT,
+      "mcp-session-id": sessionId,
+      "X-Claude-Session-Id": claudeSessionId,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  });
+  return { status: res.status, body: await res.text() };
+}
+
+describe("tandem_reply sees its own caller's Claude session id (#2358 PR 1a)", () => {
+  /**
+   * A characterisation of today's behaviour, written before PR 1a moved the
+   * read out of the handler and into `withErrorBoundary`'s caller object. Two
+   * clients reply at the same time; each reply must reach the supervisor's
+   * listener and the greeting classifier carrying ITS OWN transport's id. A
+   * wrapper that passed `{}`, a module-level "current session" or the other
+   * client's id fails here, which no in-memory test can show (an in-memory
+   * transport carries no id at all).
+   *
+   * The id rides on the registry entry captured at `initialize`, so the header
+   * repeated on the tools/call below is not what is read; it is sent only
+   * because a real bridge sends it on every request.
+   */
+  it("delivers each concurrent reply's id to the listener and the classifier", async () => {
+    const heard: Array<string | undefined> = [];
+    const classified: Array<{ sessionId: string | undefined; replyTo: string | undefined }> = [];
+    const offListener = onTandemReply((id) => heard.push(id));
+    const offClassifier = setGreetingReplyClassifier((q) => {
+      classified.push({ sessionId: q.sessionId, replyTo: q.replyTo });
+      return false;
+    });
+    try {
+      const a = await openSession("client-a", "claude-reply-a");
+      const b = await openSession("client-b", "claude-reply-b");
+      const [ra, rb] = await Promise.all([
+        callTool(a.sessionId, "claude-reply-a", "tandem_reply", {
+          text: "from a",
+          replyTo: "msg-a",
+        }),
+        callTool(b.sessionId, "claude-reply-b", "tandem_reply", {
+          text: "from b",
+          replyTo: "msg-b",
+        }),
+      ]);
+      expect(ra.status).toBe(200);
+      expect(rb.status).toBe(200);
+      expect(ra.body).toContain('\\"sent\\":true');
+      expect(rb.body).toContain('\\"sent\\":true');
+      expect([...heard].sort()).toEqual(["claude-reply-a", "claude-reply-b"]);
+      // Paired with each call's own replyTo, so ids swapped between the two
+      // concurrent calls fail here, not only ids lost.
+      expect(classified.sort((x, y) => String(x.replyTo).localeCompare(String(y.replyTo)))).toEqual(
+        [
+          { sessionId: "claude-reply-a", replyTo: "msg-a" },
+          { sessionId: "claude-reply-b", replyTo: "msg-b" },
+        ],
+      );
+    } finally {
+      offListener();
+      offClassifier();
+    }
+  });
+
+  it("delivers undefined for a transport that carried no id", async () => {
+    const heard: Array<string | undefined> = [];
+    const off = onTandemReply((id) => heard.push(id));
+    try {
+      const a = await openSession("client-direct-http");
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: MCP_ACCEPT,
+          "mcp-session-id": a.sessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "tandem_reply", arguments: { text: "no id" } },
+        }),
+      });
+      await res.text();
+      expect(res.status).toBe(200);
+      expect(heard).toEqual([undefined]);
+    } finally {
+      off();
+    }
   });
 });
 

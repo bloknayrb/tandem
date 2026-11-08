@@ -65,6 +65,7 @@ import { withBrowser } from "../../src/shared/origins.js";
 import type { ReadOnlyFileState } from "../../src/shared/types.js";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
 const POSIX = process.platform !== "win32";
@@ -119,7 +120,9 @@ const toolHandlers = new Map<string, ToolHandler>();
 async function callTool(name: string, args: Record<string, unknown>) {
   if (toolHandlers.size === 0) {
     const capture = (n: string, ...rest: unknown[]) => {
-      toolHandlers.set(n, rest[rest.length - 1] as ToolHandler);
+      // Run as a dispatched caller (#2358: flag-on, a call with none is refused).
+      const handler = rest[rest.length - 1] as ToolHandler;
+      toolHandlers.set(n, (args) => asTestCaller(() => handler(args)));
     };
     registerDocumentTools({ tool: capture, registerTool: capture } as never);
   }

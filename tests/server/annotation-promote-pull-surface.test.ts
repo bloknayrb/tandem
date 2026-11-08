@@ -63,6 +63,7 @@ import type { Annotation } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { getAnnotationsMap, noRelay } from "../helpers/ydoc-factory.js";
 
 const HTML =
@@ -130,7 +131,9 @@ beforeEach(async () => {
   clearOpenDocs();
   resetInbox();
   setCtrlMode("tandem");
-  ({ client, close } = await setupMcpServer([registerAnnotationTools, registerAwarenessTools]));
+  ({ client, close } = await setupMcpServer([registerAnnotationTools, registerAwarenessTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

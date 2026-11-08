@@ -496,3 +496,53 @@ describe("hasLiveEntryOtherThan (#2196)", () => {
     expect(hasLiveEntryOtherThan(entries, new Set([OWN, OTHER]), NOW)).toBe(false);
   });
 });
+
+describe("onRemoved: the synchronous removal hook (#2358)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("fires the moment an entry leaves the map, before its server's close resolves", async () => {
+    let releaseClose: () => void = () => {};
+    const hanging = { close: vi.fn(() => new Promise<void>((r) => (releaseClose = r))) };
+    const removed: string[] = [];
+    const reg = createMcpSessionRegistry({
+      onRemoved: (entry) =>
+        removed.push(`${entry.sessionId}:${reg.get(entry.sessionId) ? "in" : "out"}`),
+    });
+    await reg.add({ sessionId: "s1", server: hanging, transport: null });
+    const closing = reg.close("s1");
+    // close() is still awaiting the server, and the hook has already run —
+    // with the entry already gone from the map.
+    expect(removed).toEqual(["s1:out"]);
+    releaseClose();
+    await closing;
+  });
+
+  it("a throwing hook never stops close, LRU eviction, reaping or closeAll", async () => {
+    const c = clock();
+    const reg = createMcpSessionRegistry({
+      maxSessions: 1,
+      idleTtlMs: 10,
+      now: c.now,
+      onRemoved: () => {
+        throw new Error("hook failed");
+      },
+    });
+    const a = fakeServer();
+    const b = fakeServer();
+    const d = fakeServer();
+    await reg.add({ sessionId: "a", server: a, transport: null });
+    await expect(reg.add({ sessionId: "b", server: b, transport: null })).resolves.toBeUndefined();
+    expect(a.close).toHaveBeenCalledOnce(); // evicted LRU, closed anyway
+    c.advance(100);
+    await expect(reg.reapIdle()).resolves.toBe(1);
+    expect(b.close).toHaveBeenCalledOnce();
+    await reg.add({ sessionId: "d", server: d, transport: null });
+    await expect(reg.close("d")).resolves.toBeUndefined();
+    expect(d.close).toHaveBeenCalledOnce();
+    await reg.add({ sessionId: "e", server: fakeServer(), transport: null });
+    await expect(reg.closeAll()).resolves.toBeUndefined();
+    expect(reg.size).toBe(0);
+  });
+});

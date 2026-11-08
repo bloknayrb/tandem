@@ -79,6 +79,10 @@ import {
   ensureSessionDirPrivate,
   stopAutoSave,
 } from "./session/manager.js";
+import {
+  applyUserOpenDefaultToDocuments,
+  setOwnershipTransportMode,
+} from "./sessions/ownership.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
 import { installSidecarPipeGuard } from "./sidecar-pipe-guard.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
@@ -772,6 +776,11 @@ async function main() {
   const resolvedLanIP = bindCheck.resolvedLanIP;
 
   if (transportMode === "http") {
+    // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that
+    // arrives with no request context is refused (ownership design §3.1 rule 4).
+    // A literal per branch, never the env string: `TANDEM_TRANSPORT=sse` takes
+    // the stdio branch below. A no-op while ownership is off.
+    setOwnershipTransportMode("http");
     // Refresh only a standalone skill that Tandem setup already installed.
     // This is intentionally outside every launcher branch: hand-started
     // Claude sessions are the population that needs the current instructions,
@@ -861,6 +870,13 @@ async function main() {
         }
       }
     }
+
+    // Every document open here — restored, CHANGELOG, TANDEM_OPEN_FILE,
+    // welcome.md — was opened on the user's side: neither MCP nor `/api` is
+    // listening yet. So this one call is the default rule for all of them
+    // (ownership design §4.2). Tandem's Claude is never present at boot
+    // (decision 11), so it leaves them unowned unless that changes.
+    applyUserOpenDefaultToDocuments(getOpenDocs().keys());
 
     const [srv] = await Promise.all([
       startMcpServerHttp(
@@ -961,6 +977,12 @@ async function main() {
       await startLauncherSupervisor();
     }
   } else {
+    // Ownership (#2358): stdio mode answers every tool call as one `local`
+    // record (ownership design §3.1 rule 4). Then the boot default rule, as in
+    // the HTTP branch: nothing but the restore can have opened a document yet.
+    setOwnershipTransportMode("stdio");
+    applyUserOpenDefaultToDocuments(getOpenDocs().keys());
+
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
       // Probed HERE rather than at the top of `main()` so it runs concurrently

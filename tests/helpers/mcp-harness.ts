@@ -48,6 +48,21 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
  */
 export async function setupMcpServer(
   registrars: Array<(server: McpServer) => void>,
+  options: {
+    /**
+     * Run each message the server receives inside `dispatch` — how a suite
+     * gives its tool calls a request context, as the HTTP route does for a real
+     * client (#2358: flag-on, a tool call with no caller is refused). Pass
+     * `ownershipTestDispatch` from `tests/helpers/ownership-caller.ts`; this
+     * module still imports nothing from `src`.
+     *
+     * Installed after `connect`, which replaces `onmessage`. Context carries
+     * into the handler because `InMemoryTransport.send` calls the peer's
+     * `onmessage` synchronously and the SDK builds its handler promise chain
+     * inside that call.
+     */
+    dispatch?: <T>(fn: () => T) => T;
+  } = {},
 ): Promise<{ client: Client; close: () => Promise<void> }> {
   const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
   for (const register of registrars) register(server);
@@ -55,6 +70,11 @@ export async function setupMcpServer(
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.1" });
   await server.connect(serverTransport);
+  const { dispatch } = options;
+  const onmessage = serverTransport.onmessage;
+  if (dispatch && onmessage) {
+    serverTransport.onmessage = (message, extra) => dispatch(() => onmessage(message, extra));
+  }
   await client.connect(clientTransport);
 
   return {
