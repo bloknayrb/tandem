@@ -57,6 +57,14 @@ export interface McpRequestContext {
    */
   mcpSessionId?: string;
   /**
+   * The owner record of the transport this request was dispatched to (#2358,
+   * ADR-054). Set only while ownership is on, by `dispatchToSession` from the
+   * transport's registry entry; the `initialize` request itself carries none.
+   * Never read here: `sessions/caller.ts` resolves it once, in
+   * `withErrorBoundary`, and passes it on explicitly.
+   */
+  ownerId?: string;
+  /**
    * Whether the request's TCP peer is loopback: `isLoopback(req.socket.remoteAddress)`, set
    * where `server.ts` enters the context — never from the `Host` header or any other
    * client-supplied header. Read it only through {@link isCurrentPeerLoopback} (#1952).
@@ -69,6 +77,16 @@ const storage = new AsyncLocalStorage<McpRequestContext>();
 /** Run `fn` with the given request context bound for its entire async extent. */
 export function runWithMcpContext<T>(ctx: McpRequestContext, fn: () => T): T {
   return storage.run(ctx, fn);
+}
+
+/**
+ * Run `fn` with no request context, even when called from inside one. For work
+ * that outlives the request that started it — a timer armed while handling one
+ * client's request must not later run as that client
+ * (`sessions/ownership.ts`'s grace timers).
+ */
+export function runOutsideMcpContext<T>(fn: () => T): T {
+  return storage.exit(fn);
 }
 
 /** The full context for the in-flight MCP request, or undefined outside one. */

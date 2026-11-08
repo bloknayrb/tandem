@@ -42,6 +42,7 @@ import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/docume
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const DOC_ID = "save-aio-1";
 
@@ -71,7 +72,9 @@ beforeEach(async () => {
   });
   setActiveDocId(DOC_ID);
 
-  ({ client, close } = await setupMcpServer([registerDocumentTools]));
+  ({ client, close } = await setupMcpServer([registerDocumentTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

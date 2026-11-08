@@ -70,6 +70,7 @@ import { withInternal } from "../../src/shared/origins.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 let tmpDir: string;
 let client: Client;
@@ -113,7 +114,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await fs.mkdir(SESSION_DIR, { recursive: true });
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-html-readonly-"));
-  ({ client, close } = await setupMcpServer([registerDocumentTools, registerAnnotationTools]));
+  ({ client, close } = await setupMcpServer([registerDocumentTools, registerAnnotationTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

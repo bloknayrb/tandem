@@ -60,7 +60,7 @@ export const BARE_NODE = "node";
  * blindly would convert an NTLM-leaking UNC path into one that validates, which
  * is the opposite of what this normalization is for.
  */
-const WIN_EXTENDED_DRIVE_RE = /^\\\\\?\\([A-Za-z]:)/;
+export const WIN_EXTENDED_DRIVE_RE = /^\\\\\?\\([A-Za-z]:)/;
 
 /**
  * Resolve the Node binary to embed in a generated `tandem-channel` entry.

@@ -5,6 +5,8 @@
 
 import type { ToolErrorCode } from "../../shared/types.js";
 import { getSubscriberCount } from "../events/queue.js";
+import { resolveToolCaller, type ToolCaller } from "../sessions/caller.js";
+import { logLimited, noteRecordPoll } from "../sessions/ownership.js";
 import { takeWakeAdvisory } from "./wake-advisory.js";
 
 type McpToolResult = {
@@ -143,16 +145,46 @@ export function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Wrap an MCP tool handler with a try/catch that returns a structured error.
- *  Catches unexpected throws so Claude gets a useful error message instead of
- *  a generic SDK-level JSON-RPC error. */
+/**
+ * What `withErrorBoundary` answers, flag-on, for a tool call it cannot name a
+ * caller for (#2358, ADR-054; ownership design §3.1). Exported so the tests
+ * pin the exact text: its code is `INTERNAL_ERROR`, the same as a handler that
+ * threw, so the message is what tells the two apart.
+ */
+export function noCallerRefusalMessage(toolName: string): string {
+  return (
+    `${toolName} refused: this request carries no caller identity. ` +
+    "This is a Tandem wiring fault, not something to retry with different arguments."
+  );
+}
+
+/**
+ * Wrap an MCP tool handler with a try/catch that returns a structured error.
+ * Catches unexpected throws so Claude gets a useful error message instead of
+ * a generic SDK-level JSON-RPC error.
+ *
+ * **Every registered tool goes through here, and this is where the caller is
+ * resolved** (#2358, ADR-054; ownership design §3.1): once, at entry, from the
+ * request context, then passed to the handler as its second argument. A
+ * handler never reads the ambient context itself. Flag-on, a call with no
+ * nameable caller is refused here, before the handler runs — fail closed.
+ */
 export function withErrorBoundary<TArgs extends Record<string, unknown>>(
   toolName: string,
-  handler: (args: TArgs) => Promise<McpToolResult>,
+  handler: (args: TArgs, caller: ToolCaller) => Promise<McpToolResult>,
 ): (args: TArgs) => Promise<McpToolResult> {
   return async (args: TArgs) => {
     try {
-      return withWakeAdvisory(await handler(args));
+      const caller = resolveToolCaller();
+      if (caller === null) {
+        logLimited(
+          `no-caller:${toolName}`,
+          `[Tandem] Tool ${toolName} refused: no caller identity (wiring fault)`,
+        );
+        return mcpError("INTERNAL_ERROR", noCallerRefusalMessage(toolName));
+      }
+      if (toolName === "tandem_checkInbox") noteRecordPoll(caller.ownerId);
+      return withWakeAdvisory(await handler(args, caller));
     } catch (err) {
       console.error(`[Tandem] Tool ${toolName} threw:`, err);
       // Not decorated: `mcpError` tags it, and an error envelope is written for

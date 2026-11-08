@@ -79,6 +79,7 @@ import {
   stopAutoSave,
   touchSession,
 } from "../session/manager.js";
+import { onDocumentClosed } from "../sessions/ownership.js";
 import { addStartupNotice, beginStartupRestore, endStartupRestore } from "../startup-notices.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
@@ -1879,6 +1880,11 @@ export async function closeDocumentById(
   // Drop dirty-tracking state + detach its body observer (#851).
   clearDirtyState(safeId);
   clearReadOnlyFileState(safeId);
+
+  // Ownership's tab-close point (#2358, ownership design §4.2): the entry goes
+  // with the tab. Synchronous and immediately before the untrack, with no
+  // await between them. A no-op while ownership is off.
+  onDocumentClosed(safeId);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and

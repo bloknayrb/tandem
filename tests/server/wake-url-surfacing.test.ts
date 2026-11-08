@@ -39,6 +39,7 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
 import { type McpRequestContext, runWithMcpContext } from "../../src/server/sessions/context.js";
 import { parseResult as parsed, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const mockedGetWakeEndpoint = vi.mocked(getWakeEndpoint);
 const LIVE_WAKE_URL = "ws://127.0.0.1:41999/api/wake";
@@ -52,7 +53,9 @@ beforeEach(async () => {
   setActiveDocId(null);
   mockedGetWakeEndpoint.mockReturnValue(null);
 
-  ({ client, close } = await setupMcpServer([registerDocumentTools, registerAwarenessTools]));
+  ({ client, close } = await setupMcpServer([registerDocumentTools, registerAwarenessTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

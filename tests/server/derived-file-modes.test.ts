@@ -26,6 +26,7 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { modeOf } from "../helpers/file-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 const CASES = [
   { source: 0o444, expected: 0o644 },
@@ -71,7 +72,9 @@ describe.skipIf(process.platform === "win32")("derived files take the source's c
 
   it.each(CASES)("the annotation sidecar of a $source source is $expected", async (c) => {
     const { file } = await openSource("md", c.source);
-    const { client, close } = await setupMcpServer([registerAnnotationTools]);
+    const { client, close } = await setupMcpServer([registerAnnotationTools], {
+      dispatch: ownershipTestDispatch,
+    });
     try {
       const result = (await client.callTool({
         name: "tandem_exportAnnotations",
@@ -98,7 +101,9 @@ describe.skipIf(process.platform === "win32")("derived files take the source's c
     await fsp.writeFile(sidecar, "{}");
     await fsp.chmod(sidecar, 0o644);
 
-    const { client, close } = await setupMcpServer([registerAnnotationTools]);
+    const { client, close } = await setupMcpServer([registerAnnotationTools], {
+      dispatch: ownershipTestDispatch,
+    });
     try {
       await client.callTool({
         name: "tandem_exportAnnotations",

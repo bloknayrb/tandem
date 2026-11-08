@@ -54,6 +54,7 @@ import {
   pluginVersionFromRegistry,
   probeTandemEditorRepo,
   resolveDoctorPortsFromEnv,
+  resolveNpmCli,
   runDoctor,
   runDoctorCli,
   setupApplyRemedy,
@@ -868,9 +869,30 @@ describe("evaluateClaudeCli", () => {
 
 describe("globalTandemEditorVersion", () => {
   const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+  const FAKE_CLI = join(tmpdir(), "fake-node", "node_modules", "npm", "bin", "npm-cli.js");
 
   afterEach(() => {
     mockExecFile.mockReset();
+  });
+
+  it("runs npm's script with Tandem's own Node, no shell, from the script's directory (#2379)", async () => {
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => callback(null, "", ""));
+    await globalTandemEditorVersion(FAKE_CLI);
+
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = mockExecFile.mock.calls[0];
+    // The old shape was execFile("npm", …, { shell: true }): a PATH lookup that
+    // cmd.exe on Windows widened to the server's cwd.
+    expect(cmd).toBe(process.execPath);
+    expect(args[0]).toBe(FAKE_CLI);
+    expect(args.slice(1)).toEqual(["ls", "-g", "--depth=0", "--json", "tandem-editor"]);
+    expect(opts).not.toHaveProperty("shell");
+    expect(opts.cwd).toBe(dirname(FAKE_CLI));
+  });
+
+  it("spawns nothing and resolves null when no npm sits beside Tandem's Node", async () => {
+    await expect(globalTandemEditorVersion(null)).resolves.toBeNull();
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 
   it("parses the version out of npm ls -g --json output", async () => {
@@ -882,7 +904,7 @@ describe("globalTandemEditorVersion", () => {
       );
     });
 
-    await expect(globalTandemEditorVersion()).resolves.toBe("0.2.11");
+    await expect(globalTandemEditorVersion(FAKE_CLI)).resolves.toBe("0.2.11");
   });
 
   it("resolves null when npm ls prints no stdout (npm absent or errored before output)", async () => {
@@ -890,7 +912,7 @@ describe("globalTandemEditorVersion", () => {
       callback(new Error("spawn npm ENOENT"), "", "");
     });
 
-    await expect(globalTandemEditorVersion()).resolves.toBeNull();
+    await expect(globalTandemEditorVersion(FAKE_CLI)).resolves.toBeNull();
   });
 
   it("resolves null when stdout is not valid JSON", async () => {
@@ -898,7 +920,7 @@ describe("globalTandemEditorVersion", () => {
       callback(null, "not json", "");
     });
 
-    await expect(globalTandemEditorVersion()).resolves.toBeNull();
+    await expect(globalTandemEditorVersion(FAKE_CLI)).resolves.toBeNull();
   });
 
   it("resolves null when tandem-editor is not among the global dependencies", async () => {
@@ -906,7 +928,74 @@ describe("globalTandemEditorVersion", () => {
       callback(null, JSON.stringify({ dependencies: {} }), "");
     });
 
-    await expect(globalTandemEditorVersion()).resolves.toBeNull();
+    await expect(globalTandemEditorVersion(FAKE_CLI)).resolves.toBeNull();
+  });
+});
+
+describe("resolveNpmCli (#2379)", () => {
+  let root: string;
+  const touch = (...segs: string[]) => {
+    const p = join(root, ...segs);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, "// npm");
+    return p;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "npm-cli-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("finds the Windows layout: node_modules\\npm beside node.exe", () => {
+    const cli = touch("nodejs", "node_modules", "npm", "bin", "npm-cli.js");
+    expect(resolveNpmCli(join(root, "nodejs", "node.exe"), "win32")).toBe(cli);
+  });
+
+  it("finds the POSIX prefix layout: <prefix>/lib/node_modules/npm", () => {
+    const cli = touch("lib", "node_modules", "npm", "bin", "npm-cli.js");
+    expect(resolveNpmCli(join(root, "bin", "node"), "linux")).toBe(cli);
+  });
+
+  it("finds Homebrew's keg layout: <keg>/libexec/lib/node_modules/npm", () => {
+    const cli = touch("libexec", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    expect(resolveNpmCli(join(root, "bin", "node"), "darwin")).toBe(cli);
+  });
+
+  it("finds Debian's separately packaged npm: <prefix>/share/nodejs/npm", () => {
+    const cli = touch("share", "nodejs", "npm", "bin", "npm-cli.js");
+    expect(resolveNpmCli(join(root, "bin", "node"), "linux")).toBe(cli);
+  });
+
+  it("keeps each platform to its own layouts", () => {
+    // A Windows-shaped tree beside a POSIX node is not an npm install.
+    touch("bin", "node_modules", "npm", "bin", "npm-cli.js");
+    expect(resolveNpmCli(join(root, "bin", "node"), "linux")).toBeNull();
+  });
+
+  it("answers null when no npm is installed (the desktop sidecar, Volta's shim)", () => {
+    expect(resolveNpmCli(join(root, "bin", "node"), "linux")).toBeNull();
+    expect(resolveNpmCli(join(root, "node-sidecar.exe"), "win32")).toBeNull();
+  });
+
+  it("refuses a candidate that is a directory, not a file", () => {
+    mkdirSync(join(root, "lib", "node_modules", "npm", "bin", "npm-cli.js"), { recursive: true });
+    expect(resolveNpmCli(join(root, "bin", "node"), "linux")).toBeNull();
+  });
+
+  it("refuses a UNC or device-namespace Node path before touching the filesystem", () => {
+    for (const p of [
+      "\\\\attacker\\share\\node.exe",
+      "\\\\?\\UNC\\attacker\\share\\node.exe",
+      "//attacker/share/node.exe",
+    ]) {
+      expect(resolveNpmCli(p, "win32"), p).toBeNull();
+    }
+  });
+
+  it("answers null for an empty execPath", () => {
+    expect(resolveNpmCli("", "linux")).toBeNull();
   });
 });
 

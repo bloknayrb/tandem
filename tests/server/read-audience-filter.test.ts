@@ -38,6 +38,7 @@ import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { noRelay } from "../helpers/ydoc-factory.js";
 
 const DOC_ID = "read-audience-doc";
@@ -116,7 +117,9 @@ beforeEach(async () => {
   setActiveDocId(DOC_ID);
   seedFixtures();
   setCtrlMode("tandem");
-  ({ client, close } = await setupMcpServer([registerAnnotationTools, registerAwarenessTools]));
+  ({ client, close } = await setupMcpServer([registerAnnotationTools, registerAwarenessTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

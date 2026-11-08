@@ -47,6 +47,7 @@ import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { range, unanchored } from "../helpers/positions.js";
 import { createAnnotation } from "../helpers/ydoc-factory.js";
 
@@ -1170,7 +1171,9 @@ describe("InboxPollContext (#1702)", () => {
   }
 
   async function connectInbox() {
-    const { client, close } = await setupMcpServer([registerAwarenessTools]);
+    const { client, close } = await setupMcpServer([registerAwarenessTools], {
+      dispatch: ownershipTestDispatch,
+    });
     const poll = async (documentId?: string) => {
       const result = await client.callTool({
         name: "tandem_checkInbox",

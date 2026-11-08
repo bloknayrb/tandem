@@ -99,6 +99,17 @@ let _warnedInvalidToken = false;
 export const CLAUDE_SESSION_HEADER = "X-Claude-Session-Id";
 
 /**
+ * Header carrying the stdio bridge's own per-process client id (#2358,
+ * ADR-054). The bridge mints one random UUID when it starts and sends it on
+ * every request, reconnects included, so a server with multi-session ownership
+ * on can tell one bridge from another even when no Claude Code session id is
+ * available (ownership design §3.1 rule 2). Sent unconditionally — the bridge
+ * bundle carries no build flags — and ignored by a server with ownership off.
+ * It selects an owner record; it proves nothing, and it is not a secret.
+ */
+export const TANDEM_CLIENT_ID_HEADER = "X-Tandem-Client-Id";
+
+/**
  * Bound on the session-id length we forward. Claude Code sets a UUID
  * (the same `session_id` passed to hooks; CHANGELOG 2.1.157 / 2.1.163), but we
  * treat the value as opaque and only guard against an oversized header line.

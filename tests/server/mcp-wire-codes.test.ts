@@ -13,6 +13,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { teardownFileAppDataDir } from "../helpers/app-data-teardown.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { createMinimalDocx, seedAcceptedSuggestion } from "../helpers/wire-code-fixtures.js";
 
 // vi.mock factories are hoisted above module-level code. The app-data dir name
@@ -81,7 +82,9 @@ beforeEach(async () => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
   tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-wire-codes-"));
-  ({ client, close } = await setupMcpServer([registerDocumentTools, registerApplyTools]));
+  ({ client, close } = await setupMcpServer([registerDocumentTools, registerApplyTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {

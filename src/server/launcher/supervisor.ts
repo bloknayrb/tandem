@@ -57,6 +57,7 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { isTauriSidecar } from "../platform.js";
+import { sessionIdForLog } from "../sessions/log-id.js";
 import {
   type LauncherSettingsRead,
   readLauncherSettings,
@@ -1938,7 +1939,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
 
     console.error(
-      `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${plan.sessionId} resuming=${plan.resuming}`,
+      `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${sessionIdForLog(plan.sessionId)} resuming=${plan.resuming}`,
     );
 
     // Every handler below closes over `spawned`, never the mutable module-level
