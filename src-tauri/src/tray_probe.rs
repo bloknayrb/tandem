@@ -12,8 +12,14 @@
 //! sonames with the same loader, and skip the tray build when none loads.
 //!
 //! Why the probe agrees with `LIB`:
-//! - Same loader and flags: both call `libloading` 0.7 `Library::new`
-//!   (`RTLD_LAZY | RTLD_LOCAL`).
+//! - Same loader and flags: both call `libloading`'s `Library::new`, which
+//!   is `dlopen(name, RTLD_LAZY | RTLD_LOCAL)`. They are two versions of it —
+//!   `LIB` uses 0.7.4 (`libappindicator-sys` depends on `^0.7`), the probe
+//!   0.8.9 — and both `Library::new` bodies (`src/os/unix/mod.rs`) and their
+//!   Linux flag values (`src/os/unix/consts.rs`: `RTLD_LAZY = 1`,
+//!   `RTLD_LOCAL = 0`) are identical; the probe looks up no symbols, so the
+//!   versions' other differences do not reach it. The version test below
+//!   pins both.
 //! - Same search path: both calls are statically linked into `tandem-desktop`,
 //!   so glibc searches on behalf of the same calling object, in its order:
 //!   `LD_LIBRARY_PATH`, then the main executable's DT_RUNPATH, the ld.so
@@ -166,6 +172,9 @@ mod tests {
         assert_eq!(locked_versions("libappindicator-sys"), ["0.9.0"]);
         assert_eq!(locked_versions("libappindicator"), ["0.9.0"]);
         assert_eq!(locked_versions("tray-icon"), ["0.25.1"]);
+        // The probe's loader (0.8.9) and `LIB`'s (0.7.4) were read to have the
+        // same Unix `Library::new`; a move of either needs that re-read.
+        assert_eq!(locked_versions("libloading"), ["0.7.4", "0.8.9"]);
     }
 
     /// Where the crate source is on disk (any machine that just compiled this
