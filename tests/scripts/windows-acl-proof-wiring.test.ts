@@ -2,12 +2,16 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 // This used to carry a `@ts-expect-error` for the untyped `.mjs`. The test
 // tree's tsconfigs set `allowJs`, so tsc now infers this module's exports from
 // its real source and the suppression became an error in its own right.
-import { evaluateReport, WINDOWS_ACL_PROOF_SPECS } from "../../scripts/ci/windows-acl-proof.mjs";
+import {
+  evaluateReport,
+  REAL_ACL_TEST_TITLE,
+  WINDOWS_ACL_PROOF_SPECS,
+} from "../../scripts/ci/windows-acl-proof.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -63,7 +67,7 @@ const workflow = parse(readFileSync(path.join(ROOT, ".github/workflows/ci.yml"),
 const RUNNER_REL = "scripts/ci/windows-acl-proof.mjs";
 const PROOF_COMMAND = `node ${RUNNER_REL}`;
 
-type SpecEntry = { spec: string; suite: string };
+type SpecEntry = { spec: string; suite: string; realAcl?: unknown; realAclReason?: string };
 const SPECS = WINDOWS_ACL_PROOF_SPECS as SpecEntry[];
 
 /**
@@ -227,7 +231,45 @@ describe("windows-acl-proof spec list", () => {
       expect(
         source,
         `${spec} now mocks acl-win, so it no longer exercises real icacls`,
-      ).not.toMatch(/vi\.mock\([^)]*acl-win/);
+      ).not.toMatch(/vi\.(?:doM|m)ock\([^)]*acl-win/);
+      // The spawn the proof is about. Mocking it keeps the unmock, the identity
+      // test and the word "icacls" while no real icacls runs.
+      expect(source, `${spec} mocks child_process, so no real icacls runs`).not.toMatch(
+        /vi\.(?:doM|m)ock\([^)]*child_process/,
+      );
+    }
+  });
+
+  // #2390: tests/setup/acl-win-mock.ts mocks `setRestrictiveAcl` for every file.
+  it("declares for every spec whether it opts out of the global acl-win mock", () => {
+    for (const { spec, realAcl, realAclReason } of SPECS) {
+      // A missing or misspelled field would slip past both arms below.
+      expect(typeof realAcl, `${spec}: realAcl must be a boolean`).toBe("boolean");
+      if (!realAcl) {
+        expect(
+          typeof realAclReason === "string" && realAclReason.trim().length > 0,
+          `${spec} stays under the global mock with no written reason`,
+        ).toBe(true);
+      }
+    }
+    expect(SPECS.some((s) => s.realAcl)).toBe(true);
+  });
+
+  it("makes every realAcl spec unmock acl-win and prove it got the real module", () => {
+    const aclWin = path.join(ROOT, "src/server/integrations/acl-win.ts");
+    const unmockCall = /vi\.unmock\(\s*import\(\s*["']([^"']+)["']\s*\)\s*\)/g;
+    for (const { spec } of SPECS.filter((s) => s.realAcl)) {
+      const source = readFileSync(path.join(ROOT, spec), "utf-8");
+      // Resolve the specifier rather than substring-match it: a wrong relative
+      // path unmocks nothing and would otherwise read as an opt-out.
+      const targets = [...source.matchAll(unmockCall)].map((m) =>
+        path.resolve(path.dirname(path.join(ROOT, spec)), m[1].replace(/\.js$/, ".ts")),
+      );
+      expect(targets, `${spec} has no vi.unmock(import(...acl-win.js))`).toContain(aclWin);
+      // The runner requires this test to have PASSED; here we only pin that it exists
+      // and compares against the real export, so the Linux leg catches a lost unmock too.
+      expect(source).toContain(`it("${REAL_ACL_TEST_TITLE}"`);
+      expect(source).toMatch(/vi\.importActual/);
     }
   });
 
@@ -273,7 +315,9 @@ describe("windows-acl-proof spec list", () => {
 describe("windows-acl-proof runner rejects reports that proved nothing", () => {
   const SPEC = "tests/server/file-io/doc-backup-acl-repair.test.ts";
   const SUITE = "doc-backup — recovery from a pre-#1299 poisoned install";
-  const specs: SpecEntry[] = [{ spec: SPEC, suite: SUITE }];
+  // `realAcl: false` keeps these cases about the suite counts; the realAcl
+  // guard has its own block below.
+  const specs: SpecEntry[] = [{ spec: SPEC, suite: SUITE, realAcl: false }];
 
   const report = (assertions: Array<{ status: string; ancestorTitles?: string[] }>, over = {}) => ({
     success: true,
@@ -357,6 +401,45 @@ describe("windows-acl-proof runner rejects reports that proved nothing", () => {
     expect(evaluateReport({ report: undefined, specs }).ok).toBe(false);
     expect(evaluateReport({ report: {}, specs }).ok).toBe(false);
   });
+
+  // #2390: a realAcl spec must show its real-module test PASSED in the report.
+  describe("the realAcl guard", () => {
+    const real: SpecEntry[] = [{ spec: SPEC, suite: SUITE, realAcl: true }];
+    const guard = (status: string) => ({ status, title: REAL_ACL_TEST_TITLE, ancestorTitles: [] });
+
+    it("accepts a report whose real-module test passed (the control)", () => {
+      const { ok } = evaluateReport({
+        report: report([{ status: "passed" }, guard("passed")]),
+        specs: real,
+      });
+      expect(ok).toBe(true);
+    });
+
+    it.each([
+      ["missing", []],
+      ["skipped", [guard("skipped")]],
+      ["failed", [guard("failed")]],
+      ["duplicated", [guard("passed"), guard("passed")]],
+    ])("rejects a report where that test is %s", (_label, extra) => {
+      const { ok, failures } = evaluateReport({
+        report: report([{ status: "passed" }, ...extra]),
+        specs: real,
+      });
+      expect(ok).toBe(false);
+      expect(failures.join("\n")).toContain(REAL_ACL_TEST_TITLE);
+    });
+
+    it("rejects an entry whose realAcl is not a boolean", () => {
+      for (const realAcl of [undefined, "true", 1]) {
+        const { ok, failures } = evaluateReport({
+          report: report([{ status: "passed" }, guard("passed")]),
+          specs: [{ spec: SPEC, suite: SUITE, realAcl }],
+        });
+        expect(ok).toBe(false);
+        expect(failures.join("\n")).toContain("realAcl");
+      }
+    });
+  });
 });
 
 describe("windows-acl-proof runner refuses to pass where it cannot evaluate", () => {
@@ -377,6 +460,49 @@ describe("windows-acl-proof runner refuses to pass where it cannot evaluate", ()
     expect(`${proc.stdout ?? ""}${proc.stderr ?? ""}`).toContain(
       `refusing to report success on platform "${process.platform}"`,
     );
+  });
+});
+
+/**
+ * #2390 — the global acl-win mock that removes the store-dir icacls race. Text
+ * pins for the registration and isolation, plus a runtime anchor: a setup mock
+ * that silently stopped applying would bring the EBUSY flake back with no
+ * other signal.
+ */
+describe("global acl-win mock (tests/setup/acl-win-mock.ts)", () => {
+  const config = readFileSync(path.join(ROOT, "vitest.config.ts"), "utf-8");
+
+  it("is registered in setupFiles of EVERY project", () => {
+    const setupLines = config
+      .split("\n")
+      .filter(
+        (line) => line.includes("setupFiles:") && line.includes("tests/setup/acl-win-mock.ts"),
+      );
+    expect(setupLines).toHaveLength(2);
+    for (const project of ["client", "node"]) {
+      const start = config.indexOf(`name: "${project}"`);
+      expect(start, `project '${project}' not found in vitest.config.ts`).toBeGreaterThan(-1);
+      const setupLine = config
+        .slice(start)
+        .split("\n")
+        .find((line) => line.includes("setupFiles:"));
+      expect(setupLine, `project '${project}' does not load the acl-win mock`).toContain(
+        "tests/setup/acl-win-mock.ts",
+      );
+    }
+  });
+
+  it("is not defeated by turning off per-file isolation", () => {
+    // With isolate off, a module cache shared across files could hand a proof
+    // spec a private-dir bound to the mocked acl-win.
+    expect(config).not.toMatch(/isolate\s*:\s*false/);
+    const scripts = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")).scripts;
+    expect(JSON.stringify(scripts)).not.toMatch(/--(?:no-)?isolate/);
+  });
+
+  it("is active in an ordinary test file (runtime anchor)", async () => {
+    const { setRestrictiveAcl } = await import("../../src/server/integrations/acl-win.js");
+    expect(vi.isMockFunction(setRestrictiveAcl)).toBe(true);
   });
 });
 
