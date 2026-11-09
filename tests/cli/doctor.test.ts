@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -3667,6 +3667,26 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
     );
   const userMcp = async (opts: Parameters<typeof runDoctor>[0] = {}) =>
     (await runDoctor(opts)).results.filter((x) => x.check === "user-mcp-config");
+
+  it("never promises that startup adds a missing entry (Windows smoke, finding 4)", async () => {
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), JSON.stringify({ mcpServers: {} }));
+    // A `tandem` command on PATH selects the CLI arm, the one that used to say
+    // startup "also attempts this".
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    const cli = join(bin, process.platform === "win32" ? "tandem.cmd" : "tandem");
+    writeFileSync(cli, "#!/bin/sh\n");
+    chmodSync(cli, 0o755);
+    vi.stubEnv("PATH", bin);
+
+    const warn = (await userMcp()).find(
+      (x) => x.message === "tandem not registered in ~/.claude.json",
+    );
+    expect(warn?.status).toBe("warn");
+    expect(warn?.fix).toContain("tandem setup --apply");
+    expect(warn?.fix).toContain("never adds a missing one");
+    expect(warn?.fix).not.toContain("attempts this at startup");
+  });
 
   it("passes a live bridge with only the restart reminder (pre-flip smoke P3)", async () => {
     writeTandem({

@@ -1672,7 +1672,7 @@ async function checkUserMcpConfig(
     // `setup --apply` really does resolve this in one command. Reported rather
     // than folded into `absent` because the file does exist — "not found"
     // sends the user looking for something that is right there.
-    r.warn("~/.claude.json is empty", setupApplyRemedy(cliAvailable()));
+    r.warn("~/.claude.json is empty", addEntryRemedy(cliAvailable()));
     return;
   }
 
@@ -1730,7 +1730,7 @@ async function checkUserMcpConfig(
     );
   }
   if (!servers.tandem) {
-    r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
+    r.warn("tandem not registered in ~/.claude.json", addEntryRemedy(cliAvailable()));
   } else {
     // #2358 PR 2b: Tandem now writes the stdio bridge here, and its boot sweep
     // switches the direct-HTTP entry it used to write. The classifier is the
@@ -1882,6 +1882,22 @@ const WIZARD_LOCATION = "Settings → AI Assistant";
  * prefilled GitHub issue bodies, and `redactHomePaths` collapses only home and
  * app-data roots, so an install path would survive verbatim into public view.
  */
+/**
+ * The remedy where Tandem has NO entry to repair (an empty config, or no
+ * `tandem` key). `setupApplyRemedy`'s CLI arm says startup "also attempts
+ * this", which is true of a repair and false here: the boot sweep converts and
+ * repairs entries Tandem wrote and never adds a missing one (design v5 §3.6;
+ * the Windows hardware smoke of #2358 PR 2b, finding 4). The wizard arm makes
+ * no startup claim, so it is shared.
+ */
+function addEntryRemedy(cliAvailable: boolean): string {
+  if (!cliAvailable) return setupApplyRemedy(false);
+  return (
+    "Run: tandem setup --apply (Tandem's startup only repairs an entry it wrote; it never adds " +
+    "a missing one)"
+  );
+}
+
 export function setupApplyRemedy(cliAvailable: boolean): string {
   if (cliAvailable) {
     return (
@@ -2140,7 +2156,7 @@ function checkDesktopMcpConfig(
   if (read.kind === "empty") {
     r.warn(
       "tandem not registered in the Claude Desktop config",
-      withSuffix(setupApplyRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
+      withSuffix(addEntryRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
     );
     return;
   }
@@ -2184,7 +2200,7 @@ function checkDesktopMcpConfig(
     // standing between them and a working setup.
     r.warn(
       "tandem not registered in the Claude Desktop config",
-      withSuffix(setupApplyRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
+      withSuffix(addEntryRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
     );
     return;
   }
