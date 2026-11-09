@@ -268,8 +268,21 @@ describe("windows-acl-proof spec list", () => {
       expect(targets, `${spec} has no vi.unmock(import(...acl-win.js))`).toContain(aclWin);
       // The runner requires this test to have PASSED; here we only pin that it exists
       // and compares against the real export, so the Linux leg catches a lost unmock too.
-      expect(source).toContain(`it("${REAL_ACL_TEST_TITLE}"`);
-      expect(source).toMatch(/vi\.importActual/);
+      const titleAt = source.indexOf(`it("${REAL_ACL_TEST_TITLE}"`);
+      expect(titleAt, `${spec} has no "${REAL_ACL_TEST_TITLE}" test`).toBeGreaterThan(-1);
+      // The comparison must be in THAT test's body, not anywhere in the file:
+      // an empty `it(title, () => {})` would otherwise pass here on Linux.
+      const body = source.slice(titleAt, source.indexOf("\n});", titleAt));
+      expect(body, `${spec}: the identity test does not call vi.importActual`).toMatch(
+        /vi\.importActual/,
+      );
+      expect(body).toMatch(/\.toBe\(\s*actual\.setRestrictiveAcl\s*\)/);
+      // Mocking acl-win's consumer instead leaves the unmock and the identity test
+      // intact while the repair under test never reaches the real module.
+      expect(
+        source,
+        `${spec} mocks a module between it and acl-win, so the real ACL may never run`,
+      ).not.toMatch(/vi\.(?:doM|m)ock\([^)]*(?:private-dir|doc-backup)\.js/);
     }
   });
 
@@ -478,8 +491,16 @@ describe("global acl-win mock (tests/setup/acl-win-mock.ts)", () => {
       .filter(
         (line) => line.includes("setupFiles:") && line.includes("tests/setup/acl-win-mock.ts"),
       );
-    expect(setupLines).toHaveLength(2);
-    for (const project of ["client", "node"]) {
+    // One registration per project, counted from the config itself, so a third
+    // project added without the mock cannot keep the count at two.
+    const projectNames = [...config.matchAll(/^\s*name:\s*"([^"]+)"/gm)].map((m) => m[1]);
+    expect(projectNames).toEqual(expect.arrayContaining(["client", "node"]));
+    expect(setupLines).toHaveLength(projectNames.length);
+    expect(
+      config.split("\n").filter((line) => line.includes("setupFiles:")),
+      "a setupFiles entry does not load the acl-win mock",
+    ).toEqual(setupLines);
+    for (const project of projectNames) {
       const start = config.indexOf(`name: "${project}"`);
       expect(start, `project '${project}' not found in vitest.config.ts`).toBeGreaterThan(-1);
       const setupLine = config
@@ -498,6 +519,10 @@ describe("global acl-win mock (tests/setup/acl-win-mock.ts)", () => {
     expect(config).not.toMatch(/isolate\s*:\s*false/);
     const scripts = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")).scripts;
     expect(JSON.stringify(scripts)).not.toMatch(/--(?:no-)?isolate/);
+    // CI and pre-push pass extra arguments to the test command.
+    for (const file of [".github/workflows/ci.yml", ".husky/pre-push"]) {
+      expect(readFileSync(path.join(ROOT, file), "utf-8"), file).not.toMatch(/--(?:no-)?isolate/);
+    }
   });
 
   it("is active in an ordinary test file (runtime anchor)", async () => {

@@ -83,8 +83,8 @@ export const WINDOWS_ACL_PROOF_SPECS = [
     realAcl: false,
     realAclReason:
       "the proof is a directly spawned `icacls /deny` and the EPERM→PERMISSION_DENIED " +
-      "mapping; acl-win is reached only through the doc-backup root repair, which is " +
-      "irrelevant to that mapping",
+      "mapping; convert's snapshot runs on a path just found free, so it returns before " +
+      "the doc-backup root repair and acl-win is normally not reached at all",
   },
 ];
 

@@ -18,10 +18,15 @@
  * `scripts/ci/windows-acl-proof.mjs` with `realAcl: true`, calls
  * `vi.unmock(import(".../acl-win.js"))`, and has a test titled
  * `uses the real acl-win module` that compares the import with
- * `vi.importActual`. `tests/scripts/windows-acl-proof-wiring.test.ts` enforces
- * all three, and the `windows-acl-proof` CI job requires that test to pass.
- * A file's own `vi.mock` of acl-win overrides this one (measured on vitest
- * 5.0.5, 2026-11-08).
+ * `vi.importActual`. For a spec marked `realAcl: true`,
+ * `tests/scripts/windows-acl-proof-wiring.test.ts` enforces all three and the
+ * `windows-acl-proof` CI job requires that test to pass; whether a spec is
+ * marked at all is reviewed by hand via its `realAclReason`. A file's own
+ * `vi.mock` of acl-win overrides this one (measured on vitest 5.0.5 and 5.1.0).
+ *
+ * Setup files must not import modules from `src/`: one evaluated here would
+ * bind the mocked acl-win before a spec's `vi.unmock` runs, and the spec's
+ * identity test, which checks only its own import, would still pass.
  *
  * Not covered: child processes a test starts (a real server, the stdio
  * bridge, the monitor CLI) load the real module and run real icacls in their
