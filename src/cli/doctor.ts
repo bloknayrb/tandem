@@ -24,11 +24,11 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isLockFromPriorBoot, parseLockfile } from "../server/annotations/lockfile.js";
 import {
   isTandemLikeProcessName,
@@ -38,6 +38,7 @@ import {
   isRecordedPathAbsolute,
   isRecordedPathGone,
   probeNodeBinary,
+  WIN_EXTENDED_DRIVE_RE,
 } from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT, TANDEM_SUPPORT_EMAIL } from "../shared/constants.js";
 import { isAppTranslocatedPath } from "../shared/integrations/app-translocation.js";
@@ -3601,16 +3602,94 @@ export function summarizeDoctorResults(failures: number, warnings: number): stri
 // synchronous Copy-Diagnostics path, so it MUST be time-bounded and non-fatal:
 // npm being absent (bundled-node Tauri sidecar), unreachable, or slow is a SKIP,
 // never a fail.
+//
+// **No PATH npm and no shell (#2379).** This runs from the shipped server too
+// (`tandem_diagnostics`, `GET /api/diagnostics`), so it must not run whatever
+// `npm` comes first on PATH: on Windows `shell: true` meant `cmd.exe /c npm`,
+// which searches the server's cwd before PATH. Instead it runs npm's own CLI
+// script, found next to the Node that is already running Tandem, with that
+// Node and no shell. The trust anchor is "same writer as `process.execPath`":
+// the script sits inside the Node install, so whoever can replace it can
+// already replace the Node binary itself. The `lstat` below screens the final
+// component only (a junction in a middle component is followed); that is
+// within the same bound. The check therefore reports the global install of the
+// npm that ships with Tandem's own Node, which is the npm whose global
+// `tandem-editor` an npm-installed Tandem came from.
 
-/** Resolve a global `tandem-editor` version, or null when it can't be determined. */
-export function globalTandemEditorVersion(): Promise<string | null> {
+/**
+ * npm's CLI script relative to the directory holding the Node binary, per
+ * platform layout. Windows (MSI, winget, nvm-windows, Scoop, fnm, the zip):
+ * `node_modules\npm` beside `node.exe`. POSIX prefix layouts (nvm, fnm, the
+ * official pkg/tarball, NodeSource, Fedora, Arch): `<prefix>/lib/node_modules`.
+ * Homebrew keeps npm in the keg's `libexec` (its builtin npmrc carries
+ * `HOMEBREW_PREFIX`, so `ls -g` sees the same prefix the user's `npm` does).
+ * Debian's separately packaged npm lives under `share/nodejs`.
+ */
+const NPM_CLI_TAIL = ["npm", "bin", "npm-cli.js"] as const;
+const NPM_CLI_RELATIVE: Record<"win32" | "posix", readonly (readonly string[])[]> = {
+  win32: [["node_modules", ...NPM_CLI_TAIL]],
+  posix: [
+    ["..", "lib", "node_modules", ...NPM_CLI_TAIL],
+    ["..", "libexec", "lib", "node_modules", ...NPM_CLI_TAIL],
+    ["..", "share", "nodejs", ...NPM_CLI_TAIL],
+  ],
+};
+
+/**
+ * The npm CLI script that ships with the Node at `execPath`, or null when there
+ * is none (the desktop sidecar on Windows/macOS, a Node installed without
+ * npm). Screens with {@link rejectUnsafeWindowsPrefix} on the
+ * raw and resolved forms before any filesystem call, after stripping the
+ * extended-length DRIVE prefix that `process.execPath` can legitimately carry
+ * (`\\?\UNC\…` is left in place, so it is refused).
+ */
+export function resolveNpmCli(
+  execPath: string = process.execPath,
+  osPlatform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!execPath) return null;
+  const stripped = execPath.replace(WIN_EXTENDED_DRIVE_RE, "$1");
+  // Raw AND resolved, as `node-binary.ts` does: on POSIX `resolve` turns a
+  // `\\server\share\…` string into a cwd-relative name, erasing the prefix.
+  if (rejectUnsafeWindowsPrefix(stripped)) return null;
+  const resolvedExec = resolve(stripped);
+  if (rejectUnsafeWindowsPrefix(resolvedExec)) return null;
+  const binDir = dirname(resolvedExec);
+  // `osPlatform` picks the layout only; paths use the host's own `path`, so the
+  // Windows layout is exercised on POSIX CI with POSIX fixture paths.
+  for (const rel of NPM_CLI_RELATIVE[osPlatform === "win32" ? "win32" : "posix"]) {
+    const candidate = resolve(binDir, ...rel);
+    if (rejectUnsafeWindowsPrefix(candidate)) continue;
+    try {
+      if (lstatSync(candidate).isFile()) return candidate;
+    } catch {
+      // absent — try the next layout
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve a global `tandem-editor` version, or null when it can't be determined.
+ * `npmCli` is injectable for tests; production resolves it beside Tandem's Node.
+ */
+export function globalTandemEditorVersion(
+  npmCli: string | null = resolveNpmCli(),
+): Promise<string | null> {
+  if (npmCli === null) return Promise.resolve(null);
   return new Promise((resolve) => {
-    // shell:true so Windows resolves the `npm.cmd` shim (bare execFile("npm")
-    // ENOENTs there). Args are all static — no injection surface.
+    // Tandem's own Node runs npm's script directly: no shell, no PATH lookup,
+    // and a fixed cwd so nothing resolves against the server's working
+    // directory. Args are all static — no injection surface.
     execFile(
-      "npm",
-      ["ls", "-g", "--depth=0", "--json", "tandem-editor"],
-      { shell: true, windowsHide: true, timeout: 4000, maxBuffer: 8 * 1024 * 1024 },
+      process.execPath,
+      [npmCli, "ls", "-g", "--depth=0", "--json", "tandem-editor"],
+      {
+        cwd: dirname(npmCli),
+        windowsHide: true,
+        timeout: 4000,
+        maxBuffer: 8 * 1024 * 1024,
+      },
       (_err, stdout) => {
         // `npm ls` exits non-zero on unrelated global peer issues but still
         // prints JSON to stdout, so parse stdout regardless of the exit code.

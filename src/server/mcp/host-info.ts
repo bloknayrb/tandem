@@ -25,7 +25,7 @@
  * the CPU fields are optional rather than defaulted.
  *
  * Not memoized. The reads total ~60µs, against a route whose collector spawns
- * `npm ls -g`, probes two ports and stats a directory — caching them would buy
+ * npm's `ls -g` (through Tandem's own Node, #2379), probes two ports and stats a directory — caching them would buy
  * under 0.01% and cost module state plus a reset seam.
  */
 

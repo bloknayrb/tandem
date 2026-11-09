@@ -26,7 +26,6 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
-import { getCurrentSessionId } from "../sessions/context.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
@@ -2048,7 +2047,7 @@ export function registerAwarenessTools(server: McpServer): void {
         .optional()
         .describe("Document context for this reply (defaults to active document)"),
     },
-    withErrorBoundary("tandem_reply", async ({ text, replyTo, inProgress, documentId }) => {
+    withErrorBoundary("tandem_reply", async ({ text, replyTo, inProgress, documentId }, caller) => {
       // #651 presence: tandem_reply is a chat send — no annotationId — so the
       // marker is the generic "Claude is working" status-bar indicator.
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
@@ -2056,8 +2055,10 @@ export function registerAwarenessTools(server: McpServer): void {
         const docId = documentId ?? current?.id ?? undefined;
         // Asked BEFORE the append, in the same synchronous stretch as the
         // notify below, which is what ends the greeting turn's "pending" — so
-        // at most one reply is ever tagged (#2227).
-        const sessionId = getCurrentSessionId();
+        // at most one reply is ever tagged (#2227). The id is the caller's, as
+        // `withErrorBoundary` resolved it at entry (#2358): no handler reads
+        // the request context itself.
+        const sessionId = caller.claudeSessionId;
         const greeting = isGreetingReply({ sessionId, replyTo, inProgress });
         const appended = appendClaudeChatMessage(text, {
           documentId: docId,

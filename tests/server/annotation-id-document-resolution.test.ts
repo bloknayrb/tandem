@@ -39,6 +39,7 @@ import {
 import { withInternal } from "../../src/shared/origins.js";
 import type { ClaudeAwareness } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 
 let client: Client;
 let close: (() => Promise<void>) | undefined;
@@ -150,7 +151,9 @@ beforeEach(async () => {
   setActiveDocId(null);
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
-  ({ client, close } = await setupMcpServer([registerAnnotationTools]));
+  ({ client, close } = await setupMcpServer([registerAnnotationTools], {
+    dispatch: ownershipTestDispatch,
+  }));
 });
 
 afterEach(async () => {
