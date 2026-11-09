@@ -2234,7 +2234,8 @@ Inverting the default fixes all three at once: deny is structural, and the hand-
 **Status:** Accepted (2026-09-01)
 
 **Context.** Only five checks are required on `master`: `check`, the three
-`rust-test` legs, and `windows-acl-proof`. Everything else — `coverage`, CodeQL
+`rust-test` legs, and `windows-acl-proof` (six since 2026-11-08, when
+`ownership-flag-on` joined them; see ADR-054). Everything else — `coverage`, CodeQL
 — reports red without blocking a merge. That is a deliberate cost decision, not
 an oversight, and it is a repo setting rather than a tracked file.
 
