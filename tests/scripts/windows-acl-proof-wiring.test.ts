@@ -268,11 +268,21 @@ describe("windows-acl-proof spec list", () => {
       expect(targets, `${spec} has no vi.unmock(import(...acl-win.js))`).toContain(aclWin);
       // The runner requires this test to have PASSED; here we only pin that it exists
       // and compares against the real export, so the Linux leg catches a lost unmock too.
-      const titleAt = source.indexOf(`it("${REAL_ACL_TEST_TITLE}"`);
-      expect(titleAt, `${spec} has no "${REAL_ACL_TEST_TITLE}" test`).toBeGreaterThan(-1);
+      // A top-level `it` at column 0, so its body ends at the first column-0 `});`.
+      // Nested or one-line forms are refused rather than measured by a slice
+      // that could run on into a later block.
+      const titleAt = source.indexOf(`\nit("${REAL_ACL_TEST_TITLE}"`);
+      expect(titleAt, `${spec} has no top-level "${REAL_ACL_TEST_TITLE}" test`).toBeGreaterThan(-1);
+      const bodyEnd = source.indexOf("\n});", titleAt + 1);
+      expect(bodyEnd, `${spec}: the identity test is not closed at column 0`).toBeGreaterThan(
+        titleAt,
+      );
       // The comparison must be in THAT test's body, not anywhere in the file:
       // an empty `it(title, () => {})` would otherwise pass here on Linux.
-      const body = source.slice(titleAt, source.indexOf("\n});", titleAt));
+      const body = source.slice(titleAt, bodyEnd);
+      expect(body.slice(1), `${spec}: identity test body overruns`).not.toMatch(
+        /\n(?:it|test|describe)[.(]/,
+      );
       expect(body, `${spec}: the identity test does not call vi.importActual`).toMatch(
         /vi\.importActual/,
       );
