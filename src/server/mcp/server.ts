@@ -12,7 +12,11 @@ import type { Server } from "http";
 import { createRequire } from "module";
 
 import { API_HEALTH } from "../../shared/api-paths.js";
-import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
+import {
+  CLAUDE_SESSION_HEADER,
+  normalizeSessionId,
+  TANDEM_CLIENT_ID_HEADER,
+} from "../../shared/cli-runtime.js";
 import {
   DEFAULT_BIND_HOST,
   DEFAULT_WS_PORT,
@@ -35,8 +39,16 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { isWalkthroughPending, markWalkthroughConfirmed } from "../integrations/walkthrough.js";
 import { type AiRefusal, aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
+import { ownershipEnabled } from "../ownership-flag.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
+import { sessionIdForLog } from "../sessions/log-id.js";
+import {
+  noteTransportChanged,
+  noteTransportRegistered,
+  resolveTransportRecord,
+  setTransportView,
+} from "../sessions/ownership.js";
 import { isShuttingDown } from "../shutdown-state.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { createApiBodyPreParser, sdkHostValidationFor } from "./api-body-preparse.js";
@@ -294,7 +306,7 @@ export const SERVER_INSTRUCTIONS = [
 ].join(" ");
 
 /** Create an McpServer with all tool groups registered (no transport). */
-function createMcpServer(diagnostics: DiagnosticsToolDeps = {}): McpServer {
+export function createMcpServer(diagnostics: DiagnosticsToolDeps = {}): McpServer {
   const server = new McpServer(
     {
       name: "tandem",
@@ -346,6 +358,23 @@ function readMcpSessionHeader(req: import("express").Request): string | undefine
  */
 function readClaudeSessionHeader(req: import("express").Request): string | undefined {
   return normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
+}
+
+/**
+ * Read the stdio bridge's per-process client id (#2358, ADR-054), through the
+ * same header-injection guard as the Claude session id. The bridge sends it
+ * unconditionally; only an ownership-on server reads it, and it selects an
+ * owner record — it proves nothing (ownership design §11.1). Never logged.
+ */
+function readTandemClientIdHeader(req: import("express").Request): string | undefined {
+  return normalizeSessionId(req.headers[TANDEM_CLIENT_ID_HEADER.toLowerCase()]);
+}
+
+/** What an `initialize` carried that decides its owner record. */
+interface TransportIdentity {
+  claudeSessionId: string | undefined;
+  clientId: string | undefined;
+  clientName: string | undefined;
 }
 
 /** Send a JSON-RPC error response. */
@@ -539,19 +568,34 @@ function bodyErrorHandler(
 async function openSession(
   registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
   buildServer: () => McpServer,
-  claudeSessionId: string | undefined,
-  clientName: string | undefined,
+  identity: TransportIdentity,
   handshake: (transport: StreamableHTTPServerTransport) => Promise<void>,
 ): Promise<void> {
+  const { claudeSessionId, clientId, clientName } = identity;
   const server = buildServer();
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: async (sessionId) => {
-      await registry.add({ sessionId, server, transport, claudeSessionId, clientName });
+      // Ownership (#2358, ADR-054): which record this transport belongs to.
+      // Undefined while ownership is off, and then nothing below differs from
+      // before. The record itself is created only once `add` has resolved
+      // (`noteTransportRegistered`), because `add` may first await an LRU
+      // eviction whose removal re-judges the same record.
+      const owner = resolveTransportRecord({ mcpSessionId: sessionId, claudeSessionId, clientId });
+      await registry.add({
+        sessionId,
+        server,
+        transport,
+        claudeSessionId,
+        clientName,
+        ...(owner ? { ownerId: owner.ownerId } : {}),
+      });
+      if (owner)
+        noteTransportRegistered(owner.ownerId, { recordKind: owner.recordKind, clientName });
       console.error(
-        `[Tandem] MCP session established: ${sessionId}` +
-          `${claudeSessionId ? ` (claude session ${claudeSessionId})` : ""}` +
+        `[Tandem] MCP session established: ${sessionIdForLog(sessionId)}` +
+          `${claudeSessionId ? ` (claude session ${sessionIdForLog(claudeSessionId)})` : ""}` +
           `${clientName ? ` (client ${clientName})` : ""} — ${registry.size} live`,
       );
     },
@@ -559,7 +603,9 @@ async function openSession(
     // DELETE route) also covers session closes the SDK initiates itself.
     onsessionclosed: async (sessionId) => {
       await registry.close(sessionId);
-      console.error(`[Tandem] MCP session closed: ${sessionId} — ${registry.size} live`);
+      console.error(
+        `[Tandem] MCP session closed: ${sessionIdForLog(sessionId)} — ${registry.size} live`,
+      );
       // Last session gone ⇒ Claude is definitively absent. Clear its presence now
       // rather than letting the TTL run out — session end is positive knowledge,
       // and `tandem_status` writes `active: true` with no writer able to unset it.
@@ -634,6 +680,15 @@ export function isOtherMcpClientLive(ownClaudeSessionIds: ReadonlySet<string>): 
  */
 export async function reapIdleMcpSessions(idleTtlMsOverride?: number): Promise<number> {
   return (await sessions?.reapIdle(idleTtlMsOverride)) ?? 0;
+}
+
+/**
+ * Each live session's owner record id (undefined while ownership is off), for
+ * tests asserting no registry entry ever names a record that does not exist
+ * (#2358). Never read by production code.
+ */
+export function mcpSessionOwnerIdsForTests(): Array<string | undefined> {
+  return (sessions?.list() ?? []).map((entry) => entry.ownerId);
 }
 
 /**
@@ -765,8 +820,14 @@ export async function startMcpServerHttp(
     mcpPort: port,
   };
   const buildServer = () => createMcpServer(diagnosticsDeps);
-  const registry = createMcpSessionRegistry<McpServer, StreamableHTTPServerTransport>();
+  const registry = createMcpSessionRegistry<McpServer, StreamableHTTPServerTransport>({
+    // Ownership (#2358): a transport leaving the registry re-judges its record's
+    // attachment (ownership design §3.4). A no-op while ownership is off.
+    onRemoved: (entry) => noteTransportChanged(entry.ownerId),
+  });
   sessions = registry;
+  // Attachment is judged from the registry's own counters, never a second copy.
+  setTransportView(() => registry.list());
 
   // Snapshot the tool count from a throwaway instance. There is no longer a
   // boot-time singleton server to read it from (each client session owns its
@@ -872,6 +933,9 @@ export async function startMcpServerHttp(
     }
     registry.touch(entry.sessionId);
     onEntry?.(entry);
+    // Any request on a transport re-judges its owner record (ownership design
+    // §3.4); after `onEntry`, so a GET's stream counts are already updated.
+    noteTransportChanged(entry.ownerId);
     await runWithMcpContext(
       {
         claudeSessionId: entry.claudeSessionId,
@@ -879,6 +943,7 @@ export async function startMcpServerHttp(
         // The TCP peer, never the Host header (#1952). Per request, not per session:
         // a session id is a bearer value any peer holding it can present.
         peerIsLoopback: isLoopback(req.socket.remoteAddress),
+        ...(entry.ownerId !== undefined ? { ownerId: entry.ownerId } : {}),
       },
       () => entry.transport.handleRequest(req, res, body),
     );
@@ -895,7 +960,9 @@ export async function startMcpServerHttp(
     const entry = registry.get(readMcpSessionHeader(req));
     if (!entry) return;
     await registry.close(entry.sessionId);
-    console.error(`[Tandem] MCP session ${entry.sessionId} closed: AI features are unlicensed`);
+    console.error(
+      `[Tandem] MCP session ${sessionIdForLog(entry.sessionId)} closed: AI features are unlicensed`,
+    );
     if (registry.size === 0) clearAllClaudePresence();
   }
 
@@ -925,6 +992,7 @@ export async function startMcpServerHttp(
 
     if (isInit) {
       const claudeSessionId = readClaudeSessionHeader(req);
+      const clientId = readTandemClientIdHeader(req);
       // From the element that IS the initialize, in a batch too (#2199).
       const clientName = readClientName(
         Array.isArray(body) ? body.find(isInitializeRequest) : body,
@@ -932,11 +1000,18 @@ export async function startMcpServerHttp(
       try {
         // handleRequest is what mints the session id and fires
         // onsessioninitialized, so the registry entry appears during this call.
-        await openSession(registry, buildServer, claudeSessionId, clientName, (transport) =>
-          runWithMcpContext(
-            { claudeSessionId, peerIsLoopback: isLoopback(req.socket.remoteAddress) },
-            () => transport.handleRequest(req, res, body),
-          ),
+        // The context below carries no `ownerId`: no tool call can ride an
+        // initialize (the SDK refuses a batch containing one), and the
+        // transport's record does not exist until onsessioninitialized.
+        await openSession(
+          registry,
+          buildServer,
+          { claudeSessionId, clientId, clientName },
+          (transport) =>
+            runWithMcpContext(
+              { claudeSessionId, peerIsLoopback: isLoopback(req.socket.remoteAddress) },
+              () => transport.handleRequest(req, res, body),
+            ),
         );
       } catch (err) {
         console.error("[Tandem] Failed to create new MCP session:", err);
@@ -978,7 +1053,22 @@ export async function startMcpServerHttp(
       // legitimately be 2 mid-stream-reconnect, and `noteStreamClosed`'s floor
       // at 0 does not catch that — it only stops the count going negative, so a
       // double decrement from 2 would unpin a live client.
-      res.once("close", () => registry.noteStreamClosed(entry.sessionId));
+      //
+      // Ownership (#2358) comes LAST inside the listener, after both registry
+      // writes, and its call cannot throw (every ownership entry point is
+      // total). `streamEver` is set only for a stream that was actually
+      // established — a GET the SDK rejected (405/406/409/400) answered with
+      // another status — and only while ownership is on. A rejected GET still
+      // bumps `openStreams` for its short life (today's behaviour), which reads
+      // as attached for that moment; its close re-judges the record, like any
+      // other request would.
+      res.once("close", () => {
+        registry.noteStreamClosed(entry.sessionId);
+        if (ownershipEnabled() && res.statusCode === 200 && res.headersSent) {
+          entry.streamEver = true;
+        }
+        noteTransportChanged(entry.ownerId);
+      });
     });
   });
 

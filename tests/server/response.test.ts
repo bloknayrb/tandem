@@ -8,6 +8,7 @@ import {
   withErrorBoundary,
 } from "../../src/server/mcp/response.js";
 import type { ToolErrorCode } from "../../src/shared/types.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parse = (r: any) => JSON.parse(r.content[0].text);
@@ -143,9 +144,11 @@ describe("escapeRegex", () => {
 });
 
 describe("withErrorBoundary", () => {
+  // Each call runs as a dispatched caller: flag-on (#2358), the wrapper refuses
+  // a call with none before the handler runs.
   it("passes through successful results unchanged", async () => {
     const handler = withErrorBoundary("test_tool", async () => mcpSuccess({ ok: true }));
-    const result = await handler({});
+    const result = await asTestCaller(() => handler({}));
     const parsed = parse(result);
     expect(parsed.error).toBe(false);
     expect(parsed.data).toEqual({ ok: true });
@@ -155,7 +158,7 @@ describe("withErrorBoundary", () => {
     const handler = withErrorBoundary("test_tool", async () => {
       throw new Error("kaboom");
     });
-    const result = await handler({});
+    const result = await asTestCaller(() => handler({}));
     const parsed = parse(result);
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("INTERNAL_ERROR");
@@ -167,7 +170,7 @@ describe("withErrorBoundary", () => {
     const handler = withErrorBoundary("test_tool", async () => {
       throw "string error";
     });
-    const result = await handler({});
+    const result = await asTestCaller(() => handler({}));
     const parsed = parse(result);
     expect(parsed.error).toBe(true);
     expect(parsed.message).toContain("string error");
@@ -177,7 +180,7 @@ describe("withErrorBoundary", () => {
     const handler = withErrorBoundary("test_tool", async (args: { x: number }) => {
       return mcpSuccess({ doubled: args.x * 2 });
     });
-    const result = await handler({ x: 21 });
+    const result = await asTestCaller(() => handler({ x: 21 }));
     const parsed = parse(result);
     expect(parsed.data.doubled).toBe(42);
   });

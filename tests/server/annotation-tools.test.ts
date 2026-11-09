@@ -22,6 +22,7 @@ import type { Annotation } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
 import { unanchored } from "../helpers/positions.js";
 import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -179,7 +180,9 @@ describe("tandem_getAnnotations tool logic", () => {
     // The Solo hold is one of this tool's filters. Say which mode we are in
     // rather than relying on `indeterminate` happening to let these through.
     setCtrlMode("tandem");
-    ({ client, close } = await setupMcpServer([registerAnnotationTools]));
+    ({ client, close } = await setupMcpServer([registerAnnotationTools], {
+      dispatch: ownershipTestDispatch,
+    }));
   });
 
   afterEach(async () => {

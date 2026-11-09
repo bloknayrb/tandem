@@ -80,10 +80,18 @@ async function probeLinux(pid: number): Promise<ProcessIdentity> {
   }
 }
 
+/**
+ * Absolute, never PATH-resolved (#2379), for the same reason `tasklist` goes
+ * through `systemBin`: this runs from `tandem_diagnostics`. `/bin/ps` exists on
+ * macOS (SIP-protected) and on mainstream Linux; where it doesn't (NixOS, some
+ * containers) the probe answers INDETERMINATE, which every caller handles.
+ */
+export const PS_BIN = "/bin/ps";
+
 /** macOS (and Linux fallback): `ps -p <pid> -o comm=`. */
 async function probePs(pid: number): Promise<ProcessIdentity> {
   try {
-    const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "comm="], {
+    const { stdout } = await execFileAsync(PS_BIN, ["-p", String(pid), "-o", "comm="], {
       timeout: PROBE_TIMEOUT_MS,
       windowsHide: true,
     });

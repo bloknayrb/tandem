@@ -141,11 +141,49 @@ doesn't resolve inside the container at all, so apt silently fell back to stale
 lists and reported *every* dependency unsatisfiable. Diagnose the network
 before changing the mirror.
 
-## Open item, not a bug
+## The appindicator dependency on Ubuntu 24.04 and Debian (settled 2026-11-06)
 
-`libappindicator3-1` **was removed in Ubuntu 24.04**. The exit criteria name
-only 22.04, so the current `.deb` passes as written — but 24.04 is the current
-LTS and is where most new users will be. Fedora sidesteps this entirely because
-the `.rpm` depends on the soname `libappindicator3.so.1` rather than a package
-name. Whether to add 24.04 to the matrix (and whether the `.deb` should depend
-on `libayatana-appindicator3-1`) is a scope decision, not a defect.
+This section first said `libappindicator3-1` "was removed in Ubuntu 24.04".
+**That was wrong.** It is in noble/universe (`12.10.1+20.10.20200706.1-0ubuntu5`).
+The real gap looked like Debian, which has no `libappindicator3-1` in bookworm,
+trixie or sid. That turned out not to be a gap either, and nothing needed fixing.
+Measured in containers against the published v0.30.0 artifacts, whose `.deb`
+says `Depends: libxdo3, libappindicator3-1, libwebkit2gtk-4.1-0, libgtk-3-0`:
+
+- **`libayatana-appindicator3-1` declares `Provides: libappindicator3-1 (= 12.10)`**,
+  together with `Conflicts` and `Replaces`, on ubuntu:22.04, ubuntu:24.04,
+  debian:12, debian:13 and debian:sid. packages.debian.org lists only real
+  packages, so a lookup there makes the dependency look unsatisfiable.
+- `apt-get install ./tandem_0.30.0_amd64.deb` exits 0 on all four deb images.
+  Ubuntu installs the real `libappindicator3-1`, and Debian installs
+  `libayatana-appindicator3-1`. `libgtk-3-0` is virtual on 24.04 and trixie
+  (`libgtk-3-0t64` provides it) and resolves the same way.
+- The tray library resolves at run time in each image. `libappindicator-sys`
+  0.9.0 `dlopen`s `libayatana-appindicator3.so.1` first and then
+  `libappindicator3.so.1`, so either provider works. The `.rpm` on fedora:44
+  gets `libappindicator-gtk3`.
+
+**Why the `.deb` must not switch to `Depends: libayatana-appindicator3-1`**,
+which is what tauri-cli emits when it finds ayatana's pkg-config file at build
+time (`TAURI_LINUX_AYATANA_APPINDICATOR`, read in
+`crates/tauri-cli/src/interface/rust.rs`):
+
+- The in-app updater installs a `.deb` with `dpkg -i` and an `.rpm` with
+  `rpm -U` (tauri-plugin-updater 2.14.0, `src/updater.rs:1336` and `:1344`),
+  and neither resolves dependencies.
+- Existing Ubuntu users hold the real `libappindicator3-1`, which ayatana
+  conflicts with.
+- Measured on ubuntu:22.04 and ubuntu:24.04: a `.deb` that differs from 0.30.0
+  only in that dependency, applied with `dpkg -i` over it, leaves tandem `iU`
+  (unconfigured). apt then refuses every operation until `--fix-broken`.
+
+So release CI pins libappindicator explicitly (`TAURI_LINUX_AYATANA_APPINDICATOR:
+"false"`, since unset means "prefer ayatana"). Moving to ayatana would first need
+a migration that works for `dpkg -i` and `rpm -U` users.
+
+The package smoke now runs the `.deb` on ubuntu:22.04, ubuntu:24.04, debian:12
+and debian:13. It also checks with `ldconfig -p` that one of those four sonames
+resolves, because `ldd` cannot see a `dlopen`ed library. The Debian legs exist
+because ayatana's `Provides` is the only reason the `.deb` installs there.
+`tests/scripts/linux-package-smoke-wiring.test.ts` pins the legs, the soname
+list and the env var.

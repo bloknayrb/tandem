@@ -7,7 +7,7 @@ aliases: [Decisions, ADRs, Design decisions, Architecture decision records]
 
 [Home](README.md) › [Internals](maps/internals.md)
 
-Each section below is one architecture decision record ([ADR](glossary.md#adr)): what was decided, the context and the reasoning. Later amendments are added inside the record rather than replacing it, so read the whole entry before treating its first paragraph as current. ADR-054 is reserved for the multi-session ownership design and has no entry yet. The [Internals map](maps/internals.md#decisions-by-topic) groups these records by topic.
+Each section below is one architecture decision record ([ADR](glossary.md#adr)): what was decided, the context and the reasoning. Later amendments are added inside the record rather than replacing it, so read the whole entry before treating its first paragraph as current. The [Internals map](maps/internals.md#decisions-by-topic) groups these records by topic.
 
 ## ADR index
 
@@ -68,6 +68,7 @@ The Status column repeats the first status line a record states; a dash means th
 | ADR-051 | An Advisory CI Job's Guarantees Are Enforced by a Wiring Test Inside `check` | Accepted | [Read](#adr-051-an-advisory-ci-jobs-guarantees-are-enforced-by-a-wiring-test-inside-check) |
 | ADR-052 | SuperDoc Replaces the `.docx` Read/Write Pipeline, Server-Side, Behind the Existing Editor | Shelved | [Read](#adr-052-superdoc-replaces-the-docx-readwrite-pipeline-server-side-behind-the-existing-editor) |
 | ADR-053 | .docx Ships Dark | Accepted | [Read](#adr-053-docx-ships-dark) |
+| ADR-054 | Multi-Session Document Ownership — Identity, and Shipping Dark | Accepted (ships dark) | [Read](#adr-054-multi-session-document-ownership--identity-and-shipping-dark) |
 | ADR-055 | Cowork Setup Ships Dark | Accepted | [Read](#adr-055-cowork-setup-ships-dark) |
 | ADR-056 | The Non-Loopback Bind Ships Dark | Accepted | [Read](#adr-056-the-non-loopback-bind-ships-dark) |
 
@@ -2246,7 +2247,7 @@ three times (#1229), which is why the acceptance harness's step carries no `if:`
 no `continue-on-error` and no `|| true`, and why `check` fails when any of that
 changes.
 
-**Decision.** The pattern, now used ten times, is: **the job does the work; a
+**Decision.** The pattern, used by every row of the table below, is: **the job does the work; a
 wiring test inside `check` pins the job's shape and the inputs it reads.** The
 work stays where it is cheap. The disarming becomes expensive, because disarming
 it means editing something a required check reads.
@@ -2266,6 +2267,7 @@ Instances:
 | Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 | `check`'s doc-link and vault-reachability step | `tests/scripts/check-links-wiring.test.ts` |
 | `reaper-build`'s `cargo test` (the Linux sidecar trampoline, #1988) | `tests/scripts/reaper-test-wiring.test.ts` |
+| `ownership-flag-on` (ADR-054) and `check`'s release-bundle ownership probe | `tests/scripts/ownership-flag-on-wiring.test.ts` — the job is also a *required* check while ownership ships dark, once branch protection lists it, so its guarantees are enforced twice until the flip makes it advisory or removes it |
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
@@ -2861,11 +2863,47 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 
 **Cross-references:** ADR-004 and #576 (the `.docx` write-back this hides), ADR-040 (the flag pattern), ADR-052 (SuperDoc, shelved), #2027.
 
+## ADR-054: Multi-Session Document Ownership — Identity, and Shipping Dark
+
+**Status:** Accepted (2026-11-05). Phase 1 is being built in a series of PRs (#2358), all dark behind `OWNERSHIP_ENABLED`. This record lands with the first, PR 1a, which builds the identity foundation and the flag; it is amended as later PRs land.
+
+**Context.** Two Claude sessions attached to Tandem at once both answered the same comment (#2358): the inbox and the push paths hand every item to every session, and nothing decides who should answer. Bryan's decisions of 2026-11-04 and 2026-11-05 settled the rules: each open document has at most one owner, Tandem's own Claude holds every document no other session opened while it is present, and only the owner is handed a document's items and has its answers accepted. The full design is `docs/spikes/multi-session-ownership/README.md` (design v5) and the plan is `docs/plans/2358-ownership.md`; this record holds the decisions a later reader needs without them. Ownership needs one thing that did not exist: **knowing who is calling** an MCP tool, from a request that carries at most a session-id header.
+
+**Decision — identity.**
+
+- **Owner records.** Server memory only, lost on restart (decision 8): `{ownerId, recordKind, label, clientName, lastPollAt}`. Each MCP transport resolves to one record at `initialize`, by the first rule that applies (design §3.1):
+  1. `X-Claude-Session-Id` present → `claude:<id>` (case-folded, the same key `countDistinctClients` uses). Several transports share it: a bridge's reconnects, and the two Tandem toolsets of one terminal.
+  2. else `X-Tandem-Client-Id` present → `bridge:<id>`. The stdio bridge mints one random id per process and sends it on every request, unconditionally (its bundle reads no flags; a dark server ignores it).
+  3. else → `http:<Mcp-Session-Id>`: a direct-HTTP client, which has no other identity.
+  4. A stdio-mode server answers every call as one process-wide `local` record.
+
+  Rule 0 (Tandem's Claude's child binding with a per-spawn handle) and the unbound-child exception to rule 1 arrive in PR 3a. **How the handle reaches the child — a launcher `--mcp-config` entry (route L) or the child's environment (route E) — is not decided here**: it waits for probe 9 in PR 3a, which amends this record.
+- **The bridge route** (Bryan, 2026-11-05). Claude Code's setup entry becomes the stdio bridge, which forwards `CLAUDE_CODE_SESSION_ID`, because a direct-HTTP entry cannot send the session id at all (probes 4 and 5). PR 2b makes that change, live, a release before ownership flips, and amends ADR-045 decision 6 itself.
+- **The `Mcp-Session-Id` exception.** CLAUDE.md says not to key new per-client state on `Mcp-Session-Id`, the legacy-branch id. `http` records do, because it is the only identity a direct-HTTP client has. Nothing else in ownership keys on it. A stateless (MCP `2026-07-28`) client gets no transport and so no record until Tandem serves that branch; that work must give it one (design §3.5).
+- **Labels and display kinds.** A label is `owner-` plus random characters, never derived from an id. The display kind is the server's choice from a closed list, record kind first: only the `tandem` record is "Tandem's Claude"; a `claude` record is always a terminal; `clientInfo.name` decides only between Claude Desktop, terminal and other app for `bridge` and `http` records.
+- **Where the caller is resolved, and where the check will live.** Once, at the entry of `withErrorBoundary` (`src/server/mcp/response.ts`), which every registered tool goes through; the caller is passed to the handler as an explicit argument. No handler reads the request context: the context getters are imported only by `src/server/sessions/caller.ts` (and, from PR 1b, `wake-url.ts` for `peerIsLoopback` alone). `tandem_reply`'s session-id read moved into the wrapper for this. Ownership checks (PR 1c) run there and on `/api/channel-reply` (PR 4) and nowhere else: shared service code, the user's own `/api` routes, autosave, the reload family and startup restore never meet them. `tests/server/mcp-context-seam.test.ts` pins both halves.
+- **Fail closed.** With ownership on, a tool call whose caller cannot be named is refused with `INTERNAL_ERROR` and a fixed message. Every request dispatched to a registered transport carries that transport's `ownerId`, and stdio mode resolves `local`, so this fires only on a wiring fault; it is a wiring guard, not authentication.
+- **Attachment and lapse** (design §3.4). A record is attached while one of its transports is registered and, if any of them ever held a `GET /mcp` stream, one such stream is open — judged from the transport registry's own counters (`openStreams`, and `streamEver`, set only for a stream that was actually established). A detached record gets a 2-minute grace; any event on it re-judges it, so a record still detached after a request starts a fresh grace rather than keeping its documents until the idle reaper. At expiry it lapses: its documents go to the default rule, and a record with no registered transport is deleted. Grace timers and lapses run outside any request context. At most 64 records may be in their grace at once; past that, records that hold nothing lapse early first, then the one that would expire first. Any local process can trigger that cap — a lapse accelerator, like the registry's LRU eviction — which is within D4 below.
+- **Kinds and the default rule.** An ownership entry's kind is `default`, `claimed`, `opened` or `assigned` (design §4.1); no entry means unowned. The user's own opens (`POST /api/open`, upload, scratchpad, `/api/convert`, startup restore, `welcome.md`) apply the default rule — Tandem's Claude as `default` while it is present, otherwise unowned — to a document that has no entry, in the route or boot code only, never in `documents/open.ts`, which `tandem_open` also runs. Closing a tab removes its entry. Presence is false until PR 3b.
+
+**Decision — what the identity is not.** `X-Claude-Session-Id`, `X-Tandem-Client-Id` and `Mcp-Session-Id` **select** a record; none proves anything (design §11.1). Any local process can send any value, and the ids are easy to find. Ownership coordinates Claude sessions on one machine; it is not a security boundary (D4): every local process already holds every write through `/api`, and loopback callers bypass bearer auth. None of the headers is, or may be, in `Access-Control-Allow-Headers` (`tests/server/ownership-source-pins.test.ts`), which is what keeps a web page from sending them.
+
+**Decision — shipping dark** (design §12).
+- `OWNERSHIP_ENABLED` is a literal `false` in `src/shared/constants.ts`. `tsup.config.ts` injects it into the server and cli bundles as `__OWNERSHIP_ENABLED__` and reads no environment for it; only the server bundle reaches the flag today, and the cli block carries the define so a future cli import cannot read a bare global. `ownershipEnabled()` (`src/server/ownership-flag.ts`) returns the define when present; `TANDEM_OWNERSHIP=1` stands in only without one (tsx, vitest). It is not in vitest's root `test.env`, so the default suite runs flag-off.
+- While dark nothing is created or changed: no records, no `ownerId` on registry entries or request contexts, no timers, and server log lines byte-identical. The one visible difference is on the wire: the bridge now sends `X-Tandem-Client-Id`, which a dark server ignores.
+- Flag-on, server log lines print session ids as `#` plus 8 hex characters of their SHA-256. The bridge's own stderr, which lands in the MCP client's log, still prints `Mcp-Session-Id`s; that place is filed with the identity selectors in PR 4.
+- **The `ownership-flag-on` CI job** builds every bundle with the define forced on (`scripts/ci/build-ownership-on.ts`), boots the built server and checks it is ownership-on with no `TANDEM_OWNERSHIP` in its environment (`scripts/ci/ownership-bundle-probe.mjs`), runs the vitest suite and the E2E suite with `TANDEM_OWNERSHIP=1`, and refuses unless `tests/server/ownership-anchor.test.ts` — which runs only flag-on and never sets the variable — passed (`scripts/ci/ownership-flag-on-runner.mjs`). `check` boots its own release build with `TANDEM_OWNERSHIP=1` and checks it stays ownership-off. `tests/scripts/ownership-flag-on-wiring.test.ts` pins the job and the probe step from inside `check` (ADR-051). The job is a **required** check while ownership is dark (Bryan, 2026-11-05), once an admin adds it to branch protection (#2377), and leaves the required set at the flip. Every PR in the series must be green flag-off and flag-on. One bound on what "flag-on" covers: a test that spawns a `tsx` server or cli child with an environment it builds by hand, rather than spreading `process.env`, passes no `TANDEM_OWNERSHIP`, and that child has no define to read, so it runs flag-off inside the flag-on job. Such a test exercises the dark path only; flag-on coverage of a spawned child needs it to inherit the variable or to spawn the built bundle.
+
+**Consequences.**
+- **ADR-011** is narrowed, not superseded, from PR 1c: reads keep the active-document default; range-keyed writes refuse rather than retarget (design §5.2). **ADR-049 decision 1** (the inbox arbitrates between sessions) is amended from PR 2: ownership arbitrates, and the cursor registry stays the delivery record. Each PR amends this record as it lands.
+- **A non-loopback bind** (ADR-056) would make LAN MCP peers into records that hold and take documents and read labels, through the #1906 path; ADR-056's re-enable checklist carries it.
+- Known limitations are design §15's, in particular: a restart forgets everything; a client that never holds a stream keeps its documents up to about 37 minutes after it dies.
+
+**Cross-references:** #2358, design v5 (`docs/spikes/multi-session-ownership/README.md`), the plan (`docs/plans/2358-ownership.md`), ADR-011, ADR-040 and ADR-053 (the flag pattern), ADR-045, ADR-049, ADR-051, ADR-056, #1906, #1952.
+
 ## ADR-055: Cowork Setup Ships Dark
 
 **Status:** Accepted (2026-10-02)
-
-ADR-054 is reserved for the multi-session ownership design (`docs/spikes/multi-session-ownership/README.md`) and lands with its Phase 1 implementation, so the numbering skips it here on purpose.
 
 **Context.** Bryan decided on 2026-10-02 to cut Cowork out of v1.0: "im not sure we can make cowork actually function for most of the scenarios in the stories". Asked how deep the cut should go, he chose to ship it dark over a docs-only descope or deleting the code.
 
@@ -2956,9 +2994,10 @@ Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, k
 2. Decide #1906: gate mutating MCP tools on loopback, carve out an MCP equivalent of `NON_LOOPBACK_ALLOWED`, or record remote writes as intended.
 3. ~~Fix #1952 (suppress `wakeUrl` under a non-loopback bind).~~ **Done 2026-11-05**, per request rather than per bind: `wakeUrl` is withheld from any non-loopback peer, so nothing is owed here at the re-enable. *(#1884's LAN half, the `POST` carve-out, was retired by #1885 on 2026-10-28, which deleted the route and its `NON_LOOPBACK_ALLOWED` entry.)*
 4. Restore the user-facing docs from the PR that shipped this ADR, and put `docs/configuration.md` and `docs/troubleshooting.md` back on the asymmetry test's lists.
-5. Un-suspend the five ownership stories.
+5. Re-derive the five suspended ownership stories against design v5 (`docs/spikes/multi-session-ownership/README.md`) rather than un-suspending them as written: v5 does not re-status v4.1's stories, so they describe a design that no longer exists.
 6. Restore `tandem doctor`'s `TANDEM_BIND_HOST` condition on its non-loopback-url warning.
 7. Move #1906 back out of Accepted in `docs/security.md` and `CLAUDE.md`. (#1952 already left Accepted when it was fixed, 2026-11-05.)
+8. Decide what multi-session ownership (ADR-054) gives a LAN peer. Under a non-loopback bind, LAN MCP peers become owner records that can hold and take documents and read other sessions' labels, through the #1906 path; record that or refuse it before re-enabling.
 
 **Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059, #2141.
 

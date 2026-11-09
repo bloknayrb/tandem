@@ -45,6 +45,7 @@
  */
 
 import { sanitizeForLog } from "../log-sanitize.js";
+import { sessionIdForLog } from "../sessions/log-id.js";
 
 /** Minimal structural type — the registry only ever closes a session's server. */
 export interface ClosableServer {
@@ -81,6 +82,18 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
    * so it dies with the entry instead of leaking one record per closed session.
    */
   openStreams: number;
+  /**
+   * The owner record this transport resolved to at `initialize` (#2358,
+   * ADR-054). Present only while ownership is on; a dark server never sets it.
+   */
+  ownerId?: string;
+  /**
+   * Set once a standalone `GET /mcp` stream on this session was actually
+   * established (answered 200), never by a GET the SDK rejected. Ownership
+   * reads it to tell "attached and quiet" from "lost its stream" (ownership
+   * design §3.4). Written only while ownership is on.
+   */
+  streamEver?: true;
 }
 
 export interface McpSessionRegistryOptions<S extends ClosableServer, T> {
@@ -98,6 +111,13 @@ export interface McpSessionRegistryOptions<S extends ClosableServer, T> {
   now?: () => number;
   /** Called whenever a session is dropped, for logging/diagnostics. */
   onEvicted?: (entry: McpSessionEntry<S, T>, reason: "lru" | "idle" | "explicit") => void;
+  /**
+   * Called synchronously the moment an entry leaves the map, before its server
+   * is closed — unlike `onEvicted`, which waits for the close, so a hung close
+   * would delay it indefinitely. Ownership's removal hook (#2358). Must not
+   * throw: it runs inside `add`, `close`, `reapIdle` and `closeAll`.
+   */
+  onRemoved?: (entry: McpSessionEntry<S, T>) => void;
 }
 
 export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T = unknown> {
@@ -106,7 +126,7 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
    * cap is reached. Async because eviction closes the evicted server.
    */
   add(
-    entry: Omit<McpSessionEntry<S, T>, "createdAt" | "lastSeenAt" | "openStreams">,
+    entry: Omit<McpSessionEntry<S, T>, "createdAt" | "lastSeenAt" | "openStreams" | "streamEver">,
   ): Promise<void>;
   /** Look up a session without touching its idle clock. */
   get(sessionId: string | undefined): McpSessionEntry<S, T> | undefined;
@@ -142,11 +162,12 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
   list(): ReadonlyArray<McpSessionEntry<S, T>>;
 }
 
-/** The one identity rule `countDistinctClients` and `hasLiveEntryFor` share, so
- *  the count and the attachment match can never disagree on what "the same
- *  Claude session" means. Case-folded because `normalizeSessionId` preserves
- *  case and a UUID may round-trip through the session file in either. */
-function claudeIdKey(id: string): string {
+/** The one identity rule `countDistinctClients`, `hasLiveEntryFor` and the
+ *  ownership module's `claude:` records share, so the count, the attachment
+ *  match and the owner record can never disagree on what "the same Claude
+ *  session" means. Case-folded because `normalizeSessionId` preserves case and
+ *  a UUID may round-trip through the session file in either. */
+export function claudeIdKey(id: string): string {
   return id.toLowerCase();
 }
 
@@ -307,11 +328,21 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
     reason: "lru" | "idle" | "explicit",
   ): Promise<void> {
     sessions.delete(entry.sessionId);
+    // Guarded here so a generic store never depends on a hook staying total:
+    // a throw would skip the close below and reject add/close/reapIdle.
+    try {
+      opts.onRemoved?.(entry);
+    } catch (err) {
+      console.error(
+        "[Tandem] MCP session removal hook failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
     try {
       await entry.server.close();
     } catch (err) {
       console.error(
-        `[Tandem] Failed to close MCP session ${entry.sessionId} (${reason}):`,
+        `[Tandem] Failed to close MCP session ${sessionIdForLog(entry.sessionId)} (${reason}):`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -341,7 +372,7 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
         if (!victim) break;
         console.error(
           `[Tandem] MCP session cap (${maxSessions}) reached — evicting least-recently-used session ` +
-            `${victim.sessionId} (${victim.openStreams} open stream(s))`,
+            `${sessionIdForLog(victim.sessionId)} (${victim.openStreams} open stream(s))`,
         );
         await closeEntry(victim, "lru");
       }
@@ -410,7 +441,7 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
         }
       }
       for (const entry of stale) {
-        console.error(`[Tandem] Reaping idle MCP session ${entry.sessionId}`);
+        console.error(`[Tandem] Reaping idle MCP session ${sessionIdForLog(entry.sessionId)}`);
         await closeEntry(entry, "idle");
       }
       return stale.length;

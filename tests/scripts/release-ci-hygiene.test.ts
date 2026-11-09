@@ -115,7 +115,7 @@ function stepByMarker(job: Job, marker: string): { index: number; step: Step } {
  */
 describe("#1832 npm ci runs no dependency lifecycle scripts", () => {
   const EXPECTED = "npm ci --ignore-scripts";
-  const EXPECTED_SITES = 5;
+  const EXPECTED_SITES = 6;
 
   function installSteps() {
     return allSteps().filter(({ step }) => step.run?.includes("npm ci"));
