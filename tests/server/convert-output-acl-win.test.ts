@@ -32,6 +32,13 @@
  * this suite to report >=1 passed, 0 skipped, 0 failed — hence `describe.runIf`
  * rather than per-`it` gating, and hence the preconditions below THROW rather
  * than skip when the host's ACL semantics differ.
+ *
+ * Unlike its two siblings this spec stays under the global acl-win mock
+ * (tests/setup/acl-win-mock.ts, #2390; `realAcl: false` in the runner's list):
+ * the proof is the directly spawned `icacls /deny` and the errno mapping.
+ * Convert snapshots a path it has just found free, so the doc-backup root
+ * repair (acl-win's only route in) normally returns before running, and is
+ * irrelevant to that mapping.
  */
 
 import { execFile } from "node:child_process";

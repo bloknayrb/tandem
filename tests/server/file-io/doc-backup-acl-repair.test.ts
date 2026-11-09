@@ -29,6 +29,7 @@ import {
   snapshotBeforeFirstWrite,
   sweepDocBackups,
 } from "../../../src/server/file-io/doc-backup.js";
+import { setRestrictiveAcl } from "../../../src/server/integrations/acl-win.js";
 import {
   assertPre1299PoisonTook,
   currentUserSid,
@@ -37,6 +38,16 @@ import {
 } from "../../helpers/win-acl-fixture.js";
 
 vi.mock(import("../../../src/server/notifications.js"), () => ({ pushNotification: vi.fn() }));
+// #2390: opt out of tests/setup/acl-win-mock.ts — the repair under test is the
+// real inheritable re-grant. The test below and the windows-acl-proof runner check it took.
+vi.unmock(import("../../../src/server/integrations/acl-win.js"));
+
+it("uses the real acl-win module", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../src/server/integrations/acl-win.js")
+  >("../../../src/server/integrations/acl-win.js");
+  expect(setRestrictiveAcl).toBe(actual.setRestrictiveAcl);
+});
 
 const WIN_ONLY = process.platform === "win32";
 const execFileAsync = promisify(execFile);

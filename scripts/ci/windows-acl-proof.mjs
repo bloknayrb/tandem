@@ -64,10 +64,12 @@ export const WINDOWS_ACL_PROOF_SPECS = [
   {
     spec: "tests/server/file-io/doc-backup-acl-repair.test.ts",
     suite: "doc-backup — recovery from a pre-#1299 poisoned install",
+    realAcl: true,
   },
   {
     spec: "tests/server/integrations/acl-win.test.ts",
     suite: "acl-win — Windows DACL hardening",
+    realAcl: true,
   },
   {
     // #1796. Unlike its two siblings this one is not about #1299's poisoned
@@ -77,8 +79,25 @@ export const WINDOWS_ACL_PROOF_SPECS = [
     // — so the `EPERM` arm in `convert.ts` has no other proof anywhere.
     spec: "tests/server/convert-output-acl-win.test.ts",
     suite: "convert output permissions — Windows ACL proof (#1796)",
+    // Stays under the global acl-win mock (tests/setup/acl-win-mock.ts, #2390).
+    realAcl: false,
+    realAclReason:
+      "the proof is a directly spawned `icacls /deny` and the EPERM→PERMISSION_DENIED " +
+      "mapping; convert's snapshot runs on a path just found free, so it returns before " +
+      "the doc-backup root repair and acl-win is normally not reached at all",
   },
 ];
+
+/**
+ * #2390: every test file runs with `setRestrictiveAcl` mocked by a vitest
+ * setup file, so a store directory's fire-and-forget icacls hardening can no
+ * longer hold the directory while a teardown deletes it (Windows EBUSY). A spec
+ * with `realAcl: true` opts back out with `vi.unmock` and must contain a test
+ * with exactly this title, asserting the module it imported is the real one.
+ * `evaluateReport` requires that test to have PASSED, so deleting, skipping or
+ * disabling it fails this gate rather than letting the proof run over a mock.
+ */
+export const REAL_ACL_TEST_TITLE = "uses the real acl-win module";
 
 /** Normalize for comparison: the JSON reporter emits native separators. */
 const toPosix = (p) => String(p).replace(/\\/g, "/");
@@ -100,7 +119,12 @@ export function evaluateReport({ report, specs }) {
     return { ok: false, failures: ["vitest produced no parseable JSON report"], lines };
   }
 
-  for (const { spec, suite } of specs) {
+  for (const { spec, suite, realAcl } of specs) {
+    // A missing or misspelled field would otherwise slip past both branches below.
+    if (typeof realAcl !== "boolean") {
+      failures.push(`${spec}: \`realAcl\` must be true or false, got ${JSON.stringify(realAcl)}`);
+      continue;
+    }
     const wanted = toPosix(spec);
     const entries = report.testResults.filter((r) => toPosix(r.name).endsWith(wanted));
     if (entries.length !== 1) {
@@ -109,6 +133,16 @@ export function evaluateReport({ report, specs }) {
     }
 
     const assertions = entries[0].assertionResults ?? [];
+    if (realAcl) {
+      const guard = assertions.filter((a) => a.title === REAL_ACL_TEST_TITLE);
+      if (guard.length !== 1 || guard[0].status !== "passed") {
+        failures.push(
+          `${spec}: needs exactly one passed test titled ${JSON.stringify(REAL_ACL_TEST_TITLE)} ` +
+            `(found ${guard.map((a) => a.status).join(", ") || "none"}); without it the proof ` +
+            `may have run over the global acl-win mock`,
+        );
+      }
+    }
     const inSuite = assertions.filter((a) => (a.ancestorTitles ?? []).includes(suite));
     if (inSuite.length === 0) {
       failures.push(
