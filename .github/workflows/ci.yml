@@ -333,10 +333,10 @@ jobs:
   # This job runs everything flag-on, so the dark code is exercised on every
   # push while a release build stays byte-for-byte flag-off.
   #
-  # It is a REQUIRED check on master while ownership is dark, once an admin adds
-  # it to branch protection (Bryan, 2026-11-05) — until then it is advisory and
-  # its guarantees are enforced only by the wiring test in `check`. It is
-  # dropped from the required set at the flip (PR 6).
+  # It is a REQUIRED check on master while ownership is dark (in branch
+  # protection since 2026-11-08, #2377), so its guarantees are enforced twice:
+  # by protection and by the wiring test in `check`. It is dropped from the
+  # required set at the flip (PR 6).
   #
   #  - The build forces __OWNERSHIP_ENABLED__ on through tsup's API
   #    (scripts/ci/build-ownership-on.ts); tsup.config.ts itself reads no

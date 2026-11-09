@@ -33,8 +33,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  * ownership design §12). ADR-051: the job does the work; this test, inside
  * `check`, pins the job's shape and the inputs it reads, so disarming it means
  * editing something a required check reads. The job itself is required too
- * while ownership is dark — once an admin adds it to branch protection — so
- * until then this is the only thing that blocks.
+ * while ownership is dark (in branch protection since 2026-11-08), so its
+ * guarantees are enforced twice until the flip.
  *
  * ADR-051's rules, as applied here:
  * 1. npm scripts the job runs are pinned by exact equality (`test`,
