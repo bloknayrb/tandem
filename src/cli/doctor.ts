@@ -1342,6 +1342,16 @@ function validateUserTandemEntry(
 /** The base URL Tandem writes into Claude Code's entry: always the default port. */
 const TANDEM_WRITTEN_MCP_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
 
+/**
+ * A pass row whose guidance must reach the reader. Both human renderers (this
+ * CLI's report loop and the desktop's Copy Diagnostics) print `fix` only for a
+ * non-pass row, so guidance passed as a pass's `fix` reaches `--json` and
+ * nobody else (#2358 PR 2b hardware smoke, P3). It goes in the message.
+ */
+function passWithNote(r: Recorder, label: string, note: string): void {
+  r.pass(`${label}. ${note}`);
+}
+
 /** Said wherever the entry is one Tandem wrote: Claude Code reads it at terminal start. */
 const RESTART_TERMINALS_NOTE =
   "Claude Code reads this entry when a terminal starts, so a terminal opened before it last " +
@@ -1430,7 +1440,8 @@ function reportBridgeEntry(
         ? " When the desktop app updates, terminals already open lose their Tandem tools until " +
           "you restart them (running /mcp may reconnect them; untested)."
         : "";
-    r.pass(
+    passWithNote(
+      r,
       "tandem registered in ~/.claude.json (through Tandem's bridge, on the Node bundled with the desktop app)",
       `${RESTART_TERMINALS_NOTE}${update} Tandem moves the entry onto a Node 22.12 or newer it ` +
         `finds on its own PATH${process.platform === "win32" ? WINDOWS_ROOTS_CLAUSE : ""}. ` +
@@ -1438,7 +1449,11 @@ function reportBridgeEntry(
     );
     return;
   }
-  r.pass("tandem registered in ~/.claude.json (through Tandem's bridge)", RESTART_TERMINALS_NOTE);
+  passWithNote(
+    r,
+    "tandem registered in ~/.claude.json (through Tandem's bridge)",
+    RESTART_TERMINALS_NOTE,
+  );
 }
 
 /**
@@ -1748,7 +1763,8 @@ async function checkUserMcpConfig(
             "then restart any Claude Code terminal that was open.",
         );
       } else if (shape.kind === "npx-bridge") {
-        r.pass(
+        passWithNote(
+          r,
           "tandem registered in ~/.claude.json (through Tandem's bridge, started by npx)",
           RESTART_TERMINALS_NOTE,
         );
@@ -1756,7 +1772,8 @@ async function checkUserMcpConfig(
         // The user's own edit for a moved `TANDEM_MCP_PORT`, which the port
         // check above prescribes. It works. Setup would write the DEFAULT port
         // into a bridge and break it, so setup is not offered here.
-        r.pass(
+        passWithNote(
+          r,
           `tandem registered in ~/.claude.json (direct HTTP on port ${mcpPort})`,
           "Tandem's setup and its switch to the bridge use the default port, so they leave an " +
             "entry on a moved port alone. It works, but Tandem can't tell which Claude Code " +

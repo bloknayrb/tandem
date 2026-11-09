@@ -3680,10 +3680,12 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.status).toBe("pass");
-    expect(results[0]?.message).toBe(
-      "tandem registered in ~/.claude.json (through Tandem's bridge)",
+    // In the MESSAGE, never a pass's `fix`: both human renderers print `fix`
+    // only for a non-pass row, so the Windows smoke never saw the reminder.
+    expect(results[0]?.message).toMatch(
+      /^tandem registered in ~\/\.claude\.json \(through Tandem's bridge\)\. .*until you restart it\.$/,
     );
-    expect(results[0]?.fix).toContain("until you restart it");
+    expect(results[0]?.fix).toBeUndefined();
   });
 
   it("names the desktop-update caveat for the bundled Node", async () => {
@@ -3699,17 +3701,19 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
     // The update caveat is Windows-only (the NSIS hook ends the bridges); the
     // PATH note is macOS-specific there. Both judged by the doctor's platform.
     const real = process.platform;
-    const fixFor = async (platform: NodeJS.Platform) => {
+    const noteFor = async (platform: NodeJS.Platform) => {
       Object.defineProperty(process, "platform", { value: platform });
       try {
-        return (await userMcp())[0]?.fix ?? "";
+        const [row] = await userMcp();
+        expect(row?.fix).toBeUndefined();
+        return row?.message ?? "";
       } finally {
         Object.defineProperty(process, "platform", { value: real });
       }
     };
-    expect(await fixFor("win32")).toContain("desktop app updates");
-    expect(await fixFor("linux")).not.toContain("desktop app updates");
-    const mac = await fixFor("darwin");
+    expect(await noteFor("win32")).toContain("desktop app updates");
+    expect(await noteFor("linux")).not.toContain("desktop app updates");
+    const mac = await noteFor("darwin");
     expect(mac).not.toContain("desktop app updates");
     expect(mac).toContain("/usr/bin:/bin:/usr/sbin:/sbin");
   });
@@ -3802,7 +3806,8 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
 
     const results = await userMcp();
 
-    expect(results.some((x) => x.message.includes("started by npx"))).toBe(true);
+    const npx = results.find((x) => x.message.includes("started by npx"));
+    expect(npx?.message).toContain("until you restart it");
     expect(results.some((x) => x.message.includes("not an entry Tandem wrote"))).toBe(false);
   });
 });
@@ -3863,6 +3868,7 @@ describe("a moved TANDEM_MCP_PORT (#2358 PR 2b round-2 review)", () => {
 
     const entry = results.find((x) => x.message.includes("port 4000"));
     expect(entry?.status).toBe("pass");
+    expect(entry?.message).toContain("can't tell which Claude Code session");
     // (The tandem-channel line's opt-in hint names setup for the shim; this
     // entry's own report must not.)
     expect(JSON.stringify(entry)).not.toMatch(/setup --apply|integration wizard/);

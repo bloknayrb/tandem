@@ -960,6 +960,9 @@ async function main() {
     // several MSIX configs). That is a once-per-affected-install cost, since the
     // repaired entry is a no-op on every later boot — but it is the reason this
     // `await` is worth re-measuring if the sweep ever grows a routine write.
+    // A write that loses a race to Claude Code's own (#2358 PR 2b) is retried
+    // up to three tries with 0.75 s of back-off in all, so a contended config
+    // can cost about three writes plus that.
     if (!isStoreReadOnly()) {
       await import("./integrations/apply.js")
         .then(({ refreshAllMcpEntryBinaries }) => refreshAllMcpEntryBinaries())

@@ -25,7 +25,9 @@ import {
 import {
   backupDir,
   listBackups,
+  MAX_BACKUPS,
   SWEEP_BACKUP_PREFIX,
+  writeBackup,
 } from "../../../src/server/integrations/backup.js";
 import { resolveAppDataDir } from "../../../src/server/platform.js";
 
@@ -245,26 +247,83 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
   };
   const tempsLeft = () => readdirSync(home).filter((n) => n.startsWith(".tandem-setup-"));
 
-  it("skips the write when the file changed size", async () => {
+  const sweepBackups = async () => {
+    const dir = backupDir(resolveAppDataDir());
+    return existsSync(dir) ? await listBackups(dir, SWEEP_BACKUP_PREFIX) : [];
+  };
+
+  const fillBackupCap = async () => {
+    const dir = backupDir(resolveAppDataDir());
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    while ((await sweepBackups()).length < MAX_BACKUPS) {
+      await writeBackup(dir, Buffer.from("{}\n"), SWEEP_BACKUP_PREFIX);
+    }
+  };
+
+  it("abandons a write when the file changed size, and retries it from a fresh read", async () => {
     seed();
+    await fillBackupCap();
+    const backupsBefore = new Set(await sweepBackups());
+    let tries = 0;
     _setSweepBeforeCommitForTests(async () => {
-      writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 12345 });
+      // Claude Code's write lands during the FIRST try only.
+      if (++tries === 1) {
+        writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 12345 });
+      }
     });
 
     await refreshAllMcpEntryBinaries({ homeOverride: home });
 
+    expect(tries).toBe(2);
+    // Claude Code's write survives (the retry re-read it), and the switch lands.
     expect(readConfig().n).toBe(12345);
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+    expect(stderr()).toContain("Switched the tandem entry");
+    expect(stderr()).toContain("trying again (2 of 3)");
+    expect(stderr()).not.toContain("left as found");
+    expect(tempsLeft()).toEqual([]);
+    // One backup: the landed write's pre-image. The abandoned try's is gone.
+    const added = (await sweepBackups()).filter((n) => !backupsBefore.has(n));
+    expect(added).toHaveLength(1);
+    const backup = JSON.parse(
+      readFileSync(join(backupDir(resolveAppDataDir()), added[0] as string), "utf-8"),
+    ) as { n: number };
+    expect(backup.n).toBe(12345);
+    // The cap is applied once the write has landed, keeping the new one.
+    expect(await sweepBackups()).toHaveLength(MAX_BACKUPS);
+  });
+
+  it("gives up after three tries within a boot, leaves the file as found, and keeps no backup", async () => {
+    seed();
+    // A full cap: an abandoned try must not evict any of these.
+    await fillBackupCap();
+    const backupsBefore = await sweepBackups();
+    let tries = 0;
+    _setSweepBeforeCommitForTests(async () => {
+      tries++;
+      writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 1000 + tries });
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(tries).toBe(3);
+    expect(readConfig().n).toBe(1003);
     expect(readConfig().mcpServers.tandem.type).toBe("http");
-    expect(stderr()).toContain("changed while Tandem was updating it");
+    expect(stderr()).toContain("changed each of the 3 times Tandem tried to update it");
+    expect(stderr()).toContain("left as found — Tandem will try again at its next start");
     // A write that was abandoned is never also reported as made.
     expect(stderr()).not.toContain("Switched the tandem entry");
     expect(tempsLeft()).toEqual([]);
+    // Every abandoned try's backup was removed (hardware smoke, P16).
+    expect(await sweepBackups()).toEqual(backupsBefore);
   });
 
-  it("skips the write on a same-size rewrite with the mtime put back", async () => {
+  it("catches a same-size rewrite with the mtime put back, so the retry keeps it", async () => {
     seed();
     const before = statSync(claudeJson(), { bigint: true });
+    let tries = 0;
     _setSweepBeforeCommitForTests(async () => {
+      if (++tries > 1) return;
       writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 2 });
       utimesSync(claudeJson(), WHOLE_MS, WHOLE_MS);
       const after = statSync(claudeJson(), { bigint: true });
@@ -277,8 +336,11 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
 
     await refreshAllMcpEntryBinaries({ homeOverride: home });
 
+    // Had the byte comparison missed it, the first try would have written its
+    // stale copy (n: 1) over Claude Code's change.
+    expect(tries).toBe(2);
     expect(readConfig().n).toBe(2);
-    expect(readConfig().mcpServers.tandem.type).toBe("http");
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
     expect(tempsLeft()).toEqual([]);
   });
 
