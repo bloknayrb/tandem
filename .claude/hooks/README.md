@@ -31,7 +31,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 ### PreToolUse — `ExitPlanMode` matcher
 
-- **`block-plan-without-agent-review.sh`** (+ `block-plan-without-agent-review.mjs`) — Blocks plan approval unless the session transcript shows an `Agent`/`Task` call *after* the most recent write to a plan file under `~/.claude/plans/`. Project-level `<repo>/.claude/plans/` is deliberately excluded. Also blocks when the transcript has no Write/Edit to a plan file under `~/.claude/plans/` at all. Bypass by prepending `Agent feedback incorporated` to the plan body. Fail-closed on a missing or oversized (>50 MB) transcript, and on plan paths that don't `realpath` under `~/.claude/plans/`.
+- **`block-plan-without-agent-review.sh`** (+ `block-plan-without-agent-review.mjs`) — Blocks plan approval unless the session transcript shows an `Agent`/`Task` call *after* the most recent write to a plan file under `~/.claude/plans/`. Project-level `<repo>/.claude/plans/` is deliberately excluded. Also blocks when the transcript has no Write/Edit to a plan file under `~/.claude/plans/` at all. Bypass by prepending `Agent feedback incorporated` to the plan body. Fail-closed on a missing transcript, and on plan paths that don't `realpath` under `~/.claude/plans/`. **A transcript over 50 MB is scanned from its last 50 MB** rather than refused (refusing left a long session unable to approve any plan). The tail can only be stricter than a full scan: a plan written before the tail is not seen, so the gate blocks until the plan is saved again and reviewed, and its message says the scan was partial.
 
 ### PostToolUse — unmatched (every tool)
 

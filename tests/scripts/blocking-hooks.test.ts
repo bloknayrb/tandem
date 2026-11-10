@@ -217,4 +217,38 @@ describe("block-plan-without-agent-review.mjs", () => {
     expect(run.stderr).toContain("To unblock");
     expect(run.stderr).toContain("call ExitPlanMode again");
   });
+
+  describe("a transcript over the 50 MB cap is scanned from its tail", () => {
+    // 51 lines of 1 MiB: more than the cap, so everything written before the
+    // padding is outside the scanned tail and everything after is inside it.
+    const padding = `${JSON.stringify({ message: { content: "x".repeat(1024 * 1024) } })}\n`.repeat(
+      51,
+    );
+
+    it("allows a plan written and reviewed inside the tail", () => {
+      const run = runGate("big-reviewed", padding + planWrite() + review());
+      expect(run.status, run.stderr).toBe(0);
+    });
+
+    it("blocks an unreviewed plan in the tail even when an older revision was reviewed", () => {
+      // The case a tail scan must not get wrong: the review belongs to the
+      // revision before the padding, not to the one being approved.
+      const run = runGate("big-stale-review", planWrite() + review() + padding + planWrite());
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("Unblock via EITHER");
+    });
+
+    it("blocks when the plan write is outside the tail, and says the scan was partial", () => {
+      const run = runGate("big-old-plan", planWrite() + review() + padding);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("only the tail is scanned");
+      expect(run.stderr).toContain("To unblock");
+    });
+
+    it("does not count a review in the tail for a plan write outside it", () => {
+      const run = runGate("big-split", planWrite() + padding + review());
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("To unblock");
+    });
+  });
 });
