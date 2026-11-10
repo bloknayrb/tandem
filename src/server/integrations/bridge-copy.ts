@@ -8,8 +8,10 @@
  * terminal a dead entry and make every launch rewrite the config. Tauri puts
  * the resource dir there (`tauri-utils` 2.10.2, `platform.rs`
  * `resource_dir_from`: `exe_dir/../lib/<name>`, the exe being
- * `$APPDIR/usr/bin/<exe>`), so this was confirmed from the locked source and
- * is measured by the pre-flip smoke row P9.
+ * `$APPDIR/usr/bin/<exe>`), so this was confirmed from the locked source, and
+ * measured by the pre-flip smoke row P9 (2026-11-10: an AppImage built from
+ * this branch on Ubuntu 22.04 recorded this copy, outside the mount, and a
+ * relaunch under a new mount name left the config unchanged).
  *
  * So the server copies the self-contained bundle into the app-data root as
  * `bin/<version>/dist/stdio-bridge/index.js` — a path `isOwnStdioBridgeScript`
