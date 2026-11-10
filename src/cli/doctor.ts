@@ -1438,7 +1438,7 @@ function reportBridgeEntry(
     const update =
       process.platform === "win32"
         ? " When the desktop app updates, terminals already open lose their Tandem tools until " +
-          "you restart them (running /mcp may reconnect them; untested)."
+          "you reconnect them with /mcp or restart them."
         : "";
     passWithNote(
       r,
