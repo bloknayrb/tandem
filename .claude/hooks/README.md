@@ -3,7 +3,7 @@
 Wired in `.claude/settings.json`. Each script's purpose is documented in its first 2-3 comment lines (`head -3 *.sh` reveals all of them at once).
 
 **Hook semantics:**
-- `PreToolUse` hooks exit `2` to block the tool call.
+- `PreToolUse` hooks exit `2` to block the tool call. **A blocking hook writes its reason to stderr**: on exit 2 the model is shown stderr and nothing else, so a reason on stdout blocks the call and explains nothing. The reason names the hook and says what to do next. `tests/scripts/blocking-hooks.test.ts` runs the hooks and pins both.
 - `PostToolUse` hooks exit `0` (warnings only — they emit to stderr but never block).
 - **Exception: `check-token-violation.sh` exits `2` on a violation and carries `continueOnBlock: true` in `.claude/settings.json`, which turns that exit-2 into an in-turn self-correction rather than a halted turn** — see the script's own header comment. It is the one `PostToolUse` hook that does not follow the blanket exit-`0` rule above.
 - Workflow-nudge hooks emit stderr and never block.
@@ -21,12 +21,12 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 ### PreToolUse — `Edit|Write` matcher
 
-- **`block-sensitive.sh`** — Blocks an edit whose path ends in `.env` or `package-lock.json`, and nothing else. Exits 2 on match. It does **not** cover `src-tauri/Cargo.lock`, `.env.local` or `.env.example` — those edits pass, so of the release skill's two never-hand-edit lockfiles only `package-lock.json` is enforced here.
+- **`block-sensitive.sh`** — Blocks an edit whose path ends in `.env` or `package-lock.json`, and nothing else. Exits 2 on match. It does **not** cover `src-tauri/Cargo.lock`, `.env.local` or `.env.example` — those edits pass, so of the release skill's two never-hand-edit lockfiles only `package-lock.json` is enforced here. The block message gives the way through: regenerate the lockfile with `npm install --package-lock-only` (also how a merge conflict in it is resolved, after taking one side whole), and ask the user for a `.env` change.
 - **`nudge-plan-review.sh`** — Warns when a `.claude/plans/*.md` was written this session but no `Agent` tool has run before a source edit. One-shot per plan.
 
 ### PreToolUse — `Bash` matcher
 
-- **`block-no-verify.sh`** — Blocks a command containing the long `--no-verify` flag anywhere in its text (including inside a heredoc). Only that one flag: the short `-n` and `HUSKY=0` are not matched. Fail-closed on parse error.
+- **`block-no-verify.sh`** — Blocks a command containing the long `--no-verify` flag anywhere in its text (including inside a heredoc). Only that one flag: the short `-n` and `HUSKY=0` are not matched. Fail-closed on parse error, which includes `node` missing from PATH: every Bash call is then blocked, and the message says so. A commit message or PR body that only mentions the flag is blocked like any other command; the message says to put the text in a file (`git commit -F`, `gh pr create --body-file`).
 - **`nudge-simplify-before-commit.sh`** — Warns on `git commit` when source edits have happened since last `/simplify`. One-shot per edit batch.
 
 ### PreToolUse — `ExitPlanMode` matcher
@@ -48,7 +48,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 - **`check-extract-markdown.sh`** — Warns on `extractMarkdown()` usage in `src/server/` files other than `convert.ts` (Critical Rule #5 — shifts offsets relative to annotation coordinate system).
 - **`check-ymap-keys.sh`** — Warns on raw Y.Map key strings (Critical Rule #1 — must come from `src/shared/constants.ts`).
 - **`check-raw-transact.sh`** — Warns when raw `*.transact(` appears outside the ADR-031 helpers' file (`src/shared/origins.ts`) and existing test fixtures.
-- **`check-token-violation.sh`** — Delegates to `scripts/check-semantic-tokens.ts` for raw hex/rgba in `src/client/`.
+- **`check-token-violation.sh`** — Delegates to `scripts/check-semantic-tokens.ts` for raw hex/rgba in `src/client/`. Carries its own worktree guard: the scanner exempts files by their path relative to the checkout it runs from, so a file it exempts (`svelte-harness/Harness.svelte`, say) was reported as a violation when edited in another worktree. Its guard also recognises a Windows drive path as absolute, which the four above do not, so it skips a sibling worktree on Windows too.
 
 ### PostToolUse — `Bash` matcher
 

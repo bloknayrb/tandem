@@ -94,7 +94,17 @@ const transcriptPath = envelope.transcript_path;
 if (!transcriptPath) block("hook stdin missing transcript_path");
 
 const { planPath, agentAfterPlanWrite } = await scanTranscript(transcriptPath);
-if (!planPath) block("no plan-file Write/Edit under ~/.claude/plans/ in session transcript");
+if (!planPath) {
+  process.stderr.write(
+    `Blocked (fail-closed): this session's transcript shows no Write or Edit of a plan file\n` +
+      `directly under ~/.claude/plans/, so there is no plan revision to check a review against.\n` +
+      `\n` +
+      `To unblock: Write or Edit the plan into the plan file plan mode named (a .md file directly\n` +
+      `under ~/.claude/plans/, not in a subfolder and not a project-level .claude/plans/), have at\n` +
+      `least one Agent review it, then call ExitPlanMode again.\n`,
+  );
+  process.exit(2);
+}
 if (agentAfterPlanWrite) process.exit(0);
 
 try {

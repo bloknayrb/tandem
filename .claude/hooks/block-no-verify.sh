@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # PreToolUse hook: block Bash commands that skip Husky hooks
 # Exit code 2 = block the tool call
+#
+# The reason goes to STDERR. On a PreToolUse exit 2 Claude Code shows the model
+# stderr only, so a reason echoed to stdout blocks the call and explains nothing.
 
 set -uo pipefail
 
@@ -19,11 +22,19 @@ COMMAND=$(printf '%s' "$INPUT" | node -e "
     }
   });
 " 2>/dev/null) || {
-  echo "⚠ Could not parse tool input — blocking as a precaution."
+  {
+    echo "Blocked (block-no-verify.sh, fail-closed): could not read the command from the hook input."
+    echo "This hook needs \`node\` on PATH and a JSON tool input. It blocks every Bash call until that works; tell the user."
+  } >&2
   exit 2
 }
 
 if [[ -n "$COMMAND" && "$COMMAND" =~ --no-verify ]]; then
-  echo "Blocked: --no-verify skips Husky hooks. If a hook fails, fix the underlying issue instead of bypassing it."
+  {
+    echo "Blocked (block-no-verify.sh): this command contains the text --no-verify, which skips the Husky hooks."
+    echo "If a Husky hook is failing, fix what it reports instead of bypassing it."
+    echo "The match is on the whole command text, so a commit message or PR body that only mentions the flag is blocked too."
+    echo "For that case, write the text to a file and pass the file: git commit -F <file>, gh pr create --body-file <file>."
+  } >&2
   exit 2
 fi
