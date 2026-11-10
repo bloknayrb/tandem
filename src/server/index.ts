@@ -962,7 +962,11 @@ async function main() {
     // `await` is worth re-measuring if the sweep ever grows a routine write.
     // A write that loses a race to Claude Code's own (#2358 PR 2b) is retried
     // up to three tries with 0.75 s of back-off in all, so a contended config
-    // can cost about three writes plus that.
+    // can cost about three writes plus that. On Windows each try sets two
+    // ACLs (the backup's and the temp file's), each an `icacls` plus a
+    // PowerShell start to verify it: a Windows Sandbox smoke on PowerShell 5.1
+    // measured about 5 s per try, so about 15 s ahead of the launcher there.
+    // Those two steps also sit inside the window the re-check guards.
     if (!isStoreReadOnly()) {
       await import("./integrations/apply.js")
         .then(({ refreshAllMcpEntryBinaries }) => refreshAllMcpEntryBinaries())

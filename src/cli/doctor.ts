@@ -1506,7 +1506,8 @@ async function reportDirectHttpEntry(
         "so it stays as it is. " +
         "Tandem skips a Node that is older, belongs to a version manager's shim, sits in a " +
         "temporary or removable location, is owned by another user, or on Windows is installed " +
-        "anywhere but Program Files or your user folder. Install Node 22.12 or newer where " +
+        "anywhere but Program Files or your user folder (or through a folder named in 8.3 short " +
+        "form, such as C:\\PROGRA~1). Install Node 22.12 or newer where " +
         "Tandem's PATH can see it (for an npm install, on the PATH of the shell you start " +
         `Tandem from), then restart Tandem. ${desktopPathAside()}`,
     );
@@ -1521,7 +1522,8 @@ async function reportDirectHttpEntry(
       "An npm install of Tandem switches this entry when it starts only if it finds a Node " +
         "22.12 or newer it can record on its own PATH (not an older one, a version manager's " +
         "shim, one in a temporary location or owned by another user, or on Windows one outside " +
-        "Program Files or your user folder); the desktop app can also use the Node it ships " +
+        "Program Files or your user folder or reached through an 8.3 short folder name); the " +
+        "desktop app can also use the Node it ships " +
         `with. ${desktopPathAside()} Restart Tandem, or ${setupStep(cliAvailable())}, which looks ` +
         "too. If the entry is " +
         "still direct HTTP afterwards, Tandem's log says why, on a line containing " +
@@ -1600,8 +1602,8 @@ function desktopPathAside(): string {
 
 /** The Windows install-root rule, as a clause after "on its own PATH". */
 const WINDOWS_ROOTS_CLAUSE =
-  ", and on Windows only one installed under Program Files or your user folder (a PATH entry " +
-  "in 8.3 short form, such as C:\\PROGRA~1\\nodejs, is skipped)";
+  ", and on Windows only one installed under Program Files or your user folder (a path with a " +
+  "folder in 8.3 short form, such as C:\\PROGRA~1\\nodejs, is skipped)";
 
 /** Tandem's direct-HTTP entry in a config too large for any Tandem writer. */
 function reportOversizeHttpEntry(r: Recorder): void {

@@ -422,6 +422,16 @@ function ownedSafely(real: string, deps: SystemNodeDeps): boolean {
  * drive-absolute; an unset or relative variable contributes nothing.
  */
 export function isUnderWindowsInstallRoot(real: string, env: NodeJS.ProcessEnv): boolean {
+  // A folder named in 8.3 short form (`NODEJS~1`, `PROGRA~1`) anywhere in the
+  // path is refused, as the docs promise. The root test is a string-prefix
+  // test, and `screenedRealPath` resolves links but does not expand short
+  // names, so a short name INSIDE a root hid the root (refused by accident)
+  // while one BELOW it passed and was recorded as the alias, not the folder's
+  // name (#2358 PR 2b Windows smoke, finding 1). Expanding instead would take
+  // `realpathSync.native`, which follows links unscreened. `~` followed by a
+  // digit is the alias shape; a long name of that shape is refused too, and
+  // falls back like any other refusal.
+  if (real.split(/[\\/]/).some((segment) => /~\d/.test(segment))) return false;
   const roots: string[] = [];
   for (const r of [env.ProgramFiles, env["ProgramFiles(x86)"], env.USERPROFILE]) {
     if (typeof r !== "string" || !/^[A-Za-z]:[\\/]/.test(r)) continue;
@@ -657,7 +667,8 @@ function* iterateSystemNodeCandidates(deps: SystemNodeDeps = {}): Generator<stri
 }
 
 /**
- * For a version manager that DELETES the old version on upgrade, the stable
+ * For a version manager that deletes old versions (Homebrew on upgrade, Scoop
+ * on `scoop cleanup`), the stable
  * link it maintains in front of the versioned directory, when that link
  * currently resolves to exactly `real` and passes the same durability rules;
  * otherwise `real` unchanged.
@@ -665,7 +676,8 @@ function* iterateSystemNodeCandidates(deps: SystemNodeDeps = {}): Generator<stri
  * `screenedRealPath` follows Homebrew's `/opt/homebrew/bin/node` into
  * `Cellar/node/<version>/bin/node`, and Scoop's `apps\nodejs\current` into
  * `apps\nodejs\<version>\`. `brew upgrade` (with its default cleanup) and
- * `scoop update` / `scoop cleanup` then delete that directory, and every
+ * `scoop cleanup` then delete that directory (`scoop update` leaves it: its
+ * script uninstalls the old version's shims and link, not its folder), and every
  * terminal's entry would be dead until Tandem's next start re-picked a Node.
  * So for those two the entry records the link: Homebrew's
  * `<prefix>/opt/<formula>/bin/node` and Scoop's `apps\<app>\current\…`.

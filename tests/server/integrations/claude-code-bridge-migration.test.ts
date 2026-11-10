@@ -314,8 +314,13 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
     // A write that was abandoned is never also reported as made.
     expect(stderr()).not.toContain("Switched the tandem entry");
     expect(tempsLeft()).toEqual([]);
-    // Every abandoned try's backup was removed (hardware smoke, P16).
+    // Every abandoned try's backup was removed (hardware smoke, P16), and each
+    // removal is named, so a smoke run can see it rather than infer it.
     expect(await sweepBackups()).toEqual(backupsBefore);
+    const removed = stderr().match(
+      /Removed backup sweep-claude-json-\S+\.json, taken for a write/g,
+    );
+    expect(removed).toHaveLength(3);
   });
 
   it("catches a same-size rewrite with the mtime put back, so the retry keeps it", async () => {

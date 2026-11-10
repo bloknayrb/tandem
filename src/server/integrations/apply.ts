@@ -3092,13 +3092,17 @@ const SWEEP_WRITE_ATTEMPTS = 3;
 const SWEEP_RETRY_DELAY_MS = 250;
 
 /**
- * Remove the backup an abandoned sweep write took. If it cannot be removed it
- * is kept, and said so, so a reader of the backup directory is not left to
- * guess why a copy exists with no matching change to `~/.claude.json`.
+ * Remove the backup an abandoned sweep write took, naming it either way: a
+ * count of the backup directory cannot tell a removed backup from an evicted
+ * one (#2358 PR 2b Windows smoke, P16), and a kept one with no matching change
+ * to `~/.claude.json` would otherwise leave its reader guessing.
  */
 async function discardAbandonedSweepBackup(backupPath: string): Promise<void> {
   try {
     await unlink(backupPath);
+    console.error(
+      `[Tandem] Removed backup ${basename(backupPath)}, taken for a write Tandem abandoned.`,
+    );
   } catch (err) {
     console.error(
       `[Tandem] Kept backup ${basename(backupPath)} from a write Tandem abandoned (could not remove it: ` +

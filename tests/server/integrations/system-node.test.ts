@@ -326,6 +326,15 @@ describe("Windows: only Program Files and the user's profile (Bryan, 2026-11-06)
     ["a sibling sharing the prefix", "C:\\Program Files Evil\\node.exe"],
     ["another user's profile", "C:\\Users\\mallory\\node\\node.exe"],
     ["ProgramData (Chocolatey's shims)", "C:\\ProgramData\\chocolatey\\bin\\node.exe"],
+    // 8.3 short names (smoke finding 1): one INSIDE the root used to be refused
+    // only because the prefix test missed; one BELOW it was accepted and
+    // recorded as the alias.
+    ["an 8.3 alias of Program Files", "C:\\PROGRA~1\\nodejs\\node.exe"],
+    ["an 8.3 folder below Program Files", "C:\\Program Files\\NODEJS~1\\node.exe"],
+    [
+      "an 8.3 folder in the profile",
+      "C:\\Users\\bryan\\AppData\\Roaming\\nvm\\V2212~1.0\\node.exe",
+    ],
   ])("refuses %s", (_label, real) => {
     expect(durable(real)).toBe(false);
   });
