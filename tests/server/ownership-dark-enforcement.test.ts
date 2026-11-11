@@ -10,7 +10,7 @@
  * held by another one), and checks that it does refuse; then it turns the
  * flag off and drives every kind of tool against that state, and calls each
  * helper in `mcp/owned-op.ts` directly. Removing the flag guard from any one
- * of the seven fails this file. The tool-list test also builds the flag-on list
+ * of them fails this file (PR 2a's additions have their own test below). The tool-list test also builds the flag-on list
  * and names every difference, so a new flag-on string cannot appear unlisted.
  */
 
@@ -34,6 +34,7 @@ import {
   callerOwnerInfo,
   focusHeldByAnother,
   heldAmong,
+  inboxScope,
   ownedOpen,
   ownedWrite,
   ownershipOn,
@@ -43,11 +44,16 @@ import {
 import { runWithMcpContext } from "../../src/server/sessions/context.js";
 import { isDocOpQueueBusy, runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
+  beginWriteClaim,
+  dropWriteClaim,
+  inboxScopeOf,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
   setDocOwner,
+  setHandoverSeqForTests,
   setTransportView,
+  settleWriteClaim,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -108,6 +114,7 @@ const EMPTY_SNAPSHOT = {
   losses: [],
   answerers: 0,
   queuedDocuments: 0,
+  pendingClaims: 0,
 };
 
 describe("tools/list while dark", () => {
@@ -396,6 +403,80 @@ describe("no queue, no refusal, nothing stamped while dark", () => {
     expect(heldAmong(a, [docId("d")])).toBeUndefined();
     expect(ownershipOn()).toBe(false);
     expect(ownershipSnapshotForTests()).toEqual(seeded);
+  });
+
+  it("what PR 2a adds is unreachable while dark: no pending claim, no claim at an outcome, no scope answer", async () => {
+    setupDoc("held");
+    setupDoc("free");
+    setupDoc("probe");
+    seedHeldByA([docId("held")]);
+    setHandoverSeqForTests(docId("held"), 4);
+    const a = { ownerId: A };
+    const b = { ownerId: B };
+    const envelope = { content: [{ type: "text" as const, text: "{}" }] };
+
+    // Flag on, each new piece acts on this state, so the dark half can fail.
+    expect(inboxScopeOf(docId("held"), A)).toBe("holds");
+    expect(inboxScopeOf(docId("free"), B)).toBe("may-claim");
+    expect(inboxScope(a, docId("held"))).toBe("holds");
+    expect(inboxScope(b, docId("free"))).toBe("may-claim");
+    const live = beginWriteClaim(docId("probe"), B);
+    expect(ownershipSnapshotForTests().pendingClaims).toBe(1);
+    expect(settleWriteClaim(live, true)).toBe(true);
+    expect(ownershipSnapshotForTests().ownerByDoc.map(([id]) => id)).toContain(docId("probe"));
+
+    const seeded = ownershipSnapshotForTests();
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(inboxScopeOf(docId("held"), A)).toBe("neither");
+      expect(inboxScopeOf(docId("free"), B)).toBe("neither");
+      expect(inboxScope(a, docId("held"))).toBe("neither");
+      expect(inboxScope(b, docId("free"))).toBe("neither");
+      const token = beginWriteClaim(docId("free"), B);
+      expect(ownershipSnapshotForTests().pendingClaims).toBe(0);
+      expect(settleWriteClaim(token, true)).toBe(false);
+      dropWriteClaim(token);
+      expect(ownershipSnapshotForTests()).toEqual(seeded);
+
+      // A write on an unowned document, in each shape a call can arrive in:
+      // the body runs directly, nothing is pending while it runs, and nothing
+      // is claimed when it returns.
+      for (const shape of SHAPES) {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let entered = false;
+        const answer = shape.dispatch(() =>
+          ownedWrite(
+            shape.name.startsWith("a context naming") ? b : {},
+            "tandem_comment",
+            {
+              given: docId("free"),
+              resolve: () => {
+                throw new Error("resolved a target while dark");
+              },
+            },
+            async () => {
+              entered = true;
+              await gate;
+              return envelope;
+            },
+          ),
+        );
+        // No queue: the body's head ran in the caller's own tick.
+        expect(entered, shape.name).toBe(true);
+        expect(ownershipSnapshotForTests(), shape.name).toEqual(seeded);
+        expect(isDocOpQueueBusy(docId("free")), shape.name).toBe(false);
+        release();
+        expect(await answer, shape.name).toBe(envelope);
+        expect(ownershipSnapshotForTests(), shape.name).toEqual(seeded);
+      }
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("a dark server that was never on records nothing at all", async () => {

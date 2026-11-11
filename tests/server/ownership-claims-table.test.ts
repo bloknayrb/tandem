@@ -9,14 +9,17 @@
  *    claims.** One row per tool and refusal, each run by a registered record
  *    on a document nobody holds: the code is today's, and afterwards the
  *    document is still unowned and no loss was recorded. Some rows are
- *    answered before the queue and some inside the operation, after the claim
- *    (which is then undone); the table does not care which. Marked in the
+ *    answered before the queue and some inside the operation, where a claim
+ *    was possible and is never applied (PR 2a; until then it was applied at
+ *    the check and undone); the table does not care which. Marked in the
  *    source but not rowed, because no fixture here reaches them: the
  *    "not open" answers inside a body (the document closed while the call
  *    waited; `ownership-enforcement.test.ts` has that case), `markdown` that
- *    parses to no list items, and `renameDocument`'s `PATH_REJECTED` and
- *    `INVALID_PATH` (a symlinked or UNC-shaped target, which a test should
- *    not create or touch). The rule is by
+ *    parses to no list items, and `renameDocument`'s `INVALID_PATH` (a
+ *    UNC-shaped target, which a test should not create or touch).
+ *    `renameDocument`'s `PATH_REJECTED` is decided by the disk
+ *    (`assertPathSafe` walks it), so it is NOT marked and keeps the claim:
+ *    it has its own row below, made with a symlink at the destination. The rule is by
  *    what decides the refusal, not by its code: `INVALID_RANGE` for an
  *    inverted, fractional, negative or empty range leaves no claim, while
  *    `INVALID_RANGE` for an offset past the end keeps one (the control test
@@ -688,6 +691,7 @@ const nothingHeld = () => {
   expect(snap.losses, "a refused call left a loss record").toEqual([]);
   expect(snap.answerers, "a refused call recorded an answerer").toBe(0);
   expect(snap.queuedDocuments, "a refused call left a queue behind").toBe(0);
+  expect(snap.pendingClaims, "a refused call left a pending claim").toBe(0);
 };
 
 describe("a refusal decided by the arguments or by a fact fixed at open (ownership design §5.1)", () => {
@@ -743,6 +747,39 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
     expect(getDocOwner(backed)).toMatchObject({ ownerId: A, kind: "claimed" });
   });
 
+  // `PATH_REJECTED` needs a symlink at the rename's destination. Making one
+  // on Windows needs Developer Mode or elevation, so there the row runs only
+  // where a probe link can be made; everywhere else it always runs, and a
+  // failed `symlinkSync` fails it rather than skipping it. Linux CI (`check`
+  // and `ownership-flag-on`) is what covers it.
+  const canSymlink = ((): boolean => {
+    if (process.platform !== "win32") return true;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-symlink-probe-"));
+    try {
+      fs.symlinkSync(path.join(dir, "target"), path.join(dir, "link"));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  })();
+
+  it.skipIf(!canSymlink)(
+    "a rename refused by a symlink at the destination (PATH_REJECTED) is decided by the disk, so it keeps the claim",
+    async () => {
+      const { id, filePath } = await diskDoc("linked-from.md", "Body.\n");
+      // Dangling on purpose: nothing is read or written through it.
+      fs.symlinkSync(path.join(tmpDir, "nowhere.md"), path.join(tmpDir, "linked-to.md"));
+      const body = await as(A, "tandem_rename", { newName: "linked-to.md", documentId: id });
+      expect(body.code, JSON.stringify(body)).toBe("PATH_REJECTED");
+      expect(fs.existsSync(filePath)).toBe(true);
+      expect(getDocOwner(id)).toMatchObject({ ownerId: A, kind: "claimed" });
+      const other = await as(B, "tandem_comment", { from: 0, to: 2, text: "c", documentId: id });
+      expect(other.code).toBe("NOT_DOC_OWNER");
+    },
+  );
+
   it.each(REFUSALS)("$tool — $what: a claim the caller already held is kept", async (row) => {
     const { id, args } = await row.arrange();
     setActiveDocId(id);
@@ -752,7 +789,7 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
     const body = await as(A, row.tool, args);
 
     expect(body.code, JSON.stringify(body)).toBe(row.code);
-    // The very entry, not a re-made one: nothing was reversed and re-claimed.
+    // The very entry, not a re-made one: nothing was written over it.
     expect(getDocOwner(id)).toBe(entry);
   });
 });
@@ -765,12 +802,21 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
  * reply seam's refusal, whose code is computed. A mark added, dropped or
  * moved changes the list; review the change against ownership design §5.1.
  *
- * What this pin cannot see: a changed condition on a `<refused>` site (the
- * control test covers the three range sites; for rename only the member list
- * below does); a mark moved between two neighbouring refusals with the same
- * code; a mark made some other way than a plain `noClaim(` call in
- * `src/server`; and a member of `RENAME_NEVER_CLAIMS` that is commented out
- * rather than removed.
+ * What this pin cannot see:
+ * - a refusal that should be marked and is not (it lists marks that exist);
+ * - a changed condition on a `<refused>` site. The control test covers the
+ *   three range sites. For rename, the member list below pins which codes
+ *   are in the set, not the condition at the mark: a condition that excluded
+ *   a member, or stopped consulting the set, passes here, and only the rename
+ *   rows of the table (which run four of the six members) and the
+ *   `PATH_REJECTED` row would notice;
+ * - anything after the first code inside one `noClaim(...)`: a ternary's
+ *   second arm is not read;
+ * - a mark moved between two neighbouring refusals with the same code;
+ * - a mark made some other way than a plain `noClaim(` call in `src/server`.
+ * And it counts text it should not: a `noClaim(` inside a comment is listed
+ * as a mark, and a member of `RENAME_NEVER_CLAIMS` that is commented out
+ * inside the set's brackets is still read as a member.
  */
 const DOCUMENT_MARKS = [
   "<noDocumentError>",
@@ -880,11 +926,14 @@ describe("the never-claims marks, pinned from source", () => {
       "NOT_FOUND",
       "NOT_RENAMABLE",
       "EXTENSION_MISMATCH",
-      "PATH_REJECTED",
       "INVALID_NAME",
       "INVALID_PATH",
       "READ_ONLY",
     ]);
+    // Until PR 2a the list also held `PATH_REJECTED`. It is decided by
+    // `assertPathSafe`, which walks the disk, and a refusal the disk decides
+    // keeps the claim (ADR-054): the row "a rename refused by a symlink at
+    // the destination" pins that it does.
   });
 
   it("no other file marks a refusal", () => {

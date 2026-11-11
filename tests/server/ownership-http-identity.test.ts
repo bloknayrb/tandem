@@ -295,6 +295,7 @@ describe("flag off: today's behaviour, and nothing created", () => {
       losses: [],
       answerers: 0,
       queuedDocuments: 0,
+      pendingClaims: 0,
     });
     const text = logs.join("\n");
     expect(text).toContain(

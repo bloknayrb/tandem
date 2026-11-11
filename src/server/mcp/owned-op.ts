@@ -17,7 +17,13 @@
  * claiming nothing — then, at the operation's turn in the document's queue and
  * with no `await` in between: the document is still open; the item was not
  * already answered by another record; the caller holds the document or may
- * claim it (the claim is applied here); then the body. The body receives the
+ * claim it; then the body. **The claim of an unowned document takes effect
+ * at the body's outcome**, not at the check (PR 2a): while the body runs the
+ * document still reads as unowned to everything outside the queue; a body
+ * that ends in a refusal that never claims, or throws, leaves ownership
+ * exactly as it was; and a body that keeps its claim makes the caller the
+ * owner inside the queued operation, before it returns, so the next
+ * operation in the queue finds the claim in effect. The body receives the
  * **pinned document id** and resolves its Y.Doc, store and typing marker from
  * it, so a tab change, a close or a Y.Doc swap while the call waited cannot
  * send the write anywhere but the document that was checked.
@@ -41,17 +47,22 @@ import {
   runDocOp,
 } from "../sessions/doc-op-queue.js";
 import {
+  beginWriteClaim,
   callerView,
-  claimForWrite,
+  checkWrite,
   decideTake,
+  dropWriteClaim,
   type HolderView,
   heldDocumentIds,
+  type InboxScope,
+  inboxScopeOf,
   logLimited,
   type OwnershipRefusal,
   otherAnswererOf,
   otherHolderOf,
+  type PendingClaim,
   recordAnswerer,
-  reverseClaim,
+  settleWriteClaim,
   takeDocument,
 } from "../sessions/ownership.js";
 import {
@@ -70,8 +81,8 @@ export function ownershipOn(): boolean {
  * Envelopes whose refusal was decided by the call's arguments or by a fact
  * fixed when the document was opened (its format, its source, read-only).
  * Such a refusal **never claims** (ownership design §5.1): where one is
- * answered inside the operation, after an unowned document was claimed, the
- * claim is undone. A WeakSet, as `mcpError`'s own marker is, so nothing shows
+ * answered inside the operation, on an unowned document the caller could have
+ * claimed, the claim is never applied. A WeakSet, as `mcpError`'s own marker is, so nothing shows
  * on the wire. Marking is a no-op in effect while ownership is off.
  */
 const neverClaims = new WeakSet<McpToolResult>();
@@ -128,8 +139,8 @@ function refusalEnvelope(
 /**
  * The answer for a call that left the document's queue without running: it
  * waited past the limit, or its request was cancelled before its turn. Null
- * for any other failure, which the caller rethrows. Nothing was claimed (the
- * claim is the first thing inside the operation, which never ran).
+ * for any other failure, which the caller rethrows. Nothing was claimed (a
+ * claim is applied only at the outcome of an operation, and this one never ran).
  */
 function busyEnvelope(err: unknown, documentId: string): McpToolResult | null {
   const reason =
@@ -251,26 +262,48 @@ export function ownedWrite(
         }
       }
 
-      const decision = claimForWrite(documentId, ownerId);
+      const decision = checkWrite(documentId, ownerId);
       if (!decision.ok) {
         return refusalEnvelope(decision, documentId, ownerId, { family: spec.family, defaulted });
       }
 
-      let result: McpToolResult;
+      // The claim of an unowned document is pending until the body's outcome
+      // is known, and invisible meanwhile. A body that throws wrote nothing
+      // it can vouch for, and a refusal that never claims decided nothing
+      // about the document: both end with the token dropped (the `finally`)
+      // and ownership exactly as it was.
+      let pending: PendingClaim | null = decision.claim
+        ? beginWriteClaim(documentId, ownerId)
+        : null;
       try {
-        result = await body(documentId);
-      } catch (err) {
-        // A body that threw wrote nothing it can vouch for: do not leave the
-        // caller holding a document on the strength of it.
-        if (decision.claimed) reverseClaim(documentId, decision.claimed);
-        throw err;
+        const result = await body(documentId);
+        // The write has happened. Nothing from here on may fail the call: a
+        // client told INTERNAL_ERROR would retry and write twice.
+        try {
+          if (!neverClaims.has(result)) {
+            // Answered-once does not depend on the claim: the answer is on
+            // the thread whether or not the caller ends up holding the
+            // document (it closed meanwhile, its record is gone).
+            if (answering && !isErrorEnvelope(result)) {
+              recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
+            }
+            if (pending) {
+              // Cleared only once it is settled: if reading the registry
+              // throws, the `finally` still drops the token.
+              settleWriteClaim(pending, hasDoc(documentId));
+              pending = null;
+            }
+          }
+        } catch {
+          logLimited(
+            "write-outcome",
+            `[Tandem] ${tool} ran, but recording its ownership outcome failed; its result is returned as it was`,
+          );
+        }
+        return result;
+      } finally {
+        if (pending) dropWriteClaim(pending);
       }
-      if (neverClaims.has(result)) {
-        if (decision.claimed) reverseClaim(documentId, decision.claimed);
-      } else if (answering && !isErrorEnvelope(result)) {
-        recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
-      }
-      return result;
     },
     { signal: caller.signal },
   ).catch((err: unknown) => {
@@ -479,6 +512,18 @@ export function callerOwnerInfo(
     displayKind: view.displayKind,
     holding: heldDocumentIds(caller.ownerId),
   };
+}
+
+/**
+ * Where the caller stands on an open document for an inbox poll (ownership
+ * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. For PR 2b's inbox
+ * scope, which must not read `caller.ownerId` itself; nothing in production
+ * calls it yet. `"neither"` while ownership is off, and for a caller with no
+ * owner id or no owner record.
+ */
+export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
+  if (!ownershipEnabled()) return "neither";
+  return inboxScopeOf(documentId, caller.ownerId);
 }
 
 /**

@@ -22,8 +22,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isDirty, markDirty } from "../../src/server/documents/dirty.js";
-import { recordSelfWrite } from "../../src/server/file-watcher.js";
-import { autoSaveAllToDisk } from "../../src/server/mcp/document-service.js";
+import { removeDoc } from "../../src/server/documents/registry-testing.js";
+import { recordSelfWrite, unwatchFile } from "../../src/server/file-watcher.js";
+import { autoSaveAllToDisk, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
@@ -138,12 +139,25 @@ const EXCLUDED: Record<string, string> = {
 let httpServer: Server | undefined;
 let tmpDir = "";
 
+/**
+ * Remove the temp dir after closing whatever still watches a file in it: an
+ * open watch handle keeps the directory busy on Windows, and a bare `rmSync`
+ * then throws. Retries cover a handle that is still closing.
+ */
+function removeTmpDir(): void {
+  for (const d of [...getOpenDocs().values()]) {
+    if (d.source === "file") unwatchFile(d.filePath);
+    removeDoc(d.id);
+  }
+  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 afterEach(async () => {
   await closeMcpSession();
   if (httpServer) await new Promise<void>((resolve) => httpServer?.close(() => resolve()));
   httpServer = undefined;
   resetOwnershipForTests();
-  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  removeTmpDir();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -244,7 +258,7 @@ describe("/api and autosave with no MCP context", () => {
     await closeMcpSession();
     await new Promise<void>((resolve) => httpServer?.close(() => resolve()));
     httpServer = undefined;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeTmpDir();
     resetOwnershipForTests();
     vi.unstubAllEnvs();
 
@@ -290,7 +304,7 @@ describe("who may import the enforcement code", () => {
 
   it("the decision functions are named in the helper and the ownership module only", () => {
     const names =
-      /\b(claimForWrite|reverseClaim|decideTake|takeDocument|otherHolderOf|otherAnswererOf|recordAnswerer)\b/;
+      /\b(checkWrite|beginWriteClaim|settleWriteClaim|dropWriteClaim|inboxScopeOf|decideTake|takeDocument|otherHolderOf|otherAnswererOf|recordAnswerer)\b/;
     const files = [...SRC_FILES]
       .filter(([, src]) => names.test(stripComments(src)))
       .map(([file]) => file)
