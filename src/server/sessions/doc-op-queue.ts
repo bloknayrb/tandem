@@ -38,8 +38,9 @@
  * by the time its turn comes is skipped the same way ({@link DocOpCancelled}).
  * An operation that has started is never cancelled: if it never settles (a
  * save stalled on a dead mount), every later operation on that document is
- * refused after the limit, each leaving one small callback behind, and the
- * chain stays occupied until the server restarts.
+ * refused after the limit, and the chain stays occupied until the server
+ * restarts. Each refused call's turn callback stays chained until then, and
+ * it keeps that call's body and arguments alive with it.
  *
  * **The turn callback is attached from the entrant's own call**, timer or no
  * timer: the timer only marks the entrant as gone and rejects its promise.
@@ -56,8 +57,9 @@ export const DOC_OP_WAIT_MS = 20_000;
 
 let waitMs = DOC_OP_WAIT_MS;
 
-/** The caller waited {@link DOC_OP_WAIT_MS} for its turn and was not run. */
+/** The caller's wait for its turn ran out and it was not run. */
 export class DocOpWaitExpired extends Error {
+  /** The limit that applied to this wait (not a measurement of the time spent). */
   readonly waitedMs: number;
   constructor(waitedMs: number) {
     super("the document's operation queue was busy for longer than the wait limit");
@@ -135,6 +137,7 @@ export function runDocOp<T>(
     // request, or the timer fires first.
     let waiting = true;
     const limit = Math.max(0, options.waitMs ?? waitMs);
+    const queuedAt = Date.now();
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (!waiting) return;
@@ -157,10 +160,15 @@ export function runDocOp<T>(
       waiting = false;
       clearTimeout(timer);
       timers.delete(timer);
-      if (options.signal?.aborted) {
+      // The turn is a promise callback and the expiry a timer: after a long
+      // synchronous stretch the turn can come first although the limit has
+      // passed. The clock decides, so an operation never starts later than
+      // the limit after it was queued.
+      const late = Date.now() - queuedAt >= limit;
+      if (late || options.signal?.aborted) {
         settle(documentId, mine);
         open();
-        reject(new DocOpCancelled());
+        reject(late ? new DocOpWaitExpired(limit) : new DocOpCancelled());
         return;
       }
       const done = () => {

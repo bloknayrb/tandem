@@ -226,9 +226,14 @@ export function ownedWrite(
   const early = spec.preflight?.(documentId);
   if (early) return Promise.resolve(early);
 
+  // Set when the operation's turn comes. The busy answer says "not run,
+  // nothing changed", so it is given only for a call that never started: a
+  // queue error escaping from inside a body is a fault, not this.
+  let started = false;
   return runDocOp(
     documentId,
     async () => {
+      started = true;
       // Closed while this call waited: nothing to check and nothing to claim.
       // The body gives its own not-open answer for the id that was pinned.
       if (!hasDoc(documentId)) return body(documentId);
@@ -272,7 +277,7 @@ export function ownedWrite(
     },
     { signal: caller.signal },
   ).catch((err: unknown) => {
-    const busy = busyEnvelope(err, documentId);
+    const busy = started ? null : busyEnvelope(err, documentId);
     if (busy) return busy;
     throw err;
   });
@@ -329,9 +334,11 @@ export async function ownedOpen(
   const ownerId = caller.ownerId;
   if (ownerId === undefined) return noOwner(tool);
 
-  // One wait for the whole call, however many times it starts again. Only
-  // waiting is charged against it in effect: a hop that finds its queue idle
-  // runs whatever is left, and a hop is refused only by a busy queue.
+  // One deadline for the whole call, however many times it starts again. A
+  // hop that finds its queue idle runs whatever is left of it, so only a busy
+  // queue refuses. The time an earlier hop spent running does count: after a
+  // hop whose open ran past the deadline, the next one is refused by a busy
+  // queue at once.
   const deadline = Date.now() + DOC_OP_WAIT_MS;
   for (let hop = 0; hop < 3; hop++) {
     const predicted = spec.predict();
@@ -350,10 +357,12 @@ export async function ownedOpen(
       return refused.envelope;
     }
     let outcome: McpToolResult | typeof RETRY;
+    let started = false;
     try {
       outcome = await runDocOp<McpToolResult | typeof RETRY>(
         predicted,
         async () => {
+          started = true;
           if (spec.predict() !== predicted) return RETRY;
           const before = decideTake(predicted, ownerId);
           if (!before.ok) return refusalEnvelope(before, predicted, ownerId);
@@ -369,7 +378,7 @@ export async function ownedOpen(
         { signal: caller.signal, waitMs: Math.max(0, deadline - Date.now()) },
       );
     } catch (err) {
-      const busy = busyEnvelope(err, predicted);
+      const busy = started ? null : busyEnvelope(err, predicted);
       if (busy) return busy;
       throw err;
     }

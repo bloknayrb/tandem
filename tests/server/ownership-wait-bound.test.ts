@@ -273,27 +273,64 @@ describe("tandem_open that waits past the limit", () => {
 
   const envelope = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 
-  it("has one wait for the whole call, however many times its target moves", async () => {
-    // Three targets, every one busy: the three hops together may wait one
-    // limit, not three.
-    const heads = ["m0", "m1", "m2"].map((name) => hold(setupDoc(name).id));
-    const ids = ["m0", "m1", "m2"].map(docId);
-    let asked = 0;
+  it("has one wait for the whole call: a second hop on a busy queue gets only what the first left", async () => {
+    const { id: firstId } = setupDoc("m0");
+    const { id: secondId } = setupDoc("m1");
+    const firstHead = hold(firstId);
+    const secondHead = hold(secondId);
+    let target = firstId;
     let settled: McpToolResult | undefined;
+    const opens: Array<string | undefined> = [];
     const call = ownedOpen({ ownerId: A }, "tandem_open", {
-      // Stable long enough to wait in a queue, then a new target.
-      predict: () => ids[Math.min(Math.floor(asked++ / 2), 2)],
-      open: async () => ({ envelope: envelope("{}") }),
+      predict: () => target,
+      open: async (expectTargetId) => {
+        opens.push(expectTargetId);
+        return { envelope: envelope("{}") };
+      },
     }).then((r) => {
       settled = r;
     });
-    await vi.advanceTimersByTimeAsync(DOC_OP_WAIT_MS - 1);
+    // The first hop waits 15 s; then its queue frees, but the target has
+    // moved, so the call starts again in the second document's busy queue.
+    await vi.advanceTimersByTimeAsync(15_000);
+    target = secondId;
+    firstHead.release();
+    await firstHead.done;
+    await settle();
+    expect(settled).toBeUndefined();
+    // 5 s are left of the one wait, not a fresh 20.
+    await vi.advanceTimersByTimeAsync(4999);
     expect(settled).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     await call;
-    expect((JSON.parse(settled?.content[0].text as string) as Body).code).toBe("DOCUMENT_BUSY");
-    for (const h of heads) h.release();
-    await Promise.all(heads.map((h) => h.done));
+    const body = JSON.parse(settled?.content[0].text as string) as Body;
+    expect(body.code).toBe("DOCUMENT_BUSY");
+    expect(body.details).toMatchObject({ reason: "wait-expired", documentId: secondId });
+    expect(opens).toEqual([]);
+    secondHead.release();
+    await secondHead.done;
+  });
+
+  it("a cancelled open is skipped at its turn: nothing is opened, reloaded or taken", async () => {
+    const { id } = setupDoc("d");
+    const head = hold(id);
+    const abort = new AbortController();
+    const opens: Array<string | undefined> = [];
+    const call = ownedOpen({ ownerId: A, signal: abort.signal }, "tandem_open", {
+      predict: () => id,
+      open: async (expectTargetId) => {
+        opens.push(expectTargetId);
+        return { envelope: envelope("{}"), openedId: id };
+      },
+    });
+    abort.abort();
+    head.release();
+    await head.done;
+    const body = JSON.parse((await call).content[0].text) as Body;
+    expect(body.code).toBe("DOCUMENT_BUSY");
+    expect(body.details).toMatchObject({ reason: "cancelled", documentId: id });
+    expect(opens).toEqual([]);
+    expect(getDocOwner(id)).toBeUndefined();
   });
 
   it("a hop with nothing left of the wait still runs when its queue is idle: only waiting is refused", async () => {
@@ -378,6 +415,26 @@ describe("a call whose request was cancelled before its turn", () => {
     await structured({}, { signal });
     expect(seen[3]).toEqual({});
     expect(seen[4]).toEqual({});
+  });
+});
+
+describe("a queue error from inside a body", () => {
+  it("is not answered as this call's own wait: the busy answer is only for a call that never started", async () => {
+    const { id } = setupDoc("d");
+    const { DocOpWaitExpired } = await import("../../src/server/sessions/doc-op-queue.js");
+    const { ownedWrite } = await import("../../src/server/mcp/owned-op.js");
+    await expect(
+      ownedWrite(
+        { ownerId: A },
+        "tandem_comment",
+        { given: id, resolve: () => ({ open: true, documentId: id, defaulted: false }) },
+        async () => {
+          throw new DocOpWaitExpired(1);
+        },
+      ),
+    ).rejects.toBeInstanceOf(DocOpWaitExpired);
+    // A body that threw leaves no claim, as for any other throw.
+    expect(getDocOwner(id)).toBeUndefined();
   });
 });
 

@@ -255,6 +255,26 @@ describe("the wait bound (Bryan, 2026-11-11)", () => {
     expect(isDocOpQueueBusy("d")).toBe(false);
   });
 
+  it("a turn that comes after the limit, before the timer could fire, is still refused", async () => {
+    // The turn is a promise callback and the expiry a timer, so after a long
+    // synchronous stretch the turn can come first. The clock decides.
+    const head = deferred();
+    let ran = false;
+    const first = runDocOp("d", () => head.promise);
+    const waiting = runDocOp("d", () => {
+      ran = true;
+    });
+    const refused = expect(waiting).rejects.toBeInstanceOf(DocOpWaitExpired);
+    // The clock passes the limit without any timer running.
+    vi.setSystemTime(Date.now() + DOC_OP_WAIT_MS + 5000);
+    head.resolve();
+    await first;
+    await refused;
+    expect(ran).toBe(false);
+    expect(isDocOpQueueBusy("d")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("a running operation is never cancelled, however long it takes", async () => {
     const head = deferred<string>();
     const first = runDocOp("d", () => head.promise);
