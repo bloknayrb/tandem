@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,10 +14,13 @@ import {
   EXIT_MISMATCH,
   hashForLog,
   judgeProbe,
+  judgeRefusal,
   EXIT_CANNOT_EVALUATE as PROBE_CANNOT,
   EXIT_OK as PROBE_OK,
   reservedPorts,
+  rpcMessage,
   serverEnvFor,
+  toolEnvelope,
 } from "../../scripts/ci/ownership-bundle-probe.mjs";
 import {
   EXIT_CANNOT_EVALUATE,
@@ -394,5 +397,102 @@ describe("scripts/ci/ownership-bundle-probe.mjs", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the probe's second, runtime anchor: a non-owner write (PR 1c, ownership design §12)", () => {
+  const PROBE = readFileSync(path.join(ROOT, "scripts/ci/ownership-bundle-probe.mjs"), "utf-8");
+  const ok = { error: false, data: { appended: true } };
+  const refused = {
+    error: true,
+    code: "NOT_DOC_OWNER",
+    details: {
+      reason: "held",
+      documentId: "d",
+      holder: { label: "owner-aaaa", displayKind: "terminal" },
+    },
+  };
+
+  it("on: the opener writes and the second session is refused NOT_DOC_OWNER / held", () => {
+    expect(judgeRefusal(ok, refused, "on").code).toBe(0);
+    // A bundle whose define did not take accepts the write: a mismatch, not "cannot evaluate".
+    expect(judgeRefusal(ok, ok, "on").code).toBe(1);
+  });
+
+  it("off: both writes are accepted, and a refusal is a mismatch", () => {
+    expect(judgeRefusal(ok, ok, "off").code).toBe(0);
+    expect(judgeRefusal(ok, refused, "off").code).toBe(1);
+  });
+
+  it("a bundle that refuses everything, or answers anything else, is not a verdict", () => {
+    // The opener's own write must succeed either way.
+    expect(judgeRefusal(refused, refused, "on").code).toBe(3);
+    expect(judgeRefusal({ error: true, code: "INTERNAL_ERROR" }, refused, "on").code).toBe(3);
+    // The second write must be exactly accepted or exactly NOT_DOC_OWNER/held.
+    expect(judgeRefusal(ok, { error: true, code: "INTERNAL_ERROR" }, "on").code).toBe(3);
+    expect(
+      judgeRefusal(ok, { error: true, code: "NOT_DOC_OWNER", details: { reason: "claimed" } }, "on")
+        .code,
+    ).toBe(3);
+    expect(judgeRefusal(undefined, ok, "on").code).toBe(3);
+    expect(judgeRefusal(ok, ok, "sideways" as "on").code).toBe(3);
+  });
+
+  it("reads a tool envelope out of a JSON body and out of an SSE body", () => {
+    const rpc = {
+      jsonrpc: "2.0",
+      id: 2,
+      result: { content: [{ type: "text", text: JSON.stringify(refused) }] },
+    };
+    expect(toolEnvelope(JSON.stringify(rpc))).toEqual(refused);
+    expect(toolEnvelope(`event: message\ndata: ${JSON.stringify(rpc)}\n\n`)).toEqual(refused);
+    expect(rpcMessage("not json")).toBeUndefined();
+    expect(toolEnvelope('{"jsonrpc":"2.0","id":2,"error":{"code":-32000}}')).toBeUndefined();
+  });
+
+  it("the boot path judges the write only after the log line agrees, and returns its verdict", () => {
+    // Source pin: the workflow step is unchanged (`--expect on`), so what makes
+    // the job run this anchor is the probe calling it on its only boot path.
+    const boot = PROBE.slice(
+      PROBE.indexOf("async function probe("),
+      PROBE.indexOf("const MCP_HEADERS"),
+    );
+    expect(boot).toMatch(/const verdict = judgeProbe\(/);
+    expect(boot).toMatch(/const refusal = await probeRefusal\(baseUrl, mcpSessionId, expect\);/);
+    expect(boot).toMatch(/if \(refusal\.code !== EXIT_OK\) \{[\s\S]*?return refusal;/);
+    // No environment variable or flag can skip it.
+    expect(PROBE).not.toMatch(/SKIP|process\.env\.[A-Z_]*REFUSAL/);
+    const refusalFn = PROBE.slice(PROBE.indexOf("async function probeRefusal("));
+    expect(refusalFn).toMatch(/"tandem_scratchpad"/);
+    expect(refusalFn).toMatch(/return judgeRefusal\(ownWrite, otherWrite, expect\);/);
+  });
+});
+
+describe("the E2E MCP client's identity (PR 1c, ownership design §12)", () => {
+  // The flag-on E2E run is part of the required `ownership-flag-on` job. With
+  // ownership on, a client that sends no identity header is its own owner
+  // record per connection, so the document one spec opened would refuse the
+  // next spec. Every E2E client therefore sends one fixed client id.
+  const HELPERS = readFileSync(path.join(ROOT, "tests/e2e/helpers.ts"), "utf-8");
+
+  it("every MCP transport the E2E helper builds sends the one fixed X-Tandem-Client-Id", () => {
+    const transports = HELPERS.match(/new StreamableHTTPClientTransport\([\s\S]*?\);/g) ?? [];
+    expect(transports.length).toBeGreaterThan(0);
+    for (const t of transports) {
+      expect(t).toMatch(/"X-Tandem-Client-Id": E2E_TANDEM_CLIENT_ID/);
+    }
+  });
+
+  it("the id is a constant the server accepts as a client id, and no other E2E file builds a transport", () => {
+    const id = /export const E2E_TANDEM_CLIENT_ID = "([^"]+)";/.exec(HELPERS)?.[1];
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const e2eDir = path.join(ROOT, "tests/e2e");
+    const others = readdirSync(e2eDir, { recursive: true })
+      .map(String)
+      .filter((f) => /\.(ts|mts|js|mjs)$/.test(f) && f !== "helpers.ts")
+      .filter((f) =>
+        /new StreamableHTTPClientTransport\(/.test(readFileSync(path.join(e2eDir, f), "utf-8")),
+      );
+    expect(others).toEqual([]);
   });
 });

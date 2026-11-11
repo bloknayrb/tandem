@@ -61,7 +61,12 @@ import {
 import { getTombstones, resetForTesting as syncReset } from "../../src/server/annotations/sync.js";
 import { readPendingConflict } from "../../src/server/documents/conflict.js";
 import { isDirty } from "../../src/server/documents/dirty.js";
-import { openFromDisk, openFromRestore } from "../../src/server/documents/open.js";
+import {
+  findOpenTarget,
+  openFromDisk,
+  openFromRestore,
+  resolveOpenPath,
+} from "../../src/server/documents/open.js";
 import { resolveExternalConflict } from "../../src/server/documents/reload-family.js";
 import { getFileSyncContext } from "../../src/server/events/queue.js";
 import {
@@ -278,6 +283,23 @@ describe("Requirement 1: one file, one document", () => {
     expect(getOpenDocs().size).toBe(1);
   });
 
+  // `tandem_open` under ownership predicts which document an open targets
+  // with `resolveOpenPath`, synchronously, and the open refuses when its own
+  // answer differs. Both must give the long spelling for a short one, or a
+  // short-spelled `tandem_open` could never succeed with ownership on.
+  it("the synchronous resolver and the open agree on a short spelling: one path, one target id", async () => {
+    expect(resolveOpenPath(fx.aliasPath)).toBe(fx.longPath);
+    // Fresh: the id a new open would get.
+    const predicted = findOpenTarget(resolveOpenPath(fx.aliasPath)).id;
+    const opened = await openFromDisk(fx.aliasPath, { expectTargetId: predicted });
+    expect(opened.documentId).toBe(predicted);
+    // Already open: the same document, by either spelling.
+    expect(findOpenTarget(resolveOpenPath(fx.aliasPath)).id).toBe(opened.documentId);
+    expect(findOpenTarget(resolveOpenPath(fx.longPath)).id).toBe(opened.documentId);
+    const again = await openFromDisk(fx.aliasPath, { expectTargetId: opened.documentId });
+    expect(again.kind).toBe("already-open");
+  });
+
   it("stores and shows the long spelling, never the alias (R1.2)", async () => {
     const opened = await openFromDisk(fx.aliasPath);
     const entry = getOpenDocs().get(opened.documentId);
@@ -408,6 +430,8 @@ describe("Requirement 4: no security check moves", () => {
     ["a device-namespace path", `//./C:/${ALIAS_NAME}`, /Extended/],
   ])("refuses %s before any filesystem call", async (_label, hostile, message) => {
     const real = [
+      // Before `realpathSync` itself: a spy on that replaces the function.
+      vi.spyOn(fsSync.realpathSync, "native"),
       vi.spyOn(fsSync, "realpathSync"),
       vi.spyOn(fsSync, "lstatSync"),
       vi.spyOn(fsSync, "statSync"),
@@ -464,8 +488,8 @@ describe("Requirement 4: no security check moves", () => {
     const { _setShortNameDepsForTests } = await import("../../src/server/file-io/short-names.js");
     _setShortNameDepsForTests({
       platform: "win32",
-      realpathNative: async () => long,
-      lstat: (p) => fs.lstat(p, { bigint: true }),
+      realpathNative: () => long,
+      lstat: (p) => fsSync.lstatSync(p, { bigint: true }),
     });
     const opened = await openFromDisk(alias);
     expect(opened.filePath).toBe(alias);

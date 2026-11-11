@@ -786,11 +786,19 @@ describe("runtime export surfaces", () => {
         // union onto the flat JSON six sites put on the wire. It is exported
         // because those six live in three other modules — a second copy of the
         // projection is exactly what Unit 7b exists to prevent.
+        // #2358 (ownership PR 1c): `tandem_open`'s wrapper must know which
+        // document an open targets BEFORE the open runs, and must learn it
+        // with the open path's own code — a copy that ran `realpathSync` ahead
+        // of the unsafe-prefix screen would open the SMB connection the screen
+        // exists to prevent. Both are pure of ownership; `openFromDisk` uses
+        // them itself.
+        "findOpenTarget",
         "kindOfOpenResult",
         "openFromDisk",
         "openFromRestore",
         "openFromUpload",
         "openScratchpad",
+        "resolveOpenPath",
         "toWireResult",
       ].sort(),
     );

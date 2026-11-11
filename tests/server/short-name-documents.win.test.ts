@@ -437,10 +437,10 @@ describe.runIf(WIN)(
         // string itself, so that string's key holds a LIVE document's records.
         _setShortNameDepsForTests({
           platform: "win32",
-          realpathNative: async () => {
+          realpathNative: () => {
             throw Object.assign(new Error("EPERM"), { code: "EPERM" });
           },
-          lstat: (p) => fs.lstat(p, { bigint: true }),
+          lstat: (p) => fsSync.lstatSync(p, { bigint: true }),
         });
         const live = await openFromDisk(short);
         _setShortNameDepsForTests(null);

@@ -95,12 +95,16 @@ export async function makeAliasFixture(content = "alpha beta gamma\n"): Promise<
  * `ALIAS_NAME` to `LONG_NAME` and the real `lstat`. Returns the two spies.
  */
 export function installAliasExpansion(opts: { realpathError?: NodeJS.ErrnoException } = {}) {
-  const realpathNative = vi.fn(async (p: string): Promise<string> => {
+  // The real native realpath is captured here, before any test spies on
+  // `fs.realpathSync` (a spy replaces the function and drops its `.native`).
+  const native = fsSync.realpathSync.native;
+  const realpathNative = vi.fn((p: string): string => {
     if (opts.realpathError) throw opts.realpathError;
-    const real = await fsp.realpath(p);
+    const real = native(p);
     return path.basename(real) === ALIAS_NAME ? path.join(path.dirname(real), LONG_NAME) : real;
   });
-  const lstat = vi.fn((p: string) => fsp.lstat(p, { bigint: true }));
+  const realLstat = fsSync.lstatSync;
+  const lstat = vi.fn((p: string) => realLstat(p, { bigint: true }));
   _setShortNameDepsForTests({ platform: "win32", realpathNative, lstat });
   return { realpathNative, lstat };
 }

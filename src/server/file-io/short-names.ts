@@ -24,19 +24,25 @@
  * it had before. The one exception is `allowMissingTail` (save-as): a prefix
  * that does not exist yet stops the walk and the rest is kept as typed.
  *
+ * **Synchronous**, like the `realpathSync` it follows. The open path's
+ * canonical string has a synchronous producer (`resolveOpenPath` in
+ * `documents/open.ts`) that other code calls to learn which document a path
+ * names, so the expansion has to be part of it: an asynchronous expansion
+ * would give those callers a different string from the one the open uses.
+ *
  * `win32` only. On every other platform this returns its input and makes no
  * call.
  */
 
-import fsp from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 
 interface ShortNameDeps {
   platform: NodeJS.Platform;
-  /** The NATIVE realpath (`fs.promises.realpath`), which expands 8.3 names. */
-  realpathNative: (p: string) => Promise<string>;
-  lstat: (p: string) => Promise<{ dev: bigint; ino: bigint }>;
+  /** The NATIVE realpath (`fs.realpathSync.native`), which expands 8.3 names. */
+  realpathNative: (p: string) => string;
+  lstat: (p: string) => { dev: bigint; ino: bigint };
 }
 
 let depsOverride: ShortNameDeps | null = null;
@@ -53,9 +59,9 @@ function currentDeps(): ShortNameDeps {
   return (
     depsOverride ?? {
       platform: process.platform,
-      // Looked up at call time, so a spy on `fs.promises` sees every call.
-      realpathNative: (p) => fsp.realpath(p),
-      lstat: (p) => fsp.lstat(p, { bigint: true }),
+      // Looked up at call time, so a spy on `fs` sees every call.
+      realpathNative: (p) => fs.realpathSync.native(p),
+      lstat: (p) => fs.lstatSync(p, { bigint: true }),
     }
   );
 }
@@ -84,10 +90,10 @@ export interface ShortNameExpansion {
  * `p` must already be absolute and canonical in the caller's sense (the JS
  * realpath result on the open path); it is not resolved here.
  */
-export async function expandShortNames(
+export function expandShortNames(
   p: string,
   opts: { allowMissingTail?: boolean } = {},
-): Promise<ShortNameExpansion> {
+): ShortNameExpansion {
   if (rejectUnsafeWindowsPrefix(p) !== null) return { path: p };
   const deps = currentDeps();
   if (deps.platform !== "win32") return { path: p };
@@ -114,7 +120,7 @@ export async function expandShortNames(
       const prefix = parent + part;
       let native: string;
       try {
-        native = await deps.realpathNative(prefix);
+        native = deps.realpathNative(prefix);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (opts.allowMissingTail && (code === "ENOENT" || code === "ENOTDIR")) {
@@ -132,7 +138,8 @@ export async function expandShortNames(
       if (candidate === "" || candidate === "." || candidate === ".." || /[\\/:]/.test(candidate)) {
         throw new Error(`short-name expansion: unusable long name for ${part}`);
       }
-      const [alias, long] = await Promise.all([deps.lstat(prefix), deps.lstat(parent + candidate)]);
+      const alias = deps.lstat(prefix);
+      const long = deps.lstat(parent + candidate);
       // A zero inode is a filesystem that reports none: equality proves nothing.
       if (alias.ino === 0n || alias.ino !== long.ino || alias.dev !== long.dev) {
         throw new Error(`short-name expansion: ${candidate} is not the same entry as ${part}`);

@@ -62,7 +62,11 @@ import {
   TANDEM_CLIENT_ID_HEADER,
   VALID_TOKEN_RE,
 } from "../shared/cli-runtime.js";
-import { DEFAULT_MCP_PORT, LAN_BIND_ENABLED } from "../shared/constants.js";
+import {
+  DEFAULT_MCP_PORT,
+  LAN_BIND_ENABLED,
+  STDIO_BRIDGE_REQUEST_TIMEOUT_MS,
+} from "../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
 
@@ -83,7 +87,7 @@ const MAX_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
 export function parseTimeoutMs(
   raw: string | undefined,
   name = "TANDEM_REQUEST_TIMEOUT_MS",
-  fallback = 30_000,
+  fallback = STDIO_BRIDGE_REQUEST_TIMEOUT_MS,
 ): number {
   if (raw !== undefined) {
     const parsed = parseInt(raw, 10);

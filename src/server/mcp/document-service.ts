@@ -1315,7 +1315,7 @@ export async function autoSaveAllToDisk(): Promise<void> {
  * string already passed (prefix screen, extension, symlink walk).
  */
 async function expandedSaveTarget(typed: string, expectedExt: string): Promise<string> {
-  const expanded = await expandShortNames(typed, { allowMissingTail: true });
+  const expanded = expandShortNames(typed, { allowMissingTail: true });
   if (expanded.failed !== undefined) {
     console.error("[Save As] could not expand the short name in", typed, expanded.failed);
     return typed;

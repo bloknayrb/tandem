@@ -33,12 +33,12 @@ function fakeFs(entries: Record<string, Entry>) {
   const table = new Map(Object.entries(entries).map(([k, v]) => [key(k), v]));
   const enoent = (p: string) =>
     Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" }) as NodeJS.ErrnoException;
-  const realpathNative = vi.fn(async (p: string) => {
+  const realpathNative = vi.fn((p: string) => {
     const e = table.get(key(p));
     if (!e) throw enoent(p);
     return e.native;
   });
-  const lstat = vi.fn(async (p: string) => {
+  const lstat = vi.fn((p: string) => {
     const e = table.get(key(p));
     if (!e) throw enoent(p);
     return { ino: e.ino, dev: e.dev ?? 1n };
@@ -140,7 +140,7 @@ describe("expandShortNames", () => {
   it("is all-or-nothing: an EPERM on the second component returns the input, not a half-expanded string (R4.5)", async () => {
     const { realpathNative } = fakeFs(volume);
     const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" });
-    realpathNative.mockImplementation(async (p: string) => {
+    realpathNative.mockImplementation((p: string) => {
       if (p.toUpperCase().endsWith("LONGFI~1.MD")) throw eperm;
       return LONG_DIR;
     });
@@ -223,6 +223,8 @@ describe("expandShortNames", () => {
   ])("makes no filesystem call for %s", async (_label, hostile) => {
     const { realpathNative, lstat } = fakeFs({});
     const real = [
+      // Before `realpathSync` itself: a spy on that replaces the function.
+      vi.spyOn(fsSync.realpathSync, "native"),
       vi.spyOn(fsp, "realpath"),
       vi.spyOn(fsp, "lstat"),
       vi.spyOn(fsp, "stat"),
