@@ -16,9 +16,12 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
- * #1529 — the #1299 real-`icacls` proof had never run in CI and could not: the
- * only vitest job (`check`) is ubuntu-latest, so the Windows-gated specs loaded,
- * skipped, and reported green on every push. Measured before this file existed:
+ * #1529 — the #1299 real-`icacls` proof had never run in CI and could not: no
+ * vitest job ran on Windows then (`check` is ubuntu-latest), so the Windows-gated
+ * specs loaded, skipped, and reported green on every push. (Since #2397 the
+ * advisory `vitest-windows` job runs the whole suite on Windows; it accepts a
+ * skip and blocks nothing, so this proof keeps its own required job.) Measured
+ * before this file existed:
  *
  *   $ npx vitest run tests/server/file-io/doc-backup-acl-repair.test.ts
  *    Test Files  1 skipped (1) ; Tests  1 skipped (1) ; exit 0

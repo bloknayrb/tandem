@@ -12,8 +12,9 @@
  * These specs pin the create-new path. The discriminator is a **symlinked
  * parent with a missing leaf**, deliberately not a Windows junction: a
  * Windows-gated `describe` that no Windows job runs is green forever and reads
- * exactly like a pass (#1529), and the only Windows job is `windows-acl-proof`,
- * whose script requires each named describe to be registered with it.
+ * exactly like a pass (#1529), and the only Windows job that refuses a skip is
+ * `windows-acl-proof`, whose script requires each named describe to be
+ * registered with it.
  *
  * `runIf(!win32)` for the symlink half, so ubuntu's `check` is what runs it.
  * The non-symlink controls below run everywhere and exist so a broken fixture

@@ -16,10 +16,12 @@
  *
  * **"A local run" is the whole of the Windows evidence for THIS file, and the
  * reason is a list it is not on — not an absent mechanism.** The only vitest
- * that CI runs on Windows is `WINDOWS_ACL_PROOF_SPECS` in
+ * that a REQUIRED check runs on Windows is `WINDOWS_ACL_PROOF_SPECS` in
  * `scripts/ci/windows-acl-proof.mjs`, spawned by the `windows-acl-proof` job on
- * `windows-latest` as a required check; neither this file nor `session.test.ts`
- * is on that list. Every other vitest job (`check`, `coverage`) is ubuntu; the
+ * `windows-latest`; neither this file nor `session.test.ts` is on that list.
+ * The advisory `vitest-windows` job (#2397) does run this file on Windows, but
+ * a red there blocks no merge and a skip there is green. Every other vitest job
+ * (`check`, `coverage`, `ownership-flag-on`) is ubuntu; the
  * `rust-test`/`reaper-build` matrix does reach Windows but runs cargo only.
  *
  * So a change breaking only the Windows semantics here stays green in CI — read

@@ -43,7 +43,7 @@ on:
 # tagless. `permissions: {}` would 403 there, and the failure would look like a
 # harness bug rather than a permissions one.
 #
-# Declared at workflow level rather than per job, deliberately: all seven jobs need
+# Declared at workflow level rather than per job, deliberately: all eight jobs need
 # the identical minimum, and inheritance means a job added later is least-privileged
 # by default instead of silently reacquiring the repo default. A future job needing
 # more takes a job-level block — which REPLACES rather than merges, so such an
@@ -151,9 +151,11 @@ jobs:
 
   # #1529: the ONLY tests that spawn real `icacls` -- the #1299 proof that a
   # machine already poisoned by the old non-inheritable grant recovers by running
-  # the fixed build -- had no runner anywhere. `check` is the only vitest job and
-  # it is ubuntu-latest, so those specs loaded, skipped, and reported green on
-  # every push since they were written. Measured: under the JSON reporter
+  # the fixed build -- had no runner anywhere. No vitest job ran on Windows then
+  # (`check` is ubuntu-latest), so those specs loaded, skipped, and reported green
+  # on every push since they were written. `vitest-windows` below now runs the
+  # whole suite on Windows, but it is advisory and accepts a skipped describe;
+  # this job is the required one and refuses a skip. Measured: under the JSON reporter
   # `doc-backup-acl-repair.test.ts` scores file status `passed` on Linux with a
   # single `skipped` assertion.
   #
@@ -193,6 +195,73 @@ jobs:
       - name: Real-icacls proof (#1299 recovery path)
         run: node scripts/ci/windows-acl-proof.mjs
         timeout-minutes: 10
+
+  # The whole vitest suite, on Windows (#2397).
+  #
+  # `check` runs vitest on ubuntu-latest only, and cloud sessions are Linux. PR
+  # #2370 had every check green and 12 of its new tests failing on a Windows 11
+  # machine, every time; the pre-push hook runs the full suite, so one such
+  # merge blocks every later push from that machine. This job is where CI sees
+  # it first.
+  #
+  # **ADVISORY: this is not a required status check.** A red `vitest-windows`
+  # does not block a merge. Whether it becomes required is #2398 (decide by
+  # 2026-12-15); re-measure with
+  # `gh api repos/bloknayrb/tandem/branches/master/protection` rather than
+  # trusting this comment. To read a red one: compare it with this job's latest
+  # run on master. A failure master also has is not the PR's; a new one is.
+  #
+  # It mirrors `check`: the same Node and Python setup, the same install, the
+  # same `npm run build` (several suites skip without `dist/`), the same vitest
+  # command and the same file anchor, so a run that collects nothing or loses
+  # files is red. Lint, biome, the test-tree typecheck, the acceptance harness
+  # and E2E stay in `check` alone.
+  #
+  # What a green run does NOT show:
+  #  - that no test was skipped. The anchor compares FILES; a test given a
+  #    `skipIf(win32)` still reports its file as run. `windows-acl-proof` above
+  #    is the job that refuses a skip, for the specs registered with it.
+  #  - anything `tests/setup/acl-win-mock.ts` mocks: `setRestrictiveAcl` is a
+  #    mock in every file here except the specs that opt out of it.
+  #
+  # `shell:` is absent on purpose: the default pwsh template ends in
+  # `exit $LASTEXITCODE`. `cache: npm` shares its key with `windows-acl-proof`
+  # and the Windows release leg (OS + arch + lockfile hash).
+  #
+  # The job-level timeout is here because GitHub's default is six hours and an
+  # advisory job that hangs keeps a PR's checks pending that long.
+  #
+  # No `if`, `needs`, `strategy`, `name`, `env` or `continue-on-error`.
+  # tests/scripts/vitest-windows-wiring.test.ts parses this job inside `check`
+  # and fails if any of that changes or the job is removed (ADR-051).
+  vitest-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          check-latest: true
+          cache: npm
+
+      # The Test step needs a Python, exactly as in `check` (see the comment there).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+
+      - name: Every collected test file actually ran
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/vitest-file-anchor.mjs .vitest-report.json
 
   # Publishes the coverage BASELINE as an artifact. Separate from `check` on
   # purpose: instrumentation adds roughly 10-30% to the suite's wall clock

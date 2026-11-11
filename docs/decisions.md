@@ -2235,8 +2235,8 @@ Inverting the default fixes all three at once: deny is structural, and the hand-
 
 **Context.** Only five checks are required on `master`: `check`, the three
 `rust-test` legs, and `windows-acl-proof` (six since 2026-11-08, when
-`ownership-flag-on` joined them; see ADR-054). Everything else — `coverage`, CodeQL
-— reports red without blocking a merge. That is a deliberate cost decision, not
+`ownership-flag-on` joined them; see ADR-054). Everything else — `coverage`, CodeQL,
+and since #2397 `vitest-windows` — reports red without blocking a merge. That is a deliberate cost decision, not
 an oversight, and it is a repo setting rather than a tracked file.
 
 But a job outside the required set still carries guarantees people rely on, and
@@ -2268,6 +2268,7 @@ Instances:
 | Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 | `check`'s doc-link and vault-reachability step | `tests/scripts/check-links-wiring.test.ts` |
 | `reaper-build`'s `cargo test` (the Linux sidecar trampoline, #1988) | `tests/scripts/reaper-test-wiring.test.ts` |
+| `vitest-windows`: the full vitest suite on `windows-latest` (#2397), advisory; #2398 holds the dated decision on making it required | `tests/scripts/vitest-windows-wiring.test.ts` |
 | `ownership-flag-on` (ADR-054) and `check`'s release-bundle ownership probe | `tests/scripts/ownership-flag-on-wiring.test.ts` — the job is also a *required* check while ownership ships dark (in branch protection since 2026-11-08), so its guarantees are enforced twice until the flip makes it advisory or removes it |
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
