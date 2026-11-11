@@ -155,8 +155,13 @@ files from `git ls-files`, plus untracked files that are not ignored, so it need
 
 `.github/workflows/ci.yml` runs on every pull request, on pushes to `master` and on the merge
 queue. The checks a PR needs before it can merge are `check`, the three `rust-test` legs (Ubuntu,
-macOS and Windows, each running `cargo test`) and `windows-acl-proof`; `coverage` and CodeQL report
-but do not block. `check` is the broad one. On Ubuntu it runs ESLint (`npm run lint`), the Biome
+macOS and Windows, each running `cargo test`), `windows-acl-proof` and, while multi-session
+ownership ships dark, `ownership-flag-on`; `coverage`, CodeQL and `vitest-windows` report but do not
+block. `vitest-windows` is advisory: it runs the build and the full vitest suite on Windows, which
+`check` does not, so read it even though it cannot stop a merge. Compare a red one with the job's
+latest run on `master`: a failure `master` also has is not yours. A new one usually is, and a test
+that fails on Windows fails the pre-push hook on a Windows machine once merged, so find out which
+before asking for a merge. `check` is the broad one. On Ubuntu it runs ESLint (`npm run lint`), the Biome
 check, the doc-link check, the client, server, root and test typechecks, the build, the full vitest
 suite, the acceptance harness and the Playwright E2E suite, plus a few smaller verification steps.
 `ci.yml` also fires on `merge_group`, for a GitHub merge queue, but as of 2026-10-21 PRs merged

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, relative } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -39,6 +39,23 @@ describe("resolveClaudeLaunch", () => {
   }
 
   const nativeDir = () => join(home, ".local", "bin");
+
+  /**
+   * Run `fn` with `dir` as the working directory, so a path under it can be
+   * named relatively. `relative(process.cwd(), …)` cannot do that on every
+   * host: where the temp directory is on another drive (GitHub's Windows
+   * runner: checkout on `D:`, temp on `C:`) it returns an absolute path, and
+   * the test would hand the resolver exactly what it is right to accept.
+   */
+  function fromInside<T>(dir: string, fn: () => T): T {
+    const previous = process.cwd();
+    process.chdir(dir);
+    try {
+      return fn();
+    } finally {
+      process.chdir(previous);
+    }
+  }
 
   describe("POSIX", () => {
     const base = { platformOverride: "linux" as NodeJS.Platform, claudeCmdOverride: "" };
@@ -83,15 +100,15 @@ describe("resolveClaudeLaunch", () => {
     );
 
     it("never takes a relative PATH entry — that would mean the working directory", () => {
-      const rel = relative(process.cwd(), join(root, "rel"));
       seed(join(root, "rel"), "claude");
-      expect(rel.startsWith("/")).toBe(false);
       expect(
-        resolveClaudeLaunch({
-          ...base,
-          pathOverride: ["", ".", rel].join(delimiter),
-          homeOverride: home,
-        }),
+        fromInside(root, () =>
+          resolveClaudeLaunch({
+            ...base,
+            pathOverride: ["", ".", "rel"].join(delimiter),
+            homeOverride: home,
+          }),
+        ),
       ).toEqual({ command: null, knownUnstartable: false });
     });
 
@@ -112,9 +129,13 @@ describe("resolveClaudeLaunch", () => {
 
       it("a relative path is refused, even one that exists from the server's cwd", () => {
         seed(join(root, "custom"), "claude-canary");
-        const rel = relative(process.cwd(), join(root, "custom", "claude-canary"));
+        const rel = join("custom", "claude-canary");
         expect(
-          resolveClaudeLaunch({ ...base, claudeCmdOverride: rel, pathOverride: empty }).command,
+          fromInside(
+            root,
+            () =>
+              resolveClaudeLaunch({ ...base, claudeCmdOverride: rel, pathOverride: empty }).command,
+          ),
         ).toBeNull();
       });
 
