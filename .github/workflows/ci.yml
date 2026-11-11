@@ -226,14 +226,14 @@ jobs:
   #    mock in every file here except the specs that opt out of it.
   #
   # Two accommodations for the hosted runner, and no others. Both make the
-  # runner look like an ordinary Windows machine; neither skips a test. Measured
-  # on run 42947480897 without them: 19 failures in 6 files.
-  #  - `TEMP`/`TMP` on the Test step. The runner's own TEMP is the 8.3 short
-  #    name `C:\Users\RUNNER~1\...` on a different drive from the checkout
-  #    (`D:`). Tests that compare a temp path with its resolved form, or build a
-  #    relative path from the working directory to it, fail on that
-  #    (docx-apply, platform, launcher/cwd-preview, adr-034-open-characterization,
-  #    integrations/resolve-claude-launch).
+  # runner look like an ordinary Windows machine; neither skips a test, and
+  # neither changes a flag vitest gets.
+  #  - TEMP's long name. The runner's TEMP is the 8.3 short form
+  #    `C:\Users\RUNNER~1\...`, and tests that compare a temp path with its
+  #    resolved form fail on it. The step resolves it and exports the result
+  #    for the steps after it. It stays in the runner's own profile: pointing
+  #    TEMP at `runner.temp` instead (run 42949488007) broke the real-icacls
+  #    fixtures, because directories under `D:\a` inherit a different DACL.
   #  - the `\tmp` step. tests/server/document-service.test.ts writes under a
   #    literal `/tmp`, which Node resolves to `\tmp` on the working directory's
   #    drive; the runner has none there.
@@ -273,14 +273,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Give TEMP its long name
+        run: node -e "const fs=require('node:fs');const t=fs.realpathSync.native(require('node:os').tmpdir());fs.appendFileSync(process.env.GITHUB_ENV,'TEMP='+t+'\nTMP='+t+'\n')"
+
       - name: Create the \tmp directory document-service.test.ts writes under
         run: node -e "require('node:fs').mkdirSync('/tmp',{recursive:true})"
 
       - name: Test
         run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
 
       - name: Every collected test file actually ran
         if: ${{ !cancelled() }}

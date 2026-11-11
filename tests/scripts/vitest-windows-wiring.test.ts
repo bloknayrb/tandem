@@ -120,13 +120,14 @@ describe("the vitest-windows job (#2397, ADR-051)", () => {
       checkStep((s) => s.run === "npm ci --ignore-scripts", "npm ci"),
       checkStep((s) => s.name === "Build", "Build"),
       {
+        name: "Give TEMP its long name",
+        run: `node -e "const fs=require('node:fs');const t=fs.realpathSync.native(require('node:os').tmpdir());fs.appendFileSync(process.env.GITHUB_ENV,'TEMP='+t+'\\nTMP='+t+'\\n')"`,
+      },
+      {
         name: "Create the \\tmp directory document-service.test.ts writes under",
         run: `node -e "require('node:fs').mkdirSync('/tmp',{recursive:true})"`,
       },
-      {
-        ...checkStep(isFullSuiteRun, "Test"),
-        env: { TEMP: "${{ runner.temp }}", TMP: "${{ runner.temp }}" },
-      },
+      checkStep(isFullSuiteRun, "Test"),
       anchor,
     ]);
     // The comparison above is to `check`'s steps, so it would also pass if
