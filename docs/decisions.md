@@ -2271,6 +2271,17 @@ Instances:
 | `vitest-windows`: the full vitest suite on `windows-latest` (#2397), advisory; #2398 holds the dated decision on making it required | `tests/scripts/vitest-windows-wiring.test.ts` |
 | `ownership-flag-on` (ADR-054) and `check`'s release-bundle ownership probe | `tests/scripts/ownership-flag-on-wiring.test.ts` — the job is also a *required* check while ownership ships dark (in branch protection since 2026-11-08), so its guarantees are enforced twice until the flip makes it advisory or removes it |
 
+**`vitest-windows` baseline (2026-11-11, PR #2399; the decision in #2398 is recorded here when it is taken).**
+Measured on `windows-latest` at the code of `master` commit 311a5a3. The job takes about nine
+minutes (8m45s to 9m25s over the first three runs), against nineteen to twenty-three for `check`, and
+starts with it, so it adds no wall clock to a PR. It collects and runs 832 test files. 139 tests
+skip there against 35 on Linux, all behind platform gates. On the bare hosted runner 19 tests in
+6 files fail, none of them because of the code under test: the runner's `TEMP` is an 8.3 short
+name on a different drive from the checkout, and it has no `\tmp` directory. The job resolves
+`TEMP` and creates `\tmp`, which leaves 2 failures, both in
+`tests/server/integrations/resolve-claude-launch.test.ts` (a relative path built across drives).
+So the job starts red on `master`. No test is skipped or quarantined to change that.
+
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
 `check`, so the obvious reading is that it needs no wiring test at all — being

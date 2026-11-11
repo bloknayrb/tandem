@@ -240,6 +240,14 @@ jobs:
   # Those tests depend on the host. Fixing them is the way to remove a line
   # here; adding a line here is not the way to fix a test.
   #
+  # Measured on this job's first runs, at master's code (2026-11-11): 19
+  # failures in 6 files with neither accommodation (run 42947480897), 2 with
+  # both (run 42951568059). The 2 are in
+  # tests/server/integrations/resolve-claude-launch.test.ts, which builds a
+  # relative path from the working directory (`D:`) to TEMP (`C:`); across
+  # drives `path.relative` returns an absolute one. So the job is red until
+  # that test is fixed, and #2398 records it.
+  #
   # `shell:` is absent on purpose: the default pwsh template ends in
   # `exit $LASTEXITCODE`. `cache: npm` shares its key with `windows-acl-proof`
   # and the Windows release leg (OS + arch + lockfile hash).
