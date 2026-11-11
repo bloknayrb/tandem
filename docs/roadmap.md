@@ -36,7 +36,7 @@ either way.
 
 0. **Document ownership (#2358): one Claude answers each comment.** Design v5 and the plan
    are merged, and so are PR 1a (identity, dark) and PR 1b (the #1952 wake-address fix, live).
-   PR 2b is open as #2370. Still to build, all dark until the flip: PR 1c
+   PR 2b (#2370, the setup entry) is merged too and ships live in v0.31.0. Still to build, all dark until the flip: PR 1c
    (enforcement), 2 (inbox and replies), 3a and 3b (Tandem's own Claude binding, presence,
    starts and wakes), 4 (push and shim identity), 5 (controls) and 6 (the flip). #2360's
    switch merges right before the flip and ships in the same release. The plan's manual
