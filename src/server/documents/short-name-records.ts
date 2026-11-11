@@ -24,13 +24,14 @@
  *   under the short string (an expansion that failed earlier in this run
  *   opened it under master's string), its records are being written and are
  *   not moved.
- * - **Only while this instance holds the annotation store lock.** A
- *   read-only instance (another Tandem holds it), one started with the store
- *   switched off (which takes no lock), and one whose attempt to take it
- *   threw, move neither kind:
- *   such an instance must not write annotation files, and moving the session
- *   alone would leave the envelope with nothing that computes its key again.
- *   Both stay for an instance that holds the lock.
+ * - **An envelope moves only while this instance holds the annotation store
+ *   lock.** A read-only instance (another Tandem holds it), one started with
+ *   the store switched off (which takes no lock), and one whose attempt to
+ *   take it threw, must not write annotation files. Such an instance also
+ *   leaves a session that HAS an envelope under the old key where it is:
+ *   moving the session alone would leave the envelope with nothing that
+ *   computes its key again, so the pair stays for an instance that holds the
+ *   lock. A session with no envelope under the old key moves regardless.
  *
  * After the move the open is an ordinary open of the long spelling.
  */
@@ -41,7 +42,12 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
-import { envelopePath, isStoreLockHeld, moveEnvelopeFile } from "../annotations/store.js";
+import {
+  envelopeFilePresent,
+  envelopePath,
+  isStoreLockHeld,
+  moveEnvelopeFile,
+} from "../annotations/store.js";
 import { getTombstones } from "../annotations/sync.js";
 import { getFileSyncContext } from "../events/queue.js";
 import { moveSessionFile } from "../session/manager.js";
@@ -81,11 +87,22 @@ export async function moveShortNameRecords(
   const nothing: ShortNameMove = { session: false, envelope: false };
   try {
     if (legacyPathIsOpen(legacyPath)) return nothing;
+    const oldHash = docHash(legacyPath);
     // Keyed on the lock itself, not on a read-only flag: with the feature off,
     // before the lock was tried, or after taking it threw, nobody holds it.
-    if (!isStoreLockHeld()) return nothing;
+    if (!isStoreLockHeld()) {
+      // Without the lock this instance must not touch annotation files. What
+      // that rules out is moving an ENVELOPE, and moving a session away from
+      // an envelope it is paired with (the envelope would be left with
+      // nothing that computes its key again). A session with no envelope
+      // under the old key has nothing to be parted from: it moves, so unsaved
+      // work stored under a short spelling is restored whoever holds the lock.
+      if (await envelopeFilePresent(oldHash)) return nothing;
+      const alone = await moveSessionFile(legacyPath, resolved);
+      return { session: alone === "moved", envelope: false };
+    }
     // Independent: a failure moving one kind neither undoes nor blocks the other.
-    const envelope = await moveEnvelopeFile(docHash(legacyPath), docHash(resolved));
+    const envelope = await moveEnvelopeFile(oldHash, docHash(resolved));
     const session = await moveSessionFile(legacyPath, resolved);
     if (envelope === "moved" || session === "moved") {
       console.error(

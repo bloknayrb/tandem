@@ -1375,6 +1375,38 @@ describe("records saved under the short spelling are moved, per kind, only into 
     expect((await readEnvelope(fx.longPath)).annotations.map((a) => a.id)).toEqual(["ann_comment"]);
   });
 
+  // The lock guards annotation files. A session that has no annotation file
+  // under the short spelling is parted from nothing by moving, so unsaved work
+  // stored there is restored whether or not this process holds the lock.
+  it("without the store lock, a session with no annotation file under the short spelling still moves", async () => {
+    await releaseStoreLock();
+    await storeSession(fx.aliasPath, OLD_TEXT);
+    expect(await exists(oldEnvelope())).toBe(false);
+
+    const opened = await openFromDisk(fx.aliasPath);
+    expect(opened.kind).toBe("restored");
+    expect(liveText(opened.documentId)).toContain("from the short spelling");
+    expect(await sessionFiles()).toEqual([`${sessionKey(fx.longPath)}.json`]);
+  });
+
+  // The shape `open-pipeline-lifecycle.test.ts` has when the host's TEMP is a
+  // short path: open, save the session under the path the caller typed,
+  // drop the document, open again. No store lock is taken anywhere.
+  it("open, save the session under the short spelling, drop the document, reopen: restored, with no store lock held", async () => {
+    await releaseStoreLock();
+    const first = await openFromDisk(fx.aliasPath);
+    expect(first.kind).not.toBe("restored");
+    await saveSession(fx.aliasPath, "md", getOrCreateDocument(first.documentId));
+    await closeStore(docHash(fx.longPath));
+    await simulateRestart();
+    // The first open wrote nothing under the short spelling's annotation key.
+    expect(await exists(oldEnvelope())).toBe(false);
+
+    const second = await openFromDisk(fx.aliasPath);
+    expect(second.kind).toBe("restored");
+    expect(second.documentId).toBe(first.documentId);
+  });
+
   it("with the store read-only (another instance holds the lock) nothing moves; once it is writable the next short-spelled open moves both", async () => {
     const lockPath = path.join(getAnnotationsDir(), "store.lock");
     await storeOldPair();

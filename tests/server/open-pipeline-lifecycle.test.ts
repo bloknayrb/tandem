@@ -52,7 +52,13 @@ beforeEach(async () => {
   }
   setActiveDocId(null);
   vi.clearAllMocks();
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-lifecycle-"));
+  // The native realpath, so the root is the long spelling on a host whose TEMP
+  // is an 8.3 short path: these tests store sessions by the path they typed,
+  // and must not depend on how the host spells TEMP (#2400). The short-spelled
+  // form of this same sequence is in `short-name-open.test.ts`.
+  tmpDir = fsSync.realpathSync.native(
+    await fs.mkdtemp(path.join(os.tmpdir(), "tandem-lifecycle-")),
+  );
 });
 
 afterEach(async () => {

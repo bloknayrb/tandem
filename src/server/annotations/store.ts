@@ -588,6 +588,22 @@ export async function annotationFileExists(docHash: string): Promise<boolean> {
   }
 }
 
+/**
+ * Is there an envelope file under this key? A plain existence test for a
+ * caller deciding whether a key holds annotation records at all (#2400).
+ * Unlike {@link annotationFileExists} it does not answer "no" with the
+ * feature off, and an error other than "not there" answers `true`: the caller
+ * must then assume records exist.
+ */
+export async function envelopeFilePresent(docHash: string): Promise<boolean> {
+  try {
+    await fs.access(filePathFor(docHash));
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
 /** What {@link moveEnvelopeFile} did. */
 export type EnvelopeMoveResult = "moved" | "absent" | "occupied" | "failed";
 
