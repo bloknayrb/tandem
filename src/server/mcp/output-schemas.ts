@@ -212,6 +212,28 @@ export const statusOutputShape = {
     ),
 };
 
+/**
+ * What read-mode `tandem_status` adds on a server with ownership on (#2358,
+ * ownership design §5.7). Spread into the status schema only there, so a dark
+ * server's `tools/list` carries no ownership field.
+ */
+export const statusOwnershipShape = {
+  warning: z
+    .string()
+    .optional()
+    .describe(
+      "Write mode: set when the status was not broadcast (no document open), or when a focus was not applied because another session holds the document",
+    ),
+  owner: z
+    .object({
+      label: z.string().describe("This session's label, e.g. owner-k7qx"),
+      displayKind: z.enum(["Tandem's Claude", "terminal", "Claude Desktop", "other app"]),
+      holding: z.array(z.string()).describe("Ids of the documents this session holds"),
+    })
+    .optional()
+    .describe("Read mode: which session this is and the documents it holds"),
+};
+
 // ---------------------------------------------------------------------------
 // tandem_getTextContent
 // ---------------------------------------------------------------------------

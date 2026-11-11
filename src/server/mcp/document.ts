@@ -25,7 +25,14 @@ import { TandemModeSchema, ToolErrorCodeSchema, toFlatOffset } from "../../share
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
+import {
+  findOpenTarget,
+  type OpenSuccess,
+  openFromDisk,
+  openScratchpad,
+  resolveOpenPath,
+  toWireResult,
+} from "../documents/open.js";
 import { docxEnabled } from "../file-io/docx-flag.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
@@ -39,6 +46,7 @@ import {
   validateRange,
 } from "../positions.js";
 import { saveSession } from "../session/manager.js";
+import { FOCUS_NOT_MOVED_WARNING } from "../sessions/ownership-refusal.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { collectAnnotations } from "./annotations.js";
 import { convertToMarkdown } from "./convert.js";
@@ -131,11 +139,26 @@ import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
   statusOutputShape,
+  statusOwnershipShape,
 } from "./output-schemas.js";
+import {
+  callerOwnerInfo,
+  focusHeldByAnother,
+  noClaim,
+  noOwnerRefusal,
+  ownedOpen,
+  ownedWrite,
+  ownershipOn,
+  rangeDecidedByArguments,
+  switchRefusal,
+  takeFreshDocument,
+  writeTarget,
+} from "./owned-op.js";
 import { noteClaudeActivity } from "./presence-expiry.js";
 import {
   getErrorMessage,
   lockOrPermissionCode,
+  type McpToolResult,
   mcpError,
   mcpStructured,
   mcpSuccess,
@@ -497,12 +520,108 @@ function stampClaudeRange(doc: Y.Doc, from: FlatOffset, to: FlatOffset): void {
   });
 }
 
+/**
+ * Text a tool description gains only on a server with ownership on (#2358,
+ * ownership design §12): a dark server's `tools/list` is byte-identical to
+ * today's. Descriptions are built per `McpServer`, at registration.
+ */
+function ownedDescription(note: string): string {
+  return ownershipOn() ? ` ${note}` : "";
+}
+
+/**
+ * `tandem_edit`'s first three refusals, in the order it has always answered
+ * them: no such document, a read-only document, a newline into plaintext.
+ * All three are decided by the arguments or by facts fixed at open, so with
+ * ownership on they are answered before the document's queue and never claim
+ * (ownership design §5.1); the body calls this too, so there is one copy.
+ */
+function editEarlyRefusal(documentId: string | undefined, newText: string): McpToolResult | null {
+  const r = requireDocument(documentId);
+  if (!r) return noClaim(noDocumentError());
+
+  const docState = getCurrentDoc(documentId);
+  if (docState?.readOnly) {
+    return noClaim(
+      mcpError("READ_ONLY", readOnlyToolMessage(docState.format, "Use annotations instead.")),
+    );
+  }
+
+  // #1460: enforce what this tool's own description claims — a newline
+  // in newText is refused in a plain-text document.
+  //
+  // Inserting a newline literally is harmless in a markdown document —
+  // a literal `\n` is a soft wrap the serializer can spell, which is what
+  // `whitespace: "pre"` (#1448) exists to preserve. In a PLAINTEXT
+  // document it is a shape the file cannot store: save joins blocks with
+  // `\n`, so the bytes say two lines while the model says one block, and
+  // the next open believes the bytes. The AI's one-paragraph edit reopens
+  // as two.
+  //
+  // Refusing rather than splitting, deliberately. newText is inserted
+  // literally into existing blocks and never creates one — every offset
+  // the tool returns, and `RANGE_MOVED`'s retry contract, assume the
+  // inserted text stays inside one textblock. Silently promoting it to a
+  // multi-block insert would change that contract for every caller to fix
+  // a case the caller can trivially avoid, and the error names the fix.
+  if (isPlaintextFormat(docState?.format) && /[\r\n]/.test(newText)) {
+    return noClaim(
+      mcpError(
+        "INVALID_ARGUMENT",
+        `Cannot insert a newline into a '${docState?.format}' document: plaintext formats ` +
+          "cannot represent a line break inside a paragraph, so it would reopen as " +
+          "separate paragraphs. Issue one tandem_edit per line instead.",
+      ),
+    );
+  }
+  return null;
+}
+
+/**
+ * `tandem_editList`'s first three refusals, in the order it has always
+ * answered them; see {@link editEarlyRefusal}.
+ */
+function editListEarlyRefusal(documentId: string | undefined): McpToolResult | null {
+  const r = requireDocument(documentId);
+  if (!r) return noClaim(noDocumentError());
+
+  const docState = getCurrentDoc(documentId);
+  if (docState?.readOnly) {
+    return noClaim(mcpError("READ_ONLY", "Document is read-only — cannot edit lists."));
+  }
+  const refusal = listFormatRefusal(docState?.format);
+  if (refusal) return noClaim(mcpError("FORMAT_ERROR", refusal));
+  return null;
+}
+
+/** `renameDocument` refusals decided before it touches the disk. */
+const RENAME_NEVER_CLAIMS: ReadonlySet<string> = new Set([
+  "NOT_FOUND",
+  "NOT_RENAMABLE",
+  "EXTENSION_MISMATCH",
+  "PATH_REJECTED",
+  "INVALID_NAME",
+  "INVALID_PATH",
+  "READ_ONLY",
+]);
+
+function ownerField(owner: ReturnType<typeof callerOwnerInfo>): { owner?: typeof owner } {
+  return owner ? { owner } : {};
+}
+
+const OPEN_OWNERSHIP_NOTE =
+  "Opening a document makes this session its owner: if another session was answering it by default, or had picked it up, opening takes it over from them, so open a document only when the user asked you to work on it. A document another session opened or was assigned is refused (NOT_DOC_OWNER). Reading needs no open: an already-open document can be read with its documentId from tandem_listDocuments.";
+const SWITCH_OWNERSHIP_NOTE =
+  "Refused (NOT_DOC_OWNER) on a document another session holds: ask the user to click its tab.";
+const CLOSE_OWNERSHIP_NOTE = "Refused (NOT_DOC_OWNER) on a document another session holds.";
+
 export function registerDocumentTools(server: McpServer): void {
   const openDocs = getOpenDocs();
 
   server.tool(
     "tandem_open",
-    "Open an existing file in the Tandem editor as a tab and make it the active document; returns a documentId. filePath must be fully qualified (on Windows, starting with a drive letter; anything else returns INVALID_PATH) and the file must already exist — this tool never creates one. Opening a file that is already open switches to its existing tab without reloading it; pass force=true to reload from disk. .html files open read-only (annotate them, don't edit). This does not launch, show or focus the editor window: the user sees the tab the next time they look at a running editor.",
+    "Open an existing file in the Tandem editor as a tab and make it the active document; returns a documentId. filePath must be fully qualified (on Windows, starting with a drive letter; anything else returns INVALID_PATH) and the file must already exist — this tool never creates one. Opening a file that is already open switches to its existing tab without reloading it; pass force=true to reload from disk. .html files open read-only (annotate them, don't edit). This does not launch, show or focus the editor window: the user sees the tab the next time they look at a running editor." +
+      ownedDescription(OPEN_OWNERSHIP_NOTE),
     {
       filePath: z.string().describe("Absolute path to the file to open"),
       force: z
@@ -518,7 +637,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Pass 'claude' when you wrote this file wholesale before opening, to stamp Claude authorship across its content. Idempotent.",
         ),
     },
-    withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
+    withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }, caller) => {
       // A relative path would resolve against the SERVER's working directory,
       // not the caller's, and the desktop sidecar sets none (#1823). This is a
       // string check on the argument, not root confinement — that is #1666, and
@@ -528,57 +647,90 @@ export function registerDocumentTools(server: McpServer): void {
       if (!isFullyQualifiedPath(filePath)) {
         return mcpError("INVALID_PATH", "filePath must be an absolute path.");
       }
-      try {
-        const result = await openFromDisk(filePath, { force });
-
-        // Issue #937: attribute Claude-authored documents at creation. Stamp
-        // AFTER openFromDisk resolves — content is guaranteed populated, and
-        // the durable-sync/channel observers attach later in wireAnnotationStore,
-        // so there is no race. Upload/scratchpad paths bypass openFromDisk and
-        // are naturally excluded.
-        if (authoredBy === "claude") {
-          const loaded = requireDocument(result.documentId);
-          if (loaded) {
-            stampClaudeAuthorshipWholeDoc(loaded.doc);
+      return ownedOpen(caller, "tandem_open", {
+        // Which document this open targets, by the open path's own code. An
+        // unsafe path throws in `resolveOpenPath` before any filesystem call
+        // and is left for `openFromDisk` to refuse; for any other path the
+        // only disk access here is that function's own `realpathSync`.
+        predict: () => {
+          try {
+            return findOpenTarget(resolveOpenPath(filePath)).id;
+          } catch {
+            return undefined;
           }
-        }
-        // `wakeUrl` rides the TOOL payload, never `toWireResult` — that
-        // projection is shared with POST /api/open, /api/upload and
-        // /api/scratchpad (mcp/routes/send-open-result.ts), and widening it
-        // there would put a transport fact into the document-open wire contract
-        // with nothing to catch it (`res.json` takes `unknown`).
-        return mcpSuccess({
-          ...toWireResult(result),
-          message: openResultMessage(result),
-          ...wakeUrlField(),
-        });
-      } catch (err: unknown) {
-        const e = err as NodeJS.ErrnoException;
-        if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {
-          return mcpError("FILE_NOT_FOUND", e.message);
-        }
-        if (e.code === "INVALID_PATH") {
-          return mcpError("INVALID_PATH", e.message);
-        }
-        if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
-          return mcpError("FORMAT_ERROR", e.message);
-        }
-        // A read that is refused is not a lock (#1823): on Windows both arrive
-        // as EPERM and only the syscall differs (`lockOrPermissionCode`).
-        const lockOrPermission = lockOrPermissionCode(e);
-        if (lockOrPermission === "FILE_LOCKED") {
-          return mcpError(
-            "FILE_LOCKED",
-            `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`,
-          );
-        }
-        if (lockOrPermission === "PERMISSION_DENIED") {
-          return mcpError("PERMISSION_DENIED", e.message);
-        }
-        return mcpError("FORMAT_ERROR", getErrorMessage(err));
-      }
+        },
+        open: async (expectTargetId) => {
+          try {
+            const result = await openFromDisk(filePath, { force, expectTargetId });
+
+            // Issue #937: attribute Claude-authored documents at creation. Stamp
+            // AFTER openFromDisk resolves — content is guaranteed populated, and
+            // the durable-sync/channel observers attach later in wireAnnotationStore,
+            // so there is no race. Upload/scratchpad paths bypass openFromDisk and
+            // are naturally excluded.
+            if (authoredBy === "claude") {
+              const loaded = requireDocument(result.documentId);
+              if (loaded) {
+                stampClaudeAuthorshipWholeDoc(loaded.doc);
+              }
+            }
+            // `wakeUrl` rides the TOOL payload, never `toWireResult` — that
+            // projection is shared with POST /api/open, /api/upload and
+            // /api/scratchpad (mcp/routes/send-open-result.ts), and widening it
+            // there would put a transport fact into the document-open wire contract
+            // with nothing to catch it (`res.json` takes `unknown`).
+            return {
+              openedId: result.documentId,
+              envelope: mcpSuccess({
+                ...toWireResult(result),
+                message: openResultMessage(result),
+                ...wakeUrlField(),
+              }),
+            };
+          } catch (err: unknown) {
+            return openFailure(err);
+          }
+        },
+      });
     }),
   );
+
+  /** `tandem_open`'s error mapping, unchanged; `targetChanged` is ownership's retry signal. */
+  function openFailure(err: unknown): { envelope: McpToolResult; targetChanged?: boolean } {
+    return { envelope: openErrorEnvelope(err), targetChanged: isOpenTargetChanged(err) };
+  }
+
+  function isOpenTargetChanged(err: unknown): boolean {
+    return (err as NodeJS.ErrnoException).code === "OPEN_TARGET_CHANGED";
+  }
+
+  function openErrorEnvelope(err: unknown): McpToolResult {
+    {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {
+        return mcpError("FILE_NOT_FOUND", e.message);
+      }
+      if (e.code === "INVALID_PATH") {
+        return mcpError("INVALID_PATH", e.message);
+      }
+      if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
+        return mcpError("FORMAT_ERROR", e.message);
+      }
+      // A read that is refused is not a lock (#1823): on Windows both arrive
+      // as EPERM and only the syscall differs (`lockOrPermissionCode`).
+      const lockOrPermission = lockOrPermissionCode(e);
+      if (lockOrPermission === "FILE_LOCKED") {
+        return mcpError(
+          "FILE_LOCKED",
+          `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`,
+        );
+      }
+      if (lockOrPermission === "PERMISSION_DENIED") {
+        return mcpError("PERMISSION_DENIED", e.message);
+      }
+      return mcpError("FORMAT_ERROR", getErrorMessage(err));
+    }
+  }
 
   server.tool(
     "tandem_scratchpad",
@@ -591,8 +743,10 @@ export function registerDocumentTools(server: McpServer): void {
           "Initial markdown. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks.",
         ),
     },
-    withErrorBoundary("tandem_scratchpad", async ({ content }) => {
+    withErrorBoundary("tandem_scratchpad", async ({ content }, caller) => {
       const result = await openScratchpad(content);
+      // A document this call created is the caller's (ownership design §4.2).
+      await takeFreshDocument(caller, result.documentId);
       // A scratchpad seeded with content is a COMPLETE task in one call — no
       // outline, no read, no status. That is the population the wake trigger
       // used to miss entirely: `wakeUrl` was reachable only through read-mode
@@ -736,359 +890,353 @@ export function registerDocumentTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_edit",
-      async ({ from: rawFrom, to: rawTo, newText, documentId, textSnapshot }) => {
-        // #651 presence: tandem_edit targets text (not an annotation), so the
-        // marker is the generic status-bar "Claude is working" indicator.
-        return withTypingPresence({ tool: "tandem_edit", documentId }, async () => {
-          const r = requireDocument(documentId);
-          if (!r) return noDocumentError();
+      async ({ from: rawFrom, to: rawTo, newText, documentId: givenId, textSnapshot }, caller) =>
+        ownedWrite(
+          caller,
+          "tandem_edit",
+          {
+            given: givenId,
+            resolve: () => writeTarget(givenId),
+            preflight: (id) => editEarlyRefusal(id, newText),
+          },
+          (documentId) =>
+            // #651 presence: tandem_edit targets text (not an annotation), so the
+            // marker is the generic status-bar "Claude is working" indicator.
+            withTypingPresence({ tool: "tandem_edit", documentId }, async () => {
+              const early = editEarlyRefusal(documentId, newText);
+              if (early) return early;
+              const r = requireDocument(documentId);
+              if (!r) return noClaim(noDocumentError());
 
-          const docState = getCurrentDoc(documentId);
-          if (docState?.readOnly) {
-            return mcpError(
-              "READ_ONLY",
-              readOnlyToolMessage(docState.format, "Use annotations instead."),
-            );
-          }
-
-          // #1460: enforce what this tool's own description claims — a newline
-          // in newText is refused in a plain-text document.
-          //
-          // Inserting a newline literally is harmless in a markdown document —
-          // a literal `\n` is a soft wrap the serializer can spell, which is what
-          // `whitespace: "pre"` (#1448) exists to preserve. In a PLAINTEXT
-          // document it is a shape the file cannot store: save joins blocks with
-          // `\n`, so the bytes say two lines while the model says one block, and
-          // the next open believes the bytes. The AI's one-paragraph edit reopens
-          // as two.
-          //
-          // Refusing rather than splitting, deliberately. newText is inserted
-          // literally into existing blocks and never creates one — every offset
-          // the tool returns, and `RANGE_MOVED`'s retry contract, assume the
-          // inserted text stays inside one textblock. Silently promoting it to a
-          // multi-block insert would change that contract for every caller to fix
-          // a case the caller can trivially avoid, and the error names the fix.
-          if (isPlaintextFormat(docState?.format) && /[\r\n]/.test(newText)) {
-            return mcpError(
-              "INVALID_ARGUMENT",
-              `Cannot insert a newline into a '${docState?.format}' document: plaintext formats ` +
-                "cannot represent a line break inside a paragraph, so it would reopen as " +
-                "separate paragraphs. Issue one tandem_edit per line instead.",
-            );
-          }
-
-          // An empty document has no addressable range — resolveToElement returns
-          // null on a zero-length fragment, which would otherwise surface as a
-          // confusing generic INVALID_RANGE. Point the agent at the seeding path.
-          if (r.doc.getXmlFragment("default").length === 0) {
-            return mcpError(
-              "EMPTY_DOCUMENT",
-              "Document is empty — no text range to edit. Seed content with tandem_appendContent({ content }) or tandem_scratchpad({ content }).",
-            );
-          }
-
-          const from = toFlatOffset(rawFrom);
-          const to = toFlatOffset(rawTo);
-
-          // POINT INSERTION IS SUPPORTED, and the `allowEmpty` below is what keeps
-          // it so. `replaceFlatRangeInElement` guards only its DELETE on
-          // `to > from` and always inserts, so `tandem_edit(n, n, "X")` has always
-          // inserted at n — and it is the only mid-document insert this server
-          // has (`tandem_appendContent` appends at the document END and is
-          // markdown-only). Refusing every `from === to` removed a working
-          // capability with no replacement.
-          //
-          // The one genuine no-op is a point range with nothing to insert. It is
-          // answered HERE, ahead of `validateRange`, so the wire still carries
-          // `reason: "empty"` for it. Everything downstream then runs on the empty
-          // range exactly as before — in particular the heading-overlap check, so
-          // `(1, 1, "X")` inside `"## "` is still HEADING_OVERLAP.
-          if (from === to && newText === "") {
-            return mcpError(
-              "INVALID_RANGE",
-              `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
-                "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
-              { reason: "empty" },
-            );
-          }
-
-          // A point insertion collides with the standing "always pass
-          // textSnapshot" advice, and the collision is DESTRUCTIVE, so it is
-          // refused rather than papered over. A point range slices to `""`, which
-          // never equals a non-empty snapshot, so staleness fires and relocation
-          // answers RANGE_MOVED naming the span of the snapshot TEXT — and the
-          // documented retry ("use resolvedFrom/resolvedTo") then replaces those
-          // characters with `newText`. The agent asked to insert and got a
-          // deletion, having followed both documented rules.
-          //
-          // There is no coherent snapshot for a zero-length range to verify, so
-          // the fix is to omit it, and the message says so.
-          if (from === to && textSnapshot) {
-            return mcpError(
-              "INVALID_ARGUMENT",
-              `A point insertion at ${from} cannot carry a textSnapshot: a zero-length range ` +
-                "matches no text, so the snapshot would always look stale and the RANGE_MOVED " +
-                "retry would turn your insert into a replacement. Omit textSnapshot for a point " +
-                "insertion, or pass the range you mean to replace.",
-            );
-          }
-
-          // `normalizeSpaceClass` (#1622): `textSnapshot` here is the CALLER's,
-          // transcribed from `tandem_getTextContent`, where a U+00A0 is
-          // indistinguishable from U+0020 — so an exact-only comparison answers
-          // RANGE_GONE for text that is present. The server's own STORED-snapshot
-          // re-anchoring (the watcher's probe and anchor) stays byte-exact.
-          //
-          // `rejectHeadingInterior` (#1766). The endpoint-only check let
-          // `tandem_edit(4, 13, "X")` on `"Para one\n## Head\nTail"` step
-          // straight over `"## "` and produce `"ParaXead\nTail"` — the heading
-          // deleted, which is exactly what Critical Rule 6 exists to prevent.
-          // The two annotation-creating callers carry the same term on their
-          // SUGGESTION arm only (a stored `suggestedText` is a rewrite deferred
-          // to Accept); their plain-comment arm keeps the endpoint-only rule,
-          // because a comment spanning a section is legal.
-          const v = validateRange(r.doc, from, to, {
-            textSnapshot,
-            rejectHeadingOverlap: true,
-            rejectHeadingInterior: true,
-            allowEmpty: true,
-            normalizeSpaceClass: true,
-          });
-          if (!v.ok) {
-            if (v.code === "RANGE_GONE") {
-              return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
-            }
-            if (v.code === "RANGE_MOVED") {
-              return mcpError(
-                "RANGE_MOVED",
-                "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
-                { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
-              );
-            }
-            if (v.code === "HEADING_OVERLAP") {
-              // `tandem_edit`'s OWN message, not `rangeFailureToError`'s — that
-              // one serves `tandem_comment`, whose plain arm keeps the
-              // endpoint-only rule, and must stay as it is. Since #1766 this
-              // range may overlap a heading in its INTERIOR, where "target the
-              // text content only" is unfollowable: there is no sub-range of the
-              // caller's span that both clears the prefix and covers what they
-              // asked to replace. The split is the only real remedy, so the
-              // message names it.
-              return mcpError(
-                "INVALID_RANGE",
-                'Edit range overlaps with heading markup (e.g., "## "). Target the text content only, ' +
-                  "or split the edit at the heading boundary and issue one call per block. " +
-                  "Use tandem_resolveRange to find the text position.",
-              );
-            }
-            return mcpError("INVALID_RANGE", v.message, { reason: v.reason });
-          }
-
-          const fragment = r.doc.getXmlFragment("default");
-          // Resolve to the TEXTBLOCK that owns each offset, at any depth. The old
-          // `resolveToElement` pair stopped at the fragment's direct children, so
-          // every offset inside a list resolved to the `bulletList` CONTAINER and
-          // was rejected with "edit a specific paragraph or list item instead" —
-          // advice no tool could follow, because none could address a nested block.
-          const startPos = resolveToTextblock(fragment, from);
-          const endPos = resolveToTextblock(fragment, to);
-
-          if (!startPos || !endPos) {
-            return mcpError(
-              "INVALID_RANGE",
-              `Cannot resolve offset range [${from}, ${to}] to editable text. The range may cover only a container or an image.`,
-            );
-          }
-
-          const startNode = elementAtPath(fragment, startPos.path);
-          const endNode = elementAtPath(fragment, endPos.path);
-          if (!startNode || !endNode) {
-            return mcpError(
-              "INVALID_RANGE",
-              `Cannot resolve offset range [${from}, ${to}] in document.`,
-            );
-          }
-
-          // Every rejection below MUST precede the first `withMcp` — Y.js does not
-          // roll back a transaction on throw, so a late bail is a partial commit.
-          if (sameTextblock(startPos, endPos)) {
-            // Same textblock at any depth: a list item, a nested item, a table
-            // cell, a blockquote paragraph. `replaceFlatRangeInElement` already
-            // handles multi-XmlText/hardBreak interiors, so depth costs nothing.
-            withMcp(r.doc, () => {
-              replaceFlatRangeInElement(startNode, startPos.textOffset, endPos.textOffset, newText);
-            });
-          } else if (!isTopLevel(startPos) || !isTopLevel(endPos)) {
-            // Cross-block where either end is nested. The top-level algorithm below
-            // is keyed on `fragment.delete` indices and cannot express "delete the
-            // middle items of this list", so refuse rather than corrupt — and name
-            // both retry ranges so the caller's next call is mechanical.
-            //
-            // NB: the test is `isTopLevel` on BOTH ends plus `sameTextblock` above, never
-            // top-level-index equality. Two different list items share a top-level
-            // index, so an index test reads a cross-item range as same-block and
-            // edits with offsets measured against two different elements.
-            const startEnd = toFlatOffset(
-              from + (getElementTextLength(startNode) - startPos.textOffset),
-            );
-            const endStart = toFlatOffset(to - endPos.textOffset);
-            return mcpError(
-              "INVALID_RANGE",
-              `Range [${from}, ${to}] spans two blocks and at least one is nested (inside a list, ` +
-                `blockquote or table). tandem_edit replaces text within a single block. Edit them ` +
-                `separately — the first ends at ${startEnd}, the second starts at ${endStart} — or ` +
-                `use tandem_appendContent for new block structure.`,
-            );
-          } else {
-            const startIndex = startPos.path[0];
-            const endIndex = endPos.path[0];
-
-            // #1765: this branch merges the tail block into the start block and
-            // then DELETES the emptied original. Yjs cannot move items, so every
-            // RelativePosition anchored in that element dies the moment the
-            // delete lands — including annotations entirely AFTER the edited
-            // range, which the edit did not touch. Capture their LIVE positions
-            // now, while the anchors still resolve, and re-anchor the survivors
-            // after the edit.
-            //
-            // A live relRange is the only pre-edit position this pass can trust,
-            // so a record without one is not remappable and no `refreshRange`
-            // (and therefore no flat-text walk) happens here. A resolved range
-            // that has COLLAPSED is skipped too: that is #1764's spurious-
-            // collapse shape, and remapping it would re-mint exactly the
-            // confident anchor #1764 exists to refuse.
-            const preEdit: Array<{
-              id: string;
-              ann: Annotation;
-              relRange: RelativeRange;
-              range: DocumentRange;
-            }> = [];
-            for (const ann of collectAnnotations(
-              r.doc.getMap(Y_MAP_ANNOTATIONS),
-              docHash(r.filePath),
-            )) {
-              if (!ann.relRange) continue;
-              const liveFrom = relPosToFlatOffset(r.doc, ann.relRange.fromRel);
-              const liveTo = relPosToFlatOffset(r.doc, ann.relRange.toRel);
-              if (liveFrom === null || liveTo === null) continue;
-              if (liveFrom === liveTo && ann.range.from !== ann.range.to) continue;
-              preEdit.push({
-                id: ann.id,
-                ann,
-                relRange: ann.relRange,
-                range: { from: liveFrom, to: liveTo },
-              });
-            }
-
-            withMcp(r.doc, () => {
-              // Cross-element edit, both ends top-level. Each textblock may hold
-              // multiple Y.XmlText children split by sibling hardBreaks, so
-              // trims/merges go through the multi-XmlText helpers — the old
-              // first-XmlText-only path dropped the tail's breaks and later runs.
-              // 1. Trim the start element's tail: delete [startOffset, end).
-              replaceFlatRangeInElement(
-                startNode,
-                startPos.textOffset,
-                getElementTextLength(startNode),
-                "",
-              );
-
-              // 2. Delete the whole in-between elements.
-              // One call, not a loop: Y.XmlFragment.delete takes a length.
-              const deleteCount = endIndex - startIndex - 1;
-              if (deleteCount > 0) fragment.delete(startIndex + 1, deleteCount);
-
-              // 3. Trim the end element's head: delete [0, endOffset).
-              const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
-              replaceFlatRangeInElement(tailNode, 0, endPos.textOffset, "");
-
-              // 4. Insert newText at the join (end of start), then fold the end
-              //    element's surviving children onto start → [start][newText][end].
-              //    Step 1 trimmed start down to [0, startOffset), and steps 2-3 don't
-              //    touch it, so its flat length is exactly startPos.textOffset — no
-              //    need to re-walk it.
-              if (newText.length > 0) {
-                const joinAt = startPos.textOffset;
-                replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
+              // An empty document has no addressable range — resolveToElement returns
+              // null on a zero-length fragment, which would otherwise surface as a
+              // confusing generic INVALID_RANGE. Point the agent at the seeding path.
+              if (r.doc.getXmlFragment("default").length === 0) {
+                return mcpError(
+                  "EMPTY_DOCUMENT",
+                  "Document is empty — no text range to edit. Seed content with tandem_appendContent({ content }) or tandem_scratchpad({ content }).",
+                );
               }
-              mergeInlineTail(startNode, tailNode);
 
-              // 5. Remove the now-emptied end element.
-              fragment.delete(startIndex + 1, 1);
-            });
+              const from = toFlatOffset(rawFrom);
+              const to = toFlatOffset(rawTo);
 
-            // #1765, second half. The population is exactly the captured
-            // entries whose anchor no longer resolves — the ones the delete in
-            // step 5 killed. Its own transaction, as `stampClaudeRange` below
-            // is: `anchoredRange` must read POST-edit state.
-            const orphaned = preEdit.filter(
-              (e) =>
-                relPosToFlatOffset(r.doc, e.relRange.fromRel) === null ||
-                relPosToFlatOffset(r.doc, e.relRange.toRel) === null,
-            );
-            if (orphaned.length > 0) {
-              withMcp(r.doc, () => {
-                const annotationMap = r.doc.getMap(Y_MAP_ANNOTATIONS);
-                // Hoisted: this pass writes only annotation records, so the flat
-                // text is identical on every iteration.
-                const postText = extractText(r.doc);
-                for (const entry of orphaned) {
-                  const next = remapRangeAcrossReplacement(entry.range, from, to, newText.length);
-                  // Intersecting the replacement: no correct destination, so
-                  // leave it for #1764 to report as `degraded`.
-                  if (!next) continue;
-                  // `rejectHeadingOverlap` is deliberately omitted — this
-                  // relocates an EXISTING annotation rather than creating one,
-                  // and refusing would drop exactly the records the destroyed
-                  // element held. Precedent: the reload remap
-                  // (`documents/reload-remap.ts`), which does the same.
-                  // `allowEmpty` because point annotations are a real population
-                  // (Word comment import emits them) and the remap preserves
-                  // `to - from`, so it can never turn a real span into one.
-                  // No `surrogates: "ignore"` — Critical Rule 4 enumerates three
-                  // callers and this must not be a fourth.
-                  const anchored = anchoredRange(r.doc, next.from, next.to, undefined, {
-                    allowEmpty: true,
-                  });
-                  if (!anchored.ok) {
-                    console.error(
-                      `[tandem_edit] cross-block re-anchor rejected for ${entry.id}: ` +
-                        describeRangeFailure(anchored),
-                    );
-                    continue;
-                  }
-                  if (!anchored.fullyAnchored) continue;
-                  // The arithmetic's fail-safe. With a correct remap this never
-                  // fires; a violated assumption leaves the record for #1764 to
-                  // report rather than pinning it to a confident wrong anchor.
-                  if (snapshotContradicts(entry.ann, postText.slice(next.from, next.to))) continue;
-                  annotationMap.set(entry.id, {
-                    ...entry.ann,
-                    range: anchored.range,
-                    relRange: anchored.relRange,
+              // POINT INSERTION IS SUPPORTED, and the `allowEmpty` below is what keeps
+              // it so. `replaceFlatRangeInElement` guards only its DELETE on
+              // `to > from` and always inserts, so `tandem_edit(n, n, "X")` has always
+              // inserted at n — and it is the only mid-document insert this server
+              // has (`tandem_appendContent` appends at the document END and is
+              // markdown-only). Refusing every `from === to` removed a working
+              // capability with no replacement.
+              //
+              // The one genuine no-op is a point range with nothing to insert. It is
+              // answered HERE, ahead of `validateRange`, so the wire still carries
+              // `reason: "empty"` for it. Everything downstream then runs on the empty
+              // range exactly as before — in particular the heading-overlap check, so
+              // `(1, 1, "X")` inside `"## "` is still HEADING_OVERLAP.
+              if (from === to && newText === "") {
+                // Decided by the arguments alone, so it leaves no claim (#2358).
+                return noClaim(
+                  mcpError(
+                    "INVALID_RANGE",
+                    `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
+                      "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
+                    { reason: "empty" },
+                  ),
+                );
+              }
+
+              // A point insertion collides with the standing "always pass
+              // textSnapshot" advice, and the collision is DESTRUCTIVE, so it is
+              // refused rather than papered over. A point range slices to `""`, which
+              // never equals a non-empty snapshot, so staleness fires and relocation
+              // answers RANGE_MOVED naming the span of the snapshot TEXT — and the
+              // documented retry ("use resolvedFrom/resolvedTo") then replaces those
+              // characters with `newText`. The agent asked to insert and got a
+              // deletion, having followed both documented rules.
+              //
+              // There is no coherent snapshot for a zero-length range to verify, so
+              // the fix is to omit it, and the message says so.
+              if (from === to && textSnapshot) {
+                return noClaim(
+                  mcpError(
+                    "INVALID_ARGUMENT",
+                    `A point insertion at ${from} cannot carry a textSnapshot: a zero-length range ` +
+                      "matches no text, so the snapshot would always look stale and the RANGE_MOVED " +
+                      "retry would turn your insert into a replacement. Omit textSnapshot for a point " +
+                      "insertion, or pass the range you mean to replace.",
+                  ),
+                );
+              }
+
+              // `normalizeSpaceClass` (#1622): `textSnapshot` here is the CALLER's,
+              // transcribed from `tandem_getTextContent`, where a U+00A0 is
+              // indistinguishable from U+0020 — so an exact-only comparison answers
+              // RANGE_GONE for text that is present. The server's own STORED-snapshot
+              // re-anchoring (the watcher's probe and anchor) stays byte-exact.
+              //
+              // `rejectHeadingInterior` (#1766). The endpoint-only check let
+              // `tandem_edit(4, 13, "X")` on `"Para one\n## Head\nTail"` step
+              // straight over `"## "` and produce `"ParaXead\nTail"` — the heading
+              // deleted, which is exactly what Critical Rule 6 exists to prevent.
+              // The two annotation-creating callers carry the same term on their
+              // SUGGESTION arm only (a stored `suggestedText` is a rewrite deferred
+              // to Accept); their plain-comment arm keeps the endpoint-only rule,
+              // because a comment spanning a section is legal.
+              const v = validateRange(r.doc, from, to, {
+                textSnapshot,
+                rejectHeadingOverlap: true,
+                rejectHeadingInterior: true,
+                allowEmpty: true,
+                normalizeSpaceClass: true,
+              });
+              if (!v.ok) {
+                if (v.code === "RANGE_GONE") {
+                  return mcpError("RANGE_GONE", "Target text no longer exists in the document.");
+                }
+                if (v.code === "RANGE_MOVED") {
+                  return mcpError(
+                    "RANGE_MOVED",
+                    "Target text has moved. Use resolvedFrom/resolvedTo to retry.",
+                    { resolvedFrom: v.resolvedFrom, resolvedTo: v.resolvedTo },
+                  );
+                }
+                if (v.code === "HEADING_OVERLAP") {
+                  // `tandem_edit`'s OWN message, not `rangeFailureToError`'s — that
+                  // one serves `tandem_comment`, whose plain arm keeps the
+                  // endpoint-only rule, and must stay as it is. Since #1766 this
+                  // range may overlap a heading in its INTERIOR, where "target the
+                  // text content only" is unfollowable: there is no sub-range of the
+                  // caller's span that both clears the prefix and covers what they
+                  // asked to replace. The split is the only real remedy, so the
+                  // message names it.
+                  return mcpError(
+                    "INVALID_RANGE",
+                    'Edit range overlaps with heading markup (e.g., "## "). Target the text content only, ' +
+                      "or split the edit at the heading boundary and issue one call per block. " +
+                      "Use tandem_resolveRange to find the text position.",
+                  );
+                }
+                const refused = mcpError("INVALID_RANGE", v.message, { reason: v.reason });
+                return rangeDecidedByArguments(v.reason, from) ? noClaim(refused) : refused;
+              }
+
+              const fragment = r.doc.getXmlFragment("default");
+              // Resolve to the TEXTBLOCK that owns each offset, at any depth. The old
+              // `resolveToElement` pair stopped at the fragment's direct children, so
+              // every offset inside a list resolved to the `bulletList` CONTAINER and
+              // was rejected with "edit a specific paragraph or list item instead" —
+              // advice no tool could follow, because none could address a nested block.
+              const startPos = resolveToTextblock(fragment, from);
+              const endPos = resolveToTextblock(fragment, to);
+
+              if (!startPos || !endPos) {
+                return mcpError(
+                  "INVALID_RANGE",
+                  `Cannot resolve offset range [${from}, ${to}] to editable text. The range may cover only a container or an image.`,
+                );
+              }
+
+              const startNode = elementAtPath(fragment, startPos.path);
+              const endNode = elementAtPath(fragment, endPos.path);
+              if (!startNode || !endNode) {
+                return mcpError(
+                  "INVALID_RANGE",
+                  `Cannot resolve offset range [${from}, ${to}] in document.`,
+                );
+              }
+
+              // Every rejection below MUST precede the first `withMcp` — Y.js does not
+              // roll back a transaction on throw, so a late bail is a partial commit.
+              if (sameTextblock(startPos, endPos)) {
+                // Same textblock at any depth: a list item, a nested item, a table
+                // cell, a blockquote paragraph. `replaceFlatRangeInElement` already
+                // handles multi-XmlText/hardBreak interiors, so depth costs nothing.
+                withMcp(r.doc, () => {
+                  replaceFlatRangeInElement(
+                    startNode,
+                    startPos.textOffset,
+                    endPos.textOffset,
+                    newText,
+                  );
+                });
+              } else if (!isTopLevel(startPos) || !isTopLevel(endPos)) {
+                // Cross-block where either end is nested. The top-level algorithm below
+                // is keyed on `fragment.delete` indices and cannot express "delete the
+                // middle items of this list", so refuse rather than corrupt — and name
+                // both retry ranges so the caller's next call is mechanical.
+                //
+                // NB: the test is `isTopLevel` on BOTH ends plus `sameTextblock` above, never
+                // top-level-index equality. Two different list items share a top-level
+                // index, so an index test reads a cross-item range as same-block and
+                // edits with offsets measured against two different elements.
+                const startEnd = toFlatOffset(
+                  from + (getElementTextLength(startNode) - startPos.textOffset),
+                );
+                const endStart = toFlatOffset(to - endPos.textOffset);
+                return mcpError(
+                  "INVALID_RANGE",
+                  `Range [${from}, ${to}] spans two blocks and at least one is nested (inside a list, ` +
+                    `blockquote or table). tandem_edit replaces text within a single block. Edit them ` +
+                    `separately — the first ends at ${startEnd}, the second starts at ${endStart} — or ` +
+                    `use tandem_appendContent for new block structure.`,
+                );
+              } else {
+                const startIndex = startPos.path[0];
+                const endIndex = endPos.path[0];
+
+                // #1765: this branch merges the tail block into the start block and
+                // then DELETES the emptied original. Yjs cannot move items, so every
+                // RelativePosition anchored in that element dies the moment the
+                // delete lands — including annotations entirely AFTER the edited
+                // range, which the edit did not touch. Capture their LIVE positions
+                // now, while the anchors still resolve, and re-anchor the survivors
+                // after the edit.
+                //
+                // A live relRange is the only pre-edit position this pass can trust,
+                // so a record without one is not remappable and no `refreshRange`
+                // (and therefore no flat-text walk) happens here. A resolved range
+                // that has COLLAPSED is skipped too: that is #1764's spurious-
+                // collapse shape, and remapping it would re-mint exactly the
+                // confident anchor #1764 exists to refuse.
+                const preEdit: Array<{
+                  id: string;
+                  ann: Annotation;
+                  relRange: RelativeRange;
+                  range: DocumentRange;
+                }> = [];
+                for (const ann of collectAnnotations(
+                  r.doc.getMap(Y_MAP_ANNOTATIONS),
+                  docHash(r.filePath),
+                )) {
+                  if (!ann.relRange) continue;
+                  const liveFrom = relPosToFlatOffset(r.doc, ann.relRange.fromRel);
+                  const liveTo = relPosToFlatOffset(r.doc, ann.relRange.toRel);
+                  if (liveFrom === null || liveTo === null) continue;
+                  if (liveFrom === liveTo && ann.range.from !== ann.range.to) continue;
+                  preEdit.push({
+                    id: ann.id,
+                    ann,
+                    relRange: ann.relRange,
+                    range: { from: liveFrom, to: liveTo },
                   });
                 }
-              });
-            }
-          }
 
-          // Record authorship for the inserted text (Y.Map overlay strategy).
-          // This runs in a separate transaction because anchoredRange() reads the
-          // Y.Doc state *after* the edit to compute RelativePositions for the new
-          // text. Combining it into the edit transaction would anchor against
-          // pre-edit state.
-          //
-          // The split opens no race: `anchoredRange` is synchronous and nothing
-          // between the two `withMcp` calls awaits, so Node cannot interleave a
-          // remote Y update into the gap. Adding an `await` in this span would
-          // create one.
-          if (newText.length > 0) {
-            stampClaudeRange(r.doc, from, toFlatOffset(from + newText.length));
-          }
+                withMcp(r.doc, () => {
+                  // Cross-element edit, both ends top-level. Each textblock may hold
+                  // multiple Y.XmlText children split by sibling hardBreaks, so
+                  // trims/merges go through the multi-XmlText helpers — the old
+                  // first-XmlText-only path dropped the tail's breaks and later runs.
+                  // 1. Trim the start element's tail: delete [startOffset, end).
+                  replaceFlatRangeInElement(
+                    startNode,
+                    startPos.textOffset,
+                    getElementTextLength(startNode),
+                    "",
+                  );
 
-          return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
-        });
-      },
+                  // 2. Delete the whole in-between elements.
+                  // One call, not a loop: Y.XmlFragment.delete takes a length.
+                  const deleteCount = endIndex - startIndex - 1;
+                  if (deleteCount > 0) fragment.delete(startIndex + 1, deleteCount);
+
+                  // 3. Trim the end element's head: delete [0, endOffset).
+                  const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
+                  replaceFlatRangeInElement(tailNode, 0, endPos.textOffset, "");
+
+                  // 4. Insert newText at the join (end of start), then fold the end
+                  //    element's surviving children onto start → [start][newText][end].
+                  //    Step 1 trimmed start down to [0, startOffset), and steps 2-3 don't
+                  //    touch it, so its flat length is exactly startPos.textOffset — no
+                  //    need to re-walk it.
+                  if (newText.length > 0) {
+                    const joinAt = startPos.textOffset;
+                    replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
+                  }
+                  mergeInlineTail(startNode, tailNode);
+
+                  // 5. Remove the now-emptied end element.
+                  fragment.delete(startIndex + 1, 1);
+                });
+
+                // #1765, second half. The population is exactly the captured
+                // entries whose anchor no longer resolves — the ones the delete in
+                // step 5 killed. Its own transaction, as `stampClaudeRange` below
+                // is: `anchoredRange` must read POST-edit state.
+                const orphaned = preEdit.filter(
+                  (e) =>
+                    relPosToFlatOffset(r.doc, e.relRange.fromRel) === null ||
+                    relPosToFlatOffset(r.doc, e.relRange.toRel) === null,
+                );
+                if (orphaned.length > 0) {
+                  withMcp(r.doc, () => {
+                    const annotationMap = r.doc.getMap(Y_MAP_ANNOTATIONS);
+                    // Hoisted: this pass writes only annotation records, so the flat
+                    // text is identical on every iteration.
+                    const postText = extractText(r.doc);
+                    for (const entry of orphaned) {
+                      const next = remapRangeAcrossReplacement(
+                        entry.range,
+                        from,
+                        to,
+                        newText.length,
+                      );
+                      // Intersecting the replacement: no correct destination, so
+                      // leave it for #1764 to report as `degraded`.
+                      if (!next) continue;
+                      // `rejectHeadingOverlap` is deliberately omitted — this
+                      // relocates an EXISTING annotation rather than creating one,
+                      // and refusing would drop exactly the records the destroyed
+                      // element held. Precedent: the reload remap
+                      // (`documents/reload-remap.ts`), which does the same.
+                      // `allowEmpty` because point annotations are a real population
+                      // (Word comment import emits them) and the remap preserves
+                      // `to - from`, so it can never turn a real span into one.
+                      // No `surrogates: "ignore"` — Critical Rule 4 enumerates three
+                      // callers and this must not be a fourth.
+                      const anchored = anchoredRange(r.doc, next.from, next.to, undefined, {
+                        allowEmpty: true,
+                      });
+                      if (!anchored.ok) {
+                        console.error(
+                          `[tandem_edit] cross-block re-anchor rejected for ${entry.id}: ` +
+                            describeRangeFailure(anchored),
+                        );
+                        continue;
+                      }
+                      if (!anchored.fullyAnchored) continue;
+                      // The arithmetic's fail-safe. With a correct remap this never
+                      // fires; a violated assumption leaves the record for #1764 to
+                      // report rather than pinning it to a confident wrong anchor.
+                      if (snapshotContradicts(entry.ann, postText.slice(next.from, next.to)))
+                        continue;
+                      annotationMap.set(entry.id, {
+                        ...entry.ann,
+                        range: anchored.range,
+                        relRange: anchored.relRange,
+                      });
+                    }
+                  });
+                }
+              }
+
+              // Record authorship for the inserted text (Y.Map overlay strategy).
+              // This runs in a separate transaction because anchoredRange() reads the
+              // Y.Doc state *after* the edit to compute RelativePositions for the new
+              // text. Combining it into the edit transaction would anchor against
+              // pre-edit state.
+              //
+              // The split opens no race: `anchoredRange` is synchronous and nothing
+              // between the two `withMcp` calls awaits, so Node cannot interleave a
+              // remote Y update into the gap. Adding an `await` in this span would
+              // create one.
+              if (newText.length > 0) {
+                stampClaudeRange(r.doc, from, toFlatOffset(from + newText.length));
+              }
+
+              return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
+            }),
+        ),
     ),
   );
 
@@ -1140,131 +1288,156 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_editList", async ({ at, op, markdown, checked, documentId }) => {
-      return withTypingPresence({ tool: "tandem_editList", documentId }, async () => {
-        const r = requireDocument(documentId);
-        if (!r) return noDocumentError();
+    withErrorBoundary(
+      "tandem_editList",
+      async ({ at, op, markdown, checked, documentId: givenId }, caller) =>
+        ownedWrite(
+          caller,
+          "tandem_editList",
+          { given: givenId, resolve: () => writeTarget(givenId), preflight: editListEarlyRefusal },
+          (documentId) =>
+            withTypingPresence({ tool: "tandem_editList", documentId }, async () => {
+              const early = editListEarlyRefusal(documentId);
+              if (early) return early;
+              const r = requireDocument(documentId);
+              if (!r) return noClaim(noDocumentError());
+              const docState = getCurrentDoc(documentId);
 
-        const docState = getCurrentDoc(documentId);
-        if (docState?.readOnly) {
-          return mcpError("READ_ONLY", "Document is read-only — cannot edit lists.");
-        }
-        const refusal = listFormatRefusal(docState?.format);
-        if (refusal) return mcpError("FORMAT_ERROR", refusal);
+              const fragment = r.doc.getXmlFragment("default");
+              if (fragment.length === 0) {
+                return mcpError(
+                  "EMPTY_DOCUMENT",
+                  "Document is empty — no list to edit. Seed content with tandem_appendContent.",
+                );
+              }
 
-        const fragment = r.doc.getXmlFragment("default");
-        if (fragment.length === 0) {
-          return mcpError(
-            "EMPTY_DOCUMENT",
-            "Document is empty — no list to edit. Seed content with tandem_appendContent.",
-          );
-        }
+              // Bounds-check BEFORE resolving. `resolveToElement` clamps out-of-range
+              // offsets to the first/last element, so an `at` past the end silently
+              // targets the LAST item and one below zero targets the FIRST — and
+              // `op: "remove"` would then delete an item the caller never named and
+              // report success. A stale offset is exactly the case this tool's own
+              // description warns about, so it must fail loudly rather than guess.
+              const flatLength = flatDocLength(r.doc);
+              if (!Number.isInteger(at) || at < 0 || at > flatLength) {
+                const refused = mcpError(
+                  "INVALID_RANGE",
+                  `Offset ${at} is outside the document (0..${flatLength}). Re-read the list with ` +
+                    "tandem_getOutline({ includeBlocks: true }) — an offset from before your last " +
+                    "edit may no longer point where you expect.",
+                );
+                // A fractional or negative offset is wrong whatever the document
+                // holds, so it leaves no claim; one past the end depends on it.
+                return !Number.isInteger(at) || at < 0 ? noClaim(refused) : refused;
+              }
+              const pos = resolveToTextblock(fragment, toFlatOffset(at));
+              if (!pos) {
+                return mcpError("INVALID_RANGE", `Cannot resolve offset ${at} to a block.`);
+              }
+              const target = findListTarget(fragment, pos.path);
+              if ("error" in target) return mcpError("INVALID_RANGE", target.error);
 
-        // Bounds-check BEFORE resolving. `resolveToElement` clamps out-of-range
-        // offsets to the first/last element, so an `at` past the end silently
-        // targets the LAST item and one below zero targets the FIRST — and
-        // `op: "remove"` would then delete an item the caller never named and
-        // report success. A stale offset is exactly the case this tool's own
-        // description warns about, so it must fail loudly rather than guess.
-        const flatLength = flatDocLength(r.doc);
-        if (!Number.isInteger(at) || at < 0 || at > flatLength) {
-          return mcpError(
-            "INVALID_RANGE",
-            `Offset ${at} is outside the document (0..${flatLength}). Re-read the list with ` +
-              "tandem_getOutline({ includeBlocks: true }) — an offset from before your last " +
-              "edit may no longer point where you expect.",
-          );
-        }
-        const pos = resolveToTextblock(fragment, toFlatOffset(at));
-        if (!pos) {
-          return mcpError("INVALID_RANGE", `Cannot resolve offset ${at} to a block.`);
-        }
-        const target = findListTarget(fragment, pos.path);
-        if ("error" in target) return mcpError("INVALID_RANGE", target.error);
+              // Everything that can refuse must refuse BEFORE the transaction — Y.js
+              // does not roll back on throw, so a late bail is a partial commit.
+              if (op === "setChecked") {
+                if (checked === undefined) {
+                  return noClaim(
+                    mcpError(
+                      "INVALID_ARGUMENT",
+                      "setChecked requires `checked` (true, false or null).",
+                    ),
+                  );
+                }
+                if (docState?.format === "docx") {
+                  return noClaim(
+                    mcpError(
+                      "FORMAT_ERROR",
+                      "Word lists have no checkbox state, so setChecked does not apply to a .docx. " +
+                        "The other ops work on this document.",
+                    ),
+                  );
+                }
+                withMcp(r.doc, () => {
+                  if (checked === null) target.item.removeAttribute("checked");
+                  // Stored as a real boolean, matching what y-prosemirror writes when a
+                  // user toggles the checkbox, so it round-trips byte-identically.
+                  else target.item.setAttribute("checked", checked as any);
+                });
+                return mcpSuccess({ edited: true, op, itemIndex: target.index + 1, checked });
+              }
 
-        // Everything that can refuse must refuse BEFORE the transaction — Y.js
-        // does not roll back on throw, so a late bail is a partial commit.
-        if (op === "setChecked") {
-          if (checked === undefined) {
-            return mcpError(
-              "INVALID_ARGUMENT",
-              "setChecked requires `checked` (true, false or null).",
-            );
-          }
-          if (docState?.format === "docx") {
-            return mcpError(
-              "FORMAT_ERROR",
-              "Word lists have no checkbox state, so setChecked does not apply to a .docx. " +
-                "The other ops work on this document.",
-            );
-          }
-          withMcp(r.doc, () => {
-            if (checked === null) target.item.removeAttribute("checked");
-            // Stored as a real boolean, matching what y-prosemirror writes when a
-            // user toggles the checkbox, so it round-trips byte-identically.
-            else target.item.setAttribute("checked", checked as any);
-          });
-          return mcpSuccess({ edited: true, op, itemIndex: target.index + 1, checked });
-        }
+              if (op === "remove") {
+                withMcp(r.doc, () => removeItemAndCollapse(fragment, target));
+                return mcpSuccess({ edited: true, op, removedItemIndex: target.index + 1 });
+              }
 
-        if (op === "remove") {
-          withMcp(r.doc, () => removeItemAndCollapse(fragment, target));
-          return mcpSuccess({ edited: true, op, removedItemIndex: target.index + 1 });
-        }
+              // insertAfter / insertBefore
+              if (!markdown || markdown.trim() === "") {
+                return noClaim(
+                  mcpError("INVALID_ARGUMENT", `${op} requires \`markdown\` for the new item(s).`),
+                );
+              }
+              if (Buffer.byteLength(markdown, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
+                return noClaim(
+                  mcpError(
+                    "FILE_TOO_LARGE",
+                    `markdown exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte limit.`,
+                  ),
+                );
+              }
 
-        // insertAfter / insertBefore
-        if (!markdown || markdown.trim() === "") {
-          return mcpError("INVALID_ARGUMENT", `${op} requires \`markdown\` for the new item(s).`);
-        }
-        if (Buffer.byteLength(markdown, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
-          return mcpError(
-            "FILE_TOO_LARGE",
-            `markdown exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte limit.`,
-          );
-        }
+              // Parse AND build outside the transaction. Parsing alone is not enough:
+              // `blockToYxml`'s default arm calls the remark stringifier, so a throw
+              // during the build would land mid-transaction with the delete already
+              // applied and nothing replacing it.
+              const tree = mdParser.parse(markdown) as Root;
+              const { items, deferred } = buildListItemsFromTree(tree);
+              if (items.length === 0) {
+                return noClaim(mcpError("INVALID_ARGUMENT", "markdown parsed to no list items."));
+              }
 
-        // Parse AND build outside the transaction. Parsing alone is not enough:
-        // `blockToYxml`'s default arm calls the remark stringifier, so a throw
-        // during the build would land mid-transaction with the delete already
-        // applied and nothing replacing it.
-        const tree = mdParser.parse(markdown) as Root;
-        const { items, deferred } = buildListItemsFromTree(tree);
-        if (items.length === 0) {
-          return mcpError("INVALID_ARGUMENT", "markdown parsed to no list items.");
-        }
+              const insertAt = op === "insertAfter" ? target.index + 1 : target.index;
+              withMcp(r.doc, () => attachItems(target.list, insertAt, items, deferred));
 
-        const insertAt = op === "insertAfter" ? target.index + 1 : target.index;
-        withMcp(r.doc, () => attachItems(target.list, insertAt, items, deferred));
+              // Stamp the inserted items as Claude's, using the per-range scheme
+              // tandem_edit uses. `stampClaudeAuthorshipWholeDoc` is unusable here: it
+              // walks top level only, keys entries by fragment index, and has no end
+              // bound, so a mid-document insert would re-key every later block.
+              //
+              // The range is derived from the document AFTER insertion rather than
+              // from the target block's own start. Deriving it from the target stamps
+              // the user's existing item — `insertAfter` puts the new items after it,
+              // so a span starting at the target covers text Claude did not write, and
+              // claiming authorship over the user's prose is worse than claiming none.
+              // Scoped to the target list, not the document: the span is a question
+              // about `target.list`'s children, and enumerating every block in the
+              // file to answer it costs a full traversal plus an allocation per block
+              // (1041 of them on this repo's CHANGELOG) — on the long lists this tool
+              // exists for, that dominates the mutation itself.
+              const listStart =
+                at - pos.textOffset - flatOffsetWithinList(target.list, target.index);
+              const insertedSpan = flatSpanOfChildren(
+                target.list,
+                insertAt,
+                items.length,
+                listStart,
+              );
+              if (insertedSpan) {
+                stampClaudeRange(
+                  r.doc,
+                  toFlatOffset(insertedSpan.from),
+                  toFlatOffset(insertedSpan.to),
+                );
+              }
 
-        // Stamp the inserted items as Claude's, using the per-range scheme
-        // tandem_edit uses. `stampClaudeAuthorshipWholeDoc` is unusable here: it
-        // walks top level only, keys entries by fragment index, and has no end
-        // bound, so a mid-document insert would re-key every later block.
-        //
-        // The range is derived from the document AFTER insertion rather than
-        // from the target block's own start. Deriving it from the target stamps
-        // the user's existing item — `insertAfter` puts the new items after it,
-        // so a span starting at the target covers text Claude did not write, and
-        // claiming authorship over the user's prose is worse than claiming none.
-        // Scoped to the target list, not the document: the span is a question
-        // about `target.list`'s children, and enumerating every block in the
-        // file to answer it costs a full traversal plus an allocation per block
-        // (1041 of them on this repo's CHANGELOG) — on the long lists this tool
-        // exists for, that dominates the mutation itself.
-        const listStart = at - pos.textOffset - flatOffsetWithinList(target.list, target.index);
-        const insertedSpan = flatSpanOfChildren(target.list, insertAt, items.length, listStart);
-        if (insertedSpan) {
-          stampClaudeRange(r.doc, toFlatOffset(insertedSpan.from), toFlatOffset(insertedSpan.to));
-        }
-
-        return mcpSuccess({
-          edited: true,
-          op,
-          insertedCount: items.length,
-          atItemIndex: insertAt + 1,
-        });
-      });
-    }),
+              return mcpSuccess({
+                edited: true,
+                op,
+                insertedCount: items.length,
+                atItemIndex: insertAt + 1,
+              });
+            }),
+        ),
+    ),
   );
 
   server.tool(
@@ -1279,52 +1452,70 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_appendContent", async ({ content, documentId }) => {
-      return withTypingPresence({ tool: "tandem_appendContent", documentId }, async () => {
+    withErrorBoundary("tandem_appendContent", async ({ content, documentId: givenId }, caller) => {
+      // Every refusal this tool has is decided by its arguments or by facts
+      // fixed at open, so all of them are answered before the queue.
+      const earlyRefusal = (documentId: string | undefined): McpToolResult | null => {
         const r = requireDocument(documentId);
-        if (!r) return noDocumentError();
+        if (!r) return noClaim(noDocumentError());
 
         const docState = getCurrentDoc(documentId);
         if (docState?.readOnly) {
-          return mcpError(
-            "READ_ONLY",
-            readOnlyToolMessage(docState.format, "Cannot append content."),
+          return noClaim(
+            mcpError("READ_ONLY", readOnlyToolMessage(docState.format, "Cannot append content.")),
           );
         }
         if (docState && docState.format !== "md") {
-          return mcpError("FORMAT_ERROR", "tandem_appendContent supports markdown documents only.");
-        }
-        if (Buffer.byteLength(content, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
-          return mcpError(
-            "FILE_TOO_LARGE",
-            `Content exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte append limit.`,
+          return noClaim(
+            mcpError("FORMAT_ERROR", "tandem_appendContent supports markdown documents only."),
           );
         }
-
-        // Parse outside the transaction to shrink the in-transact failure surface
-        // (mirrors the adapter parse/apply split). Cast: mdParser.parse is typed Node.
-        const tree = mdParser.parse(content) as Root;
-
-        const fragment = r.doc.getXmlFragment("default");
-        const fragBefore = fragment.length;
-        withMcp(r.doc, () => appendMdast(r.doc, tree));
-        const fragAfter = fragment.length;
-
-        // Stamp only the freshly-appended top-level blocks as Claude authorship,
-        // mirroring tandem_edit's automatic stamp of inserted text. Skip the
-        // whole-fragment walk when nothing was appended (e.g. whitespace-only).
-        if (fragAfter > fragBefore) {
-          stampClaudeAuthorshipWholeDoc(r.doc, fragBefore);
+        if (Buffer.byteLength(content, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
+          return noClaim(
+            mcpError(
+              "FILE_TOO_LARGE",
+              `Content exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte append limit.`,
+            ),
+          );
         }
+        return null;
+      };
+      return ownedWrite(
+        caller,
+        "tandem_appendContent",
+        { given: givenId, resolve: () => writeTarget(givenId), preflight: earlyRefusal },
+        (documentId) =>
+          withTypingPresence({ tool: "tandem_appendContent", documentId }, async () => {
+            const early = earlyRefusal(documentId);
+            if (early) return early;
+            const r = requireDocument(documentId);
+            if (!r) return noClaim(noDocumentError());
 
-        return mcpSuccess({
-          appended: true,
-          // Fragment-element delta, not an mdast-paragraph count: splitParagraphImages
-          // can emit multiple elements from one paragraph, so this may exceed the
-          // number of source markdown paragraphs.
-          blockCount: fragAfter - fragBefore,
-        });
-      });
+            // Parse outside the transaction to shrink the in-transact failure surface
+            // (mirrors the adapter parse/apply split). Cast: mdParser.parse is typed Node.
+            const tree = mdParser.parse(content) as Root;
+
+            const fragment = r.doc.getXmlFragment("default");
+            const fragBefore = fragment.length;
+            withMcp(r.doc, () => appendMdast(r.doc, tree));
+            const fragAfter = fragment.length;
+
+            // Stamp only the freshly-appended top-level blocks as Claude authorship,
+            // mirroring tandem_edit's automatic stamp of inserted text. Skip the
+            // whole-fragment walk when nothing was appended (e.g. whitespace-only).
+            if (fragAfter > fragBefore) {
+              stampClaudeAuthorshipWholeDoc(r.doc, fragBefore);
+            }
+
+            return mcpSuccess({
+              appended: true,
+              // Fragment-element delta, not an mdast-paragraph count: splitParagraphImages
+              // can emit multiple elements from one paragraph, so this may exceed the
+              // number of source markdown paragraphs.
+              blockCount: fragAfter - fragBefore,
+            });
+          }),
+      );
     }),
   );
 
@@ -1366,145 +1557,158 @@ export function registerDocumentTools(server: McpServer): void {
           }
         : {}),
     },
-    withErrorBoundary("tandem_save", async ({ documentId, allowImageLoss }) => {
-      // path.basename eliminates directory components so CodeQL does not trace
-      // user input through Map.get(id) to existing.filePath (js/path-injection).
-      const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
-      const r = requireDocument(safeDocId);
-      if (!r) return noDocumentError();
+    withErrorBoundary("tandem_save", async ({ documentId: rawGiven, allowImageLoss }, caller) => {
+      // The id the body acts on is the basename, so that is the id ownership
+      // checks: a check on the raw string and a write on its basename could
+      // name two different documents.
+      const givenId = rawGiven !== undefined ? path.basename(rawGiven) : undefined;
+      return ownedWrite(
+        caller,
+        "tandem_save",
+        { given: rawGiven, resolve: () => writeTarget(givenId) },
+        async (documentId) => {
+          // path.basename eliminates directory components so CodeQL does not trace
+          // user input through Map.get(id) to existing.filePath (js/path-injection).
+          const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+          const r = requireDocument(safeDocId);
+          if (!r) return noClaim(noDocumentError());
 
-      const docState = getCurrentDoc(safeDocId);
-      const format = docState?.format ?? "txt";
-      const readOnly = docState?.readOnly ?? false;
+          const docState = getCurrentDoc(safeDocId);
+          const format = docState?.format ?? "txt";
+          const readOnly = docState?.readOnly ?? false;
 
-      // `saved` reports whether the DISK file changed, so every session-only
-      // branch below answers false (#1798). It used to answer true with
-      // `sessionOnly: true` beside it, and `sessionOnly` has no readers
-      // anywhere — so the only signal an agent actually reads said the save
-      // succeeded while the file on disk was untouched, and a tab close then
-      // deleted the session. `reason` is the machine-readable why.
+          // `saved` reports whether the DISK file changed, so every session-only
+          // branch below answers false (#1798). It used to answer true with
+          // `sessionOnly: true` beside it, and `sessionOnly` has no readers
+          // anywhere — so the only signal an agent actually reads said the save
+          // succeeded while the file on disk was untouched, and a tab close then
+          // deleted the session. `reason` is the machine-readable why.
 
-      // Uploaded files have no disk path — session-only save
-      if (docState?.source === "upload") {
-        await saveSession(r.filePath, format, r.doc);
-        const reason: SaveSkipReason = "upload";
-        return mcpSuccess({
-          saved: false,
-          sessionOnly: true,
-          reason,
-          filePath: r.filePath,
-          message:
-            "Session saved (annotations preserved). This file was uploaded — no disk path to save to.",
-        });
-      }
+          // Uploaded files have no disk path — session-only save
+          if (docState?.source === "upload") {
+            await saveSession(r.filePath, format, r.doc);
+            const reason: SaveSkipReason = "upload";
+            return mcpSuccess({
+              saved: false,
+              sessionOnly: true,
+              reason,
+              filePath: r.filePath,
+              message:
+                "Session saved (annotations preserved). This file was uploaded — no disk path to save to.",
+            });
+          }
 
-      // Read-only documents — session-only save. Two tiers, and telling them
-      // apart is the point: a doc the user asked to keep read-only (View
-      // Changelog, `POST /api/open {readOnly:true}`) gets the neutral fact,
-      // while one that is read-only BECAUSE its format has no way back to disk
-      // (#1798, `.html`) gets the cause. Saying "the document is read-only" to
-      // the second names the mechanism instead of the reason, and the user
-      // never asked for read-only. `.docx` is not read-only at all (#576); it
-      // round-trips through the binary save branch below.
-      if (readOnly) {
-        await saveSession(r.filePath, format, r.doc);
-        const unsaveable = !canSaveToDisk(format);
-        const reason: SaveSkipReason = unsaveable ? "UNSUPPORTED_FORMAT" : "read-only";
-        return mcpSuccess({
-          saved: false,
-          sessionOnly: true,
-          reason,
-          filePath: r.filePath,
-          message: unsaveable
-            ? `Session saved (annotations preserved). Source file unchanged — this format (${format}) cannot be written back to disk.`
-            : "Session saved (annotations preserved). Source file unchanged — document is read-only.",
-        });
-      }
+          // Read-only documents — session-only save. Two tiers, and telling them
+          // apart is the point: a doc the user asked to keep read-only (View
+          // Changelog, `POST /api/open {readOnly:true}`) gets the neutral fact,
+          // while one that is read-only BECAUSE its format has no way back to disk
+          // (#1798, `.html`) gets the cause. Saying "the document is read-only" to
+          // the second names the mechanism instead of the reason, and the user
+          // never asked for read-only. `.docx` is not read-only at all (#576); it
+          // round-trips through the binary save branch below.
+          if (readOnly) {
+            await saveSession(r.filePath, format, r.doc);
+            const unsaveable = !canSaveToDisk(format);
+            const reason: SaveSkipReason = unsaveable ? "UNSUPPORTED_FORMAT" : "read-only";
+            return mcpSuccess({
+              saved: false,
+              sessionOnly: true,
+              reason,
+              filePath: r.filePath,
+              message: unsaveable
+                ? `Session saved (annotations preserved). Source file unchanged — this format (${format}) cannot be written back to disk.`
+                : "Session saved (annotations preserved). Source file unchanged — document is read-only.",
+            });
+          }
 
-      // Delegate to shared save function (handles .docx body export back to disk)
-      const result = await saveDocumentToDisk(r.docId, "mcp", { allowImageLoss });
-      if (result.status === "saved") {
-        // Surface .docx body-export fidelity warnings (#576) so the agent knows
-        // what the round-trip downgraded (e.g. unsupported blocks → plain text).
-        return mcpSuccess({
-          saved: true,
-          filePath: r.filePath,
-          ...(result.fidelityWarnings && result.fidelityWarnings.length > 0
-            ? { fidelityWarnings: result.fidelityWarnings }
-            : {}),
-          // Post-write verification advisories (#1123 0e). Content-free strings;
-          // surfaced so the agent knows the save may have lost content
-          // unexpectedly (the user's original is backed up). A `blocked` verdict
-          // never reaches here — it aborts the save (result.status === "error").
-          ...(result.integrityWarnings && result.integrityWarnings.length > 0
-            ? { integrityWarnings: result.integrityWarnings }
-            : {}),
-          // How many KINDS of Word feature the import couldn't bring in (#1142
-          // G3) — so the agent knows this save overwrote an original that had
-          // things the model never held. A capped category count, NOT a feature
-          // count, and the lines themselves stay user-only (see the note in
-          // docx-lost-features.ts on why import losses don't cross to Claude).
-          ...(result.unpreservedImports ? { unpreservedImports: result.unpreservedImports } : {}),
-        });
-      }
-      if (result.status === "skipped") {
-        // Fall back to session-only save for skipped formats. The disk save
-        // did NOT happen, so persist the dirty flag (#1069) and any pending
-        // conflict (#1238): without them a skipped save would write a
-        // clean-looking session that a restart then discards — losing the only
-        // copy of the unsaved edits, or silently laundering away a conflict the
-        // user still has to decide.
-        await persistSkippedSaveSession(r.docId);
-        // An external-conflict skip is not a save at any level Claude can act
-        // on, and `saved: true` would be a lie it has no way to check. Report
-        // it as an error instead — the resolution is a human keep-vs-reload
-        // choice in the editor, which no MCP tool exposes. Ordering matters:
-        // the session write above must happen first, or the carry is dead code.
-        //
-        // Branches on `skipCode`, not `reason`: `reason` is free-form prose
-        // (SaveResult's own contract says as much) and `skipCode` is the
-        // machine-readable discriminator added specifically so callers don't
-        // depend on exact wording (review finding — this branch had drifted
-        // to the string it was meant to avoid).
-        if (result.skipCode === "EXTERNAL_CONFLICT") {
-          // Name the document — with several open, "a conflict" isn't
-          // actionable — and name BOTH exits. The banner is the normal one, but
-          // it needs a browser/desktop client; in stdio there is none, and
-          // pointing only at it would describe a remedy the caller cannot
-          // reach. tandem_open force:true works in either mode.
-          return mcpError(
-            "EXTERNAL_CONFLICT",
-            `${r.filePath} changed on disk while it had unsaved edits. The session was saved, but the disk save was blocked. The user resolves this with Keep or Reload in the editor's banner; if no editor is attached, tandem_open with force: true reloads from disk and discards the unsaved edits (annotations are kept and re-anchored).`,
-            { documentId: r.docId, filePath: r.filePath },
-          );
-        }
-        // Verbatim, so the tool's `reason` cannot drift from the skip code the
-        // save path actually produced.
-        const reason: SaveSkipReason | undefined = result.skipCode;
-        return mcpSuccess({
-          saved: false,
-          sessionOnly: true,
-          reason,
-          filePath: r.filePath,
-          // #2273: the answer is the user's, and no tool takes it. Say so, name
-          // the no-editor exit (stdio has no banner), and warn off closing —
-          // until the user answers, the session is the only copy of the edits.
-          message:
-            result.skipCode === "READ_ONLY_FILE"
-              ? `Session saved. Disk save skipped: ${r.filePath} is read-only on disk. Tandem does not overwrite a read-only file unless the user chooses Overwrite in the editor's banner (Windows offers no Overwrite: the user clears Read-only in the file's Properties). If the user dismissed the banner with Not now, pressing Ctrl+S in the editor shows it again. If no editor is attached, the user can make the file writable and you can call tandem_save again. Do not close the document meanwhile: its unsaved edits exist only in the session.`
-              : `Session saved. Disk save skipped: ${result.reason}`,
-        });
-      }
-      // result.status === "error"
-      // One code per condition, matching `tandem_open` and `tandem_applyChanges`
-      // (#1823): a permission refusal is not a lock, and on Windows the syscall
-      // is what tells them apart (`lockOrPermissionCode`). VERIFY_BLOCKED still
-      // falls through to FORMAT_ERROR, carried in `details.errorCode`; giving it
-      // its own wire code is #2004.
-      const code =
-        lockOrPermissionCode({ code: result.errorCode, syscall: result.errorSyscall }) ??
-        "FORMAT_ERROR";
-      return mcpError(code, result.reason ?? "Save failed", { errorCode: result.errorCode });
+          // Delegate to shared save function (handles .docx body export back to disk)
+          const result = await saveDocumentToDisk(r.docId, "mcp", { allowImageLoss });
+          if (result.status === "saved") {
+            // Surface .docx body-export fidelity warnings (#576) so the agent knows
+            // what the round-trip downgraded (e.g. unsupported blocks → plain text).
+            return mcpSuccess({
+              saved: true,
+              filePath: r.filePath,
+              ...(result.fidelityWarnings && result.fidelityWarnings.length > 0
+                ? { fidelityWarnings: result.fidelityWarnings }
+                : {}),
+              // Post-write verification advisories (#1123 0e). Content-free strings;
+              // surfaced so the agent knows the save may have lost content
+              // unexpectedly (the user's original is backed up). A `blocked` verdict
+              // never reaches here — it aborts the save (result.status === "error").
+              ...(result.integrityWarnings && result.integrityWarnings.length > 0
+                ? { integrityWarnings: result.integrityWarnings }
+                : {}),
+              // How many KINDS of Word feature the import couldn't bring in (#1142
+              // G3) — so the agent knows this save overwrote an original that had
+              // things the model never held. A capped category count, NOT a feature
+              // count, and the lines themselves stay user-only (see the note in
+              // docx-lost-features.ts on why import losses don't cross to Claude).
+              ...(result.unpreservedImports
+                ? { unpreservedImports: result.unpreservedImports }
+                : {}),
+            });
+          }
+          if (result.status === "skipped") {
+            // Fall back to session-only save for skipped formats. The disk save
+            // did NOT happen, so persist the dirty flag (#1069) and any pending
+            // conflict (#1238): without them a skipped save would write a
+            // clean-looking session that a restart then discards — losing the only
+            // copy of the unsaved edits, or silently laundering away a conflict the
+            // user still has to decide.
+            await persistSkippedSaveSession(r.docId);
+            // An external-conflict skip is not a save at any level Claude can act
+            // on, and `saved: true` would be a lie it has no way to check. Report
+            // it as an error instead — the resolution is a human keep-vs-reload
+            // choice in the editor, which no MCP tool exposes. Ordering matters:
+            // the session write above must happen first, or the carry is dead code.
+            //
+            // Branches on `skipCode`, not `reason`: `reason` is free-form prose
+            // (SaveResult's own contract says as much) and `skipCode` is the
+            // machine-readable discriminator added specifically so callers don't
+            // depend on exact wording (review finding — this branch had drifted
+            // to the string it was meant to avoid).
+            if (result.skipCode === "EXTERNAL_CONFLICT") {
+              // Name the document — with several open, "a conflict" isn't
+              // actionable — and name BOTH exits. The banner is the normal one, but
+              // it needs a browser/desktop client; in stdio there is none, and
+              // pointing only at it would describe a remedy the caller cannot
+              // reach. tandem_open force:true works in either mode.
+              return mcpError(
+                "EXTERNAL_CONFLICT",
+                `${r.filePath} changed on disk while it had unsaved edits. The session was saved, but the disk save was blocked. The user resolves this with Keep or Reload in the editor's banner; if no editor is attached, tandem_open with force: true reloads from disk and discards the unsaved edits (annotations are kept and re-anchored).`,
+                { documentId: r.docId, filePath: r.filePath },
+              );
+            }
+            // Verbatim, so the tool's `reason` cannot drift from the skip code the
+            // save path actually produced.
+            const reason: SaveSkipReason | undefined = result.skipCode;
+            return mcpSuccess({
+              saved: false,
+              sessionOnly: true,
+              reason,
+              filePath: r.filePath,
+              // #2273: the answer is the user's, and no tool takes it. Say so, name
+              // the no-editor exit (stdio has no banner), and warn off closing —
+              // until the user answers, the session is the only copy of the edits.
+              message:
+                result.skipCode === "READ_ONLY_FILE"
+                  ? `Session saved. Disk save skipped: ${r.filePath} is read-only on disk. Tandem does not overwrite a read-only file unless the user chooses Overwrite in the editor's banner (Windows offers no Overwrite: the user clears Read-only in the file's Properties). If the user dismissed the banner with Not now, pressing Ctrl+S in the editor shows it again. If no editor is attached, the user can make the file writable and you can call tandem_save again. Do not close the document meanwhile: its unsaved edits exist only in the session.`
+                  : `Session saved. Disk save skipped: ${result.reason}`,
+            });
+          }
+          // result.status === "error"
+          // One code per condition, matching `tandem_open` and `tandem_applyChanges`
+          // (#1823): a permission refusal is not a lock, and on Windows the syscall
+          // is what tells them apart (`lockOrPermissionCode`). VERIFY_BLOCKED still
+          // falls through to FORMAT_ERROR, carried in `details.errorCode`; giving it
+          // its own wire code is #2004.
+          const code =
+            lockOrPermissionCode({ code: result.errorCode, syscall: result.errorSyscall }) ??
+            "FORMAT_ERROR";
+          return mcpError(code, result.reason ?? "Save failed", { errorCode: result.errorCode });
+        },
+      );
     }),
   );
 
@@ -1529,12 +1733,14 @@ export function registerDocumentTools(server: McpServer): void {
           .optional()
           .describe("Target document ID for status write (defaults to active document)"),
       },
-      outputSchema: statusOutputShape,
+      outputSchema: ownershipOn()
+        ? { ...statusOutputShape, ...statusOwnershipShape }
+        : statusOutputShape,
     },
     withStructuredErrors(
       withErrorBoundary(
         "tandem_status",
-        async ({ text, focusParagraph, focusOffset, documentId }) => {
+        async ({ text, focusParagraph, focusOffset, documentId }, caller) => {
           // Write mode — update Claude's status shown in the editor
           if (text !== undefined) {
             const current = getCurrentDoc(documentId);
@@ -1550,6 +1756,13 @@ export function registerDocumentTools(server: McpServer): void {
                   : "No document open — status not broadcast to editor.",
               });
             }
+            // Ownership (design §5.2): the status text stays global free
+            // text, but a focus on a document another session holds is
+            // ignored, not refused. "Ignored" means the stored position stays
+            // exactly as its holder left it — the awareness entry is one
+            // value per document, so writing null would erase the holder's.
+            const heldByAnother = focusHeldByAnother(caller, current.docName);
+            if (heldByAnother === "no-owner") return noOwnerRefusal("tandem_status");
             const doc = getOrCreateDocument(current.docName);
             const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
             withMcp(doc, () => {
@@ -1561,15 +1774,23 @@ export function registerDocumentTools(server: McpServer): void {
                 status: text,
                 timestamp: Date.now(),
                 active: true,
-                focusParagraph: focusParagraph ?? null,
-                focusOffset: focusOffset ?? null,
+                focusParagraph: heldByAnother
+                  ? (prev?.focusParagraph ?? null)
+                  : (focusParagraph ?? null),
+                focusOffset: heldByAnother ? (prev?.focusOffset ?? null) : (focusOffset ?? null),
                 ...(prev?.working ? { working: prev.working } : {}),
               });
             });
             // This write claims `active: true` and nothing here can ever clear it
             // — arm the expiry sweep so the claim has a bounded lifetime.
             noteClaudeActivity(current.docName);
-            return mcpStructured({ status: text });
+            // Said only when the caller asked for a focus that was not applied.
+            const focusDropped =
+              heldByAnother && (focusParagraph !== undefined || focusOffset !== undefined);
+            return mcpStructured({
+              status: text,
+              ...(focusDropped ? { warning: FOCUS_NOT_MOVED_WARNING } : {}),
+            });
           }
 
           // Read mode — return editor status summary
@@ -1605,6 +1826,9 @@ export function registerDocumentTools(server: McpServer): void {
               readOnly: d.readOnly,
             })),
             documentCount: docCount(),
+            // Ownership (design §5.7): which session this is, so the user can
+            // ask. Absent on a dark server, whose schema has no such field.
+            ...ownerField(callerOwnerInfo(caller)),
           });
         },
       ),
@@ -1613,28 +1837,38 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_close",
-    "Close a document's tab (the active document when documentId is omitted); if it was the active document, another open document, if any, becomes active. Closing does not save: edits not yet written by tandem_save or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened.",
+    "Close a document's tab (the active document when documentId is omitted); if it was the active document, another open document, if any, becomes active. Closing does not save: edits not yet written by tandem_save or autosave are discarded (unless an external-change conflict is pending, whose session is kept), and a scratchpad's content is gone. Annotations on an on-disk file are kept and return when it is reopened." +
+      ownedDescription(CLOSE_OWNERSHIP_NOTE),
     {
       documentId: z
         .string()
         .optional()
         .describe("Document ID to close (defaults to active document)"),
     },
-    withErrorBoundary("tandem_close", async ({ documentId }) => {
-      // path.basename eliminates directory components — CodeQL taint-terminator
-      // before documentId reaches closeDocumentById's Map.get/FS sinks.
-      const rawId = documentId ?? getActiveDocId();
-      if (!rawId) return mcpError("NO_DOCUMENT", "No document to close.");
-      const id = path.basename(rawId);
+    withErrorBoundary("tandem_close", async ({ documentId: rawGiven }, caller) => {
+      // Checked on the basename, the id the body closes (see tandem_save).
+      const givenId = rawGiven !== undefined ? path.basename(rawGiven) : undefined;
+      return ownedWrite(
+        caller,
+        "tandem_close",
+        { given: rawGiven, resolve: () => writeTarget(givenId) },
+        async (documentId) => {
+          // path.basename eliminates directory components — CodeQL taint-terminator
+          // before documentId reaches closeDocumentById's Map.get/FS sinks.
+          const rawId = documentId ?? getActiveDocId();
+          if (!rawId) return noClaim(mcpError("NO_DOCUMENT", "No document to close."));
+          const id = path.basename(rawId);
 
-      const result = await closeDocumentById(id);
-      if (!result.success) return mcpError("NO_DOCUMENT", result.error);
+          const result = await closeDocumentById(id);
+          if (!result.success) return noClaim(mcpError("NO_DOCUMENT", result.error));
 
-      return mcpSuccess({
-        closed: true,
-        was: result.closedPath,
-        activeDocumentId: result.activeDocumentId,
-      });
+          return mcpSuccess({
+            closed: true,
+            was: result.closedPath,
+            activeDocumentId: result.activeDocumentId,
+          });
+        },
+      );
     }),
   );
 
@@ -1650,36 +1884,59 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Document ID to rename (defaults to active document)"),
     },
-    withErrorBoundary("tandem_rename", async ({ newName: rawNewName, documentId: rawDocId }) => {
-      const rawId = rawDocId ?? getActiveDocId();
-      if (!rawId) return mcpError("NO_DOCUMENT", "No document to rename.");
-      // Sanitize via path.basename() — CodeQL's recognized taint-terminator for
-      // js/path-injection. Both values are hashes or basenames (no separators on
-      // valid input); the calls break the taint chain before reaching fs sinks.
-      const id = path.basename(rawId);
-      if (!id) return mcpError("BAD_REQUEST", "documentId resolved to an empty string.");
-      const newName = path.basename(rawNewName);
-      if (!newName) return mcpError("INVALID_NAME", "newName must not be empty.");
+    withErrorBoundary(
+      "tandem_rename",
+      async ({ newName: rawNewName, documentId: rawGiven }, caller) => {
+        // Checked on the basename, the id the body renames (see tandem_save).
+        const givenId = rawGiven !== undefined ? path.basename(rawGiven) : undefined;
+        // The two argument refusals, in today's order, ahead of the queue.
+        const nameRefusal = (): McpToolResult | null =>
+          path.basename(rawNewName)
+            ? null
+            : noClaim(mcpError("INVALID_NAME", "newName must not be empty."));
+        return ownedWrite(
+          caller,
+          "tandem_rename",
+          { given: rawGiven, resolve: () => writeTarget(givenId), preflight: nameRefusal },
+          async (rawDocId) => {
+            const rawId = rawDocId ?? getActiveDocId();
+            if (!rawId) return noClaim(mcpError("NO_DOCUMENT", "No document to rename."));
+            // Sanitize via path.basename() — CodeQL's recognized taint-terminator for
+            // js/path-injection. Both values are hashes or basenames (no separators on
+            // valid input); the calls break the taint chain before reaching fs sinks.
+            const id = path.basename(rawId);
+            if (!id)
+              return noClaim(mcpError("BAD_REQUEST", "documentId resolved to an empty string."));
+            const newName = path.basename(rawNewName);
+            if (!newName) return noClaim(mcpError("INVALID_NAME", "newName must not be empty."));
 
-      const result = await renameDocument(id, newName);
-      if (result.status === "error") {
-        const reason = result.reason ?? "Rename failed.";
-        // `errorCode` is an open string: `renameDocument`'s catches pass a raw
-        // errno (`EXDEV`, `EACCES`, `UNKNOWN`) through it. Narrow against the
-        // wire vocabulary rather than casting, and carry an unlisted one in
-        // `details.errorCode`, the shape `tandem_save` uses (#1851).
-        const parsed = ToolErrorCodeSchema.safeParse(result.errorCode);
-        if (parsed.success) return mcpError(parsed.data, reason);
-        return mcpError("RENAME_FAILED", reason, { errorCode: result.errorCode });
-      }
+            const result = await renameDocument(id, newName);
+            if (result.status === "error") {
+              const reason = result.reason ?? "Rename failed.";
+              // `errorCode` is an open string: `renameDocument`'s catches pass a raw
+              // errno (`EXDEV`, `EACCES`, `UNKNOWN`) through it. Narrow against the
+              // wire vocabulary rather than casting, and carry an unlisted one in
+              // `details.errorCode`, the shape `tandem_save` uses (#1851).
+              const parsed = ToolErrorCodeSchema.safeParse(result.errorCode);
+              if (parsed.success) {
+                const refused = mcpError(parsed.data, reason);
+                // Decided by the name asked for or by what kind of document this
+                // is, before `renameDocument` touches the disk: these never claim.
+                return RENAME_NEVER_CLAIMS.has(parsed.data) ? noClaim(refused) : refused;
+              }
+              return mcpError("RENAME_FAILED", reason, { errorCode: result.errorCode });
+            }
 
-      return mcpSuccess({
-        renamed: true,
-        from: result.oldPath,
-        to: result.newPath,
-        fileName: result.fileName,
-      });
-    }),
+            return mcpSuccess({
+              renamed: true,
+              from: result.oldPath,
+              to: result.newPath,
+              fileName: result.fileName,
+            });
+          },
+        );
+      },
+    ),
   );
 
   server.registerTool(
@@ -1706,14 +1963,19 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_switchDocument",
-    "Switch the active document. Tools will operate on this document by default.",
+    "Switch the active document. Tools will operate on this document by default." +
+      ownedDescription(SWITCH_OWNERSHIP_NOTE),
     {
       documentId: z.string().describe("Document ID to switch to"),
     },
-    withErrorBoundary("tandem_switchDocument", async ({ documentId }) => {
+    withErrorBoundary("tandem_switchDocument", async ({ documentId }, caller) => {
       if (!hasDoc(documentId)) {
         return mcpError("NO_DOCUMENT", `Document ${documentId} is not open.`);
       }
+      // Owner-only where an owner exists, and it never claims (ownership
+      // design §5.6). Synchronous: nothing awaits between this and the switch.
+      const refused = switchRefusal(caller, "tandem_switchDocument", documentId);
+      if (refused) return refused;
       activateDocument(documentId);
       return mcpSuccess({
         activeDocumentId: documentId,
@@ -1740,49 +2002,68 @@ export function registerDocumentTools(server: McpServer): void {
             "Custom output DIRECTORY for the .md file (must already exist; defaults to the .docx's own directory). The filename is always derived from the source document and cannot be chosen.",
           ),
       },
-      withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
-        // path.basename eliminates directory components so CodeQL does not trace
-        // user input through Map.get(id) to existing.filePath (js/path-injection).
-        const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
-        try {
-          const result = await convertToMarkdown(safeDocId, outputPath);
-          return mcpSuccess({
-            converted: true,
-            outputPath: result.outputPath,
-            documentId: result.documentId,
-            fileName: result.fileName,
-            message: `Converted to Markdown: ${result.fileName}`,
-          });
-        } catch (err: unknown) {
-          const e = err as NodeJS.ErrnoException;
-          if (e.code === "NO_DOCUMENT") {
-            // `safeDocId` is what `convertToMarkdown` actually received. A
-            // named-but-closed id gets a message echoing the (possibly
-            // basename-rewritten) id itself, like `tandem_switchDocument` above —
-            // `convertToMarkdown`'s own thrown message is the generic "No
-            // document is open, or..." sentence, which never names the id that
-            // was actually looked up.
-            //
-            // TRUTHINESS, not `!== undefined`: `getCurrentDoc` (registry.ts)
-            // resolves `"" ?? activeDocId` to `""`, then returns null from its
-            // `if (!id)` guard WITHOUT consulting the open-document map — so an
-            // empty id genuinely took the no-document-at-all path and belongs on
-            // the shared text. Treating it as "named" printed
-            // `"Document  is not open."`: a sentence with a hole and a double
-            // space, naming an id the server never looked up.
-            return safeDocId
-              ? mcpError("NO_DOCUMENT", `Document ${safeDocId} is not open.`)
-              : noDocumentError();
-          }
-          if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-          if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
-          if (e.code === "PERMISSION_DENIED") return mcpError("PERMISSION_DENIED", e.message);
-          if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
-          if (e.code === "CONFLICT") return mcpError("CONFLICT", e.message);
-          if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
-          if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
-          throw err; // Let withErrorBoundary handle unexpected errors
-        }
-      }),
+      withErrorBoundary(
+        "tandem_convertToMarkdown",
+        async ({ documentId: rawGiven, outputPath }, caller) => {
+          // Checked on the basename, the id the body converts (see tandem_save).
+          const givenId = rawGiven !== undefined ? path.basename(rawGiven) : undefined;
+          return ownedWrite(
+            caller,
+            "tandem_convertToMarkdown",
+            { given: rawGiven, resolve: () => writeTarget(givenId) },
+            async (documentId) => {
+              // path.basename eliminates directory components so CodeQL does not trace
+              // user input through Map.get(id) to existing.filePath (js/path-injection).
+              const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+              try {
+                const result = await convertToMarkdown(safeDocId, outputPath);
+                // The Markdown document this call created is the caller's.
+                await takeFreshDocument(caller, result.documentId);
+                return mcpSuccess({
+                  converted: true,
+                  outputPath: result.outputPath,
+                  documentId: result.documentId,
+                  fileName: result.fileName,
+                  message: `Converted to Markdown: ${result.fileName}`,
+                });
+              } catch (err: unknown) {
+                const e = err as NodeJS.ErrnoException;
+                if (e.code === "NO_DOCUMENT") {
+                  // `safeDocId` is what `convertToMarkdown` actually received. A
+                  // named-but-closed id gets a message echoing the (possibly
+                  // basename-rewritten) id itself, like `tandem_switchDocument` above —
+                  // `convertToMarkdown`'s own thrown message is the generic "No
+                  // document is open, or..." sentence, which never names the id that
+                  // was actually looked up.
+                  //
+                  // TRUTHINESS, not `!== undefined`: `getCurrentDoc` (registry.ts)
+                  // resolves `"" ?? activeDocId` to `""`, then returns null from its
+                  // `if (!id)` guard WITHOUT consulting the open-document map — so an
+                  // empty id genuinely took the no-document-at-all path and belongs on
+                  // the shared text. Treating it as "named" printed
+                  // `"Document  is not open."`: a sentence with a hole and a double
+                  // space, naming an id the server never looked up.
+                  return noClaim(
+                    safeDocId
+                      ? mcpError("NO_DOCUMENT", `Document ${safeDocId} is not open.`)
+                      : noDocumentError(),
+                  );
+                }
+                if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+                // A path the caller must change, and a source that is not a .docx:
+                // decided by the arguments and the format, so they never claim.
+                if (e.code === "INVALID_PATH") return noClaim(mcpError("INVALID_PATH", e.message));
+                if (e.code === "PERMISSION_DENIED") return mcpError("PERMISSION_DENIED", e.message);
+                if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
+                if (e.code === "CONFLICT") return mcpError("CONFLICT", e.message);
+                if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
+                if (e.code === "UNSUPPORTED_FORMAT")
+                  return noClaim(mcpError("FORMAT_ERROR", e.message));
+                throw err; // Let withErrorBoundary handle unexpected errors
+              }
+            },
+          );
+        },
+      ),
     );
 }

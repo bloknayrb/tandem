@@ -21,6 +21,15 @@ export interface ToolCaller {
   readonly claudeSessionId?: string;
   /** The caller's owner record. Always set while ownership is on; never while it is off. */
   readonly ownerId?: string;
+  /**
+   * The request's abort signal, as the MCP SDK hands it to the tool handler:
+   * aborted when the client sends `notifications/cancelled` for the request
+   * (its own timeout, or the user interrupting) and when the transport
+   * closes. Attached by `withErrorBoundary`, and only while ownership is on:
+   * its one reader is the operation queue, which skips a call whose request
+   * was aborted before its turn came.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**

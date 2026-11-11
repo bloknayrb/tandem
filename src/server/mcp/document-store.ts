@@ -468,7 +468,11 @@ export function getDocumentStore(documentId?: string): YDocStore | null {
  * `ambiguous` lists the open documents in which the id is Claude-facing.
  */
 export type AnnotationStoreResolution =
-  | { kind: "store"; store: YDocStore }
+  /**
+   * `matched`: the document was named, or holds the id Claude-facing. False
+   * for the active-document fallback, where the id did not pick the document.
+   */
+  | { kind: "store"; store: YDocStore; matched: boolean }
   | { kind: "none" }
   | { kind: "ambiguous"; documentIds: string[] };
 
@@ -525,7 +529,7 @@ export type AnnotationStoreResolution =
 export function resolveAnnotationStore(id: string, documentId?: string): AnnotationStoreResolution {
   if (documentId !== undefined) {
     const store = getDocumentStore(documentId);
-    return store ? { kind: "store", store } : { kind: "none" };
+    return store ? { kind: "store", store, matched: true } : { kind: "none" };
   }
 
   const candidates: string[] = [];
@@ -548,5 +552,23 @@ export function resolveAnnotationStore(id: string, documentId?: string): Annotat
   if (candidates.length > 1) return { kind: "ambiguous", documentIds: candidates };
   // `candidates[0]` is undefined when nothing matched → the active document.
   const store = getDocumentStore(candidates[0]);
-  return store ? { kind: "store", store } : { kind: "none" };
+  return store ? { kind: "store", store, matched: candidates.length === 1 } : { kind: "none" };
+}
+
+/**
+ * The raw stored record for `annotationId` in an open document, exactly as
+ * the annotation map holds it — unsanitized, whatever its type or audience —
+ * or undefined when the map has no entry. A read; it writes nothing.
+ *
+ * For the ownership wrapper (#2358), which asks two things of it and returns
+ * neither to a caller: whether **any** record exists for an id (an absent id
+ * has nothing to write, so it is answered `NOT_FOUND` without an ownership
+ * check), and, through `narrowForChannel`, which thread item a reply answers.
+ */
+export function rawAnnotationRecord(
+  documentId: string,
+  annotationId: string,
+): { present: boolean; raw: unknown } {
+  const map = getOrCreateDocument(documentId).getMap(Y_MAP_ANNOTATIONS);
+  return { present: map.has(annotationId), raw: map.get(annotationId) };
 }

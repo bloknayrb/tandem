@@ -56,6 +56,7 @@ describe("ownership flag module seam", () => {
       .map(([file]) => file)
       .sort();
     expect(importers).toEqual([
+      "src/server/mcp/owned-op.ts",
       "src/server/mcp/server.ts",
       "src/server/sessions/caller.ts",
       "src/server/sessions/log-id.ts",
@@ -148,10 +149,17 @@ describe("tests and the flag", () => {
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
     "tests/server/mcp-context-seam.test.ts",
+    "tests/server/mcp-write-precedence.test.ts",
+    "tests/server/ownership-api-no-context.test.ts",
+    "tests/server/ownership-claims-table.test.ts",
+    "tests/server/ownership-dark-enforcement.test.ts",
     "tests/server/ownership-default-rule.test.ts",
+    "tests/server/ownership-enforcement.test.ts",
     "tests/server/ownership-flag.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-records.test.ts",
+    "tests/server/ownership-tool-modes.test.ts",
+    "tests/server/ownership-wait-bound.test.ts",
   ];
 
   it("the files that stub the variable at all are a reviewed set", () => {
@@ -162,20 +170,35 @@ describe("tests and the flag", () => {
     // A file stubbing "" runs that test flag-off even in the ownership-flag-on
     // job: it pins dark behaviour, and the series lists each one (design §12).
     // Every one of these also stubs "1": none opts a whole file out.
+    // PR 1c's four: each runs the same rows flag-off and flag-on (the
+    // precedence pin, the tool-mode table, the `/api` differential), or pins
+    // what enforcement must not do while dark.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       "tests/server/mcp-context-seam.test.ts",
+      "tests/server/mcp-write-precedence.test.ts",
+      "tests/server/ownership-api-no-context.test.ts",
+      "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-records.test.ts",
+      "tests/server/ownership-tool-modes.test.ts",
+      "tests/server/ownership-wait-bound.test.ts",
     ]);
   });
 
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
       "tests/server/mcp-context-seam.test.ts",
+      "tests/server/mcp-write-precedence.test.ts",
+      "tests/server/ownership-api-no-context.test.ts",
+      "tests/server/ownership-claims-table.test.ts",
+      "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
+      "tests/server/ownership-enforcement.test.ts",
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-records.test.ts",
+      "tests/server/ownership-tool-modes.test.ts",
+      "tests/server/ownership-wait-bound.test.ts",
     ]);
   });
 

@@ -142,7 +142,11 @@ describe("an ownerId is never published (ADR-054; OwnerRecord.ownerId)", () => {
       .filter(([, src]) => /\bownerId\b/.test(src))
       .map(([f]) => f)
       .sort();
+    // `owned-op.ts` (PR 1c) is the one tool-side file that reads
+    // `caller.ownerId`; every refusal it builds carries the holder's label and
+    // display kind (`ownership-enforcement.test.ts` checks each envelope).
     expect(files).toEqual([
+      "src/server/mcp/owned-op.ts",
       "src/server/mcp/response.ts",
       "src/server/mcp/server.ts",
       "src/server/mcp/transport-registry.ts",

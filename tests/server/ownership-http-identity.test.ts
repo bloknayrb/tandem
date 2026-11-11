@@ -292,6 +292,9 @@ describe("flag off: today's behaviour, and nothing created", () => {
       ownerByDoc: [],
       handoverSeq: [],
       timers: 0,
+      losses: [],
+      answerers: 0,
+      queuedDocuments: 0,
     });
     const text = logs.join("\n");
     expect(text).toContain(

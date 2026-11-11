@@ -7,9 +7,19 @@
  * reads) can be green while the artifact is wrong — a misspelled identifier or a
  * dropped define leaves the bundle falling back to the `TANDEM_OWNERSHIP` env
  * var, which is exactly the half-on build a shell export must never produce.
- * So this boots `dist/server/index.js` and asks it, through a 1a behaviour it
- * already has: with ownership on, the server's log lines print a session id as
- * `#` plus 8 hex characters of its SHA-256; with it off, they print the id.
+ * So this boots `dist/server/index.js` and asks it twice.
+ *
+ * First through a log line (PR 1a): with ownership on, the server's log lines
+ * print a session id as `#` plus 8 hex characters of its SHA-256; with it off,
+ * they print the id.
+ *
+ * Then through enforcement itself (PR 1c, ownership design §12: "a second,
+ * runtime anchor starts the built server and asserts it refuses a non-owner
+ * write"). Two sessions connect; the first opens a scratchpad and appends to
+ * it, which must succeed either way; the second appends to the same document.
+ * With ownership on that write must be refused `NOT_DOC_OWNER` / `held`; with
+ * it off it must succeed. Requiring the owner's own write keeps a bundle that
+ * refuses everything from passing as "on".
  *
  *   --expect on   the child gets NO `TANDEM_OWNERSHIP`, so only the define can
  *                 turn it on (the `ownership-flag-on` job, after
@@ -111,6 +121,84 @@ export function judgeProbe(stderrText, ids, expect) {
     code: EXIT_MISMATCH,
     reason: `expected ownership ${expect.toUpperCase()}: ${raw.length}/${ids.length} id(s) printed raw, ${hashed.length}/${ids.length} hashed`,
   };
+}
+
+/**
+ * Judge the two writes. Pure.
+ *
+ * @param {unknown} ownWrite    the envelope the document's opener got for its own append
+ * @param {unknown} otherWrite  the envelope a second session got for its append
+ * @param {"on" | "off"} expect
+ * @returns {{ code: 0 | 1 | 3, reason: string }}
+ */
+export function judgeRefusal(ownWrite, otherWrite, expect) {
+  const isEnvelope = (e) => e !== null && typeof e === "object" && typeof e.error === "boolean";
+  if (!isEnvelope(ownWrite) || !isEnvelope(otherWrite)) {
+    return { code: EXIT_CANNOT_EVALUATE, reason: "a write returned no tool envelope" };
+  }
+  if (expect !== "on" && expect !== "off") {
+    return { code: EXIT_CANNOT_EVALUATE, reason: `unknown expectation ${JSON.stringify(expect)}` };
+  }
+  // Whatever the flag, the session that opened the document may write to it.
+  // Anything else is not a verdict about the flag at all.
+  if (ownWrite.error !== false) {
+    return {
+      code: EXIT_CANNOT_EVALUATE,
+      reason: `the document's own opener could not write to it (${String(ownWrite.code)})`,
+    };
+  }
+  const refused =
+    otherWrite.error === true &&
+    otherWrite.code === "NOT_DOC_OWNER" &&
+    otherWrite.details?.reason === "held";
+  const accepted = otherWrite.error === false;
+  if (!refused && !accepted) {
+    return {
+      code: EXIT_CANNOT_EVALUATE,
+      reason: `the second session's write was neither accepted nor refused NOT_DOC_OWNER/held (${String(otherWrite.code)})`,
+    };
+  }
+  if (refused === (expect === "on")) {
+    return {
+      code: EXIT_OK,
+      reason: `ownership is ${expect.toUpperCase()}: a non-owner's write was ${refused ? "refused NOT_DOC_OWNER" : "accepted"}`,
+    };
+  }
+  return {
+    code: EXIT_MISMATCH,
+    reason: `expected ownership ${expect.toUpperCase()}: a non-owner's write was ${refused ? "refused NOT_DOC_OWNER" : "accepted"}`,
+  };
+}
+
+/** The JSON-RPC message in a Streamable HTTP response body (plain JSON, or one SSE `data:` line). */
+export function rpcMessage(bodyText) {
+  const text = String(bodyText).trim();
+  const candidates = text.startsWith("{")
+    ? [text]
+    : text
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).trim());
+  for (const candidate of candidates.reverse()) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      // not this line
+    }
+  }
+  return undefined;
+}
+
+/** The tool envelope (`{ error, code?, data?, details? }`) inside a `tools/call` response body. */
+export function toolEnvelope(bodyText) {
+  const text = rpcMessage(bodyText)?.result?.content?.find?.((c) => c?.type === "text")?.text;
+  if (typeof text !== "string") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -270,8 +358,17 @@ async function probe(expect, entry = SERVER_ENTRY) {
       await new Promise((r) => setTimeout(r, 100));
     }
     const verdict = judgeProbe(stderr, [mcpSessionId, claudeSessionId], expect);
-    if (verdict.code !== EXIT_OK) verdict.reason += `\n--- server stderr ---\n${stderr}`;
-    return verdict;
+    if (verdict.code !== EXIT_OK) {
+      verdict.reason += `\n--- server stderr ---\n${stderr}`;
+      return verdict;
+    }
+    // The log line agrees. Now the enforcement itself (see the header).
+    const refusal = await probeRefusal(baseUrl, mcpSessionId, expect);
+    if (refusal.code !== EXIT_OK) {
+      refusal.reason += `\n--- server stderr ---\n${stderr}`;
+      return refusal;
+    }
+    return { code: EXIT_OK, reason: `${verdict.reason}; ${refusal.reason}` };
   } finally {
     if (!exited) {
       child.kill("SIGTERM");
@@ -283,6 +380,75 @@ async function probe(expect, entry = SERVER_ENTRY) {
     }
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+const MCP_HEADERS = {
+  "Content-Type": "application/json",
+  Accept: "application/json, text/event-stream",
+};
+
+async function rpc(baseUrl, sessionId, body, extraHeaders = {}) {
+  const res = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      ...MCP_HEADERS,
+      ...extraHeaders,
+      ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", ...body }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return { res, text: await res.text() };
+}
+
+async function callTool(baseUrl, sessionId, name, args) {
+  const { text } = await rpc(baseUrl, sessionId, {
+    id: 2,
+    method: "tools/call",
+    params: { name, arguments: args },
+  });
+  return toolEnvelope(text);
+}
+
+/** The second verdict: a second session's write to a document the first opened. */
+async function probeRefusal(baseUrl, firstSessionId, expect) {
+  await rpc(baseUrl, firstSessionId, { method: "notifications/initialized" });
+  const scratch = await callTool(baseUrl, firstSessionId, "tandem_scratchpad", {
+    content: "ownership probe",
+  });
+  const documentId = scratch?.data?.documentId;
+  if (typeof documentId !== "string") {
+    return { code: EXIT_CANNOT_EVALUATE, reason: "tandem_scratchpad returned no documentId" };
+  }
+  const ownWrite = await callTool(baseUrl, firstSessionId, "tandem_appendContent", {
+    content: "by the opener",
+    documentId,
+  });
+  // A second session: its own identity, so it is a different owner record.
+  const init = await rpc(
+    baseUrl,
+    undefined,
+    {
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "ownership-bundle-probe-2", version: "1.0.0" },
+      },
+    },
+    { "X-Claude-Session-Id": randomUUID() },
+  );
+  const secondSessionId = init.res.headers.get("mcp-session-id") ?? "";
+  if (!secondSessionId) {
+    return { code: EXIT_CANNOT_EVALUATE, reason: "the second initialize returned no session id" };
+  }
+  await rpc(baseUrl, secondSessionId, { method: "notifications/initialized" });
+  const otherWrite = await callTool(baseUrl, secondSessionId, "tandem_appendContent", {
+    content: "by another session",
+    documentId,
+  });
+  return judgeRefusal(ownWrite, otherWrite, expect);
 }
 
 export async function main(argv = process.argv.slice(2)) {
