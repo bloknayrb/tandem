@@ -375,13 +375,12 @@ export async function openFromDisk(
  */
 const openChains = new Map<string, Promise<unknown>>();
 
+const settled = (): undefined => undefined;
+
 function serialisedPerId<T>(id: string, task: () => Promise<T>): Promise<T> {
   const previous = openChains.get(id) ?? Promise.resolve();
   const run = previous.then(task, task);
-  const tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
+  const tail = run.then(settled, settled);
   openChains.set(id, tail);
   void tail.then(() => {
     if (openChains.get(id) === tail) openChains.delete(id);
@@ -528,7 +527,12 @@ async function openResolved(
     // it does on any restore: a tab stored read-only must not come back
     // writable because its session could not be moved.
     if (options?.fromRestore === true && !moved.session) {
-      const own = await loadSessionWithPath(resolved).catch(() => null);
+      let own: LoadedSession | null = null;
+      try {
+        own = await loadSessionWithPath(resolved);
+      } catch {
+        // Unreadable: `maybeRestoreSession` deals with it next; the flag stands.
+      }
       if (own !== null) readOnly = derivedReadOnly || own.session.readOnly === true;
     }
   }
