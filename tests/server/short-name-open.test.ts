@@ -239,7 +239,8 @@ function anchoredOn(
   const anchored = anchoredRange(doc, off(from), off(from + word.length));
   if (!anchored.ok || !anchored.relRange) throw new Error("fixture: could not anchor");
   return {
-    ...annRecord({ id, author: "user", rev: 1, range: anchored.range }),
+    ...annRecord({ id, author: "user", rev: 1 }),
+    range: anchored.range,
     relRange: anchored.relRange,
     ...extra,
   };
@@ -259,10 +260,12 @@ async function editStoredSession(
 /** Make `fs.readFile` reject with `code` for one file until the returned function is called. */
 function failReadsOf(file: string, code: string): () => void {
   const real = fs.readFile.bind(fs) as (...a: unknown[]) => Promise<unknown>;
-  const spy = vi.spyOn(fs, "readFile").mockImplementation(((p: unknown, ...rest: unknown[]) =>
-    p === file
-      ? Promise.reject(Object.assign(new Error(code), { code }))
-      : real(p, ...rest)) as never);
+  const spy = vi
+    .spyOn(fs, "readFile")
+    .mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      p === file
+        ? Promise.reject(Object.assign(new Error(code), { code }))
+        : real(p, ...rest)) as never);
   return () => spy.mockRestore();
 }
 
@@ -771,9 +774,7 @@ describe("Requirement 2: records saved under the short spelling", () => {
 
         const opened = await openFromDisk(fx.aliasPath);
         expect(liveText(opened.documentId)).toContain("from the long spelling");
-        expect((await backupTexts()).some((t) => t.includes("from the short spelling"))).toBe(
-          true,
-        );
+        expect((await backupTexts()).some((t) => t.includes("from the short spelling"))).toBe(true);
         expect(await sessionFiles()).toEqual([`${sessionKey(fx.longPath)}.json`]);
       },
     );
@@ -838,9 +839,9 @@ describe("Requirement 2: records saved under the short spelling", () => {
       expect(liveText(opened.documentId)).not.toContain("from the short spelling");
       expect(liveAnnotations(opened.documentId).has("ann_old")).toBe(false);
       expect((await fs.readFile(sessionFile(fx.aliasPath))).equals(before.session)).toBe(true);
-      expect(
-        (await fs.readFile(envelopePath(docHash(fx.aliasPath)))).equals(before.envelope),
-      ).toBe(true);
+      expect((await fs.readFile(envelopePath(docHash(fx.aliasPath)))).equals(before.envelope)).toBe(
+        true,
+      );
     });
 
     it("comments that lived only in the losing session are folded into the surviving document", async () => {
@@ -1192,7 +1193,7 @@ describe("Requirement 2: records saved under the short spelling", () => {
         ["new", "old"],
       ] as const)(
         "a record only the losing (%s-key) session held lands on its words in the %s-key session's text",
-        async (loser) => {
+        async (loser, _winner) => {
           const loserKey = loser === "old" ? fx.aliasPath : fx.longPath;
           const winnerKey = loser === "old" ? fx.longPath : fx.aliasPath;
           await storeSession(loserKey, "alpha beta gamma\n", {
