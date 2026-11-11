@@ -160,12 +160,24 @@ describe("at runtime under vitest", () => {
     const realHome = userInfo().homedir;
     const targets = detectTargets({ force: true });
     expect(targets.length).toBeGreaterThan(0);
+    // "Never the real home" cannot be a prefix test on the home itself: on
+    // Windows `os.tmpdir()` is `%LOCALAPPDATA%\Temp`, inside the home, and the
+    // stand-in lives under it, so every stand-in path starts with the home
+    // (`join(home, ".")` normalises to the home, which is why this failed on
+    // Windows and passed on Linux, where `/tmp` is outside it). What must
+    // never appear is one of the places a real client keeps its config: a
+    // dot-path directly under the home (Claude Code's user config and its
+    // dot-folder), or, on Windows, Claude Desktop's folder under the real
+    // `%APPDATA%`.
+    expect(resolve(standIn as string)).not.toBe(resolve(realHome));
+    const realPlaces = [realHome + sep + "."];
+    const realAppData = process.env.APPDATA;
+    if (process.platform === "win32" && realAppData) realPlaces.push(join(realAppData, "Claude"));
     for (const t of targets) {
       expect(t.configPath.startsWith(standIn as string)).toBe(true);
-      // A dot-entry directly under the real home (`~/.claude.json`), spelled
-      // with the separator: `join(realHome, ".")` is the home itself, and on
-      // Windows the stand-in lives under it (`%TEMP%` is inside the profile).
-      expect(t.configPath.startsWith(`${realHome}${sep}.`)).toBe(false);
+      for (const place of realPlaces) {
+        expect(t.configPath.startsWith(place), `${t.configPath} is under ${place}`).toBe(false);
+      }
     }
   });
 });
