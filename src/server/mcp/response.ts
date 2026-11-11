@@ -9,7 +9,7 @@ import { resolveToolCaller, type ToolCaller } from "../sessions/caller.js";
 import { logLimited, noteRecordPoll } from "../sessions/ownership.js";
 import { takeWakeAdvisory } from "./wake-advisory.js";
 
-type McpToolResult = {
+export type McpToolResult = {
   content: Array<{ type: "text"; text: string }>;
   /** MCP structured content — present on tools that declare an outputSchema. */
   structuredContent?: Record<string, unknown>;

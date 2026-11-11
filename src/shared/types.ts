@@ -88,6 +88,7 @@ export const ToolErrorCodeSchema = z.enum([
   "INVALID_PATH",
   "INVALID_RANGE",
   "LICENSE_REQUIRED",
+  "NOT_DOC_OWNER",
   "NOT_FOUND",
   "NOT_OWNED",
   "NOT_RENAMABLE",

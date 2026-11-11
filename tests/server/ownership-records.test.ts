@@ -377,6 +377,9 @@ describe("reset", () => {
       ownerByDoc: [],
       handoverSeq: [],
       timers: 0,
+      losses: [],
+      answerers: 0,
+      queuedDocuments: 0,
     });
   });
 });
@@ -397,6 +400,9 @@ describe("flag off: nothing is ever created", () => {
       ownerByDoc: [],
       handoverSeq: [],
       timers: 0,
+      losses: [],
+      answerers: 0,
+      queuedDocuments: 0,
     });
   });
 });
