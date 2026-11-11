@@ -2282,8 +2282,8 @@ On the bare hosted runner 19 tests in 6 files fail, with the same 19 on a second
 causes are two properties of the runner: its `TEMP` is an 8.3 short name on a different drive
 from the checkout, and it has no `\tmp` directory. The job resolves `TEMP` and creates `\tmp`,
 which leaves 2 failures, both in `tests/server/integrations/resolve-claude-launch.test.ts` (a
-relative path built across drives). So the job starts red on `master`. No test is skipped or
-quarantined to change that. **One of the 19 is a product defect that the `TEMP` step now hides**:
+relative path built across drives); PR #2399 rewrote those two tests to stand in the temp
+directory instead. No test is skipped or quarantined. **One of the 19 is a product defect that the `TEMP` step now hides**:
 `resolveSafeCwd` and `resolveSafeCwdAsync` disagree on a short-name path (#2400, at least two
 tests in `tests/server/launcher/cwd-preview.test.ts`). One failure was seen on a single run and
 not again: the two-caller race in `tests/server/integrations/apply-malformed.test.ts`.

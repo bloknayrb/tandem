@@ -248,10 +248,11 @@ jobs:
   # Measured on this job's first runs, at master's code (2026-11-11): 19
   # failures in 6 files with neither accommodation (run 42947480897), 2 with
   # both (run 42951568059). The 2 are in
-  # tests/server/integrations/resolve-claude-launch.test.ts, which builds a
+  # tests/server/integrations/resolve-claude-launch.test.ts, which built a
   # relative path from the working directory (`D:`) to TEMP (`C:`); across
-  # drives `path.relative` returns an absolute one. So the job is red until
-  # that test is fixed, and #2398 records it. One failure appeared on one run
+  # drives `path.relative` returns an absolute one. The PR that added this
+  # job (#2399) rewrote those two tests to stand in the temp directory
+  # instead. One failure appeared on one run
   # only: apply-malformed.test.ts's two-caller race, on run 42949488007.
   #
   # `shell:` is absent on purpose: the default pwsh template ends in

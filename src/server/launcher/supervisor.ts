@@ -3798,7 +3798,7 @@ export async function resolveRouteCwdAsync(
  * home. Node's JS `realpathSync` does not case-normalize on Windows, so two
  * realpath'd strings for one directory can still differ by case — the fold is
  * load-bearing, not defensive. `platform` is injectable for the same reason it
- * is on `sessionCwdMatches`: CI runs ubuntu-only.
+ * is on `sessionCwdMatches`: CI's `check` runs ubuntu-only.
  */
 export function samePath(
   a: string,
