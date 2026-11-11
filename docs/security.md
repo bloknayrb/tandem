@@ -785,8 +785,9 @@ not a reflex "it was dismissed before".
   `realpathSync` between them live in `resolveOpenPath`, which
   `resolveAndValidatePath` calls first; it is exported, and its one other caller
   is `tandem_open`'s wrapper (`src/server/mcp/document.ts`), which uses it — with
-  ownership on only — to learn which open document a path targets and makes no
-  filesystem call of its own. The order is unchanged: both pre-screens precede
+  ownership on only — to learn which open document a path targets, and makes no
+  filesystem call other than `resolveOpenPath`'s own `realpathSync` (run again
+  there, behind the same two pre-screens, before `openFromDisk` runs it). The order is unchanged: both pre-screens precede
   `realpathSync`, the third precedes the extension check and `fs.stat`. **Bound: screened, but NOT confined to any
   directory** — opening any allowlisted-extension file by absolute path is the
   product's intended behaviour, so a containment-shaped alert here is a policy

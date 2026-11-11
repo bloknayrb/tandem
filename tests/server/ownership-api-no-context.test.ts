@@ -21,6 +21,8 @@ import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isDirty, markDirty } from "../../src/server/documents/dirty.js";
+import { recordSelfWrite } from "../../src/server/file-watcher.js";
 import { autoSaveAllToDisk } from "../../src/server/mcp/document-service.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { runDocOp } from "../../src/server/sessions/doc-op-queue.js";
@@ -209,8 +211,14 @@ async function drive(flag: "" | "1"): Promise<string[]> {
   }
 
   const results: string[] = [];
+  // A dirty document, so the tick really writes: autosave skips clean ones.
+  markDirty(id);
+  fs.writeFileSync(filePath, "stale on disk\n");
+  recordSelfWrite(filePath, "stale on disk\n");
   await autoSaveAllToDisk();
-  results.push("autosave: completed");
+  results.push(
+    `autosave: dirty=${isDirty(id)} wrote=${fs.readFileSync(filePath, "utf-8") !== "stale on disk\n"}`,
+  );
   for (const route of DRIVEN) {
     const url = (apiPaths as Record<string, unknown>)[route.constant] as string;
     const res = await post(route.method, url, route.body(id));
@@ -244,6 +252,7 @@ describe("/api and autosave with no MCP context", () => {
     expect(on, JSON.stringify(off)).toEqual(off);
     // Anti-vacuity: the routes did real work on the held document.
     for (const done of [
+      "autosave: dirty=false wrote=true",
       "post API_SAVE: 200 undefined",
       "post API_ANNOTATION_REPLY: 200 undefined",
       "post API_REMOVE_ANNOTATION: 200 undefined",

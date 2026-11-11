@@ -647,9 +647,10 @@ export function registerDocumentTools(server: McpServer): void {
         return mcpError("INVALID_PATH", "filePath must be an absolute path.");
       }
       return ownedOpen(caller, "tandem_open", {
-        // Which document this open targets, by the open path's own code: an
-        // unsafe path is left for `openFromDisk` to refuse (it throws before
-        // any filesystem call), so nothing here touches the disk first.
+        // Which document this open targets, by the open path's own code. An
+        // unsafe path throws in `resolveOpenPath` before any filesystem call
+        // and is left for `openFromDisk` to refuse; for any other path the
+        // only disk access here is that function's own `realpathSync`.
         predict: () => {
           try {
             return findOpenTarget(resolveOpenPath(filePath)).id;
@@ -1556,7 +1557,7 @@ export function registerDocumentTools(server: McpServer): void {
       return ownedWrite(
         caller,
         "tandem_save",
-        { given: givenId, resolve: () => writeTarget(givenId) },
+        { given: rawGiven, resolve: () => writeTarget(givenId) },
         async (documentId) => {
           // path.basename eliminates directory components so CodeQL does not trace
           // user input through Map.get(id) to existing.filePath (js/path-injection).
@@ -1842,7 +1843,7 @@ export function registerDocumentTools(server: McpServer): void {
       return ownedWrite(
         caller,
         "tandem_close",
-        { given: givenId, resolve: () => writeTarget(givenId) },
+        { given: rawGiven, resolve: () => writeTarget(givenId) },
         async (documentId) => {
           // path.basename eliminates directory components — CodeQL taint-terminator
           // before documentId reaches closeDocumentById's Map.get/FS sinks.
@@ -1888,7 +1889,7 @@ export function registerDocumentTools(server: McpServer): void {
         return ownedWrite(
           caller,
           "tandem_rename",
-          { given: givenId, resolve: () => writeTarget(givenId), preflight: nameRefusal },
+          { given: rawGiven, resolve: () => writeTarget(givenId), preflight: nameRefusal },
           async (rawDocId) => {
             const rawId = rawDocId ?? getActiveDocId();
             if (!rawId) return noClaim(mcpError("NO_DOCUMENT", "No document to rename."));
@@ -2001,7 +2002,7 @@ export function registerDocumentTools(server: McpServer): void {
           return ownedWrite(
             caller,
             "tandem_convertToMarkdown",
-            { given: givenId, resolve: () => writeTarget(givenId) },
+            { given: rawGiven, resolve: () => writeTarget(givenId) },
             async (documentId) => {
               // path.basename eliminates directory components so CodeQL does not trace
               // user input through Map.get(id) to existing.filePath (js/path-injection).

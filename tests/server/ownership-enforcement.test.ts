@@ -22,6 +22,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -31,6 +32,7 @@ import {
   getOpenDocs,
 } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
+import { ownedOpen, ownedWrite } from "../../src/server/mcp/owned-op.js";
 import { TOOL_MODES } from "../../src/server/mcp/tool-modes.js";
 import { runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
@@ -198,14 +200,21 @@ afterEach(async () => {
   // R3.6 / §11.1: nothing a tool returned may carry an owner id (an `http:`
   // one is a bearer session id) or the raw header value inside one.
   const all = envelopes.join("\n");
+  // Every owner-id prefix, and the raw header value inside each id this file
+  // registers. (Display kinds and labels are the only names a refusal may use.)
   for (const secret of [
-    A,
-    B,
+    "claude:",
+    "bridge:",
+    "http:",
     "session-a",
     "session-b",
-    TANDEM_OWNER_ID === "tandem" ? "claude:" : "",
+    "session-c",
+    "session-gone",
+    "forger",
+    "legacy-transport",
+    "no-record",
   ]) {
-    if (secret) expect(all, `an envelope leaked ${secret}`).not.toContain(secret);
+    expect(all, `an envelope leaked ${secret}`).not.toContain(secret);
   }
   await close?.();
   close = undefined;
@@ -492,7 +501,7 @@ describe("which document a call means (R4.1, §5.2)", () => {
 });
 
 describe("the operation queue (ownership design §5.1)", () => {
-  it("the check runs at the operation's turn: a take that lands while a write waits refuses the write", async () => {
+  it("operations run in the order they were queued: a write queued before a take runs first, and the loser is refused afterwards", async () => {
     const ydoc = setupDoc("d");
     const before = snapshot(ydoc);
     let release!: () => void;
@@ -641,6 +650,24 @@ describe("a lapse while the document is busy (ownership design §3.4, §4.3)", (
     expect(getOwnerRecord(A)).toBeUndefined();
   });
 
+  it("a deferred move that is no longer needed still lets the record go", async () => {
+    setupDoc("busy");
+    setDocOwner(docId("busy"), { ownerId: A, kind: "opened" }, "take");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const inFlight = runDocOp(docId("busy"), () => gate);
+    lapseNow(A);
+    expect(getOwnerRecord(A)).toBeDefined();
+    // The tab closes before the deferred move gets its turn.
+    await closeDocumentById(docId("busy"));
+    release();
+    await inFlight;
+    await runDocOp(docId("busy"), () => undefined);
+    expect(getOwnerRecord(A)).toBeUndefined();
+  });
+
   it("a record that is attached again before its turn keeps the document", async () => {
     setupDoc("busy");
     setDocOwner(docId("busy"), { ownerId: A, kind: "opened" }, "take");
@@ -764,6 +791,97 @@ describe("tandem_open: the take rule (§4.2, §5.4)", () => {
     realpath.mockRestore();
   });
 
+  it("openFromDisk acts only on the target it was told to expect", async () => {
+    const filePath = file("a.md", "Original.\n");
+    const id = (await as(A, "tandem_open", { filePath })).data?.documentId as string;
+    fs.writeFileSync(filePath, "Changed on disk.\n");
+    const ydoc = getOrCreateDocument(id);
+    const before = snapshot(ydoc);
+    setupDoc("other");
+    setActiveDocId(docId("other"));
+    // The file's open document is `id`; a caller that checked another target
+    // is refused before the force reload or the activation.
+    await expect(
+      openFromDisk(filePath, { force: true, expectTargetId: "some-other-document" }),
+    ).rejects.toMatchObject({ code: "OPEN_TARGET_CHANGED" });
+    expect(snapshot(ydoc)).toBe(before);
+    expect(getActiveDocId()).toBe(docId("other"));
+    // And a fresh open that expected an already-open target is refused too.
+    await expect(openFromDisk(file("fresh.md"), { expectTargetId: id })).rejects.toMatchObject({
+      code: "OPEN_TARGET_CHANGED",
+    });
+    expect([...getOpenDocs().values()].some((d) => d.filePath.endsWith("fresh.md"))).toBe(false);
+  });
+
+  it("an open whose target keeps moving starts again, at most three times, and opens nothing", async () => {
+    let predictions = 0;
+    const opens: Array<string | undefined> = [];
+    const result = await asTestCaller(
+      () =>
+        ownedOpen({ ownerId: A }, "tandem_open", {
+          // A different target every time it is asked.
+          predict: () => `moving-${predictions++}`,
+          open: async (expectTargetId) => {
+            opens.push(expectTargetId);
+            return { envelope: { content: [{ type: "text", text: "{}" }] } };
+          },
+        }),
+      { ownerId: A },
+    );
+    const body = JSON.parse(result.content[0].text) as Body;
+    expect(body.code).toBe("RELOAD_IN_PROGRESS");
+    expect(body.message).toContain("Retry tandem_open");
+    expect(opens).toEqual([]);
+    expect(predictions).toBe(6);
+
+    // The core reporting a changed target is the same signal.
+    let calls = 0;
+    const second = await ownedOpen({ ownerId: A }, "tandem_open", {
+      predict: () => "steady",
+      open: async () => {
+        calls++;
+        return { envelope: { content: [{ type: "text", text: "{}" }] }, targetChanged: true };
+      },
+    });
+    expect((JSON.parse(second.content[0].text) as Body).code).toBe("RELOAD_IN_PROGRESS");
+    expect(calls).toBe(3);
+  });
+
+  it("a take that lands while the open was reading the disk: the caller is told it was opened but is not held", async () => {
+    setupDoc("d");
+    const result = await ownedOpen({ ownerId: A }, "tandem_open", {
+      predict: () => docId("d"),
+      open: async () => {
+        // Another record's take lands during the open's awaits.
+        setDocOwner(docId("d"), { ownerId: B, kind: "opened" }, "take");
+        return { envelope: { content: [{ type: "text", text: "{}" }] }, openedId: docId("d") };
+      },
+    });
+    const body = JSON.parse(result.content[0].text) as Body;
+    expect(body.code).toBe("NOT_DOC_OWNER");
+    expect(body.message).toMatch(/^The document was opened/);
+    expect(holds(B, "d")).toBe(true);
+  });
+
+  it("a body that throws leaves no claim behind", async () => {
+    setupDoc("d");
+    await expect(
+      ownedWrite(
+        { ownerId: A },
+        "tandem_comment",
+        {
+          given: docId("d"),
+          resolve: () => ({ open: true, documentId: docId("d"), defaulted: false }),
+        },
+        async () => {
+          expect(holds(A, "d")).toBe(true);
+          throw new Error("boom");
+        },
+      ),
+    ).rejects.toThrow("boom");
+    expect(getDocOwner(docId("d"))).toBeUndefined();
+  });
+
   it("tandem_scratchpad makes the caller the new document's owner", async () => {
     const body = await as(A, "tandem_scratchpad", { content: "Draft." });
     expect(getDocOwner(body.data?.documentId as string)).toMatchObject({
@@ -851,6 +969,27 @@ describe("Tandem's Claude, through the presence seam (reachable in a server from
     });
     expect(lost.details).toMatchObject({ reason: "lost", cause: "taken back" });
     expect(lost.message).toContain("Tandem's Claude took this document back.");
+  });
+
+  it("its tandem_open takes a terminal's claim back while present, takes nothing while not, and is refused on an `opened` document", async () => {
+    const filePath = path.join(tmpDir, "t.md");
+    fs.writeFileSync(filePath, "# T\n\nBody.\n");
+    const id = (await as(A, "tandem_open", { filePath })).data?.documentId as string;
+
+    // A holds it `opened`: refused, present or not.
+    const refused = await as(TANDEM_OWNER_ID, "tandem_open", { filePath, force: true });
+    expect(refused.details).toMatchObject({ reason: "held" });
+
+    // A holds it only as a claim.
+    setDocOwner(id, { ownerId: A, kind: "claimed" }, "claim");
+    expect((await as(TANDEM_OWNER_ID, "tandem_open", { filePath })).error).toBe(false);
+    // Not present: nothing moves.
+    expect(getDocOwner(id)).toMatchObject({ ownerId: A, kind: "claimed" });
+
+    setTandemPresenceSource(() => true);
+    expect((await as(TANDEM_OWNER_ID, "tandem_open", { filePath })).error).toBe(false);
+    expect(getDocOwner(id)).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+    expect(ownershipSnapshotForTests().losses).toEqual([[id, { ownerId: A, cause: "taken back" }]]);
   });
 
   it("while not present it never claims: `not-present`, and nothing is written", async () => {

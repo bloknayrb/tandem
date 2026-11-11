@@ -197,7 +197,15 @@ export function ownedWrite(
       return refusalEnvelope(decision, documentId, ownerId, { family: spec.family, defaulted });
     }
 
-    const result = await body(documentId);
+    let result: McpToolResult;
+    try {
+      result = await body(documentId);
+    } catch (err) {
+      // A body that threw wrote nothing it can vouch for: do not leave the
+      // caller holding a document on the strength of it.
+      if (decision.claimed) reverseClaim(documentId, decision.claimed);
+      throw err;
+    }
     if (neverClaims.has(result)) {
       if (decision.claimed) reverseClaim(documentId, decision.claimed);
     } else if (answering && !isErrorEnvelope(result)) {
@@ -252,7 +260,17 @@ export async function ownedOpen(
 
   for (let hop = 0; hop < 3; hop++) {
     const predicted = spec.predict();
-    if (predicted === undefined) return (await spec.open(undefined)).envelope;
+    if (predicted === undefined) {
+      // The path is one the open path refuses, so this open is expected to
+      // fail. If it does not (the path changed under us), the take rule still
+      // decides who holds what was opened.
+      const opened = await spec.open(undefined);
+      if (opened.openedId === undefined || !hasDoc(opened.openedId)) return opened.envelope;
+      const taken = takeDocument(opened.openedId, ownerId);
+      return taken.ok
+        ? opened.envelope
+        : refusalEnvelope(taken, opened.openedId, ownerId, { openedAnyway: true });
+    }
     const outcome = await runDocOp<McpToolResult | typeof RETRY>(predicted, async () => {
       if (spec.predict() !== predicted) return RETRY;
       const before = decideTake(predicted, ownerId);

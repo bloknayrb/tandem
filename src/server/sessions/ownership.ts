@@ -581,10 +581,14 @@ function lapse(record: OwnerRecord): void {
     runWhenDocIdle(
       documentId,
       () => {
-        if (ownerByDoc.get(documentId) !== entry) return;
-        if (records.get(record.ownerId) !== record || !record.lapsed) return;
-        if (isAttached(record.ownerId)) return;
-        setDocOwner(documentId, defaultRuleOwner(), "lapse");
+        const stillThis =
+          ownerByDoc.get(documentId) === entry &&
+          records.get(record.ownerId) === record &&
+          record.lapsed === true &&
+          !isAttached(record.ownerId);
+        if (stillThis) setDocOwner(documentId, defaultRuleOwner(), "lapse");
+        // On every exit: a move that was no longer needed (the tab closed, the
+        // claim was reversed) must still let a record with nothing left go.
         deleteIfGone(record);
       },
       (err) => logLimited("throw:lapse", `[ownership] lapse failed: ${errorText(err)}`),

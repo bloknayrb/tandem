@@ -219,6 +219,21 @@ describe.each([
       );
     });
 
+    it("an id whose basename is empty keeps each tool's own answer", async () => {
+      doc("d", { text: "t" });
+      setActiveDocId(docId("d"));
+      const renamed = await call("tandem_rename", { newName: "n.md", documentId: "/" });
+      expect(renamed).toMatchObject({
+        code: "BAD_REQUEST",
+        message: "documentId resolved to an empty string.",
+      });
+      const closed = await call("tandem_close", { documentId: "/" });
+      expect(closed.code).toBe("NO_DOCUMENT");
+      expect(closed.message).not.toBe("No document to close.");
+      expect((await call("tandem_save", { documentId: "/" })).code).toBe("NO_DOCUMENT");
+      expect(getOpenDocs().has(docId("d"))).toBe(true);
+    });
+
     it("rename: an empty name outranks everything renameDocument would say", async () => {
       doc("ro", { text: "t", readOnly: true });
       expect((await call("tandem_rename", { newName: "", documentId: docId("ro") })).code).toBe(

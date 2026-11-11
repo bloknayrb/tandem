@@ -63,6 +63,38 @@ describe("runDocOp", () => {
     await expect(after).resolves.toBe("ok");
   });
 
+  it("an operation queued from inside another's synchronous head waits for it", async () => {
+    // Reachable through a claim: writing an entry can re-judge a record,
+    // which can lapse another, which queues an ownership change.
+    const gate = deferred();
+    const log: string[] = [];
+    let nested: Promise<void> | undefined;
+    const outer = runDocOp("d", async () => {
+      log.push("outer:start");
+      nested = runDocOp("d", () => {
+        log.push("nested");
+      });
+      runWhenDocIdle(
+        "d",
+        () => log.push("change"),
+        () => undefined,
+      );
+      await gate.promise;
+      log.push("outer:end");
+    });
+    const after = runDocOp("d", () => {
+      log.push("after");
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(log).toEqual(["outer:start"]);
+    gate.resolve();
+    await Promise.all([outer, nested, after]);
+    await runDocOp("d", () => undefined);
+    expect(log).toEqual(["outer:start", "outer:end", "nested", "change", "after"]);
+    expect(isDocOpQueueBusy("d")).toBe(false);
+  });
+
   it("forgets a document once its last operation settles, including one that failed", async () => {
     await runDocOp("d", () => undefined);
     await runDocOp("never-opened", () => Promise.reject(new Error("x"))).catch(() => undefined);

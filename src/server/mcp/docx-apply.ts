@@ -553,7 +553,7 @@ export function registerApplyTools(server: McpServer): void {
         return ownedWrite(
           caller,
           "tandem_applyChanges",
-          { given: givenId, resolve: () => writeTarget(givenId) },
+          { given: args.documentId, resolve: () => writeTarget(givenId) },
           async (documentId) => {
             try {
               const result = await applyChangesCore(documentId, args.author, args.backupPath);
@@ -634,11 +634,11 @@ export function registerApplyTools(server: McpServer): void {
       // Restore mode replaces the document's content, so it is a write. Both
       // act on the basename of the id, so that is the id that is checked.
       const givenId = args.documentId !== undefined ? path.basename(args.documentId) : undefined;
-      if (args.backup === undefined) return restoreBackupBody(givenId);
+      if (args.backup === undefined) return restoreBackupBody(args.documentId);
       return ownedWrite(
         caller,
         "tandem_restoreBackup",
-        { given: givenId, resolve: () => writeTarget(givenId) },
+        { given: args.documentId, resolve: () => writeTarget(givenId) },
         restoreBackupBody,
       );
 

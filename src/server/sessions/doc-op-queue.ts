@@ -44,14 +44,25 @@ export function runDocOp<T>(documentId: string, fn: () => Promise<T> | T): Promi
   const mine = existing ?? { tail: Promise.resolve(), pending: 0 };
   if (!existing) chains.set(documentId, mine);
   mine.pending++;
+  // The tail is replaced BEFORE `fn` can run, with a gate that opens when this
+  // operation settles: an operation queued from inside `fn`'s synchronous head
+  // (a lapse triggered by a claim, say) then waits for this one instead of
+  // chaining onto the old, already-resolved tail.
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const previous = mine.tail;
+  mine.tail = gate;
   // An idle document starts its operation in this very tick, as a handler
   // with no queue would: the synchronous head of the body (and so the
   // ownership check and claim) runs before the caller's next line.
-  const result = existing ? mine.tail.then(fn) : startNow(fn);
-  mine.tail = result.then(
-    () => settle(documentId, mine),
-    () => settle(documentId, mine),
-  );
+  const result = existing ? previous.then(fn) : startNow(fn);
+  const done = () => {
+    settle(documentId, mine);
+    open();
+  };
+  result.then(done, done);
   return result;
 }
 
