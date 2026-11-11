@@ -403,6 +403,38 @@ describe("local-model announced record (#2404)", () => {
       expect(editingOnWasAnnounced()).toBe(false);
     });
 
+    // Off's clearing write fails, then On again with no window: the file still
+    // says "told". The announcement retries the write, so the next start does
+    // not read the stale file and stay silent.
+    it("a failed clear is retried by the next announcement, so a restart re-announces", async () => {
+      const stop = subscribeNotifications(() => {}, { ownWindow: true });
+      announceLocalModelChange(EDITING_KEY, "switched on", { editing: true });
+      await flush();
+      expect(onDisk()).toEqual({ version: 1, editing: true, answering: null });
+      stop();
+
+      writeControl.reject = true;
+      recordEditingOff(EDITING_KEY);
+      await flush();
+      expect(onDisk(), "the clear did not land").toEqual({
+        version: 1,
+        editing: true,
+        answering: null,
+      });
+
+      writeControl.reject = false;
+      announceLocalModelChange(EDITING_KEY, "switched on", { editing: true }); // no window
+      await reload();
+      expect(onDisk()).toEqual({ version: 1, editing: false, answering: null });
+      expect(editingOnWasAnnounced(), "the next start announces it").toBe(false);
+    });
+
+    it("with no failed write behind it, an unseen announcement still writes nothing", async () => {
+      announceLocalModelChange(EDITING_KEY, "switched on", { editing: true });
+      await flush();
+      expect(writeControl.calls).toEqual([]);
+    });
+
     it("does not poison the next write", async () => {
       writeControl.reject = true;
       subscribeNotifications(() => {}, { ownWindow: true });

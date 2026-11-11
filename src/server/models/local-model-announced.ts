@@ -30,7 +30,8 @@
  *    and counts. The notice then sits in that browser profile's activity tray,
  *    but the desktop window is never sent it. Closing this needs a
  *    `frame-ancestors` policy and "seen" recorded on a user acknowledgement
- *    rather than on a stream write — an open decision on #2404;
+ *    rather than on a stream write — decided 2026-11-11, owed before the
+ *    flip in its own change (#2404, an open finding until then);
  *  - `http://tauri.localhost` is taken as the desktop WebView, but a browser
  *    resolves `*.localhost` to loopback, so content served on port 80 of this
  *    computer can present that origin.
@@ -41,10 +42,12 @@
  * notice has the same cost. A failed write that was CLEARING the record (Off,
  * or no model answering) is worse: the file still says "told", so the same
  * state switched back on with no window open would not be re-announced after
- * a restart. Start-up therefore clears the record again whenever commenting is
- * off or no local model answers (`primeLocalModelSettings`, the collaborator's
- * `wire`); what is left is a clear that fails every time it is tried, which is
- * logged and not otherwise bounded.
+ * a restart. Two things narrow that. Start-up clears the record again whenever
+ * commenting is off or no local model answers (`primeLocalModelSettings`, the
+ * collaborator's `wire`). And a write that failed is remembered (`unsaved`) and
+ * tried again by the next announcement, which is the moment a stale "told"
+ * would start to matter. What is left is a disk that refuses every one of
+ * those writes, which is logged and not otherwise bounded.
  *
  * It lives in `models/` so that both the settings module and the collaborator
  * can use it (a file outside `local-model/` may not import the engine). A dark
@@ -80,6 +83,8 @@ interface Announced {
 let basePath: string | null = null;
 let announced: Announced | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
+/** The last write failed, so the file may say more than the record does. */
+let unsaved = false;
 
 function filePath(): string {
   return path.join(basePath ?? resolveAppDataDir(), LOCAL_MODEL_ANNOUNCED_FILE_NAME);
@@ -110,8 +115,12 @@ function persist(): void {
   const snapshot = { version: VERSION, ...load() };
   const file = filePath();
   writeQueue = writeQueue
-    .then(() => atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`))
+    .then(async () => {
+      await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
+      unsaved = false;
+    })
     .catch((err: unknown) => {
+      unsaved = true;
       // The cost is one repeated notice after the next start, never silence.
       console.error(
         `[tandem] ${LOCAL_MODEL_ANNOUNCED_FILE_NAME} could not be written (${
@@ -162,6 +171,11 @@ export function announceLocalModelChange(
   const listening = ownWindowSubscriberCount() > 0;
   pushNotification(notice);
   if (listening) record(delivered);
+  // Nobody was sent this, so nothing new is recorded — but if an earlier write
+  // failed, the file may still say "told" about exactly this state (a failed
+  // clear on Off, then On again). Write the record as it stands, or the next
+  // start would read the stale file and stay silent.
+  else if (unsaved) persist();
   return notice;
 }
 
@@ -194,5 +208,6 @@ export function __flushLocalModelAnnouncedForTests(): Promise<void> {
 export function __resetLocalModelAnnouncedForTests(base?: string): void {
   basePath = base ?? null;
   announced = null;
+  unsaved = false;
   writeQueue = Promise.resolve();
 }

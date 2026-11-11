@@ -2985,7 +2985,7 @@ describe("collaborator — a run that may not write ends honestly (#1123 R2, exi
     expect(all[0].type).toBe("general-error");
     expect(all[0].documentId).toBe("doc-editing-off");
     expect(all[0].message).toBe(
-      "The local model stopped without replying: it tried to comment on or change the document, which local models are not allowed to do right now. Ask again for an answer in chat.",
+      "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.",
     );
     expect(all[0].message).not.toMatch(/step limit|ran out of time/);
     expect(chatMessages()).toHaveLength(0); // and no empty bubble

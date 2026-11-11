@@ -636,7 +636,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             type: "general-error",
             severity: "info",
             message:
-              "The local model stopped without replying: it tried to comment on or change the document, which local models are not allowed to do right now. Ask again for an answer in chat.",
+              "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.",
             documentId: req.docName,
             timestamp: Date.now(),
           });
