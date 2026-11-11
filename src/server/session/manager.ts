@@ -176,7 +176,7 @@ export async function saveSession(
   filePath: string,
   format: string,
   doc: Y.Doc,
-  opts?: { dirty?: boolean; conflict?: ExternalConflictState },
+  opts?: { dirty?: boolean; conflict?: ExternalConflictState; lastAccessed?: number },
 ): Promise<void> {
   let sourceFileMtime = 0;
   // Upload paths have no disk file — skip stat
@@ -203,7 +203,12 @@ export async function saveSession(
     format,
     ydocState,
     sourceFileMtime,
-    lastAccessed: Date.now(),
+    // `opts.lastAccessed` (#2400): a record carried over from another key at
+    // OPEN time keeps the stamp it had. A fresh `Date.now()` there would make
+    // one adopted document the newest session on disk, and after a hard kill
+    // inside the first autosave minute every other tab would fall outside the
+    // restore window measured against it.
+    lastAccessed: opts?.lastAccessed ?? Date.now(),
     modelRevision: DOCUMENT_MODEL_REVISION,
     ...(opts?.dirty ? { dirty: true } : {}),
     ...(opts?.conflict ? { conflict: opts.conflict } : {}),
@@ -357,9 +362,12 @@ async function readSessionFile(
     // identity of the document; `data.filePath` is an unvalidated string from a
     // bare `JSON.parse` that a tampered session file controls outright, and
     // `sourceFileChanged` used to `stat` it. Overwriting deletes that untrusted
-    // value rather than screening one hostile shape of it — and the two spellings
-    // are equivalent by construction, since `sessionKey` normalizes separators,
-    // so this cannot change which document is restored. `narrowConflict` below
+    // value rather than screening one hostile shape of it — and it cannot
+    // change which document is restored: the record was FOUND by the key of
+    // the caller's path, so the caller's path is by definition the one it
+    // belongs to. (That holds for #2400's carry-over too: a record stored
+    // under an 8.3 short spelling is looked up by the key of the caller's own
+    // screened short spelling, never by reading this field.) `narrowConflict` below
     // is the same don't-trust-loadSession-fields rule applied to `conflict`.
     // BOTH candidates are sanitized: an unsanitized fallback carrying
     // `filePath: "upload://…"` would short-circuit `sessionModelIsStale`
@@ -682,8 +690,13 @@ export async function touchSession(filePath: string, stamp: number): Promise<voi
  *
  * For an upload path `legacySessionPath` returns null and only the one name is
  * unlinked — uploads keep the legacy key, so the two names are the same file.
+ *
+ * Never rejects. Resolves `false` when a file survived its unlink (anything but
+ * ENOENT), so a caller that removed the session because its content now lives
+ * elsewhere can tell the removal did not happen (#2400).
  */
-export async function deleteSession(filePath: string): Promise<void> {
+export async function deleteSession(filePath: string): Promise<boolean> {
+  let removed = true;
   for (const target of [sessionPathFor(filePath), legacySessionPath(filePath)]) {
     if (target === null) continue;
     try {
@@ -691,10 +704,12 @@ export async function deleteSession(filePath: string): Promise<void> {
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
+        removed = false;
         console.error("[Tandem] deleteSession: failed to delete", target, err);
       }
     }
   }
+  return removed;
 }
 
 // --- CTRL_ROOM persistence (chat history) ---

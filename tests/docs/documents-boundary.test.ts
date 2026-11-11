@@ -339,6 +339,10 @@ const FAN_IN = [
   // import whose only purpose was breaking the cycle; a static edge here is
   // the cycle being gone rather than deferred.
   "server/mcp/document-service.ts -> server/documents/open.ts (value) x1",
+  // #2400: close retries the removal of a session once stored under a Windows
+  // 8.3 short spelling of the file, whose unlink failed after its content was
+  // carried over. One function; nothing else of the module is reachable here.
+  "server/mcp/document-service.ts -> server/documents/short-name-adoption.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
   // Route infrastructure reaching the open seam, added by ADR-034 Unit 7b.
   // `send-open-result.ts` owns `sendOpenResult`, the one place the three open
@@ -443,6 +447,9 @@ const FAN_OUT = [
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // The .docx ship-dark flag (ADR-053): open.ts asks it which extensions a build accepts.
   "server/documents/open.ts -> server/file-io/docx-flag.ts (value) x1",
+  // #2400: the 8.3 short-name expansion `resolveAndValidatePath` runs after its
+  // UNC screens. The only filesystem behaviour that change added.
+  "server/documents/open.ts -> server/file-io/short-names.ts (value) x1",
   // Two edges from the seam back into mcp/, both ADR-034 residue: format
   // detection/id derivation, and the welcome-doc tutorial annotations.
   "server/documents/open.ts -> server/mcp/document-model.ts (value) x1",
@@ -494,6 +501,23 @@ const FAN_OUT = [
   "server/documents/reload-remap.ts -> shared/sanitize.ts (value) x1",
   "server/documents/reload-remap.ts -> shared/snapshot.ts (value) x1",
   "server/documents/reload-remap.ts -> shared/types.ts (type) x1",
+  // #2400: carrying records stored under a short spelling's key over to the
+  // long spelling's. It reads and writes the same three stores the open and
+  // rename paths do (sessions, annotation envelopes, backups), and nothing else.
+  "server/documents/short-name-adoption.ts -> server/annotations/doc-hash.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/annotations/schema.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/annotations/store.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/annotations/sync.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/events/queue.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/file-io/doc-backup.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/mcp/document-model.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/platform.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/positions.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> server/session/manager.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> shared/constants.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> shared/origins.ts (value) x1",
+  "server/documents/short-name-adoption.ts -> shared/types.ts (type) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",

@@ -409,6 +409,57 @@ export function describeSnapshotFailure(err: unknown): string {
   }
 }
 
+/**
+ * Write one snapshot into a per-path subdir and prune beyond `MAX_DOC_BACKUPS`.
+ * The single writer behind both entry points (`snapshotBeforeFirstWrite` and
+ * `writeDocBackupContent`), so the file mode, the exclusive create and the
+ * prune cannot drift between them. The caller has already hardened the root.
+ * Throws on a failed write; returns the snapshot's path.
+ */
+async function writeSnapshotFile(
+  subdir: string,
+  filePath: string,
+  original: Buffer,
+  existing: string[],
+): Promise<string> {
+  // 0o700 mode on the per-path subdir. Windows ignores it; the root's
+  // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
+  // directory there, and it is already in force by the time we get here.
+  await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
+
+  // `wx` exclusive-create: a pre-planted symlink or colliding name fails the
+  // open instead of following it. UUID suffix makes the path unpredictable.
+  const snapshotName = snapshotFilename(filePath);
+  const snapshotPath = path.join(subdir, snapshotName);
+  try {
+    await fs.writeFile(snapshotPath, original, { flag: "wx", mode: 0o600 });
+  } catch (writeErr) {
+    // Remove any partial file so it never counts as a valid snapshot.
+    // Best-effort: if the cleanup itself fails, the partial survives until
+    // a later prune; writeErr below is the error the caller needs to see.
+    await fs.rm(snapshotPath, { force: true }).catch(() => {});
+    throw writeErr;
+  }
+
+  // Metadata, rewritten on every snapshot so post-rename staleness self-heals.
+  await fs
+    .writeFile(path.join(subdir, SOURCE_MARKER_FILENAME), `${filePath}\n`, { mode: 0o600 })
+    .catch((err) => console.error("[DocBackup] source.txt write failed (continuing):", err));
+
+  // Prune beyond MAX_DOC_BACKUPS, newest kept. The write added exactly one
+  // file to the listing we already have — no second readdir needed. Do NOT
+  // re-sort: the timestamp segment is second-granular, so two snapshots in
+  // the same second tie and fall to the random uuid8 — which can rank the
+  // just-written file "oldest" and prune it. By construction it is newest.
+  const all = [snapshotName, ...existing];
+  for (const name of all.slice(MAX_DOC_BACKUPS)) {
+    await fs
+      .rm(path.join(subdir, name), { force: true })
+      .catch((err) => console.error("[DocBackup] prune failed for %s:", name, err));
+  }
+  return snapshotPath;
+}
+
 export type SnapshotOutcome =
   | "written"
   | "skipped-already-this-run"
@@ -515,41 +566,7 @@ export async function snapshotBeforeFirstWrite(
       return "skipped-size-cap";
     }
 
-    // 0o700 mode on the per-path subdir. Windows ignores it; the root's
-    // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
-    // directory there, and it is already in force by the time we get here.
-    await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
-
-    // `wx` exclusive-create: a pre-planted symlink or colliding name fails the
-    // open instead of following it. UUID suffix makes the path unpredictable.
-    const snapshotName = snapshotFilename(filePath);
-    const snapshotPath = path.join(subdir, snapshotName);
-    try {
-      await fs.writeFile(snapshotPath, original, { flag: "wx", mode: 0o600 });
-    } catch (writeErr) {
-      // Remove any partial file so it never counts as a valid snapshot.
-      // Best-effort: if the cleanup itself fails, the partial survives until
-      // a later prune; writeErr below is the error the caller needs to see.
-      await fs.rm(snapshotPath, { force: true }).catch(() => {});
-      throw writeErr;
-    }
-
-    // Metadata, rewritten on every snapshot so post-rename staleness self-heals.
-    await fs
-      .writeFile(path.join(subdir, SOURCE_MARKER_FILENAME), `${filePath}\n`, { mode: 0o600 })
-      .catch((err) => console.error("[DocBackup] source.txt write failed (continuing):", err));
-
-    // Prune beyond MAX_DOC_BACKUPS, newest kept. The write added exactly one
-    // file to the listing we already have — no second readdir needed. Do NOT
-    // re-sort: the timestamp segment is second-granular, so two snapshots in
-    // the same second tie and fall to the random uuid8 — which can rank the
-    // just-written file "oldest" and prune it. By construction it is newest.
-    const all = [snapshotName, ...existing];
-    for (const name of all.slice(MAX_DOC_BACKUPS)) {
-      await fs
-        .rm(path.join(subdir, name), { force: true })
-        .catch((err) => console.error("[DocBackup] prune failed for %s:", name, err));
-    }
+    const snapshotPath = await writeSnapshotFile(subdir, filePath, original, existing);
 
     snapshottedPaths.add(pathKey);
     // A success after earlier failures re-arms the notification: if the path
@@ -583,6 +600,69 @@ export async function snapshotBeforeFirstWrite(
         timestamp: Date.now(),
       });
     }
+    return "failed";
+  }
+}
+
+/**
+ * Store `content` as a snapshot in `filePath`'s backups list (#2400).
+ *
+ * `snapshotBeforeFirstWrite` copies the bytes ON DISK and returns without
+ * writing in several ordinary cases (already snapshotted this run, identical,
+ * over the size cap). This entry takes the content from the caller, for the one
+ * case where the content exists nowhere on disk: a saved session that is being
+ * retired in favour of another session for the same file. It is not gated by
+ * the once-per-run set and does not set it, and it applies no size cap: a cap
+ * refusal would leave the retired session on disk for ever.
+ *
+ * Returns `"written"` only when the content is in the list. Never throws.
+ *
+ * `acceptAnyIdentical` decides what counts as "already in the list":
+ *   - false (the caller will REMOVE its own copy next): only the name-newest
+ *     snapshot counts, because the prune drops by name order and an older
+ *     identical snapshot could be the next one pruned. Its mtime is refreshed
+ *     so the 30-day sweep counts from now.
+ *   - true (the caller removes nothing): any identical snapshot counts, so a
+ *     repeated attempt cannot rotate real backups out.
+ */
+export async function writeDocBackupContent(
+  filePath: string,
+  content: string | Buffer,
+  opts: { appDataDir: string; acceptAnyIdentical?: boolean },
+): Promise<"written" | "failed"> {
+  try {
+    const bytes = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
+    const root = docBackupsRoot(opts.appDataDir);
+    const subdir = path.join(root, docHash(filePath));
+    await ensureBackupRootHardened(root);
+    const existing = await listSnapshots(subdir);
+    const candidates = opts.acceptAnyIdentical ? existing : existing.slice(0, 1);
+    for (const name of candidates) {
+      const full = path.join(subdir, name);
+      let same = false;
+      try {
+        same = (await fs.readFile(full)).equals(bytes);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+      if (!same) continue;
+      if (opts.acceptAnyIdentical) return "written";
+      try {
+        // Date objects: numeric `utimes` arguments are seconds.
+        const now = new Date();
+        await fs.utimes(full, now, now);
+        return "written";
+      } catch {
+        // Could not refresh its age: fall through and write a fresh copy.
+      }
+    }
+    const snapshotPath = await writeSnapshotFile(subdir, filePath, bytes, existing);
+    console.error(
+      `[DocBackup] Stored session content of ${path.basename(filePath)} -> ${snapshotPath}`,
+    );
+    return "written";
+  } catch (err) {
+    console.error("[DocBackup] Storing session content failed for %s:", filePath, err);
     return "failed";
   }
 }

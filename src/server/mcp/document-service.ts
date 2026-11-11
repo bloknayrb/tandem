@@ -46,6 +46,7 @@ import {
   isWritableOnDisk,
   noteFileWritable,
 } from "../documents/read-only-file.js";
+import { removePendingLegacySession } from "../documents/short-name-adoption.js";
 import { wireFileWatcher } from "../documents/watcher.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
@@ -63,6 +64,7 @@ import {
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { flattenPlaintextBreaks } from "../file-io/plaintext-flatten.js";
+import { expandShortNames } from "../file-io/short-names.js";
 import { rearmWatch, recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
@@ -967,7 +969,7 @@ export async function saveDocumentAsToDisk(
   // record in `OpenDoc.filePath` are identical. Otherwise the auto-save
   // mtime-check would compare stat(promoted-path) against a session baseline
   // keyed on a slightly different string and never converge.
-  const resolved = path.resolve(targetPath);
+  const typedResolved = path.resolve(targetPath);
 
   // Reject UNC + `\\?\` extended-length prefixes pre- and post-resolve.
   // Cross-platform (string check) since a Windows client can supply a
@@ -976,14 +978,14 @@ export async function saveDocumentAsToDisk(
   if (rawReason) {
     return { status: "error", reason: rawReason, errorCode: "INVALID_PATH" };
   }
-  const resolvedReason = rejectUnsafeWindowsPrefix(resolved);
+  const resolvedReason = rejectUnsafeWindowsPrefix(typedResolved);
   if (resolvedReason) {
     return { status: "error", reason: resolvedReason, errorCode: "INVALID_PATH" };
   }
 
   // The extension on disk must match the chosen format — otherwise auto-save
   // and the format-detection round-trip would diverge from what the user sees.
-  const ext = path.extname(resolved).toLowerCase();
+  const ext = path.extname(typedResolved).toLowerCase();
   const expectedExt = `.${format}`;
   if (ext !== expectedExt) {
     return {
@@ -1003,7 +1005,7 @@ export async function saveDocumentAsToDisk(
   // under its own root) while the realpath/symlink walk still rejects any
   // symlinked component. UNC is rejected separately above.
   try {
-    assertPathSafe(resolved, { allowedRoots: [path.parse(resolved).root] });
+    assertPathSafe(typedResolved, { allowedRoots: [path.parse(typedResolved).root] });
   } catch (err) {
     // cr-6 (#1816 follow-up): `assertPathSafe`'s thrown message embeds the
     // absolute path it rejected ("Refusing to operate on symlinked path:
@@ -1012,7 +1014,7 @@ export async function saveDocumentAsToDisk(
     // path in a headline, the exact shape #1816 scrubbed everywhere else.
     // Mirrors `renameDocument`'s identical `assertPathSafe` catch: log the
     // raw error, return the same generic PATH_REJECTED wording.
-    console.error("[Save As] assertPathSafe rejected", resolved, err);
+    console.error("[Save As] assertPathSafe rejected", typedResolved, err);
     return {
       status: "error",
       reason: "The destination path was rejected.",
@@ -1028,6 +1030,15 @@ export async function saveDocumentAsToDisk(
       errorCode: "NO_ADAPTER",
     };
   }
+
+  // Windows 8.3 short names (#2400): a target typed with an alias component
+  // (`C:\AFOLDE~1\new.md`) is stored under the long name, so a later open of
+  // the file by its long spelling finds this document instead of opening a
+  // second one. Components that exist are expanded; a leaf that does not exist
+  // yet is kept as typed. Runs after every check above passed on the typed
+  // string, and the expansion is used only if it passes them again — otherwise
+  // the typed string stands, which is what this function did before.
+  const resolved = await expandedSaveTarget(typedResolved, expectedExt);
 
   // Per-document lock — shares the same set used by saveDocumentToDisk so a
   // concurrent auto-save and save-as on the same doc cannot race.
@@ -1297,6 +1308,28 @@ export async function autoSaveAllToDisk(): Promise<void> {
       console.error("[AutoSave] Unexpected error saving %s:", state.filePath, err);
     }
   }
+}
+
+/**
+ * The save-as target with its existing 8.3 short components expanded, or the
+ * typed string when the expansion fails or does not pass the checks the typed
+ * string already passed (prefix screen, extension, symlink walk).
+ */
+async function expandedSaveTarget(typed: string, expectedExt: string): Promise<string> {
+  const expanded = await expandShortNames(typed, { allowMissingTail: true });
+  if (expanded.failed !== undefined) {
+    console.error("[Save As] could not expand the short name in", typed, expanded.failed);
+    return typed;
+  }
+  if (expanded.path === typed) return typed;
+  if (rejectUnsafeWindowsPrefix(expanded.path) !== null) return typed;
+  if (path.extname(expanded.path).toLowerCase() !== expectedExt) return typed;
+  try {
+    assertPathSafe(expanded.path, { allowedRoots: [path.parse(expanded.path).root] });
+  } catch {
+    return typed;
+  }
+  return expanded.path;
 }
 
 export interface RenameResult {
@@ -1908,6 +1941,11 @@ export async function closeDocumentById(
       console.error("[Tandem] Failed to delete session for %s:", safeId, err);
     }
   }
+
+  // A session once stored under a short spelling of this file whose removal
+  // failed after its content was carried over (#2400): retry it now, or the
+  // closed document would come back at the next start.
+  await removePendingLegacySession(safeId);
 
   if (docCount() === 0) {
     stopAutoSave();

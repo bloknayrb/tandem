@@ -426,6 +426,7 @@ describe("reloadDocumentFromMarkdown — scratchpad (editable upload source)", (
     vi.mocked(deleteSession).mockImplementationOnce(async () => {
       const ann = onlyAnnotation(doc);
       textAtDelete = extractText(doc).slice(ann.range.from, ann.range.to);
+      return true;
     });
 
     await reloadDocumentFromMarkdown(id, "# Scratch\n\nDelta epsilon.\n");

@@ -657,7 +657,7 @@ bound in full, and the conditions that void the acceptance.
 
 - **[#1609](https://github.com/bloknayrb/tandem/issues/1609) — environment-derived path reads reached by `runDoctor` (three when accepted, two today). ACCEPTED 2026-09-08.** Its full entry is under *Resolved since this list was last reconciled* above rather than repeated here, because that section records the 2026-09-11 reconciliation that moved it out of the open list. Cross-referenced here so the accepted set is enumerable from one place: the bound is the **input** (`PATH` and `homedir()` — process environment a caller cannot steer by triggering diagnostics; the third read, `TANDEM_CLAUDE_CMD`, is now screened before any `stat`), not the sink, and it carries **no** revisit date deliberately.
 
-- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment. ACCEPTED by Bryan 2026-09-16; no revisit date, deliberately.** `resolveAndValidatePath` (`src/server/documents/open.ts:701-774`, measured at `ade78f8f`) screens the UNC / extended-length / device-namespace prefixes on the raw, resolved *and* `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. The file holds **zero** `allowedRoots` and **zero** `assertPathSafe` calls; that is the verified property, re-derived after #1661 relocated the function.
+- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment. ACCEPTED by Bryan 2026-09-16; no revisit date, deliberately.** `resolveAndValidatePath` (`src/server/documents/open.ts:701-774`, measured at `ade78f8f`) screens the UNC / extended-length / device-namespace prefixes on the raw, resolved *and* `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. Since #2400 it also replaces a Windows 8.3 short component of the `realpath`'d string with the long name of the same directory entry (`src/server/file-io/short-names.ts`), after the third screen and before a fourth on the final string; that step reads names and `lstat`s, creates nothing, never changes the drive prefix, and adds no containment, so the property below is unchanged. The file holds **zero** `allowedRoots` and **zero** `assertPathSafe` calls; that is the verified property, re-derived after #1661 relocated the function.
 
   **The bound.** An MCP client can open, edit and save any *existing* allowlisted file at any absolute path — arbitrary content into an existing `.md` / `.txt` / `.html` / `.docx`. It **cannot create** one: the resolver `fs.stat`s the resolved path (`resolveAndValidatePath`'s `fs.stat(resolved)`) with no existence branch in front of it, so a path that does not exist throws ENOENT. The extension allowlist, the size cap, the prefix screening and that cannot-create property together **are** the intended limit for a local-first editor whose job is opening the files you point it at. What makes it loud is the first step, not every step: `tandem_open` opens a visible tab.
 
@@ -778,9 +778,11 @@ check that the named screen still runs first — not a fresh investigation, and
 not a reflex "it was dismissed before".
 
 - **Paths reaching a file open through `resolveAndValidatePath`.** It is called
-  from exactly one place — unconditionally at the head of `openFromDisk`
-  (`openFromDisk`'s call to `resolveAndValidatePath` in `src/server/documents/open.ts`) — and screens UNC/extended-length
-  prefixes on the raw, resolved *and* `realpath`'d forms, enforces the extension
+  from exactly one place — unconditionally at the head of `openValidated`, which
+  `openFromDisk` and `openFromRestore` both enter through
+  (`src/server/documents/open.ts`) — and screens UNC/extended-length
+  prefixes on the raw, resolved *and* `realpath`'d forms, and once more on the
+  string left after the 8.3 short-name expansion (#2400), enforces the extension
   allowlist and the size cap. **Bound: screened, but NOT confined to any
   directory** — opening any allowlisted-extension file by absolute path is the
   product's intended behaviour, so a containment-shaped alert here is a policy

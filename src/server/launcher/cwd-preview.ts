@@ -23,10 +23,12 @@
  * same documents. A nudge that cannot be acted on safely is worse than silence.
  */
 
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { LauncherCwdPreview } from "../../shared/launcher/contract.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { resolveRouteCwdAsync, resolveSafeCwdAsync, samePath } from "./supervisor.js";
 
 /** Cap on how many trailing segments a distinguishing label may carry before it
@@ -181,9 +183,49 @@ async function noteIfHomeUnresolvable(homeOverride: string | undefined): Promise
   );
 }
 
-/** Test-only reset of the one-shot home-failure latch. */
+/** Test-only reset of the one-shot home-failure latch and the bundled-dir memo. */
 export function _resetHomeFailureLatchForTests(): void {
   homeFailureReported = false;
+  bundledComparable.clear();
+}
+
+/**
+ * The NATIVE realpath of a path the gate already accepted, for COMPARISON and
+ * display only (#2400).
+ *
+ * The gate (`resolveRouteCwdAsync`) answers in the JS flavour, the same one the
+ * relaunch route uses, so the nudge never offers a folder the action would
+ * refuse. But two JS-flavour strings for one folder can still differ: an 8.3
+ * short name on one side, or (off Windows) the typed case against the on-disk
+ * case. The native flavour settles both, and it is what this module compared
+ * and displayed before the gate changed flavour. Never called on a string that
+ * fails the UNC / device-prefix screen. Rejects when the path cannot be
+ * resolved; callers decide what that means.
+ */
+async function nativeForm(p: string): Promise<string> {
+  if (rejectUnsafeWindowsPrefix(p) !== null) return p;
+  return await fsp.realpath(p);
+}
+
+/**
+ * Bundled document folders in the same native form as the candidate they are
+ * compared with. The list comes from `resolveBundledDocDirs`, which uses the JS
+ * flavour and so can hold an 8.3 short spelling (a short install or data path)
+ * while the candidate is long; comparing the two as strings is the defect
+ * #2400 reported here. Successes are memoised (the folders are static);
+ * a failure falls back to the string as given and is retried next time.
+ */
+const bundledComparable = new Map<string, string>();
+async function comparableBundledDir(dir: string): Promise<string> {
+  const known = bundledComparable.get(dir);
+  if (known !== undefined) return known;
+  try {
+    const native = await nativeForm(dir);
+    bundledComparable.set(dir, native);
+    return native;
+  } catch {
+    return dir;
+  }
 }
 
 /**
@@ -200,11 +242,20 @@ export async function previewCwdDrift(deps: CwdPreviewDeps): Promise<LauncherCwd
   // Home-confined, canonicalized, non-UNC, must exist and be a directory. This
   // is the SAME predicate the relaunch route applies, which is what keeps the
   // nudge from offering an action the action itself would reject.
-  const suggested = await resolveRouteCwdAsync(deps.candidate, {
+  const accepted = await resolveRouteCwdAsync(deps.candidate, {
     homeOverride: deps.homeOverride,
   });
-  if (suggested === null) {
+  if (accepted === null) {
     await noteIfHomeUnresolvable(deps.homeOverride);
+    return noDrift;
+  }
+  // Everything below compares and displays the native form (see `nativeForm`).
+  // A folder that passed the gate but cannot be resolved natively is "no
+  // drift", as it was when the gate itself was native.
+  let suggested: string;
+  try {
+    suggested = await nativeForm(accepted);
+  } catch {
     return noDrift;
   }
 
@@ -218,10 +269,23 @@ export async function previewCwdDrift(deps: CwdPreviewDeps): Promise<LauncherCwd
   // `integrations.json` no longer reaches the spawn unresolved: it is
   // home-confined since #1822 item 4a). Falling back to the raw value keeps a
   // since-deleted cwd comparable rather than silently reporting "no drift".
-  const claude = (await resolveSafeCwdAsync(deps.claudeCwd)) ?? deps.claudeCwd;
+  //
+  // The raw fallback is compared as given and never reaches a filesystem call:
+  // only a string `resolveSafeCwdAsync` accepted is resolved natively.
+  const claudeAccepted = await resolveSafeCwdAsync(deps.claudeCwd);
+  let claude = deps.claudeCwd;
+  if (claudeAccepted !== null) {
+    try {
+      claude = await nativeForm(claudeAccepted);
+    } catch {
+      return noDrift;
+    }
+  }
 
   if (samePath(suggested, claude, platform)) return noDrift;
-  if (deps.bundledDocDirs.some((dir) => samePath(suggested, dir, platform))) return noDrift;
+  for (const dir of deps.bundledDocDirs) {
+    if (samePath(suggested, await comparableBundledDir(dir), platform)) return noDrift;
+  }
 
   // Canonicalize home the same way both paths above were, or `tildeAbbreviate`
   // silently stops matching wherever home contains a symlink. An unresolvable
@@ -232,7 +296,9 @@ export async function previewCwdDrift(deps: CwdPreviewDeps): Promise<LauncherCwd
   // catch could not usefully handle anyway, since the fallback would have to
   // call it again. The route's own try/catch answers that with `drifted: false`.
   const homeRaw = deps.homeOverride ?? os.homedir();
-  const home = (await resolveSafeCwdAsync(homeRaw)) ?? homeRaw;
+  const homeAccepted = await resolveSafeCwdAsync(homeRaw);
+  const home =
+    homeAccepted === null ? homeRaw : await nativeForm(homeAccepted).catch(() => homeAccepted);
 
   const suggestedCwd = tildeAbbreviate(suggested, home, platform);
   const claudeCwd = tildeAbbreviate(claude, home, platform);

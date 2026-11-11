@@ -229,7 +229,8 @@ describe("Session persistence", () => {
       const loaded = await loadSession(lone);
       expect(loaded).not.toBeNull();
       expect(loaded!.filePath).toBe(lone);
-      await expect(deleteSession(lone)).resolves.toBeUndefined();
+      // `true`: every unlink succeeded or found nothing (#2400 made it report).
+      await expect(deleteSession(lone)).resolves.toBe(true);
       expect(await loadSession(lone)).toBeNull();
     });
 

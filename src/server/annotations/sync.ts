@@ -388,7 +388,10 @@ export function getTombstones(docHash: string): TombstoneRecordV1[] {
  * so under two folds into one destination the surviving `deletedAt` (and every
  * passthrough field) depends on fold order — and `deletedAt` is what
  * `cleanupStaleTombstones` ages against. It takes two folds from DIFFERENT
- * sources to observe, and no caller does that today. A rename does fold twice
+ * sources to observe. Since #2400 `mergeForeignEnvelope` IS a second source (an
+ * envelope stored under another key), and it settles a rev tie by the later
+ * `deletedAt` (`unionTombstones`) so its result does not depend on order; this
+ * function still takes the first writer, which no caller observes. A rename does fold twice
  * into one destination (`document-service.ts` before the RMW snapshot, then
  * `loadAndMerge`'s `migrateTombstonesFrom`), but both folds share one source and
  * the first spreads it, so the records re-entering on the second are
@@ -764,6 +767,162 @@ export function mergeEnvelopeForward(ydoc: Y.Doc, file: AnnotationDocV1, docHash
     const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
     mergeMap(repMap, fileReplies, normalizeReply);
   });
+}
+
+/** What a foreign merge wrote into the live maps, by id. */
+export interface ForeignMergeResult {
+  annotationIds: Set<string>;
+  replyIds: Set<string>;
+}
+
+/**
+ * Union `stones` into the in-memory ledger for `docHash`: the higher `rev`
+ * wins, and on a rev tie the later `deletedAt` (so a second source can never
+ * shorten a tombstone's retention). Records are spread, not re-minted, so
+ * `deletedAt` and passthrough fields survive.
+ */
+function unionTombstones(docHash: string, stones: readonly TombstoneRecordV1[]): void {
+  if (stones.length === 0) return;
+  let ledger = tombstonesByDoc.get(docHash);
+  if (!ledger) {
+    ledger = new Map();
+    tombstonesByDoc.set(docHash, ledger);
+  }
+  for (const stone of stones) {
+    const existing = ledger.get(stone.id);
+    if (
+      !existing ||
+      stone.rev > existing.rev ||
+      (stone.rev === existing.rev && stone.deletedAt > existing.deletedAt)
+    ) {
+      ledger.set(stone.id, { ...stone });
+    }
+  }
+}
+
+/**
+ * Merge an envelope that was stored under ANOTHER key into a document that is
+ * already wired to `docHash` (#2400: records saved under a Windows 8.3 short
+ * spelling of the same file).
+ *
+ * Same outcome as `loadAndMerge` gives its own file, without its store read,
+ * its fast paths or its observer registration: the file's tombstones are
+ * unioned into the ledger for `docHash`, then ONE `FILE_SYNC_ORIGIN`
+ * transaction deletes live entries a unioned tombstone outranks and merges
+ * alive annotations and replies with `pickWinner`. `file-sync` is in the
+ * channel skip set and the durable-observer skip set, so this emits no event,
+ * wakes nobody and queues no write: the caller owns persistence.
+ *
+ * `loadAndMerge` and `mergeEnvelopeForward` are deliberately left alone. This
+ * is the second ledger fold SOURCE that `migrateTombstoneLedger`'s docblock
+ * warns about; `unionTombstones` settles the rev tie by `deletedAt` so the
+ * result does not depend on fold order.
+ */
+export function mergeForeignEnvelope(
+  ydoc: Y.Doc,
+  file: Pick<AnnotationDocV1, "annotations" | "replies" | "tombstones">,
+  docHash: string,
+): ForeignMergeResult {
+  unionTombstones(docHash, file.tombstones);
+  const stones = Array.from(tombstonesByDoc.get(docHash)?.values() ?? []);
+  const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+  const result: ForeignMergeResult = { annotationIds: new Set(), replyIds: new Set() };
+
+  withFileSync(ydoc, () => {
+    for (const stone of stones) {
+      const live = normalizeAnnotation(annMap.get(stone.id), docHash);
+      if (live && stone.rev > live.rev) annMap.delete(stone.id);
+    }
+    const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
+    const beaten = new Set<string>();
+    for (const stone of stones) {
+      const fileAnn = fileAnns.get(stone.id);
+      if (fileAnn && stone.rev > fileAnn.rev) beaten.add(stone.id);
+    }
+    result.annotationIds = mergeMap(annMap, fileAnns, (raw) => normalizeAnnotation(raw, docHash), {
+      shouldSkipInsert: (id) => beaten.has(id),
+    }).fileWon;
+    const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
+    result.replyIds = mergeMap(repMap, fileReplies, normalizeReply).fileWon;
+  });
+  return result;
+}
+
+/**
+ * The annotation and reply records a decoded SESSION document holds,
+ * normalised the way `snapshot()` normalises them (legacy shapes migrated, a
+ * missing `rev` read as 0, an invalid reply dropped and logged).
+ */
+export function readSessionRecords(
+  scratch: Y.Doc,
+  docHash: string,
+): Pick<AnnotationDocV1, "annotations" | "replies"> {
+  const annotations: AnnotationRecordV1[] = [];
+  for (const value of scratch.getMap(Y_MAP_ANNOTATIONS).values()) {
+    const rec = normalizeAnnotation(value, docHash);
+    if (rec && typeof rec.id === "string") annotations.push(rec);
+  }
+  const replies: AnnotationReplyRecordV1[] = [];
+  for (const value of scratch.getMap(Y_MAP_ANNOTATION_REPLIES).values()) {
+    const rec = normalizeReply(value);
+    if (rec) replies.push(rec);
+  }
+  return { annotations, replies };
+}
+
+/**
+ * Fold the records of a saved session that will NOT become the document into
+ * the live maps (#2400), so comments and notes that reached that session but
+ * never an envelope are not dropped with it.
+ *
+ * A session map is the stale peer tombstones exist for, so the rule is
+ * stricter than the envelope merge's, on purpose: an annotation is skipped
+ * when a tombstone (ledger or `extraTombstones`) is at or above its `rev`
+ * (`>=`, where the envelope merge needs `>`); it is inserted when absent; and
+ * it replaces a live record only when its `rev` is strictly higher. A reply is
+ * inserted only when absent and its parent annotation is live afterwards
+ * (replies have no tombstones). One `FILE_SYNC_ORIGIN` transaction: no event,
+ * no wake, no queued write.
+ */
+export function mergeSessionRecords(
+  ydoc: Y.Doc,
+  records: Pick<AnnotationDocV1, "annotations" | "replies">,
+  docHash: string,
+  extraTombstones: readonly TombstoneRecordV1[] = [],
+): ForeignMergeResult {
+  const stoneRev = new Map<string, number>();
+  const note = (stone: TombstoneRecordV1): void => {
+    const existing = stoneRev.get(stone.id);
+    if (existing === undefined || stone.rev > existing) stoneRev.set(stone.id, stone.rev);
+  };
+  for (const stone of tombstonesByDoc.get(docHash)?.values() ?? []) note(stone);
+  for (const stone of extraTombstones) note(stone);
+
+  const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+  const result: ForeignMergeResult = { annotationIds: new Set(), replyIds: new Set() };
+
+  withFileSync(ydoc, () => {
+    for (const rec of records.annotations) {
+      const covered = stoneRev.get(rec.id);
+      if (covered !== undefined && covered >= rec.rev) continue;
+      const liveRaw = annMap.get(rec.id);
+      if (liveRaw !== undefined) {
+        const live = normalizeAnnotation(liveRaw, docHash);
+        if (live && live.rev >= rec.rev) continue;
+      }
+      annMap.set(rec.id, rec);
+      result.annotationIds.add(rec.id);
+    }
+    for (const reply of records.replies) {
+      if (repMap.has(reply.id)) continue;
+      if (!annMap.has(reply.annotationId)) continue;
+      repMap.set(reply.id, reply);
+      result.replyIds.add(reply.id);
+    }
+  });
+  return result;
 }
 
 /**

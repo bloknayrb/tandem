@@ -389,6 +389,18 @@ describe("openFromDisk — UNC paths are rejected BEFORE canonicalization", () =
     const spy = vi.spyOn(fsSync, "realpathSync").mockImplementation(() => {
       throw new Error("realpathSync must not be called on an unvalidated path");
     });
+    // `realpathSync` is no longer the only filesystem call the resolver makes
+    // (#2400 added the 8.3 short-name expansion: a native realpath and two
+    // lstats), and a spy on one function sees nothing of the others. Every one
+    // of them is watched here; `short-name-open.test.ts` repeats this with the
+    // expansion forced on, which is the only way it can run off Windows.
+    const others = [
+      vi.spyOn(fsSync, "lstatSync"),
+      vi.spyOn(fsSync, "statSync"),
+      vi.spyOn(fs, "realpath"),
+      vi.spyOn(fs, "lstat"),
+      vi.spyOn(fs, "stat"),
+    ];
 
     try {
       await openFromDisk(badPath);
@@ -404,6 +416,7 @@ describe("openFromDisk — UNC paths are rejected BEFORE canonicalization", () =
     // canonicalization. The pre-check is cross-platform (no `win32` gate,
     // matching windows-path-safety.ts's own header), so this runs on Linux CI.
     expect(spy).not.toHaveBeenCalled();
+    for (const other of others) expect(other).not.toHaveBeenCalled();
   });
 });
 

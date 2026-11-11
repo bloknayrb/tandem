@@ -875,7 +875,7 @@ export function storedRangeStillMatches(ann: Annotation, text: string): boolean 
  * and the clamped one succeeds. That direction only turns a `degraded` into an
  * anchored record.
  */
-function clampToFlatLength(range: DocumentRange, length: number): DocumentRange {
+export function clampToFlatLength(range: DocumentRange, length: number): DocumentRange {
   const inBounds = (n: number) => n >= 0 && n <= length;
   if (inBounds(range.from) && inBounds(range.to)) return range;
   const clamp = (n: number) => toFlatOffset(Math.min(Math.max(n, 0), length));

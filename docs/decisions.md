@@ -2292,12 +2292,15 @@ are the figures #2398 uses.
   `\tmp` directory. The job resolves `TEMP` and creates `\tmp`. That left 2 failures in
   `tests/server/integrations/resolve-claude-launch.test.ts` (a relative path built across
   drives), which PR #2399 rewrote. No test is skipped or quarantined.
-- **What the `TEMP` step hides:** five of the 19, and probably a sixth, are a product defect, #2400. Node's JS
-  `fs.realpathSync` keeps a short name where `fs.promises.realpath` expands it, and the product
-  uses both: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher (the two
-  equivalence tests in `tests/server/launcher/cwd-preview.test.ts`; its third failure was not
-  traced), and the document key in `documents/open.ts`
-  (three in `tests/server/adr-034-open-characterization.test.ts`).
+- **What the `TEMP` step hid, until #2400 was fixed:** five of the 19, and a sixth, were a product
+  defect. Node's JS `fs.realpathSync` keeps a short name where `fs.promises.realpath` expands it,
+  and the product compared the two: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher
+  (the two equivalence tests in `tests/server/launcher/cwd-preview.test.ts`), the bundled-folder
+  list against the drift preview's candidate (that file's third failure), and the document key in
+  `documents/open.ts` (three in `tests/server/adr-034-open-characterization.test.ts`). The fix
+  makes those six pass on a short `TEMP` too; the step stays for the host-dependent tests. Whether
+  the hosted runner's volume creates short names for NEW folders is what
+  `tests/server/short-name-documents.win.test.ts` reports as ran or skipped.
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in

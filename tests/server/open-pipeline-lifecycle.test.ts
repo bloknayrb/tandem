@@ -160,13 +160,18 @@ describe("file-watcher — .md", () => {
     const filePath = path.join(tmpDir, "watch-md.md");
     await fs.writeFile(filePath, "# Watch test");
 
-    await openFromDisk(filePath);
+    const opened = await openFromDisk(filePath);
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
-    // First argument should be the canonically resolved file path
+    // The watcher is armed with the document's own canonical path: the string
+    // its saves use. That is `realpathSync`'s result except where a component
+    // is a Windows 8.3 short name (a short `TEMP`), which the open expands
+    // (#2400) — so the expectation is the open's own result, and the second
+    // line says what that result is on any host with no short component.
     const calledPath = mockWatchFile.mock.calls[0][0];
-    expect(calledPath).toBe(fsSync.realpathSync(filePath));
+    expect(calledPath).toBe(opened.filePath);
+    if (!/~\d/.test(filePath)) expect(calledPath).toBe(fsSync.realpathSync(filePath));
   });
 });
 
@@ -185,7 +190,8 @@ describe("file-watcher — .docx", () => {
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
-    expect(mockWatchFile.mock.calls[0][0]).toBe(fsSync.realpathSync(filePath));
+    expect(mockWatchFile.mock.calls[0][0]).toBe(result.filePath);
+    if (!/~\d/.test(filePath)) expect(result.filePath).toBe(fsSync.realpathSync(filePath));
 
     // Content assertion — docx goes through the Buffer adapter branch; a
     // non-empty fragment proves that path works end-to-end. If the branch
