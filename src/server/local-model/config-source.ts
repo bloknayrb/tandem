@@ -3,96 +3,148 @@
  *
  * Resolves the collaborator loop's `{endpoint, modelId, transport}` from the
  * server-side Models registry (`src/server/models/`) — no browser session
- * required. Reads the in-memory registry cache SYNCHRONOUSLY (the collaborator's
- * `resolveConfig` seam is `() => LocalModelConfig | null`); the cache is warmed
- * at boot by `primeModelStoreCache()` before the collaborator starts.
+ * required. Reads the in-memory registry cache SYNCHRONOUSLY; the cache is
+ * warmed at boot by `primeModelStoreCache()` and replaced on every successful
+ * `POST /api/models` (`persistModelsFile`), so the collaborator can resolve
+ * again on every chat event and pick up a model saved a moment ago with no
+ * restart and no extra invalidation.
  *
- * The collaborator still resolves this ONCE at boot and caches it (M1a makes no
- * collaborator change, per D-C). Dynamic re-resolution after a post-boot config
- * change is deferred to M4 (see the TODO(M4) in collaborator.ts) — while
- * `BYO_MODELS_ENABLED` is false the loop never subscribes, so this is inert.
+ * Three outcomes, because "no config" means two different things to the user:
  *
- * Inert (returns null) when: no default set, the default entry is missing or
- * disabled, the default is a CLOUD provider (cloud BYO keys are v1.1 — the loop
- * only drives local endpoints), the entry has no endpoint, or the endpoint
- * fails the loopback check. The engine re-validates the endpoint at fetch time
- * (validate-at-use / TOCTOU); this resolve-time check is defense-in-depth.
+ *  - `ok` — an enabled local default with an endpoint that passes the loopback
+ *    check. The engine re-validates the endpoint at fetch time (validate-at-use
+ *    / TOCTOU); this resolve-time check is defense-in-depth.
+ *  - `none` — the ordinary ways of saying "Claude is my collaborator": nothing
+ *    saved, a disabled default, a cloud default (cloud BYO keys are v1.1), or no
+ *    default with no enabled local model. The user is told nothing.
+ *  - `unusable` — the user has an enabled local model selected, or one saved
+ *    with no default chosen, and it cannot be used. The collaborator tells the
+ *    user why, once per state.
+ *
+ * A default naming no entry is the same state as no default: the store clears
+ * it on every read and write, so it is only reachable at this seam.
+ *
+ * This module logs nothing on the ordinary paths. It runs on every chat
+ * message, so a line here would repeat per chat; the collaborator prints one
+ * breadcrumb per changed state instead. `stateKey` is a hash, never the
+ * endpoint itself, because a rejected endpoint may hold a user name and
+ * password.
  */
+import { createHash } from "node:crypto";
+
 import { isLocalProvider } from "../../shared/models/contract.js";
 import { AGENT_DISPLAY_NAME_MAX } from "../../shared/types.js";
 import { getCachedModelsFile } from "../models/registry.js";
 import { type LocalModelConfig, validateEndpoint } from "./config.js";
 
-export function resolveLocalModelConfig(): LocalModelConfig | null {
+export type LocalModelUnusableReason = "no-default-chosen" | "no-endpoint" | "endpoint-rejected";
+
+export interface LocalModelUnusable {
+  reason: LocalModelUnusableReason;
+  /** Identity of this broken state, for once-per-state dedup. Opaque (a hash). */
+  stateKey: string;
+  /** Safe-to-log detail: the entry id and reject code. Never the endpoint. */
+  detail: string;
+}
+
+export type LocalModelResolution =
+  | { kind: "ok"; config: LocalModelConfig }
+  | { kind: "none" }
+  | ({ kind: "unusable" } & LocalModelUnusable);
+
+function unusable(
+  reason: LocalModelUnusableReason,
+  keyParts: readonly string[],
+  detail: string,
+): LocalModelResolution {
+  const stateKey = createHash("sha256")
+    .update(JSON.stringify([reason, ...keyParts]))
+    .digest("hex");
+  return { kind: "unusable", reason, stateKey, detail };
+}
+
+export function resolveLocalModel(): LocalModelResolution {
   try {
     const file = getCachedModelsFile();
-    // "No default configured" is a legitimate resting state → stay silent.
-    if (!file.defaultModelId) return null;
-    // Every branch below is a *present-but-broken* default: the user asked for a
-    // collaborator and won't get one. The resolver has no return channel for a
-    // reason, so log one to stderr (this runs only under BYO_MODELS_ENABLED, so
-    // it never fires when dark) — otherwise the loop is silently inert at M4.
-    const entry = file.models.find((m) => m.id === file.defaultModelId);
+    const entry =
+      file.defaultModelId === null
+        ? undefined
+        : file.models.find((m) => m.id === file.defaultModelId);
     if (!entry) {
-      console.error(
-        `[tandem] local-model: defaultModelId "${file.defaultModelId}" matches no registry entry; loop inert.`,
-      );
-      return null;
+      // No default (or one naming no entry). Silent unless the user has saved an
+      // enabled local model: adding a model from Settings does not set a default
+      // and deleting the default clears it, so this is how "I added a model and
+      // nothing answers" looks from here. The key is the reason alone, so adding
+      // or removing another local model while still default-less is not a new
+      // state.
+      const hasEnabledLocal = file.models.some((m) => m.enabled && isLocalProvider(m.provider));
+      return hasEnabledLocal
+        ? unusable("no-default-chosen", [], "no default chosen")
+        : { kind: "none" };
     }
-    if (!entry.enabled) {
-      console.error(`[tandem] local-model: default entry "${entry.id}" is disabled; loop inert.`);
-      return null;
-    }
-    if (!isLocalProvider(entry.provider)) {
-      // Cloud BYO keys are v1.1 — the loop only drives local endpoints for now.
-      console.error(
-        `[tandem] local-model: default entry "${entry.id}" is a cloud provider (${entry.provider}); cloud collaborators are not yet supported, loop inert.`,
-      );
-      return null;
-    }
+    // A disabled or cloud default is an ordinary resting state, not a fault.
+    if (!entry.enabled) return { kind: "none" };
+    if (!isLocalProvider(entry.provider)) return { kind: "none" };
     if (!entry.endpoint) {
-      console.error(
-        `[tandem] local-model: default entry "${entry.id}" has no endpoint; loop inert.`,
-      );
-      return null;
+      return unusable("no-endpoint", [entry.id], `default entry "${entry.id}" has no endpoint`);
     }
     const check = validateEndpoint(entry.endpoint);
     if (!check.ok) {
-      console.error(
-        `[tandem] local-model: default entry "${entry.id}" endpoint rejected (${check.code}); loop inert.`,
+      return unusable(
+        "endpoint-rejected",
+        [entry.id, entry.endpoint, check.code],
+        `default entry "${entry.id}" endpoint rejected (${check.code})`,
       );
-      return null;
     }
     return {
-      endpoint: entry.endpoint,
-      modelId: entry.modelId,
-      // Both local kinds (Ollama, llama.cpp) expose an OpenAI-compatible
-      // `/v1/chat/completions`, so `v1` is uniform for now. Ollama-native
-      // `/api/chat` can become an optional per-entry transport later (M2/M4).
-      transport: "v1",
-      // #1123 M3: build the byline identity ONCE here (the entry's provider +
-      // displayName were previously read and discarded). Threaded whole to both
-      // write paths so the fields are never re-bundled downstream. CLAMP the
-      // displayName: the registry permits longer names (client ≤256, server
-      // schema unbounded) than the durable-record bound, and an over-long
-      // agentIdentity fails AnnotationRecordSchemaV1 on reload — corrupting the
-      // WHOLE annotations file (parseAnnotationDoc → corrupt → quarantine), not
-      // just the one record. Clamping here is the sole guard, since this is the
-      // only site that builds an agentIdentity.
-      agentIdentity: {
-        provider: entry.provider,
-        displayName: entry.displayName.slice(0, AGENT_DISPLAY_NAME_MAX),
+      kind: "ok",
+      config: {
+        endpoint: entry.endpoint,
+        modelId: entry.modelId,
+        // Both local kinds (Ollama, llama.cpp) expose an OpenAI-compatible
+        // `/v1/chat/completions`, so `v1` is uniform for now.
+        transport: "v1",
+        // #1123 M3: build the byline identity ONCE here. CLAMP the displayName:
+        // the registry permits longer names (client ≤256, server schema
+        // unbounded) than the durable-record bound, and an over-long
+        // agentIdentity fails AnnotationRecordSchemaV1 on reload — corrupting the
+        // WHOLE annotations file (parseAnnotationDoc → corrupt → quarantine), not
+        // just the one record. Clamping here is the sole guard, since this is the
+        // only site that builds an agentIdentity.
+        agentIdentity: {
+          provider: entry.provider,
+          displayName: entry.displayName.slice(0, AGENT_DISPLAY_NAME_MAX),
+        },
       },
     };
   } catch (err) {
-    // No error channel on this seam — a resolution failure means "inert". Today
-    // every call above is non-throwing, so reaching here means a real bug, not a
-    // config problem: log it rather than resolving null indistinguishably.
+    // Every call above is non-throwing today, so reaching here means a real
+    // bug, not a config problem: log it rather than resolving `none` silently.
+    // It cannot be reported as `unusable`, because nothing here knows whether a
+    // local model was selected.
     console.error(
       `[tandem] local-model: unexpected error resolving config (${
         err instanceof Error ? err.message : String(err)
       }); loop inert.`,
     );
-    return null;
+    return { kind: "none" };
   }
+}
+
+/** The usable config, or null. The collaborator's `resolveConfig` seam. */
+export function resolveLocalModelConfig(): LocalModelConfig | null {
+  const r = resolveLocalModel();
+  return r.kind === "ok" ? r.config : null;
+}
+
+/**
+ * Why a selected local model cannot be used, or null when there is nothing to
+ * tell the user (it resolved, or the state is an ordinary "no local model").
+ * Reads the same synchronous cache as {@link resolveLocalModelConfig}, so two
+ * calls in one tick cannot disagree.
+ */
+export function diagnoseLocalModel(): LocalModelUnusable | null {
+  const r = resolveLocalModel();
+  if (r.kind !== "unusable") return null;
+  return { reason: r.reason, stateKey: r.stateKey, detail: r.detail };
 }

@@ -5,8 +5,14 @@
  * to `runLocalModelTurn`: wake on a user `chat:message`, run one loop turn
  * against the active document, and STREAM the reply token-by-token back into the
  * chat sidebar. Ships DARK — `startLocalModelCollaborator()` early-returns when
- * `BYO_MODELS_ENABLED` is false (the subscriber is never registered), and even
- * if the flag flips, `config-source.ts` returns null until M1a (no loop runs).
+ * `BYO_MODELS_ENABLED` is false (the subscriber is never registered).
+ *
+ * The model config is resolved on EVERY chat event from the registry cache, so
+ * a model saved a moment ago is used by the next chat with no restart, and a
+ * change (another default, disabled, another endpoint) applies to the next run.
+ * A run already in flight carries the config it started with and finishes on
+ * it. The editing permission is the opposite on purpose: it is read on every
+ * tool call, so switching it off stops a run in flight from writing.
  *
  * Design (see PR #1160's "Product decisions wired in" table — no tracked
  * #1123 plan doc covers M1.2; #1160's own description is the record):
@@ -42,9 +48,19 @@ import {
 } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
 import { readLiveMode } from "../mode.js";
+import {
+  type LocalModelEditingState,
+  localModelEditingState,
+} from "../models/local-model-settings.js";
+import { onModelsFileChanged } from "../models/registry.js";
 import { pushNotification } from "../notifications.js";
 import type { LocalModelConfig } from "./config.js";
-import { resolveLocalModelConfig } from "./config-source.js";
+import {
+  diagnoseLocalModel,
+  type LocalModelUnusable,
+  type LocalModelUnusableReason,
+  resolveLocalModelConfig,
+} from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
 
 /** Inline the whole document into the prompt below this length; else windowed reads. */
@@ -121,6 +137,21 @@ export interface CollaboratorDeps {
   unsubscribe: (cb: (e: TandemEvent) => void) => void;
   /** The licence decision (#1521). Optional: absent means the live `aiRefusal`. */
   aiRefusal?: () => AiRefusal | null;
+  /**
+   * Why a selected local model cannot be used, consulted only when
+   * `resolveConfig` answered null. Absent means "nothing to tell the user",
+   * which is what a test double that only wants a config or none gets.
+   */
+  diagnose?: () => LocalModelUnusable | null;
+  /**
+   * The user's editing setting plus its Off counter (#1123). **Absent means no
+   * writes** — the default is supplied only in `DEFAULT_DEPS`, never by `??` at
+   * the read, so a double that forgets it gets a chat-tier collaborator.
+   */
+  editingState?: () => LocalModelEditingState;
+  /** Be told when the saved registry changes; returns the unsubscribe. Absent
+   *  means never told. */
+  onModelsChanged?: (cb: () => void) => () => void;
 }
 
 const DEFAULT_DEPS: CollaboratorDeps = {
@@ -128,9 +159,30 @@ const DEFAULT_DEPS: CollaboratorDeps = {
   resolveConfig: resolveLocalModelConfig,
   subscribe,
   unsubscribe,
+  diagnose: diagnoseLocalModel,
+  editingState: localModelEditingState,
+  onModelsChanged: onModelsFileChanged,
+};
+
+/**
+ * What the user is told when the local model they selected cannot be used
+ * (#1123 R1.3). Fixed strings: never the endpoint, the model id or a path. The
+ * observation is in the past tense because a warning stays in the activity
+ * tray after the state it describes has been fixed (see the convention on
+ * `TandemNotification.severity`); the instruction stays true.
+ */
+export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
+  "no-default-chosen":
+    "A saved local model did not answer, because no default model had been chosen. Mark one as Default in Settings → Models, then send your message again.",
+  "endpoint-rejected":
+    "Your default local model did not answer, because its Endpoint was not accepted. It must be a plain http address on this computer, such as http://127.0.0.1:11434, with no user name or password. Edit the model in Settings → Models, then send your message again.",
+  "no-endpoint":
+    "Your default local model did not answer, because it had no Endpoint saved. Edit the model in Settings → Models, then send your message again.",
 };
 
 interface RunReq {
+  /** Resolved at the chat event; the run finishes on it whatever is saved later. */
+  config: LocalModelConfig;
   docName: string;
   task: string;
   selection?: ChatMessagePayload["selection"];
@@ -175,7 +227,9 @@ export function classifyFailure(metrics: LoopMetrics): string {
 }
 
 export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DEPS) {
-  let cachedConfig: LocalModelConfig | null = null;
+  /** The broken state the user was last told about, so one state is one notice. */
+  let noticedStateKey: string | null = null;
+  let stopWatchingModels: (() => void) | null = null;
   let subscriberCb: ((e: TandemEvent) => void) | null = null;
   let current: RunSlot | null = null;
   /** Which refusal was last logged, so a refused state logs once, not once per chat. */
@@ -362,8 +416,21 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     const stillOwner = () => current?.token === token && !abort.signal.aborted && docCurrent();
 
     if (!stillOwner()) return;
-    if (!cachedConfig) return;
-    const config = cachedConfig; // capture: `let` widens back to |null across the await
+    const config = req.config;
+
+    // The editing permission for THIS run (#1123). Captured here, with no await
+    // between this line and `runTurn` reading it, so the tier the engine picks
+    // and the epoch this closure compares are the same instant. Any Off request
+    // from now on changes the epoch, so the run cannot write again even if
+    // editing is switched back on before its next tool call. No `editingState`
+    // dep at all means no writes.
+    const readEditing = deps.editingState;
+    const startEpoch = readEditing ? readEditing().offEpoch : -1;
+    const editingAllowed = (): boolean => {
+      if (!readEditing) return false;
+      const now = readEditing();
+      return now.enabled === true && now.offEpoch === startEpoch;
+    };
 
     const includeFullText = extractText(ydoc).length <= INLINE_CHAR_LIMIT;
     const task = composeTask(req.task, req.selection);
@@ -396,6 +463,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         // captured instance is no longer the room's live one, or its content
         // was replaced — and refuse each write dispatch on the same predicate.
         isDocCurrent: docCurrent,
+        editingAllowed,
       });
 
       // #2039: the swap arm sits OUTSIDE the ownership gate, deliberately.
@@ -558,6 +626,44 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     );
   }
 
+  /**
+   * Tell the user, once per broken state, why their local model did not answer
+   * (#1123 R1.3 to R1.5). Through `pushNotification` only — the browser's
+   * notify stream. Never chat and never the event queue: either would be a new
+   * AI surface (CLAUDE.md Critical Rule 9).
+   *
+   * "Once" is this in-memory latch, because the client cannot do it: its
+   * `dedupKey` re-pops the toast with a count, and its notify stream drops an
+   * `id` it has already seen — hence a fresh id each time, and no `dedupKey`.
+   * The latch does not survive a restart, and it is set whether or not a
+   * browser was listening (`pushNotification` has no replay).
+   */
+  function noticeUnusable(state: LocalModelUnusable): void {
+    if (noticedStateKey === state.stateKey) return;
+    noticedStateKey = state.stateKey;
+    // The breadcrumb names the entry id and reject code, never the endpoint.
+    console.error(`[local-model] not answering: ${state.detail}`);
+    pushNotification({
+      id: generateMessageId(),
+      type: "general-error",
+      severity: "warning",
+      message: UNUSABLE_NOTICE[state.reason],
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * The saved registry changed. Forget the latched state unless it is still
+   * exactly the state the user was told about — so a model that is fixed and
+   * then broken again is reported again even when no chat arrived while it was
+   * fixed, and Solo or licence-refused chats cannot keep a stale latch alive.
+   */
+  function onModelsChanged(): void {
+    if (noticedStateKey === null) return;
+    const now = deps.resolveConfig() ? null : (deps.diagnose?.() ?? null);
+    if (now?.stateKey !== noticedStateKey) noticedStateKey = null;
+  }
+
   /** Synchronous queue callback: ZERO Y.Doc writes, cheap, non-throwing. */
   function onEvent(event: TandemEvent): void {
     if (event.type === "document:closed") {
@@ -575,22 +681,33 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
 
     const task = event.payload.text?.trim();
     if (!task) return;
-    if (readLiveMode() !== "tandem") return; // hold in Solo (D-D)
-    // TODO(M4): once config re-resolution is dynamic, a config that resolves
-    // null AFTER a successful boot is indistinguishable from the dark no-op here
-    // — the boot breadcrumb in resolveLocalModelConfig() fires only once.
-    // Re-resolve and/or log (rate-limited) so a post-boot misconfig isn't silent
-    // across many chat messages.
-    if (!cachedConfig) return; // inert when unconfigured (M1a)
+    if (readLiveMode() !== "tandem") return; // hold in Solo (D-D): no run, no notice
+    // Resolved per chat event, from the registry cache `POST /api/models`
+    // replaces on every successful write — so a model saved a second ago is
+    // used by this chat, with no restart.
+    const config = deps.resolveConfig();
+    const broken = config ? null : (deps.diagnose?.() ?? null);
+    if (!config && !broken) {
+      // Nothing saved, a disabled default, a cloud default: the ordinary ways of
+      // meaning "Claude is my collaborator". Say nothing.
+      noticedStateKey = null;
+      return;
+    }
     // Licence admission (#1521), per run: no turn, no chat write, one stderr
-    // line per refused state. The user-facing explanation is meant to be the
-    // editor's AI-off notice (PR 2 of #1521), not a chat message.
+    // line per refused state. It precedes the notice below, so an unlicensed
+    // install is told about the licence (by the editor's AI-off notice), not
+    // about a model it could not use anyway.
     const refusal = decideRefusal();
     if (refusal) {
       logRefusal(refusal);
       return;
     }
     loggedRefusal = null;
+    if (!config) {
+      if (broken) noticeUnusable(broken);
+      return;
+    }
+    noticedStateKey = null;
     const docName = event.documentId ?? getActiveDocId();
     if (!docName) return;
     if (!requireDocument(docName)) return; // never fabricate a phantom room
@@ -599,6 +716,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     // originating browser-origin txn; a sync write here would be mis-tagged).
     queueMicrotask(() =>
       run({
+        config,
         docName,
         task,
         selection: event.payload.selection,
@@ -607,16 +725,12 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     );
   }
 
-  // Resolve config + register the subscriber. Split from start() so tests can
-  // exercise the real subscribe/unsubscribe pairing without the compile-time
-  // dark gate (which always early-returns in test builds).
+  // Register the subscriber. Split from start() so tests can exercise the real
+  // subscribe/unsubscribe pairing without the compile-time dark gate (which
+  // always early-returns in test builds). Nothing is resolved here: the config
+  // is read per chat event.
   function wire(): void {
-    cachedConfig = deps.resolveConfig();
-    if (!cachedConfig) {
-      console.error(
-        "[local-model] collaborator: no config resolved — inert until configured (M1a)",
-      );
-    }
+    stopWatchingModels = deps.onModelsChanged?.(onModelsChanged) ?? null;
     subscriberCb = onEvent;
     // "internal" is passed EXPLICITLY, not left to the default. Two correctness
     // properties now hang on this subscriber not being external:
@@ -635,6 +749,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
   }
 
   async function stop(): Promise<void> {
+    stopWatchingModels?.();
+    stopWatchingModels = null;
     if (subscriberCb) {
       deps.unsubscribe(subscriberCb);
       subscriberCb = null;
@@ -649,12 +765,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     start,
     stop,
     onEvent,
-    /** test seam: resolve config + subscribe without the BYO flag gate. */
+    /** test seam: subscribe without the BYO flag gate. */
     __startForTests: wire,
-    /** test seam: set config without the BYO flag gate (behavior tests). */
-    __setConfigForTests: (c: LocalModelConfig | null) => {
-      cachedConfig = c;
-    },
     /** test seam: await the in-flight run (or resolve immediately if idle). */
     __awaitCurrent: () => current?.promise ?? Promise.resolve(),
     /** test seam: inspect the in-flight run's target doc (null when idle). */

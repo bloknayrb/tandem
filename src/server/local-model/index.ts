@@ -10,18 +10,17 @@
  * write, no `createAnnotation`/`review-pending` — those fire only when the loop
  * RUNS). The load-bearing dark check is now that `collaborator.ts`'s
  * `subscribe()` call is gated behind `BYO_MODELS_ENABLED` (the subscriber is
- * never registered while dark), AND that `config-source.ts` returns null (so the
- * loop is inert even if the flag flips before M1a). See PR #1160's "Stays
- * byte-identical to today when dark" section (no tracked #1123 plan doc
- * covers M1.2 — #1160's own description is the record).
+ * never registered while dark). See PR #1160's "Stays byte-identical to today
+ * when dark" section (no tracked #1123 plan doc covers M1.2 — #1160's own
+ * description is the record).
  */
 import type * as Y from "yjs";
 
 import { type LocalModelConfig } from "./config.js";
 import { type LoopResult, runLoop } from "./loop.js";
 import { type ChatMessage } from "./ollama-client.js";
-import { buildUserPrompt, SYSTEM_PROMPT } from "./prompts.js";
-import { TOOLS } from "./tools.js";
+import { buildUserPrompt, systemPromptFor } from "./prompts.js";
+import { READ_TOOLS, TOOLS } from "./tools.js";
 
 export interface RunTurnOpts {
   ydoc: Y.Doc;
@@ -46,17 +45,49 @@ export interface RunTurnOpts {
   /** Still the same Y.Doc instance, content not replaced? (#2039, #2070) See
    *  `RunLoopOpts`. */
   isDocCurrent?: () => boolean;
+  /**
+   * Is the user's "let local models comment and suggest changes" setting on
+   * right now? (#1123, ADR-039's tiers.) Read once when the run starts, to pick
+   * the tier, and again on every tool call.
+   *
+   * Fail-closed: anything but a function returning exactly `true` is "no". A
+   * run that STARTS with it off is a chat-tier run for its whole life — it is
+   * offered only the reading tools, its prompts name no writing tool, and
+   * switching the setting on mid-run does not unlock it. A run that starts with
+   * it on stops writing the first time this answers anything else, and stays
+   * stopped.
+   */
+  editingAllowed: () => boolean;
 }
 
 /** Run one collaborator turn (read/decide/act) against a document. */
 export async function runLocalModelTurn(opts: RunTurnOpts): Promise<LoopResult> {
-  const userPrompt = buildUserPrompt(opts.ydoc, opts.task, opts.includeFullText ?? true);
+  const live = (): boolean =>
+    typeof opts.editingAllowed === "function" && opts.editingAllowed() === true;
+  const tier = live() ? "editing" : "chat";
+  // Sticky: once this run has seen editing off, it never writes again. The
+  // collaborator's own closure also compares an Off counter, which is what
+  // makes an Off-then-On between two tool calls stick; this latch is what keeps
+  // a run that STARTED in the chat tier from being unlocked by an On.
+  let revoked = tier === "chat";
+  const canEdit = (): boolean => {
+    if (revoked) return false;
+    if (!live()) {
+      revoked = true;
+      return false;
+    }
+    return true;
+  };
+  const userPrompt = buildUserPrompt(opts.ydoc, opts.task, opts.includeFullText ?? true, tier);
   return runLoop({
     ydoc: opts.ydoc,
     config: opts.config,
-    tools: TOOLS,
-    systemPrompt: SYSTEM_PROMPT,
+    // The tier decides all three together: a chat-tier model is offered only
+    // the reading tools and told about nothing else.
+    tools: tier === "editing" ? TOOLS : READ_TOOLS,
+    systemPrompt: systemPromptFor(tier),
     userPrompt,
+    canEdit,
     history: opts.history,
     maxTurns: opts.maxTurns,
     maxToolCalls: opts.maxToolCalls,
@@ -81,5 +112,19 @@ export {
 } from "./config.js";
 export { type LoopMetrics, type LoopResult, type RunLoopOpts, runLoop } from "./loop.js";
 export { type ChatMessage, chat, type ToolSchema } from "./ollama-client.js";
-export { buildUserPrompt, SYSTEM_PROMPT } from "./prompts.js";
-export { type DispatchCtx, dispatch, TOOLS, type ToolOutcome } from "./tools.js";
+export {
+  buildUserPrompt,
+  CHAT_SYSTEM_PROMPT,
+  EDITING_SYSTEM_PROMPT,
+  type LocalModelTier,
+  systemPromptFor,
+} from "./prompts.js";
+export {
+  type DispatchCtx,
+  dispatch,
+  EDITING_OFF_MESSAGE,
+  READ_TOOL_NAMES,
+  READ_TOOLS,
+  TOOLS,
+  type ToolOutcome,
+} from "./tools.js";

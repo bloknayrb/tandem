@@ -324,6 +324,13 @@ license-trial-days
 license-unverifiable-warning
 license-update-window-ended
 license-window-support-link
+local-model-editing-error
+local-model-editing-force-off
+local-model-editing-load-error
+local-model-editing-loading
+local-model-editing-retry
+local-model-editing-section
+local-model-editing-toggle
 margin-anchor-dot
 margin-bubble-{*}
 margin-column-{*}

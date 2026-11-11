@@ -21,9 +21,14 @@ import {
   type CollaboratorDeps,
   classifyFailure,
   createLocalModelCollaborator,
+  UNUSABLE_NOTICE,
 } from "../../../src/server/local-model/collaborator.js";
 import type { LocalModelConfig } from "../../../src/server/local-model/config.js";
-import type { LoopResult } from "../../../src/server/local-model/index.js";
+import type {
+  LocalModelUnusable,
+  LocalModelUnusableReason,
+} from "../../../src/server/local-model/config-source.js";
+import type { LoopResult, RunTurnOpts } from "../../../src/server/local-model/index.js";
 import {
   appendClaudeChatMessage,
   finalizeClaudeChatMessage,
@@ -240,7 +245,6 @@ describe("collaborator — dispatch", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("Improve this", { documentId: "doc-dispatch" }));
     await drain(collab);
@@ -268,7 +272,6 @@ describe("collaborator — dispatch", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(
       chatEvent("Tighten", {
         documentId: "doc-sel",
@@ -291,7 +294,6 @@ describe("collaborator — dispatch", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     const longSel = "x".repeat(600);
     collab.onEvent(
       chatEvent("Summarize", {
@@ -314,27 +316,38 @@ describe("collaborator — dispatch", () => {
     setMode("solo");
     const runTurn = vi.fn(async () => cleanResult("x"));
     const collab = createLocalModelCollaborator(makeDeps({ runTurn }));
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("hi", { documentId: "doc-solo" }));
     await drain(collab);
     expect(runTurn).not.toHaveBeenCalled();
     expect(chatMessages()).toHaveLength(0);
   });
 
-  it("is inert when no config is resolved (no loop, no throw)", async () => {
+  it("is inert while no config resolves, asking again on every chat event (no loop, no throw)", async () => {
     setupDoc("doc-noconf", "Body");
     const runTurn = vi.fn(async () => cleanResult("x"));
-    const collab = createLocalModelCollaborator(makeDeps({ runTurn }));
-    collab.__setConfigForTests(null);
-    collab.onEvent(chatEvent("hi", { documentId: "doc-noconf" }));
+    const resolveConfig = vi.fn((): LocalModelConfig | null => null);
+    const collab = createLocalModelCollaborator(makeDeps({ runTurn, resolveConfig }));
+    // Nothing is resolved at creation or at wire time: the config is read per
+    // chat event, so there is no stored answer to go stale.
+    collab.__startForTests();
+    expect(resolveConfig).not.toHaveBeenCalled();
+
+    collab.onEvent(chatEvent("hi", { documentId: "doc-noconf", messageId: "a" }));
     await drain(collab);
+    expect(resolveConfig).toHaveBeenCalledTimes(1);
+    collab.onEvent(chatEvent("hi again", { documentId: "doc-noconf", messageId: "b" }));
+    await drain(collab);
+    expect(resolveConfig).toHaveBeenCalledTimes(2);
+
     expect(runTurn).not.toHaveBeenCalled();
+    expect(chatMessages()).toHaveLength(0);
+    expect(getBuffer()).toEqual([]);
+    await collab.stop();
   });
 
   it("never fabricates a phantom room for an unknown documentId", async () => {
     const runTurn = vi.fn(async () => cleanResult("x"));
     const collab = createLocalModelCollaborator(makeDeps({ runTurn }));
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("hi", { documentId: "never-opened" }));
     await drain(collab);
     expect(runTurn).not.toHaveBeenCalled();
@@ -345,7 +358,6 @@ describe("collaborator — dispatch", () => {
     setupDoc("doc-empty", "Body");
     const runTurn = vi.fn(async () => cleanResult("x"));
     const collab = createLocalModelCollaborator(makeDeps({ runTurn }));
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("   ", { documentId: "doc-empty" }));
     await drain(collab);
     expect(runTurn).not.toHaveBeenCalled();
@@ -366,7 +378,6 @@ describe("collaborator — streaming sink", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-sync" }));
     await drain(collab);
     expect(sizeAtDelta).toBe(0);
@@ -384,7 +395,6 @@ describe("collaborator — streaming sink", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-coalesce" }));
     await drain(collab);
     const msgs = chatMessages();
@@ -405,7 +415,6 @@ describe("collaborator — streaming sink", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-preamble" }));
     await drain(collab);
     const msgs = chatMessages();
@@ -429,7 +438,6 @@ describe("collaborator — streaming sink", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-preamble-mint" }));
     await drain(collab);
 
@@ -463,7 +471,6 @@ describe("collaborator — single-flight supersede (D-B)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("A", { documentId: "doc-serial", messageId: "a" }));
     await Promise.resolve();
@@ -497,7 +504,6 @@ describe("collaborator — single-flight supersede (D-B)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("A", { documentId: "doc-stale", messageId: "a" }));
     await Promise.resolve();
@@ -536,7 +542,6 @@ describe("collaborator — single-flight supersede (D-B)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("A", { documentId: "doc-slot", messageId: "a" }));
     await Promise.resolve();
@@ -570,7 +575,6 @@ describe("collaborator — lifecycle aborts", () => {
           }),
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-close" }));
     await Promise.resolve();
     collab.onEvent({
@@ -604,7 +608,6 @@ describe("collaborator — lifecycle aborts", () => {
           }),
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-a" }));
     await Promise.resolve();
     collab.onEvent({
@@ -634,7 +637,6 @@ describe("collaborator — lifecycle aborts", () => {
           }),
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-fg" }));
     await Promise.resolve();
     collab.onEvent({
@@ -662,7 +664,6 @@ describe("collaborator — lifecycle aborts", () => {
           }),
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-same" }));
     await Promise.resolve();
     collab.onEvent({
@@ -713,7 +714,6 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("go", { documentId: id }));
     await Promise.resolve(); // run() → executeRun → runTurn → push → parked on `gate`
@@ -776,7 +776,6 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-swap-closed" }));
     await Promise.resolve();
 
@@ -810,7 +809,6 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-swap-thread" }));
     await Promise.resolve();
 
@@ -853,7 +851,6 @@ describe("collaborator — content replaced under a parked turn (#2070)", () => 
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: id }));
     await Promise.resolve();
     whileParked(ydoc);
@@ -937,7 +934,6 @@ describe("collaborator — failure + robustness", () => {
         runTurn: async () => errorResult("ECONNREFUSED 127.0.0.1:11434 secret-detail"),
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-err" }));
     await drain(collab);
     // Nothing was streamed, so the error branch's flush has nothing to commit
@@ -966,7 +962,6 @@ describe("collaborator — failure + robustness", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-err-partial" }));
     await drain(collab);
 
@@ -995,7 +990,6 @@ describe("collaborator — failure + robustness", () => {
           },
         }),
       );
-      collab.__setConfigForTests(CONFIG);
       collab.onEvent(chatEvent("go", { documentId: "doc-limit" }));
       await drain(collab);
 
@@ -1017,7 +1011,6 @@ describe("collaborator — failure + robustness", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-throw" }));
     // __awaitCurrent must RESOLVE (the run's catch swallows) — never reject.
     await expect(drain(collab)).resolves.toBeUndefined();
@@ -1232,7 +1225,6 @@ describe("collaborator — streamed reply is bounded (#1292)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-runaway" }));
     await drain(collab);
 
@@ -1265,7 +1257,6 @@ describe("collaborator — streamed reply is bounded (#1292)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-marker-once" }));
     await drain(collab);
 
@@ -1288,7 +1279,6 @@ describe("collaborator — streamed reply is bounded (#1292)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-abort" }));
     await drain(collab);
 
@@ -1312,7 +1302,6 @@ describe("collaborator — streamed reply is bounded (#1292)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-marker-toolcall" }));
     await drain(collab);
 
@@ -1334,7 +1323,6 @@ describe("collaborator — streamed reply is bounded (#1292)", () => {
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-bytecap" }));
     await drain(collab);
 
@@ -1367,7 +1355,6 @@ describe("collaborator — streamed lifecycle ends with an empty sidecar (#1340)
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-fin-clean" }));
     await drain(collab);
 
@@ -1390,7 +1377,6 @@ describe("collaborator — streamed lifecycle ends with an empty sidecar (#1340)
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-fin-err" }));
     await drain(collab);
 
@@ -1414,7 +1400,6 @@ describe("collaborator — streamed lifecycle ends with an empty sidecar (#1340)
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-fin-cap" }));
     await drain(collab);
 
@@ -1443,7 +1428,6 @@ describe("collaborator — streamed lifecycle ends with an empty sidecar (#1340)
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("A", { documentId: "doc-fin-super", messageId: "a" }));
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 0)); // A's flush mints its bubble
@@ -1483,7 +1467,6 @@ describe("collaborator — streamed write volume at the caller level (#1340)", (
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     let bytes = 0;
@@ -1537,7 +1520,6 @@ describe("collaborator — streamed write volume at the caller level (#1340)", (
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     const ctrl = getOrCreateDocument(CTRL_ROOM);
     let bytes = 0;
@@ -1583,7 +1565,6 @@ describe("collaborator — streamed write volume at the caller level (#1340)", (
         },
       }),
     );
-    collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-loop-cap" }));
     await drain(collab);
 
@@ -1607,7 +1588,6 @@ describe("collaborator — licence (#1521)", () => {
     const runTurn = vi.fn(async () => cleanResult("should not run"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const collab = createLocalModelCollaborator(makeDeps({ runTurn, aiRefusal: () => REFUSAL }));
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("first", { documentId: "doc-lic", messageId: "a" }));
     collab.onEvent(chatEvent("second", { documentId: "doc-lic", messageId: "b" }));
@@ -1632,7 +1612,6 @@ describe("collaborator — licence (#1521)", () => {
     const collab = createLocalModelCollaborator(
       makeDeps({ runTurn, aiRefusal: () => (refused ? REFUSAL : null) }),
     );
-    collab.__setConfigForTests(CONFIG);
 
     collab.onEvent(chatEvent("while refused", { documentId: "doc-lic2", messageId: "c" }));
     await drain(collab);
@@ -1644,5 +1623,625 @@ describe("collaborator — licence (#1521)", () => {
     errSpy.mockRestore();
     expect(runTurn).toHaveBeenCalledTimes(1);
     expect(chatMessages()).toHaveLength(1);
+  });
+});
+
+describe("collaborator — config resolved per chat event (#1123 R1)", () => {
+  const OTHER: LocalModelConfig = {
+    endpoint: "http://localhost:8080",
+    modelId: "other-model",
+    transport: "v1",
+    agentIdentity: { provider: "local-llamacpp", displayName: "Other Model" },
+  };
+
+  it("a resolver answering null, then a config: the second chat runs with no restart", async () => {
+    setupDoc("doc-late-config", "Body");
+    let answer: LocalModelConfig | null = null;
+    const seen: LocalModelConfig[] = [];
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        resolveConfig: () => answer,
+        runTurn: async (opts) => {
+          seen.push(opts.config);
+          return cleanResult("");
+        },
+      }),
+    );
+
+    collab.onEvent(chatEvent("one", { documentId: "doc-late-config", messageId: "a" }));
+    await drain(collab);
+    expect(seen).toEqual([]);
+
+    answer = CONFIG; // "saved a moment ago" — the same collaborator instance
+    collab.onEvent(chatEvent("two", { documentId: "doc-late-config", messageId: "b" }));
+    await drain(collab);
+    expect(seen).toEqual([CONFIG]);
+  });
+
+  it("a config that changes between two chats: each run gets the one current at its event", async () => {
+    setupDoc("doc-config-change", "Body");
+    let answer: LocalModelConfig | null = CONFIG;
+    const seen: LocalModelConfig[] = [];
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        resolveConfig: () => answer,
+        runTurn: async (opts) => {
+          seen.push(opts.config);
+          opts.onContentDelta?.(`reply from ${opts.config.modelId}`);
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("");
+        },
+      }),
+    );
+
+    collab.onEvent(chatEvent("one", { documentId: "doc-config-change", messageId: "a" }));
+    await drain(collab);
+    answer = OTHER;
+    collab.onEvent(chatEvent("two", { documentId: "doc-config-change", messageId: "b" }));
+    await drain(collab);
+
+    expect(seen.map((c) => [c.endpoint, c.modelId])).toEqual([
+      [CONFIG.endpoint, CONFIG.modelId],
+      [OTHER.endpoint, OTHER.modelId],
+    ]);
+    // The byline follows the config of the run that wrote the reply.
+    const byText = new Map(chatMessages().map((m) => [m.text, m.agentIdentity]));
+    expect(byText.get(`reply from ${CONFIG.modelId}`)).toEqual(CONFIG.agentIdentity);
+    expect(byText.get(`reply from ${OTHER.modelId}`)).toEqual(OTHER.agentIdentity);
+  });
+
+  it("a run in flight keeps the config it started with when the resolver's answer changes mid-run", async () => {
+    setupDoc("doc-config-midrun", "Body");
+    let answer: LocalModelConfig | null = CONFIG;
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    let atStart: LocalModelConfig | undefined;
+    let afterChange: LocalModelConfig | undefined;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        resolveConfig: () => answer,
+        runTurn: async (opts) => {
+          atStart = opts.config;
+          await gate;
+          afterChange = opts.config;
+          opts.onContentDelta?.("late reply");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("late reply");
+        },
+      }),
+    );
+
+    collab.onEvent(chatEvent("go", { documentId: "doc-config-midrun" }));
+    await Promise.resolve(); // parked on `gate`
+    expect(atStart).toBe(CONFIG);
+
+    answer = OTHER; // the saved model changes while the run is parked
+    release();
+    await drain(collab);
+
+    expect(afterChange).toBe(CONFIG);
+    expect(afterChange).toEqual({
+      endpoint: "http://127.0.0.1:11434",
+      modelId: "m",
+      transport: "v1",
+      agentIdentity: { provider: "local-ollama", displayName: "Test Model" },
+    });
+    // The reply written after the change still carries the starting identity.
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].agentIdentity).toEqual(CONFIG.agentIdentity);
+
+    // …and the change is not lost: the NEXT run sees it.
+    const next: LocalModelConfig[] = [];
+    const collab2 = createLocalModelCollaborator(
+      makeDeps({
+        resolveConfig: () => answer,
+        runTurn: async (opts) => {
+          next.push(opts.config);
+          return cleanResult("");
+        },
+      }),
+    );
+    collab2.onEvent(chatEvent("again", { documentId: "doc-config-midrun", messageId: "n" }));
+    await drain(collab2);
+    expect(next).toEqual([OTHER]);
+  });
+
+  it("a mid-run change does not need a second collaborator: the same one's next run sees it", async () => {
+    setupDoc("doc-config-same", "Body");
+    let answer: LocalModelConfig | null = CONFIG;
+    const seen: LocalModelConfig[] = [];
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        resolveConfig: () => answer,
+        runTurn: async (opts) => {
+          seen.push(opts.config);
+          if (seen.length === 1) answer = OTHER; // changed while run 1 is in flight
+          await Promise.resolve();
+          seen.push(opts.config);
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.onEvent(chatEvent("one", { documentId: "doc-config-same", messageId: "a" }));
+    await drain(collab);
+    collab.onEvent(chatEvent("two", { documentId: "doc-config-same", messageId: "b" }));
+    await drain(collab);
+    expect(seen).toEqual([CONFIG, CONFIG, OTHER, OTHER]);
+  });
+});
+
+describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R1.5)", () => {
+  const REASONS = Object.keys(UNUSABLE_NOTICE) as LocalModelUnusableReason[];
+  const REFUSAL = {
+    error: "LICENSE_REQUIRED" as const,
+    kind: "unlicensed" as const,
+    message: "Tandem is unlicensed, so its AI features are turned off.",
+  };
+
+  /** A broken state as the resolver would describe it. `key` distinguishes two
+   *  states with the same reason (e.g. two different rejected endpoints). */
+  function unusable(reason: LocalModelUnusableReason, key = "1"): LocalModelUnusable {
+    return {
+      reason,
+      stateKey: `state:${reason}:${key}`,
+      detail: `default entry "entry-${key}" (${reason})`,
+    };
+  }
+
+  /**
+   * A collaborator over a mutable saved state: `state.config` is what the
+   * resolver answers, `state.broken` what the diagnosis answers when the config
+   * is null. `fireModelsChanged` is the registry's change listener, captured
+   * from the injected `onModelsChanged` at wire time.
+   */
+  function harness(over: Partial<CollaboratorDeps> = {}) {
+    const state: { config: LocalModelConfig | null; broken: LocalModelUnusable | null } = {
+      config: null,
+      broken: null,
+    };
+    const runTurn = vi.fn(async (_opts: RunTurnOpts) => cleanResult(""));
+    const diagnose = vi.fn(() => state.broken);
+    let listener: (() => void) | null = null;
+    const stopWatching = vi.fn(() => {
+      listener = null;
+    });
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn,
+        resolveConfig: () => state.config,
+        diagnose,
+        onModelsChanged: (cb) => {
+          listener = cb;
+          return stopWatching;
+        },
+        ...over,
+      }),
+    );
+    collab.__startForTests();
+    let n = 0;
+    return {
+      state,
+      collab,
+      runTurn,
+      diagnose,
+      stopWatching,
+      hasListener: () => listener !== null,
+      fireModelsChanged: () => {
+        if (!listener) throw new Error("onModelsChanged listener was never registered");
+        listener();
+      },
+      /** Send `count` chats, draining after each. */
+      chat: async (docId: string, count = 1) => {
+        for (let i = 0; i < count; i++) {
+          collab.onEvent(chatEvent(`hello ${n}`, { documentId: docId, messageId: `n${n++}` }));
+          await drain(collab);
+        }
+      },
+    };
+  }
+
+  beforeEach(() => {
+    // `noticeUnusable` prints one breadcrumb per state on stderr.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  for (const reason of REASONS) {
+    it(`${reason}: several chats in the same state produce exactly ONE notice, with the fixed text`, async () => {
+      setupDoc("doc-notice", "Body");
+      const h = harness();
+      h.state.broken = unusable(reason);
+
+      await h.chat("doc-notice", 4);
+
+      expect(h.runTurn).not.toHaveBeenCalled();
+      const notes = getBuffer();
+      expect(notes).toHaveLength(1);
+      expect(notes[0].message).toBe(UNUSABLE_NOTICE[reason]);
+      expect(notes[0].severity).toBe("warning");
+      expect(notes[0].type).toBe("general-error");
+      // A fresh id and NO dedupKey: the client re-pops a toast on a repeated
+      // dedupKey and drops an id it has already seen, so neither can carry "once".
+      expect(typeof notes[0].id).toBe("string");
+      expect(notes[0].id.length).toBeGreaterThan(0);
+      expect("dedupKey" in notes[0]).toBe(false);
+      // Nothing of the state's identity or log detail reaches the user.
+      expect(notes[0].message).not.toContain(h.state.broken.stateKey);
+      expect(notes[0].message).not.toContain(h.state.broken.detail);
+      expect(notes[0].message).not.toContain("entry-1");
+      await h.collab.stop();
+    });
+  }
+
+  it("the three texts differ, and none carries a saved endpoint or model id", () => {
+    expect(REASONS.slice().sort()).toEqual([
+      "endpoint-rejected",
+      "no-default-chosen",
+      "no-endpoint",
+    ]);
+    const texts = REASONS.map((r) => UNUSABLE_NOTICE[r]);
+    expect(new Set(texts).size).toBe(3);
+    for (const text of texts) {
+      expect(text.length).toBeGreaterThan(0);
+      // The only address any text may hold is the documented example of an
+      // accepted one. Strip it, and nothing URL-, host- or credential-shaped
+      // may remain.
+      const rest = text.split("http://127.0.0.1:11434").join("");
+      expect(rest).not.toMatch(/https?:/i);
+      expect(rest).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
+      expect(rest).not.toMatch(/localhost|:\d{2,5}\b|@/i);
+      // Fixed copy: no interpolation slot survived into the string.
+      expect(rest).not.toMatch(/\$\{|%s|undefined|null/);
+    }
+  });
+
+  it("a different reason is a different state: each gets its own notice, with distinct fresh ids", async () => {
+    setupDoc("doc-notice-reasons", "Body");
+    const h = harness();
+    for (const reason of REASONS) {
+      h.state.broken = unusable(reason);
+      await h.chat("doc-notice-reasons", 3);
+    }
+    const notes = getBuffer();
+    expect(notes.map((n) => n.message)).toEqual(REASONS.map((r) => UNUSABLE_NOTICE[r]));
+    expect(new Set(notes.map((n) => n.id)).size).toBe(REASONS.length);
+    expect(notes.every((n) => !("dedupKey" in n))).toBe(true);
+    await h.collab.stop();
+  });
+
+  it("the same reason under a different stateKey is a new notice (another rejected endpoint)", async () => {
+    setupDoc("doc-notice-key", "Body");
+    const h = harness();
+    h.state.broken = unusable("endpoint-rejected", "1");
+    await h.chat("doc-notice-key", 2);
+    h.state.broken = unusable("endpoint-rejected", "2");
+    await h.chat("doc-notice-key", 2);
+
+    const notes = getBuffer();
+    expect(notes).toHaveLength(2);
+    expect(notes[0].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
+    expect(notes[1].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
+    expect(notes[1].id).not.toBe(notes[0].id);
+    await h.collab.stop();
+  });
+
+  it("fixed (a chat runs), then broken again: a second notice", async () => {
+    setupDoc("doc-notice-rebreak", "Body");
+    const h = harness();
+    const broken = unusable("endpoint-rejected");
+    h.state.broken = broken;
+    await h.chat("doc-notice-rebreak", 2);
+    expect(getBuffer()).toHaveLength(1);
+
+    h.state.config = CONFIG; // fixed
+    await h.chat("doc-notice-rebreak");
+    expect(h.runTurn).toHaveBeenCalledTimes(1);
+    expect(getBuffer()).toHaveLength(1);
+
+    h.state.config = null; // broken again, in the very same state as before
+    h.state.broken = broken;
+    await h.chat("doc-notice-rebreak", 3);
+
+    const notes = getBuffer();
+    expect(notes).toHaveLength(2);
+    expect(notes[1].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
+    expect(notes[1].id).not.toBe(notes[0].id);
+    expect(h.runTurn).toHaveBeenCalledTimes(1);
+    await h.collab.stop();
+  });
+
+  it("fixed and re-broken with NO chat in between: a second notice, via the registry-change listener", async () => {
+    setupDoc("doc-notice-listener", "Body");
+    const h = harness();
+    const broken = unusable("no-default-chosen");
+    h.state.broken = broken;
+    await h.chat("doc-notice-listener", 2);
+    expect(getBuffer()).toHaveLength(1);
+
+    h.state.config = CONFIG; // a save fixes it…
+    h.fireModelsChanged();
+    h.state.config = null; // …and another save breaks it the same way
+    h.state.broken = broken;
+    h.fireModelsChanged();
+    // The listener itself tells the user nothing; only a chat does.
+    expect(getBuffer()).toHaveLength(1);
+
+    await h.chat("doc-notice-listener", 3);
+    const notes = getBuffer();
+    expect(notes).toHaveLength(2);
+    expect(notes[1].message).toBe(UNUSABLE_NOTICE["no-default-chosen"]);
+    expect(notes[1].id).not.toBe(notes[0].id);
+    expect(h.runTurn).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
+
+  it("a registry change that leaves the state unchanged does NOT cause a repeat", async () => {
+    setupDoc("doc-notice-unchanged", "Body");
+    const h = harness();
+    h.state.broken = unusable("no-endpoint");
+    await h.chat("doc-notice-unchanged", 2);
+    expect(getBuffer()).toHaveLength(1);
+
+    // e.g. an unrelated entry was renamed: the file changed, the state did not.
+    h.fireModelsChanged();
+    h.fireModelsChanged();
+    await h.chat("doc-notice-unchanged", 3);
+    h.fireModelsChanged();
+    await h.chat("doc-notice-unchanged");
+
+    expect(getBuffer()).toHaveLength(1);
+    await h.collab.stop();
+  });
+
+  it("registers the registry-change listener when wired and releases it on stop()", async () => {
+    const h = harness();
+    expect(h.hasListener()).toBe(true);
+    expect(h.stopWatching).not.toHaveBeenCalled();
+    await h.collab.stop();
+    expect(h.stopWatching).toHaveBeenCalledTimes(1);
+    expect(h.hasListener()).toBe(false);
+  });
+
+  it("a null diagnosis is silent and runs nothing", async () => {
+    setupDoc("doc-notice-none", "Body");
+    const h = harness();
+    h.state.broken = null; // no models, a disabled default, a cloud default…
+
+    await h.chat("doc-notice-none", 3);
+
+    expect(h.diagnose).toHaveBeenCalledTimes(3); // it was asked, and said "nothing to tell"
+    expect(h.runTurn).not.toHaveBeenCalled();
+    expect(getBuffer()).toEqual([]);
+    expect(chatMessages()).toHaveLength(0);
+    await h.collab.stop();
+  });
+
+  it("no diagnose dep at all is silent too", async () => {
+    setupDoc("doc-notice-nodiag", "Body");
+    const runTurn = vi.fn(async () => cleanResult(""));
+    const collab = createLocalModelCollaborator(makeDeps({ runTurn, resolveConfig: () => null }));
+    collab.onEvent(chatEvent("hi", { documentId: "doc-notice-nodiag" }));
+    await drain(collab);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(getBuffer()).toEqual([]);
+  });
+
+  it("the diagnosis is not consulted while a config resolves", async () => {
+    setupDoc("doc-notice-ok", "Body");
+    const h = harness();
+    h.state.config = CONFIG;
+    h.state.broken = unusable("endpoint-rejected"); // would be reported if it were asked
+    await h.chat("doc-notice-ok", 2);
+    expect(h.runTurn).toHaveBeenCalledTimes(2);
+    expect(h.diagnose).not.toHaveBeenCalled();
+    expect(getBuffer()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("Solo mode: no notice and no run, and a Solo chat does not use up the once", async () => {
+    setupDoc("doc-notice-solo", "Body");
+    const h = harness();
+    h.state.broken = unusable("endpoint-rejected");
+    setMode("solo");
+
+    await h.chat("doc-notice-solo", 3);
+    expect(getBuffer()).toEqual([]);
+    expect(h.runTurn).not.toHaveBeenCalled();
+
+    setMode("tandem");
+    await h.chat("doc-notice-solo", 2);
+    expect(getBuffer()).toHaveLength(1);
+    expect(getBuffer()[0].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
+    expect(h.runTurn).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
+
+  it("Solo mode with a usable config: no run and no notice", async () => {
+    setupDoc("doc-notice-solo-ok", "Body");
+    const h = harness();
+    h.state.config = CONFIG;
+    setMode("solo");
+    await h.chat("doc-notice-solo-ok", 2);
+    expect(h.runTurn).not.toHaveBeenCalled();
+    expect(getBuffer()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("a licence refusal: no notice, and the refused chat does not use up the once", async () => {
+    setupDoc("doc-notice-lic", "Body");
+    let refused = true;
+    const h = harness({ aiRefusal: () => (refused ? REFUSAL : null) });
+    h.state.broken = unusable("no-default-chosen");
+
+    await h.chat("doc-notice-lic", 3);
+    expect(getBuffer()).toEqual([]);
+    expect(h.runTurn).not.toHaveBeenCalled();
+    expect(chatMessages()).toHaveLength(0);
+
+    refused = false; // activated; the model is still broken in the same way
+    await h.chat("doc-notice-lic", 3);
+    const notes = getBuffer();
+    expect(notes).toHaveLength(1);
+    expect(notes[0].message).toBe(UNUSABLE_NOTICE["no-default-chosen"]);
+
+    refused = true; // and a later refusal is silent again
+    await h.chat("doc-notice-lic", 2);
+    expect(getBuffer()).toHaveLength(1);
+    await h.collab.stop();
+  });
+
+  it("the notice is not a chat message and not an event-queue event", async () => {
+    setupDoc("doc-notice-surface", "Body");
+    attachCtrlObservers();
+    const events: TandemEvent[] = [];
+    const internal = (e: TandemEvent) => events.push(e);
+    const external = (e: TandemEvent) => events.push(e);
+    subscribe(internal, "internal");
+    subscribe(external, "external");
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    let ctrlUpdates = 0;
+    const onUpdate = () => {
+      ctrlUpdates++;
+    };
+    ctrl.on("update", onUpdate);
+    try {
+      const h = harness();
+      for (const reason of REASONS) {
+        h.state.broken = unusable(reason);
+        await h.chat("doc-notice-surface", 2);
+      }
+      await h.collab.stop();
+    } finally {
+      ctrl.off("update", onUpdate);
+      unsubscribe(internal);
+      unsubscribe(external);
+    }
+
+    expect(getBuffer()).toHaveLength(REASONS.length); // the notices did go out…
+    // …through the browser's notify stream only: the chat map and its streaming
+    // sidecar are untouched, CTRL_ROOM saw no write at all, and no subscriber of
+    // the event queue (the AI-facing surface) was handed anything.
+    expect(chatMap().size).toBe(0);
+    expect(streamMap().size).toBe(0);
+    expect(ctrlUpdates).toBe(0);
+    expect(events).toEqual([]);
+  });
+});
+
+describe("collaborator — editing permission handed to the run (#1123 R2)", () => {
+  /** Park one run and hand back the `editingAllowed` it was given. */
+  function parkedRun(over: Partial<CollaboratorDeps>) {
+    const captured: RunTurnOpts[] = [];
+    const releases: Array<() => void> = [];
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          captured.push(opts);
+          await new Promise<void>((res) => {
+            releases.push(res);
+          });
+          return cleanResult("");
+        },
+        ...over,
+      }),
+    );
+    return {
+      collab,
+      captured,
+      /** Start a run and wait until it is parked inside `runTurn`. */
+      start: async (docId: string, messageId: string) => {
+        collab.onEvent(chatEvent("go", { documentId: docId, messageId }));
+        await Promise.resolve();
+        const opts = captured[captured.length - 1];
+        if (!opts) throw new Error("runTurn was not reached");
+        return opts;
+      },
+      finish: async () => {
+        for (const r of releases.splice(0)) r();
+        await drain(collab);
+      },
+    };
+  }
+
+  it("runTurn receives an editingAllowed function; with no editingState dep it answers false", async () => {
+    setupDoc("doc-edit-absent", "Body");
+    const p = parkedRun({});
+    const opts = await p.start("doc-edit-absent", "a");
+    // `typeof` first: a missing field would make a bare falsy assertion pass.
+    expect(typeof opts.editingAllowed).toBe("function");
+    expect(opts.editingAllowed()).toBe(false);
+    expect(opts.editingAllowed()).toBe(false);
+    await p.finish();
+  });
+
+  it("answers true while the setting is on and no Off has been requested since the run began", async () => {
+    setupDoc("doc-edit-on", "Body");
+    const p = parkedRun({ editingState: () => ({ enabled: true, offEpoch: 7 }) });
+    const opts = await p.start("doc-edit-on", "a");
+    expect(opts.editingAllowed()).toBe(true);
+    expect(opts.editingAllowed()).toBe(true); // re-read on every call, still true
+    await p.finish();
+  });
+
+  it("answers false while the setting is off", async () => {
+    setupDoc("doc-edit-off", "Body");
+    const p = parkedRun({ editingState: () => ({ enabled: false, offEpoch: 7 }) });
+    const opts = await p.start("doc-edit-off", "a");
+    expect(opts.editingAllowed()).toBe(false);
+    await p.finish();
+  });
+
+  it("reads the setting live: switching it off mid-run revokes without any Off counter change", async () => {
+    setupDoc("doc-edit-live", "Body");
+    const editing = { enabled: true, offEpoch: 0 };
+    const p = parkedRun({ editingState: () => ({ ...editing }) });
+    const opts = await p.start("doc-edit-live", "a");
+    expect(opts.editingAllowed()).toBe(true);
+    editing.enabled = false;
+    expect(opts.editingAllowed()).toBe(false);
+    await p.finish();
+  });
+
+  it("Off-then-On inside one run stays off for that run; the next run sees on again", async () => {
+    setupDoc("doc-edit-epoch", "Body");
+    const editing = { enabled: true, offEpoch: 3 };
+    const p = parkedRun({ editingState: () => ({ ...editing }) });
+
+    const first = await p.start("doc-edit-epoch", "a");
+    expect(first.editingAllowed()).toBe(true);
+
+    // The user switches editing Off…
+    editing.enabled = false;
+    editing.offEpoch = 4;
+    expect(first.editingAllowed()).toBe(false);
+    // …and back On before this run's next tool call.
+    editing.enabled = true;
+    expect(first.editingAllowed()).toBe(false);
+    expect(first.editingAllowed()).toBe(false); // and it stays false
+    await p.finish();
+    // Still false once the run is over: the closure never re-arms.
+    expect(first.editingAllowed()).toBe(false);
+
+    // A run that starts after the Off-then-On has the permission again.
+    const second = await p.start("doc-edit-epoch", "b");
+    expect(second).not.toBe(first);
+    expect(second.editingAllowed()).toBe(true);
+    expect(first.editingAllowed()).toBe(false);
+    await p.finish();
+  });
+
+  it("an Off counter that moved while the setting reads on is still a revoke", async () => {
+    // The Off-then-On may complete between two reads, so the run never observes
+    // `enabled: false` at all — only the counter can tell it.
+    setupDoc("doc-edit-blink", "Body");
+    const editing = { enabled: true, offEpoch: 0 };
+    const p = parkedRun({ editingState: () => ({ ...editing }) });
+    const opts = await p.start("doc-edit-blink", "a");
+    expect(opts.editingAllowed()).toBe(true);
+    editing.offEpoch = 1; // enabled never read as false
+    expect(opts.editingAllowed()).toBe(false);
+    await p.finish();
   });
 });

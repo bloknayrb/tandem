@@ -14,6 +14,11 @@
  *                                       `tandem-models`).
  *   DELETE /api/models/secrets/:ref   — remove a stored key.
  *
+ *   GET    /api/models/local-settings — whether local models may comment and
+ *                                       suggest (#1123). Loopback only.
+ *   POST   /api/models/local-settings — switch that setting. Body
+ *                                       `{ editing: boolean }`.
+ *
  * **Secrets never travel back to the client.** There is intentionally no
  * `GET .../secrets/:ref` route — only server-side code reads the plaintext when
  * proxying an outbound request. Only the opaque `apiKeyRef` is persisted; the
@@ -29,13 +34,19 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import { ERROR_CODE_INVALID_SECRET } from "../../shared/integrations/contract.js";
 import {
   API_MODELS,
+  API_MODELS_LOCAL_SETTINGS,
+  ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS,
   ERROR_CODE_INVALID_MODELS_FILE,
+  ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED,
   ERROR_CODE_MODELS_BUSY,
   ERROR_CODE_MODELS_STALE,
   ERROR_CODE_MODELS_WRITE_FAILED,
+  type LocalModelSettingsPostResponse,
+  type LocalModelSettingsResponse,
   type ModelsEntry,
   type ModelsFile,
   type ModelsGetResponse,
@@ -49,6 +60,7 @@ import {
 } from "../integrations/api-routes.js";
 import type { Keychain } from "../integrations/keychain.js";
 import type { Handler } from "../mcp/routes/_shared.js";
+import { isLocalModelEditingEnabled, setLocalModelEditing } from "./local-model-settings.js";
 import {
   getCachedModelsFile,
   getModelsEtag,
@@ -62,6 +74,12 @@ export const API_MODELS_SECRET = "/api/models/secrets/:ref";
 
 export interface ModelsRoutesDeps {
   keychain: Keychain;
+  /**
+   * Are the local-model settings routes live? Defaults to `BYO_MODELS_ENABLED`,
+   * so in a release they answer 404 and neither read nor write anything while
+   * the feature is dark. A test passes `true` to exercise them.
+   */
+  localModelSettingsEnabled?: boolean;
 }
 
 // Ref / secret bounds. Refs are client-chosen but server-validated against
@@ -92,6 +110,74 @@ export function registerModelsRoutes(
   app.options(API_MODELS_SECRET, mw);
   app.post(API_MODELS_SECRET, mw, largeBody, makePostSecretHandler(deps));
   app.delete(API_MODELS_SECRET, mw, makeDeleteSecretHandler(deps));
+  // No `largeBody`: the body is one boolean, read by the app's default JSON
+  // parser. The OPTIONS registration is what answers the preflight — the
+  // desktop WebView's JSON POST is cross-origin, and the 204 comes from `mw`.
+  const settingsLive = deps.localModelSettingsEnabled ?? BYO_MODELS_ENABLED;
+  app.options(API_MODELS_LOCAL_SETTINGS, mw);
+  app.get(API_MODELS_LOCAL_SETTINGS, mw, makeGetLocalSettingsHandler(settingsLive));
+  app.post(API_MODELS_LOCAL_SETTINGS, mw, makePostLocalSettingsHandler(settingsLive));
+}
+
+/**
+ * `GET /api/models/local-settings` (#1123). Loopback only: a non-loopback
+ * caller is refused outright rather than scrubbed, so the non-loopback bind
+ * (dark, ADR-056) would not expose the setting. 404 while the feature is dark.
+ */
+function makeGetLocalSettingsHandler(live: boolean): Handler {
+  return (req: Request, res: Response) => {
+    if (!live) {
+      res.status(404).json({ error: "NOT_FOUND" });
+      return;
+    }
+    if (!isLoopback(req.socket.remoteAddress)) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
+      return;
+    }
+    const body: LocalModelSettingsResponse = { editing: isLocalModelEditingEnabled() };
+    res.status(200).json(body);
+  };
+}
+
+/**
+ * `POST /api/models/local-settings` (#1123) — body `{ editing: boolean }`.
+ *
+ * Origin, then loopback, before anything else (a `text/plain` simple request
+ * carries no allowlisted Origin and no parsed body). The body must hold the
+ * boolean itself; nothing is coerced. The server never trusts a client's word
+ * per request for what the local model may do: this route is the only writer,
+ * and the collaborator reads the result server-side.
+ *
+ * The answer always carries the EFFECTIVE value, including on a failed write,
+ * so the page can show what the server is really doing: a failed Off is still
+ * off for this run of Tandem (`editing: false, persisted: false`).
+ *
+ * Not licence-gated: it starts nothing and reaches no model. The local model
+ * itself is refused per chat event in `collaborator.ts`.
+ */
+function makePostLocalSettingsHandler(live: boolean): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_MODELS_LOCAL_SETTINGS)) return;
+    if (assertLoopbackForMutation(req, res)) return;
+    if (!live) {
+      res.status(404).json({ error: "NOT_FOUND" });
+      return;
+    }
+    const editing = (req.body as { editing?: unknown } | undefined)?.editing;
+    if (typeof editing !== "boolean") {
+      res.status(400).json({
+        error: "BAD_REQUEST",
+        code: ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS,
+        message: "Body must be { editing: <boolean> }.",
+      });
+      return;
+    }
+    const result = await setLocalModelEditing(editing);
+    const body: LocalModelSettingsPostResponse = result.persisted
+      ? result
+      : { ...result, code: ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED };
+    res.status(result.persisted ? 200 : 500).json(body);
+  };
 }
 
 /**

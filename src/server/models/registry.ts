@@ -8,10 +8,11 @@
  * so the cache must already be warm.
  *
  * **Boot cache-warm is mandatory (architecture review Finding 1).** The
- * collaborator resolves config exactly once at boot; with a write-only-primed
- * cache, a fresh run with a valid `models.json` on disk would read a cold empty
- * cache and resolve null — defeating the whole "resolve without a browser
- * session" premise. `primeModelStoreCache()` MUST be awaited before
+ * collaborator resolves config from this cache on every chat event; with a
+ * write-only-primed cache, a fresh run with a valid `models.json` on disk would
+ * read a cold empty cache and resolve nothing until the next write — defeating
+ * the "resolve without a browser session" premise. `primeModelStoreCache()`
+ * MUST be awaited before
  * `startLocalModelCollaborator()` in `src/server/index.ts`. `read()` never
  * throws (see store.ts), and priming swallows anything else → empty cache.
  */
@@ -26,6 +27,36 @@ import { createModelStore, type ModelStore, serializeModelsFile } from "./store.
 let store: ModelStore | null = null;
 let cache: ModelsFile = emptyModelsFile();
 
+type ModelsChangedListener = () => void;
+const changeListeners = new Set<ModelsChangedListener>();
+
+/**
+ * Be told after every replacement of the cached registry (a boot prime or a
+ * successful write). The local-model collaborator uses it to forget which
+ * broken state it last told the user about, so a model that is fixed and then
+ * broken again is reported again even if no chat arrived in between. Nothing
+ * subscribes while `BYO_MODELS_ENABLED` is false. Returns the unsubscribe.
+ */
+export function onModelsFileChanged(cb: ModelsChangedListener): () => void {
+  changeListeners.add(cb);
+  return () => {
+    changeListeners.delete(cb);
+  };
+}
+
+function setCache(next: ModelsFile): void {
+  cache = next;
+  // Isolated: a throwing listener must not turn a write that already reached
+  // the disk and the cache into a failed `POST /api/models`.
+  for (const cb of changeListeners) {
+    try {
+      cb();
+    } catch (err) {
+      console.error("[tandem] model-registry change listener threw:", err);
+    }
+  }
+}
+
 function getStore(): ModelStore {
   if (!store) store = createModelStore(resolveAppDataDir());
   return store;
@@ -37,7 +68,7 @@ function getStore(): ModelStore {
  */
 export async function primeModelStoreCache(): Promise<void> {
   try {
-    cache = await getStore().read();
+    setCache(await getStore().read());
   } catch (err) {
     // read() is contractually non-throwing, so reaching here means a genuine
     // failure (e.g. createModelStore rejecting a bad appData path). Log it —
@@ -48,7 +79,7 @@ export async function primeModelStoreCache(): Promise<void> {
         err instanceof Error ? err.message : String(err)
       }); using an empty registry.`,
     );
-    cache = emptyModelsFile();
+    setCache(emptyModelsFile());
   }
 }
 
@@ -87,7 +118,7 @@ export function getModelsEtag(): string {
  * stable across a write→read cycle (see `store.serializeModelsFile`).
  */
 export async function persistModelsFile(file: ModelsFile): Promise<void> {
-  cache = await getStore().write(file);
+  setCache(await getStore().write(file));
 }
 
 /** Result of an optimistic-concurrency write. */
@@ -135,4 +166,5 @@ export async function persistModelsFileIfMatch(
 export function __resetModelRegistryForTests(basePath?: string): void {
   store = basePath ? createModelStore(basePath) : null;
   cache = emptyModelsFile();
+  changeListeners.clear();
 }

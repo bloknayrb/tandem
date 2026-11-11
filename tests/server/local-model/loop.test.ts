@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { runLocalModelTurn } from "../../../src/server/local-model/index.js";
 import { runLoop } from "../../../src/server/local-model/loop.js";
-import { TOOLS } from "../../../src/server/local-model/tools.js";
+import { EDITING_OFF_MESSAGE, TOOLS } from "../../../src/server/local-model/tools.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
@@ -42,6 +42,25 @@ function v1ToolCallArgs(name: string, args: Record<string, unknown>): Response {
   );
 }
 
+/** One assistant turn carrying several tool calls — several dispatches of one run. */
+function v1ToolCalls(calls: { name: string; args: Record<string, unknown> }[]): Response {
+  return new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: "",
+            tool_calls: calls.map((c, i) => ({
+              id: `c${i}`,
+              function: { name: c.name, arguments: JSON.stringify(c.args) },
+            })),
+          },
+        },
+      ],
+    }),
+  );
+}
+
 // A Response body is single-use, so the loop's repeated chat() calls each need a
 // FRESH Response — pass a factory, not a shared instance.
 function stubFetch(factory: () => Response): void {
@@ -66,6 +85,10 @@ function base(extra: Partial<Parameters<typeof runLoop>[0]> = {}) {
     tools: TOOLS,
     systemPrompt: "sys",
     userPrompt: "do x",
+    // #1123: the editing permission. The pre-existing cases exercise the write
+    // path, so the default here is ON; "runLoop — editing permission" below is
+    // where it is switched off, flipped mid-run and left out.
+    canEdit: () => true,
     ...extra,
   };
 }
@@ -408,9 +431,174 @@ describe("runLoop — mid-turn doc swap (#2039)", () => {
       config: CONFIG,
       task: "go",
       isDocCurrent: () => false,
+      editingAllowed: () => true,
     });
 
     expect(r.metrics.exit).toBe("doc-swapped");
     expect(r.metrics.toolCalls).toBe(0);
+  });
+});
+
+describe("runLoop — editing permission (#1123 R2.3, R2.4)", () => {
+  const COMMENT = { name: "comment_on_quote", args: { quoted_text: "body text", comment: "one" } };
+  const COMMENT_2 = {
+    name: "comment_on_quote",
+    args: { quoted_text: "text here", comment: "two" },
+  };
+
+  /** The tool messages handed back to the model, parsed, in order. */
+  function toolResults(r: Awaited<ReturnType<typeof runLoop>>): Record<string, unknown>[] {
+    return r.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => JSON.parse(m.content) as Record<string, unknown>);
+  }
+
+  it("reads canEdit on EVERY dispatch: switched off between two dispatches of one turn, the second is refused", async () => {
+    // One assistant turn, two tool calls. Nothing awaits between them, so only a
+    // per-dispatch read of the permission can tell them apart.
+    let turn = 0;
+    stubFetch(() => (turn++ === 0 ? v1ToolCalls([COMMENT, COMMENT_2]) : v1Text("done")));
+    let reads = 0;
+    const opts = base({ canEdit: () => reads++ === 0, maxTurns: 9, maxToolCalls: 9 });
+    const r = await runLoop(opts);
+
+    expect(reads, "one read per writing dispatch").toBe(2);
+    const outcomes = r.steps[0]?.toolCalls.map((c) => c.outcome);
+    expect(outcomes?.[0]).toMatchObject({ kind: "comment", ok: true });
+    expect(outcomes?.[1]).toEqual({
+      kind: "refused",
+      tool: "comment_on_quote",
+      errorCode: "EDITING_OFF",
+    });
+
+    // The first write landed; the second did not.
+    const stored = [...getAnnotationsMap(opts.ydoc).values()] as Annotation[];
+    expect(stored.map((a) => a.content)).toEqual(["one"]);
+
+    // And the model is TOLD, in the tool message it gets back, that editing is off.
+    const results = toolResults(r);
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ ok: true });
+    expect(results[1]).toEqual({ error: "EDITING_OFF", message: EDITING_OFF_MESSAGE });
+    expect(String(results[1]?.message)).toMatch(/switched off/i);
+    expect(r.metrics.exit).toBe("clean");
+  });
+
+  it("switched off between two TURNS of one run: the first write lands, the second is refused", async () => {
+    let editing = true;
+    let turn = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        turn += 1;
+        if (turn === 1) return v1ToolCalls([COMMENT]);
+        if (turn === 2) {
+          // The user flips the setting while the model is thinking.
+          editing = false;
+          return v1ToolCalls([COMMENT_2]);
+        }
+        return v1Text("answered in chat");
+      }),
+    );
+    const opts = base({ canEdit: () => editing, maxTurns: 9, maxToolCalls: 9 });
+    const r = await runLoop(opts);
+
+    const stored = [...getAnnotationsMap(opts.ydoc).values()] as Annotation[];
+    expect(stored.map((a) => a.content)).toEqual(["one"]);
+    expect(r.steps[1]?.toolCalls[0]?.outcome).toEqual({
+      kind: "refused",
+      tool: "comment_on_quote",
+      errorCode: "EDITING_OFF",
+    });
+    expect(toolResults(r)[1]).toEqual({ error: "EDITING_OFF", message: EDITING_OFF_MESSAGE });
+    // The run goes on: the model gets its refusal and can still answer.
+    expect(r.metrics.exit).toBe("clean");
+    expect(r.finalContent).toBe("answered in chat");
+  });
+
+  it("a caller that omits canEdit gets no writes (fail-closed)", async () => {
+    let turn = 0;
+    stubFetch(() =>
+      turn++ === 0
+        ? v1ToolCalls([
+            COMMENT,
+            {
+              name: "propose_replacement",
+              args: { quoted_text: "body text here", suggested_text: "x" },
+            },
+            { name: "reply_to_annotation", args: { annotation_id: "any", text: "t" } },
+          ])
+        : v1Text("done"),
+    );
+    const { canEdit: _omitted, ...withoutPermission } = base({ maxTurns: 9, maxToolCalls: 9 });
+    let writes = 0;
+    withoutPermission.ydoc.on("afterTransaction", () => writes++);
+    const r = await runLoop(withoutPermission as unknown as Parameters<typeof runLoop>[0]);
+
+    expect(r.metrics.toolCalls).toBe(3);
+    expect(r.steps[0]?.toolCalls.map((c) => c.outcome.kind)).toEqual([
+      "refused",
+      "refused",
+      "refused",
+    ]);
+    expect(writes, "no Y.Doc transaction at all").toBe(0);
+    expect(getAnnotationsMap(withoutPermission.ydoc).size).toBe(0);
+  });
+
+  it("still serves the reading tools when canEdit says no", async () => {
+    let turn = 0;
+    stubFetch(() => (turn++ === 0 ? v1ToolCall("get_outline") : v1Text("done")));
+    const r = await runLoop(base({ canEdit: () => false, maxTurns: 9 }));
+    expect(r.steps[0]?.toolCalls[0]?.outcome).toEqual({ kind: "read" });
+    expect(toolResults(r)[0]).toHaveProperty("outline");
+  });
+
+  it("a refused call counts in neither anchorResolutionFailures nor replyFailures", async () => {
+    // Those two tally what the model got WRONG. The same calls with editing on
+    // are counted (see "runLoop — metric tallies"): a heading-overlap quote and
+    // a reply to an id that does not exist.
+    let turn = 0;
+    stubFetch(() =>
+      turn++ === 0
+        ? v1ToolCalls([
+            { name: "comment_on_quote", args: { quoted_text: "# H", comment: "x" } },
+            {
+              name: "propose_replacement",
+              args: { quoted_text: "not there", suggested_text: "x" },
+            },
+            { name: "reply_to_annotation", args: { annotation_id: "nope", text: "hi" } },
+          ])
+        : v1Text("done"),
+    );
+    const r = await runLoop(base({ canEdit: () => false, maxTurns: 9, maxToolCalls: 9 }));
+
+    expect(r.metrics.toolCalls).toBe(3);
+    expect(r.metrics.anchorResolutionFailures).toBe(0);
+    expect(r.metrics.replyFailures).toBe(0);
+    expect(r.metrics.flatOnlyAnchors).toBe(0);
+    expect(r.steps[0]?.toolCalls.map((c) => c.outcome.kind)).toEqual([
+      "refused",
+      "refused",
+      "refused",
+    ]);
+  });
+
+  it("control: the same three calls ARE counted with editing on", async () => {
+    let turn = 0;
+    stubFetch(() =>
+      turn++ === 0
+        ? v1ToolCalls([
+            { name: "comment_on_quote", args: { quoted_text: "# H", comment: "x" } },
+            {
+              name: "propose_replacement",
+              args: { quoted_text: "not there", suggested_text: "x" },
+            },
+            { name: "reply_to_annotation", args: { annotation_id: "nope", text: "hi" } },
+          ])
+        : v1Text("done"),
+    );
+    const r = await runLoop(base({ maxTurns: 9, maxToolCalls: 9 }));
+    expect(r.metrics.anchorResolutionFailures).toBe(2);
+    expect(r.metrics.replyFailures).toBe(1);
   });
 });

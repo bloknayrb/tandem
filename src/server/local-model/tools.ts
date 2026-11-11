@@ -19,6 +19,15 @@
  *     clamp to 1 (information-free on a unique quote; the count===1 gate makes
  *     collapsing two distinct spans structurally impossible).
  *
+ * Editing permission (#1123, ADR-039's tiers): chat is the default tier, and
+ * commenting, suggesting and replying in threads are an opt-in. `dispatch` is
+ * the ONE route by which model output reaches a document, so the gate is its
+ * first statement: unless `ctx.canEdit()` answers exactly `true`, every name
+ * that is not in {@link READ_TOOL_NAMES} is refused before anything is built or
+ * read. It is an allowlist on purpose — a writing tool added later, a tool the
+ * model was never offered and a name that is no tool at all are all refused
+ * with no edit here. **Omitted means refused**, the opposite of `isDocCurrent`.
+ *
  * License (#1521): nothing here. The local model is an AI surface, and an
  * unlicensed install runs no turn at all — the collaborator refuses per run
  * before this dispatcher is ever reached (`collaborator.ts`).
@@ -54,6 +63,15 @@ export interface DispatchCtx {
    * stay open, since they read the live document by construction.
    */
   isDocCurrent?: () => boolean;
+  /**
+   * May this run write — comment, suggest a replacement, reply in a thread?
+   * Read on EVERY dispatch, so switching editing off stops a run already in
+   * flight. **Fail-closed: anything but a function returning exactly `true`
+   * refuses every tool outside {@link READ_TOOL_NAMES}.** Required in the type
+   * so forgetting it is a compile error, and refused at run time so a cast, a
+   * JS caller or a later refactor that drops it still writes nothing.
+   */
+  canEdit: () => boolean;
 }
 
 export interface ToolOutcome {
@@ -73,7 +91,11 @@ export interface ToolOutcome {
         fullyAnchored?: boolean;
         errorCode?: string;
       }
-    | { kind: "reply"; ok: boolean; annotationId: string; replyId?: string; errorCode?: string };
+    | { kind: "reply"; ok: boolean; annotationId: string; replyId?: string; errorCode?: string }
+    /** Refused before anything was read or written: editing is off for this
+     *  run. Its own kind so the loop's anchor- and reply-failure metrics stay
+     *  a record of what the model got wrong, not of what it was not allowed. */
+    | { kind: "refused"; tool: string; errorCode: "EDITING_OFF" | "UNKNOWN_TOOL" };
 }
 
 export const TOOLS: ToolSchema[] = [
@@ -152,6 +174,48 @@ export const TOOLS: ToolSchema[] = [
     },
   },
 ];
+
+/**
+ * The reading tools: the whole of what a chat-tier run may call. An allowlist —
+ * `dispatch` refuses everything else unless editing is on, so adding a tool to
+ * {@link TOOLS} leaves it refused in the chat tier until it is named here.
+ */
+export const READ_TOOL_NAMES: ReadonlySet<string> = new Set(["get_outline", "read_section"]);
+
+/** The tool list a chat-tier run is offered: exactly the reading tools. */
+export const READ_TOOLS: ToolSchema[] = TOOLS.filter((t) => READ_TOOL_NAMES.has(t.name));
+
+/** What the model is told when it calls a writing tool with editing off. Names
+ *  no writing tool, and says what to do instead so it answers in chat rather
+ *  than spending its tool budget on refused calls. */
+export const EDITING_OFF_MESSAGE =
+  "Commenting on and suggesting changes to the document are switched off, so nothing was written. Only get_outline and read_section are available. Do not call this tool again: answer the user in plain text instead.";
+
+function refusedOutcome(name: string): ToolOutcome {
+  if (TOOLS.some((t) => t.name === name)) {
+    return {
+      result: { error: "EDITING_OFF", message: EDITING_OFF_MESSAGE },
+      effect: { kind: "refused", tool: name, errorCode: "EDITING_OFF" },
+    };
+  }
+  return {
+    result: {
+      error: "UNKNOWN_TOOL",
+      message: `No tool named ${name}. Only get_outline and read_section are available. Answer the user in plain text.`,
+    },
+    effect: { kind: "refused", tool: name, errorCode: "UNKNOWN_TOOL" },
+  };
+}
+
+/** What a successful write tells the model (#1123 R3): it proposed, it did not
+ *  change the document. The measured failure was a reply saying "the suggested
+ *  change has been made and is now part of the document" after a proposal the
+ *  user then dismissed. */
+const REPLACEMENT_NOTE =
+  "This is a suggestion waiting for the user to accept or reject. The document text has NOT been changed.";
+const COMMENT_NOTE =
+  "The comment was added for the user to read. The document text has NOT been changed.";
+const REPLY_NOTE = "The reply was posted in the thread. The document text has NOT been changed.";
 
 /**
  * The `not-owned` remedy for the local model (#2216). The shared default names
@@ -288,7 +352,12 @@ function annotateFromQuote(
     extras: mergedExtra,
   });
   return {
-    result: { ok: true, annotation_id: annotation.id },
+    // The id stays: a create result is the only place the model learns one, and
+    // `reply_to_annotation` needs it. The prompt tells it not to quote ids.
+    result:
+      kind === "replacement"
+        ? { ok: true, annotation_id: annotation.id, status: "proposed", note: REPLACEMENT_NOTE }
+        : { ok: true, annotation_id: annotation.id, note: COMMENT_NOTE },
     effect: {
       kind,
       ok: true,
@@ -326,6 +395,13 @@ export function dispatch(
   ctx: DispatchCtx,
 ): ToolOutcome {
   const { ydoc } = ctx;
+  // The editing gate — FIRST, before the lifecycle is built, before the args are
+  // looked at, before the switch. `=== true` on a real function only: an
+  // omitted, non-function or truthy-but-not-boolean answer refuses.
+  if (!READ_TOOL_NAMES.has(name)) {
+    const allowed = typeof ctx.canEdit === "function" && ctx.canEdit() === true;
+    if (!allowed) return refusedOutcome(name);
+  }
   // Built per dispatch, never cached on `ctx`. Two reasons, both silent if
   // broken: a lifecycle outliving a Hocuspocus `onLoadDocument` doc swap writes
   // into a destroyed doc, and a lifecycle injected alongside a different `ydoc`
@@ -416,7 +492,7 @@ export function dispatch(
       // from a reachable one to anyone reading it later.
       if (reply.kind === "ok") {
         return {
-          result: { ok: true, reply_id: reply.replyId },
+          result: { ok: true, reply_id: reply.replyId, note: REPLY_NOTE },
           effect: { kind: "reply", ok: true, annotationId, replyId: reply.replyId },
         };
       }

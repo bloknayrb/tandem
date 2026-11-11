@@ -1,4 +1,5 @@
 <script lang="ts">
+import { createLocalModelSettings } from "../../hooks/useLocalModelSettings.svelte";
 import { createModels } from "../../hooks/useModels.svelte";
 import type { ModelProvider, ModelRegistryEntry } from "../../hooks/useTandemSettings.svelte";
 import { disabledControlStyle } from "../../utils/colors";
@@ -17,6 +18,27 @@ const { readOnly }: SettingsTabContext = $props();
 // every caller shares the same server-loaded `$state`, so mutations
 // propagate across consumers via shared reactivity.
 const models = createModels();
+
+// The server-owned "let local models comment and suggest changes" setting
+// (#1123, ADR-039's opt-in tier). Loaded on every mount of this tab: the tab
+// body is rebuilt on each tab switch and modal open, so this is also how a
+// change made in another window is picked up. The call returns at once while
+// dark, and its state writes land in promise continuations, not in this
+// component's initialisation.
+//
+// Deliberately NOT gated on `readOnly`. That flag means the localStorage
+// settings were written by a newer Tandem; this setting is a server file with
+// no such schema, and switching it off must always be possible.
+const localModel = createLocalModelSettings();
+void localModel.load();
+
+async function onEditingChange(event: Event) {
+  const input = event.currentTarget as HTMLInputElement;
+  await localModel.setEditing(input.checked);
+  // Svelte skips a `checked` update whose value did not change, so after a
+  // save that the server did not take, the DOM would keep the user's click.
+  input.checked = localModel.editing;
+}
 
 const PROVIDER_LABEL: Record<ModelProvider, string> = {
   anthropic: "Anthropic",
@@ -274,6 +296,77 @@ async function confirmDelete(id: string) {
     </button>
   {/if}
 </div>
+
+<!-- Rendered outside the loading / load-failed / empty / list chain above, so
+     the off switch is there in every state of the list. -->
+<section
+  data-testid="local-model-editing-section"
+  style="display: flex; flex-direction: column; gap: var(--tandem-space-2); margin-top: var(--tandem-space-4); padding-top: var(--tandem-space-3); border-top: 1px solid var(--tandem-border);"
+>
+  <div class="settings-section-label">Local models and your document</div>
+  {#if localModel.known}
+    <label
+      style="display: flex; align-items: flex-start; gap: var(--tandem-space-2); font-size: 13px; color: var(--tandem-fg);"
+    >
+      <input
+        type="checkbox"
+        data-testid="local-model-editing-toggle"
+        checked={localModel.editing}
+        onchange={onEditingChange}
+        style="margin-top: 2px; accent-color: var(--tandem-accent); cursor: pointer;"
+      />
+      <span>Let local models comment and suggest changes</span>
+    </label>
+  {:else if localModel.loadFailed}
+    <!-- The server's value is unknown. An unticked box would claim "off" and
+         could only be clicked to On, so offer Retry and an explicit Off. -->
+    <div
+      role="alert"
+      data-testid="local-model-editing-load-error"
+      style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2); font-size: 12px; color: var(--tandem-fg-muted);"
+    >
+      <span>Couldn't read whether local models may comment and suggest changes.</span>
+      <button
+        type="button"
+        data-testid="local-model-editing-retry"
+        onclick={() => localModel.load()}
+        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+      >
+        Retry
+      </button>
+      <button
+        type="button"
+        data-testid="local-model-editing-force-off"
+        onclick={() => localModel.setEditing(false)}
+        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+      >
+        Switch off
+      </button>
+    </div>
+  {:else}
+    <div
+      data-testid="local-model-editing-loading"
+      aria-busy="true"
+      style="font-size: 12px; color: var(--tandem-fg-subtle);"
+    >
+      Checking…
+    </div>
+  {/if}
+  <p style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
+    Experimental — review every suggestion. When this is off, local models can read your
+    document and reply in chat only. A change here applies from your next message; switching it
+    off also stops a reply that is already running from adding comments or suggestions.
+  </p>
+  {#if localModel.saveNotice}
+    <div
+      role="alert"
+      data-testid="local-model-editing-error"
+      style="padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-3); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); font-size: 12px;"
+    >
+      {localModel.saveNotice}
+    </div>
+  {/if}
+</section>
 
 <!-- List-level banner: the store's reactive `saveError`, set by a rolled-back
      fire-and-forget mutator (default/toggle/delete). Suppressed while the editor

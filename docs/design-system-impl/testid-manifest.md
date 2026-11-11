@@ -415,6 +415,7 @@ of these selectors renders in a release build.
   to name no longer ship.
 - `model-{row,default,toggle,edit-btn,delete-confirm,delete-btn}-{*}`,
   `model-add-btn`
+- Local-model editing opt-in (#1123): `local-model-editing-{section,toggle,loading,load-error,retry,force-off,error}`
 - Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save}`
 - First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,apikey,endpoint,error,save,skip,skip-secondary}`
 

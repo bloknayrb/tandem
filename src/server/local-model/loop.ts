@@ -140,6 +140,12 @@ export interface RunLoopOpts {
    *  that does not thread it is unchanged. Checked at each turn boundary and
    *  forwarded to every tool dispatch. */
   isDocCurrent?: () => boolean;
+  /** May this run write? Forwarded to every tool dispatch and read there each
+   *  time (#1123). Fail-closed: `dispatch` refuses every writing tool unless
+   *  this is a function returning exactly `true`, so a caller that leaves it
+   *  out gets a run that can read and chat and nothing else. The caller is also
+   *  responsible for passing a matching `tools` list and prompts. */
+  canEdit: () => boolean;
 }
 
 export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
@@ -259,6 +265,9 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
           // land before these writes. It is here so a future await inside the
           // loop cannot reopen the hole silently.
           isDocCurrent: opts.isDocCurrent,
+          // #1123: the editing permission, read live on every dispatch so
+          // switching it off stops this run's next write.
+          canEdit: opts.canEdit,
         });
         const eff = outcome.effect;
         if ((eff.kind === "comment" || eff.kind === "replacement") && !eff.ok) {
