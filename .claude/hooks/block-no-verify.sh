@@ -24,7 +24,7 @@ COMMAND=$(printf '%s' "$INPUT" | node -e "
 " 2>/dev/null) || {
   {
     echo "Blocked (block-no-verify.sh, fail-closed): could not read the command from the hook input."
-    echo "This hook needs \`node\` on PATH and a JSON tool input. It blocks every Bash call until that works; tell the user."
+    echo "It needs \`node\` on PATH and a JSON tool input whose command is a string. If node is missing, every Bash call is blocked until it is back; tell the user."
   } >&2
   exit 2
 }
@@ -34,7 +34,7 @@ if [[ -n "$COMMAND" && "$COMMAND" =~ --no-verify ]]; then
     echo "Blocked (block-no-verify.sh): this command contains the text --no-verify, which skips the Husky hooks."
     echo "If a Husky hook is failing, fix what it reports instead of bypassing it."
     echo "The match is on the whole command text, so a commit message or PR body that only mentions the flag is blocked too."
-    echo "For that case, write the text to a file and pass the file: git commit -F <file>, gh pr create --body-file <file>."
+    echo "For that case, write the text to a file with the Write tool (a heredoc is a command and is blocked too), then pass the file: git commit -F <file>, gh pr create --body-file <file>."
   } >&2
   exit 2
 fi

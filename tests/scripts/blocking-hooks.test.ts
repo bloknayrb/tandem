@@ -218,6 +218,34 @@ describe("block-plan-without-agent-review.mjs", () => {
     expect(run.stderr).toContain("call ExitPlanMode again");
   });
 
+  it("blocks, rather than crashing open, when the transcript cannot be read", () => {
+    // A directory stats fine and then fails on read. Uncaught, node exits 1,
+    // which does not block a PreToolUse call.
+    const run = spawnSync(
+      process.execPath,
+      [path.join(HOOKS, "block-plan-without-agent-review.mjs")],
+      {
+        input: JSON.stringify({ transcript_path: home }),
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, USERPROFILE: home },
+      },
+    );
+    expect(run.status, run.stderr).toBe(2);
+    expect(run.stderr).toContain("fail-closed");
+  });
+
+  bashOnly("the wrapper turns a gate that cannot run into a block", () => {
+    // An absolute bash, because the child's PATH is emptied to hide `node`.
+    const run = spawnSync("/bin/bash", [path.join(HOOKS, "block-plan-without-agent-review.sh")], {
+      input: "{}",
+      encoding: "utf8",
+      env: { ...process.env, PATH: "/nonexistent" },
+    });
+    expect(run.error, `could not spawn /bin/bash: ${run.error?.message}`).toBeUndefined();
+    expect(run.status, run.stderr).toBe(2);
+    expect(run.stderr).toContain("fail-closed");
+  });
+
   describe("a transcript over the 50 MB cap is scanned from its tail", () => {
     // 51 lines of 1 MiB: more than the cap, so everything written before the
     // padding is outside the scanned tail and everything after is inside it.
@@ -243,6 +271,21 @@ describe("block-plan-without-agent-review.mjs", () => {
       expect(run.status).toBe(2);
       expect(run.stderr).toContain("only the tail is scanned");
       expect(run.stderr).toContain("To unblock");
+    });
+
+    it("blocks when the cut lands inside the plan-write line itself", () => {
+      // A 2 MiB plan write followed by 49 MiB: the tail starts partway through
+      // the write's line, which must be dropped, not half-read as a write.
+      const bigWrite = toolUse("Write", {
+        file_path: planFile,
+        content: "x".repeat(2 * 1024 * 1024),
+      });
+      const run = runGate(
+        "big-cut-in-write",
+        bigWrite + review() + padding.slice(0, 49 * (padding.length / 51)),
+      );
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("only the tail is scanned");
     });
 
     it("does not count a review in the tail for a plan write outside it", () => {

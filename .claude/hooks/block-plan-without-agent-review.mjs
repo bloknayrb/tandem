@@ -102,7 +102,15 @@ const envelope = await readEnvelope();
 const transcriptPath = envelope.transcript_path;
 if (!transcriptPath) block("hook stdin missing transcript_path");
 
-const { planPath, agentAfterPlanWrite, truncated } = await scanTranscript(transcriptPath);
+// A read error mid-scan (a directory, EACCES, a locked file) rejects the read
+// loop. Uncaught, node would exit 1, and a PreToolUse exit 1 does not block.
+let scan;
+try {
+  scan = await scanTranscript(transcriptPath);
+} catch (e) {
+  block(`could not read transcript: ${e.message}`);
+}
+const { planPath, agentAfterPlanWrite, truncated } = scan;
 if (!planPath) {
   const scanned = truncated
     ? `the last ${TRANSCRIPT_BYTE_CAP / (1024 * 1024)} MB of this session's transcript (it is larger; only the tail is scanned) show`

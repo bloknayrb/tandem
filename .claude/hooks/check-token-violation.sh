@@ -34,7 +34,11 @@ FILE_PATH="${FILE_PATH//\\//}"
 # path, so a "starts with /" test never fires there and a sibling worktree
 # (../tandem-fix-x) would still be scanned against the wrong root.
 case "$FILE_PATH" in */.claude/worktrees/*) exit 0 ;; esac
-_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"; _PROJECT_DIR="${_PROJECT_DIR%/}"
+_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"
+while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
+# Known limits, all of which skip the advisory scan rather than run it wrongly:
+# a project dir and a file path in different forms (/c/x against C:/x), a POSIX
+# path that differs from the project dir only by case, and `..` segments.
 if [[ -n "$_PROJECT_DIR" ]]; then
   if [[ "$FILE_PATH" == /* ]]; then
     if [[ "$FILE_PATH" != "$_PROJECT_DIR"/* ]]; then exit 0; fi

@@ -30,6 +30,6 @@ if [[ -n "$FILE_PATH" && "$FILE_PATH" =~ (\.env|package-lock\.json)$ ]]; then
     else
       echo ".env holds local secrets. Ask the user to make the change, or tell them the line to add."
     fi
-  } >&2
+  } >&2 || true # under `set -e` a failed write must not exit 1 before the block
   exit 2
 fi
