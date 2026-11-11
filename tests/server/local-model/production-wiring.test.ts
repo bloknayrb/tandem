@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COLLABORATOR_DEPS } from "../../../src/server/local-model/collaborator.js";
+import {
+  ANSWERING_CHANGED_NOTICE_KEY,
+  DEFAULT_COLLABORATOR_DEPS,
+} from "../../../src/server/local-model/collaborator.js";
 import { answeringLocalModel } from "../../../src/server/local-model/config-source.js";
 import { answeringWasAnnounced } from "../../../src/server/models/local-model-announced.js";
 
@@ -133,5 +136,32 @@ describe("local-model production wiring (#1123, #2404)", () => {
     expect(body).toMatch(
       /announceLocalModelChange\(\s*dedupKey\s*,\s*message\s*,\s*\{\s*answering:\s*fingerprint\s*\}\s*\)/,
     );
+  });
+
+  // Without the key, `recordAnsweringNone` clears the record but leaves the
+  // pending replay: a window connecting later is sent a notice naming a model
+  // that no longer answers, and that delivery records it as told. (The
+  // behaviour is exercised in answering-announced-restart.test.ts.)
+  it("the default `none` passes the answering notice's own replay key", async () => {
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, "export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {");
+    expect(body).toMatch(
+      /none:\s*\(\)\s*=>\s*recordAnsweringNone\(\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*,/,
+    );
+    expect(ANSWERING_CHANGED_NOTICE_KEY).toBe("local-model-answering-changed");
+  });
+
+  // Both #2404 notices describe what was SAVED, so they fire in Solo and while
+  // the licence refuses AI. Neither module that raises the editing-on notice
+  // may consult the mode or the licence; the answering notice's path is pinned
+  // behaviourally in collaborator.test.ts ("fires in Solo mode", "fires under
+  // a licence refusal").
+  it.each([
+    ["models", "local-model-settings.ts"],
+    ["models", "local-model-announced.ts"],
+  ])("%s/%s imports neither the mode nor the licence", async (...parts) => {
+    const src = stripComments(await read(...parts));
+    expect(src).not.toMatch(/from\s+"[^"]*(license\/|\/mode\.js|ai-refusal)/);
+    expect(src).not.toMatch(/readLiveMode|aiRefusal/);
   });
 });

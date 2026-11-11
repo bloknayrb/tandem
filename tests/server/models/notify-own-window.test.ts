@@ -43,8 +43,21 @@ import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../../src/shared/constant
 
 type Headers = Record<string, string>;
 
+/** `close` handlers of every fake request. A fake never closes by itself, and
+ *  the route's keepalive interval lives until its request does, so each test
+ *  closes them all (`closeFakeRequests`) rather than leak a timer per stream. */
+const closers: (() => void)[] = [];
+function closeFakeRequests(): void {
+  for (const close of closers.splice(0)) close();
+}
+
 function fakeRequest(headers?: Headers): Request {
-  return { headers, on: () => undefined } as unknown as Request;
+  return {
+    headers,
+    on: (event: string, cb: () => void) => {
+      if (event === "close") closers.push(cb);
+    },
+  } as unknown as Request;
 }
 
 /** A response that records what was written to it. */
@@ -127,6 +140,7 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
   });
 
   afterEach(async () => {
+    closeFakeRequests();
     await __flushLocalModelAnnouncedForTests();
     __resetLocalModelSettingsForTests();
     resetNotifications();

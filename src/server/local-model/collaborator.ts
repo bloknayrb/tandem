@@ -238,7 +238,7 @@ function quotableName(name: string): string {
  * because it stays in the activity tray.
  */
 export function answeringChangedNotice(now: AnsweringLocalModel): string {
-  return `Which local model Tandem sends your chat to was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
+  return `The local model that is set up to answer your chat was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
 }
 
 /**
@@ -353,11 +353,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
 
     // The single write path. Cancels the pending timer first (so a stale flush
     // can never land after a reset/final write), then commits the buffer if we
-    // still own the run; no-op on an empty buffer (never mint/write "").
+    // still own the run; no-op on an empty buffer (never mint/write ""). A
+    // whitespace-only buffer counts as empty: the loop treats such a turn as
+    // "said nothing" (`editing_off`), and a blank bubble beside that notice
+    // would contradict it. Leading whitespace is only held back, not lost —
+    // it is committed with the first visible character.
     const write = () => {
       cancelTimer();
       charsSinceFlush = 0;
-      if (!isOwner() || buffer.length === 0) return;
+      if (!isOwner() || buffer.trim().length === 0) return;
       if (liveId === null) {
         const appended = appendClaudeChatMessage(buffer, {
           documentId: ctx.docName,
@@ -632,7 +636,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             type: "general-error",
             severity: "info",
             message:
-              "The local model stopped without replying, because commenting and suggesting were switched off for that reply. Ask again for an answer in chat.",
+              "The local model stopped without replying: it tried to comment on or change the document, which local models are not allowed to do right now. Ask again for an answer in chat.",
             documentId: req.docName,
             timestamp: Date.now(),
           });
@@ -882,8 +886,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // change made with no window open, followed by a restart, would start as
     // the silent baseline — and the same local caller can cause both.
     lastAnswering = deps.answering?.() ?? null;
-    if (
-      lastAnswering &&
+    if (lastAnswering === null) {
+      // Nothing answers at start-up: forget which model the user was told
+      // about. The record can outlive the model it names (the write that
+      // cleared it failed, or `models.json` changed while the server was
+      // down), and a stale "told" would let that same model be re-enabled
+      // with no window open and then start, after one more restart, as the
+      // silent baseline.
+      deps.announced?.none();
+    } else if (
       deps.announced &&
       !deps.announced.wasAnnounced(answeringFingerprint(lastAnswering))
     ) {

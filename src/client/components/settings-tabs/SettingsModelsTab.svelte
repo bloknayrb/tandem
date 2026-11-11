@@ -358,7 +358,10 @@ async function confirmDelete(id: string) {
     <!-- The server's value is not known (still reading, or the read failed), so
          the box above is indeterminate and inert. Switch off is offered in both
          cases: a read that hangs or fails must not be the reason commenting
-         cannot be turned off. Live-region roles sit on the TEXT only. -->
+         cannot be turned off. Live-region roles sit on the TEXT only.
+         Known limit: "Checking…" mounts with its text already inside its
+         `role="status"` element, and some screen readers announce a live
+         region only when its content changes after it exists. -->
     <div
       style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2); font-size: 12px; color: var(--tandem-fg-muted);"
     >

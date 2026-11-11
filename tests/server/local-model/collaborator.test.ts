@@ -2339,6 +2339,40 @@ describe("collaborator — answering-changed notice (#2404)", () => {
     await h.collab.stop();
   });
 
+  // The notice is about what was SAVED, so it does not wait for a moment when
+  // the model would actually answer: a change made in Solo, or while the
+  // licence refuses AI, is exactly as much a change the user may not have
+  // made. (The unusable-model notice, by contrast, is held in both.)
+  it("fires in Solo mode", async () => {
+    setMode("solo");
+    try {
+      const h = harness(A);
+      const moved = { ...A, endpoint: "http://127.0.0.1:9999" };
+      h.change(moved);
+      expect(notes()).toHaveLength(1);
+      expect(notes()[0].message).toBe(answeringChangedNotice(moved));
+      expect(getStartupNotices()).toEqual(notes());
+      await h.collab.stop();
+    } finally {
+      setMode("tandem");
+    }
+  });
+
+  it("fires under a licence refusal, and its text does not claim the model answers", async () => {
+    const refusal = {
+      error: "LICENSE_REQUIRED" as const,
+      kind: "unlicensed" as const,
+      message: "Tandem is unlicensed, so its AI features are turned off.",
+    };
+    const h = harness(A, { aiRefusal: () => refusal });
+    h.change(B);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].message).toBe(answeringChangedNotice(B));
+    // True while refused or in Solo: it names what is set up, not what happens.
+    expect(notes()[0].message).not.toMatch(/sends your chat|is answering|will answer/);
+    await h.collab.stop();
+  });
+
   it("a modelId-only change is a notice", async () => {
     const h = harness(A);
     h.change({ ...A, modelId: "llama3.1:8b" });
@@ -2646,7 +2680,7 @@ describe("answeringChangedNotice — what it may carry (#2404)", () => {
   // was told about, so it says "set or changed" and no longer asserts an edit.
   it("the notice, whole", () => {
     expect(answeringChangedNotice(base)).toBe(
-      'Which local model Tandem sends your chat to was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
+      'The local model that is set up to answer your chat was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
     );
   });
 
@@ -2783,10 +2817,23 @@ describe("collaborator — the model found at start-up is announced unless a bro
     await h.collab.stop();
   });
 
-  it("does not call none when no model answered at wire", async () => {
-    const h = harness(null);
+  // The record can outlive the model it names (a failed clearing write, or
+  // models.json changed while the server was down). Start-up with nothing
+  // answering clears it, or the same model re-enabled with no window open
+  // would start, one restart later, as the silent baseline.
+  it("none at wire clears the record once, and a later still-none write does not repeat it", async () => {
+    const h = harness(null, [answeringFingerprint(A)]);
+    expect(h.none).not.toHaveBeenCalled(); // creation touches nothing
     h.collab.__startForTests();
+    expect(h.none).toHaveBeenCalledTimes(1);
     h.change(null);
+    expect(h.none).toHaveBeenCalledTimes(1);
+    await h.collab.stop();
+  });
+
+  it("a model at wire does not clear the record", async () => {
+    const h = harness(A, [answeringFingerprint(A)]);
+    h.collab.__startForTests();
     expect(h.none).not.toHaveBeenCalled();
     await h.collab.stop();
   });
@@ -2938,10 +2985,56 @@ describe("collaborator — a run that may not write ends honestly (#1123 R2, exi
     expect(all[0].type).toBe("general-error");
     expect(all[0].documentId).toBe("doc-editing-off");
     expect(all[0].message).toBe(
-      "The local model stopped without replying, because commenting and suggesting were switched off for that reply. Ask again for an answer in chat.",
+      "The local model stopped without replying: it tried to comment on or change the document, which local models are not allowed to do right now. Ask again for an answer in chat.",
     );
     expect(all[0].message).not.toMatch(/step limit|ran out of time/);
     expect(chatMessages()).toHaveLength(0); // and no empty bubble
+  });
+
+  // The loop calls a whitespace-only text turn "said nothing" (editing_off).
+  // The sink must agree, or a blank bubble sits beside "stopped without replying".
+  it("a whitespace-only text-only turn commits no bubble, only the notice", async () => {
+    setupDoc("doc-editing-off-blank", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onTurnEnd?.({ hadToolCalls: true });
+          opts.onContentDelta?.("\n\n  ");
+          opts.onContentDelta?.("\t\n");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return {
+            metrics: { ...cleanResult("").metrics, turns: 2, toolCalls: 1, exit: "editing_off" },
+            steps: [REFUSED_STEP],
+            finalContent: "\n\n  \t\n",
+            messages: [],
+          };
+        },
+      }),
+    );
+    collab.onEvent(chatEvent("go", { documentId: "doc-editing-off-blank" }));
+    await drain(collab);
+
+    expect(chatMessages()).toHaveLength(0);
+    expect(getBuffer()).toHaveLength(1);
+    expect(getBuffer()[0].message).toMatch(/stopped without replying/);
+  });
+
+  it("leading whitespace is held back, not lost: it is committed with the first visible text", async () => {
+    setupDoc("doc-leading-ws", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.("\n\n");
+          opts.onContentDelta?.("Hello.");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("\n\nHello.");
+        },
+      }),
+    );
+    collab.onEvent(chatEvent("go", { documentId: "doc-leading-ws" }));
+    await drain(collab);
+
+    expect(chatMessages().map((m) => m.text)).toEqual(["\n\nHello."]);
   });
 
   it("a clean exit after a refusal delivers the reply and produces no notification", async () => {

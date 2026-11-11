@@ -37,7 +37,14 @@
  *
  * The read fails toward announcing: a missing, unreadable or malformed file
  * reads as "nothing was ever announced", so the cost of losing it is one
- * repeated notice, never a silent change. A failed write has the same cost.
+ * repeated notice, never a silent change. A failed write that was RECORDING a
+ * notice has the same cost. A failed write that was CLEARING the record (Off,
+ * or no model answering) is worse: the file still says "told", so the same
+ * state switched back on with no window open would not be re-announced after
+ * a restart. Start-up therefore clears the record again whenever commenting is
+ * off or no local model answers (`primeLocalModelSettings`, the collaborator's
+ * `wire`); what is left is a clear that fails every time it is tried, which is
+ * logged and not otherwise bounded.
  *
  * It lives in `models/` so that both the settings module and the collaborator
  * can use it (a file outside `local-model/` may not import the engine). A dark
