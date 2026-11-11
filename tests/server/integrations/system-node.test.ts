@@ -157,7 +157,12 @@ describe("screenedRealPath follows a link only after screening its target", () =
   });
 });
 
-describe("the PATH walk on a real filesystem (POSIX)", () => {
+// POSIX-only: shell-script stand-ins for `node` (`#!/bin/sh`, `chmod 0o755`) and
+// symlinks, judged with `platform: "linux"`. Skipped on a Windows host, where
+// none of that holds; CI's Linux `check` leg runs it on every push.
+const ON_WINDOWS = process.platform === "win32";
+
+describe.skipIf(ON_WINDOWS)("the PATH walk on a real filesystem (POSIX)", () => {
   let root: string;
   const makeNode = (d: string): string => {
     mkdirSync(d, { recursive: true });
@@ -394,24 +399,31 @@ describe("version managers that delete old versions: record their stable link (B
   const walk = (pathVar: string) =>
     findSystemNodeAsync({ pathVar, platform: "linux", scratchRoots: [], env: {} });
 
-  it("Homebrew: records <prefix>/opt/node/bin/node, not the Cellar version directory", async () => {
-    const prefix = brew(["23.1.0"], "23.1.0");
-    expect(await walk(join(prefix, "bin"))).toBe(join(prefix, "opt", "node", "bin", "node"));
-  });
+  // POSIX-only, like the real-filesystem walk above.
+  it.skipIf(ON_WINDOWS)(
+    "Homebrew: records <prefix>/opt/node/bin/node, not the Cellar version directory",
+    async () => {
+      const prefix = brew(["23.1.0"], "23.1.0");
+      expect(await walk(join(prefix, "bin"))).toBe(join(prefix, "opt", "node", "bin", "node"));
+    },
+  );
 
-  it("Homebrew: keeps the real path when no opt link exists, or it names another version", async () => {
-    const none = brew(["23.1.0"], null);
-    expect(await walk(join(none, "bin"))).toBe(
-      join(none, "Cellar", "node", "23.1.0", "bin", "node"),
-    );
-    rmSync(none, { recursive: true, force: true });
-    const other = brew(["22.12.0", "23.1.0"], "22.12.0");
-    expect(await walk(join(other, "bin"))).toBe(
-      join(other, "Cellar", "node", "23.1.0", "bin", "node"),
-    );
-  });
+  it.skipIf(ON_WINDOWS)(
+    "Homebrew: keeps the real path when no opt link exists, or it names another version",
+    async () => {
+      const none = brew(["23.1.0"], null);
+      expect(await walk(join(none, "bin"))).toBe(
+        join(none, "Cellar", "node", "23.1.0", "bin", "node"),
+      );
+      rmSync(none, { recursive: true, force: true });
+      const other = brew(["22.12.0", "23.1.0"], "22.12.0");
+      expect(await walk(join(other, "bin"))).toBe(
+        join(other, "Cellar", "node", "23.1.0", "bin", "node"),
+      );
+    },
+  );
 
-  it("nvm keeps the real, versioned path (it keeps old versions)", async () => {
+  it.skipIf(ON_WINDOWS)("nvm keeps the real, versioned path (it keeps old versions)", async () => {
     const v = join(base, ".nvm", "versions", "node", "v22.12.0", "bin");
     mkdirSync(v, { recursive: true });
     writeFileSync(join(v, "node"), "#!/bin/sh\necho v22.12.0\n");

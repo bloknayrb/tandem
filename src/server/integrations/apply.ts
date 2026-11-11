@@ -24,6 +24,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  promises,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -33,6 +34,7 @@ import {
 import {
   chmod,
   copyFile,
+  type FileHandle,
   mkdir,
   open,
   readdir,
@@ -90,9 +92,14 @@ import { isTauriSidecar, resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import {
   backupDir,
+  commitReservedBackup,
+  discardReservedBackup,
   pruneOldBackups,
+  type ReservedBackup,
+  reserveBackup,
   SWEEP_BACKUP_PREFIX,
   shouldBackup,
+  writeAllThrough,
   writeBackup,
 } from "./backup.js";
 import {
@@ -1101,6 +1108,16 @@ export interface DetectOptions {
  * `src/cli/uninstall-scrub.ts`; the two cannot share an implementation because
  * `detectTargets` is synchronous, but they must not diverge in behaviour.
  */
+/** `p` does not exist (`lstat` answers ENOENT); any other error is not "missing". */
+function isMissing(p: string): boolean {
+  try {
+    lstatSync(p);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
 function isReparsePoint(p: string): boolean {
   try {
     return lstatSync(p).isSymbolicLink();
@@ -1345,6 +1362,10 @@ function detectWith(
       // install", and routing a security refusal into it would report the
       // attack this function exists to stop as an ordinary absence. It is also
       // what keeps this in step with the async twin, which logs.
+      // No `Packages` folder is the ordinary no-MSIX case, not a refusal: say
+      // nothing (#2358 PR 2b review, where the old message read as an attack on
+      // every Windows test home and every profile without one).
+      if (isMissing(packagesDir)) return targets;
       if (isReparsePoint(packagesDir)) {
         console.error(
           `[Tandem] Refusing to enumerate ${packagesDir}: reparse point or unreadable. ` +
@@ -1492,29 +1513,63 @@ async function atomicWrite(
     expectUnchanged?: FileStamp;
     /** Test-only seam immediately before the refresh commit guard. */
     beforeCommitForTests?: () => Promise<void>;
+    /**
+     * Sweep-only (#2358 PR 2b): a temp file {@link prepareAtomicTmp} already
+     * created and restricted beside `dest`. Its content is written through its
+     * held handle and its ACL step is skipped (done before the caller's read),
+     * so the read-to-rename window holds no ACL work. This call owns it: every
+     * path closes the handle, and every failure removes the file.
+     */
+    preparedTmp?: PreparedTmp;
+    /**
+     * Set to `performance.now()` at the moment `dest` was, or may have been,
+     * changed: after the rename, or before the EXDEV fallback's copy. Unset
+     * means nothing reached `dest`.
+     */
+    committed?: { at?: number };
   } = {},
 ): Promise<void> {
   const { signal } = opts;
   throwIfAborted(signal);
-  const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
-  // mode at create, not chmod-after: on POSIX a plain writeFile lands at
-  // 0o666 & ~umask, leaving sibling vendors' tokens world-readable until the
-  // tighten below. Windows ignores mode (the ACL step is the protection).
-  // `flush`: durable before the rename publishes it; a filesystem that refuses
-  // fsync falls back to an unflushed write, as `atomicWrite` does.
-  for (const flush of [true, false]) {
+  const tmp = opts.preparedTmp?.path ?? setupTmpPath(dest);
+  if (opts.preparedTmp !== undefined) {
+    const { handle } = opts.preparedTmp;
     try {
-      await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600, signal, flush });
-      break;
+      await writeAllThrough(handle, Buffer.from(content, "utf-8"));
+      try {
+        await handle.sync();
+      } catch (syncErr) {
+        // As below: a filesystem that refuses fsync gets an unflushed write.
+        if (!isFlushUnsupported(syncErr)) throw syncErr;
+      }
+      await handle.close();
     } catch (writeErr) {
-      if (flush && isFlushUnsupported(writeErr)) continue;
+      await handle.close().catch(() => {});
       await unlinkOrLeak(tmp, writeErr);
       throw writeErr;
+    }
+  } else {
+    // mode at create, not chmod-after: on POSIX a plain writeFile lands at
+    // 0o666 & ~umask, leaving sibling vendors' tokens world-readable until the
+    // tighten below. Windows ignores mode (the ACL step is the protection).
+    // `flush`: durable before the rename publishes it; a filesystem that refuses
+    // fsync falls back to an unflushed write, as `atomicWrite` does.
+    for (const flush of [true, false]) {
+      try {
+        await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600, signal, flush });
+        break;
+      } catch (writeErr) {
+        if (flush && isFlushUnsupported(writeErr)) continue;
+        await unlinkOrLeak(tmp, writeErr);
+        throw writeErr;
+      }
     }
   }
 
   try {
-    if (process.platform === "win32") {
+    if (opts.preparedTmp !== undefined) {
+      // Restricted at prepare, before the caller's read; nothing reopened it.
+    } else if (process.platform === "win32") {
       await setRestrictiveAcl(tmp, { signal });
     } else {
       throwIfAborted(signal);
@@ -1553,6 +1608,7 @@ async function atomicWrite(
 
   try {
     await rename(tmp, dest);
+    if (opts.committed) opts.committed.at = performance.now();
   } catch (err) {
     // EXDEV: cross-device link — fall back to copy + delete. The copy
     // preserves the source mode on POSIX (file is created via copyFile's
@@ -1560,7 +1616,13 @@ async function atomicWrite(
     // destination DACL is recomputed from the dest dir, so we re-run
     // setRestrictiveAcl on the dest after the cross-device copy.
     if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-      await copyFile(tmp, dest);
+      if (opts.committed) opts.committed.at = performance.now();
+      try {
+        await copyFile(tmp, dest);
+      } catch (copyErr) {
+        await unlinkOrLeak(tmp, copyErr);
+        throw copyErr;
+      }
       await unlinkOrLeak(tmp, err);
       if (process.platform === "win32") await setRestrictiveAcl(dest);
       else await chmod(dest, 0o600);
@@ -1574,6 +1636,46 @@ async function atomicWrite(
   // every failure path above re-throws first. See `sweepStaleSetupTemps` for
   // why this can never fail the write it follows.
   await sweepStaleSetupTemps(dirname(dest));
+}
+
+/** The temp `atomicWrite` renames over `dest`; {@link SETUP_TMP_NAME} matches it. */
+function setupTmpPath(dest: string): string {
+  return join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
+}
+
+/** A temp file made ready before its content is known (#2358 PR 2b). */
+export interface PreparedTmp {
+  readonly path: string;
+  readonly handle: FileHandle;
+}
+
+/**
+ * Create `atomicWrite`'s temp file for `dest` now, empty, exclusively and
+ * restricted (POSIX 0600; on Windows the restrictive DACL), keeping its handle
+ * open for the content. The boot sweep calls this before its authoritative
+ * read, so the Windows ACL step (an icacls run and a PowerShell verify) is
+ * outside the window that read opens. Same name shape as every other
+ * `atomicWrite` temp, so {@link sweepStaleSetupTemps} reaps one a killed run
+ * leaves. Exported for the Windows ACL proof spec.
+ */
+export async function prepareAtomicTmp(dest: string): Promise<PreparedTmp> {
+  const path = setupTmpPath(dest);
+  const handle = await promises.open(path, "wx", 0o600);
+  try {
+    if (process.platform === "win32") await setRestrictiveAcl(path);
+    else await handle.chmod(0o600);
+  } catch (err) {
+    await handle.close().catch(() => {});
+    await unlinkOrLeak(path, err);
+    throw err;
+  }
+  return { path, handle };
+}
+
+/** Close and remove a prepared temp that was never handed to `atomicWrite`. */
+async function discardPreparedTmp(prepared: PreparedTmp): Promise<void> {
+  await prepared.handle.close().catch(() => {});
+  await unlink(prepared.path).catch(() => {});
 }
 
 /** Orphaned setup temps older than this are swept. */
@@ -1860,6 +1962,9 @@ export type ConfigReadResult =
       /** The file as read — see {@link FileStamp}. */
       stamp: FileStamp;
     };
+
+/** A config {@link readConfigForMutation} opened for a write. */
+type OpenedConfig = Extract<ConfigReadResult, { status: "ok" }>;
 
 /**
  * Open a client config for a NON-DESTRUCTIVE mutation.
@@ -2840,6 +2945,9 @@ export async function refreshAllMcpEntryBinaries(
   let claudeCodeBridgeMemo: ClaudeCodeBridge | null | undefined;
   const claudeCodeBridgeFor = async (
     servers: Record<string, unknown>,
+    /** False inside the write window: resolve from what is already known,
+     *  never start a `node --version` probe there (#2358 PR 2b). */
+    mayProbe = true,
   ): Promise<ClaudeCodeBridge | null> => {
     if (claudeCodeBridgeMemo !== undefined) return claudeCodeBridgeMemo;
     const currentScript =
@@ -2848,6 +2956,8 @@ export async function refreshAllMcpEntryBinaries(
         : durableBridgeScript();
     if (claudeCodeBridgeForTests === undefined && currentScript === null) return null;
     if (!claudeCodeEntryNeedsBridge(servers.tandem, currentScript)) return null;
+    // Unmemoised: a later read outside the window may still probe.
+    if (!mayProbe) return resolveClaudeCodeBridge();
     try {
       await warmClaudeCodeBridge();
       claudeCodeBridgeMemo = resolveClaudeCodeBridge();
@@ -2864,202 +2974,279 @@ export async function refreshAllMcpEntryBinaries(
   /** A config whose write was skipped or failed: its on-disk scripts are unknown. */
   let anyConfigUnsettled = false;
 
-  targetLoop: for (const target of targets) {
-    // A write the pre-rename re-check abandons is retried from a fresh read,
-    // within this boot (#2358 PR 2b hardware smoke, P1): Claude Code rewrites
-    // `~/.claude.json` often enough while sessions are open that the first
-    // boot after an upgrade lost the race on Windows, where the write's own
-    // ACL step widens the window to about half a second.
-    for (let attempt = 1; ; attempt++) {
-      /** The sweep backup this attempt wrote, removed if its write is abandoned. */
-      let sweepBackup: string | undefined;
-      try {
-        // ONE read and at most ONE write per config, however many keys we repair.
-        // `~/.claude.json` is routinely multi-megabyte (it stores per-project
-        // history) and this is awaited on the startup path ahead of the launcher
-        // spawn, so a read per key would put the whole file through `stat` +
-        // `readFile` + `JSON.parse` twice to answer a question that is `no-op` for
-        // one of the keys in almost every real config.
-        const opened = await readConfigForMutation(target.configPath);
-        if (opened.status !== "ok") {
-          if (opened.status === "skipped") {
-            // A config Tandem could not read may still name an old bridge copy.
-            anyConfigUnsettled = true;
-            // Every refusal was previously silent. `malformed-json` in particular
-            // deserves to be loud: `~/.claude.json` is the whole MCP registry, so
-            // if it does not parse then EVERY server the user has is broken — and
-            // Tandem is the only process that just found out. The reasons are
-            // fixed enum strings precisely so they are safe to log (parse-error
-            // text would embed a source snippet from a file holding bearer tokens).
-            console.error(
-              `[Tandem] Left ${target.label} untouched (${opened.reason}). ` +
-                "Run 'tandem doctor' for the full check.",
-            );
-          }
-          continue targetLoop;
-        }
+  /**
+   * What one read of a config asks the sweep to do: the migration and the
+   * repair loop run on `opened.servers` in place. Lines describing a change
+   * (`changeLines`) are printed only once a write has landed; a write the
+   * re-check abandons must not also be reported as made. "Left untouched"
+   * lines (`skipLines`) are printed once per config whatever the outcome.
+   */
+  const planWrite = async (target: DetectedTarget, opened: OpenedConfig, mayProbe = true) => {
+    let dirty = false;
+    const claudeCodeBridge =
+      target.kind === "claude-code" ? await claudeCodeBridgeFor(opened.servers, mayProbe) : null;
+    if (
+      target.kind === "claude-code" &&
+      claudeCodeBridge === null &&
+      classifyClaudeCodeTandemEntry(opened.servers.tandem, MCP_URL).kind === "tandem-http"
+    ) {
+      // Say why the switch did not happen — the line `tandem doctor` points
+      // at, since the doctor itself never probes. Printed once per process.
+      warnClaudeCodeHttpFallback();
+    }
+    // The migration is its own branch AHEAD of the repair loop: the HTTP
+    // entry has no `command`, so the repair would return before looking.
+    const migration = migrateHttpEntryInPlace(opened.servers, {
+      targetKind: target.kind,
+      bridge: claudeCodeBridge,
+    });
+    dirty ||= migration.changed;
+    const changeLines: string[] = [];
+    const skipLines: string[] = [];
+    for (const entryKey of REFRESHABLE_ENTRY_KEYS) {
+      // `targetKind` is threaded because convergence is scoped to Claude
+      // Desktop and ONLY the sweep knows which config it is looking at. A
+      // default here would unlock the branch for every direct caller.
+      const { changed, result } = repairEntryInPlace(opened.servers, {
+        entryKey,
+        targetKind: target.kind,
+        claudeCodeBridge,
+      });
+      dirty ||= changed;
+      if (result.status === "converged") {
+        // A DISTINCT sentence, not the staleness one. Nothing was stale here —
+        // a bare name cannot go stale — and `args` was replaced wholesale
+        // rather than refreshed. This string is what a user pastes into a bug
+        // report, so it has to describe what actually happened, including the
+        // restart they have not been prompted for by anything else.
+        changeLines.push(
+          `[Tandem] Converged the ${entryKey} entry in ${target.label} from 'npx' onto a ` +
+            "bundled Node path — restart the client for it to take effect.",
+        );
+      } else if (result.status === "rewritten") {
+        // Name what actually moved. The binary and the script are repaired
+        // independently, so `from`/`to` are null on a script-only fix —
+        // logging them unconditionally would print "null → null" for a real
+        // repair.
+        const what =
+          result.from === null
+            ? "script path refreshed"
+            : `${result.from} → ${result.to}` +
+              (result.scriptRefreshed ? ", script path also refreshed" : "");
+        changeLines.push(`[Tandem] Repaired the ${entryKey} entry in ${target.label} (${what}).`);
+      } else if (result.status === "skipped") {
+        skipLines.push(
+          `[Tandem] Left the ${entryKey} entry in ${target.label} untouched (${result.reason}). ` +
+            "Run 'tandem doctor' for the full check.",
+        );
+      } else {
+        // Exhaustiveness. This block used to end at the `skipped` branch with
+        // no `else`, so a status nobody had handled would have rewritten the
+        // user's `~/.claude.json` and said NOTHING — the loudest possible
+        // action with the quietest possible output. `EntryRepairResult` is
+        // narrowed to what `repairEntryInPlace` can actually produce so this
+        // can compile at all.
+        result.status satisfies "no-op";
+      }
+    }
+    return { dirty, migration, changeLines, skipLines };
+  };
 
-        let dirty = false;
-        const claudeCodeBridge =
-          target.kind === "claude-code" ? await claudeCodeBridgeFor(opened.servers) : null;
-        if (
-          target.kind === "claude-code" &&
-          claudeCodeBridge === null &&
-          classifyClaudeCodeTandemEntry(opened.servers.tandem, MCP_URL).kind === "tandem-http"
-        ) {
-          // Say why the switch did not happen — the line `tandem doctor` points
-          // at, since the doctor itself never probes.
-          warnClaudeCodeHttpFallback();
-        }
-        // The migration is its own branch AHEAD of the repair loop: the HTTP
-        // entry has no `command`, so the repair would return before looking.
-        const migration = migrateHttpEntryInPlace(opened.servers, {
-          targetKind: target.kind,
-          bridge: claudeCodeBridge,
-        });
-        dirty ||= migration.changed;
-        // Lines describing a change are printed only once the write has landed:
-        // a write the re-check abandons must not also be reported as made.
-        // (The "left untouched" lines wait with them, printed once per config.)
-        const afterWrite: string[] = [];
-        for (const entryKey of REFRESHABLE_ENTRY_KEYS) {
-          // `targetKind` is threaded because convergence is scoped to Claude
-          // Desktop and ONLY the sweep knows which config it is looking at. A
-          // default here would unlock the branch for every direct caller.
-          const { changed, result } = repairEntryInPlace(opened.servers, {
-            entryKey,
-            targetKind: target.kind,
-            claudeCodeBridge,
-          });
-          dirty ||= changed;
-          if (result.status === "converged") {
-            // A DISTINCT sentence, not the staleness one. Nothing was stale here —
-            // a bare name cannot go stale — and `args` was replaced wholesale
-            // rather than refreshed. This string is what a user pastes into a bug
-            // report, so it has to describe what actually happened, including the
-            // restart they have not been prompted for by anything else.
-            afterWrite.push(
-              `[Tandem] Converged the ${entryKey} entry in ${target.label} from 'npx' onto a ` +
-                "bundled Node path — restart the client for it to take effect.",
-            );
-          } else if (result.status === "rewritten") {
-            // Name what actually moved. The binary and the script are repaired
-            // independently, so `from`/`to` are null on a script-only fix —
-            // logging them unconditionally would print "null → null" for a real
-            // repair.
-            const what =
-              result.from === null
-                ? "script path refreshed"
-                : `${result.from} → ${result.to}` +
-                  (result.scriptRefreshed ? ", script path also refreshed" : "");
-            afterWrite.push(
-              `[Tandem] Repaired the ${entryKey} entry in ${target.label} (${what}).`,
-            );
-          } else if (result.status === "skipped") {
-            // Deferred with the change lines, so a retried write does not
-            // print it once per try.
-            afterWrite.push(
-              `[Tandem] Left the ${entryKey} entry in ${target.label} untouched (${result.reason}). ` +
-                "Run 'tandem doctor' for the full check.",
-            );
-          } else {
-            // Exhaustiveness. This block used to end at the `skipped` branch with
-            // no `else`, so a status nobody had handled would have rewritten the
-            // user's `~/.claude.json` and said NOTHING — the loudest possible
-            // action with the quietest possible output. `EntryRepairResult` is
-            // narrowed to what `repairEntryInPlace` can actually produce so this
-            // can compile at all.
-            result.status satisfies "no-op";
+  /** A config Tandem could not read: say so, and keep its scripts unpruned. */
+  const reportUnreadable = (target: DetectedTarget, opened: ConfigReadResult) => {
+    if (opened.status !== "skipped") return;
+    // A config Tandem could not read may still name an old bridge copy.
+    anyConfigUnsettled = true;
+    // Every refusal was previously silent. `malformed-json` in particular
+    // deserves to be loud: `~/.claude.json` is the whole MCP registry, so
+    // if it does not parse then EVERY server the user has is broken — and
+    // Tandem is the only process that just found out. The reasons are
+    // fixed enum strings precisely so they are safe to log (parse-error
+    // text would embed a source snippet from a file holding bearer tokens).
+    console.error(
+      `[Tandem] Left ${target.label} untouched (${opened.reason}). ` +
+        "Run 'tandem doctor' for the full check.",
+    );
+  };
+
+  targetLoop: for (const target of targets) {
+    /** The last read's "left untouched" lines, printed once when this config settles. */
+    let skipLines: string[] = [];
+    try {
+      // A write the pre-rename re-check abandons is retried from a fresh
+      // read, within this boot (#2358 PR 2b hardware smoke, P1), up to
+      // SWEEP_WRITE_ATTEMPTS tries.
+      //
+      // The window that re-check guards runs from the authoritative read to
+      // the rename. For Claude Code's config it holds no ACL work: the backup
+      // slot and the temp file are created and restricted FIRST (on Windows an
+      // icacls run and a PowerShell verify each, measured at 6.5-24 s a try),
+      // then the config is read again and everything written comes from that
+      // read. The hardware smoke had measured that whole span inside the
+      // window, which a Claude Code session writing the file every few
+      // seconds would abandon on every try.
+      for (let attempt = 1; ; attempt++) {
+        /** This try's backup, set only once it is filled and renamed. */
+        let sweepBackup: string | undefined;
+        /** Prepared files this try still owns; whatever is left is discarded. */
+        let reservedBackup: ReservedBackup | undefined;
+        let preparedTmp: PreparedTmp | undefined;
+        /** When the authoritative read began (`performance.now()`), for the window line. */
+        let readAt: number | undefined;
+        const committed: { at?: number } = {};
+        try {
+          // ONE read and at most ONE write per config, however many keys we
+          // repair. `~/.claude.json` is routinely multi-megabyte (it stores
+          // per-project history) and this is awaited on the startup path ahead
+          // of the launcher spawn, so a read per key would put the whole file
+          // through `stat` + `readFile` + `JSON.parse` twice to answer a
+          // question that is `no-op` for one of the keys in almost every real
+          // config. (A Claude Code config that needs a write is read twice;
+          // see the next block.)
+          skipLines = [];
+          let opened = await readConfigForMutation(target.configPath);
+          if (opened.status !== "ok") {
+            reportUnreadable(target, opened);
+            continue targetLoop;
           }
-        }
-        if (dirty && target.kind === "claude-code") {
-          // Back up Claude Code's user-level config before the sweep rewrites it
-          // (#2358 PR 2b): the migration fires once on every install, and Claude
-          // Code writes this file too. The backup is the pre-image the re-check
-          // below compares against, so it is exactly what this write replaces.
-          // It does not close #1599: it undoes TANDEM's write. A Claude Code
-          // write that lands between the re-check and the rename is in neither
-          // this copy nor the result. No backup, no write: the next start
-          // retries.
-          try {
-            sweepBackup = await backupConfigBytes(opened.stamp.bytes, SWEEP_BACKUP_PREFIX, {
-              prune: false,
+          let plan = await planWrite(target, opened);
+          skipLines = plan.skipLines;
+          if (plan.dirty && target.kind === "claude-code") {
+            // Prepare, outside the window. (The second plan below never
+            // starts a `node --version` probe: it resolves from what the first
+            // plan, or an earlier config, already learned.)
+            try {
+              reservedBackup = await reserveSweepBackup();
+            } catch (err) {
+              throw new SweepBackupError(err);
+            }
+            preparedTmp = await prepareAtomicTmp(target.configPath);
+            if (process.env.VITEST === "true") await sweepAfterPrepareForTests?.();
+
+            // The authoritative read. The first read only said there is work;
+            // every byte written, backed up or logged comes from this one.
+            skipLines = [];
+            readAt = performance.now();
+            const reread = await readConfigForMutation(target.configPath);
+            if (reread.status !== "ok") {
+              reportUnreadable(target, reread);
+              continue targetLoop;
+            }
+            opened = reread;
+            plan = await planWrite(target, opened, false);
+            skipLines = plan.skipLines;
+            if (plan.dirty) {
+              // The exact bytes the re-check compares against, so the backup
+              // is what this write replaces. No backup, no write.
+              try {
+                sweepBackup = await commitReservedBackup(reservedBackup, opened.stamp.bytes);
+              } catch (err) {
+                throw new SweepBackupError(err);
+              } finally {
+                reservedBackup = undefined; // committed, or removed by the commit
+              }
+            }
+          }
+          if (plan.dirty) {
+            // `requireExistingDest` because this is a REPAIR: the file was read
+            // moments ago and must still be there. Without it a config deleted
+            // mid-sweep would be recreated from our in-memory snapshot,
+            // resurrecting every other vendor's entries the user just removed.
+            //
+            // `expectUnchanged` (#2358 PR 2b): Claude Code rewrites this same
+            // file. Re-checked immediately before the rename; a change abandons
+            // the write, which is retried from a fresh read up to
+            // `SWEEP_WRITE_ATTEMPTS` times, then at the next start. The residual
+            // is the bound on #1599.
+            const content = JSON.stringify(opened.root, null, 2) + "\n";
+            const tmp = preparedTmp;
+            preparedTmp = undefined; // atomicWrite owns it from here
+            await atomicWrite(content, target.configPath, {
+              requireExistingDest: true,
+              expectUnchanged: opened.stamp,
+              beforeCommitForTests: sweepBeforeCommitForTests,
+              preparedTmp: tmp,
+              committed,
             });
-          } catch (err) {
+            if (readAt !== undefined) logSweepWindow(target, readAt, committed.at, "replacing it");
+            if (sweepBackup !== undefined) await pruneSweepBackups(sweepBackup);
+          }
+          for (const line of plan.changeLines) console.error(line);
+          if (plan.migration.result.status === "migrated") {
+            // One distinct line per migrated config, naming the file — never the
+            // token. Logged only after the write landed.
+            console.error(
+              `[Tandem] Switched the tandem entry in ${target.label} (${target.configPath}) from ` +
+                "direct HTTP to Tandem's stdio bridge — Claude Code terminals opened before now keep " +
+                "the old entry until they restart.",
+            );
+          }
+          collectEntryScripts(opened.servers, referencedScripts);
+          continue targetLoop;
+        } catch (err) {
+          if (err instanceof ConfigChangedError) {
+            if (readAt !== undefined) {
+              logSweepWindow(target, readAt, performance.now(), "finding it changed");
+            }
+            // Thrown before the rename, so nothing was written: the backup is of
+            // bytes no Tandem write replaced (hardware smoke, P16). The cap was
+            // not applied for it, so removing it evicts nothing.
+            if (sweepBackup !== undefined) {
+              await discardSweepBackup(sweepBackup, "taken for a write Tandem abandoned");
+            }
+            if (attempt < SWEEP_WRITE_ATTEMPTS) {
+              console.error(
+                `[Tandem] ${target.label} changed while Tandem was updating it; trying again ` +
+                  `(${attempt + 1} of ${SWEEP_WRITE_ATTEMPTS}).`,
+              );
+              await new Promise((r) => setTimeout(r, SWEEP_RETRY_DELAY_MS * attempt));
+              continue;
+            }
             anyConfigUnsettled = true;
             console.error(
-              `[Tandem] Left ${target.label} untouched: could not back it up first (${err instanceof Error ? err.message : err}). ` +
+              `[Tandem] ${target.label} changed each of the ${SWEEP_WRITE_ATTEMPTS} times Tandem tried ` +
+                `to update it (${target.configPath}); left as found — Tandem will try again at its next start.`,
+            );
+            continue targetLoop;
+          }
+          anyConfigUnsettled = true;
+          if (err instanceof SweepBackupError) {
+            console.error(
+              `[Tandem] Left ${target.label} untouched: could not back it up first (${err.message}). ` +
                 "Tandem will try again at its next start.",
             );
             continue targetLoop;
           }
-        }
-        if (dirty) {
-          // `requireExistingDest` because this is a REPAIR: the file was read
-          // moments ago and must still be there. Without it a config deleted
-          // mid-sweep would be recreated from our in-memory snapshot, resurrecting
-          // every other vendor's entries the user just removed. That window
-          // matters more now than it did — before convergence this write
-          // essentially never fired.
-          //
-          // `expectUnchanged` (#2358 PR 2b): Claude Code rewrites this same file,
-          // and from PR 2b this write fires once on every install. Re-checked
-          // immediately before the rename; a change abandons the write, which is
-          // retried from a fresh read up to `SWEEP_WRITE_ATTEMPTS` times, then at
-          // the next start. The residual is the bound on #1599.
-          await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", target.configPath, {
-            requireExistingDest: true,
-            expectUnchanged: opened.stamp,
-            beforeCommitForTests: sweepBeforeCommitForTests,
-          });
-          if (sweepBackup !== undefined) await pruneSweepBackups(sweepBackup);
-        }
-        for (const line of afterWrite) console.error(line);
-        if (migration.result.status === "migrated") {
-          // One distinct line per migrated config, naming the file — never the
-          // token. Logged only after the write landed.
-          console.error(
-            `[Tandem] Switched the tandem entry in ${target.label} (${target.configPath}) from ` +
-              "direct HTTP to Tandem's stdio bridge — Claude Code terminals opened before now keep " +
-              "the old entry until they restart.",
-          );
-        }
-        collectEntryScripts(opened.servers, referencedScripts);
-        continue targetLoop;
-      } catch (err) {
-        if (err instanceof ConfigChangedError) {
-          // Thrown before the rename, so nothing was written: the backup is of
-          // bytes no Tandem write replaced (hardware smoke, P16). The cap was
-          // not applied for it, so removing it evicts nothing.
-          if (sweepBackup !== undefined) await discardAbandonedSweepBackup(sweepBackup);
-          if (attempt < SWEEP_WRITE_ATTEMPTS) {
-            console.error(
-              `[Tandem] ${target.label} changed while Tandem was updating it; trying again ` +
-                `(${attempt + 1} of ${SWEEP_WRITE_ATTEMPTS}).`,
-            );
-            await new Promise((r) => setTimeout(r, SWEEP_RETRY_DELAY_MS * attempt));
-            continue;
+          if (sweepBackup !== undefined) {
+            if (committed.at !== undefined) {
+              // The destination changed, or may have (EXDEV's copy): keep the
+              // pre-image; the cap still applies.
+              await pruneSweepBackups(sweepBackup);
+            } else {
+              // Nothing reached the config (every throw before the rename), so
+              // this backup is of an unchanged file and would only evict a real
+              // one from the cap.
+              await discardSweepBackup(sweepBackup, "taken for a write that failed before it");
+            }
           }
-          anyConfigUnsettled = true;
+          // Include the target — a Windows box can have Claude Code plus several
+          // Desktop/MSIX configs, and an anonymous one-liner does not say which
+          // failed. This is also where `assertPathSafe`'s rejection lands, i.e.
+          // "someone symlinked this config", which is worth naming.
           console.error(
-            `[Tandem] ${target.label} changed each of the ${SWEEP_WRITE_ATTEMPTS} times Tandem tried ` +
-              `to update it (${target.configPath}); left as found — Tandem will try again at its next start.`,
+            `[Tandem] MCP entry refresh failed for ${target.label} (${target.configPath}, non-fatal): ${err instanceof Error ? err.message : err}`,
           );
           continue targetLoop;
+        } finally {
+          // Whatever this try prepared and did not hand over: a throw or an
+          // early exit between preparing and writing must leave neither an
+          // empty backup slot nor a temp beside the config.
+          if (reservedBackup !== undefined) await discardReservedBackup(reservedBackup);
+          if (preparedTmp !== undefined) await discardPreparedTmp(preparedTmp);
         }
-        anyConfigUnsettled = true;
-        // Whether the write landed is unknown here (an error after the rename
-        // is possible), so its backup is kept; the cap still applies.
-        if (sweepBackup !== undefined) await pruneSweepBackups(sweepBackup);
-        // Include the target — a Windows box can have Claude Code plus several
-        // Desktop/MSIX configs, and an anonymous one-liner does not say which
-        // failed. This is also where `assertPathSafe`'s rejection lands, i.e.
-        // "someone symlinked this config", which is worth naming.
-        console.error(
-          `[Tandem] MCP entry refresh failed for ${target.label} (${target.configPath}, non-fatal): ${err instanceof Error ? err.message : err}`,
-        );
-        continue targetLoop;
       }
+    } finally {
+      for (const line of skipLines) console.error(line);
     }
   }
 
@@ -3086,29 +3273,55 @@ export async function refreshAllMcpEntryBinaries(
  * How many times the sweep tries one config's write before leaving it for the
  * next start, and the base of the linear back-off between tries. Small on
  * purpose: the sweep is awaited ahead of the launcher's spawn, so the worst
- * case (every try lost) adds about 0.75 s of waiting plus the tries themselves.
+ * case (every try lost) adds about 0.75 s of waiting plus the tries themselves
+ * (each try's preparation, on Windows two ACL steps, runs outside the window
+ * but still on that path).
  */
 const SWEEP_WRITE_ATTEMPTS = 3;
 const SWEEP_RETRY_DELAY_MS = 250;
 
 /**
- * Remove the backup an abandoned sweep write took, naming it either way: a
- * count of the backup directory cannot tell a removed backup from an evicted
- * one (#2358 PR 2b Windows smoke, P16), and a kept one with no matching change
- * to `~/.claude.json` would otherwise leave its reader guessing.
+ * Remove the backup a sweep write took when nothing reached the config (an
+ * abandoned try, or a write that failed before its rename), naming it either
+ * way: a count of the backup directory cannot tell a removed backup from an
+ * evicted one (#2358 PR 2b Windows smoke, P16), and a kept one with no
+ * matching change to `~/.claude.json` would otherwise leave its reader
+ * guessing. `why` completes "Removed backup <name>, …".
  */
-async function discardAbandonedSweepBackup(backupPath: string): Promise<void> {
+async function discardSweepBackup(backupPath: string, why: string): Promise<void> {
   try {
     await unlink(backupPath);
-    console.error(
-      `[Tandem] Removed backup ${basename(backupPath)}, taken for a write Tandem abandoned.`,
-    );
+    console.error(`[Tandem] Removed backup ${basename(backupPath)}, ${why}.`);
   } catch (err) {
     console.error(
-      `[Tandem] Kept backup ${basename(backupPath)} from a write Tandem abandoned (could not remove it: ` +
+      `[Tandem] Kept backup ${basename(backupPath)}, ${why} (could not remove it: ` +
         `${err instanceof Error ? err.message : err}).`,
     );
   }
+}
+
+/** A failure to reserve or fill the sweep's backup: no backup, no write. */
+class SweepBackupError extends Error {
+  override readonly name = "SweepBackupError";
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+/**
+ * The sweep's read-to-rename window for one try, in whole milliseconds: from
+ * just before the authoritative read to the rename (`replacing it`) or to the
+ * re-check finding the file changed. The measure a hardware run reads to judge
+ * the race (#2358 PR 2b). Names the config, never its contents.
+ */
+function logSweepWindow(
+  target: DetectedTarget,
+  readAt: number,
+  endAt: number | undefined,
+  outcome: "replacing it" | "finding it changed",
+): void {
+  const ms = Math.max(0, Math.round((endAt ?? performance.now()) - readAt));
+  console.error(`[Tandem] ${target.label}: ${ms} ms from reading it to ${outcome}.`);
 }
 
 /**
@@ -3137,6 +3350,15 @@ let sweepBeforeCommitForTests: (() => Promise<void>) | undefined;
 export function _setSweepBeforeCommitForTests(fn: (() => Promise<void>) | undefined): void {
   if (process.env.VITEST !== "true") throw new Error("test seam");
   sweepBeforeCommitForTests = fn;
+}
+
+/** Test seam: runs after the sweep prepares its backup slot and temp file,
+ *  before the authoritative read (called only under vitest). */
+let sweepAfterPrepareForTests: (() => Promise<void>) | undefined;
+
+export function _setSweepAfterPrepareForTests(fn: (() => Promise<void>) | undefined): void {
+  if (process.env.VITEST !== "true") throw new Error("test seam");
+  sweepAfterPrepareForTests = fn;
 }
 
 /** Add every Tandem entry's script (`args[0]`) in `servers` to `out`. */
@@ -3170,22 +3392,12 @@ async function maybeBackupExistingConfig(
 }
 
 /**
- * Write `content` (a client config's bytes) as a backup under the app-data
- * root's backup directory and prune to the backup cap. Shared by
- * `applyConfig`'s conditional backup and the boot sweep's (#2358 PR 2b), so
- * the two cannot disagree about where a backup lands or how it is protected.
- *
- * Atomicity contract: if this throws, the caller MUST NOT write the config.
- *
- * `prune: false` defers the cap to the caller, which prunes once its write has
- * landed: the boot sweep can abandon its write, and a prune taken first would
- * already have evicted an older backup for a copy it then discards.
+ * The app-data root's backup directory, created and tightened. Shared by
+ * `applyConfig`'s conditional backup ({@link backupConfigBytes}) and the boot
+ * sweep's ({@link reserveSweepBackup}, #2358 PR 2b), so the two cannot disagree
+ * about where a backup lands or how it is protected.
  */
-async function backupConfigBytes(
-  content: Buffer,
-  prefix?: string,
-  opts: { prune?: boolean } = {},
-): Promise<string> {
+function preparedBackupDir(): string {
   const dir = backupDir(resolveAppDataDir());
   // assertPathSafe defeats app-data-dir poisoning: `resolveAppDataDir()` is
   // env-derived (`TANDEM_APP_DATA_DIR`, else `env-paths`, which reads
@@ -3212,14 +3424,31 @@ async function backupConfigBytes(
       // protection on the file itself.
     }
   }
+  return dir;
+}
 
-  const backupPath = await writeBackup(dir, content, prefix);
+/**
+ * Write `content` (a client config's bytes) as a backup and prune to the
+ * backup cap. `applyConfig`'s conditional backup.
+ *
+ * Atomicity contract: if this throws, the caller MUST NOT write the config.
+ */
+async function backupConfigBytes(content: Buffer): Promise<string> {
+  const dir = preparedBackupDir();
+  const backupPath = await writeBackup(dir, content);
   // Prune AFTER successful write so we never delete the previous backup
   // before its replacement is on disk — and never the one just written.
-  if (opts.prune !== false) {
-    await pruneOldBackups(dir, prefix, undefined, undefined, basename(backupPath));
-  }
+  await pruneOldBackups(dir, undefined, undefined, undefined, basename(backupPath));
   return backupPath;
+}
+
+/**
+ * Reserve the boot sweep's backup of `~/.claude.json` before the read it
+ * will hold (#2358 PR 2b): see {@link reserveBackup}. The cap is applied only
+ * after the write lands ({@link pruneSweepBackups}).
+ */
+async function reserveSweepBackup(): Promise<ReservedBackup> {
+  return reserveBackup(preparedBackupDir(), SWEEP_BACKUP_PREFIX);
 }
 
 /**

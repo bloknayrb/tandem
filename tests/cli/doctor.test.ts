@@ -3668,6 +3668,31 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
   const userMcp = async (opts: Parameters<typeof runDoctor>[0] = {}) =>
     (await runDoctor(opts)).results.filter((x) => x.check === "user-mcp-config");
 
+  // Review M1: the states the boot sweep never acts on. With a `tandem` CLI on
+  // PATH (the arm that used to carry the claim), no row may promise a startup
+  // repair for them.
+  it.each([
+    ["no config file", null],
+    ["an empty config", ""],
+    ["a malformed tandem entry", JSON.stringify({ mcpServers: { tandem: { type: "sse" } } })],
+  ])("never promises a startup repair for %s (review M1)", async (_label, content) => {
+    const cfg = claudeCodeConfigPath({ homeOverride: home });
+    if (content === null) rmSync(cfg, { force: true });
+    else writeFileSync(cfg, content);
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const cli = join(bin, process.platform === "win32" ? "tandem.cmd" : "tandem");
+    writeFileSync(cli, "#!/bin/sh\n");
+    chmodSync(cli, 0o755);
+    vi.stubEnv("PATH", bin);
+
+    const rows = await userMcp();
+    const warn = rows.find((x) => x.status === "warn");
+    expect(warn, JSON.stringify(rows)).toBeDefined();
+    expect(warn?.fix).toContain("tandem setup --apply");
+    for (const row of rows) expect(row.fix ?? "").not.toContain("attempts this at startup");
+  });
+
   it("never promises that startup adds a missing entry (Windows smoke, finding 4)", async () => {
     writeFileSync(claudeCodeConfigPath({ homeOverride: home }), JSON.stringify({ mcpServers: {} }));
     // A `tandem` command on PATH selects the CLI arm, the one that used to say
@@ -3785,6 +3810,24 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
       expect(warn?.message).toContain("older direct-HTTP entry");
       expect(warn?.fix).toContain(want);
       if (verdict !== "bridge") expect(warn?.fix).not.toMatch(/setup --apply/);
+    },
+  );
+
+  const unknownVerdicts: Array<[string, () => Promise<null>]> = [
+    ["null", async () => null],
+    ["a thrown error", async () => Promise.reject(new Error("import failed"))],
+  ];
+  it.each(unknownVerdicts)(
+    "an unknown verdict (%s) never promises the switch the bridge arm promises (review L5)",
+    async (_label, verdict) => {
+      writeTandem({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcp({ claudeCodeBridgeVerdict: verdict });
+
+      const warn = results.find((x) => x.status === "warn");
+      expect(warn?.message).toContain("older direct-HTTP entry");
+      expect(warn?.fix).toContain("An npm install of Tandem switches this entry");
+      expect(warn?.fix).not.toContain("Restart Tandem (it switches this entry when it starts)");
     },
   );
 

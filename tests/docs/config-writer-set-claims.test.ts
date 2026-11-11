@@ -136,11 +136,14 @@ const WRITER_SITES: Record<
   { sites: number; disposition: "covered" | "out-of-scope"; why: string }
 > = {
   "src/server/integrations/apply.ts": {
-    sites: 9,
+    sites: 10,
     disposition: "covered",
     why:
       "Six `atomicWrite` calls, plus the helper's own tmp `writeFile`, its " +
-      "`rename`, and the single `copyFile` of its EXDEV fallback. Four of the " +
+      "`rename`, the single `copyFile` of its EXDEV fallback, and " +
+      "`prepareAtomicTmp`'s `promises.open` (#2358 PR 2b: the boot sweep creates " +
+      "its temp, empty and restricted, before its authoritative read; the same " +
+      "temp, renamed by the same `rename`, so no new writer of a config). Four of the " +
       "six write the Claude config (applyConfig, removeConfigEntries, " +
       "refreshMcpEntryBinary, refreshAllMcpEntryBinaries); two write " +
       "~/.claude/skills/tandem/SKILL.md (installSkill, " +
@@ -149,6 +152,16 @@ const WRITER_SITES: Record<
       "`.broken-backups` copy — the site the old `why` never named, having " +
       "reached its total by counting the EXDEV fallback as two `copyFile` " +
       "calls when it is one.",
+  },
+  "src/server/integrations/backup.ts": {
+    sites: 3,
+    disposition: "out-of-scope",
+    why:
+      "Backups of a Claude config under Tandem's own app-data root (.backups/): " +
+      "`writeBackup`'s and `reserveBackup`'s `wx` opens, and the `.part` -> `.json` " +
+      "rename that commits a reserved sweep backup (#2358 PR 2b). Fresh names, no " +
+      "read-modify-write, never a Claude config file — named in the #1599 entry " +
+      "in docs/security.md so the accepted scope is unchanged.",
   },
   "src/server/integrations/install-claude-cli.ts": {
     sites: 2,
@@ -279,7 +292,8 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // list counts every `fs.open` conservatively; this one writes no file at
   // all, and never a Claude config, so the accepted #1599 scope is unchanged.
   "src/server/file-io/private-dir.ts": 1,
-  "src/server/integrations/apply.ts": 9,
+  "src/server/integrations/apply.ts": 10,
+  "src/server/integrations/backup.ts": 3,
   "src/server/integrations/install-claude-cli.ts": 2,
   "src/server/integrations/storage.ts": 8,
   // #2198: `v1-walkthrough.json`, same app-data root, never a Claude config.

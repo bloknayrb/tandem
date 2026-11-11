@@ -177,9 +177,20 @@ describe("isDurableInstallLayout", () => {
         "older pnpm dlx",
         "/home/me/x/dlx-4242/node_modules/tandem-editor/dist/stdio-bridge/index.js",
       ],
-      ["an install under /tmp", "/tmp/x/lib/node_modules/tandem-editor/dist/stdio-bridge/index.js"],
     ])("refuses %s", (_label, path) => {
       expect(isDurableInstallLayout(path, notSidecar, noGit)).toBe(false);
+    });
+
+    // `/tmp` is a scratch root of a POSIX host (`isScratchPath` judges by the
+    // host platform, as the paths it sees only ever come from this host).
+    it.skipIf(process.platform === "win32")("refuses an install under /tmp", () => {
+      expect(
+        isDurableInstallLayout(
+          "/tmp/x/lib/node_modules/tandem-editor/dist/stdio-bridge/index.js",
+          notSidecar,
+          noGit,
+        ),
+      ).toBe(false);
     });
   });
 });

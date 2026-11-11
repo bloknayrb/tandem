@@ -14,9 +14,11 @@
  * one backup the user actually needs.
  *
  * Storage layout: `${appDataDir}/.backups/claude-json-YYYYMMDD-HHMMSS-
- * ${UUID8}.json`. Dir mode 0o700, file mode 0o600. The UUID suffix
- * defeats predictable-path symlink attacks; `wx` (exclusive create)
- * is the second layer.
+ * ${UUID8}.json`. Dir mode 0o700, file mode 0o600. The random suffix
+ * makes the name unpredictable and `wx` (exclusive create) refuses an
+ * existing file; on Windows `wx` still creates through a dangling symlink
+ * (#2144), so the bound there is the suffix plus the directory being
+ * writable only by this user.
  *
  * Atomicity invariant: `writeBackup` MUST complete (or throw) before
  * the caller invokes `atomicWrite` on the destination. If the backup
@@ -30,7 +32,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { open, readdir, rm } from "node:fs/promises";
+import { promises } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { setRestrictiveAcl } from "./acl-win.js";
@@ -114,7 +118,7 @@ export async function writeBackup(
   // collision is astronomically rare but a symlinked predictable path
   // is the real concern). `0o600` is honoured on POSIX; on Windows
   // we apply setRestrictiveAcl below.
-  const fd = await open(backupPath, "wx", 0o600);
+  const fd = await promises.open(backupPath, "wx", 0o600);
   let writeFailed = false;
   try {
     try {
@@ -146,6 +150,135 @@ export async function writeBackup(
   }
 
   return backupPath;
+}
+
+/**
+ * Write every byte of `data` through `handle` from offset 0. `FileHandle.write`
+ * may write fewer bytes than asked; a write that makes no progress throws.
+ */
+export async function writeAllThrough(handle: FileHandle, data: Buffer): Promise<void> {
+  let offset = 0;
+  while (offset < data.length) {
+    const { bytesWritten } = await handle.write(data, offset, data.length - offset, offset);
+    if (bytesWritten <= 0) throw new Error("write made no progress");
+    offset += bytesWritten;
+  }
+}
+
+/** The suffix a reserved backup carries until it is filled (#2358 PR 2b). */
+const PART_SUFFIX = ".part";
+
+/**
+ * A backup slot made before the bytes it will hold are known: an empty file,
+ * created exclusively and restricted (POSIX 0600; on Windows the restrictive
+ * DACL), whose handle stays open so the fill writes into exactly this file.
+ * Nothing reopens it by path.
+ */
+export interface ReservedBackup {
+  readonly partPath: string;
+  readonly finalPath: string;
+  readonly handle: FileHandle;
+}
+
+/**
+ * Reserve a backup in `dir` (#2358 PR 2b). The boot sweep reserves before it
+ * reads the config it will back up, so the slow Windows ACL step runs outside
+ * the read-to-rename window. The file is named `<backup>.json.part` until
+ * {@link commitReservedBackup} fills and renames it, so an unfilled slot is
+ * never listed, counted or pruned as a backup; {@link sweepBackupsOnStartup}
+ * removes one a killed run left behind.
+ */
+export async function reserveBackup(dir: string, prefix: string): Promise<ReservedBackup> {
+  const finalPath = join(dir, backupFilename(new Date(), prefix));
+  const partPath = finalPath + PART_SUFFIX;
+  const handle = await promises.open(partPath, "wx", 0o600);
+  if (process.platform === "win32") {
+    try {
+      // By path, with the handle still open: libuv opens with every share
+      // flag, so icacls and Get-Acl can reach the file (measured by the
+      // windows-acl-proof spec), and the DACL set here is the one the
+      // handle's later writes land under.
+      await setRestrictiveAcl(partPath);
+    } catch (aclErr) {
+      await discardReservedBackup({ partPath, finalPath, handle });
+      throw aclErr;
+    }
+  }
+  return { partPath, finalPath, handle };
+}
+
+/**
+ * Fill a reserved backup through its handle, close it and rename it to its
+ * final `.json` name (a rename keeps the file's DACL and mode). Returns the
+ * final path. On any failure the slot is removed and the error re-thrown.
+ */
+export async function commitReservedBackup(
+  reserved: ReservedBackup,
+  content: Buffer,
+): Promise<string> {
+  try {
+    await writeAllThrough(reserved.handle, content);
+    await reserved.handle.close();
+    await renameWithRetry(reserved.partPath, reserved.finalPath);
+  } catch (err) {
+    await discardReservedBackup(reserved);
+    throw err;
+  }
+  return reserved.finalPath;
+}
+
+/**
+ * `rename`, retried briefly on Windows' transient refusals. A file closed a
+ * moment ago is often still open in an antivirus scan-on-close, and the rename
+ * then fails EPERM, EBUSY or EACCES for a few hundred milliseconds. About 1 s
+ * in all, then the error stands (the sweep then leaves the config for the next
+ * start).
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await promises.rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (process.platform !== "win32" || !transient || attempt >= 6) throw err;
+      await new Promise((r) => setTimeout(r, 50 * attempt));
+    }
+  }
+}
+
+/** Close and remove a reserved backup. Idempotent and never throws. */
+export async function discardReservedBackup(reserved: ReservedBackup): Promise<void> {
+  await reserved.handle.close().catch(() => {});
+  await rm(reserved.partPath, { force: true }).catch(() => {});
+}
+
+/** A `.part` this old cannot be another instance's slot in flight. */
+const PART_MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Remove reserved sweep backups (`sweep-claude-json-*.json.part`) older than
+ * an hour: a run killed between reserving and renaming leaves one, empty or
+ * partly written. The age gate keeps a slot another instance is filling.
+ */
+async function removeStaleReservedBackups(dir: string): Promise<void> {
+  try {
+    const cutoff = Date.now() - PART_MAX_AGE_MS;
+    for (const name of await readdir(dir)) {
+      if (!name.startsWith(SWEEP_BACKUP_PREFIX) || !name.endsWith(BACKUP_SUFFIX + PART_SUFFIX)) {
+        continue;
+      }
+      const path = join(dir, name);
+      try {
+        if ((await stat(path)).mtimeMs < cutoff) await rm(path, { force: true });
+      } catch {
+        // Gone already, or unreadable: the rest are still worth a look.
+      }
+    }
+  } catch {
+    // Best-effort, like the prune beside it.
+  }
 }
 
 /**
@@ -236,6 +369,7 @@ export async function pruneOldBackups(
 export async function sweepBackupsOnStartup(appDataDir: string): Promise<void> {
   await pruneOldBackups(backupDir(appDataDir));
   await pruneOldBackups(backupDir(appDataDir), SWEEP_BACKUP_PREFIX);
+  await removeStaleReservedBackups(backupDir(appDataDir));
 }
 
 /**

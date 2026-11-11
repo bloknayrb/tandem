@@ -964,9 +964,10 @@ async function main() {
     // up to three tries with 0.75 s of back-off in all, so a contended config
     // can cost about three writes plus that. On Windows each try sets two
     // ACLs (the backup's and the temp file's), each an `icacls` plus a
-    // PowerShell start to verify it: a Windows Sandbox smoke on PowerShell 5.1
-    // measured about 5 s per try, so about 15 s ahead of the launcher there.
-    // Those two steps also sit inside the window the re-check guards.
+    // PowerShell start to verify it: Windows hardware measured 6.5-24 s a try,
+    // so up to about a minute ahead of the launcher if every try loses. Since
+    // the window fix those steps run BEFORE the authoritative read, outside
+    // the window the re-check guards; the sweep logs that window per try.
     if (!isStoreReadOnly()) {
       await import("./integrations/apply.js")
         .then(({ refreshAllMcpEntryBinaries }) => refreshAllMcpEntryBinaries())

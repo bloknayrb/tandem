@@ -91,10 +91,21 @@ describe("durableRunningNode", () => {
     expect(durableRunningNode({})).toBe(mocks.execPath);
   });
 
-  it("refuses the desktop sidecar's Node on a mounted volume or under a scratch root", () => {
+  // A macOS path: the removable-volume roots are judged by the HOST platform
+  // (`isScratchPath`), which is right, since the running Node's path only ever
+  // comes from this host. On a Windows host `/Volumes` is not one of them.
+  it.skipIf(process.platform === "win32")(
+    "refuses the desktop sidecar's Node on a mounted volume",
+    () => {
+      mocks.sidecar = true;
+      mocks.execPath =
+        "/Volumes/Tandem/Tandem.app/Contents/MacOS/node-sidecar-aarch64-apple-darwin";
+      expect(durableRunningNode({})).toBeNull();
+    },
+  );
+
+  it("refuses the desktop sidecar's Node under a scratch root", () => {
     mocks.sidecar = true;
-    mocks.execPath = "/Volumes/Tandem/Tandem.app/Contents/MacOS/node-sidecar-aarch64-apple-darwin";
-    expect(durableRunningNode({})).toBeNull();
     mocks.execPath = join(root, "extracted", "node-sidecar-x86_64-unknown-linux-gnu");
     expect(durableRunningNode({})).toBeNull();
   });

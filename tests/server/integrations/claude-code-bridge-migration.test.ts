@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetClaudeCodeHttpWarningForTests,
   _setClaudeCodeBridgeForTests,
+  _setSweepAfterPrepareForTests,
   _setSweepBeforeCommitForTests,
   applyConfig,
   bridgeScriptVersion,
@@ -75,6 +76,7 @@ beforeEach(() => {
 afterEach(() => {
   _setClaudeCodeBridgeForTests(undefined);
   _setSweepBeforeCommitForTests(undefined);
+  _setSweepAfterPrepareForTests(undefined);
   errSpy.mockRestore();
   rmSync(home, { recursive: true, force: true });
 });
@@ -281,6 +283,9 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
     expect(stderr()).toContain("Switched the tandem entry");
     expect(stderr()).toContain("trying again (2 of 3)");
     expect(stderr()).not.toContain("left as found");
+    // The window line, once per try: abandoned, then landed.
+    expect(stderr()).toMatch(/: \d+ ms from reading it to finding it changed\./);
+    expect(stderr()).toMatch(/: \d+ ms from reading it to replacing it\./);
     expect(tempsLeft()).toEqual([]);
     // One backup: the landed write's pre-image. The abandoned try's is gone.
     const added = (await sweepBackups()).filter((n) => !backupsBefore.has(n));
@@ -697,5 +702,109 @@ describe("the bridge repair leaves a hand-copied bridge alone", () => {
     await refreshAllMcpEntryBinaries({ homeOverride: home });
 
     expect(readFileSync(claudeJson()).equals(before)).toBe(true);
+  });
+});
+
+describe("the window is opened only after the slow preparation (#2358 PR 2b, before 0.31)", () => {
+  const dir = () => backupDir(resolveAppDataDir());
+  const sweepBackups = async () =>
+    existsSync(dir()) ? await listBackups(dir(), SWEEP_BACKUP_PREFIX) : [];
+  /** No reserved slot, filled or not, is ever left in the backup directory. */
+  const partsLeft = () =>
+    existsSync(dir()) ? readdirSync(dir()).filter((n) => n.endsWith(".part")) : [];
+  const tempsLeft = () => readdirSync(home).filter((n) => n.startsWith(".tandem-setup-"));
+  const seed = () =>
+    writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 1 });
+
+  it("absorbs a Claude Code write that lands while the files are prepared", async () => {
+    seed();
+    const before = new Set(await sweepBackups());
+    let prepares = 0;
+    _setSweepAfterPrepareForTests(async () => {
+      prepares++;
+      // Claude Code's write, during what used to be inside the window.
+      writeConfig({ mcpServers: { tandem: { type: "http", url: `${MCP}/mcp` } }, n: 777 });
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    // One try: the authoritative read came after the write, so nothing changed
+    // under it and no retry was needed.
+    expect(prepares).toBe(1);
+    expect(stderr()).not.toContain("trying again");
+    expect(readConfig().n).toBe(777);
+    expect(readConfig().mcpServers.tandem.command).toBe(node);
+    expect(stderr()).toMatch(/: \d+ ms from reading it to replacing it\./);
+    // The backup holds what this write replaced: the bytes the second read saw.
+    const added = (await sweepBackups()).filter((n) => !before.has(n));
+    expect(added).toHaveLength(1);
+    const backup = JSON.parse(readFileSync(join(dir(), added[0] as string), "utf-8")) as {
+      n: number;
+    };
+    expect(backup.n).toBe(777);
+    if (process.platform !== "win32") {
+      expect(statSync(join(dir(), added[0] as string)).mode & 0o777).toBe(0o600);
+    }
+    expect(partsLeft()).toEqual([]);
+    expect(tempsLeft()).toEqual([]);
+  });
+
+  it("writes nothing and keeps no backup when the second read has nothing to change", async () => {
+    seed();
+    const before = await sweepBackups();
+    _setSweepAfterPrepareForTests(async () => {
+      // Another writer (a second Tandem, or setup) switched it meanwhile.
+      writeConfig({
+        mcpServers: { tandem: { command: node, args: [script], env: { TANDEM_URL: MCP } } },
+        n: 2,
+      });
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readConfig().n).toBe(2);
+    expect(stderr()).not.toContain("Switched the tandem entry");
+    expect(stderr()).not.toContain("ms from reading it");
+    expect(await sweepBackups()).toEqual(before);
+    expect(partsLeft()).toEqual([]);
+    expect(tempsLeft()).toEqual([]);
+  });
+
+  it("leaves no slot or temp when the second read cannot open the config", async () => {
+    seed();
+    const before = await sweepBackups();
+    _setSweepAfterPrepareForTests(async () => {
+      // Replace the file with something `readConfigForMutation` refuses.
+      rmSync(claudeJson());
+      writeFileSync(claudeJson(), "{ not json");
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(readFileSync(claudeJson(), "utf-8")).toBe("{ not json");
+    expect(stderr()).toContain("untouched (malformed-json)");
+    expect(await sweepBackups()).toEqual(before);
+    expect(partsLeft()).toEqual([]);
+    expect(tempsLeft()).toEqual([]);
+  });
+
+  it("removes the backup of a write that failed before its rename (review M3)", async () => {
+    seed();
+    const before = await sweepBackups();
+    _setSweepBeforeCommitForTests(async () => {
+      // The config disappears: `requireExistingDest` refuses, before the rename.
+      rmSync(claudeJson());
+    });
+
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
+
+    expect(existsSync(claudeJson())).toBe(false);
+    expect(stderr()).toContain("MCP entry refresh failed");
+    expect(stderr()).toMatch(
+      /Removed backup sweep-claude-json-\S+\.json, taken for a write that failed before it\./,
+    );
+    expect(await sweepBackups()).toEqual(before);
+    expect(partsLeft()).toEqual([]);
+    expect(tempsLeft()).toEqual([]);
   });
 });

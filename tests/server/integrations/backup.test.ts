@@ -6,9 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   backupDir,
   backupFilename,
+  commitReservedBackup,
+  discardReservedBackup,
   listBackups,
   MAX_BACKUPS,
   pruneOldBackups,
+  reserveBackup,
   SWEEP_BACKUP_PREFIX,
   shouldBackup,
   sweepBackupsOnStartup,
@@ -261,5 +264,71 @@ describe("sweepBackupsOnStartup", () => {
     await sweepBackupsOnStartup(tmpDir);
     const remaining = await listBackups(dir);
     expect(remaining.length).toBe(MAX_BACKUPS);
+  });
+});
+
+describe("reserved backups (#2358 PR 2b: prepared before the read they hold)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-reserve-"));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  it("is an unlisted, user-only `.part` until committed, then a listed backup with the bytes", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    expect(reserved.partPath).toBe(`${reserved.finalPath}.part`);
+    expect(fs.statSync(reserved.partPath).size).toBe(0);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(reserved.partPath).mode & 0o777).toBe(0o600);
+    }
+    // Never counted, listed or pruned as a backup while unfilled.
+    expect(await listBackups(dir, SWEEP_BACKUP_PREFIX)).toEqual([]);
+
+    const bytes = Buffer.from('{"token":"sentinel"}\n');
+    const final = await commitReservedBackup(reserved, bytes);
+
+    expect(final).toBe(reserved.finalPath);
+    expect(fs.existsSync(reserved.partPath)).toBe(false);
+    expect(fs.readFileSync(final).equals(bytes)).toBe(true);
+    if (process.platform !== "win32") expect(fs.statSync(final).mode & 0o777).toBe(0o600);
+    expect(await listBackups(dir, SWEEP_BACKUP_PREFIX)).toEqual([path.basename(final)]);
+  });
+
+  it("discard closes and removes the slot, and is safe to repeat", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    await discardReservedBackup(reserved);
+    await discardReservedBackup(reserved);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("a failed commit removes the slot", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    await reserved.handle.close(); // the write through it now fails
+    await expect(commitReservedBackup(reserved, Buffer.from("x"))).rejects.toThrow();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("the startup sweep removes a slot a killed run left, but not a fresh one", async () => {
+    const appData = dir;
+    const backups = backupDir(appData);
+    fs.mkdirSync(backups, { recursive: true, mode: 0o700 });
+    const stale = path.join(backups, `${SWEEP_BACKUP_PREFIX}20260101-000000-deadbeef.json.part`);
+    const fresh = path.join(backups, `${SWEEP_BACKUP_PREFIX}20260101-000001-cafebabe.json.part`);
+    const unrelated = path.join(backups, "claude-json-20260101-000000-deadbeef.json.part");
+    for (const p of [stale, fresh, unrelated]) fs.writeFileSync(p, "");
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(stale, twoHoursAgo, twoHoursAgo);
+    fs.utimesSync(unrelated, twoHoursAgo, twoHoursAgo);
+
+    await sweepBackupsOnStartup(appData);
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    // Only the sweep's own prefix: setup's backups never use `.part`.
+    expect(fs.existsSync(unrelated)).toBe(true);
   });
 });

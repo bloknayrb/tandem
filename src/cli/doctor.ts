@@ -1513,7 +1513,10 @@ async function reportDirectHttpEntry(
     );
     return;
   }
-  if (verdict === "unprobed") {
+  // An unknown verdict (the import or the call failed) cannot promise a switch
+  // either, so it gets the arm that says what decides one (#2358 PR 2b review,
+  // L5: it used to share the "bridge" arm's promise below).
+  if (verdict === "unprobed" || verdict === null) {
     // This process never looked for a system Node (the doctor never probes,
     // Bryan 2026-11-06), and the Node it runs on can't be recorded. So whether
     // a restart switches the entry is not known here — say what decides it.
@@ -1531,7 +1534,7 @@ async function reportDirectHttpEntry(
     );
     return;
   }
-  // "bridge" and an unknown verdict.
+  verdict satisfies "bridge";
   r.warn(
     message,
     `Restart Tandem (it switches this entry when it starts), or ${setupStep(cliAvailable())}; ` +
@@ -1866,15 +1869,13 @@ function makeCliAvailability(): CliAvailability {
 const WIZARD_LOCATION = "Settings → AI Assistant";
 
 /**
- * The remedy for any Tandem-managed entry that has gone wrong, phrased for what
- * the reader can actually run.
- *
- * Leads with the thing that always works. The boot repair is real but
- * conditional in two ways doctor cannot see and the user cannot act on:
- * `refreshMcpEntryBinary` deliberately declines when the only replacement it
- * could offer is the bare name, and the whole sweep is skipped while another
- * instance holds the annotation-store lock. Under either, "restart Tandem" is a
- * loop with no exit — the shape of false promise these checks exist to replace.
+ * The setup step, phrased for what the reader can actually run. **It makes no
+ * claim about startup**: it is the remedy wherever Tandem's boot sweep does
+ * nothing (no config file, a malformed or foreign `tandem` entry, a broken
+ * project `.mcp.json`), and saying "Tandem also attempts this at startup" there
+ * sent a reader to restart Tandem and watch nothing change (#2358 PR 2b
+ * review, M1). {@link repairRemedy} adds the startup sentence where the sweep
+ * really does act.
  *
  * The in-app branch names the **tab and the action**, never the button's literal
  * text: that label is conditional (`SettingsClaudeCodeTab.svelte` renders
@@ -1884,33 +1885,46 @@ const WIZARD_LOCATION = "Settings → AI Assistant";
  * prefilled GitHub issue bodies, and `redactHomePaths` collapses only home and
  * app-data roots, so an install path would survive verbatim into public view.
  */
+export function setupApplyRemedy(cliAvailable: boolean): string {
+  if (cliAvailable) return "Run: tandem setup --apply";
+  return (
+    `In Tandem, open ${WIZARD_LOCATION} and run the integration wizard — it rewrites the ` +
+    "entries Tandem manages. (`tandem setup --apply` does the same from a terminal, but that " +
+    "command ships with the npm package, not the desktop app.)"
+  );
+}
+
+/**
+ * The remedy for an entry Tandem wrote whose recorded path has gone stale: the
+ * one state the boot sweep repairs, so the CLI arm says so.
+ *
+ * Leads with the thing that always works. The boot repair is real but
+ * conditional in two ways doctor cannot see and the user cannot act on:
+ * `refreshMcpEntryBinary` deliberately declines when the only replacement it
+ * could offer is the bare name, and the whole sweep is skipped while another
+ * instance holds the annotation-store lock. Under either, "restart Tandem" is a
+ * loop with no exit — the shape of false promise these checks exist to replace.
+ */
+function repairRemedy(cliAvailable: boolean): string {
+  if (!cliAvailable) return setupApplyRemedy(false);
+  return (
+    "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
+    "has no valid Node path to substitute, or when another instance holds the store lock)"
+  );
+}
+
 /**
  * The remedy where Tandem has NO entry to repair (an empty config, or no
- * `tandem` key). `setupApplyRemedy`'s CLI arm says startup "also attempts
- * this", which is true of a repair and false here: the boot sweep converts and
- * repairs entries Tandem wrote and never adds a missing one (design v5 §3.6;
- * the Windows hardware smoke of #2358 PR 2b, finding 4). The wizard arm makes
- * no startup claim, so it is shared.
+ * `tandem` key): the boot sweep converts and repairs entries Tandem wrote and
+ * never adds a missing one (design v5 §3.6; the Windows hardware smoke of
+ * #2358 PR 2b, finding 4), so the CLI arm says that rather than nothing. The
+ * wizard arm is {@link setupApplyRemedy}'s.
  */
 function addEntryRemedy(cliAvailable: boolean): string {
   if (!cliAvailable) return setupApplyRemedy(false);
   return (
     "Run: tandem setup --apply (Tandem's startup only repairs an entry it wrote; it never adds " +
     "a missing one)"
-  );
-}
-
-export function setupApplyRemedy(cliAvailable: boolean): string {
-  if (cliAvailable) {
-    return (
-      "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
-      "has no valid Node path to substitute, or when another instance holds the store lock)"
-    );
-  }
-  return (
-    `In Tandem, open ${WIZARD_LOCATION} and run the integration wizard — it rewrites the ` +
-    "entries Tandem manages. (`tandem setup --apply` does the same from a terminal, but that " +
-    "command ships with the npm package, not the desktop app.)"
   );
 }
 
@@ -1937,7 +1951,7 @@ interface EntryRemedy {
    * Override for the *stale absolute path* remedy.
    *
    * Optional, and defaulted from `cliAvailable` at the single consumer: three of
-   * the four call sites want exactly `setupApplyRemedy(cliAvailable())`, so
+   * the four call sites want exactly `repairRemedy(cliAvailable())`, so
    * requiring it made every caller restate a fact it was already passing in the
    * same literal — two fields that could silently disagree. Only `.mcp.json`
    * genuinely differs, which is the distinction `reportSpawnedCommand`'s
@@ -2020,7 +2034,7 @@ function reportEntryCommand(
   // exactly the healthy-machine cost `makeCliAvailability` defers to avoid.
   // `/api/diagnostics` is a request path, so that walk is not free.
   reportSpawnedCommand(r, entry, entryName, label, () =>
-    withSuffix(remedy.stalePathFix ?? setupApplyRemedy(remedy.cliAvailable()), remedy.suffix),
+    withSuffix(remedy.stalePathFix ?? repairRemedy(remedy.cliAvailable()), remedy.suffix),
   );
 }
 
