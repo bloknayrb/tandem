@@ -17,19 +17,24 @@ import {
   type KeychainBackend,
 } from "../../../src/server/integrations/keychain.js";
 import {
+  type CollaboratorDeps,
   createLocalModelCollaborator,
   DEFAULT_COLLABORATOR_DEPS,
 } from "../../../src/server/local-model/collaborator.js";
 import {
+  answeringLocalModel,
   diagnoseLocalModel,
   resolveLocalModelConfig,
 } from "../../../src/server/local-model/config-source.js";
 import type { LoopResult, RunTurnOpts } from "../../../src/server/local-model/index.js";
 import { runLocalModelTurn } from "../../../src/server/local-model/index.js";
+import { EDITING_OFF_MESSAGE, READ_TOOL_NAMES } from "../../../src/server/local-model/tools.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
 import { registerModelsRoutes } from "../../../src/server/models/api-routes.js";
 import {
   __resetLocalModelSettingsForTests,
+  EDITING_ON_NOTICE,
+  EDITING_ON_NOTICE_KEY,
   localModelEditingState,
 } from "../../../src/server/models/local-model-settings.js";
 import {
@@ -37,11 +42,17 @@ import {
   getModelsEtag,
   onModelsFileChanged,
 } from "../../../src/server/models/registry.js";
-import { resetForTesting as resetNotifications } from "../../../src/server/notifications.js";
+import {
+  getBuffer,
+  resetForTesting as resetNotifications,
+} from "../../../src/server/notifications.js";
+import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   TAURI_HOSTNAME,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_CHAT_STREAM,
   Y_MAP_MODE,
@@ -54,6 +65,7 @@ import {
   type ModelsFile,
 } from "../../../src/shared/models/contract.js";
 import { withInternal } from "../../../src/shared/origins.js";
+import type { ChatMessage } from "../../../src/shared/types.js";
 
 /**
  * #1123 R2.4, end to end across the joints the unit tests cover one at a time:
@@ -122,6 +134,7 @@ describe("production wiring of the collaborator's seams (#1123)", () => {
     expect(DEFAULT_COLLABORATOR_DEPS.diagnose).toBe(diagnoseLocalModel);
     expect(DEFAULT_COLLABORATOR_DEPS.editingState).toBe(localModelEditingState);
     expect(DEFAULT_COLLABORATOR_DEPS.onModelsChanged).toBe(onModelsFileChanged);
+    expect(DEFAULT_COLLABORATOR_DEPS.answering).toBe(answeringLocalModel);
   });
 });
 
@@ -148,6 +161,23 @@ describe("switching editing through the real route reaches a run in flight (#112
     expect(await res.json()).toEqual({ editing, persisted: true });
   }
 
+  /** Production's seams, with only what `over` names (and the queue) swapped. */
+  function wireCollaborator(over: Partial<CollaboratorDeps>): void {
+    let registered: ((e: TandemEvent) => void) | null = null;
+    collab = createLocalModelCollaborator({
+      ...DEFAULT_COLLABORATOR_DEPS,
+      subscribe: (cb) => {
+        registered = cb;
+      },
+      unsubscribe: () => {},
+      aiRefusal: () => null,
+      ...over,
+    });
+    collab.__startForTests();
+    if (!registered) throw new Error("the collaborator did not subscribe");
+    deliver = registered;
+  }
+
   async function chat(): Promise<void> {
     const messageId = `editing-live-${seq++}`;
     deliver({
@@ -164,6 +194,7 @@ describe("switching editing through the real route reaches a run in flight (#112
   beforeEach(async () => {
     resetQueue();
     resetNotifications();
+    clearStartupNotices();
     for (const id of [...getOpenDocs().keys()]) removeDoc(id);
     setActiveDocId(null);
     const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -190,23 +221,12 @@ describe("switching editing through the real route reaches a run in flight (#112
     setActiveDocId(DOC);
 
     duringRun = async () => {};
-    let registered: ((e: TandemEvent) => void) | null = null;
-    collab = createLocalModelCollaborator({
-      // Production's seams, with only the model call and the queue swapped.
-      ...DEFAULT_COLLABORATOR_DEPS,
+    wireCollaborator({
       runTurn: async (opts) => {
         await duringRun(opts);
         return cleanResult();
       },
-      subscribe: (cb) => {
-        registered = cb;
-      },
-      unsubscribe: () => {},
-      aiRefusal: () => null,
     });
-    collab.__startForTests();
-    if (!registered) throw new Error("the collaborator did not subscribe");
-    deliver = registered;
 
     const app = express();
     app.use(express.json());
@@ -228,6 +248,12 @@ describe("switching editing through the real route reaches a run in flight (#112
       body: JSON.stringify({ file: REGISTRY, ifMatch: getModelsEtag() }),
     });
     expect(saved.status).toBe(200);
+    // Saving the first model is itself announced (the answering-changed notice,
+    // pinned in collaborator-live-config.test.ts). Start every test below from
+    // an empty tray and an empty replay list, so each counts only its own.
+    expect(getBuffer()).toHaveLength(1);
+    resetNotifications();
+    clearStartupNotices();
   });
 
   afterEach(async () => {
@@ -236,6 +262,8 @@ describe("switching editing through the real route reaches a run in flight (#112
     __resetModelRegistryForTests();
     __resetLocalModelSettingsForTests();
     removeDoc(DOC);
+    clearStartupNotices();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
@@ -282,17 +310,141 @@ describe("switching editing through the real route reaches a run in flight (#112
   });
 
   it("On through the route, mid-run, does not unlock a run that started with it off", async () => {
-    const seen: Record<string, boolean> = {};
-    duringRun = async (opts) => {
-      seen.start = opts.editingAllowed();
-      await setEditing(true);
-      // The collaborator's closure answers for the live setting and the Off
-      // counter; that a chat-tier START is never unlocked is the engine's latch
-      // (`runLocalModelTurn`, pinned in editing-tier.test.ts). What must hold
-      // here is that the run was started in the chat tier.
-      seen.afterOn = opts.editingAllowed();
-    };
+    // The REAL engine for this one: `runLocalModelTurn`, its chat client and
+    // `dispatch`. Only the model endpoint's HTTP answers are scripted; every
+    // request to this test's own server goes to the real fetch.
+    await collab.stop();
+    wireCollaborator({});
+    expect(DEFAULT_COLLABORATOR_DEPS.runTurn).toBe(runLocalModelTurn);
+
+    // `Response` in this file is Express's type; the model answers with fetch's.
+    const sse = (delta: unknown): globalThis.Response =>
+      new globalThis.Response(`data: ${JSON.stringify({ choices: [{ delta }] })}\ndata: [DONE]\n`);
+    const toolCall = (name: string, args: Record<string, unknown>): globalThis.Response =>
+      sse({
+        tool_calls: [
+          { index: 0, id: `call-${name}`, function: { name, arguments: JSON.stringify(args) } },
+        ],
+      });
+    const REPLY = "This document has a title and one line of body text.";
+
+    interface ModelRequest {
+      url: string;
+      tools: string[];
+      messages: { role: string; content: string }[];
+    }
+    const requests: ModelRequest[] = [];
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.startsWith("http://127.0.0.1:11434/")) return realFetch(input, init);
+      const index = requests.length;
+      const body = JSON.parse(String(init?.body)) as {
+        tools?: { function: { name: string } }[];
+        messages: { role: string; content: string }[];
+      };
+      requests.push({
+        url,
+        tools: (body.tools ?? []).map((t) => t.function.name),
+        messages: body.messages,
+      });
+      if (index === 0) return toolCall("get_outline", {});
+      if (index === 1) {
+        // "While the model is thinking": the box is ticked, through the route.
+        await setEditing(true);
+        expect(localModelEditingState().enabled).toBe(true);
+        // A forged write: the tool was never offered, and the quote is real.
+        return toolCall("comment_on_quote", { quoted_text: "Body.", comment: "forged" });
+      }
+      return sse({ content: REPLY });
+    });
+
     await chat();
-    expect(seen.start).toBe(false);
+
+    const readTools = [...READ_TOOL_NAMES].sort();
+    expect(requests).toHaveLength(3);
+    expect(requests.every((r) => r.url === "http://127.0.0.1:11434/v1/chat/completions")).toBe(
+      true,
+    );
+    // Only the reading tools were offered, before and after the switch…
+    expect([...requests[0].tools].sort()).toEqual(readTools);
+    expect([...requests[1].tools].sort()).toEqual(readTools);
+    // …and once the forged write was refused, no tools at all.
+    expect(requests[2].tools).toEqual([]);
+    const toolResults = requests[2].messages.filter((m) => m.role === "tool");
+    expect(toolResults).toHaveLength(2);
+    expect(JSON.parse(toolResults[1].content)).toMatchObject({
+      error: "EDITING_OFF",
+      message: EDITING_OFF_MESSAGE,
+    });
+
+    // Nothing was written to the document, although editing reads ON now.
+    const ydoc = getOrCreateDocument(DOC);
+    expect(localModelEditingState().enabled).toBe(true);
+    expect(ydoc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
+
+    // The run still delivered its text reply, and raised nothing of its own:
+    // the only notification is the route's "switched on" notice.
+    const chatRows = [
+      ...getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).values(),
+    ] as ChatMessage[];
+    expect(chatRows.map((m) => m.text)).toEqual([REPLY]);
+    expect(chatRows[0].author).toBe("claude");
+    expect(getBuffer().map((n) => n.message)).toEqual([EDITING_ON_NOTICE]);
+  });
+
+  describe("switching on is announced (#2404)", () => {
+    const onNotes = () => getBuffer().filter((n) => n.message === EDITING_ON_NOTICE);
+
+    it("ON through the route: exactly one notification, also registered for replay", async () => {
+      expect(getStartupNotices()).toEqual([]);
+      await setEditing(true);
+
+      expect(getBuffer()).toHaveLength(1);
+      const [note] = onNotes();
+      expect(note).toMatchObject({
+        type: "general-error",
+        severity: "warning",
+        message: EDITING_ON_NOTICE,
+        dedupKey: EDITING_ON_NOTICE_KEY,
+      });
+      expect(getStartupNotices()).toEqual([note]);
+    });
+
+    it("a second ON while already on says nothing", async () => {
+      await setEditing(true);
+      const [first] = onNotes();
+      await setEditing(true);
+
+      expect(getBuffer()).toHaveLength(1);
+      expect(getStartupNotices()).toEqual([first]);
+    });
+
+    it("OFF withdraws the replay and raises no notification", async () => {
+      await setEditing(true);
+      expect(getStartupNotices()).toHaveLength(1);
+      await setEditing(false);
+
+      expect(getStartupNotices()).toEqual([]);
+      expect(getBuffer()).toHaveLength(1); // still just the ON notice
+      expect(onNotes()).toHaveLength(1);
+    });
+
+    it("OFF with nothing switched on raises nothing; ON again after an OFF is announced again", async () => {
+      await setEditing(false);
+      expect(getBuffer()).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+
+      await setEditing(true);
+      await setEditing(false);
+      await setEditing(true);
+
+      const notes = onNotes();
+      expect(getBuffer()).toHaveLength(2);
+      expect(notes).toHaveLength(2);
+      expect(notes[1].id).not.toBe(notes[0].id);
+      expect(getStartupNotices()).toEqual([notes[1]]);
+    });
   });
 });

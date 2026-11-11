@@ -54,8 +54,11 @@ import {
 } from "../models/local-model-settings.js";
 import { onModelsFileChanged } from "../models/registry.js";
 import { pushNotification } from "../notifications.js";
+import { addStartupNotice } from "../startup-notices.js";
 import type { LocalModelConfig } from "./config.js";
 import {
+  type AnsweringLocalModel,
+  answeringLocalModel,
   diagnoseLocalModel,
   type LocalModelUnusable,
   type LocalModelUnusableReason,
@@ -152,6 +155,9 @@ export interface CollaboratorDeps {
   /** Be told when the saved registry changes; returns the unsubscribe. Absent
    *  means never told. */
   onModelsChanged?: (cb: () => void) => () => void;
+  /** Which saved entry would answer the next chat, for the "it was changed"
+   *  notice (#2404). Absent means that notice is never raised. */
+  answering?: () => AnsweringLocalModel | null;
 }
 
 /** Exported so a test can pin that production really wires each seam: every
@@ -165,7 +171,38 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
   diagnose: diagnoseLocalModel,
   editingState: localModelEditingState,
   onModelsChanged: onModelsFileChanged,
+  answering: answeringLocalModel,
 };
+
+/** Replay key of the "answering model was changed" notice. One key, so a
+ *  burst of changes is one tray row with a count, and cannot push another
+ *  notice (such as "commenting was switched on") out of the tray. */
+export const ANSWERING_CHANGED_NOTICE_KEY = "local-model-answering-changed";
+
+/** A saved display name, made safe to quote inside a notice: letters, digits
+ *  and plain punctuation only (so no control, bidi or zero-width characters),
+ *  and short enough that it cannot carry a message of its own. */
+function quotableName(name: string): string {
+  const cleaned = name
+    .replace(/[^\p{L}\p{N} ._:+()-]/gu, "")
+    .trim()
+    .slice(0, 40);
+  return cleaned.length > 0 ? `"${cleaned}"` : "an unnamed model";
+}
+
+/**
+ * What the user is told when the local model that would answer their chat is
+ * changed (#2404). A saved model takes effect on the next chat with no
+ * restart, and the route's origin and loopback gates do not prove the user
+ * made the write — so the change is announced, for any writer, the user's own
+ * Settings edit included. One text for every kind of change: it never carries
+ * the Endpoint (which `GET /api/models` withholds from a non-loopback caller)
+ * or the model id (which for llama.cpp is often a file path). Past tense,
+ * because it stays in the activity tray.
+ */
+export function answeringChangedNotice(now: AnsweringLocalModel): string {
+  return `The local model that Tandem sends your chat to was changed: its Endpoint or model was edited, or a different model was chosen. It was set to ${quotableName(now.displayName)}. If you did not make this change, check Settings → Models.`;
+}
 
 /**
  * What the user is told when the local model they selected cannot be used
@@ -176,11 +213,11 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
  */
 export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
   "no-default-chosen":
-    "A saved local model did not answer, because no default model had been chosen. To have it answer, mark it as Default in Settings → Models.",
+    "Your saved local models did not answer, because none of them was marked Default. Mark one as Default in Settings → Models.",
   "endpoint-rejected":
-    "Your default local model did not answer, because its Endpoint was not accepted. It must be a plain http loopback address on this computer, such as http://127.0.0.1:11434, with no user name or password. Edit the model in Settings → Models, then send your message again.",
+    "Your local model did not answer, because its Endpoint was not accepted. It must be a plain http loopback address on this computer, such as http://127.0.0.1:11434, with no user name or password. Edit the model in Settings → Models, then send your message again.",
   "no-endpoint":
-    "Your default local model did not answer, because it had no Endpoint saved. Edit the model in Settings → Models, then send your message again.",
+    "Your local model did not answer, because it had no Endpoint saved. Edit the model in Settings → Models, then send your message again.",
 };
 
 interface RunReq {
@@ -233,6 +270,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   /** The broken state the user was last told about, so one state is one notice. */
   let noticedStateKey: string | null = null;
   let stopWatchingModels: (() => void) | null = null;
+  /** The last model that would have answered, kept across "none" states so
+   *  switching a model off and on again, or re-marking the same default, is
+   *  not announced as a change. Null until one has been seen. */
+  let lastAnswering: AnsweringLocalModel | null = null;
   let subscriberCb: ((e: TandemEvent) => void) | null = null;
   let current: RunSlot | null = null;
   /** Which refusal was last logged, so a refused state logs once, not once per chat. */
@@ -544,6 +585,21 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             documentId: req.docName,
             timestamp: Date.now(),
           });
+        } else if (exit === "editing_off") {
+          // The model called a writing tool in a run that may not write, was
+          // told so, and then had one turn with no tools to answer in text —
+          // and said nothing. Not a step limit: say what actually happened.
+          // (When it did answer, the exit is `clean`.) `info`, so it expires.
+          sink.flushFinal();
+          pushNotification({
+            id: generateMessageId(),
+            type: "general-error",
+            severity: "info",
+            message:
+              "The local model stopped without replying, because commenting and suggesting were switched off for that reply. Ask again for an answer in chat.",
+            documentId: req.docName,
+            timestamp: Date.now(),
+          });
         } else if (exit === "timeout") {
           // Deliberately its own branch, not folded into the budget message
           // above (#1295 L6). A wall-clock exit happens with turns to spare, so
@@ -656,12 +712,46 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   }
 
   /**
+   * Announce a change to WHICH model answers, or WHERE it points (#2404).
+   * Compares the entry, its Endpoint and its model id — not its display name,
+   * so a rename is not announced as a different model. Live through
+   * `pushNotification`, and registered for replay to a browser that connects
+   * later in this run, because a change made while no window was open is the
+   * one that must not go unseen. Never chat, never the event queue.
+   */
+  function noticeAnsweringChange(): void {
+    const now = deps.answering?.() ?? null;
+    if (now === null) return;
+    const before = lastAnswering;
+    lastAnswering = now;
+    if (
+      before !== null &&
+      before.entryId === now.entryId &&
+      before.endpoint === now.endpoint &&
+      before.modelId === now.modelId
+    ) {
+      return;
+    }
+    const notice = {
+      id: generateMessageId(),
+      type: "general-error" as const,
+      severity: "warning" as const,
+      message: answeringChangedNotice(now),
+      dedupKey: ANSWERING_CHANGED_NOTICE_KEY,
+      timestamp: Date.now(),
+    };
+    addStartupNotice(notice);
+    pushNotification(notice);
+  }
+
+  /**
    * The saved registry changed. Forget the latched state unless it is still
    * exactly the state the user was told about — so a model that is fixed and
    * then broken again is reported again even when no chat arrived while it was
    * fixed, and Solo or licence-refused chats cannot keep a stale latch alive.
    */
   function onModelsChanged(): void {
+    noticeAnsweringChange();
     if (noticedStateKey === null) return;
     const now = deps.resolveConfig() ? null : (deps.diagnose?.() ?? null);
     if (now?.stateKey !== noticedStateKey) noticedStateKey = null;
@@ -733,6 +823,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   // always early-returns in test builds). Nothing is resolved here: the config
   // is read per chat event.
   function wire(): void {
+    // The baseline for the "it was changed" notice: whatever would answer at
+    // start-up is what the user last left, and is not announced.
+    lastAnswering = deps.answering?.() ?? null;
     stopWatchingModels = deps.onModelsChanged?.(onModelsChanged) ?? null;
     subscriberCb = onEvent;
     // "internal" is passed EXPLICITLY, not left to the default. Two correctness

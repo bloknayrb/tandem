@@ -432,11 +432,70 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
     });
 
     it("the 500 body names no path", async () => {
+      // From off, so the answer really is the 500 (a failed redundant On is a
+      // 200, which is what this case used to send).
       const base = await listen(makeApp({ live: true }));
-      await postSetting(base, { editing: true });
       writeControl.failSettingsWrites = true;
       const res = await postSetting(base, { editing: true });
+      expect(res.status).toBe(500);
       expect(JSON.stringify(res.body)).not.toContain(path.basename(dir));
+      expect(JSON.stringify(res.body)).not.toContain(LOCAL_MODEL_SETTINGS_FILE_NAME);
+    });
+  });
+
+  describe("a later build's settings file (round 2)", () => {
+    const V2 = `${JSON.stringify({ version: 2, editing: true, mode: "ask-first" }, null, 4)}\n`;
+
+    it("GET reads it as off", async () => {
+      fs.writeFileSync(settingsFile, V2, "utf8");
+      primeLocalModelSettings();
+      const base = await listen(makeApp({ live: true }));
+      expect((await getSetting(base)).body).toEqual({ editing: false });
+    });
+
+    it("POST On → 500 { editing: true, persisted: false, code }: on for this run, file untouched", async () => {
+      fs.writeFileSync(settingsFile, V2, "utf8");
+      primeLocalModelSettings();
+      const before = fs.readFileSync(settingsFile);
+      const base = await listen(makeApp({ live: true }));
+
+      const res = await postSetting(base, { editing: true });
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({
+        editing: true,
+        persisted: false,
+        code: ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED,
+      });
+      expect(JSON.stringify(res.body)).not.toContain(path.basename(dir));
+
+      // It IS on, for this run of the server...
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect((await getSetting(base)).body).toEqual({ editing: true });
+      // ...and the later build's file was not written.
+      expect(fs.readFileSync(settingsFile).equals(before), "byte-identical").toBe(true);
+      expect(fs.readdirSync(dir)).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
+
+      // A restart of the server process reads the file, which says off to this build.
+      __resetLocalModelSettingsForTests(dir);
+      primeLocalModelSettings();
+      const again = await listen(makeApp({ live: true }));
+      expect((await getSetting(again)).body).toEqual({ editing: false });
+    });
+
+    it("POST Off → 200, written into the file with its version and unknown keys kept", async () => {
+      fs.writeFileSync(settingsFile, V2, "utf8");
+      const base = await listen(makeApp({ live: true }));
+      await postSetting(base, { editing: true });
+
+      const res = await postSetting(base, { editing: false });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ editing: false, persisted: true });
+      expect(JSON.parse(fs.readFileSync(settingsFile, "utf8"))).toEqual({
+        version: 2,
+        editing: false,
+        mode: "ask-first",
+      });
+      expect((await getSetting(base)).body).toEqual({ editing: false });
     });
   });
 

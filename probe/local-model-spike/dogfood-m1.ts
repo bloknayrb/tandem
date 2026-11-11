@@ -12,8 +12,9 @@
  *    anchored annotation was created.
  *  - chat (the shipped default): the SAME request. PASS means NO annotation
  *    was created and it answered in text. (That the model is offered only the
- *    reading tools in this tier is pinned by tests, not checked here.) The last lines also print whether the reply claims to have
- *    changed the document, for a human to read; that is not asserted.
+ *    reading tools in this tier is pinned by tests, not checked here.) The last line reminds you to READ the reply: whether it
+ *    claims to have changed the document is for a human to judge, and is
+ *    neither detected nor asserted here.
  *
  * Requires a local Ollama with the model pulled. Not part of CI, and not
  * typechecked.

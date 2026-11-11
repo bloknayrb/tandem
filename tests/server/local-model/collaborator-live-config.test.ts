@@ -17,11 +17,15 @@ import {
   type KeychainBackend,
 } from "../../../src/server/integrations/keychain.js";
 import {
+  ANSWERING_CHANGED_NOTICE_KEY,
+  answeringChangedNotice,
+  type CollaboratorDeps,
   createLocalModelCollaborator,
   UNUSABLE_NOTICE,
 } from "../../../src/server/local-model/collaborator.js";
 import type { LocalModelConfig } from "../../../src/server/local-model/config.js";
 import {
+  answeringLocalModel,
   diagnoseLocalModel,
   resolveLocalModelConfig,
 } from "../../../src/server/local-model/config-source.js";
@@ -37,6 +41,7 @@ import {
   getBuffer,
   resetForTesting as resetNotifications,
 } from "../../../src/server/notifications.js";
+import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -162,9 +167,38 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
   const seenConfigs = (): Array<Pick<LocalModelConfig, "endpoint" | "modelId">> =>
     runs.map((r) => ({ endpoint: r.config.endpoint, modelId: r.config.modelId }));
 
+  /**
+   * Wire a collaborator over the REAL registry-backed seams. `extra` adds a
+   * seam the default set below leaves out (the answering-changed notice has
+   * its own describe, so the tests above it can keep asserting an empty tray).
+   */
+  function wireCollaborator(extra: Partial<CollaboratorDeps> = {}): void {
+    let registered: ((e: TandemEvent) => void) | null = null;
+    collab = createLocalModelCollaborator({
+      runTurn: async (opts) => {
+        runs.push(opts);
+        return cleanResult();
+      },
+      // The REAL registry-backed seams — the point of this file.
+      resolveConfig: resolveLocalModelConfig,
+      diagnose: diagnoseLocalModel,
+      onModelsChanged: onModelsFileChanged,
+      subscribe: (cb) => {
+        registered = cb;
+      },
+      unsubscribe: () => {},
+      aiRefusal: () => null,
+      ...extra,
+    });
+    collab.__startForTests();
+    if (!registered) throw new Error("the collaborator did not subscribe");
+    deliver = registered;
+  }
+
   beforeEach(async () => {
     resetQueue();
     resetNotifications();
+    clearStartupNotices();
     for (const id of [...getOpenDocs().keys()]) removeDoc(id);
     setActiveDocId(null);
     const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -194,25 +228,7 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     setActiveDocId(DOC);
 
     runs = [];
-    let registered: ((e: TandemEvent) => void) | null = null;
-    collab = createLocalModelCollaborator({
-      runTurn: async (opts) => {
-        runs.push(opts);
-        return cleanResult();
-      },
-      // The REAL registry-backed seams — the point of this file.
-      resolveConfig: resolveLocalModelConfig,
-      diagnose: diagnoseLocalModel,
-      onModelsChanged: onModelsFileChanged,
-      subscribe: (cb) => {
-        registered = cb;
-      },
-      unsubscribe: () => {},
-      aiRefusal: () => null,
-    });
-    collab.__startForTests();
-    if (!registered) throw new Error("the collaborator did not subscribe");
-    deliver = registered;
+    wireCollaborator();
 
     const app = express();
     app.use(express.json());
@@ -233,6 +249,7 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     await new Promise<void>((resolve) => server.close(() => resolve()));
     __resetModelRegistryForTests();
     removeDoc(DOC);
+    clearStartupNotices();
     vi.restoreAllMocks();
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
@@ -390,22 +407,64 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     expect(notes[0].message).toBe(UNUSABLE_NOTICE["no-endpoint"]);
   });
 
-  it("an enabled local model with NO default: one notice; set the default: a run; clear it again: a second notice", async () => {
+  it("ONE enabled local model with NO default: the next chat runs on it, and nothing is said", async () => {
+    await chat(); // before the save: inert
+    expect(runs).toEqual([]);
+
+    // Adding a model from Settings does not mark it Default. A sole enabled
+    // local model answers unmarked.
     await save(file([entry()], null));
+    await chat(2);
+
+    expect(seenConfigs()).toEqual([
+      { endpoint: "http://127.0.0.1:11434", modelId: "qwen2.5:14b-instruct" },
+      { endpoint: "http://127.0.0.1:11434", modelId: "qwen2.5:14b-instruct" },
+    ]);
+    expect(runs[0].config.agentIdentity).toEqual({
+      provider: "local-ollama",
+      displayName: "Local One",
+    });
+    expect(getBuffer()).toEqual([]);
+  });
+
+  it("a sole enabled local model with NO default still has its endpoint checked", async () => {
+    await save(file([entry({ endpoint: "http://192.168.1.20:11434" })], null));
+    await chat(3);
+
+    expect(runs).toEqual([]);
+    expect(getBuffer()).toHaveLength(1);
+    expect(getBuffer()[0].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
+  });
+
+  it("a disabled DEFAULT is not overridden by a spare enabled local model: silent", async () => {
+    await save(file([entry({ enabled: false }), entry({ id: "m-2" })], "m-1"));
+    await chat(2);
+    expect(runs).toEqual([]);
+    expect(getBuffer()).toEqual([]);
+  });
+
+  const SECOND = entry({
+    id: "m-2",
+    displayName: "Local Two",
+    modelId: "phi-4",
+    endpoint: "http://localhost:8080",
+  });
+
+  it("TWO enabled local models with NO default: exactly one notice; mark one: a run; clear it again: a second notice", async () => {
+    await save(file([entry(), SECOND], null));
     await chat(3);
 
     expect(runs).toEqual([]);
     expect(getBuffer()).toHaveLength(1);
     expect(getBuffer()[0].message).toBe(UNUSABLE_NOTICE["no-default-chosen"]);
+    expect(getBuffer()[0].message).toContain("none of them was marked Default");
 
-    await save(file([entry()], "m-1"));
+    await save(file([entry(), SECOND], "m-2"));
     await chat();
-    expect(seenConfigs()).toEqual([
-      { endpoint: "http://127.0.0.1:11434", modelId: "qwen2.5:14b-instruct" },
-    ]);
+    expect(seenConfigs()).toEqual([{ endpoint: "http://localhost:8080", modelId: "phi-4" }]);
     expect(getBuffer()).toHaveLength(1);
 
-    await save(file([entry()], null));
+    await save(file([entry(), SECOND], null));
     await chat(3);
 
     const notes = getBuffer();
@@ -415,15 +474,15 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     expect(runs).toHaveLength(1);
   });
 
-  it("default set and cleared again with NO chat in between: still a second notice", async () => {
-    await save(file([entry()], null));
+  it("two local models: default set and cleared again with NO chat in between: still a second notice", async () => {
+    await save(file([entry(), SECOND], null));
     await chat(2);
     expect(getBuffer()).toHaveLength(1);
 
     // Two saves, no chat: only the registry's change listener can tell the
     // collaborator that the state it reported was fixed in the meantime.
-    await save(file([entry()], "m-1"));
-    await save(file([entry()], null));
+    await save(file([entry(), SECOND], "m-1"));
+    await save(file([entry(), SECOND], null));
     expect(getBuffer()).toHaveLength(1); // a save alone tells the user nothing
 
     await chat(3);
@@ -436,16 +495,16 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
   });
 
   it("a save that leaves the broken state as it was does not repeat the notice", async () => {
-    await save(file([entry()], null));
+    await save(file([entry(), SECOND], null));
     await chat(2);
     expect(getBuffer()).toHaveLength(1);
 
     // Still no default; only an unrelated field changed. The file is new, the
     // state is not.
-    await save(file([entry({ displayName: "Renamed" })], null));
+    await save(file([entry({ displayName: "Renamed" }), SECOND], null));
     await chat(2);
-    // Adding a second local model while still default-less is not a new state either.
-    await save(file([entry({ displayName: "Renamed" }), entry({ id: "m-2" })], null));
+    // Adding a third local model while still default-less is not a new state either.
+    await save(file([entry({ displayName: "Renamed" }), SECOND, entry({ id: "m-3" })], null));
     await chat(2);
 
     expect(getBuffer()).toHaveLength(1);
@@ -457,5 +516,109 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     await chat(2);
     expect(runs).toEqual([]);
     expect(getBuffer()).toEqual([]);
+  });
+
+  describe("the answering-changed notice, through the real route (#2404)", () => {
+    const answeringNotes = () =>
+      getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
+
+    beforeEach(async () => {
+      // Re-wire with the real `answeringLocalModel` seam added. The baseline is
+      // taken here, at wire, over an empty registry: nothing would answer.
+      await collab.stop();
+      wireCollaborator({ answering: answeringLocalModel });
+      expect(getBuffer()).toEqual([]);
+    });
+
+    it("saving the first model, with no chat at all: one notice, also registered for replay", async () => {
+      await save(file([entry()], "m-1"));
+
+      const notes = answeringNotes();
+      expect(getBuffer()).toHaveLength(1);
+      expect(notes).toHaveLength(1);
+      expect(notes[0].message).toBe(
+        answeringChangedNotice({
+          entryId: "m-1",
+          endpoint: "http://127.0.0.1:11434",
+          modelId: "qwen2.5:14b-instruct",
+          displayName: "Local One",
+        }),
+      );
+      expect(notes[0].message).toContain('"Local One"');
+      expect(notes[0].severity).toBe("warning");
+      expect(getStartupNotices()).toEqual([notes[0]]);
+      expect(chatMap().size).toBe(0);
+      expect(runs).toEqual([]);
+    });
+
+    it("an unmarked sole local model is announced too: it is what would answer", async () => {
+      await save(file([entry()], null));
+      expect(answeringNotes()).toHaveLength(1);
+      // Marking it Default changes neither the entry nor where it points.
+      await save(file([entry()], "m-1"));
+      expect(answeringNotes()).toHaveLength(1);
+    });
+
+    it("endpoint change: another; rename: none; disable and re-enable: none; another default: one", async () => {
+      const endpoints = ["http://127.0.0.1:11434", "http://localhost:8080", "http://[::1]:9090"];
+      const modelIds = ["qwen2.5:14b-instruct", "phi-4"];
+
+      await save(file([entry()], "m-1"));
+      expect(answeringNotes()).toHaveLength(1);
+
+      await save(file([entry({ endpoint: endpoints[1] })], "m-1"));
+      expect(answeringNotes()).toHaveLength(2);
+
+      await save(file([entry({ endpoint: endpoints[1], displayName: "Renamed" })], "m-1"));
+      expect(answeringNotes()).toHaveLength(2);
+
+      await save(
+        file([entry({ endpoint: endpoints[1], displayName: "Renamed", enabled: false })], "m-1"),
+      );
+      expect(answeringNotes()).toHaveLength(2);
+      await save(file([entry({ endpoint: endpoints[1], displayName: "Renamed" })], "m-1"));
+      expect(answeringNotes()).toHaveLength(2);
+
+      const first = entry({ endpoint: endpoints[1], displayName: "Renamed" });
+      const second = entry({
+        id: "m-2",
+        provider: "local-llamacpp",
+        displayName: "Local Two",
+        modelId: modelIds[1],
+        endpoint: endpoints[2],
+      });
+      // Adding a second model while the default stays put changes nothing…
+      await save(file([first, second], "m-1"));
+      expect(answeringNotes()).toHaveLength(2);
+      // …switching the default to it does.
+      await save(file([first, second], "m-2"));
+
+      const notes = answeringNotes();
+      expect(notes).toHaveLength(3);
+      expect(getBuffer()).toHaveLength(3); // and nothing else was said
+      expect(new Set(notes.map((n) => n.id)).size).toBe(3);
+      expect(notes[2].message).toContain('"Local Two"');
+      // One replay entry, the latest: the key replaces rather than stacks.
+      expect(getStartupNotices()).toEqual([notes[2]]);
+      for (const n of notes) {
+        for (const endpoint of endpoints) {
+          expect(n.message).not.toContain(endpoint);
+          expect(n.message).not.toContain(new URL(endpoint).host);
+        }
+        for (const modelId of modelIds) expect(n.message).not.toContain(modelId);
+        expect(n.message).not.toMatch(/https?:\/\//);
+      }
+      expect(chatMap().size).toBe(0);
+    });
+
+    it("the next chat runs on what was announced", async () => {
+      await save(file([entry()], "m-1"));
+      await save(file([entry({ endpoint: "http://localhost:8080" })], "m-1"));
+      await chat();
+      expect(seenConfigs()).toEqual([
+        { endpoint: "http://localhost:8080", modelId: "qwen2.5:14b-instruct" },
+      ]);
+      expect(answeringNotes()).toHaveLength(2);
+    });
   });
 });

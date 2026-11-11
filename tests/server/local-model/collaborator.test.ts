@@ -18,6 +18,8 @@ import {
   unsubscribe,
 } from "../../../src/server/events/queue.js";
 import {
+  ANSWERING_CHANGED_NOTICE_KEY,
+  answeringChangedNotice,
   type CollaboratorDeps,
   classifyFailure,
   createLocalModelCollaborator,
@@ -25,6 +27,7 @@ import {
 } from "../../../src/server/local-model/collaborator.js";
 import type { LocalModelConfig } from "../../../src/server/local-model/config.js";
 import type {
+  AnsweringLocalModel,
   LocalModelUnusable,
   LocalModelUnusableReason,
 } from "../../../src/server/local-model/config-source.js";
@@ -39,6 +42,7 @@ import {
   getBuffer,
   resetForTesting as resetNotifications,
 } from "../../../src/server/notifications.js";
+import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import { getOrCreateDocument, removeDocument } from "../../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -200,6 +204,7 @@ async function drain(collab: ReturnType<typeof createLocalModelCollaborator>) {
 beforeEach(() => {
   resetQueue();
   resetNotifications();
+  clearStartupNotices();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
   // Clear CTRL_ROOM chat + mode so tests don't bleed.
@@ -2243,5 +2248,497 @@ describe("collaborator — editing permission handed to the run (#1123 R2)", () 
     editing.offEpoch = 1; // enabled never read as false
     expect(opts.editingAllowed()).toBe(false);
     await p.finish();
+  });
+});
+
+describe("collaborator — answering-changed notice (#2404)", () => {
+  const A: AnsweringLocalModel = {
+    entryId: "entry-a",
+    endpoint: "http://127.0.0.1:11434",
+    modelId: "qwen2.5:14b-instruct",
+    displayName: "Model A",
+  };
+  const B: AnsweringLocalModel = {
+    entryId: "entry-b",
+    endpoint: "http://localhost:8080",
+    modelId: "phi-4",
+    displayName: "Model B",
+  };
+
+  /**
+   * A collaborator whose `answering` seam reads a mutable cell, wired with a
+   * captured registry-change listener. `change(next)` is one registry write:
+   * set what would answer, then fire the listener.
+   */
+  function harness(initial: AnsweringLocalModel | null, over: Partial<CollaboratorDeps> = {}) {
+    const cell: { now: AnsweringLocalModel | null } = { now: initial };
+    const answering = vi.fn(() => cell.now);
+    let listener: (() => void) | null = null;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        answering,
+        onModelsChanged: (cb) => {
+          listener = cb;
+          return () => {
+            listener = null;
+          };
+        },
+        ...over,
+      }),
+    );
+    collab.__startForTests();
+    const fire = () => {
+      if (!listener) throw new Error("onModelsChanged listener was never registered");
+      listener();
+    };
+    return {
+      collab,
+      answering,
+      fire,
+      change: (next: AnsweringLocalModel | null) => {
+        cell.now = next;
+        fire();
+      },
+    };
+  }
+
+  const notes = () => getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
+
+  it("the baseline taken at wire is silent, and so is a registry write that changes nothing", async () => {
+    const h = harness(A);
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+
+    h.fire();
+    h.change({ ...A }); // a fresh object with the same three fields
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("an endpoint-only change is one notice: the fixed text, warning, keyed, and registered for replay", async () => {
+    const h = harness(A);
+    const moved = { ...A, endpoint: "http://127.0.0.1:9999" };
+    h.change(moved);
+
+    expect(getBuffer()).toHaveLength(1);
+    const [note] = notes();
+    expect(note.message).toBe(answeringChangedNotice(moved));
+    expect(note.severity).toBe("warning");
+    expect(note.type).toBe("general-error");
+    expect(note.dedupKey).toBe(ANSWERING_CHANGED_NOTICE_KEY);
+    expect("documentId" in note).toBe(false);
+    // The same notice is replayed to a browser that connects later.
+    expect(getStartupNotices()).toEqual([note]);
+
+    // Further writes that leave it there say nothing more.
+    h.fire();
+    h.fire();
+    expect(getBuffer()).toHaveLength(1);
+    await h.collab.stop();
+  });
+
+  it("a modelId-only change is a notice", async () => {
+    const h = harness(A);
+    h.change({ ...A, modelId: "llama3.1:8b" });
+    expect(notes()).toHaveLength(1);
+    expect(getBuffer()).toHaveLength(1);
+    await h.collab.stop();
+  });
+
+  it("a different entryId is a notice even when it points at the same endpoint and model", async () => {
+    const h = harness(A);
+    const twin = { ...A, entryId: "entry-twin" };
+    h.change(twin);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].message).toBe(answeringChangedNotice(twin));
+    await h.collab.stop();
+  });
+
+  it("a displayName-only change is silent", async () => {
+    const h = harness(A);
+    h.change({ ...A, displayName: "Renamed" });
+    h.change({ ...A, displayName: "Renamed again" });
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("model → none → the same model again is silent (switched off and on, or re-marked Default)", async () => {
+    const h = harness(A);
+    h.change(null);
+    h.fire(); // still none
+    h.change({ ...A });
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("none at wire → the first model ever is a notice", async () => {
+    const h = harness(null);
+    h.fire(); // still none: nothing to say
+    expect(getBuffer()).toEqual([]);
+
+    h.change(A);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].message).toBe(answeringChangedNotice(A));
+    expect(getStartupNotices()).toEqual(notes());
+    await h.collab.stop();
+  });
+
+  it("model A → none → model B is a notice, and going to none says nothing by itself", async () => {
+    const h = harness(A);
+    h.change(null);
+    expect(getBuffer()).toEqual([]);
+
+    h.change(B);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].message).toBe(answeringChangedNotice(B));
+    await h.collab.stop();
+  });
+
+  it("each change gets a fresh id; the replay list holds only the latest", async () => {
+    const h = harness(A);
+    h.change(B);
+    h.change(A);
+    h.change({ ...A, endpoint: "http://[::1]:9090" });
+
+    const all = notes();
+    expect(all).toHaveLength(3);
+    expect(new Set(all.map((n) => n.id)).size).toBe(3);
+    expect(all.every((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY)).toBe(true);
+    // One key, so a second add REPLACES the first: one tray row on reconnect.
+    expect(getStartupNotices()).toEqual([all[2]]);
+    await h.collab.stop();
+  });
+
+  it("with no `answering` dep the notice is never raised", async () => {
+    let listener: (() => void) | null = null;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        onModelsChanged: (cb) => {
+          listener = cb;
+          return () => {};
+        },
+      }),
+    );
+    collab.__startForTests();
+    const fire = listener as (() => void) | null;
+    if (!fire) throw new Error("onModelsChanged listener was never registered");
+    fire();
+    fire();
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+    await collab.stop();
+  });
+
+  it("`answering` IS read once at wire (the baseline), while `resolveConfig` still is not", async () => {
+    const resolveConfig = vi.fn((): LocalModelConfig | null => CONFIG);
+    const answering = vi.fn((): AnsweringLocalModel | null => A);
+    const collab = createLocalModelCollaborator(makeDeps({ resolveConfig, answering }));
+    // Creation reads nothing.
+    expect(answering).not.toHaveBeenCalled();
+    expect(resolveConfig).not.toHaveBeenCalled();
+
+    collab.__startForTests();
+    expect(answering).toHaveBeenCalledTimes(1);
+    expect(resolveConfig).not.toHaveBeenCalled();
+    expect(getBuffer()).toEqual([]);
+
+    // A chat reads the config, and does not re-read `answering`.
+    setupDoc("doc-answering-wire", "Body");
+    collab.onEvent(chatEvent("hi", { documentId: "doc-answering-wire" }));
+    await drain(collab);
+    expect(resolveConfig).toHaveBeenCalledTimes(1);
+    expect(answering).toHaveBeenCalledTimes(1);
+    await collab.stop();
+  });
+
+  it("the comparison runs on every registry write, with no unusable-notice latched", async () => {
+    const resolveConfig = vi.fn((): LocalModelConfig | null => CONFIG);
+    const diagnose = vi.fn((): LocalModelUnusable | null => null);
+    const h = harness(A, { resolveConfig, diagnose });
+
+    h.change(B);
+    h.fire();
+    // Asked at wire and on each of the two writes…
+    expect(h.answering).toHaveBeenCalledTimes(3);
+    expect(notes()).toHaveLength(1);
+    // …while the unusable-notice half had nothing latched and looked at nothing.
+    expect(resolveConfig).not.toHaveBeenCalled();
+    expect(diagnose).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
+
+  it("the unusable-notice latch still works alongside it: fixed and re-broken with no chat is a second unusable notice", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setupDoc("doc-answering-latch", "Body");
+    const state: { config: LocalModelConfig | null; broken: LocalModelUnusable | null } = {
+      config: null,
+      broken: {
+        reason: "endpoint-rejected",
+        stateKey: "state:endpoint-rejected:1",
+        detail: 'entry "entry-a" endpoint rejected',
+      },
+    };
+    const runTurn = vi.fn(async (_opts: RunTurnOpts) => cleanResult(""));
+    const h = harness(null, {
+      runTurn,
+      resolveConfig: () => state.config,
+      diagnose: () => state.broken,
+    });
+    let n = 0;
+    const chat = async (count: number) => {
+      for (let i = 0; i < count; i++) {
+        h.collab.onEvent(
+          chatEvent(`hello ${n}`, { documentId: "doc-answering-latch", messageId: `al${n++}` }),
+        );
+        await drain(h.collab);
+      }
+    };
+    const unusableNotes = () =>
+      getBuffer().filter((x) => x.message === UNUSABLE_NOTICE["endpoint-rejected"]);
+
+    await chat(3);
+    expect(unusableNotes()).toHaveLength(1);
+    expect(notes()).toHaveLength(0);
+
+    // A write that changes nothing keeps the latch: no repeat.
+    h.fire();
+    await chat(2);
+    expect(unusableNotes()).toHaveLength(1);
+
+    // A save fixes it — announced as a change of what answers, with no chat…
+    const broken = state.broken;
+    state.config = CONFIG;
+    state.broken = null;
+    h.change(A);
+    expect(notes()).toHaveLength(1);
+    expect(unusableNotes()).toHaveLength(1);
+
+    // …and another save breaks it the same way. Going to none says nothing.
+    state.config = null;
+    state.broken = broken;
+    h.change(null);
+    expect(getBuffer()).toHaveLength(2);
+
+    await chat(3);
+    expect(unusableNotes()).toHaveLength(2);
+    expect(unusableNotes()[1].id).not.toBe(unusableNotes()[0].id);
+    expect("dedupKey" in unusableNotes()[1]).toBe(false);
+    expect(notes()).toHaveLength(1);
+    expect(runTurn).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
+
+  it("the notice is not a chat message and not an event-queue event", async () => {
+    attachCtrlObservers();
+    const events: TandemEvent[] = [];
+    const internal = (e: TandemEvent) => events.push(e);
+    const external = (e: TandemEvent) => events.push(e);
+    subscribe(internal, "internal");
+    subscribe(external, "external");
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    let ctrlUpdates = 0;
+    const onUpdate = () => {
+      ctrlUpdates++;
+    };
+    ctrl.on("update", onUpdate);
+    try {
+      const h = harness(null);
+      h.change(A);
+      h.change(B);
+      await h.collab.stop();
+    } finally {
+      ctrl.off("update", onUpdate);
+      unsubscribe(internal);
+      unsubscribe(external);
+    }
+
+    expect(notes()).toHaveLength(2); // the notices did go out…
+    // …through the browser's notify stream (and its replay list) only.
+    expect(chatMap().size).toBe(0);
+    expect(streamMap().size).toBe(0);
+    expect(ctrlUpdates).toBe(0);
+    expect(events).toEqual([]);
+  });
+});
+
+describe("answeringChangedNotice — what it may carry (#2404)", () => {
+  const base: AnsweringLocalModel = {
+    entryId: "entry-secret-id-7f3a",
+    endpoint: "http://someuser:hunter2pw@127.0.0.1:23457",
+    modelId: "/home/someone/models/distinctive-model.gguf",
+    displayName: "Local One",
+  };
+
+  it("names the model in quotes and never carries the endpoint, the model id or the entry id", () => {
+    const text = answeringChangedNotice(base);
+    expect(text).toContain('It was set to "Local One".');
+    expect(text).toContain("Settings → Models");
+    for (const secret of [
+      base.endpoint,
+      base.modelId,
+      base.entryId,
+      "127.0.0.1",
+      "23457",
+      "hunter2pw",
+      "someuser",
+      "distinctive-model",
+    ]) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it("is one text for every kind of change: only the display name varies it", () => {
+    const other = answeringChangedNotice({
+      ...base,
+      entryId: "x",
+      endpoint: "http://localhost:1",
+      modelId: "y",
+    });
+    expect(other).toBe(answeringChangedNotice(base));
+  });
+
+  it("strips control, bidi and zero-width characters and quotes from a hostile display name", () => {
+    const hostile = 'Good‮"evil"⁦​‍﻿\u0007\n\r\t\u001B[31m`\'“”<b>{x}</b>\\ name';
+    const text = answeringChangedNotice({ ...base, displayName: hostile });
+
+    expect(text).toContain('It was set to "Goodevil31mbxb name".');
+    // Exactly the two quotes the notice itself adds; nothing the name supplied.
+    expect(text.match(/"/g)).toHaveLength(2);
+    expect(text).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+    expect(text).not.toMatch(/['`‘’“”<>{}[\]\\]/);
+  });
+
+  it("clamps the display name to 40 characters", () => {
+    const text = answeringChangedNotice({ ...base, displayName: "n".repeat(300) });
+    expect(text).toContain(`"${"n".repeat(40)}"`);
+    expect(text).not.toContain("n".repeat(41));
+    // The clamp is applied after stripping, so padding cannot push text out.
+    const padded = answeringChangedNotice({
+      ...base,
+      displayName: `${"​".repeat(100)}${"k".repeat(60)}`,
+    });
+    expect(padded).toContain(`"${"k".repeat(40)}"`);
+    expect(padded).not.toContain("k".repeat(41));
+  });
+
+  for (const [label, displayName] of [
+    ["empty", ""],
+    ["spaces only", "    "],
+    ["only stripped characters", "‮​\"'\n\u0007<>"],
+  ] as const) {
+    it(`says "an unnamed model" when nothing printable is left (${label})`, () => {
+      const text = answeringChangedNotice({ ...base, displayName });
+      expect(text).toContain("It was set to an unnamed model.");
+      expect(text).not.toContain('"');
+    });
+  }
+});
+
+describe("collaborator — a run that may not write ends honestly (#1123 R2, exit editing_off)", () => {
+  const REFUSED_STEP: LoopResult["steps"][number] = {
+    turn: 1,
+    assistantContent: "",
+    toolCalls: [
+      {
+        name: "comment_on_quote",
+        args: { quoted_text: "Body", comment: "x" },
+        rawArgs: '{"quoted_text":"Body","comment":"x"}',
+        outcome: { kind: "refused", tool: "comment_on_quote", errorCode: "EDITING_OFF" },
+      },
+    ],
+    latencyMs: 1,
+  };
+
+  it("exit editing_off: exactly one info notification saying it stopped without replying — not a step limit", async () => {
+    setupDoc("doc-editing-off", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          // The refused tool-call turn, then a text-only turn that said nothing.
+          opts.onTurnEnd?.({ hadToolCalls: true });
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return {
+            metrics: { ...cleanResult("").metrics, turns: 2, toolCalls: 1, exit: "editing_off" },
+            steps: [REFUSED_STEP],
+            finalContent: "",
+            messages: [],
+          };
+        },
+      }),
+    );
+    collab.onEvent(chatEvent("go", { documentId: "doc-editing-off" }));
+    await drain(collab);
+
+    const all = getBuffer();
+    expect(all).toHaveLength(1);
+    expect(all[0].severity).toBe("info");
+    expect(all[0].type).toBe("general-error");
+    expect(all[0].documentId).toBe("doc-editing-off");
+    expect(all[0].message).toBe(
+      "The local model stopped without replying, because commenting and suggesting were switched off for that reply. Ask again for an answer in chat.",
+    );
+    expect(all[0].message).not.toMatch(/step limit|ran out of time/);
+    expect(chatMessages()).toHaveLength(0); // and no empty bubble
+  });
+
+  it("a clean exit after a refusal delivers the reply and produces no notification", async () => {
+    setupDoc("doc-editing-off-clean", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onTurnEnd?.({ hadToolCalls: true });
+          opts.onContentDelta?.("Here is my answer in plain text.");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return {
+            metrics: { ...cleanResult("").metrics, turns: 2, toolCalls: 1, exit: "clean" },
+            steps: [REFUSED_STEP],
+            finalContent: "Here is my answer in plain text.",
+            messages: [],
+          };
+        },
+      }),
+    );
+    collab.onEvent(chatEvent("go", { documentId: "doc-editing-off-clean" }));
+    await drain(collab);
+
+    expect(getBuffer()).toEqual([]);
+    expect(chatMessages().map((m) => m.text)).toEqual(["Here is my answer in plain text."]);
+  });
+
+  it("a superseded editing_off run says nothing (the notice is ownership-gated)", async () => {
+    setupDoc("doc-editing-off-superseded", "Body");
+    let release: () => void = () => {};
+    const parked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async () => {
+          if (calls++ === 0) {
+            await parked;
+            return {
+              metrics: { ...cleanResult("").metrics, exit: "editing_off" },
+              steps: [REFUSED_STEP],
+              finalContent: "",
+              messages: [],
+            };
+          }
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.onEvent(chatEvent("one", { documentId: "doc-editing-off-superseded", messageId: "a" }));
+    await Promise.resolve();
+    collab.onEvent(chatEvent("two", { documentId: "doc-editing-off-superseded", messageId: "b" }));
+    await Promise.resolve();
+    release();
+    await collab.__awaitCurrent();
+
+    expect(calls).toBe(2);
+    expect(getBuffer()).toEqual([]);
   });
 });

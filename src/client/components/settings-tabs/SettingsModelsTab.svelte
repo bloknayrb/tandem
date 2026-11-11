@@ -33,12 +33,28 @@ const models = createModels();
 const localModel = createLocalModelSettings();
 void localModel.load();
 
+// The value is "settled" when a read or a save has told us what the server
+// holds and no read is in flight. Otherwise the box is shown indeterminate and
+// inert: it stays MOUNTED and focusable (`aria-disabled`, not `disabled`, which
+// would drop keyboard focus to the page), but it claims nothing and a click on
+// it does nothing — Retry and Switch off are the controls for that state.
+const editingSettled = $derived(localModel.known && !localModel.loading);
+
+function syncEditingBox(input: HTMLInputElement) {
+  input.checked = editingSettled && localModel.editing;
+  input.indeterminate = !editingSettled;
+}
+
 async function onEditingChange(event: Event) {
   const input = event.currentTarget as HTMLInputElement;
+  if (!editingSettled) {
+    syncEditingBox(input); // undo the browser's own toggle
+    return;
+  }
   await localModel.setEditing(input.checked);
   // Svelte skips a `checked` update whose value did not change, so after a
   // save that the server did not take, the DOM would keep the user's click.
-  input.checked = localModel.editing;
+  syncEditingBox(input);
 }
 
 const PROVIDER_LABEL: Record<ModelProvider, string> = {
@@ -305,66 +321,68 @@ async function confirmDelete(id: string) {
   style="display: flex; flex-direction: column; gap: var(--tandem-space-2); margin-top: var(--tandem-space-4); padding-top: var(--tandem-space-3); border-top: 1px solid var(--tandem-border);"
 >
   <div class="settings-section-label">Local models and your document</div>
-  {#if localModel.known}
-    <label
-      style="display: flex; align-items: flex-start; gap: var(--tandem-space-2); font-size: 13px; color: var(--tandem-fg);"
-    >
-      <input
-        type="checkbox"
-        data-testid="local-model-editing-toggle"
-        checked={localModel.editing}
-        onchange={onEditingChange}
-        style="margin-top: 2px; accent-color: var(--tandem-accent); cursor: pointer;"
-      />
-      <span>Let local models comment and suggest changes</span>
-    </label>
-  {:else if localModel.loadFailed}
-    <!-- The server's value is unknown. An unticked box would claim "off" and
-         could only be clicked to On, so offer Retry and an explicit Off. -->
+  <label
+    style="display: flex; align-items: flex-start; gap: var(--tandem-space-2); font-size: 13px; color: var(--tandem-fg);"
+  >
+    <input
+      type="checkbox"
+      data-testid="local-model-editing-toggle"
+      checked={editingSettled && localModel.editing}
+      indeterminate={!editingSettled}
+      aria-disabled={!editingSettled}
+      aria-describedby="local-model-editing-help"
+      onchange={onEditingChange}
+      style="margin-top: 2px; accent-color: var(--tandem-accent); cursor: {editingSettled
+        ? 'pointer'
+        : 'not-allowed'};"
+    />
+    <span>Let local models comment and suggest changes</span>
+  </label>
+  {#if !editingSettled}
+    <!-- The server's value is not known (still reading, or the read failed), so
+         the box above is indeterminate and inert. Switch off is offered in both
+         cases: a read that hangs or fails must not be the reason commenting
+         cannot be turned off. Live-region roles sit on the TEXT only. -->
     <div
-      role="alert"
-      data-testid="local-model-editing-load-error"
       style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2); font-size: 12px; color: var(--tandem-fg-muted);"
     >
-      <span>Couldn't read whether local models may comment and suggest changes.</span>
-      <button
-        type="button"
-        data-testid="local-model-editing-retry"
-        onclick={() => localModel.load()}
-        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
-      >
-        Retry
-      </button>
-      <button
-        type="button"
-        data-testid="local-model-editing-force-off"
-        onclick={() => localModel.setEditing(false)}
-        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
-      >
-        Switch off
-      </button>
-    </div>
-  {:else}
-    <!-- Switch off is offered here too: a read that hangs must not be the
-         reason editing cannot be turned off. -->
-    <div
-      data-testid="local-model-editing-loading"
-      role="status"
-      aria-busy="true"
-      style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2); font-size: 12px; color: var(--tandem-fg-subtle);"
-    >
-      <span>Checking…</span>
-      <button
-        type="button"
-        data-testid="local-model-editing-force-off-pending"
-        onclick={() => localModel.setEditing(false)}
-        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
-      >
-        Switch off
-      </button>
+      {#if localModel.loadFailed && !localModel.loading}
+        <span role="alert" data-testid="local-model-editing-load-error">
+          Couldn't read whether local models may comment and suggest changes.
+        </span>
+        <button
+          type="button"
+          data-testid="local-model-editing-retry"
+          onclick={() => localModel.load()}
+          style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          data-testid="local-model-editing-force-off"
+          onclick={() => localModel.setEditing(false)}
+          style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+        >
+          Switch off
+        </button>
+      {:else}
+        <span role="status" data-testid="local-model-editing-loading">Checking…</span>
+        <button
+          type="button"
+          data-testid="local-model-editing-force-off-pending"
+          onclick={() => localModel.setEditing(false)}
+          style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+        >
+          Switch off
+        </button>
+      {/if}
     </div>
   {/if}
-  <p style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
+  <p
+    id="local-model-editing-help"
+    style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);"
+  >
     Experimental — review every suggestion. When this is on, a local model can add comments,
     suggest replacements and reply in comment threads. When it is off, local models can read
     your document and reply in chat only. A change here applies from your next message;

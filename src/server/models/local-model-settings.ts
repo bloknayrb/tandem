@@ -20,8 +20,9 @@
  * server file outside `local-model/` that imports the engine.
  *
  * **The read fails toward off.** Missing, unreadable, not a regular file,
- * oversized, not JSON, not an object, or `editing` anything but the boolean
- * `true`: off.
+ * oversized, not JSON, not an object, a `version` that is not exactly this
+ * build's (missing, not a number, or a later build's), or `editing` anything
+ * but the boolean `true`: off.
  *
  * **Off is immediate and the last request wins.** `setLocalModelEditing(false)`
  * changes the effective value synchronously, before any disk work, and bumps
@@ -35,10 +36,20 @@
  * a failed Off, or an On that published its bytes and then threw, cannot leave
  * `true` behind for the next start.
  *
- * **No "newer version, refuse to write" rule**, unlike the launcher's file:
- * refusing would make it impossible to switch editing off. Unknown top-level
- * keys of an existing file are carried through a write instead, so a later
- * build's fields survive this one.
+ * **A later build's file can always be switched off, and is never switched on.**
+ * Refusing every write to a newer file, as the launcher's file does, would
+ * make it impossible to switch editing off. So an Off is written into a newer
+ * file with its `version` and unknown keys kept; an On is NOT written there at
+ * all — this build has declared it cannot read that schema, so it must not
+ * stamp `editing: true` into it for the newer build to find. The On still
+ * takes effect for this run of the server and is reported `persisted: false`.
+ * A file of this build's own version carries its unknown keys through a write.
+ *
+ * **Switching on is announced** (#2404): the origin and loopback gates on the
+ * route do not prove the user made the request, so every transition to on
+ * raises an in-app notice — for any caller, the user's own click included,
+ * because the server cannot tell them apart — and registers it for replay to a
+ * browser that connects later in this run. Switching off withdraws the replay.
  *
  * Nothing here touches the disk at import. A dark build never calls
  * `primeLocalModelSettings` (the call sits inside the `BYO_MODELS_ENABLED`
@@ -49,8 +60,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { generateMessageId } from "../../shared/utils.js";
 import { atomicWriteConfigFile, readBoundedJsonFileSync } from "../integrations/storage.js";
+import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
+import { addStartupNotice, removeStartupNotice } from "../startup-notices.js";
 
 export const LOCAL_MODEL_SETTINGS_FILE_NAME = "local-model-settings.json";
 const LOCAL_MODEL_SETTINGS_VERSION = 1;
@@ -92,15 +106,51 @@ function readObject(file: string): Record<string, unknown> | null {
   return parsed as Record<string, unknown>;
 }
 
+/** The file's `version` when it is one a LATER build wrote; else null. */
+function newerVersion(obj: Record<string, unknown> | null): number | null {
+  if (obj === null || !Object.hasOwn(obj, "version")) return null;
+  const v = obj.version;
+  return typeof v === "number" && Number.isFinite(v) && v > LOCAL_MODEL_SETTINGS_VERSION ? v : null;
+}
+
 function readEditing(file: string): boolean {
   const obj = readObject(file);
-  // Own property and the boolean `true`, nothing looser.
-  return obj !== null && Object.hasOwn(obj, "editing") && obj.editing === true;
+  // Own properties, exactly this build's version, and the boolean `true`.
+  return (
+    obj !== null &&
+    Object.hasOwn(obj, "version") &&
+    obj.version === LOCAL_MODEL_SETTINGS_VERSION &&
+    Object.hasOwn(obj, "editing") &&
+    obj.editing === true
+  );
+}
+
+/** What was said when editing was last switched on; also its replay key. */
+export const EDITING_ON_NOTICE_KEY = "local-model-editing-on";
+export const EDITING_ON_NOTICE =
+  "Local models were allowed to comment on and suggest changes to your documents. If you did not switch this on, switch it off in Settings → Models.";
+
+function announceEditingOn(): void {
+  const notice = {
+    id: generateMessageId(),
+    type: "general-error" as const,
+    severity: "warning" as const,
+    message: EDITING_ON_NOTICE,
+    dedupKey: EDITING_ON_NOTICE_KEY,
+    timestamp: Date.now(),
+  };
+  // Live for a browser that is connected now, and registered for one that
+  // connects later in this run: a switch made while no window was open is
+  // exactly the one that must not go unseen.
+  addStartupNotice(notice);
+  pushNotification(notice);
 }
 
 function serialize(file: string, editing: boolean): string {
-  const known = { version: LOCAL_MODEL_SETTINGS_VERSION, editing };
   const existing = readObject(file);
+  // Never lower a later build's version: keep it, so that build still
+  // recognises its own file (and this one keeps reading it as off).
+  const known = { version: newerVersion(existing) ?? LOCAL_MODEL_SETTINGS_VERSION, editing };
   if (existing) {
     const carried: Record<string, unknown> = {};
     for (const key of Object.keys(existing)) {
@@ -127,6 +177,12 @@ interface DiskOutcome {
  *  so the next start cannot read `true`. Never throws. */
 async function writeDisk(editing: boolean): Promise<DiskOutcome> {
   const file = filePath();
+  if (editing && newerVersion(readObject(file)) !== null) {
+    // An On is never stamped into a later build's file. It is "written" for
+    // the purpose of taking effect now; `settled` reports it not persisted,
+    // because this build reads that file as off.
+    return { written: true, agrees: false };
+  }
   try {
     await atomicWriteConfigFile(file, serialize(file, editing));
     return { written: true, agrees: true };
@@ -210,6 +266,7 @@ export async function setLocalModelEditing(value: boolean): Promise<SetEditingRe
     // Before any await: a run in flight stops writing at once.
     effective = false;
     offEpoch += 1;
+    removeStartupNotice(EDITING_ON_NOTICE_KEY);
     // A failed write that the delete fallback made good still leaves the disk
     // reading off, which is what was asked for.
     await enqueue(() => writeDisk(false));
@@ -220,7 +277,10 @@ export async function setLocalModelEditing(value: boolean): Promise<SetEditingRe
     // Only if the On itself was written, and nothing later arrived: an Off
     // issued while this write was in flight has already set `effective` and
     // queued its own write behind us.
-    if (outcome.written && seq === mine) effective = true;
+    if (outcome.written && seq === mine && !effective) {
+      effective = true;
+      announceEditingOn();
+    }
   });
   return settled(true);
 }
@@ -232,4 +292,5 @@ export function __resetLocalModelSettingsForTests(base?: string): void {
   offEpoch = 0;
   seq = 0;
   diskQueue = Promise.resolve();
+  removeStartupNotice(EDITING_ON_NOTICE_KEY);
 }

@@ -9,9 +9,15 @@
  *  - the control is present in EVERY state of the models list (loading, load
  *    failed, empty, populated) — it is the off switch;
  *  - it carries ADR-039's "experimental, review every suggestion" wording;
- *  - with the server's value unknown there is no checkbox (an unticked box
- *    would claim "off" and could only be clicked to On) — only Retry and an
- *    explicit Switch off;
+ *  - the checkbox is ALWAYS in the DOM. The value is "settled" when the store
+ *    knows it and no read is in flight; otherwise the box is indeterminate,
+ *    `aria-disabled` (never `disabled`, which would drop keyboard focus) and a
+ *    click on it sends nothing — Retry and an explicit Switch off are the
+ *    controls for that state;
+ *  - live-region roles sit on the text only: "Checking…" is a status with no
+ *    `aria-busy`, the load error is an alert that contains no button;
+ *  - a tab remounted while its read is in flight shows the unknown state, not
+ *    the last value as a live checkbox;
  *  - it is not disabled by `readOnly`;
  *  - after a save the server did not take, the DOM follows the store, not the click.
  */
@@ -54,10 +60,18 @@ vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
 interface EditingPose {
   editing: boolean;
   known: boolean;
+  loading: boolean;
   loadFailed: boolean;
   saveNotice: string | null;
 }
-let pose: EditingPose = { editing: false, known: true, loadFailed: false, saveNotice: null };
+const SETTLED_OFF: EditingPose = {
+  editing: false,
+  known: true,
+  loading: false,
+  loadFailed: false,
+  saveNotice: null,
+};
+let pose: EditingPose = { ...SETTLED_OFF };
 const load = vi.fn(async () => {});
 /** What the fake server makes of a save: by default it takes it. */
 let onSave: (value: boolean) => void = (value) => {
@@ -75,7 +89,9 @@ vi.mock(import("../../src/client/hooks/useLocalModelSettings.svelte"), () => ({
     get known() {
       return pose.known;
     },
-    loading: false,
+    get loading() {
+      return pose.loading;
+    },
     get loadFailed() {
       return pose.loadFailed;
     },
@@ -109,6 +125,10 @@ function mount(readOnly = false) {
   });
 }
 
+function toggle(getByTestId: (id: string) => HTMLElement): HTMLInputElement {
+  return getByTestId("local-model-editing-toggle") as HTMLInputElement;
+}
+
 const LOCAL: ModelRegistryEntry = {
   id: "m1",
   provider: "local-ollama",
@@ -120,7 +140,7 @@ const LOCAL: ModelRegistryEntry = {
 
 afterEach(() => {
   modelsPose = {};
-  pose = { editing: false, known: true, loadFailed: false, saveNotice: null };
+  pose = { ...SETTLED_OFF };
   onSave = (value) => {
     pose.editing = value;
   };
@@ -200,28 +220,134 @@ describe("SettingsModelsTab — local-model editing control", () => {
     expect(alert.textContent).toMatch(/off for now/);
   });
 
-  it("with the value unknown after a failed load: no checkbox, Retry and an explicit Switch off", async () => {
-    pose = { editing: false, known: false, loadFailed: true, saveNotice: null };
-    const { queryByTestId, getByTestId } = mount();
-    expect(queryByTestId("local-model-editing-toggle")).toBeNull();
-    load.mockClear();
-    await fireEvent.click(getByTestId("local-model-editing-retry"));
-    expect(load).toHaveBeenCalledTimes(1);
-    await fireEvent.click(getByTestId("local-model-editing-force-off"));
+  it("when settled the box is live: not indeterminate, not aria-disabled, and a click sends the new value", async () => {
+    pose = { ...SETTLED_OFF, editing: true };
+    const { getByTestId, queryByTestId } = mount();
+    const box = toggle(getByTestId);
+    expect(box.indeterminate).toBe(false);
+    expect(box.checked).toBe(true);
+    expect(box.getAttribute("aria-disabled") ?? "false").toBe("false");
+    expect(box.disabled).toBe(false);
+    expect(queryByTestId("local-model-editing-loading")).toBeNull();
+    expect(queryByTestId("local-model-editing-load-error")).toBeNull();
+    await fireEvent.click(box);
+    expect(setEditing).toHaveBeenCalledTimes(1);
     expect(setEditing).toHaveBeenCalledWith(false);
   });
 
-  it("with the value unknown and still loading: no checkbox yet", () => {
-    pose = { editing: false, known: false, loadFailed: false, saveNotice: null };
+  it("points aria-describedby at the experimental / review-every-suggestion help text", () => {
+    const { getByTestId, container } = mount();
+    const id = toggle(getByTestId).getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    const matches = container.querySelectorAll(`[id="${id}"]`);
+    expect(matches).toHaveLength(1); // the reference resolves, and to one element
+    const help = matches[0]?.textContent ?? "";
+    expect(help).toMatch(/Experimental/);
+    expect(help).toMatch(/review every suggestion/);
+  });
+
+  describe.each<[string, Partial<EditingPose>]>([
+    ["unknown and still being read", { known: false, loading: true }],
+    ["unknown, before the read has started", { known: false }],
+    ["unknown after a failed read", { known: false, loadFailed: true }],
+    ["a failed read being retried", { known: false, loadFailed: true, loading: true }],
+    ["known, but a fresh read is in flight", { known: true, loading: true }],
+    ["known and on, but a fresh read is in flight", { known: true, editing: true, loading: true }],
+  ])("not settled — %s", (_name, p) => {
+    it("keeps the checkbox mounted, indeterminate and aria-disabled, never disabled", () => {
+      pose = { ...SETTLED_OFF, ...p };
+      const { getByTestId } = mount();
+      const box = toggle(getByTestId);
+      expect(box.indeterminate).toBe(true);
+      expect(box.checked).toBe(false); // it claims neither on nor off
+      expect(box.getAttribute("aria-disabled")).toBe("true");
+      expect(box.disabled).toBe(false);
+      expect(box.hasAttribute("disabled")).toBe(false);
+    });
+
+    it("a click on it sends nothing and leaves it indeterminate", async () => {
+      pose = { ...SETTLED_OFF, ...p };
+      const { getByTestId } = mount();
+      const box = toggle(getByTestId);
+      await fireEvent.click(box);
+      await fireEvent.click(box);
+      expect(setEditing).toHaveBeenCalledTimes(0);
+      expect(box.indeterminate).toBe(true);
+      expect(box.checked).toBe(false);
+    });
+  });
+
+  it("while the value is being read: 'Checking…' is a status, with no aria-busy anywhere in the section", () => {
+    pose = { ...SETTLED_OFF, known: false, loading: true };
+    const { getByTestId, queryByTestId } = mount();
+    const status = getByTestId("local-model-editing-loading");
+    expect(status.getAttribute("role")).toBe("status");
+    expect(status.textContent).toMatch(/Checking/);
+    expect(status.hasAttribute("aria-busy")).toBe(false);
+    expect(status.querySelector("button")).toBeNull();
+    expect(getByTestId("local-model-editing-section").querySelector("[aria-busy]")).toBeNull();
+    expect(queryByTestId("local-model-editing-load-error")).toBeNull();
+    expect(queryByTestId("local-model-editing-retry")).toBeNull();
+  });
+
+  it("after a failed read: the error text is an alert that contains no button; Retry and Switch off work", async () => {
+    pose = { ...SETTLED_OFF, known: false, loadFailed: true };
+    const { getByTestId, queryByTestId } = mount();
+    const alert = getByTestId("local-model-editing-load-error");
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toMatch(/Couldn't read/);
+    expect(alert.querySelector("button")).toBeNull();
+    const retry = getByTestId("local-model-editing-retry");
+    const forceOff = getByTestId("local-model-editing-force-off");
+    // Neither control sits inside ANY live region, so pressing one is not announced as an alert.
+    expect(retry.closest("[role='alert'], [role='status']")).toBeNull();
+    expect(forceOff.closest("[role='alert'], [role='status']")).toBeNull();
+    expect(queryByTestId("local-model-editing-loading")).toBeNull();
+
+    load.mockClear();
+    await fireEvent.click(retry);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(setEditing).toHaveBeenCalledTimes(0);
+    await fireEvent.click(forceOff);
+    expect(setEditing).toHaveBeenCalledTimes(1);
+    expect(setEditing).toHaveBeenCalledWith(false);
+  });
+
+  it("a failed read that is being retried shows 'Checking…', not the stale error", () => {
+    pose = { ...SETTLED_OFF, known: false, loadFailed: true, loading: true };
     const { queryByTestId } = mount();
-    expect(queryByTestId("local-model-editing-toggle")).toBeNull();
     expect(queryByTestId("local-model-editing-loading")).not.toBeNull();
+    expect(queryByTestId("local-model-editing-load-error")).toBeNull();
+    expect(queryByTestId("local-model-editing-retry")).toBeNull();
   });
 
   it("offers Switch off while the value is still being read, so a hung read cannot block it", async () => {
-    pose = { editing: false, known: false, loadFailed: false, saveNotice: null };
+    pose = { ...SETTLED_OFF, known: false, loading: true };
     const { getByTestId } = mount();
-    await fireEvent.click(getByTestId("local-model-editing-force-off-pending"));
+    const forceOff = getByTestId("local-model-editing-force-off-pending");
+    expect(forceOff.closest("[role='alert'], [role='status']")).toBeNull();
+    await fireEvent.click(forceOff);
+    expect(setEditing).toHaveBeenCalledTimes(1);
     expect(setEditing).toHaveBeenCalledWith(false);
+  });
+
+  it("a tab remounted while its read is in flight shows the unknown state, not the last value as a live checkbox", async () => {
+    // The store is a module singleton: on a remount it still holds the value
+    // from the last visit (known, on) while this mount's own read is in flight.
+    pose = { ...SETTLED_OFF, known: true, editing: true };
+    const first = mount();
+    expect(toggle(first.getByTestId).checked).toBe(true);
+    first.unmount();
+
+    pose.loading = true; // what `load()` does synchronously on the next mount
+    const { getByTestId, queryByTestId } = mount();
+    const box = toggle(getByTestId);
+    expect(box.checked).toBe(false);
+    expect(box.indeterminate).toBe(true);
+    expect(box.getAttribute("aria-disabled")).toBe("true");
+    expect(queryByTestId("local-model-editing-loading")).not.toBeNull();
+    expect(queryByTestId("local-model-editing-force-off-pending")).not.toBeNull();
+    await fireEvent.click(box);
+    expect(setEditing).toHaveBeenCalledTimes(0);
   });
 });

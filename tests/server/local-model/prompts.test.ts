@@ -9,7 +9,12 @@ import {
   EDITING_SYSTEM_PROMPT,
   systemPromptFor,
 } from "../../../src/server/local-model/prompts.js";
-import { READ_TOOL_NAMES, READ_TOOLS, TOOLS } from "../../../src/server/local-model/tools.js";
+import {
+  EDITING_OFF_MESSAGE,
+  READ_TOOL_NAMES,
+  READ_TOOLS,
+  TOOLS,
+} from "../../../src/server/local-model/tools.js";
 import { makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
 let doc: Y.Doc | undefined;
@@ -88,9 +93,38 @@ describe("EDITING_SYSTEM_PROMPT", () => {
       EDITING_SYSTEM_PROMPT.length - tail.length,
     );
     expect(inserted.startsWith("\n\nYOU PROPOSE, THE USER DECIDES\n")).toBe(true);
-    // One section: a single heading line, then bullets only.
+    // One section: a single heading line, then bullets only — no blank line,
+    // so nothing in it can be read as a second section.
     const lines = inserted.trim().split("\n");
+    expect(lines[0]).toBe("YOU PROPOSE, THE USER DECIDES");
     expect(lines.slice(1).every((l) => l.startsWith("- "))).toBe(true);
+    // The section, line by line. Round 2 grew it from four bullets to five
+    // (the "ids you know" line) and reworded the EDITING_OFF one; pinning the
+    // list means the next growth is a deliberate edit here, and the
+    // startsWith/endsWith above mean it can only ever grow INSIDE this section.
+    expect(lines.slice(1).map((l) => l.slice(0, 40))).toEqual([
+      "- Your tools never change the document t",
+      "- So never tell the user that a change w",
+      "- Never quote annotation ids, reply ids ",
+      "- You only know the ids of comments you ",
+      "- If a tool returns EDITING_OFF, the use",
+    ]);
+  });
+
+  it("every line of the spike's prompt is still a line of the editing prompt, in order", () => {
+    // Line-level, so an edit to one of the spike's own lines fails by naming
+    // it — the startsWith/endsWith check above only says "something differs".
+    const spikeLines = spikeSystemPrompt().split("\n");
+    const ours = EDITING_SYSTEM_PROMPT.split("\n");
+    let at = 0;
+    for (const line of spikeLines) {
+      const found = ours.indexOf(line, at);
+      expect(found, `spike line missing or out of order: ${JSON.stringify(line)}`).not.toBe(-1);
+      at = found + 1;
+    }
+    // And the only lines we have that the spike does not are the inserted
+    // section's: its heading, its five bullets and one blank separator.
+    expect(ours.length - spikeLines.length).toBe(7);
   });
 
   it("names every writing tool (the reading tools are described by their schemas, as in the spike)", () => {
@@ -111,9 +145,27 @@ describe("EDITING_SYSTEM_PROMPT", () => {
     expect(EDITING_SYSTEM_PROMPT).toMatch(/waiting for them to accept or reject/);
   });
 
-  it("tells the model what an EDITING_OFF refusal means", () => {
+  it("tells the model what an EDITING_OFF refusal means, and that its next message is the reply", () => {
     expect(EDITING_SYSTEM_PROMPT).toMatch(/EDITING_OFF/);
     expect(EDITING_SYSTEM_PROMPT).toMatch(/answer in plain text/);
+    // Round 2: was "Stop calling tools that write". The loop now offers no
+    // tools at all on the next turn, so the prompt says to call none.
+    expect(EDITING_SYSTEM_PROMPT).toContain(
+      "- If a tool returns EDITING_OFF, the user has switched off commenting and suggesting. Call no more tools: your next message is your reply, so answer in plain text.",
+    );
+    expect(EDITING_SYSTEM_PROMPT).not.toMatch(/Stop calling tools that write/);
+  });
+
+  it("says the model only knows the ids of comments it created in this same reply (round 2)", () => {
+    expect(EDITING_SYSTEM_PROMPT).toContain(
+      "- You only know the ids of comments you created in this same reply (each create result gives you one), so those are the only threads you can reply in.",
+    );
+  });
+
+  it("agrees with the refusal the tool returns: both say to call no more tools", () => {
+    expect(EDITING_OFF_MESSAGE).toMatch(/Do not call any more tools/);
+    expect(EDITING_OFF_MESSAGE).toMatch(/your next message is your reply/);
+    expect(EDITING_SYSTEM_PROMPT).toMatch(/Call no more tools: your next message is your reply/);
   });
 });
 
@@ -134,6 +186,11 @@ describe("CHAT_SYSTEM_PROMPT", () => {
     expect(CHAT_SYSTEM_PROMPT).toMatch(
       /Never tell the user that you changed, edited, fixed or commented on the document/,
     );
+  });
+
+  it("does not mention EDITING_OFF or ids it could reply with: it has no writing tool to be refused", () => {
+    expect(CHAT_SYSTEM_PROMPT).not.toMatch(/EDITING_OFF/);
+    expect(CHAT_SYSTEM_PROMPT).not.toMatch(/threads you can reply in/);
   });
 
   it("carries none of the editing tier's anchoring instructions", () => {

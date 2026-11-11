@@ -17,9 +17,17 @@
  *  - `none` — the ordinary ways of saying "Claude is my collaborator": nothing
  *    saved, a disabled default, a cloud default (cloud BYO keys are v1.1), or no
  *    default with no enabled local model. The user is told nothing.
- *  - `unusable` — the user has an enabled local model selected, or one saved
- *    with no default chosen, and it cannot be used. The collaborator tells the
- *    user why, once per state.
+ *  - `unusable` — the user has a local model that should answer and cannot:
+ *    its endpoint is missing or rejected, or two or more enabled local models
+ *    are saved and none is marked Default. The collaborator tells the user
+ *    why, once per state.
+ *
+ * **Which entry answers** (Bryan, 2026-11-11): the default, when one is set.
+ * With no default, a SOLE enabled local model answers without being marked —
+ * adding a model from Settings does not set a default, and the client's label
+ * already treats a lone model as the active one. A default that is set but
+ * disabled or cloud is never overridden by a spare local model: that is the
+ * user saying "Claude is my collaborator".
  *
  * A default naming no entry is the same state as no default: the store clears
  * it on every read and write, so it is only reachable at this seam.
@@ -48,7 +56,7 @@ export interface LocalModelUnusable {
 }
 
 export type LocalModelResolution =
-  | { kind: "ok"; config: LocalModelConfig }
+  | { kind: "ok"; config: LocalModelConfig; entryId: string }
   | { kind: "none" }
   | ({ kind: "unusable" } & LocalModelUnusable);
 
@@ -71,42 +79,40 @@ function unusable(
 export function resolveLocalModel(): LocalModelResolution {
   try {
     const file = getCachedModelsFile();
-    const entry =
+    const chosen =
       file.defaultModelId === null
         ? undefined
         : file.models.find((m) => m.id === file.defaultModelId);
+    let entry = chosen;
     if (!entry) {
-      // No default (or one naming no entry). Silent unless the user has saved an
-      // enabled local model: adding a model from Settings does not set a default
-      // and deleting the default clears it, so this is how "I added a model and
-      // nothing answers" looks from here. The key is the reason alone, so adding
-      // or removing another local model while still default-less is not a new
-      // state.
-      const hasEnabledLocal = file.models.some((m) => m.enabled && isLocalProvider(m.provider));
-      return hasEnabledLocal
-        ? unusable("no-default-chosen", [], "no default chosen")
-        : { kind: "none" };
+      // No default (or one naming no entry). A sole enabled local model answers
+      // unmarked; two or more with none marked is the one "choose a default"
+      // state; none is an ordinary "no local model". The key is the reason
+      // alone, so adding a third while still default-less is not a new state.
+      const locals = file.models.filter((m) => m.enabled && isLocalProvider(m.provider));
+      if (locals.length === 0) return { kind: "none" };
+      if (locals.length > 1) {
+        return unusable("no-default-chosen", [], "several local models, no default chosen");
+      }
+      entry = locals[0];
     }
     // A disabled or cloud default is an ordinary resting state, not a fault.
     if (!entry.enabled) return { kind: "none" };
     if (!isLocalProvider(entry.provider)) return { kind: "none" };
     if (!entry.endpoint) {
-      return unusable(
-        "no-endpoint",
-        [entry.id],
-        `default entry ${logId(entry.id)} has no endpoint`,
-      );
+      return unusable("no-endpoint", [entry.id], `entry ${logId(entry.id)} has no endpoint`);
     }
     const check = validateEndpoint(entry.endpoint);
     if (!check.ok) {
       return unusable(
         "endpoint-rejected",
         [entry.id, entry.endpoint, check.code],
-        `default entry ${logId(entry.id)} endpoint rejected (${check.code})`,
+        `entry ${logId(entry.id)} endpoint rejected (${check.code})`,
       );
     }
     return {
       kind: "ok",
+      entryId: entry.id,
       config: {
         endpoint: entry.endpoint,
         modelId: entry.modelId,
@@ -156,4 +162,29 @@ export function diagnoseLocalModel(): LocalModelUnusable | null {
   const r = resolveLocalModel();
   if (r.kind !== "unusable") return null;
   return { reason: r.reason, stateKey: r.stateKey, detail: r.detail };
+}
+
+/** Which saved entry would answer the next chat, and where it points. */
+export interface AnsweringLocalModel {
+  entryId: string;
+  endpoint: string;
+  modelId: string;
+  displayName: string;
+}
+
+/**
+ * The local model that would answer the next chat, or null when none would.
+ * The collaborator watches this across registry writes to tell the user when
+ * it changes (#2404): since a saved model takes effect with no restart, a
+ * write the user did not make must not be silent.
+ */
+export function answeringLocalModel(): AnsweringLocalModel | null {
+  const r = resolveLocalModel();
+  if (r.kind !== "ok") return null;
+  return {
+    entryId: r.entryId,
+    endpoint: r.config.endpoint,
+    modelId: r.config.modelId,
+    displayName: r.config.agentIdentity.displayName,
+  };
 }

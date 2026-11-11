@@ -244,3 +244,224 @@ describe("useLocalModelSettings — save", () => {
     expect(s.editing).toBe(false);
   });
 });
+
+/**
+ * Round 2: while any save is outstanding the DISPLAYED value belongs to the
+ * user's latest click. Every response here is held open with a deferred and
+ * released by hand, and `editing` is sampled after each step, so an answer
+ * that flips the box even briefly fails the test.
+ *
+ * Each "Catches the removal of…" comment below was reasoned through the held
+ * ordering and then confirmed by running this file against a transform-time
+ * mutation of the hook (a throwaway vite plugin; `src/` was not edited): each
+ * mutation failed exactly the tests that name it, and nothing else.
+ */
+describe("useLocalModelSettings — the display follows the last click", () => {
+  /** Hold the next `n` requests open, in the order they will be sent. */
+  function hold(n: number) {
+    const ds = Array.from({ length: n }, () => deferred<Response>());
+    held.push(...ds.map((d) => d.promise));
+    return ds;
+  }
+
+  /** The queue hands over in microtasks; wait until request number `n` is out. */
+  async function sent(n: number): Promise<void> {
+    await vi.waitFor(() => expect(calls).toHaveLength(n));
+  }
+
+  // Catches the removal of the `_savesOutstanding === 0` guard on the SUCCESS
+  // arm of the load path (`if (_savesOutstanding === 0) { _editing = editing; …`).
+  // Reasoned through the held ordering: the click raises the count to 1 before
+  // the GET answers, the POST cannot be sent until the load's turn ends, so the
+  // count is still 1 when the GET's `{editing:false}` lands. Without the guard
+  // that answer is written and the sample taken straight after `await loading`
+  // reads false.
+  it("a click made while the mount read is in flight is never contradicted by that read's answer", async () => {
+    const s = createLocalModelSettings();
+    const [heldGet, heldPost] = hold(2);
+    const loading = s.load();
+    await sent(1);
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
+
+    const saving = s.setEditing(true); // the click
+    expect(s.editing).toBe(true); // from the instant of the click
+    expect(s.known).toBe(true);
+
+    heldGet.resolve(jsonResponse(200, { editing: false })); // the older answer says off
+    await loading;
+    expect(s.editing).toBe(true); // …and is not shown
+    expect(s.known).toBe(true);
+    expect(s.loadFailed).toBe(false);
+
+    await sent(2); // only now does the POST go out
+    expect(calls[1]).toEqual({ method: "POST", body: { editing: true } });
+    expect(s.editing).toBe(true);
+
+    heldPost.resolve(jsonResponse(200, { editing: true, persisted: true }));
+    await saving;
+    expect(s.editing).toBe(true);
+    expect(s.known).toBe(true);
+    expect(s.saveNotice).toBeNull();
+    expect(calls).toHaveLength(2);
+  });
+
+  // Same guard, same line, opposite polarity of click and read: an Off clicked
+  // over a read that answers On. Kept separate because this is the dangerous
+  // direction — the box would show On after the user switched it off.
+  it("an Off clicked during the read is not flipped back on by a read that answers on", async () => {
+    const s = createLocalModelSettings();
+    const [heldGet, heldPost] = hold(2);
+    const loading = s.load();
+    await sent(1);
+    const saving = s.setEditing(false);
+    expect(s.editing).toBe(false);
+
+    heldGet.resolve(jsonResponse(200, { editing: true }));
+    await loading;
+    expect(s.editing).toBe(false);
+
+    await sent(2);
+    expect(calls[1]).toEqual({ method: "POST", body: { editing: false } });
+    heldPost.resolve(jsonResponse(200, { editing: false, persisted: true }));
+    await saving;
+    expect(s.editing).toBe(false);
+    expect(s.known).toBe(true);
+  });
+
+  // Catches the removal of `if (_savesOutstanding > 0) return;` in the save
+  // path. Reasoned through the held ordering: both clicks raise the count to 2
+  // synchronously; the first POST's `finally` lowers it to 1, so the early
+  // return is what stops `_editing = editing` (true) and `_saveNotice = notice`
+  // from being written. Without it the samples after `await first` read
+  // editing true and a non-null notice.
+  it("two rapid clicks: the first save's answer is not shown; the second's is", async () => {
+    const s = createLocalModelSettings();
+    const [heldFirst, heldSecond] = hold(2);
+    const first = s.setEditing(true);
+    expect(s.editing).toBe(true);
+    const second = s.setEditing(false);
+    expect(s.editing).toBe(false); // the last click
+
+    await sent(1);
+    expect(calls[0]).toEqual({ method: "POST", body: { editing: true } });
+    expect(s.editing).toBe(false); // while the first POST is held
+
+    // The first answer says on, and carries a notice-worthy `persisted: false`.
+    heldFirst.resolve(jsonResponse(500, { editing: true, persisted: false, code: "X" }));
+    await first;
+    expect(s.editing).toBe(false); // STILL the last click
+    expect(s.saveNotice).toBeNull(); // and no notice about a save nobody is looking at
+
+    await sent(2);
+    expect(calls[1]).toEqual({ method: "POST", body: { editing: false } });
+    expect(s.editing).toBe(false);
+
+    // The server's answer to the last click differs from the click itself, so
+    // "shows the server's answer" is distinguishable from "shows the click".
+    heldSecond.resolve(jsonResponse(500, { editing: true, persisted: false, code: "X" }));
+    await second;
+    expect(s.editing).toBe(true);
+    expect(s.known).toBe(true);
+    expect(s.saveNotice).toMatch(/on for now/);
+    expect(calls).toHaveLength(2);
+  });
+
+  // Catches the removal of the `_savesOutstanding === 0` guard on the FAILURE
+  // arm of the load path (`if (_savesOutstanding === 0) { _known = false;
+  // _loadFailed = true; }`). Without it the samples after `await loading` read
+  // known false / loadFailed true while the user's click is still on its way.
+  it("a load that fails while a save is outstanding does not flip the store to unknown; the save's answer decides", async () => {
+    const s = createLocalModelSettings();
+    const [heldGet, heldPost] = hold(2);
+    const loading = s.load();
+    await sent(1);
+    const saving = s.setEditing(true);
+
+    heldGet.resolve(jsonResponse(503, { error: "UNAVAILABLE" })); // the read fails
+    await loading;
+    expect(s.known).toBe(true);
+    expect(s.loadFailed).toBe(false);
+    expect(s.editing).toBe(true);
+    expect(s.loading).toBe(false);
+
+    await sent(2);
+    heldPost.resolve(jsonResponse(500, { editing: false, persisted: false, code: "X" }));
+    await saving;
+    expect(s.known).toBe(true); // the save's own answer: the server holds off
+    expect(s.loadFailed).toBe(false);
+    expect(s.editing).toBe(false);
+    expect(s.saveNotice).toMatch(/could not be switched on/);
+  });
+
+  it("…and when that save cannot be answered or re-read either, its own failure is what makes the state unknown", async () => {
+    const s = createLocalModelSettings();
+    const [heldGet] = hold(1);
+    posts.push("network-error");
+    gets.push("network-error"); // the save's own re-read
+    const loading = s.load();
+    await sent(1);
+    const saving = s.setEditing(true);
+    heldGet.resolve(jsonResponse(503, { error: "UNAVAILABLE" }));
+    await loading;
+    expect(s.known).toBe(true); // not yet: the save has not answered
+    await saving;
+    expect(s.known).toBe(false);
+    expect(s.loadFailed).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "POST", "GET"]);
+  });
+});
+
+describe("useLocalModelSettings — loading", () => {
+  it("is true from the call until the answer, and false after", async () => {
+    const s = createLocalModelSettings();
+    expect(s.loading).toBe(false);
+    const heldGet = deferred<Response>();
+    held.push(heldGet.promise);
+    const loading = s.load();
+    expect(s.loading).toBe(true); // synchronously, before the request is even sent
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(s.loading).toBe(true);
+    heldGet.resolve(jsonResponse(200, { editing: true }));
+    await loading;
+    expect(s.loading).toBe(false);
+  });
+
+  it("is false again after a load that fails", async () => {
+    const s = createLocalModelSettings();
+    const heldGet = deferred<Response>();
+    held.push(heldGet.promise);
+    const loading = s.load();
+    expect(s.loading).toBe(true);
+    heldGet.resolve(jsonResponse(500, {}));
+    await loading;
+    expect(s.loading).toBe(false);
+    expect(s.loadFailed).toBe(true);
+  });
+
+  it("is true during a refresh of an already-known value, which stays readable underneath", async () => {
+    const s = createLocalModelSettings();
+    gets.push({ status: 200, body: { editing: true } });
+    await s.load();
+    const heldGet = deferred<Response>();
+    held.push(heldGet.promise);
+    const refreshing = s.load();
+    expect(s.loading).toBe(true);
+    expect(s.known).toBe(true); // the tab, not the store, hides the value while loading
+    heldGet.resolve(jsonResponse(200, { editing: false }));
+    await refreshing;
+    expect(s.loading).toBe(false);
+    expect(s.editing).toBe(false);
+  });
+
+  it("a save alone does not raise it", async () => {
+    const s = createLocalModelSettings();
+    const heldPost = deferred<Response>();
+    held.push(heldPost.promise);
+    const saving = s.setEditing(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(s.loading).toBe(false);
+    heldPost.resolve(jsonResponse(200, { editing: true, persisted: true }));
+    await saving;
+    expect(s.loading).toBe(false);
+  });
+});

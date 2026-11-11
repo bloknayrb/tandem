@@ -25,6 +25,10 @@ import { API_BASE } from "../utils/fileUpload.js";
  *  - loads and saves share ONE queue, so they reach the server, and are
  *    applied here, strictly in the order they were asked for: a read can never
  *    overwrite what a later save learned, and a save never waits on nothing;
+ *  - the DISPLAYED value follows the user's last click until that click's own
+ *    answer arrives: an answer from a load, or from an older save, that lands
+ *    while a later save is still queued is not shown (it would flip the box
+ *    back and forth under the user's hand);
  *  - a read that fails drops back to "unknown" rather than keep showing a value
  *    that another window or a restart may have changed;
  *  - every request has a timeout, so a hung server ends in the unknown state
@@ -46,6 +50,9 @@ let _saveNotice = $state<string | null>(null);
 let _loadInFlight: Promise<void> | null = null;
 /** Loads and saves, one at a time, in request order. */
 let _queue: Promise<void> = Promise.resolve();
+/** Saves asked for and not yet answered. While any is outstanding the display
+ *  belongs to the latest click, so nothing else may write `_editing`. */
+let _savesOutstanding = 0;
 
 const url = `${API_BASE}${API_MODELS_LOCAL_SETTINGS}`;
 /** Long enough for a busy loopback server, short enough that a hung one ends
@@ -79,18 +86,25 @@ export function loadLocalModelSettings(): Promise<void> {
   _loading = true;
   _loadInFlight = enqueue(async () => {
     try {
-      _editing = await fetchEditing();
-      _known = true;
-      _loadFailed = false;
-      // What the server says now supersedes whatever a past save reported.
-      _saveNotice = null;
+      const editing = await fetchEditing();
+      // A click made while this read was in flight owns the display until its
+      // own answer arrives; this (older) answer must not flip the box back.
+      if (_savesOutstanding === 0) {
+        _editing = editing;
+        _known = true;
+        _loadFailed = false;
+        // What the server says now supersedes whatever a past save reported.
+        _saveNotice = null;
+      }
     } catch (err) {
       console.warn("[models] local-model settings load failed", err);
-      // Not "keep the last value": another window or a restart may have
-      // changed it, and a stale box is exactly the lie this store exists to
-      // avoid.
-      _known = false;
-      _loadFailed = true;
+      if (_savesOutstanding === 0) {
+        // Not "keep the last value": another window or a restart may have
+        // changed it, and a stale box is exactly the lie this store exists to
+        // avoid.
+        _known = false;
+        _loadFailed = true;
+      }
     } finally {
       _loading = false;
       _loadInFlight = null;
@@ -116,11 +130,14 @@ function noticeFor(requested: boolean, answer: LocalModelSettingsPostResponse): 
 export function setLocalModelEditing(value: boolean): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
   // Optimistic, synchronously in the handler: the control does not bounce.
-  const before = { editing: _editing, known: _known };
+  const before = _editing;
   _editing = value;
   _known = true;
   _saveNotice = null;
+  _savesOutstanding += 1;
   const run = async (): Promise<void> => {
+    let editing: boolean | null = null;
+    let notice: string | null = null;
     try {
       const res = await fetch(url, {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -130,31 +147,39 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
       });
       const answer = (await res.json().catch(() => null)) as LocalModelSettingsPostResponse | null;
       if (answer && typeof answer.editing === "boolean" && typeof answer.persisted === "boolean") {
-        _editing = answer.editing;
-        _known = true;
-        _loadFailed = false;
-        _saveNotice = noticeFor(value, answer);
-        return;
+        editing = answer.editing;
+        notice = noticeFor(value, answer);
+      } else {
+        throw new Error(`POST ${API_MODELS_LOCAL_SETTINGS} → ${res.status}`);
       }
-      throw new Error(`POST ${API_MODELS_LOCAL_SETTINGS} → ${res.status}`);
     } catch (err) {
       console.warn("[models] local-model settings save failed", err);
       // The request may or may not have reached the server. Ask it.
       try {
-        _editing = await fetchEditing();
-        _known = true;
-        _loadFailed = false;
-        _saveNotice =
-          _editing === value
-            ? null
-            : "That change could not be saved. Showing the current setting.";
+        editing = await fetchEditing();
+        notice =
+          editing === value ? null : "That change could not be saved. Showing the current setting.";
       } catch {
-        _editing = before.editing;
-        _known = false;
-        _loadFailed = true;
-        _saveNotice = "That change could not be saved, and the current setting could not be read.";
+        editing = null;
+        notice = "That change could not be saved, and the current setting could not be read.";
       }
+    } finally {
+      _savesOutstanding -= 1;
     }
+    // Only the LAST click's answer reaches the display. An earlier save's
+    // answer arriving while a later one is still queued is dropped: the later
+    // click is what the user is looking at, and its own answer is on its way.
+    if (_savesOutstanding > 0) return;
+    if (editing === null) {
+      _editing = before;
+      _known = false;
+      _loadFailed = true;
+    } else {
+      _editing = editing;
+      _known = true;
+      _loadFailed = false;
+    }
+    _saveNotice = notice;
   };
   return enqueue(run);
 }
@@ -164,6 +189,8 @@ export interface LocalModelSettingsState {
   readonly editing: boolean;
   /** Has a load or a save told us the server's value? */
   readonly known: boolean;
+  /** A read is in flight. The tab shows "Checking…" rather than a value that
+   *  another window or a restart may have changed. */
   readonly loading: boolean;
   readonly loadFailed: boolean;
   /** A save that did not fully land, in words; null otherwise. */
@@ -203,4 +230,5 @@ export function _resetLocalModelSettingsForTests(): void {
   _saveNotice = null;
   _loadInFlight = null;
   _queue = Promise.resolve();
+  _savesOutstanding = 0;
 }

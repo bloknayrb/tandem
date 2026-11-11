@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __resetLocalModelSettingsForTests,
+  EDITING_ON_NOTICE,
+  EDITING_ON_NOTICE_KEY,
   isLocalModelEditingEnabled,
   LOCAL_MODEL_SETTINGS_FILE_NAME,
   localModelEditingState,
@@ -17,7 +19,13 @@ import {
   persistModelsFile,
   primeModelStoreCache,
 } from "../../../src/server/models/registry.js";
+import {
+  resetForTesting as resetNotifications,
+  subscribe as subscribeNotifications,
+} from "../../../src/server/notifications.js";
+import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import type { ModelsFile } from "../../../src/shared/models/contract.js";
+import type { TandemNotification } from "../../../src/shared/types.js";
 
 /**
  * `local-model-settings.json` (#1123): the one opt-in that lets a local model
@@ -61,6 +69,33 @@ function failWrites(impl: WriteImpl): void {
 const REJECT: WriteImpl = async () => {
   throw new Error("simulated write failure");
 };
+/**
+ * A write held open until the test lets it go. `entered` resolves when the
+ * module has actually called the writer, so a test waits for the write to be
+ * in flight instead of sleeping and hoping. Only the FIRST settings write is
+ * held; later ones go straight through.
+ */
+function holdFirstWrite(): { entered: Promise<void>; release: () => void } {
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let markEntered = (): void => {};
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
+  let held = false;
+  failWrites(async (f, content, real) => {
+    if (!held) {
+      held = true;
+      markEntered();
+      await gate;
+    }
+    await real(f, content);
+  });
+  return { entered, release };
+}
+
 /** The bytes reach the disk and THEN the write reports failure. */
 const PUBLISH_THEN_THROW: WriteImpl = async (file, content, real) => {
   await real(file, content);
@@ -74,6 +109,10 @@ describe("local-model editing setting (#1123)", () => {
   const onDisk = (): Record<string, unknown> =>
     JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
   const write = (text: string) => fs.writeFileSync(file, text, "utf8");
+  /** Every notification pushed since the test began, in order. */
+  let pushed: TandemNotification[] = [];
+  const editingOnNotices = () => pushed.filter((n) => n.dedupKey === EDITING_ON_NOTICE_KEY);
+  const replayed = () => getStartupNotices().filter((n) => n.dedupKey === EDITING_ON_NOTICE_KEY);
   /** A new process: all module state forgotten, same directory. */
   const restart = () => {
     __resetLocalModelSettingsForTests(dir);
@@ -86,11 +125,17 @@ describe("local-model editing setting (#1123)", () => {
     __resetLocalModelSettingsForTests(dir);
     writeControl.impl = null;
     writeControl.calls = [];
+    resetNotifications();
+    clearStartupNotices();
+    pushed = [];
+    subscribeNotifications((n) => pushed.push(n));
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(async () => {
     writeControl.impl = null;
+    resetNotifications();
+    clearStartupNotices();
     __resetLocalModelSettingsForTests();
     vi.restoreAllMocks();
     if (dir) await fs.promises.rm(dir, { recursive: true, force: true });
@@ -127,8 +172,27 @@ describe("local-model editing setting (#1123)", () => {
       ["editing: null", JSON.stringify({ version: 1, editing: null })],
       ["editing: false", JSON.stringify({ version: 1, editing: false })],
       ["no editing key", JSON.stringify({ version: 1 })],
-      ["editing nested, not top-level", JSON.stringify({ settings: { editing: true } })],
-      ["editing only on __proto__", '{"__proto__": {"editing": true}}'],
+      // Both carry `version: 1`, so it is the `editing` rule that reads them
+      // off and not the version rule added in round 2.
+      [
+        "editing nested, not top-level",
+        JSON.stringify({ version: 1, settings: { editing: true } }),
+      ],
+      ["editing only on __proto__", '{"version": 1, "__proto__": {"editing": true}}'],
+      // Round 2: the version must be exactly this build's.
+      ["no version key, editing: true", JSON.stringify({ editing: true })],
+      ['version: "1" (a string), editing: true', JSON.stringify({ version: "1", editing: true })],
+      [
+        "version: 2 (a later build's), editing: true",
+        JSON.stringify({ version: 2, editing: true }),
+      ],
+      ["version: 0, editing: true", JSON.stringify({ version: 0, editing: true })],
+      ["version: 1.5, editing: true", JSON.stringify({ version: 1.5, editing: true })],
+      ["version: null, editing: true", JSON.stringify({ version: null, editing: true })],
+      ["version: true, editing: true", JSON.stringify({ version: true, editing: true })],
+      ["version: [1], editing: true", JSON.stringify({ version: [1], editing: true })],
+      ["version only on __proto__", '{"__proto__": {"version": 1}, "editing": true}'],
+      ["version nested, not top-level", JSON.stringify({ meta: { version: 1 }, editing: true })],
     ])("%s → off", (_name, text) => {
       write(text);
       primeLocalModelSettings();
@@ -223,18 +287,14 @@ describe("local-model editing setting (#1123)", () => {
     });
 
     it("On is not effective while its write is still in flight", async () => {
-      let release = (): void => {};
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      failWrites(async (f, content, real) => {
-        await gate;
-        await real(f, content);
-      });
+      const hold = holdFirstWrite();
       const pending = setLocalModelEditing(true);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await hold.entered; // the write has been called and is parked
+      expect(writeControl.calls).toHaveLength(1);
       expect(isLocalModelEditingEnabled()).toBe(false);
-      release();
+      expect(fs.existsSync(file)).toBe(false);
+      expect(editingOnNotices(), "nothing is announced before it is true").toEqual([]);
+      hold.release();
       expect(await pending).toEqual({ editing: true, persisted: true });
       expect(isLocalModelEditingEnabled()).toBe(true);
     });
@@ -259,27 +319,23 @@ describe("local-model editing setting (#1123)", () => {
     });
 
     it("an Off issued while an On write is held open still wins", async () => {
-      let release = (): void => {};
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      let held = false;
-      failWrites(async (f, content, real) => {
-        if (!held) {
-          held = true;
-          await gate;
-        }
-        await real(f, content);
-      });
+      const hold = holdFirstWrite();
       const on = setLocalModelEditing(true);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await hold.entered; // the On's write is in flight, not merely queued
       const epoch = localModelEditingState().offEpoch;
       const off = setLocalModelEditing(false);
       expect(localModelEditingState()).toEqual({ enabled: false, offEpoch: epoch + 1 });
-      release();
-      await Promise.all([on, off]);
+      // The Off's write is queued behind the held On: one write so far.
+      expect(writeControl.calls).toHaveLength(1);
+      hold.release();
+      const [onResult, offResult] = await Promise.all([on, off]);
+      expect(onResult).toEqual({ editing: false, persisted: false });
+      expect(offResult).toEqual({ editing: false, persisted: true });
       expect(isLocalModelEditingEnabled()).toBe(false);
       expect(onDisk().editing).toBe(false);
+      expect(
+        writeControl.calls.map((c) => (JSON.parse(c) as { editing: boolean }).editing),
+      ).toEqual([true, false]);
     });
 
     it("OFF then ON overlapping ends on, in memory and on disk", async () => {
@@ -432,11 +488,24 @@ describe("local-model editing setting (#1123)", () => {
       });
     });
 
-    it("version and editing are this build's, whatever the file held", async () => {
-      write(JSON.stringify({ version: 99, editing: "yes", later: true }));
-      await setLocalModelEditing(true);
-      expect(onDisk()).toEqual({ version: 1, editing: true, later: true });
-    });
+    // Round 2 replaced "version and editing are this build's, whatever the file
+    // held" (which stamped version 1 over a version 99 file): a LATER build's
+    // file is never rewritten by an On — see "a later build's file" below. What
+    // is left of the old rule is the file whose version is not a later one.
+    it.each([
+      ["no version key", { editing: "yes", later: true }],
+      ['version: "1" (a string)', { version: "1", editing: "yes", later: true }],
+      ["version: 0", { version: 0, editing: "yes", later: true }],
+    ])(
+      "%s: an On writes this build's version and a boolean, keeping other keys",
+      async (_n, held) => {
+        write(JSON.stringify(held));
+        expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: true });
+        expect(onDisk()).toEqual({ version: 1, editing: true, later: true });
+        restart();
+        expect(isLocalModelEditingEnabled()).toBe(true);
+      },
+    );
 
     it("__proto__, constructor and prototype keys are not carried", async () => {
       write(
@@ -473,6 +542,258 @@ describe("local-model editing setting (#1123)", () => {
       expect(onDisk()).toEqual({ version: 1, editing: true });
       restart();
       expect(isLocalModelEditingEnabled()).toBe(true);
+    });
+  });
+
+  describe("a later build's file (round 2)", () => {
+    const V2 = `${JSON.stringify(
+      { version: 2, editing: true, mode: "ask-first", future: { nested: [1, 2] } },
+      null,
+      4,
+    )}\n`;
+    const V2_OFF = `${JSON.stringify({ version: 2, editing: false, mode: "ask-first" })}\n`;
+
+    it("reads off, though it says editing: true", () => {
+      write(V2);
+      primeLocalModelSettings();
+      expect(localModelEditingState()).toEqual({ enabled: false, offEpoch: 0 });
+    });
+
+    it("Off is written into it: version 2 and its unknown keys are kept, editing is false", async () => {
+      write(V2);
+      expect(await setLocalModelEditing(false)).toEqual({ editing: false, persisted: true });
+      expect(onDisk()).toEqual({
+        version: 2,
+        editing: false,
+        mode: "ask-first",
+        future: { nested: [1, 2] },
+      });
+      expect(writeControl.calls).toHaveLength(1);
+      restart();
+      expect(isLocalModelEditingEnabled()).toBe(false);
+    });
+
+    it.each([
+      ["holding editing: true", V2],
+      ["holding editing: false", V2_OFF],
+    ])(
+      "On (%s) leaves the file byte-identical, takes effect in memory, and reports not persisted",
+      async (_n, bytes) => {
+        write(bytes);
+        const before = fs.readFileSync(file);
+
+        expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: false });
+
+        expect(localModelEditingState().enabled).toBe(true);
+        expect(isLocalModelEditingEnabled()).toBe(true);
+        expect(fs.readFileSync(file).equals(before), "byte-identical").toBe(true);
+        expect(writeControl.calls, "the writer was never called").toEqual([]);
+        expect(fs.readdirSync(dir)).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
+
+        // It was for this run of the server only.
+        restart();
+        expect(isLocalModelEditingEnabled()).toBe(false);
+        expect(fs.readFileSync(file).equals(before)).toBe(true);
+      },
+    );
+
+    it("a second On is the same answer and still writes nothing", async () => {
+      write(V2);
+      await setLocalModelEditing(true);
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: false });
+      expect(fs.readFileSync(file, "utf8")).toBe(V2);
+      expect(writeControl.calls).toEqual([]);
+    });
+
+    it("On then Off: off at once, and only the Off is written — with the version kept", async () => {
+      write(V2);
+      await setLocalModelEditing(true);
+      const epoch = localModelEditingState().offEpoch;
+      const off = setLocalModelEditing(false);
+      expect(localModelEditingState()).toEqual({ enabled: false, offEpoch: epoch + 1 });
+      expect(await off).toEqual({ editing: false, persisted: true });
+      expect(onDisk()).toMatchObject({ version: 2, editing: false, mode: "ask-first" });
+      expect(
+        writeControl.calls.map((c) => (JSON.parse(c) as { editing: boolean }).editing),
+      ).toEqual([false]);
+    });
+
+    it("an On overlapped by an Off never takes effect, and the file ends version 2, editing false", async () => {
+      write(V2);
+      const on = setLocalModelEditing(true);
+      const off = setLocalModelEditing(false);
+      expect(await on).toEqual({ editing: false, persisted: false });
+      expect(await off).toEqual({ editing: false, persisted: true });
+      expect(isLocalModelEditingEnabled()).toBe(false);
+      expect(onDisk()).toMatchObject({ version: 2, editing: false });
+    });
+
+    it("a version far ahead is treated the same way", async () => {
+      const far = JSON.stringify({ version: 99, editing: "yes", later: true });
+      write(far);
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: false });
+      expect(fs.readFileSync(file, "utf8")).toBe(far);
+      expect(await setLocalModelEditing(false)).toEqual({ editing: false, persisted: true });
+      expect(onDisk()).toEqual({ version: 99, editing: false, later: true });
+    });
+
+    it("an Off whose write fails still removes the file, so no build can read true from it", async () => {
+      write(V2);
+      failWrites(REJECT);
+      expect(await setLocalModelEditing(false)).toEqual({ editing: false, persisted: true });
+      expect(fs.existsSync(file)).toBe(false);
+    });
+  });
+
+  describe("switching on is announced (#2404, round 2)", () => {
+    it("off → on: exactly one notice, pushed live and registered for replay", async () => {
+      await setLocalModelEditing(true);
+
+      expect(pushed).toHaveLength(1);
+      const [notice] = pushed;
+      expect(notice?.message).toBe(EDITING_ON_NOTICE);
+      expect(notice?.dedupKey).toBe(EDITING_ON_NOTICE_KEY);
+      expect(notice?.severity).toBe("warning");
+      expect(typeof notice?.id).toBe("string");
+      expect(notice?.id).not.toBe("");
+
+      // The replay list holds the very same notice, once.
+      expect(getStartupNotices()).toEqual([notice]);
+    });
+
+    it("the wording says what was allowed and where to switch it off", () => {
+      expect(EDITING_ON_NOTICE).toMatch(/comment on and suggest changes/);
+      expect(EDITING_ON_NOTICE).toMatch(/If you did not switch this on/);
+      expect(EDITING_ON_NOTICE).toMatch(/switch it off in Settings → Models/);
+    });
+
+    it("is pushed only once editing really is on", async () => {
+      resetNotifications();
+      const seenEnabled: boolean[] = [];
+      subscribeNotifications(() => seenEnabled.push(isLocalModelEditingEnabled()));
+      await setLocalModelEditing(true);
+      expect(seenEnabled).toEqual([true]);
+    });
+
+    it("a redundant On says nothing more", async () => {
+      await setLocalModelEditing(true);
+      const first = replayed();
+      await setLocalModelEditing(true);
+      await setLocalModelEditing(true);
+      expect(editingOnNotices()).toHaveLength(1);
+      expect(replayed()).toEqual(first);
+    });
+
+    it("Off pushes nothing and withdraws the replay — synchronously", async () => {
+      await setLocalModelEditing(true);
+      expect(replayed()).toHaveLength(1);
+
+      const off = setLocalModelEditing(false);
+      expect(replayed(), "withdrawn before the write settles").toEqual([]);
+      await off;
+      expect(pushed).toHaveLength(1); // still only the On's
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("an Off with nothing to withdraw pushes nothing", async () => {
+      await setLocalModelEditing(false);
+      expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("on again after an off is a new transition: a second notice, one replay entry", async () => {
+      await setLocalModelEditing(true);
+      await setLocalModelEditing(false);
+      await setLocalModelEditing(true);
+      expect(editingOnNotices()).toHaveLength(2);
+      expect(editingOnNotices()[1]?.id).not.toBe(editingOnNotices()[0]?.id);
+      expect(replayed()).toEqual([editingOnNotices()[1]]);
+    });
+
+    it.each([
+      ["rejected", REJECT],
+      ["published, then threw", PUBLISH_THEN_THROW],
+    ])("a failed On (%s) is not announced", async (_n, impl) => {
+      failWrites(impl);
+      expect((await setLocalModelEditing(true)).editing).toBe(false);
+      expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("an On superseded by an Off never took effect and is not announced", async () => {
+      const hold = holdFirstWrite();
+      const on = setLocalModelEditing(true);
+      await hold.entered;
+      const off = setLocalModelEditing(false);
+      hold.release();
+      await Promise.all([on, off]);
+      expect(isLocalModelEditingEnabled()).toBe(false);
+      expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("two overlapping Ons are one transition: one notice", async () => {
+      await Promise.all([setLocalModelEditing(true), setLocalModelEditing(true)]);
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(editingOnNotices()).toHaveLength(1);
+      expect(replayed()).toHaveLength(1);
+    });
+
+    it("ON, OFF, ON overlapping: one notice, for the On that took effect", async () => {
+      await Promise.all([
+        setLocalModelEditing(true),
+        setLocalModelEditing(false),
+        setLocalModelEditing(true),
+      ]);
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(editingOnNotices()).toHaveLength(1);
+      expect(replayed()).toHaveLength(1);
+    });
+
+    it("ON, OFF overlapping after being on: nothing pushed, replay withdrawn", async () => {
+      await setLocalModelEditing(true);
+      pushed = [];
+      await Promise.all([setLocalModelEditing(true), setLocalModelEditing(false)]);
+      expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("a prime that reads true announces nothing: the user switched it on in an earlier run", () => {
+      write(JSON.stringify({ version: 1, editing: true }));
+      primeLocalModelSettings();
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("an On that already was on from the prime is redundant, and silent", async () => {
+      write(JSON.stringify({ version: 1, editing: true }));
+      primeLocalModelSettings();
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: true });
+      expect(pushed).toEqual([]);
+    });
+
+    it("an On that takes effect in memory only (a later build's file) is announced too", async () => {
+      write(JSON.stringify({ version: 2, editing: false }));
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: false });
+      expect(editingOnNotices()).toHaveLength(1);
+      expect(replayed()).toHaveLength(1);
+    });
+
+    it("leaves other startup notices alone", async () => {
+      const { addStartupNotice } = await import("../../../src/server/startup-notices.js");
+      const other: TandemNotification = {
+        id: "other-1",
+        type: "general-error",
+        severity: "info",
+        message: "something else",
+        dedupKey: "something-else",
+        timestamp: 1,
+      };
+      addStartupNotice(other);
+      await setLocalModelEditing(true);
+      await setLocalModelEditing(false);
+      expect(getStartupNotices()).toEqual([other]);
     });
   });
 

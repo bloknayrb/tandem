@@ -374,6 +374,98 @@ describe("dispatch — replies", () => {
   });
 });
 
+describe("dispatch — replies aimed at a record the model must not reach (ADR-027, round 2)", () => {
+  // The editing tier, with the permission ON: the ADR-027 guard is the only
+  // thing between the model and these threads. Both records are the user's.
+  const NOTE = { type: "note", author: "user", audience: "private" } as const;
+  const PRIVATE_COMMENT = { type: "comment", author: "user", audience: "private" } as const;
+
+  function docWithRecord(overrides: Partial<Annotation>): { ydoc: Y.Doc; id: string } {
+    doc = makeMarkdownDoc(FIXTURE);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "the user's own words" },
+      { ydoc: doc, canEdit: ON },
+    );
+    const id = (created.result as { annotation_id: string }).annotation_id;
+    const map = getAnnotationsMap(doc);
+    const { agentIdentity: _dropped, ...rest } = map.get(id) as Annotation;
+    map.set(id, { ...rest, ...overrides });
+    return { ydoc: doc, id };
+  }
+
+  function snapshot(ydoc: Y.Doc): { annotations: unknown; replies: unknown } {
+    return {
+      annotations: ydoc.getMap(Y_MAP_ANNOTATIONS).toJSON(),
+      replies: ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).toJSON(),
+    };
+  }
+
+  for (const [label, overrides] of [
+    ["a personal note (type: note)", NOTE],
+    ["a private comment (type: comment, audience: private)", PRIVATE_COMMENT],
+  ] as const) {
+    it(`${label}: refused, nothing written, and the refusal does not say what the record is`, () => {
+      const { ydoc, id } = docWithRecord(overrides);
+      const before = snapshot(ydoc);
+      let transactions = 0;
+      ydoc.on("afterTransaction", () => transactions++);
+
+      const out = dispatch(
+        "reply_to_annotation",
+        { annotation_id: id, text: "into a thread that is not mine" },
+        { ydoc, canEdit: ON, agentIdentity: { provider: "local-ollama", displayName: "Qwen" } },
+      );
+
+      expect(out.effect).toEqual({
+        kind: "reply",
+        ok: false,
+        annotationId: id,
+        errorCode: "INVALID_ARGUMENT",
+      });
+      expect(transactions, "no Y.Doc transaction at all").toBe(0);
+      expect(snapshot(ydoc)).toEqual(before);
+      expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
+
+      // What the model is handed back. It names neither kind of record, and
+      // carries nothing of the record itself.
+      const text = JSON.stringify(out.result);
+      expect(text).not.toMatch(/\bnotes?\b/i);
+      expect(text).not.toMatch(/private/i);
+      expect(text).not.toMatch(/audience|personal|hidden|withheld/i);
+      expect(text).not.toContain("the user's own words");
+      expect(text).not.toContain("the first phase");
+      expect(text).not.toContain(id);
+      expect(Object.keys(out.result as object).sort()).toEqual(["error", "message"]);
+    });
+  }
+
+  it("the two kinds of record are answered identically, so the refusal does not tell them apart", () => {
+    const answers = [NOTE, PRIVATE_COMMENT].map((overrides) => {
+      const { ydoc, id } = docWithRecord(overrides);
+      const out = dispatch(
+        "reply_to_annotation",
+        { annotation_id: id, text: "t" },
+        { ydoc, canEdit: ON },
+      );
+      ydoc.destroy();
+      return out.result;
+    });
+    expect(answers[0]).toEqual(answers[1]);
+  });
+
+  it("control: the same reply into the same record while it is still the model's own comment lands", () => {
+    const { ydoc, id } = docWithRecord({});
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: id, text: "t" },
+      { ydoc, canEdit: ON },
+    );
+    expect(out.effect).toMatchObject({ kind: "reply", ok: true });
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
+  });
+});
+
 describe("dispatch — replies to a user-authored comment (#2216)", () => {
   it("refuses NOT_OWNED with a remedy that names a local tool, not an MCP one", () => {
     doc = makeMarkdownDoc(FIXTURE);
@@ -670,11 +762,22 @@ describe("dispatch — editing off refuses every writing tool (#1123 R2.2)", () 
     });
   }
 
-  it("the refusal tells the model editing is off and to answer in plain text", () => {
+  it("the refusal tells the model editing is off, to call no more tools, and that its next message is the reply", () => {
     expect(EDITING_OFF_MESSAGE).toMatch(/switched off/i);
     expect(EDITING_OFF_MESSAGE).toMatch(/nothing was written/i);
-    expect(EDITING_OFF_MESSAGE).toMatch(/do not call this tool again/i);
-    expect(EDITING_OFF_MESSAGE).toMatch(/plain text/i);
+    // Round 2: was "do not call this tool again". The loop now gives the model
+    // exactly one more turn, with no tools, so the message says so — a model
+    // told only to avoid THIS tool would try another and waste that turn.
+    expect(EDITING_OFF_MESSAGE).toMatch(/do not call any more tools/i);
+    expect(EDITING_OFF_MESSAGE).not.toMatch(/this tool again/i);
+    expect(EDITING_OFF_MESSAGE).toMatch(/your next message is your reply/i);
+    expect(EDITING_OFF_MESSAGE).toMatch(/answer the user in plain text/i);
+  });
+
+  it("the refusal, whole", () => {
+    expect(EDITING_OFF_MESSAGE).toBe(
+      "Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Only get_outline and read_section are available. Do not call any more tools: your next message is your reply, so answer the user in plain text.",
+    );
   });
 
   it("is read on every dispatch — off, then on, then off again", () => {
