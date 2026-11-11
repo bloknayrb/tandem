@@ -22,16 +22,35 @@ import {
   describeSuggestionRangeRefusal,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { isClaudeFacing } from "../annotations/projection.js";
+import { isClaudeFacing, narrowForChannel } from "../annotations/projection.js";
 import { atomicWrite, derivedFileModeCeiling } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { captureSnapshotFromText } from "../positions.js";
+
+import { forgetThreadAnswerers } from "../sessions/ownership.js";
+import type { RefusalFamily } from "../sessions/ownership-refusal.js";
 import type { FlatBreak } from "./document-model.js";
 import { extractTextWithBreaks } from "./document-model.js";
-import { getDocumentStore, resolveAnnotationStore, type YDocStore } from "./document-store.js";
+import {
+  getDocumentStore,
+  rawAnnotationRecord,
+  resolveAnnotationStore,
+  type YDocStore,
+} from "./document-store.js";
 import { getAnnotationsOutputShape } from "./output-schemas.js";
 import {
+  heldAmong,
+  noClaim,
+  ownedWrite,
+  ownershipOn,
+  rangeDecidedByArguments,
+  type ToolCaller,
+  type WriteTarget,
+  writeTarget,
+} from "./owned-op.js";
+import {
+  type McpToolResult,
   mcpError,
   mcpStructured,
   mcpSuccess,
@@ -64,27 +83,130 @@ const ID_KEYED_DOCUMENT_ID_DESCRIPTION =
 function resolveIdKeyedStore(
   id: string,
   documentId: string | undefined,
+  caller: ToolCaller,
 ):
-  | { store: YDocStore; error?: undefined }
+  | { store: YDocStore; matched: boolean; error?: undefined }
   | { store?: undefined; error: ReturnType<typeof mcpError> } {
   const resolved = resolveAnnotationStore(id, documentId);
   switch (resolved.kind) {
     case "store":
-      return { store: resolved.store };
+      return { store: resolved.store, matched: resolved.matched };
     case "none":
-      return { error: noDocumentError() };
-    case "ambiguous":
+      return { error: noClaim(noDocumentError()) };
+    case "ambiguous": {
+      // With ownership on, also say which of the candidates the caller holds,
+      // so "pass documentId" has an obvious answer (ownership design §5.2).
+      // A subset of `documentIds`, so it can never point outside them.
+      const heldDocumentIds = heldAmong(caller, resolved.documentIds);
       // No new error code: INVALID_ARGUMENT with a `reason` keeps the
       // error-code table untouched, and the remedy is one the caller can follow.
       // The ids listed are only documents where the record is Claude-facing.
       return {
-        error: mcpError(
-          "INVALID_ARGUMENT",
-          `Annotation ${id} is in ${resolved.documentIds.length} open documents; pass documentId`,
-          { reason: "ambiguous-document", documentIds: resolved.documentIds },
+        error: noClaim(
+          mcpError(
+            "INVALID_ARGUMENT",
+            `Annotation ${id} is in ${resolved.documentIds.length} open documents; pass documentId`,
+            {
+              reason: "ambiguous-document",
+              documentIds: resolved.documentIds,
+              ...(heldDocumentIds ? { heldDocumentIds } : {}),
+            },
+          ),
         ),
       };
+    }
   }
+}
+
+/**
+ * Run an id-keyed annotation tool's body under ownership (#2358, ownership
+ * design §5.2, R2.2): the document is resolved **by annotation id first**
+ * (#2187), then checked.
+ *
+ * With ownership on, the document is pinned before the queue and the body
+ * builds its store from the pinned id at its turn, so no `YDocStore` (and no
+ * Y.Doc inside one) is carried across the wait. A pinned document that holds
+ * **no record at all** for the id has nothing to write: the body answers its
+ * own `NOT_FOUND` with no check and no claim, whoever holds the document. Any
+ * record that is present — whatever its type, audience or author — makes the
+ * call a write on that document, and it is checked.
+ */
+function ownedIdKeyed(
+  caller: ToolCaller,
+  tool: string,
+  id: string,
+  givenId: string | undefined,
+  opts: { family?: RefusalFamily; answersThread?: boolean },
+  body: (store: YDocStore) => Promise<McpToolResult> | McpToolResult,
+): Promise<McpToolResult> {
+  return ownedWrite(
+    caller,
+    tool,
+    {
+      given: givenId,
+      resolve: (): WriteTarget => {
+        const resolved = resolveIdKeyedStore(id, givenId, caller);
+        // `none` and `ambiguous`: no target. The body resolves again and
+        // answers the same refusal, as it does with ownership off.
+        if (resolved.error) return { open: false };
+        return {
+          open: true,
+          documentId: resolved.store.documentId,
+          // Only the active-document fallback "named no document".
+          defaulted: givenId === undefined && !resolved.matched,
+        };
+      },
+      family: opts.family,
+      nothingToWrite: (documentId) => !rawAnnotationRecord(documentId, id).present,
+      answers: opts.answersThread
+        ? (documentId) => threadItemAnsweredBy(documentId, id)
+        : undefined,
+    },
+    async (documentId) => {
+      const { store, error } = resolveIdKeyedStore(id, documentId, caller);
+      if (error) return error;
+      return body(store);
+    },
+  );
+}
+
+/**
+ * The thread item a Claude reply on `annotationId` would answer (#2358,
+ * ownership design §5.5): the thread's latest user reply **that Claude can
+ * read**, or null when there is none.
+ *
+ * Computed with the gates the read path uses and nothing else, so neither the
+ * item nor an "already answered" refusal can disclose what a read would not:
+ * the parent must project to the channel (`narrowForChannel`: no note, no
+ * private record, no unknown type) and pass the Solo hold; replies go through
+ * `channelVisibleReplies` (no `private` reply). A reply the user wrote during
+ * Solo carries `heldInSolo` until release and is skipped, in every mode, so
+ * the item is the same before, during and after a hold until that reply is
+ * released — and an answer given during Solo is recorded against the item
+ * Claude could see.
+ *
+ * A read: no refresh, no transaction. A user-authored comment as the item
+ * arrives with #2360, which makes such a thread repliable.
+ */
+function threadItemAnsweredBy(
+  documentId: string,
+  annotationId: string,
+): { annotationId: string; item: string } | null {
+  const { raw } = rawAnnotationRecord(documentId, annotationId);
+  if (!hasAnnotationShape(raw)) return null;
+  const parent = narrowForChannel(raw);
+  if (parent === null) return null;
+  const store = getDocumentStore(documentId);
+  if (!store) return null;
+  if (hideFromAI(parent, readModeState())) return null;
+  const visible = channelVisibleReplies(parent, (id) => store.listReplies(id));
+  for (let i = visible.length - 1; i >= 0; i--) {
+    const reply = visible[i];
+    if (reply.author === "user" && reply.heldInSolo !== true) {
+      return { annotationId, item: `r:${reply.id}` };
+    }
+  }
+  return null;
 }
 
 /**
@@ -313,51 +435,64 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({ from: rawFrom, to: rawTo, text, suggestedText, documentId, textSnapshot }) => {
-        // #651 presence: tandem_comment creates a new annotation (no pre-existing
-        // id to broadcast), so the presence marker is a generic "Claude is
-        // working on the document" indicator surfaced in the status bar.
-        return withTypingPresence({ tool: "tandem_comment", documentId }, async () => {
-          const store = getDocumentStore(documentId);
-          if (!store) return noDocumentError();
-          const from = toFlatOffset(rawFrom);
-          const to = toFlatOffset(rawTo);
-          // `purpose` decides whether the range's INTERIOR is held to Critical
-          // Rule 6 (#1766 follow-up). `suggestedText` makes this a text rewrite
-          // deferred to Accept, and the accept path replaces the stored flat
-          // span verbatim — so a suggestion spanning a heading prefix deletes
-          // the heading, which is the damage #1766 closed for `tandem_edit`. A
-          // plain comment keeps the endpoint-only rule and may span a section.
-          const result = store.anchorRange(
-            from,
-            to,
-            suggestedText !== undefined ? "suggestion" : "comment",
-            textSnapshot,
-          );
-          if (!result.ok) {
-            notifyRangeFailure(result, "tandem_comment", documentId);
-            return rangeFailureToError(result);
-          }
-          const snap = store.captureSnapshot(result.range.from, result.range.to);
-          // ADR-035: creates go through the lifecycle seam, not the store.
-          // `create` has no `type` parameter — it mints a comment, which is
-          // the only thing Claude may author.
-          const { annotation } = store.lifecycle.create({
-            anchored: result,
-            content: text,
-            extras: {
-              textSnapshot: snap.text,
-              ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
-              // Dropped when empty rather than stored as `[]`: the single-block
-              // annotation is the overwhelming majority, and an empty array on
-              // every record is bytes on disk that say nothing.
-              ...(snap.breaks.length > 0 ? { textSnapshotBreaks: snap.breaks } : {}),
-              ...(suggestedText !== undefined ? { suggestedText } : {}),
-            },
-          });
-          return mcpSuccess({ annotationId: annotation.id });
-        });
-      },
+      async (
+        { from: rawFrom, to: rawTo, text, suggestedText, documentId: givenId, textSnapshot },
+        caller,
+      ) =>
+        ownedWrite(
+          caller,
+          "tandem_comment",
+          { given: givenId, resolve: () => writeTarget(givenId) },
+          (documentId) =>
+            // #651 presence: tandem_comment creates a new annotation (no pre-existing
+            // id to broadcast), so the presence marker is a generic "Claude is
+            // working on the document" indicator surfaced in the status bar.
+            withTypingPresence({ tool: "tandem_comment", documentId }, async () => {
+              const store = getDocumentStore(documentId);
+              if (!store) return noClaim(noDocumentError());
+              const from = toFlatOffset(rawFrom);
+              const to = toFlatOffset(rawTo);
+              // `purpose` decides whether the range's INTERIOR is held to Critical
+              // Rule 6 (#1766 follow-up). `suggestedText` makes this a text rewrite
+              // deferred to Accept, and the accept path replaces the stored flat
+              // span verbatim — so a suggestion spanning a heading prefix deletes
+              // the heading, which is the damage #1766 closed for `tandem_edit`. A
+              // plain comment keeps the endpoint-only rule and may span a section.
+              const result = store.anchorRange(
+                from,
+                to,
+                suggestedText !== undefined ? "suggestion" : "comment",
+                textSnapshot,
+              );
+              if (!result.ok) {
+                notifyRangeFailure(result, "tandem_comment", documentId);
+                const refused = rangeFailureToError(result);
+                // Decided by the offsets alone: it leaves no claim (#2358).
+                return result.code === "INVALID_RANGE" &&
+                  rangeDecidedByArguments(result.reason, from)
+                  ? noClaim(refused)
+                  : refused;
+              }
+              const snap = store.captureSnapshot(result.range.from, result.range.to);
+              // ADR-035: creates go through the lifecycle seam, not the store.
+              // `create` has no `type` parameter — it mints a comment, which is
+              // the only thing Claude may author.
+              const { annotation } = store.lifecycle.create({
+                anchored: result,
+                content: text,
+                extras: {
+                  textSnapshot: snap.text,
+                  ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
+                  // Dropped when empty rather than stored as `[]`: the single-block
+                  // annotation is the overwhelming majority, and an empty array on
+                  // every record is bytes on disk that say nothing.
+                  ...(snap.breaks.length > 0 ? { textSnapshotBreaks: snap.breaks } : {}),
+                  ...(suggestedText !== undefined ? { suggestedText } : {}),
+                },
+              });
+              return mcpSuccess({ annotationId: annotation.id });
+            }),
+        ),
     ),
   );
 
@@ -468,60 +603,66 @@ export function registerAnnotationTools(server: McpServer): void {
       action: AnnotationActionSchema.describe("Action to take"),
       documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
     },
-    withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
-      const { store, error } = resolveIdKeyedStore(id, documentId);
-      if (error) return error;
+    withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }, caller) =>
+      ownedIdKeyed(caller, "tandem_resolveAnnotation", id, documentId, {}, (store) => {
+        // Route through the AnnotationLifecycle module (ADR-035 part 2/N).
+        // The lifecycle owns sanitize → status-check → rev-bump → tagged
+        // result; the handler becomes a thin adapter translating
+        // LifecycleResult arms to MCP error envelopes.
+        const result =
+          action === "accept" ? store.acceptAnnotation(id) : store.dismissAnnotation(id);
 
-      // Route through the AnnotationLifecycle module (ADR-035 part 2/N).
-      // The lifecycle owns sanitize → status-check → rev-bump → tagged
-      // result; the handler becomes a thin adapter translating
-      // LifecycleResult arms to MCP error envelopes.
-      const result = action === "accept" ? store.acceptAnnotation(id) : store.dismissAnnotation(id);
-
-      switch (result.kind) {
-        case "ok":
-          return mcpSuccess({ id, status: result.data.status, documentId: store.documentId });
-        case "not-found":
-          return mcpError("NOT_FOUND", `Annotation ${id} not found`);
-        case "invalid-note":
-          // Same envelope `tandem_editAnnotation` returns for a note, so the two
-          // write paths now answer identically rather than disagreeing.
-          return mcpError(
-            "INVALID_ARGUMENT",
-            `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be resolved by Claude`,
-          );
-        case "not-pending":
-          // The same code edit and reply use for this condition (#1823); it
-          // was `ANNOTATION_NOT_PENDING` here alone.
-          return mcpError(
-            "ANNOTATION_RESOLVED",
-            `Annotation ${id} is already ${result.currentStatus}`,
-          );
-        case "accept-refused":
-          // #1770 decision 3: Claude may dismiss or withdraw, never accept.
-          return mcpError(
-            "ACCEPT_REFUSED",
-            result.reason === "own-annotation"
-              ? `Annotation ${id} is Claude's own; accept is the user's decision. Dismiss it to withdraw it.`
-              : `Annotation ${id} carries suggestedText, which an MCP accept does not apply. Leave it for the user to accept in the editor.`,
-          );
-        default: {
-          // A new `LifecycleResult` arm errors HERE, naming it — the shape the
-          // remove switch uses, for the same reason.
-          //
-          // `INTERNAL_ERROR`, not `INTERNAL`: the two are different strings on
-          // the wire, and MCP's own catch-all is `INTERNAL_ERROR`
-          // (`response.ts:118`). `INTERNAL` is the `/api` surface's code
-          // (`routes/_shared.ts`) and stays there — these two sites had it by
-          // accident, which gave the MCP surface two codes for one condition.
-          const unhandled: never = result;
-          return mcpError(
-            "INTERNAL_ERROR",
-            `unhandled resolve outcome: ${JSON.stringify(unhandled)}`,
-          );
+        switch (result.kind) {
+          case "ok":
+            return mcpSuccess({ id, status: result.data.status, documentId: store.documentId });
+          case "not-found":
+            return noClaim(mcpError("NOT_FOUND", `Annotation ${id} not found`));
+          case "invalid-note":
+            // Same envelope `tandem_editAnnotation` returns for a note, so the two
+            // write paths now answer identically rather than disagreeing.
+            return noClaim(
+              mcpError(
+                "INVALID_ARGUMENT",
+                `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be resolved by Claude`,
+              ),
+            );
+          case "not-pending":
+            // The same code edit and reply use for this condition (#1823); it
+            // was `ANNOTATION_NOT_PENDING` here alone.
+            return noClaim(
+              mcpError(
+                "ANNOTATION_RESOLVED",
+                `Annotation ${id} is already ${result.currentStatus}`,
+              ),
+            );
+          case "accept-refused":
+            // #1770 decision 3: Claude may dismiss or withdraw, never accept.
+            return noClaim(
+              mcpError(
+                "ACCEPT_REFUSED",
+                result.reason === "own-annotation"
+                  ? `Annotation ${id} is Claude's own; accept is the user's decision. Dismiss it to withdraw it.`
+                  : `Annotation ${id} carries suggestedText, which an MCP accept does not apply. Leave it for the user to accept in the editor.`,
+              ),
+            );
+          default: {
+            // A new `LifecycleResult` arm errors HERE, naming it — the shape the
+            // remove switch uses, for the same reason.
+            //
+            // `INTERNAL_ERROR`, not `INTERNAL`: the two are different strings on
+            // the wire, and MCP's own catch-all is `INTERNAL_ERROR`
+            // (`response.ts:118`). `INTERNAL` is the `/api` surface's code
+            // (`routes/_shared.ts`) and stays there — these two sites had it by
+            // accident, which gave the MCP surface two codes for one condition.
+            const unhandled: never = result;
+            return mcpError(
+              "INTERNAL_ERROR",
+              `unhandled resolve outcome: ${JSON.stringify(unhandled)}`,
+            );
+          }
         }
-      }
-    }),
+      }),
+    ),
   );
 
   server.tool(
@@ -535,40 +676,44 @@ export function registerAnnotationTools(server: McpServer): void {
       id: z.string().describe("Annotation ID"),
       documentId: z.string().optional().describe(ID_KEYED_DOCUMENT_ID_DESCRIPTION),
     },
-    withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
-      const { store, error } = resolveIdKeyedStore(id, documentId);
-      if (error) return error;
-      // ADR-035 Unit 8e: the store delegates to `AnnotationLifecycle.remove`,
-      // and this handler is the thin adapter translating arms to envelopes.
-      // Arm-by-arm rather than a flattened `NOT_FOUND` — collapsing them made
-      // the error code and the error text disagree, and the `INVALID_ARGUMENT`
-      // envelope is what `tandem_editAnnotation` and `tandem_resolveAnnotation`
-      // already return for a note.
-      const result = store.removeAnnotation(id);
-      switch (result.kind) {
-        case "ok":
-          return mcpSuccess({ removed: true, id, documentId: store.documentId });
-        case "not-found":
-          return mcpError("NOT_FOUND", `Annotation ${id} not found`);
-        case "invalid-note":
-          return mcpError(
-            "INVALID_ARGUMENT",
-            `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be removed by Claude`,
-          );
-        default: {
-          // A new `RemoveResult` arm errors HERE, naming it. Without this the
-          // switch falls off the end and the only complaint is `withErrorBoundary`
-          // rejecting the inferred `Promise<… | undefined>` — a message that
-          // never mentions the arm or this switch, and whose obvious fix is a
-          // generic `default` that swallows it.
-          const unhandled: never = result;
-          return mcpError(
-            "INTERNAL_ERROR",
-            `unhandled remove outcome: ${JSON.stringify(unhandled)}`,
-          );
+    withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }, caller) =>
+      ownedIdKeyed(caller, "tandem_removeAnnotation", id, documentId, {}, (store) => {
+        // ADR-035 Unit 8e: the store delegates to `AnnotationLifecycle.remove`,
+        // and this handler is the thin adapter translating arms to envelopes.
+        // Arm-by-arm rather than a flattened `NOT_FOUND` — collapsing them made
+        // the error code and the error text disagree, and the `INVALID_ARGUMENT`
+        // envelope is what `tandem_editAnnotation` and `tandem_resolveAnnotation`
+        // already return for a note.
+        const result = store.removeAnnotation(id);
+        switch (result.kind) {
+          case "ok":
+            // The thread is gone, and its answerers with it (ownership design §5.5).
+            if (ownershipOn()) forgetThreadAnswerers(store.documentId, id);
+            return mcpSuccess({ removed: true, id, documentId: store.documentId });
+          case "not-found":
+            return noClaim(mcpError("NOT_FOUND", `Annotation ${id} not found`));
+          case "invalid-note":
+            return noClaim(
+              mcpError(
+                "INVALID_ARGUMENT",
+                `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be removed by Claude`,
+              ),
+            );
+          default: {
+            // A new `RemoveResult` arm errors HERE, naming it. Without this the
+            // switch falls off the end and the only complaint is `withErrorBoundary`
+            // rejecting the inferred `Promise<… | undefined>` — a message that
+            // never mentions the arm or this switch, and whose obvious fix is a
+            // generic `default` that swallows it.
+            const unhandled: never = result;
+            return mcpError(
+              "INTERNAL_ERROR",
+              `unhandled remove outcome: ${JSON.stringify(unhandled)}`,
+            );
+          }
         }
-      }
-    }),
+      }),
+    ),
   );
 
   server.tool(
@@ -583,67 +728,74 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_editAnnotation",
-      async ({ id, content, newText, reason, documentId }) => {
-        const { store, error } = resolveIdKeyedStore(id, documentId);
-        if (error) return error;
+      async ({ id, content, newText, reason, documentId }, caller) =>
+        ownedIdKeyed(caller, "tandem_editAnnotation", id, documentId, {}, (store) => {
+          // `reason` is a legacy alias for `content`; an explicit `content` wins.
+          // When all three are undefined the resolved patch is empty, which the
+          // store reports as `empty-patch` (matching the pre-seam field check).
+          const resolvedContent = content !== undefined ? content : reason;
+          const result = store.editAnnotation(id, {
+            ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
+            ...(newText !== undefined ? { suggestedText: newText } : {}),
+          });
 
-        // `reason` is a legacy alias for `content`; an explicit `content` wins.
-        // When all three are undefined the resolved patch is empty, which the
-        // store reports as `empty-patch` (matching the pre-seam field check).
-        const resolvedContent = content !== undefined ? content : reason;
-        const result = store.editAnnotation(id, {
-          ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
-          ...(newText !== undefined ? { suggestedText: newText } : {}),
-        });
-
-        switch (result.kind) {
-          case "not-found":
-            return mcpError("NOT_FOUND", `Annotation ${id} not found`);
-          case "invalid-note":
-            // ADR-027: notes and private comments are user-private. Claude must
-            // not read or modify them via MCP. The note→comment promotion path
-            // runs from the browser, not through this tool.
-            return mcpError(
-              "INVALID_ARGUMENT",
-              "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
-            );
-          case "not-owned":
-            // #1770 decision 4: Claude may only edit an annotation it authored.
-            return mcpError(
-              "NOT_OWNED",
-              `Annotation ${id} was authored by the ${result.author}; Claude can only edit its own annotations.`,
-            );
-          case "not-pending":
-            return mcpError(
-              "ANNOTATION_RESOLVED",
-              `Cannot edit a ${result.currentStatus} annotation`,
-            );
-          case "empty-patch":
-            return mcpError(
-              "INVALID_ARGUMENT",
-              "No editable fields provided. Use content, newText, or reason.",
-            );
-          case "invalid-suggestion-target":
-            return mcpError(
-              "INVALID_ARGUMENT",
-              `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
-            );
-          case "invalid-suggestion-range":
-            // Critical Rule 6's interior term reaches this tool too (#1626
-            // review): a `newText` on a comment whose live span steps over a
-            // heading prefix is a deferred rewrite that would delete the heading.
-            // The body-only edit (`content` / `reason`) is unaffected.
-            return mcpError("INVALID_ARGUMENT", describeSuggestionRangeRefusal(result.cause));
-          case "ok":
-            return mcpSuccess({
-              id,
-              content: result.annotation.content,
-              suggestedText: result.annotation.suggestedText,
-              editedAt: result.annotation.editedAt,
-              documentId: store.documentId,
-            });
-        }
-      },
+          switch (result.kind) {
+            case "not-found":
+              return noClaim(mcpError("NOT_FOUND", `Annotation ${id} not found`));
+            case "invalid-note":
+              // ADR-027: notes and private comments are user-private. Claude must
+              // not read or modify them via MCP. The note→comment promotion path
+              // runs from the browser, not through this tool.
+              return noClaim(
+                mcpError(
+                  "INVALID_ARGUMENT",
+                  "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
+                ),
+              );
+            case "not-owned":
+              // #1770 decision 4: Claude may only edit an annotation it authored.
+              return noClaim(
+                mcpError(
+                  "NOT_OWNED",
+                  `Annotation ${id} was authored by the ${result.author}; Claude can only edit its own annotations.`,
+                ),
+              );
+            case "not-pending":
+              return noClaim(
+                mcpError("ANNOTATION_RESOLVED", `Cannot edit a ${result.currentStatus} annotation`),
+              );
+            case "empty-patch":
+              return noClaim(
+                mcpError(
+                  "INVALID_ARGUMENT",
+                  "No editable fields provided. Use content, newText, or reason.",
+                ),
+              );
+            case "invalid-suggestion-target":
+              return noClaim(
+                mcpError(
+                  "INVALID_ARGUMENT",
+                  `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
+                ),
+              );
+            case "invalid-suggestion-range":
+              // Critical Rule 6's interior term reaches this tool too (#1626
+              // review): a `newText` on a comment whose live span steps over a
+              // heading prefix is a deferred rewrite that would delete the heading.
+              // The body-only edit (`content` / `reason`) is unaffected.
+              return noClaim(
+                mcpError("INVALID_ARGUMENT", describeSuggestionRangeRefusal(result.cause)),
+              );
+            case "ok":
+              return mcpSuccess({
+                id,
+                content: result.annotation.content,
+                suggestedText: result.annotation.suggestedText,
+                editedAt: result.annotation.editedAt,
+                documentId: store.documentId,
+              });
+          }
+        }),
     ),
   );
 
@@ -963,63 +1115,76 @@ export function registerAnnotationTools(server: McpServer): void {
     },
     withErrorBoundary(
       "tandem_annotationReply",
-      async ({ annotationId, text, suggestedText, documentId }) => {
-        const { store, error } = resolveIdKeyedStore(annotationId, documentId);
-        if (error) return error;
-
-        // #651 presence: surface the typing indicator on the specific card being
-        // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
-        // lookup says note (or absent), and the indicator falls back to the
-        // generic status-bar one.
-        //
-        // NOT belt-and-suspenders over the seam, despite the order this reads in
-        // (review round 2). `lifecycle.reply` does return `invalid-note`, but it
-        // runs inside the handler BELOW, and `withTypingPresence` broadcasts
-        // presence before it invokes that handler — so at the moment the id
-        // reaches awareness the seam has refused nothing. This call is the only
-        // ADR-027 check on the broadcast path.
-        //
-        // Both read `store.documentId`, never the caller's `documentId`: when it
-        // was omitted the store may be a BACKGROUND document (PR #2225 review),
-        // and keying presence on the caller's value would vet the id against —
-        // and mark typing on — the active document while the reply landed
-        // elsewhere. (`documentId` IS the registry's `docName`.)
-        const safeId = sanitizeAnnotationIdForPresence(
-          store.documentId,
+      async ({ annotationId, text, suggestedText, documentId }, caller) =>
+        ownedIdKeyed(
+          caller,
+          "tandem_annotationReply",
           annotationId,
-          Y_MAP_ANNOTATIONS,
-        );
-        return withTypingPresence(
-          {
-            tool: "tandem_annotationReply",
-            documentId: store.documentId,
-            ...(safeId ? { annotationId: safeId } : {}),
-          },
-          async () => {
-            const result = store.addReply(
+          documentId,
+          { family: "answer", answersThread: true },
+          (store) => {
+            // #651 presence: surface the typing indicator on the specific card being
+            // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
+            // lookup says note (or absent), and the indicator falls back to the
+            // generic status-bar one.
+            //
+            // NOT belt-and-suspenders over the seam, despite the order this reads in
+            // (review round 2). `lifecycle.reply` does return `invalid-note`, but it
+            // runs inside the handler BELOW, and `withTypingPresence` broadcasts
+            // presence before it invokes that handler — so at the moment the id
+            // reaches awareness the seam has refused nothing. This call is the only
+            // ADR-027 check on the broadcast path.
+            //
+            // Both read `store.documentId`, never the caller's `documentId`: when it
+            // was omitted the store may be a BACKGROUND document (PR #2225 review),
+            // and keying presence on the caller's value would vet the id against —
+            // and mark typing on — the active document while the reply landed
+            // elsewhere. (`documentId` IS the registry's `docName`.)
+            const safeId = sanitizeAnnotationIdForPresence(
+              store.documentId,
               annotationId,
-              text,
-              // #1626: the discriminant is built HERE, at the one place the wire
-              // shape is known. The seam takes the arm, not the bare optional.
-              suggestedText === undefined
-                ? { kind: "none" }
-                : { kind: "replacement", suggestedText },
+              Y_MAP_ANNOTATIONS,
             );
-            if (result.kind === "ok") {
-              return mcpSuccess({
-                replyId: result.replyId,
+            const reply = async (): Promise<McpToolResult> => {
+              const result = store.addReply(
                 annotationId,
-                documentId: store.documentId,
-              });
+                text,
+                // #1626: the discriminant is built HERE, at the one place the wire
+                // shape is known. The seam takes the arm, not the bare optional.
+                suggestedText === undefined
+                  ? { kind: "none" }
+                  : { kind: "replacement", suggestedText },
+              );
+              if (result.kind === "ok") {
+                return mcpSuccess({
+                  replyId: result.replyId,
+                  annotationId,
+                  documentId: store.documentId,
+                });
+              }
+              // The wire codes are unchanged from the ternary chain this replaces;
+              // what moved is that a new arm now fails to compile inside
+              // `describeReplyWriteRefusal` instead of falling into a catch-all.
+              const { code, message } = describeReplyWriteRefusal(result);
+              // A refused reply wrote nothing, so it leaves no claim behind.
+              return noClaim(mcpError(code, message));
+            };
+            // With ownership on, an id the document holds no record for is
+            // answered unchecked (there is nothing to write), so it must not set
+            // a typing marker on a document the caller may not hold either.
+            if (ownershipOn() && !rawAnnotationRecord(store.documentId, annotationId).present) {
+              return reply();
             }
-            // The wire codes are unchanged from the ternary chain this replaces;
-            // what moved is that a new arm now fails to compile inside
-            // `describeReplyWriteRefusal` instead of falling into a catch-all.
-            const { code, message } = describeReplyWriteRefusal(result);
-            return mcpError(code, message);
+            return withTypingPresence(
+              {
+                tool: "tandem_annotationReply",
+                documentId: store.documentId,
+                ...(safeId ? { annotationId: safeId } : {}),
+              },
+              reply,
+            );
           },
-        );
-      },
+        ),
     ),
   );
 }

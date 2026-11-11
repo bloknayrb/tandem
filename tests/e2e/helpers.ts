@@ -38,6 +38,17 @@ const MCP_URL = `http://127.0.0.1:${E2E_MCP_PORT}/mcp`;
 const E2E_ANNOTATIONS_DIR = path.join(E2E_APP_DATA_DIR, "annotations");
 
 /**
+ * The one `X-Tandem-Client-Id` every E2E MCP client sends (#2358, ADR-054;
+ * ownership design §12). With ownership on, each MCP connection that carries
+ * no identity header is its own owner record, so a document one spec opened
+ * would refuse the next spec's client (`NOT_DOC_OWNER`). One fixed id makes
+ * every spec's client the same `bridge:` record — one session, as a real
+ * bridge's reconnects are. A server with ownership off ignores the header.
+ * Pinned by `tests/scripts/ownership-flag-on-wiring.test.ts`.
+ */
+export const E2E_TANDEM_CLIENT_ID = "e2e00000-0000-4000-8000-000000000001";
+
+/**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.
  */
 export class McpTestClient {
@@ -54,7 +65,9 @@ export class McpTestClient {
   async connect(retries = 5, delayMs = 1000): Promise<void> {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const transport = new StreamableHTTPClientTransport(new URL(this.mcpUrl));
+        const transport = new StreamableHTTPClientTransport(new URL(this.mcpUrl), {
+          requestInit: { headers: { "X-Tandem-Client-Id": E2E_TANDEM_CLIENT_ID } },
+        });
         await this.client.connect(transport);
         this.connected = true;
         return;

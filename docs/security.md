@@ -781,7 +781,17 @@ not a reflex "it was dismissed before".
   from exactly one place — unconditionally at the head of `openFromDisk`
   (`openFromDisk`'s call to `resolveAndValidatePath` in `src/server/documents/open.ts`) — and screens UNC/extended-length
   prefixes on the raw, resolved *and* `realpath`'d forms, enforces the extension
-  allowlist and the size cap. **Bound: screened, but NOT confined to any
+  allowlist and the size cap. Since #2358 PR 1c the three prefix screens and the
+  `realpathSync` between them live in `resolveOpenPath`, which
+  `resolveAndValidatePath` calls first; it is exported, and its one other caller
+  is `tandem_open`'s wrapper (`src/server/mcp/document.ts`), which uses it — with
+  ownership on only — to learn which open document a path targets, and makes no
+  filesystem call other than `resolveOpenPath`'s own `realpathSync`. With
+  ownership on that call runs more than once per `tandem_open`: once to predict
+  the target, once more inside the document's queue to confirm it, and once in
+  `openFromDisk`, and all three again for each of up to three attempts when the
+  target moved — up to nine times, every one behind the same two pre-screens. The order is unchanged: both pre-screens precede
+  `realpathSync`, the third precedes the extension check and `fs.stat`. **Bound: screened, but NOT confined to any
   directory** — opening any allowlisted-extension file by absolute path is the
   product's intended behaviour, so a containment-shaped alert here is a policy
   question — tracked as #1666, DECIDED 2026-09-16 and filed under

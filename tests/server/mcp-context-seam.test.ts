@@ -124,13 +124,15 @@ describe("the context getters have one reader (ownership design §3.1)", () => {
   // `resolveToolCaller` would be a second place the caller is resolved, outside
   // the wrapper, so caller.ts has exactly one importer and the name appears
   // nowhere else in src.
-  it("caller.ts is imported only by the wrapper (mcp/response.ts)", () => {
+  it("caller.ts is imported only by the wrapper (mcp/response.ts) and its ownership helper", () => {
     const CALLER = "src/server/sessions/caller.ts";
     const importers = [...IMPORTS]
       .filter(([file, targets]) => file !== CALLER && targets.includes(CALLER))
       .map(([file]) => file)
       .sort();
-    expect(importers).toEqual(["src/server/mcp/response.ts"]);
+    // `owned-op.ts` (ownership PR 1c) imports the `ToolCaller` TYPE only: it is
+    // handed the caller the wrapper resolved and never resolves one.
+    expect(importers).toEqual(["src/server/mcp/owned-op.ts", "src/server/mcp/response.ts"]);
     const named = [...SRC_FILES]
       .filter(([f]) => f !== CALLER && f !== "src/server/mcp/response.ts")
       .filter(([, src]) => /\bresolveToolCaller\b/.test(stripComments(src)))

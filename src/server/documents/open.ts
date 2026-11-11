@@ -345,34 +345,33 @@ function pathsEqual(a: string, b: string): boolean {
  */
 export async function openFromDisk(
   filePath: string,
-  options?: { force?: boolean; readOnly?: boolean },
+  options?: {
+    force?: boolean;
+    readOnly?: boolean;
+    /**
+     * Act only if the file's open document — or the id a fresh open would get
+     * — is this one; otherwise throw `OPEN_TARGET_CHANGED` having done nothing.
+     * Passed by `tandem_open`'s wrapper alone, and only with ownership on.
+     */
+    expectTargetId?: string;
+  },
 ): Promise<OpenSuccess> {
-  const {
-    resolved,
-    format,
-    readOnly: derivedReadOnly,
-    id,
-  } = await resolveAndValidatePath(filePath);
+  const { resolved, format, readOnly: derivedReadOnly } = await resolveAndValidatePath(filePath);
   // Caller may override the derived readOnly (e.g. force changelog read-only).
   const readOnly = options?.readOnly === true ? true : derivedReadOnly;
   const fileName = path.basename(resolved);
-  const openDocs = getOpenDocs();
-  let existingId = id;
-  let existing = openDocs.get(id);
-
-  // Realpath fallback: after a rename, a doc stays registered under its ORIGINAL
-  // path-hash id but now points at `resolved`. `docIdFromPath(resolved)` no
-  // longer matches that id, so without this scan openFromDisk would open a
-  // DUPLICATE tab of the same file. (Save-As has the same latent property —
-  // promote keeps the upload-derived id; this cures both. See #1017.)
-  if (!existing) {
-    for (const [openId, d] of openDocs) {
-      if (d.source === "file" && pathsEqual(d.filePath, resolved)) {
-        existingId = openId;
-        existing = d;
-        break;
-      }
-    }
+  // Looked up HERE, after `resolveAndValidatePath`'s stat and with no await
+  // before the branch below, so the answer cannot be stale by the time it is
+  // acted on.
+  const { id: existingId, existing } = findOpenTarget(resolved);
+  // `tandem_open` under ownership checked a particular document before
+  // calling (#2358). If the file's open document is a different one by now (a
+  // rename landed, a tab closed during the stat), refuse before the force,
+  // already-open or fresh branch touches anything; the caller starts again.
+  if (options?.expectTargetId !== undefined && options.expectTargetId !== existingId) {
+    throw Object.assign(new Error("The file's open document changed while it was being opened."), {
+      code: "OPEN_TARGET_CHANGED",
+    });
   }
 
   // Already open — force-reload or switch to existing
@@ -452,6 +451,8 @@ export async function openFromDisk(
   }
 
   // Normal open
+  // No open document holds this file, so the target is the path's own id.
+  const id = existingId;
   const doc = getOrCreateDocument(id);
   const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly, id);
   const restoredFromSession = restore.restored;
@@ -697,11 +698,16 @@ function assertSafePathPrefix(p: string): void {
 }
 
 /**
- * Resolve a raw file path to its canonical form, validate it (UNC check,
- * extension check, size limit), derive format / readOnly / doc ID.
- * stat is used only for the size check and is not returned.
+ * The synchronous front of opening a file: the caller's path to its canonical
+ * form, with every unsafe-prefix screen applied. Throws `INVALID_PATH`.
+ *
+ * Exported so `tandem_open`'s wrapper can tell which document an open targets
+ * with **this** code rather than a copy of it (#2358): a copy that ran
+ * `realpathSync` ahead of the prefix screen would open the very SMB
+ * connection the screen exists to prevent. All three screens are inside, so no
+ * caller can get a canonical path that skipped one.
  */
-async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
+export function resolveOpenPath(filePath: string): string {
   // ORDER IS THE POINT. `realpathSync` on `\\evil.com\share\x.md` OPENS the SMB
   // connection — and leaks the NTLM hash — before any post-canonicalization
   // check could reject it, so the UNC gate has to run first, on the raw input
@@ -733,6 +739,41 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   // Defense-in-depth, kept deliberately: a Windows junction can canonicalize to
   // a UNC target that neither pre-check could see.
   assertSafePathPrefix(resolved);
+  return resolved;
+}
+
+/**
+ * Which open document, if any, holds the file at `resolved` (a
+ * {@link resolveOpenPath} result), and under which id. String comparisons
+ * only — no filesystem call.
+ *
+ * The id match comes first. The scan after it is the realpath fallback: after
+ * a rename, a doc stays registered under its ORIGINAL path-hash id but now
+ * points at `resolved`. `docIdFromPath(resolved)` no longer matches that id,
+ * so without the scan `openFromDisk` would open a DUPLICATE tab of the same
+ * file. (Save-As has the same latent property — promote keeps the
+ * upload-derived id; this cures both. See #1017.)
+ */
+export function findOpenTarget(resolved: string): { id: string; existing: OpenDoc | undefined } {
+  const openDocs = getOpenDocs();
+  const id = docIdFromPath(resolved);
+  const direct = openDocs.get(id);
+  if (direct) return { id, existing: direct };
+  for (const [openId, d] of openDocs) {
+    if (d.source === "file" && pathsEqual(d.filePath, resolved)) {
+      return { id: openId, existing: d };
+    }
+  }
+  return { id, existing: undefined };
+}
+
+/**
+ * Resolve a raw file path to its canonical form, validate it (UNC check,
+ * extension check, size limit), derive format / readOnly / doc ID.
+ * stat is used only for the size check and is not returned.
+ */
+async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
+  const resolved = resolveOpenPath(filePath);
 
   const ext = path.extname(resolved).toLowerCase();
   assertSupportedExtension(ext);

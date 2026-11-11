@@ -34,8 +34,10 @@ import { narrowConflict } from "../session/manager.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
+import { noClaim, ownedWrite, writeTarget } from "./owned-op.js";
 import {
   lockOrPermissionCode,
+  type McpToolResult,
   mcpError,
   mcpSuccess,
   noDocumentError,
@@ -544,52 +546,65 @@ export function registerApplyTools(server: McpServer): void {
           .optional()
           .describe("Custom backup path (default: {name}.backup.docx)"),
       },
-      withErrorBoundary("tandem_applyChanges", async (args) => {
-        try {
-          const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
-          return mcpSuccess(result);
-        } catch (err) {
-          const e = err as Error & { code?: string };
-          if (e.code === "NO_DOCUMENT") return noDocumentError();
-          if (e.code === "NO_SUGGESTIONS") return mcpError("NO_SUGGESTIONS", e.message);
-          if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
-          // A UNC `backupPath` or an upload/scratchpad source: a path the caller
-          // must change, answered with the same code every tool uses for it
-          // (#1823). It was FORMAT_ERROR, which is not what either condition is.
-          if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
-          // The backup directory does not exist (`applyChangesCore` throws it
-          // before touching anything). With no arm it rethrew as INTERNAL_ERROR.
-          if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-          if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
-          // Its own internal code, and it must stay distinguishable on BOTH
-          // surfaces: the `/api` label table keys on it. Collapsing it onto
-          // BACKUP_FAILED is the mistake this line used to make: it would put
-          // "move the symlink or pass a different backupPath", which the caller
-          // CAN fix and should retry, in the same bucket as a failed size
-          // verification, which it must not retry.
-          if (e.code === "BACKUP_SYMLINK") return mcpError("INVALID_PATH", e.message);
-          // The write guards (#1448 W1). Every one of these is an expected policy
-          // refusal, so it has to come back as a structured error the AI can read
-          // and act on. Rethrowing would surface "the file changed on disk" as an
-          // unhandled MCP protocol failure.
-          if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
-          if (e.code === "EXTERNAL_CONFLICT") return mcpError("EXTERNAL_CONFLICT", e.message);
-          if (e.code === "FILE_MODIFIED") return mcpError("FILE_MODIFIED", e.message);
-          if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
-          // A concurrent Hocuspocus Y.Doc swap mid-apply (#2037). Without this arm
-          // the refusal escapes as an unhandled MCP protocol failure — exactly what
-          // the comment above forbids. Reuses the existing wire code: a doc swap is
-          // a reload in the caller's terms, and `routes/_shared.ts` already maps it
-          // to 409 on the `/api` side.
-          if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
-          // A locked or unreadable source keeps its own errno rather than a code of
-          // ours, so it is matched by code here too — same reasoning as the stat guard.
-          // A permission refusal is not a lock (#1823), the same split `tandem_open`
-          // and `tandem_save` draw; see `lockOrPermissionCode` for Windows' EPERM.
-          const lockOrPermission = lockOrPermissionCode(e as NodeJS.ErrnoException);
-          if (lockOrPermission) return mcpError(lockOrPermission, e.message);
-          throw err;
-        }
+      withErrorBoundary("tandem_applyChanges", async (args, caller) => {
+        // Checked on the basename, the id the core acts on (#2358): a check on
+        // the raw string and a write on its basename could name two documents.
+        const givenId = args.documentId !== undefined ? path.basename(args.documentId) : undefined;
+        return ownedWrite(
+          caller,
+          "tandem_applyChanges",
+          { given: args.documentId, resolve: () => writeTarget(givenId) },
+          async (documentId) => {
+            try {
+              const result = await applyChangesCore(documentId, args.author, args.backupPath);
+              return mcpSuccess(result);
+            } catch (err) {
+              const e = err as Error & { code?: string };
+              // `noClaim`: decided by the arguments or by what kind of document
+              // this is, so with ownership on they leave no claim behind.
+              if (e.code === "NO_DOCUMENT") return noClaim(noDocumentError());
+              if (e.code === "NO_SUGGESTIONS") return mcpError("NO_SUGGESTIONS", e.message);
+              if (e.code === "UNSUPPORTED_FORMAT")
+                return noClaim(mcpError("FORMAT_ERROR", e.message));
+              // A UNC `backupPath` or an upload/scratchpad source: a path the caller
+              // must change, answered with the same code every tool uses for it
+              // (#1823). It was FORMAT_ERROR, which is not what either condition is.
+              if (e.code === "INVALID_PATH") return noClaim(mcpError("INVALID_PATH", e.message));
+              // The backup directory does not exist (`applyChangesCore` throws it
+              // before touching anything). With no arm it rethrew as INTERNAL_ERROR.
+              if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+              if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
+              // Its own internal code, and it must stay distinguishable on BOTH
+              // surfaces: the `/api` label table keys on it. Collapsing it onto
+              // BACKUP_FAILED is the mistake this line used to make: it would put
+              // "move the symlink or pass a different backupPath", which the caller
+              // CAN fix and should retry, in the same bucket as a failed size
+              // verification, which it must not retry.
+              if (e.code === "BACKUP_SYMLINK") return mcpError("INVALID_PATH", e.message);
+              // The write guards (#1448 W1). Every one of these is an expected policy
+              // refusal, so it has to come back as a structured error the AI can read
+              // and act on. Rethrowing would surface "the file changed on disk" as an
+              // unhandled MCP protocol failure.
+              if (e.code === "READ_ONLY") return noClaim(mcpError("READ_ONLY", e.message));
+              if (e.code === "EXTERNAL_CONFLICT") return mcpError("EXTERNAL_CONFLICT", e.message);
+              if (e.code === "FILE_MODIFIED") return mcpError("FILE_MODIFIED", e.message);
+              if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
+              // A concurrent Hocuspocus Y.Doc swap mid-apply (#2037). Without this arm
+              // the refusal escapes as an unhandled MCP protocol failure — exactly what
+              // the comment above forbids. Reuses the existing wire code: a doc swap is
+              // a reload in the caller's terms, and `routes/_shared.ts` already maps it
+              // to 409 on the `/api` side.
+              if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
+              // A locked or unreadable source keeps its own errno rather than a code of
+              // ours, so it is matched by code here too — same reasoning as the stat guard.
+              // A permission refusal is not a lock (#1823), the same split `tandem_open`
+              // and `tandem_save` draw; see `lockOrPermissionCode` for Windows' EPERM.
+              const lockOrPermission = lockOrPermissionCode(e as NodeJS.ErrnoException);
+              if (lockOrPermission) return mcpError(lockOrPermission, e.message);
+              throw err;
+            }
+          },
+        );
       }),
     );
 
@@ -614,85 +629,99 @@ export function registerApplyTools(server: McpServer): void {
         .optional()
         .describe("Snapshot filename to restore. Omit to list available snapshots."),
     },
-    withErrorBoundary("tandem_restoreBackup", async (args) => {
-      // path.basename on the ID strips any directory components so CodeQL
-      // does not trace args.documentId through Map.get to existing.filePath.
-      // Valid IDs (64-char hex / upload_*) have no separators, so this is a
-      // no-op at runtime.
-      const safeDocId = args.documentId !== undefined ? path.basename(args.documentId) : undefined;
-      const docState = getCurrentDoc(safeDocId);
-      if (!docState) return noDocumentError();
+    withErrorBoundary("tandem_restoreBackup", async (args, caller) => {
+      // List mode (no `backup`) is a read: no check, no claim, no queue.
+      // Restore mode replaces the document's content, so it is a write. Both
+      // act on the basename of the id, so that is the id that is checked.
+      const givenId = args.documentId !== undefined ? path.basename(args.documentId) : undefined;
+      if (args.backup === undefined) return restoreBackupBody(args.documentId);
+      return ownedWrite(
+        caller,
+        "tandem_restoreBackup",
+        { given: args.documentId, resolve: () => writeTarget(givenId) },
+        restoreBackupBody,
+      );
 
-      const { filePath } = docState;
+      async function restoreBackupBody(documentId: string | undefined): Promise<McpToolResult> {
+        // path.basename on the ID strips any directory components so CodeQL
+        // does not trace args.documentId through Map.get to existing.filePath.
+        // Valid IDs (64-char hex / upload_*) have no separators, so this is a
+        // no-op at runtime.
+        const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+        const docState = getCurrentDoc(safeDocId);
+        if (!docState) return noClaim(noDocumentError());
 
-      // One code path for every format (#1768). .docx gains the same
-      // pre-overwrite doc-backups snapshots as .md/.txt (#1086 extended), and
-      // the {name}.backup.docx sidecar tandem_applyChanges writes is an
-      // ordinary NAMED entry in that same list — restored, like any snapshot,
-      // only through restoreDocumentFromBackup. The no-`backup` call lists and
-      // never writes; it used to fall through to a private copy-back that
-      // ignored readOnly and every other guard.
-      try {
-        if (args.backup === undefined) {
-          if (docState.source !== "file") {
-            return mcpError(
-              "INVALID_PATH",
-              "Uploaded documents and scratchpads have no on-disk backups.",
-            );
+        const { filePath } = docState;
+
+        // One code path for every format (#1768). .docx gains the same
+        // pre-overwrite doc-backups snapshots as .md/.txt (#1086 extended), and
+        // the {name}.backup.docx sidecar tandem_applyChanges writes is an
+        // ordinary NAMED entry in that same list — restored, like any snapshot,
+        // only through restoreDocumentFromBackup. The no-`backup` call lists and
+        // never writes; it used to fall through to a private copy-back that
+        // ignored readOnly and every other guard.
+        try {
+          if (args.backup === undefined) {
+            if (docState.source !== "file") {
+              return mcpError(
+                "INVALID_PATH",
+                "Uploaded documents and scratchpads have no on-disk backups.",
+              );
+            }
+            const backups = await listDocBackups(filePath, resolveAppDataDir());
+            // Append the sidecar LAST, after the mtime-sorted snapshots, and do
+            // NOT re-sort the merged array. The sidecar's timestamp is an mtime
+            // on a file in the user's own document directory, settable by any
+            // local process; a re-sort would let it take index 0 of a list this
+            // response tells an agent to trust.
+            const sidecar = await docxSidecarEntry(filePath);
+            if (sidecar) backups.push(sidecar);
+            if (backups.length === 0) {
+              return mcpError(
+                "FILE_NOT_FOUND",
+                `No backups found for ${path.basename(filePath)}. Tandem snapshots a ` +
+                  "document's on-disk bytes before its first overwrite each server run." +
+                  (docState.format === "docx"
+                    ? " tandem_applyChanges also writes a {name}.backup.docx sidecar beside the " +
+                      "document, which is listed here whenever it exists."
+                    : ""),
+              );
+            }
+            return mcpSuccess({
+              filePath,
+              backups,
+              message:
+                "Snapshots listed newest first." +
+                (sidecar
+                  ? " The {name}.backup.docx sidecar is listed last and is not a Tandem-managed" +
+                    " snapshot."
+                  : "") +
+                " Call tandem_restoreBackup again with `backup` set to one of these names to" +
+                " restore it.",
+            });
           }
-          const backups = await listDocBackups(filePath, resolveAppDataDir());
-          // Append the sidecar LAST, after the mtime-sorted snapshots, and do
-          // NOT re-sort the merged array. The sidecar's timestamp is an mtime
-          // on a file in the user's own document directory, settable by any
-          // local process; a re-sort would let it take index 0 of a list this
-          // response tells an agent to trust.
-          const sidecar = await docxSidecarEntry(filePath);
-          if (sidecar) backups.push(sidecar);
-          if (backups.length === 0) {
-            return mcpError(
-              "FILE_NOT_FOUND",
-              `No backups found for ${path.basename(filePath)}. Tandem snapshots a ` +
-                "document's on-disk bytes before its first overwrite each server run." +
-                (docState.format === "docx"
-                  ? " tandem_applyChanges also writes a {name}.backup.docx sidecar beside the " +
-                    "document, which is listed here whenever it exists."
-                  : ""),
-            );
+          const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
+          return mcpSuccess(result);
+        } catch (err) {
+          const e = err as Error & { code?: string };
+          if (e.code === "NO_DOCUMENT") return noClaim(noDocumentError());
+          if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+          // An upload or scratchpad source has no on-disk location to restore
+          // into (#1823: the same code list mode and tandem_applyChanges give
+          // it). It is decided by the document's source, fixed at open, so it
+          // leaves no claim (#2358).
+          if (e.code === "INVALID_PATH") return noClaim(mcpError("INVALID_PATH", e.message));
+          // A symlinked sidecar — or a FIFO / directory wearing the sidecar's name
+          // — is a path refusal the caller can act on, not a format problem. It
+          // is decided by the disk, so a claim made by this call is kept.
+          if (e.code === "BACKUP_SYMLINK" || e.code === "BACKUP_NOT_A_FILE") {
+            return mcpError("INVALID_PATH", e.message);
           }
-          return mcpSuccess({
-            filePath,
-            backups,
-            message:
-              "Snapshots listed newest first." +
-              (sidecar
-                ? " The {name}.backup.docx sidecar is listed last and is not a Tandem-managed" +
-                  " snapshot."
-                : "") +
-              " Call tandem_restoreBackup again with `backup` set to one of these names to" +
-              " restore it.",
-          });
+          if (e.code === "UNSUPPORTED_FORMAT") return noClaim(mcpError("FORMAT_ERROR", e.message));
+          if (e.code === "READ_ONLY") return noClaim(mcpError("READ_ONLY", e.message));
+          if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
+          throw err;
         }
-        const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
-        return mcpSuccess(result);
-      } catch (err) {
-        const e = err as Error & { code?: string };
-        if (e.code === "NO_DOCUMENT") return noDocumentError();
-        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-        // A symlinked sidecar — or a FIFO / directory wearing the sidecar's name
-        // — is a path refusal the caller can act on, not a format problem. So is
-        // an upload/scratchpad source, which has no on-disk location to restore
-        // into (#1823: the same code list mode and tandem_applyChanges give it).
-        if (
-          e.code === "BACKUP_SYMLINK" ||
-          e.code === "BACKUP_NOT_A_FILE" ||
-          e.code === "INVALID_PATH"
-        ) {
-          return mcpError("INVALID_PATH", e.message);
-        }
-        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
-        if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
-        if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
-        throw err;
       }
     }),
   );
