@@ -1294,9 +1294,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *   `unanswered`, so at most the FIRST reply is ever tagged.
    * - The reply is the supervisor's own child's. One with no session id counts,
    *   as it does for `answered` above: the direct-HTTP entry `tandem setup`
-   *   writes sends no `X-Claude-Session-Id`, so requiring one would make this
-   *   do nothing for most users. A hand-launched Claude replying with no id
-   *   during the greeting turn would read "ready" — wording only.
+   *   wrote before #2358 PR 2b sends no `X-Claude-Session-Id`, and an entry
+   *   the boot sweep has not switched yet still is one, so requiring an id
+   *   would make this do nothing for those users. Through the bridge entry
+   *   setup writes now, every reply carries an id and this is exact
+   *   (`tests/server/launcher/setup-entry-session-id.test.ts`). A
+   *   hand-launched Claude replying with no id during the greeting turn would
+   *   read "ready" — wording only.
    * - It answers nothing: no `replyTo`, not an `inProgress` ack.
    * - No user chat was waiting when the turn was written, and none arrived
    *   since. Either way the reply may be an answer, which must still read

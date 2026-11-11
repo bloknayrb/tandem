@@ -45,6 +45,15 @@ To proceed: click **More info**, then **Run anyway**. The warning stops appearin
 
 This is a SmartScreen-side delay, not a code-signing failure — the installer is signed and the publisher name will be shown in the dialog. If the publisher reads as *"Unknown publisher"* instead of the Tandem signing-cert identity, that's a real signature problem; please [file an issue](https://github.com/bloknayrb/tandem/issues).
 
+## Claude Code's `tandem` entry and Node (since #2358)
+
+Tandem's `tandem` entry in `~/.claude.json` runs a small bridge on a Node it recorded (`command`) and a script it recorded (`args`). `tandem doctor` (desktop: Settings → About → Copy Diagnostics) says which entry you have and, if it did not switch to the bridge, why.
+
+- **A Node upgrade or removal fails while terminals are open.** Every open Claude Code terminal runs that bridge, so it holds the recorded Node open. Scoop skips updating an app with a running process (its source prints "Running process detected, skip updating."). A Windows Node installer or winget upgrade can fail on files in use (inferred, not measured). Close Claude Code terminals first, then upgrade; for an npm install, stop Tandem too, since it runs on that Node.
+- **Terminals lose their Tandem tools after you removed a Node or a Tandem install.** Uninstalling the nvm version the entry names, or a `pnpm up -g` that prunes pnpm's versioned global folder, leaves the entry pointing at a path that is gone, so terminals opened afterwards get no Tandem tools (ones already open keep working on macOS and Linux until they exit). Tandem's next start repoints it; until then `tandem doctor` reports a Node or bridge script that no longer exists. Restart terminals afterwards.
+- **A terminal's log shows "Not sending the auth token" on every start.** The bridge sends Tandem's token only to `http://127.0.0.1` or `http://[::1]` on Tandem's MCP port: the default, or the `TANDEM_MCP_PORT` in Claude Code's own environment. After moving Tandem's port without setting that variable where Claude Code can see it, every start prints this line. It still connects: Tandem on this computer does not need the token.
+- **The desktop app's entry stays on the Node it ships with.** Tandem only takes a Node 22.12 or newer from its own `PATH`. On macOS an app opened from the Dock or Finder sees only `/usr/bin:/bin:/usr/sbin:/sbin`, so it never sees a Node you install, unless Tandem is started from a shell that has Node on its `PATH`. On Windows only a Node under Program Files or your user folder counts, and a `PATH` entry with a folder in 8.3 short form (`C:\PROGRA~1\nodejs`, `C:\Program Files\NODEJS~1`) is skipped. On the shipped Node, a Windows desktop update ends every terminal's bridge, so reconnect them with `/mcp` (or restart them) after updating.
+
 ## Claude Code says "MCP failed to connect"
 
 The server must be running before Claude Code probes the MCP URL. Start it first:
@@ -633,7 +642,7 @@ Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-05
 
 Don't port-forward around the refusal. A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access.
 
-> **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.
+> **Note:** Since #2358, Tandem writes Claude Code's `tandem` entry as its stdio bridge, with the Bearer token in the entry's `env` (`TANDEM_AUTH_TOKEN`) rather than in a header. Claude Code CLI **≥ 2.1.141** redacts credential *headers* and URL secrets in `claude mcp get`/`list`, but whether it redacts an `env` value has not been checked, so treat that output as containing the token: redact it before pasting it anywhere. An older direct-HTTP entry still carries the token in its headers, which those versions redact and older CLIs print in plain text.
 
 ## Related
 

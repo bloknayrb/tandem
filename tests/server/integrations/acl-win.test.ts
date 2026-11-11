@@ -9,6 +9,7 @@ import {
   _resetCurrentUserSidForTests,
   assertNoBroadAce,
   setRestrictiveAcl,
+  withoutPsModulePath,
 } from "../../../src/server/integrations/acl-win.js";
 import {
   assertPre1299PoisonTook,
@@ -164,6 +165,22 @@ describe("acl-win — source contract", () => {
     );
     expect(source).not.toMatch(shellExec);
     expect(source).not.toMatch(/shell\s*:\s*true/);
+  });
+});
+
+describe("withoutPsModulePath (#2358 PR 2b)", () => {
+  it("drops PSModulePath in any casing and keeps everything else", () => {
+    const env = {
+      PSModulePath: "C:\\pwsh7\\Modules",
+      PATH: "C:\\bin",
+      TANDEM_ACL_PATH: "x",
+    };
+    expect(withoutPsModulePath(env)).toEqual({ PATH: "C:\\bin", TANDEM_ACL_PATH: "x" });
+    expect(withoutPsModulePath({ PSMODULEPATH: "a", psmodulepath: "b", Path: "c" })).toEqual({
+      Path: "c",
+    });
+    // The input is not mutated.
+    expect(env.PSModulePath).toBe("C:\\pwsh7\\Modules");
   });
 });
 

@@ -1,4 +1,6 @@
 node_modules/
+# Test fixtures that must live outside the temp dir (tests/cli/doctor-no-probe.test.ts)
+.vitest-fixtures/
 dist/
 .tandem/
 .worktrees/

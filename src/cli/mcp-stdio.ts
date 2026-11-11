@@ -60,7 +60,9 @@ import {
   resolveClaudeSessionId,
   resolveTandemUrl,
   TANDEM_CLIENT_ID_HEADER,
+  VALID_TOKEN_RE,
 } from "../shared/cli-runtime.js";
+import { DEFAULT_MCP_PORT, LAN_BIND_ENABLED } from "../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
 
@@ -392,8 +394,55 @@ process.once("unhandledRejection", (reason: unknown) => {
   process.exit(1);
 });
 
-/** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
-const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
+/**
+ * May the bearer token be sent to `baseUrl`? (#2358 PR 2b.)
+ *
+ * Claude Code's `tandem` entry is now this bridge with the token in its `env`,
+ * and the URL it connects to is resolved with `CLAUDE_PLUGIN_OPTION_SERVER_URL`
+ * ahead of the entry's own `TANDEM_URL` — so a variable inherited from Claude
+ * Code's environment could otherwise carry the token, in plaintext, to another
+ * host. While the non-loopback bind ships dark (ADR-056) no Tandem listens
+ * anywhere but loopback, so withholding the token there loses nothing. The
+ * re-enable revisits this with the bind.
+ *
+ * This is the same bridge the Claude Code plugin runs, so the rule covers the
+ * plugin's entry too (whose `TANDEM_URL` is `http://127.0.0.1:3479`). A
+ * plugin user who pointed `server_url` at `localhost` keeps connecting, without
+ * the token, which loopback Tandem does not require.
+ */
+export function tokenMayGoTo(baseUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (LAN_BIND_ENABLED) return true;
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  // The two loopback addresses: `127.0.0.1`, Tandem's default bind, and
+  // `[::1]`, the other loopback bind `TANDEM_BIND_HOST` accepts — not
+  // `localhost` (resolved by whatever the system's resolver says, hosts file
+  // included) and not the rest of 127/8, which Tandem never binds.
+  // Plain `http:` only: Tandem's MCP server speaks nothing else, and an
+  // `https:` URL with no port means 443, not the port checked below.
+  if (url.protocol !== "http:") return false;
+  if (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") return false;
+  // And Tandem's MCP port: the default, or the `TANDEM_MCP_PORT` this bridge
+  // was started with. Another local process on another port gets no token;
+  // a loopback Tandem accepts a request without one, so nothing breaks. What
+  // this guards against is a misconfigured URL, not a hostile environment:
+  // `TANDEM_MCP_PORT` arrives the same way `CLAUDE_PLUGIN_OPTION_SERVER_URL`
+  // does, and whoever sets those could set `NODE_OPTIONS` too. The default
+  // port stays allowed after Tandem moves off it, so a URL naming 3479 still
+  // sends the token to whatever holds 3479. On a moved port whose
+  // `TANDEM_MCP_PORT` does not reach Claude Code's environment, the token is
+  // withheld and the bridge prints its "Not sending the auth token" line on
+  // every start; that is noise, not a failure, since loopback needs no token.
+  const port = url.port === "" ? 80 : Number(url.port);
+  const allowed = new Set<number>([DEFAULT_MCP_PORT]);
+  const moved = Number.parseInt(env.TANDEM_MCP_PORT ?? "", 10);
+  if (Number.isInteger(moved) && moved > 0 && moved < 65536) allowed.add(moved);
+  return allowed.has(port);
+}
 
 /**
  * Validate the configured auth token if present.
@@ -435,7 +484,17 @@ export async function runMcpStdio(): Promise<void> {
   // No-op when not in a Claude Code launch — see resolveClaudeSessionId.
   const sessionId = resolveClaudeSessionId();
   const upstreamHeaders: Record<string, string> = {};
-  if (authToken) upstreamHeaders.Authorization = `Bearer ${authToken}`;
+  if (authToken) {
+    if (tokenMayGoTo(baseUrl)) {
+      upstreamHeaders.Authorization = `Bearer ${authToken}`;
+    } else {
+      process.stderr.write(
+        "[tandem mcp-stdio] Not sending the auth token: the server URL is not Tandem's MCP " +
+          "address on this computer (127.0.0.1 or [::1], on its MCP port). A Tandem on this " +
+          "computer does not need it.\n",
+      );
+    }
+  }
   if (sessionId !== undefined) upstreamHeaders[CLAUDE_SESSION_HEADER] = sessionId;
   // One id per bridge process, reused by every reconnect through
   // `createUpstream` below, so a server with ownership on keeps this bridge on

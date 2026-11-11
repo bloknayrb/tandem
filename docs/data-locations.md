@@ -68,12 +68,14 @@ Inside either directory:
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your email address — the only identity information Tandem writes to disk. To remove it, use Settings → License → Remove license or `tandem deactivate` (#1943) rather than deleting it by hand: both also clear `license-grace.json`, and nothing is sent anywhere. Either way, getting it back means re-activating from the key you were emailed. |
 | `license-grace.json` | The licence grace period's record (#2231): when each installed license file first failed its check, keyed by a SHA-256 of the file's contents (`0o600` on POSIX). Written only on a build where licensing is enforced, never by a dark build; cleared when a license verifies and by Remove license. Deleting it restarts a grace period, exactly as deleting `trial.json` restarts the trial — it is no stronger than the trial clock. |
 | `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
-| `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized. Named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`; the three most recent are kept |
+| `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized, named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`, and of `~/.claude.json` before the startup sweep rewrites it (since #2358 PR 2b: the switch to the bridge and its repairs), named `sweep-claude-json-<YYYYMMDD-HHMMSS>-<id>.json` (written first as `….json.part` and renamed once filled; a leftover `.part` from a killed run is removed by a later start once it is an hour old). The three most recent of each kind are kept, so three later sweep repairs push out the copy taken before the first switch. They hold the config's tokens, so they are user-only |
 | `.broken-backups/` | Quarantined copies of Tandem's own malformed config files (user-only permissions): `integrations.json` (named `integrations-…`) and the bring-your-own-model store (named `models-…`). Claude's config files are never copied here — a malformed Claude config is refused and left untouched |
 | `last-seen-version` | Drives the "what's new" changelog on upgrade |
 | `autostart-seen` | Linux only, and only with start-at-login enabled — marks that a login launch has happened |
 | `update-pending.json` | **Desktop location only.** Marks an in-app update that was in flight, so the next launch can tell whether it landed. Removed once that is settled |
 | `sample/` | **Desktop location only.** The sample documents, including the welcome tutorial, copied in on first run |
+| `bin/<version>/` | **Linux AppImage desktop only** (#2358): a copy of Tandem's stdio bridge (`dist/stdio-bridge/index.js`, plus a `package.json` marking it an ES module) that Claude Code's `tandem` entry runs, because the AppImage's own files disappear when it quits. Re-checked against the bundled file on every start; older versions' copies are removed once no Claude config names them. Deleting it while Tandem is closed makes Claude Code's Tandem tools fail to start until Tandem's next launch recreates it |
+| `client-config-home/` | **Development and tests only**: when Tandem runs without a build (tsx, vitest), it treats this folder as your home for Claude client configs and the skill, so a development run never touches your real `~/.claude.json`. A release build never creates it. `npm run doctor` from a checkout still reads the real one, so it can disagree with what a development setup just wrote |
 | `models.json` | The bring-your-own-model registry. Normally absent: that feature ships dark and no shipped UI writes it |
 
 You may also see `.tandem-tmp-*` files inside `sessions/` and `annotations/`. These are
@@ -304,7 +306,9 @@ when run as administrator, the firewall rules). It **deliberately
 leaves your data**: the app-data directory (your sessions, annotations, and
 document backups) and the keychain entries stay until you delete them
 yourself — uninstalling must never be the thing that destroys a backup you
-need next week. The one exception is `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`,
+need next week. That includes `.backups/`: its `claude-json-*` and `sweep-claude-json-*` files are
+copies of `~/.claude.json` and the Claude Desktop config, so they can hold tokens and other
+MCP servers' credentials. Delete that folder too if you want those copies gone. The one exception is `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`,
 which the Windows desktop uninstaller's own scrub deletes; this command leaves it.
 
 ### Full manual cleanup
