@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, describe, expect, it } from "vitest";
@@ -162,7 +162,10 @@ describe("at runtime under vitest", () => {
     expect(targets.length).toBeGreaterThan(0);
     for (const t of targets) {
       expect(t.configPath.startsWith(standIn as string)).toBe(true);
-      expect(t.configPath.startsWith(join(realHome, "."))).toBe(false);
+      // A dot-entry directly under the real home (`~/.claude.json`), spelled
+      // with the separator: `join(realHome, ".")` is the home itself, and on
+      // Windows the stand-in lives under it (`%TEMP%` is inside the profile).
+      expect(t.configPath.startsWith(`${realHome}${sep}.`)).toBe(false);
     }
   });
 });
