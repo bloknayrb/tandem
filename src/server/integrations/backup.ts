@@ -248,10 +248,21 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-/** Close and remove a reserved backup. Idempotent and never throws. */
+/**
+ * Close and remove a reserved backup. Idempotent and never throws; a removal
+ * that fails is logged, because a filled `.part` holds the config's tokens
+ * (still user-only, and reaped by the startup sweep after an hour).
+ */
 export async function discardReservedBackup(reserved: ReservedBackup): Promise<void> {
   await reserved.handle.close().catch(() => {});
-  await rm(reserved.partPath, { force: true }).catch(() => {});
+  try {
+    await rm(reserved.partPath, { force: true });
+  } catch (err) {
+    console.error(
+      `[Tandem] Could not remove the unfinished backup ${reserved.partPath}: ` +
+        `${err instanceof Error ? err.message : err}. Tandem removes it at a later start.`,
+    );
+  }
 }
 
 /** A `.part` this old cannot be another instance's slot in flight. */

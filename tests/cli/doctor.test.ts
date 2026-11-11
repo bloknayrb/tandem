@@ -3693,6 +3693,53 @@ describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
     for (const row of rows) expect(row.fix ?? "").not.toContain("attempts this at startup");
   });
 
+  // Review of 3739b2c, M1: the stale-path remedy promises a startup repair
+  // only where the boot sweep makes one. Both directions are asserted, so the
+  // claim cannot silently vanish from the rows that should carry it either.
+  describe("the stale-path remedy's startup claim (review M1)", () => {
+    const withCliOnPath = () => {
+      const bin = join(home, "bin");
+      mkdirSync(bin, { recursive: true });
+      const cli = join(bin, process.platform === "win32" ? "tandem.cmd" : "tandem");
+      writeFileSync(cli, "#!/bin/sh\n");
+      chmodSync(cli, 0o755);
+      vi.stubEnv("PATH", bin);
+    };
+    const gone = () => join(home, "gone", process.platform === "win32" ? "node.exe" : "node");
+    const writeServers = (servers: Record<string, unknown>) =>
+      writeFileSync(
+        claudeCodeConfigPath({ homeOverride: home }),
+        JSON.stringify({ mcpServers: servers }),
+      );
+
+    it("is absent for a hand-made tandem entry, which the sweep leaves alone", async () => {
+      writeServers({ tandem: { command: gone(), args: [join(home, "my-server.js")] } });
+      withCliOnPath();
+
+      const rows = await userMcp();
+
+      expect(rows.some((x) => x.message.includes("not an entry Tandem wrote"))).toBe(true);
+      const stale = rows.filter((x) => x.status === "warn" && x.fix?.includes("setup --apply"));
+      expect(stale.length, JSON.stringify(rows)).toBeGreaterThan(0);
+      for (const row of rows) expect(row.fix ?? "").not.toContain("attempts this at startup");
+    });
+
+    it("is present for a stale tandem-channel path, which the sweep does repair", async () => {
+      writeServers({
+        tandem: { command: bridgeNode, args: [bridgeScript] },
+        "tandem-channel": { command: gone(), args: [join(home, "dist", "channel", "index.js")] },
+      });
+      withCliOnPath();
+
+      const all = (await runDoctor({})).results.filter((x) => x.message.includes("tandem-channel"));
+
+      expect(
+        all.some((x) => x.status === "warn" && x.fix?.includes("attempts this at startup")),
+        JSON.stringify(all),
+      ).toBe(true);
+    });
+  });
+
   it("never promises that startup adds a missing entry (Windows smoke, finding 4)", async () => {
     writeFileSync(claudeCodeConfigPath({ homeOverride: home }), JSON.stringify({ mcpServers: {} }));
     // A `tandem` command on PATH selects the CLI arm, the one that used to say

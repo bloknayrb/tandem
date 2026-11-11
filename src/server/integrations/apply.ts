@@ -1530,6 +1530,10 @@ async function atomicWrite(
   } = {},
 ): Promise<void> {
   const { signal } = opts;
+  if (signal?.aborted && opts.preparedTmp !== undefined) {
+    // This call owns the prepared temp on every path, this one included.
+    await discardPreparedTmp(opts.preparedTmp);
+  }
   throwIfAborted(signal);
   const tmp = opts.preparedTmp?.path ?? setupTmpPath(dest);
   if (opts.preparedTmp !== undefined) {
@@ -1607,7 +1611,29 @@ async function atomicWrite(
   }
 
   try {
-    await rename(tmp, dest);
+    // A prepared temp is closed milliseconds before this rename (its ACL step
+    // ran before the caller's read), so on Windows an antivirus scan-on-close
+    // can still hold it: retry the transient refusals briefly, as the sweep
+    // backup's rename does. Unprepared temps keep today's single try, their
+    // ACL step having run between close and rename.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await rename(tmp, dest);
+        break;
+      } catch (renameErr) {
+        const code = (renameErr as NodeJS.ErrnoException).code;
+        const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+        if (
+          opts.preparedTmp === undefined ||
+          process.platform !== "win32" ||
+          !transient ||
+          attempt >= 6
+        ) {
+          throw renameErr;
+        }
+        await new Promise((r) => setTimeout(r, 50 * attempt));
+      }
+    }
     if (opts.committed) opts.committed.at = performance.now();
   } catch (err) {
     // EXDEV: cross-device link — fall back to copy + delete. The copy

@@ -323,7 +323,7 @@ describe("the pre-rename re-check against Claude Code's own writes", () => {
     // removal is named, so a smoke run can see it rather than infer it.
     expect(await sweepBackups()).toEqual(backupsBefore);
     const removed = stderr().match(
-      /Removed backup sweep-claude-json-\S+\.json, taken for a write/g,
+      /Removed backup sweep-claude-json-\S+\.json, taken for a write Tandem abandoned\./g,
     );
     expect(removed).toHaveLength(3);
   });

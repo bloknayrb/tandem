@@ -63,6 +63,9 @@ async function sddl(file: string): Promise<string> {
   }
 }
 
+// Each test runs icacls and several PowerShell starts, which a loaded Windows
+// machine has taken past vitest's default 15 s: hence the explicit 120 s, since
+// this describe is on the required windows-acl-proof list.
 describe.skipIf(!WIN_ONLY)("sweep prepared files — Windows ACL proof (#2358 PR 2b)", () => {
   let tmpDir: string;
 
@@ -85,7 +88,7 @@ describe.skipIf(!WIN_ONLY)("sweep prepared files — Windows ACL proof (#2358 PR
     expect(await sddl(final)).toBe(before);
     await expect(assertNoBroadAce(final)).resolves.toBeUndefined();
     expect(fs.readFileSync(final).equals(bytes)).toBe(true);
-  });
+  }, 120_000);
 
   it("a prepared temp keeps its restrictive DACL through a write via its handle", async () => {
     const prepared = await prepareAtomicTmp(path.join(tmpDir, ".claude.json"));
@@ -100,5 +103,5 @@ describe.skipIf(!WIN_ONLY)("sweep prepared files — Windows ACL proof (#2358 PR
     expect(await sddl(prepared.path)).toBe(before);
     await expect(assertNoBroadAce(prepared.path)).resolves.toBeUndefined();
     expect(fs.readFileSync(prepared.path).equals(bytes)).toBe(true);
-  });
+  }, 120_000);
 });

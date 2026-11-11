@@ -283,6 +283,13 @@ export async function assertNoBroadAce(
   throwIfAborted(signal);
 
   const sddl = stdout.trim();
+  // A `Get-Acl` that hit a non-terminating error exits 0 with no output, and an
+  // empty string contains no broad fragment: refuse anything that is not an
+  // SDDL (owner, group or DACL section first) rather than pass it (#2358 PR 2b
+  // review, L2).
+  if (!/^[OGD]:/.test(sddl)) {
+    throw new Error(`assertNoBroadAce: could not read the ACL of ${path} (no SDDL returned).`);
+  }
   for (const fragment of BROAD_SDDL_FRAGMENTS) {
     if (sddl.includes(fragment)) {
       throw new Error(

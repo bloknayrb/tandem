@@ -1797,7 +1797,12 @@ async function checkUserMcpConfig(
       }
       // A stdio entry here that is not Tandem's bridge is a hand-edit or a
       // plugin-managed shape, and both can carry the failure modes it reports.
-      reportEntryCommand(r, servers.tandem, "tandem", "~/.claude.json", { cliAvailable });
+      // The boot sweep leaves such an entry alone, so its stale-path remedy
+      // must not promise a startup repair (#2358 PR 2b review, M1).
+      reportEntryCommand(r, servers.tandem, "tandem", "~/.claude.json", {
+        cliAvailable,
+        stalePathFix: setupApplyRemedy(cliAvailable()),
+      });
     }
   }
   if (!servers["tandem-channel"]) {
@@ -1895,8 +1900,10 @@ export function setupApplyRemedy(cliAvailable: boolean): string {
 }
 
 /**
- * The remedy for an entry Tandem wrote whose recorded path has gone stale: the
- * one state the boot sweep repairs, so the CLI arm says so.
+ * The remedy for a stale recorded path in an entry the boot sweep repairs
+ * (`tandem-channel`, and the Claude Desktop entries), so the CLI arm says so.
+ * Claude Code's `tandem` entry is not one of them when it is not Tandem's
+ * bridge: its call site passes `setupApplyRemedy` instead.
  *
  * Leads with the thing that always works. The boot repair is real but
  * conditional in two ways doctor cannot see and the user cannot act on:
