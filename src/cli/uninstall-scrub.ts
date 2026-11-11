@@ -74,6 +74,7 @@ import { promisify } from "node:util";
 import {
   assertPathSafe,
   CLAUDE_PACKAGE_PREFIXES,
+  clientConfigHomeOverride,
   type DetectedTarget,
   detectRemovalTargets,
   isClaudePackageName,
@@ -1020,12 +1021,16 @@ const SKILL_DIR_ALLOWLIST = [/^SKILL\.md$/, /^\.tandem-setup-[0-9a-f-]+\.tmp$/];
  * `homeOverride` is for tests only.
  */
 export async function removeSkillDir(logger: ScrubLogger, homeOverride?: string): Promise<number> {
-  const skillDir = path.join(homeOverride ?? homedir(), ".claude", "skills", "tandem");
+  // The same home `installSkill` and `detectRemovalTargets` use: under tsx or
+  // vitest that is the stand-in, never the real one (#2358 PR 2b), so a scrub
+  // run from a checkout cannot delete the developer's installed skill.
+  const home = clientConfigHomeOverride(homeOverride);
+  const skillDir = path.join(home ?? homedir(), ".claude", "skills", "tandem");
 
   // Symmetric with installSkill: if install would refuse a symlinked
   // ~/.claude, uninstall refuses too.
   try {
-    assertPathSafe(skillDir, { allowedRoots: homeOverride ? [homeOverride] : undefined });
+    assertPathSafe(skillDir, { allowedRoots: home ? [home] : undefined });
   } catch (err) {
     const reason = pathRejectionReason(err);
     logger.warn(`leaving ${skillDir} — path rejected (${reason})`);

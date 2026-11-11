@@ -115,6 +115,13 @@ export default defineConfig({
     env: {
       TANDEM_TEST_APP_DATA_ROOT: TEST_APP_DATA_ROOT,
       TANDEM_APP_DATA_DIR: TEST_APP_DATA_ROOT,
+      // The stand-in for the user's home for every Claude client config and
+      // skill path (#2358 PR 2b): the boot sweep now rewrites `~/.claude.json`,
+      // and no test may reach the real one. Honoured only without the build
+      // define (`src/server/integrations/client-config-home.ts`). This root
+      // value is the fallback; `tests/setup/app-data-isolation.ts` narrows it
+      // per worker, so parallel workers never share a config.
+      TANDEM_CLIENT_CONFIG_HOME: path.join(TEST_APP_DATA_ROOT, "client-config-home"),
       // `.docx` ships dark (ADR-053), but its code and suites stay: under
       // vitest there is no build define, so this env fallback keeps the dark
       // code exercised. The release path is tested by stubbing it back to "".

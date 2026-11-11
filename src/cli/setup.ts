@@ -16,6 +16,7 @@ import {
   resolveChannelShimIntent,
   type TargetKind,
   validateChannelShimPrereq,
+  warmClaudeCodeBridge,
 } from "../server/integrations/apply.js";
 import { readTokenFromFile } from "../shared/auth/token-file.js";
 import { resolveAuthTokenCandidate } from "../shared/cli-runtime.js";
@@ -470,6 +471,9 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
         opts.withChannelShim,
       );
       const writeShim = preserveShim && targetPushSupport(t.kind) !== "none";
+      // The async probe (outer timer, SIGKILL), never a synchronous one: a
+      // planted `node` that leaves a grandchild holding stdout cannot hang it.
+      if (t.kind === "claude-code") await warmClaudeCodeBridge();
       const entries = buildMcpEntries(CHANNEL_DIST, {
         withChannelShim: writeShim,
         targetKind: t.kind,
