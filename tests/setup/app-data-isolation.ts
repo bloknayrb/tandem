@@ -30,12 +30,17 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll } from "vitest";
 import { workerAppDataDir } from "../helpers/worker-app-data-dir.js";
 
 const dir = workerAppDataDir();
 fs.mkdirSync(dir, { recursive: true });
 process.env.TANDEM_APP_DATA_DIR = dir;
+// Per worker for the same reason (#2358 PR 2b): the integrations API tests fall
+// back to the real `detectTargets` and `applyConfig`, so a home shared by
+// parallel workers would let them race on one `.claude.json`.
+process.env.TANDEM_CLIENT_CONFIG_HOME = path.join(dir, "client-config-home");
 
 // Safety net for a test file that DELETES `TANDEM_APP_DATA_DIR` and does not
 // put it back: the annotation store re-reads the variable on every debounced

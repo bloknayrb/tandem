@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -2834,8 +2834,10 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
 
     const report = await runDoctor();
     const entry = report.results.find((x) => x.check === "user-mcp-config");
-    expect(entry?.status).toBe("pass");
-    expect(entry?.message).toContain("tandem registered");
+    // Read fine: what is reported is the entry's shape (#2358 PR 2b), never a
+    // parse or emptiness complaint.
+    expect(entry?.message).toContain("older direct-HTTP entry");
+    expect(entry?.message).not.toMatch(/JSON|empty|not found/);
   });
 
   it("still names a fallback when ~/.claude.json does not exist at all", async () => {
@@ -2997,11 +2999,49 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       ["127.0.0.1", "http://127.0.0.1:3479/mcp"],
       ["localhost", "http://localhost:3479/mcp"],
       ["bracketed IPv6 loopback", "http://[::1]:3479/mcp"],
-    ])("still passes the loopback form %s", async (_label, url) => {
+    ])("does not call the loopback form %s unexpected or non-loopback", async (_label, url) => {
+      // Since #2358 PR 2b no HTTP entry passes outright: Tandem's own shape is
+      // "the older direct-HTTP entry", any other "not an entry Tandem wrote".
+      // What this pins is unchanged — the #1807 validator accepts all three.
       writeEntry({ type: "http", url });
 
       const results = await userMcpAll();
-      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      const messages = results.map((x) => x.message).join("\n");
+      expect(messages).not.toContain("unexpected config");
+      expect(messages).not.toContain("non-loopback");
+      expect(messages).toMatch(
+        /older direct-HTTP entry|not an entry Tandem wrote|an older Tandem wrote \(on localhost\)/,
+      );
+    });
+
+    it("names the pre-#686 localhost entry as Tandem's own, not foreign", async () => {
+      writeEntry({ type: "http", url: "http://localhost:3479/mcp" });
+      const messages = (await userMcpAll()).map((x) => `${x.message} ${x.fix ?? ""}`).join("\n");
+      expect(messages).toContain("an older Tandem wrote (on localhost)");
+      expect(messages).not.toContain("not an entry Tandem wrote");
+    });
+
+    it("names the >16 MiB skip instead of promising a switch that cannot land", async () => {
+      writeFileSync(
+        claudeCodeConfigPath({ homeOverride: home }),
+        JSON.stringify({
+          mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+          projects: "x".repeat(16 * 1024 * 1024),
+        }),
+      );
+      const rows = await userMcpAll();
+      const text = rows.map((x) => `${x.message} ${x.fix ?? ""}`).join("\n");
+      expect(text).toContain("is over 16 MiB, so Tandem will not rewrite it");
+      expect(text).toContain("too large to rewrite");
+      expect(text).not.toContain("it switches this entry when it starts");
+    });
+
+    it("a foreign entry carries the cost of keeping it (design §3.6)", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp", headers: { "X-Mine": "1" } });
+      const row = (await userMcpAll()).find((x) => x.message.includes("not an entry Tandem wrote"));
+      expect(row?.fix).toContain("can't tell which Claude Code session is calling");
+      expect(row?.fix).toContain("separate connection from the plugin's");
+      expect(row?.fix).toContain("this discards your edits");
     });
 
     it.each([
@@ -3018,35 +3058,35 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       expect(serialized).not.toContain(url);
     });
 
-    it("leaves a stdio (command) entry to reportEntryCommand and still passes", async () => {
+    it("leaves a foreign stdio (command) entry alone, names it, and still runs reportEntryCommand", async () => {
       writeEntry({ command: "/abs/node", args: [] });
 
       const results = await userMcpAll();
-      // The positive: that pass is reachable only when the command arm returns
-      // null, so it reds both if the arm is dropped and if the validator
-      // returns null while emitting nothing at all.
-      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      expect(results.some((x) => x.message.includes("not an entry Tandem wrote"))).toBe(true);
+      expect(results.some((x) => x.message.includes("unexpected config"))).toBe(false);
       // reportEntryCommand's own outcome still appears alongside it.
       expect(results.length).toBeGreaterThan(1);
     });
 
-    it("passes a healthy entry and says nothing about its url", async () => {
+    it("says nothing about a url it will not migrate (userinfo, query)", async () => {
       const url = "http://tok:s3cret@127.0.0.1:3479/mcp?key=abc";
       writeEntry({ type: "http", url });
 
       const results = await userMcpAll();
       const serialized = JSON.stringify(results);
-      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      expect(results.some((x) => x.message.includes("not an entry Tandem wrote"))).toBe(true);
       expect(serialized).not.toContain("s3cret");
       expect(serialized).not.toContain("key=abc");
       expect(serialized).not.toContain(url);
     });
 
-    it("passes a plain healthy entry", async () => {
+    it("warns on Tandem's own direct-HTTP entry (#2358 PR 2b)", async () => {
       writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp" });
 
-      const results = await userMcpAll();
-      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      const results = await userMcpAll({ claudeCodeBridgeVerdict: async () => "bridge" });
+      const warn = results.find((x) => x.status === "warn");
+      expect(warn?.message).toContain("older direct-HTTP entry");
+      expect(warn?.fix).toContain("Restart Tandem");
     });
 
     it("compares against the probed MCP port, not a hardcoded 3479", async () => {
@@ -3591,5 +3631,389 @@ describe("describeHealthSession", () => {
       label: "no MCP session",
       warning: "No active MCP session — Claude Code hasn't connected yet",
     });
+  });
+});
+
+// #2358 PR 2b — Claude Code's `tandem` entry is now Tandem's stdio bridge. The
+// doctor classifies it with the SAME matcher the boot migration uses, so what it
+// promises about the next start is what the next start does, and it never
+// offers a setup step that would write the direct-HTTP entry again.
+describe("Claude Code's bridge entry (#2358 PR 2b)", () => {
+  let home: string;
+  let bridgeNode: string;
+  let bridgeScript: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-bridge-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    bridgeNode = join(home, "opt", "node");
+    bridgeScript = join(home, "lib", "dist", "stdio-bridge", "index.js");
+    mkdirSync(dirname(bridgeNode), { recursive: true });
+    mkdirSync(dirname(bridgeScript), { recursive: true });
+    writeFileSync(bridgeNode, "");
+    writeFileSync(bridgeScript, "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const writeTandem = (tandem: unknown) =>
+    writeFileSync(
+      claudeCodeConfigPath({ homeOverride: home }),
+      JSON.stringify({ mcpServers: { tandem } }),
+    );
+  const userMcp = async (opts: Parameters<typeof runDoctor>[0] = {}) =>
+    (await runDoctor(opts)).results.filter((x) => x.check === "user-mcp-config");
+
+  // Review M1: the states the boot sweep never acts on. With a `tandem` CLI on
+  // PATH (the arm that used to carry the claim), no row may promise a startup
+  // repair for them.
+  it.each([
+    ["no config file", null],
+    ["an empty config", ""],
+    ["a malformed tandem entry", JSON.stringify({ mcpServers: { tandem: { type: "sse" } } })],
+  ])("never promises a startup repair for %s (review M1)", async (_label, content) => {
+    const cfg = claudeCodeConfigPath({ homeOverride: home });
+    if (content === null) rmSync(cfg, { force: true });
+    else writeFileSync(cfg, content);
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const cli = join(bin, process.platform === "win32" ? "tandem.cmd" : "tandem");
+    writeFileSync(cli, "#!/bin/sh\n");
+    chmodSync(cli, 0o755);
+    vi.stubEnv("PATH", bin);
+
+    const rows = await userMcp();
+    const warn = rows.find((x) => x.status === "warn");
+    expect(warn, JSON.stringify(rows)).toBeDefined();
+    expect(warn?.fix).toContain("tandem setup --apply");
+    for (const row of rows) expect(row.fix ?? "").not.toContain("attempts this at startup");
+  });
+
+  // Review of 3739b2c, M1: the stale-path remedy promises a startup repair
+  // only where the boot sweep makes one. Both directions are asserted, so the
+  // claim cannot silently vanish from the rows that should carry it either.
+  describe("the stale-path remedy's startup claim (review M1)", () => {
+    const withCliOnPath = () => {
+      const bin = join(home, "bin");
+      mkdirSync(bin, { recursive: true });
+      const cli = join(bin, process.platform === "win32" ? "tandem.cmd" : "tandem");
+      writeFileSync(cli, "#!/bin/sh\n");
+      chmodSync(cli, 0o755);
+      vi.stubEnv("PATH", bin);
+    };
+    const gone = () => join(home, "gone", process.platform === "win32" ? "node.exe" : "node");
+    const writeServers = (servers: Record<string, unknown>) =>
+      writeFileSync(
+        claudeCodeConfigPath({ homeOverride: home }),
+        JSON.stringify({ mcpServers: servers }),
+      );
+
+    it("is absent for a hand-made tandem entry, which the sweep leaves alone", async () => {
+      writeServers({ tandem: { command: gone(), args: [join(home, "my-server.js")] } });
+      withCliOnPath();
+
+      const rows = await userMcp();
+
+      expect(rows.some((x) => x.message.includes("not an entry Tandem wrote"))).toBe(true);
+      const stale = rows.filter((x) => x.status === "warn" && x.fix?.includes("setup --apply"));
+      expect(stale.length, JSON.stringify(rows)).toBeGreaterThan(0);
+      for (const row of rows) expect(row.fix ?? "").not.toContain("attempts this at startup");
+    });
+
+    it("is present for a stale tandem-channel path, which the sweep does repair", async () => {
+      writeServers({
+        tandem: { command: bridgeNode, args: [bridgeScript] },
+        "tandem-channel": { command: gone(), args: [join(home, "dist", "channel", "index.js")] },
+      });
+      withCliOnPath();
+
+      const all = (await runDoctor({})).results.filter((x) => x.message.includes("tandem-channel"));
+
+      expect(
+        all.some((x) => x.status === "warn" && x.fix?.includes("attempts this at startup")),
+        JSON.stringify(all),
+      ).toBe(true);
+    });
+  });
+
+  it("never promises that startup adds a missing entry (Windows smoke, finding 4)", async () => {
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), JSON.stringify({ mcpServers: {} }));
+    // A `tandem` command on PATH selects the CLI arm, the one that used to say
+    // startup "also attempts this".
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    const cli = join(bin, process.platform === "win32" ? "tandem.cmd" : "tandem");
+    writeFileSync(cli, "#!/bin/sh\n");
+    chmodSync(cli, 0o755);
+    vi.stubEnv("PATH", bin);
+
+    const warn = (await userMcp()).find(
+      (x) => x.message === "tandem not registered in ~/.claude.json",
+    );
+    expect(warn?.status).toBe("warn");
+    expect(warn?.fix).toContain("tandem setup --apply");
+    expect(warn?.fix).toContain("never adds a missing one");
+    expect(warn?.fix).not.toContain("attempts this at startup");
+  });
+
+  it("passes a live bridge with only the restart reminder (pre-flip smoke P3)", async () => {
+    writeTandem({
+      command: bridgeNode,
+      args: [bridgeScript],
+      env: { TANDEM_URL: "http://127.0.0.1:3479" },
+    });
+
+    // The `tandem-channel` line is about the shim, not this entry.
+    const results = (await userMcp()).filter((x) => !x.message.includes("tandem-channel"));
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.status).toBe("pass");
+    // In the MESSAGE, never a pass's `fix`: both human renderers print `fix`
+    // only for a non-pass row, so the Windows smoke never saw the reminder.
+    expect(results[0]?.message).toMatch(
+      /^tandem registered in ~\/\.claude\.json \(through Tandem's bridge\)\. .*until you restart it\.$/,
+    );
+    expect(results[0]?.fix).toBeUndefined();
+  });
+
+  it("names the desktop-update caveat for the bundled Node", async () => {
+    const sidecar = join(home, "app", "node-sidecar-x86_64-pc-windows-msvc.exe");
+    mkdirSync(dirname(sidecar), { recursive: true });
+    writeFileSync(sidecar, "");
+    writeTandem({ command: sidecar, args: [bridgeScript] });
+
+    const [result] = await userMcp();
+
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain("bundled with the desktop app");
+    // The update caveat is Windows-only (the NSIS hook ends the bridges); the
+    // PATH note is macOS-specific there. Both judged by the doctor's platform.
+    const real = process.platform;
+    const noteFor = async (platform: NodeJS.Platform) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      try {
+        const [row] = await userMcp();
+        expect(row?.fix).toBeUndefined();
+        return row?.message ?? "";
+      } finally {
+        Object.defineProperty(process, "platform", { value: real });
+      }
+    };
+    expect(await noteFor("win32")).toContain("desktop app updates");
+    expect(await noteFor("linux")).not.toContain("desktop app updates");
+    const mac = await noteFor("darwin");
+    expect(mac).not.toContain("desktop app updates");
+    expect(mac).toContain("/usr/bin:/bin:/usr/sbin:/sbin");
+  });
+
+  it("warns ONCE for a dead Node or script, and promises only an attempt", async () => {
+    writeTandem({ command: join(home, "gone", "node"), args: [bridgeScript] });
+    const deadNode = await userMcp();
+    writeTandem({
+      command: bridgeNode,
+      args: [join(home, "gone", "dist", "stdio-bridge", "index.js")],
+    });
+    const deadScript = await userMcp();
+
+    for (const results of [deadNode, deadScript]) {
+      const warns = results.filter((x) => x.status === "warn");
+      expect(warns).toHaveLength(1);
+      expect(warns[0]?.message).toContain("no longer exists");
+      expect(warns[0]?.fix).toContain("tries to repoint");
+      // No path from a config file reaches the report.
+      expect(JSON.stringify(results)).not.toContain(home);
+    }
+  });
+
+  it("refuses to stat a UNC bridge script (the value can come from a model's `claude mcp add`)", async () => {
+    writeTandem({
+      command: bridgeNode,
+      args: ["\\\\attacker\\share\\dist\\stdio-bridge\\index.js"],
+    });
+
+    const results = await userMcp();
+
+    // `isRecordedPathGone` answers "cannot tell" for UNC, never "gone".
+    expect(results.some((x) => x.message.includes("no longer exists"))).toBe(false);
+  });
+
+  it.each([
+    ["not-installed", "never switches the entry"],
+    ["translocated", "Move Tandem to Applications"],
+    ["no-node", "Node 22.12 or newer"],
+    ["bridge", "Restart Tandem"],
+  ] as const)(
+    "picks the direct-HTTP remedy that works when the verdict is %s",
+    async (verdict, want) => {
+      writeTandem({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcp({ claudeCodeBridgeVerdict: async () => verdict });
+
+      const warn = results.find((x) => x.status === "warn");
+      expect(warn?.message).toContain("older direct-HTTP entry");
+      expect(warn?.fix).toContain(want);
+      if (verdict !== "bridge") expect(warn?.fix).not.toMatch(/setup --apply/);
+    },
+  );
+
+  const unknownVerdicts: Array<[string, () => Promise<null>]> = [
+    ["null", async () => null],
+    ["a thrown error", async () => Promise.reject(new Error("import failed"))],
+  ];
+  it.each(unknownVerdicts)(
+    "an unknown verdict (%s) never promises the switch the bridge arm promises (review L5)",
+    async (_label, verdict) => {
+      writeTandem({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcp({ claudeCodeBridgeVerdict: verdict });
+
+      const warn = results.find((x) => x.status === "warn");
+      expect(warn?.message).toContain("older direct-HTTP entry");
+      expect(warn?.fix).toContain("An npm install of Tandem switches this entry");
+      expect(warn?.fix).not.toContain("Restart Tandem (it switches this entry when it starts)");
+    },
+  );
+
+  it.each(["no-node", "unprobed"] as const)(
+    "on macOS the %s arm marks the Dock note as desktop-only, since npm users reach it too",
+    async (verdict) => {
+      writeTandem({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+      const real = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      let fix = "";
+      try {
+        const results = await userMcp({ claudeCodeBridgeVerdict: async () => verdict });
+        fix = results.find((x) => x.status === "warn")?.fix ?? "";
+      } finally {
+        Object.defineProperty(process, "platform", { value: real });
+      }
+      expect(fix).toContain("If you use the desktop app: opened from the Dock");
+      // Never the unqualified desktop sentence an npm user would read as theirs.
+      expect(fix).not.toContain("so a desktop entry stays on the Node the app ships with");
+    },
+  );
+
+  it("names a hand-edited HTTP entry and warns that replacing it discards the edit (P11)", async () => {
+    writeTandem({
+      type: "http",
+      url: "http://127.0.0.1:3479/mcp",
+      headers: { Authorization: `Bearer ${"a".repeat(43)}`, "X-Mine": "1" },
+    });
+
+    const results = await userMcp();
+
+    const warn = results.find((x) => x.status === "warn");
+    expect(warn?.message).toContain("not an entry Tandem wrote");
+    expect(warn?.fix).toContain("discards your edits");
+  });
+
+  it("passes Tandem's own npx bridge shape", async () => {
+    writeTandem({ command: "npx", args: ["-y", "tandem-editor@0.30.0", "mcp-stdio"] });
+
+    const results = await userMcp();
+
+    const npx = results.find((x) => x.message.includes("started by npx"));
+    expect(npx?.message).toContain("until you restart it");
+    expect(results.some((x) => x.message.includes("not an entry Tandem wrote"))).toBe(false);
+  });
+});
+
+describe("the duplicate-toolset warning (#2358 PR 2b)", () => {
+  const base = {
+    enabledPlugins: { "tandem@tandem": true },
+    wizardChannelEntry: false,
+    readPluginRegistry: () => null,
+    bundledVersion: null,
+  };
+
+  it("calls the duplicate cosmetic when the user entry is the bridge", () => {
+    const out = evaluateTandemPlugin({
+      ...base,
+      wizardTandemEntry: true,
+      wizardTandemIsBridge: true,
+    });
+    const warn = out.find((x) => x.status === "warn");
+    expect(warn?.fix).toContain("only cosmetic");
+  });
+
+  it("does not call it cosmetic for a direct-HTTP entry", () => {
+    const out = evaluateTandemPlugin({
+      ...base,
+      wizardTandemEntry: true,
+      wizardTandemIsBridge: false,
+    });
+    const warn = out.find((x) => x.status === "warn");
+    expect(warn?.fix).not.toContain("cosmetic");
+    expect(warn?.fix).toContain("Keep one");
+  });
+});
+
+describe("a moved TANDEM_MCP_PORT (#2358 PR 2b round-2 review)", () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-port-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+  const write = (tandem: unknown) =>
+    writeFileSync(
+      claudeCodeConfigPath({ homeOverride: home }),
+      JSON.stringify({ mcpServers: { tandem } }),
+    );
+  const userMcp = async (mcpPort: number) =>
+    (await runDoctor({ mcpPort })).results.filter((x) => x.check === "user-mcp-config");
+
+  it("passes the user's own entry on the moved port and never offers setup", async () => {
+    write({ type: "http", url: "http://127.0.0.1:4000/mcp" });
+
+    const results = await userMcp(4000);
+
+    const entry = results.find((x) => x.message.includes("port 4000"));
+    expect(entry?.status).toBe("pass");
+    expect(entry?.message).toContain("can't tell which Claude Code session");
+    // (The tandem-channel line's opt-in hint names setup for the shim; this
+    // entry's own report must not.)
+    expect(JSON.stringify(entry)).not.toMatch(/setup --apply|integration wizard/);
+    expect(results.some((x) => x.status === "warn")).toBe(false);
+  });
+
+  it("names port 80, not 'not this computer', for a loopback URL with no port", async () => {
+    const node = join(home, "node");
+    const script = join(home, "dist", "stdio-bridge", "index.js");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(node, "");
+    writeFileSync(script, "");
+    write({ command: node, args: [script], env: { TANDEM_URL: "http://127.0.0.1" } });
+
+    const warn = (await userMcp(3479)).find((x) => x.status === "warn");
+
+    expect(warn?.message).toContain("port 80");
+    expect(warn?.message).not.toContain("not this computer");
+  });
+
+  it("does not certify a bridge pointed at the default port when Tandem moved", async () => {
+    const node = join(home, "node");
+    const script = join(home, "dist", "stdio-bridge", "index.js");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(node, "");
+    writeFileSync(script, "");
+    write({ command: node, args: [script], env: { TANDEM_URL: "http://127.0.0.1:3479" } });
+
+    const results = await userMcp(4000);
+
+    const warn = results.find((x) => x.status === "warn");
+    expect(warn?.message).toContain("port 3479");
+    expect(warn?.message).toContain("4000");
+    expect(
+      results.some((x) => x.status === "pass" && x.message.includes("through Tandem's bridge")),
+    ).toBe(false);
   });
 });

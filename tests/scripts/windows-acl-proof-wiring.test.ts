@@ -308,6 +308,11 @@ describe("windows-acl-proof spec list", () => {
     // Matching only the direct spawn would let a new spec built on the helper
     // slip past this guard entirely -- the same blind spot in a new shape.
     const viaFixture = /from\s+["'][^"']*helpers\/win-acl-fixture(?:\.js)?["']/;
+    // Or through production code, by opting out of the global acl-win mock:
+    // a spec that unmocks it runs real icacls in whatever it calls (#2358 PR 2b).
+    const viaUnmock = new RegExp(
+      String.raw`vi\.unmock\(\s*import\(\s*["'][^"']*integrations/` + "acl-win",
+    );
     const found: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
@@ -316,7 +321,7 @@ describe("windows-acl-proof spec list", () => {
           walk(full);
         } else if (entry.endsWith(".test.ts")) {
           const source = readFileSync(full, "utf-8");
-          if (spawnCall.test(source) || viaFixture.test(source)) {
+          if (spawnCall.test(source) || viaFixture.test(source) || viaUnmock.test(source)) {
             found.push(path.relative(ROOT, full).replace(/\\/g, "/"));
           }
         }

@@ -72,6 +72,14 @@ export const WINDOWS_ACL_PROOF_SPECS = [
     realAcl: true,
   },
   {
+    // #2358 PR 2b: the boot sweep's backup slot and temp file are restricted
+    // by path while their handles are open, then filled through the handle.
+    // Proves both the ACL step on an open file and that the DACL survives.
+    spec: "tests/server/integrations/sweep-prepared-acl-win.test.ts",
+    suite: "sweep prepared files — Windows ACL proof (#2358 PR 2b)",
+    realAcl: true,
+  },
+  {
     // #1796. Unlike its two siblings this one is not about #1299's poisoned
     // install: it denies write on a convert output directory and pins that the
     // failure is reported as PERMISSION_DENIED whichever syscall trips on it.

@@ -55,6 +55,22 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
+ * `env` without `PSModulePath`, matched case-insensitively (Windows variable
+ * names are). Windows PowerShell 5.1 started with a PowerShell 7 parent's
+ * `PSModulePath` loads 7's copy of `Microsoft.PowerShell.Security` and fails
+ * ("The member Sddl is already present", #2358 PR 2b), so `Get-Acl` is never
+ * found and the ACL verify fails closed. 5.1 rebuilds its own default path
+ * when the variable is absent.
+ */
+export function withoutPsModulePath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() !== "psmodulepath") out[key] = value;
+  }
+  return out;
+}
+
+/**
  * Run a PowerShell script, preferring PowerShell 7 (`pwsh.exe`) and falling
  * back to Windows PowerShell 5.1 (`powershell.exe`). pwsh is more reliable —
  * 5.1's auto-module-load has been observed to fail intermittently for
@@ -87,8 +103,10 @@ async function runPowerShell(
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
     try {
+      // Reached only when pwsh.exe is not on PATH; a PowerShell 7 parent
+      // started from elsewhere can still have handed down its PSModulePath.
       return await execFileAsync(systemBin("WindowsPowerShell\\v1.0\\powershell.exe"), args, {
-        env,
+        env: withoutPsModulePath(env),
         signal,
       });
     } catch (fallbackErr) {
@@ -265,6 +283,15 @@ export async function assertNoBroadAce(
   throwIfAborted(signal);
 
   const sddl = stdout.trim();
+  // A `Get-Acl` that hit a non-terminating error exits 0 with no output, and an
+  // empty string contains no broad fragment: refuse output with no SDDL line
+  // (owner, group or DACL section first) rather than pass it (#2358 PR 2b
+  // review, L2). Any line, so a line PowerShell printed first cannot fail it;
+  // and a section letter, SID or `(` after the colon, so a line that is a drive
+  // path (`D:\…`) cannot pass it.
+  if (!/^[OGD]:[A-Z(]/m.test(sddl)) {
+    throw new Error(`assertNoBroadAce: could not read the ACL of ${path} (no SDDL returned).`);
+  }
   for (const fragment of BROAD_SDDL_FRAGMENTS) {
     if (sddl.includes(fragment)) {
       throw new Error(

@@ -77,8 +77,14 @@ export function resolveAuthTokenCandidate(
   return { token: undefined, source: undefined };
 }
 
-/** Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars). */
-const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
+/**
+ * Regex for a valid Tandem auth token (32+ URL-safe alphanumeric chars).
+ *
+ * Exported so the boot sweep's HTTP→bridge migration (`apply.ts`) moves a
+ * header token into the bridge's `env` only when the bridge would accept it —
+ * one rule, not a second copy that could drift from what the bridge sends.
+ */
+export const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
 
 /** Guard so we only warn once per process (not on every SSE reconnect). */
 let _warnedInvalidToken = false;

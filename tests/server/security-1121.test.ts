@@ -45,7 +45,11 @@ vi.mock(import("../../src/server/auth/middleware.js"), async (importOriginal) =>
 
 vi.mock(import("../../src/server/mcp/document-service.js"), () => ({ getCurrentDoc }));
 vi.mock(import("../../src/server/file-io/doc-backup.js"), () => ({ listDocBackups }));
-vi.mock(import("../../src/server/platform.js"), () => ({ resolveAppDataDir }));
+vi.mock(import("../../src/server/platform.js"), () => ({
+  resolveAppDataDir,
+  // apply.ts reads it at import (#2358 PR 2b: sidecar provenance is argv).
+  isTauriSidecar: () => false,
+}));
 vi.mock(import("../../src/server/documents/reload-family.js"), () => ({
   restoreDocumentFromBackup,
   reloadDocumentFromMarkdown,

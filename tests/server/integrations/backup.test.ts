@@ -6,11 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   backupDir,
   backupFilename,
+  commitReservedBackup,
+  discardReservedBackup,
   listBackups,
   MAX_BACKUPS,
   pruneOldBackups,
+  reserveBackup,
+  SWEEP_BACKUP_PREFIX,
   shouldBackup,
   sweepBackupsOnStartup,
+  withTransientRenameRetry,
   writeBackup,
 } from "../../../src/server/integrations/backup.js";
 
@@ -188,6 +193,30 @@ describe("backup filename + write + prune", () => {
     expect(remaining.length).toBe(MAX_BACKUPS);
   });
 
+  it("pruneOldBackups never removes the protected backup, however it sorts", async () => {
+    // Same second, random id: the just-written one can sort last.
+    const names = ["ffff", "eeee", "dddd", "0000"].map(
+      (id) => `claude-json-20260601-000000-${id}0000.json`,
+    );
+    for (const n of names) fs.writeFileSync(path.join(dir, n), n);
+    const protect = names[3] as string;
+    const removed = await pruneOldBackups(dir, undefined, undefined, undefined, protect);
+    const remaining = await listBackups(dir);
+    expect(remaining).toContain(protect);
+    expect(remaining.length).toBe(MAX_BACKUPS);
+    expect(removed.map((p) => path.basename(p))).toEqual([names[2]]);
+  });
+
+  it("the sweep's backups are capped separately and never evict applyConfig's", async () => {
+    fs.writeFileSync(path.join(dir, "claude-json-20260101-000000-aaaa0000.json"), "user");
+    for (let i = 0; i < MAX_BACKUPS + 2; i++) {
+      await writeBackup(dir, Buffer.from(`s${i}`), SWEEP_BACKUP_PREFIX);
+    }
+    await pruneOldBackups(dir, SWEEP_BACKUP_PREFIX);
+    expect(await listBackups(dir)).toEqual(["claude-json-20260101-000000-aaaa0000.json"]);
+    expect((await listBackups(dir, SWEEP_BACKUP_PREFIX)).length).toBe(MAX_BACKUPS);
+  });
+
   it("writeBackup with `wx` exclusive-create rejects a pre-existing symlink at the predicted path", async () => {
     // Symlink attack: predict the filename and pre-create a symlink.
     // `wx` fails with EEXIST. POSIX-only because symlink creation on
@@ -236,5 +265,184 @@ describe("sweepBackupsOnStartup", () => {
     await sweepBackupsOnStartup(tmpDir);
     const remaining = await listBackups(dir);
     expect(remaining.length).toBe(MAX_BACKUPS);
+  });
+});
+
+describe("reserved backups (#2358 PR 2b: prepared before the read they hold)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-reserve-"));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  it("is an unlisted, user-only `.part` until committed, then a listed backup with the bytes", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    expect(reserved.partPath).toBe(`${reserved.finalPath}.part`);
+    expect(fs.statSync(reserved.partPath).size).toBe(0);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(reserved.partPath).mode & 0o777).toBe(0o600);
+    }
+    // Never counted, listed or pruned as a backup while unfilled.
+    expect(await listBackups(dir, SWEEP_BACKUP_PREFIX)).toEqual([]);
+
+    const bytes = Buffer.from('{"token":"sentinel"}\n');
+    const final = await commitReservedBackup(reserved, bytes);
+
+    expect(final).toBe(reserved.finalPath);
+    expect(fs.existsSync(reserved.partPath)).toBe(false);
+    expect(fs.readFileSync(final).equals(bytes)).toBe(true);
+    if (process.platform !== "win32") expect(fs.statSync(final).mode & 0o777).toBe(0o600);
+    expect(await listBackups(dir, SWEEP_BACKUP_PREFIX)).toEqual([path.basename(final)]);
+  });
+
+  it("discard closes and removes the slot, and is safe to repeat", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    await discardReservedBackup(reserved);
+    await discardReservedBackup(reserved);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("a failed commit removes the slot", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    await reserved.handle.close(); // the write through it now fails
+    await expect(commitReservedBackup(reserved, Buffer.from("x"))).rejects.toThrow();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("the startup sweep removes a slot a killed run left, but not a fresh one", async () => {
+    const appData = dir;
+    const backups = backupDir(appData);
+    fs.mkdirSync(backups, { recursive: true, mode: 0o700 });
+    const stale = path.join(backups, `${SWEEP_BACKUP_PREFIX}20260101-000000-deadbeef.json.part`);
+    const fresh = path.join(backups, `${SWEEP_BACKUP_PREFIX}20260101-000001-cafebabe.json.part`);
+    const unrelated = path.join(backups, "claude-json-20260101-000000-deadbeef.json.part");
+    for (const p of [stale, fresh, unrelated]) fs.writeFileSync(p, "");
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(stale, twoHoursAgo, twoHoursAgo);
+    fs.utimesSync(unrelated, twoHoursAgo, twoHoursAgo);
+
+    await sweepBackupsOnStartup(appData);
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    // Only the sweep's own prefix: setup's backups never use `.part`.
+    expect(fs.existsSync(unrelated)).toBe(true);
+  });
+});
+
+describe("withTransientRenameRetry (#2358 PR 2b)", () => {
+  const refused = (code: string) => Object.assign(new Error(code), { code });
+
+  it("retries Windows' transient refusals until the rename goes through", async () => {
+    let calls = 0;
+    const rename = async () => {
+      if (++calls < 3) throw refused("EBUSY");
+    };
+    await withTransientRenameRetry(rename, { platform: "win32" });
+    expect(calls).toBe(3);
+  });
+
+  it("re-checks before each retry, and a check that throws stops it (review H1)", async () => {
+    let calls = 0;
+    let checks = 0;
+    const changed = new Error("changed");
+    const rename = async () => {
+      calls++;
+      throw refused("EPERM");
+    };
+    const beforeRetry = async () => {
+      // Claude Code finished its write while the rename was refused.
+      if (++checks === 2) throw changed;
+    };
+    await expect(withTransientRenameRetry(rename, { platform: "win32", beforeRetry })).rejects.toBe(
+      changed,
+    );
+    // The rename was never tried again after the check found the change.
+    expect(calls).toBe(2);
+    expect(checks).toBe(2);
+  });
+
+  it("sleeps, then re-checks, then renames: never re-checks before the sleep (review M1)", async () => {
+    const events: string[] = [];
+    let calls = 0;
+    const rename = async () => {
+      events.push("rename");
+      if (++calls < 3) throw refused("EBUSY");
+    };
+    await withTransientRenameRetry(rename, {
+      platform: "win32",
+      sleep: async (ms) => {
+        events.push(`sleep ${ms}`);
+      },
+      beforeRetry: async () => {
+        events.push("check");
+      },
+    });
+    // A write landing during a sleep is caught by the check that follows it.
+    expect(events).toEqual([
+      "rename",
+      "sleep 50",
+      "check",
+      "rename",
+      "sleep 100",
+      "check",
+      "rename",
+    ]);
+  });
+
+  it("gives up after six tries, and never retries off Windows or a non-transient error", async () => {
+    let calls = 0;
+    const alwaysBusy = async () => {
+      calls++;
+      throw refused("EBUSY");
+    };
+    await expect(withTransientRenameRetry(alwaysBusy, { platform: "win32" })).rejects.toThrow(
+      "EBUSY",
+    );
+    expect(calls).toBe(6);
+
+    calls = 0;
+    await expect(withTransientRenameRetry(alwaysBusy, { platform: "linux" })).rejects.toThrow();
+    expect(calls).toBe(1);
+
+    calls = 0;
+    const missing = async () => {
+      calls++;
+      throw refused("ENOENT");
+    };
+    await expect(withTransientRenameRetry(missing, { platform: "win32" })).rejects.toThrow();
+    expect(calls).toBe(1);
+  }, 10_000);
+});
+
+describe("discardReservedBackup logs a slot it cannot remove (#2358 PR 2b)", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-discard-"));
+  });
+  afterEach(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  it("names the slot in the log instead of failing silently", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    // A non-empty directory where the slot was: `rm` without `recursive` refuses it.
+    await reserved.handle.close();
+    fs.rmSync(reserved.partPath);
+    fs.mkdirSync(reserved.partPath);
+    fs.writeFileSync(path.join(reserved.partPath, "x"), "");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await discardReservedBackup(reserved);
+      const logged = errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("Could not remove the unfinished backup");
+      expect(logged).toContain(reserved.partPath);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
