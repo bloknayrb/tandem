@@ -12,10 +12,10 @@
  *
  * Expectations therefore branch on `process.platform`, and the reason is stated
  * at each branch. CI's ubuntu `check` job is the Linux evidence; a local run is
- * the Windows evidence.
+ * the Windows evidence a merge can rely on.
  *
- * **"A local run" is the whole of the Windows evidence for THIS file, and the
- * reason is a list it is not on — not an absent mechanism.** The only vitest
+ * **No required check holds Windows evidence for THIS file, and the reason is
+ * a list it is not on — not an absent mechanism.** The only vitest
  * that a REQUIRED check runs on Windows is `WINDOWS_ACL_PROOF_SPECS` in
  * `scripts/ci/windows-acl-proof.mjs`, spawned by the `windows-acl-proof` job on
  * `windows-latest`; neither this file nor `session.test.ts` is on that list.
@@ -24,8 +24,9 @@
  * (`check`, `coverage`, `ownership-flag-on`) is ubuntu; the
  * `rust-test`/`reaper-build` matrix does reach Windows but runs cargo only.
  *
- * So a change breaking only the Windows semantics here stays green in CI — read
- * a green `check` as evidence about Linux and nothing else — but the remedy is
+ * So a change breaking only the Windows semantics here passes every required
+ * check — read a green `check` as evidence about Linux and nothing else — and
+ * shows up, if at all, as a red advisory `vitest-windows`. The remedy is
  * sitting right there: add the spec to that list, which carries its own drift
  * guard in `tests/scripts/windows-acl-proof-wiring.test.ts`. That gate demands
  * >=1 passed / 0 skipped / 0 failed per NAMED describe, so joining it means

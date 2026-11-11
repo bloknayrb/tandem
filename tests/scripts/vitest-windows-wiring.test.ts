@@ -17,7 +17,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  * What this pins: the job exists under this id, on a literal Windows runner,
  * and runs `check`'s own setup, install, build, vitest command and file
  * anchor, each exactly as written, with nothing that lets it skip or pass on a
- * failure.
+ * failure; its two accommodations for the hosted runner, by exact value, so
+ * the list cannot grow unseen; and, of the workflow it inherits from, the
+ * push trigger, the trigger set and the read-only default token.
  *
  * What this cannot pin, and the job does not show either:
  *  - A test skipped on Windows. The anchor compares files, never statuses
@@ -32,6 +34,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  *    steps to `check`'s parsed ones.
  *  - `package.json`'s `test` script, and "the workflow sets no `env` or
  *    `defaults`": `ownership-flag-on-wiring.test.ts`.
+ *  - `package.json`'s `build` script cannot swallow a failure:
+ *    `tests/build/third-party-notices-wiring.test.ts` (its last command) and
+ *    `e2e-guard-wiring.test.ts` (its client step).
  *  - `pull_request` and `merge_group` trigger unfiltered:
  *    `windows-acl-proof-wiring.test.ts`.
  *  - the action SHAs: `workflow-action-pin.test.ts`.
@@ -88,17 +93,22 @@ describe("the vitest-windows job (#2397, ADR-051)", () => {
     // every step runs under.
     expect(Object.keys(job).sort()).toEqual(["runs-on", "steps", "timeout-minutes"]);
     expect(job["runs-on"]).toBe("windows-latest");
-    // Present and a number: GitHub's default is six hours, and a hung advisory
-    // job keeps a PR's checks pending that long. The value is the job's to tune.
-    expect(typeof job["timeout-minutes"]).toBe("number");
+    // GitHub's default is six hours, and a hung advisory job keeps a PR's
+    // checks pending that long. Exact, because a value below the job's real
+    // duration (about nine minutes) turns every run red: about three times it.
+    expect(job["timeout-minutes"]).toBe(30);
   });
 
-  it("runs exactly these steps, in this order, each exactly as check runs it", () => {
+  it("runs exactly these steps, in this order, each as check runs it but for two accommodations", () => {
     // Whole step objects, so a `continue-on-error`, `if`, `shell`, `env` or
     // `timeout-minutes` added to any step, an argument appended to a `run`
     // (`|| true`, an `--exclude`), or a dropped reporter flag, changes the
-    // object and fails. That is also what keeps a quarantine list out of this
-    // job: there is no field left to put one in.
+    // object and fails.
+    //
+    // The two accommodations are literals for the same reason. Each makes the
+    // hosted runner look like an ordinary Windows machine (ci.yml says what
+    // fails without it); neither skips a test. A third, or a quarantine list,
+    // has to be written here first, where a required check reads it.
     const anchor = checkStep(
       (s) => typeof s.run === "string" && s.run.includes("vitest-file-anchor"),
       "file anchor",
@@ -109,7 +119,14 @@ describe("the vitest-windows job (#2397, ADR-051)", () => {
       usesStep("actions/setup-python@"),
       checkStep((s) => s.run === "npm ci --ignore-scripts", "npm ci"),
       checkStep((s) => s.name === "Build", "Build"),
-      checkStep(isFullSuiteRun, "Test"),
+      {
+        name: "Create the \\tmp directory document-service.test.ts writes under",
+        run: `node -e "require('node:fs').mkdirSync('/tmp',{recursive:true})"`,
+      },
+      {
+        ...checkStep(isFullSuiteRun, "Test"),
+        env: { TEMP: "${{ runner.temp }}", TMP: "${{ runner.temp }}" },
+      },
       anchor,
     ]);
     // The comparison above is to `check`'s steps, so it would also pass if
@@ -128,21 +145,6 @@ describe("the vitest-windows job (#2397, ADR-051)", () => {
       .map(([id]) => id);
     expect(ids).toEqual([JOB_ID]);
   });
-
-  it("the build it runs cannot swallow a failure", () => {
-    const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")) as {
-      scripts: Record<string, string>;
-    };
-    // Exact equality. `e2e-guard-wiring.test.ts` and
-    // `tests/build/third-party-notices-wiring.test.ts` each pin one part of
-    // this script; neither sees an appended `|| true`. With one, a failed build
-    // leaves `dist/` missing, the step passes, and the dist-gated suites
-    // (`tests/build/version-baked.test.ts`, `tests/monitor/build-artifact.test.ts`)
-    // skip in this job instead of failing.
-    expect(pkg.scripts.build).toBe(
-      "npm run typecheck && node scripts/build-client.mjs && node scripts/check-font-assets.mjs && tsup && node scripts/third-party-notices/generate.mjs npm",
-    );
-  });
 });
 
 describe("the workflow the job inherits from", () => {
@@ -152,13 +154,21 @@ describe("the workflow the job inherits from", () => {
     expect(workflow.on.push).toEqual({ branches: ["master"] });
   });
 
-  it("gives every job a read-only token and never runs on pull_request_target", () => {
-    // The job declares no permissions of its own, so this block is all it has.
-    // It runs the build and the whole suite for pull requests, forks included:
-    // `pull_request_target` would run that with the base repository's token
-    // and cache scope.
+  it("defaults every job to a read-only token, and triggers on these four events only", () => {
+    // The job declares no permissions of its own (its key set is pinned
+    // above), so this block is all it has.
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(Object.keys(workflow.on)).not.toContain("pull_request_target");
+    // The job runs the build and the whole suite for pull requests, forks
+    // included. `pull_request_target` or `workflow_run` would run that with the
+    // base repository's token and cache scope, so the set is exact.
+    // `windows-acl-proof-wiring.test.ts` owns that `pull_request` and
+    // `merge_group` are unfiltered; this owns that nothing else is here.
+    expect(Object.keys(workflow.on).sort()).toEqual([
+      "merge_group",
+      "pull_request",
+      "push",
+      "workflow_dispatch",
+    ]);
   });
 });
 

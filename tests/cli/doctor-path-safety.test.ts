@@ -639,8 +639,8 @@ describe("a refused profile is reported rather than silently skipped", () => {
   // loader's backstop is what rejects. Reachable only where `path.posix.join`
   // turns a lone backslash into a `\\`-prefixed path, so it is gated the
   // opposite way from the usual trap — skipped on this Windows machine and RUN
-  // on CI's ubuntu jobs, which every required vitest job is. Its evidence is
-  // therefore CI, not a local green.
+  // on CI's ubuntu jobs, where every required run of the whole suite is. Its
+  // evidence is therefore CI, not a local green.
   //
   // Without it, folding that branch back into `enabledPlugins === null` leaves
   // the whole file green: measured, not assumed.
@@ -808,8 +808,8 @@ describe("the annotation-store check screens its app-data input", () => {
  * (`//attacker/share/x` -> `/attacker/share/x/annotations`), the derived screen
  * accepts the result, and the input screen is the only thing left. The first
  * test pins the collapse itself so the premise cannot rot silently; the second
- * is the discriminating assertion and runs on CI's ubuntu jobs, which every
- * required vitest job is.
+ * is the discriminating assertion and runs on CI's ubuntu jobs, where every
+ * required run of the whole suite is.
  */
 describe("the input screen is load-bearing where posix.join collapses the prefix", () => {
   const COLLAPSING = NETWORK_PATHS.filter(([, p]) => p.startsWith("//"));

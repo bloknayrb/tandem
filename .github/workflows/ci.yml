@@ -209,7 +209,8 @@ jobs:
   # 2026-12-15); re-measure with
   # `gh api repos/bloknayrb/tandem/branches/master/protection` rather than
   # trusting this comment. To read a red one: compare it with this job's latest
-  # run on master. A failure master also has is not the PR's; a new one is.
+  # run on master. A failure master also has is not the PR's; a new one usually
+  # is, though the suite has load-sensitive tests on Windows.
   #
   # It mirrors `check`: the same Node and Python setup, the same install, the
   # same `npm run build` (several suites skip without `dist/`), the same vitest
@@ -224,19 +225,35 @@ jobs:
   #  - anything `tests/setup/acl-win-mock.ts` mocks: `setRestrictiveAcl` is a
   #    mock in every file here except the specs that opt out of it.
   #
+  # Two accommodations for the hosted runner, and no others. Both make the
+  # runner look like an ordinary Windows machine; neither skips a test. Measured
+  # on run 42947480897 without them: 19 failures in 6 files.
+  #  - `TEMP`/`TMP` on the Test step. The runner's own TEMP is the 8.3 short
+  #    name `C:\Users\RUNNER~1\...` on a different drive from the checkout
+  #    (`D:`). Tests that compare a temp path with its resolved form, or build a
+  #    relative path from the working directory to it, fail on that
+  #    (docx-apply, platform, launcher/cwd-preview, adr-034-open-characterization,
+  #    integrations/resolve-claude-launch).
+  #  - the `\tmp` step. tests/server/document-service.test.ts writes under a
+  #    literal `/tmp`, which Node resolves to `\tmp` on the working directory's
+  #    drive; the runner has none there.
+  # Those tests depend on the host. Fixing them is the way to remove a line
+  # here; adding a line here is not the way to fix a test.
+  #
   # `shell:` is absent on purpose: the default pwsh template ends in
   # `exit $LASTEXITCODE`. `cache: npm` shares its key with `windows-acl-proof`
   # and the Windows release leg (OS + arch + lockfile hash).
   #
   # The job-level timeout is here because GitHub's default is six hours and an
-  # advisory job that hangs keeps a PR's checks pending that long.
+  # advisory job that hangs keeps a PR's checks pending that long. The job takes
+  # about nine minutes.
   #
-  # No `if`, `needs`, `strategy`, `name`, `env` or `continue-on-error`.
+  # No `if`, `needs`, `strategy`, `name`, job `env` or `continue-on-error`.
   # tests/scripts/vitest-windows-wiring.test.ts parses this job inside `check`
   # and fails if any of that changes or the job is removed (ADR-051).
   vitest-windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -256,8 +273,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Create the \tmp directory document-service.test.ts writes under
+        run: node -e "require('node:fs').mkdirSync('/tmp',{recursive:true})"
+
       - name: Test
         run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       - name: Every collected test file actually ran
         if: ${{ !cancelled() }}
