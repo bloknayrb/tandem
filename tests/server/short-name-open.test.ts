@@ -1884,6 +1884,23 @@ describe("records saved under the short spelling are moved, per kind, only into 
       expectReadOnly(opened.documentId, true);
     });
 
+    it("the long session stored read-only under its pre-#1750 name still makes the document read-only", async () => {
+      await storeSession(fx.aliasPath, OLD_TEXT);
+      await storeSession(fx.longPath, NEW_TEXT);
+      await editStoredSession(fx.longPath, setReadOnly);
+      const entry = await entryFor(fx.aliasPath);
+      expect(entry.readOnly).toBe(false);
+      // Only the legacy name exists for the long spelling.
+      await fs.rename(
+        sessionFile(fx.longPath),
+        path.join(SESSION_DIR, `${legacySessionKey(fx.longPath)}.json`),
+      );
+
+      const opened = await openFromRestore(entry);
+      expect(liveText(opened.documentId)).toContain("from the long spelling");
+      expectReadOnly(opened.documentId, true);
+    });
+
     it("a session already at the new key that still names the short path (a move, then a crash) keeps its stored read-only flag", async () => {
       await storeSession(fx.longPath, OLD_TEXT);
       await editStoredSession(fx.longPath, (stored) => {

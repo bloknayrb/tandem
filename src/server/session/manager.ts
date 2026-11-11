@@ -703,19 +703,26 @@ export async function deleteSession(filePath: string): Promise<void> {
 }
 
 /**
- * The stored `readOnly` flag of the session under `filePath`'s current key,
- * read without the loader's side effects (no quarantine, no notice, no
- * fallback arbitration). `null` when there is no such file or it does not
- * parse. For a caller that needs only the flag before the real load (#2400).
+ * The stored `readOnly` flag of the session under `filePath`'s key (true if
+ * either of its two file names says so), read without the loader's side
+ * effects (no quarantine, no notice, no arbitration). `null` when there is no
+ * such file or none parses. For a caller that needs only the flag before the real load (#2400).
  */
 export async function peekSessionReadOnly(filePath: string): Promise<boolean | null> {
-  try {
-    const parsed: unknown = JSON.parse(await fs.readFile(sessionPathFor(filePath), "utf-8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    return (parsed as { readOnly?: unknown }).readOnly === true;
-  } catch {
-    return null;
+  // Both names: inside the #1750 migration window the loader may pick either,
+  // and the flag must never read weaker than the session it then restores.
+  let found: boolean | null = null;
+  for (const file of [sessionPathFor(filePath), legacySessionPath(filePath)]) {
+    if (file === null) continue;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+      found = found === true || (parsed as { readOnly?: unknown }).readOnly === true;
+    } catch {
+      // Absent or unreadable under this name.
+    }
   }
+  return found;
 }
 
 /** What {@link moveSessionFile} did. */
