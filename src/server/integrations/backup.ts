@@ -251,7 +251,12 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
  */
 export async function withTransientRenameRetry(
   renameOp: () => Promise<void>,
-  opts: { beforeRetry?: () => Promise<void>; platform?: NodeJS.Platform } = {},
+  opts: {
+    beforeRetry?: () => Promise<void>;
+    platform?: NodeJS.Platform;
+    /** Test seam for the back-off; defaults to a real timer. */
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
 ): Promise<void> {
   const platform = opts.platform ?? process.platform;
   for (let attempt = 1; ; attempt++) {
@@ -262,7 +267,9 @@ export async function withTransientRenameRetry(
       const code = (err as NodeJS.ErrnoException).code;
       const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
       if (platform !== "win32" || !transient || attempt >= 6) throw err;
-      await new Promise((r) => setTimeout(r, 50 * attempt));
+      // Sleep FIRST, then re-check: a write that lands during the sleep must be
+      // seen before the next rename (review of e905578, M1).
+      await (opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(50 * attempt);
       await opts.beforeRetry?.();
     }
   }

@@ -286,8 +286,10 @@ export async function assertNoBroadAce(
   // A `Get-Acl` that hit a non-terminating error exits 0 with no output, and an
   // empty string contains no broad fragment: refuse output with no SDDL line
   // (owner, group or DACL section first) rather than pass it (#2358 PR 2b
-  // review, L2). Any line, so a line PowerShell printed first cannot fail it.
-  if (!/^[OGD]:/m.test(sddl)) {
+  // review, L2). Any line, so a line PowerShell printed first cannot fail it;
+  // and a section letter, SID or `(` after the colon, so a line that is a drive
+  // path (`D:\…`) cannot pass it.
+  if (!/^[OGD]:[A-Z(]/m.test(sddl)) {
     throw new Error(`assertNoBroadAce: could not read the ACL of ${path} (no SDDL returned).`);
   }
   for (const fragment of BROAD_SDDL_FRAGMENTS) {

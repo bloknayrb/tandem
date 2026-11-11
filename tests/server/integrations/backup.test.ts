@@ -366,6 +366,34 @@ describe("withTransientRenameRetry (#2358 PR 2b)", () => {
     expect(checks).toBe(2);
   });
 
+  it("sleeps, then re-checks, then renames: never re-checks before the sleep (review M1)", async () => {
+    const events: string[] = [];
+    let calls = 0;
+    const rename = async () => {
+      events.push("rename");
+      if (++calls < 3) throw refused("EBUSY");
+    };
+    await withTransientRenameRetry(rename, {
+      platform: "win32",
+      sleep: async (ms) => {
+        events.push(`sleep ${ms}`);
+      },
+      beforeRetry: async () => {
+        events.push("check");
+      },
+    });
+    // A write landing during a sleep is caught by the check that follows it.
+    expect(events).toEqual([
+      "rename",
+      "sleep 50",
+      "check",
+      "rename",
+      "sleep 100",
+      "check",
+      "rename",
+    ]);
+  });
+
   it("gives up after six tries, and never retries off Windows or a non-transient error", async () => {
     let calls = 0;
     const alwaysBusy = async () => {
