@@ -77,6 +77,10 @@ const usesStep = (prefix: string) =>
 
 const isFullSuiteRun = (s: Step) => typeof s.run === "string" && /^npm test\b/.test(s.run.trim());
 
+/** Any spelling that starts vitest from a step: `npm test`, `npx vitest`, `vitest run`. */
+const invokesVitest = (s: Step) =>
+  typeof s.run === "string" && /\b(npm (run )?test\b|vitest\b)/.test(s.run);
+
 /** Does this job run on Windows, directly or through a matrix leg? */
 function reachesWindows(job: Job): boolean {
   if (String(job["runs-on"] ?? "").startsWith("windows")) return true;
@@ -142,7 +146,7 @@ describe("the vitest-windows job (#2397, ADR-051)", () => {
     // would leave this one in place and pinned while the copy drifts. The brief
     // for #2397 also rules out the matrix: `check` is a required check by name.
     const ids = Object.entries(workflow.jobs)
-      .filter(([, job]) => reachesWindows(job) && (job.steps ?? []).some(isFullSuiteRun))
+      .filter(([, job]) => reachesWindows(job) && (job.steps ?? []).some(invokesVitest))
       .map(([id]) => id);
     expect(ids).toEqual([JOB_ID]);
   });

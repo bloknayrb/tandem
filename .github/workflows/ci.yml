@@ -232,13 +232,18 @@ jobs:
   #    `C:\Users\RUNNER~1\...`, and tests that compare a temp path with its
   #    resolved form fail on it. The step resolves it and exports the result
   #    for the steps after it. It stays in the runner's own profile: pointing
-  #    TEMP at `runner.temp` instead (run 42949488007) broke the real-icacls
-  #    fixtures, because directories under `D:\a` inherit a different DACL.
+  #    TEMP at `runner.temp` instead (run 42949488007) made three real-icacls
+  #    fixtures fail their own precondition under `D:\a\_temp`, and
+  #    platform.test.ts fail because app data was no longer under LOCALAPPDATA.
+  #    **This step also hides one product defect, #2400**: `resolveSafeCwd` and
+  #    `resolveSafeCwdAsync` disagree on a short-name path, and
+  #    launcher/cwd-preview.test.ts fails on the bare runner because of it.
   #  - the `\tmp` step. tests/server/document-service.test.ts writes under a
   #    literal `/tmp`, which Node resolves to `\tmp` on the working directory's
   #    drive; the runner has none there.
-  # Those tests depend on the host. Fixing them is the way to remove a line
-  # here; adding a line here is not the way to fix a test.
+  # Apart from #2400, the tests these two steps turn green depend on the host,
+  # not on the code under test. Fixing them is the way to remove a line here;
+  # adding a line here is not the way to fix a test.
   #
   # Measured on this job's first runs, at master's code (2026-11-11): 19
   # failures in 6 files with neither accommodation (run 42947480897), 2 with
@@ -246,7 +251,8 @@ jobs:
   # tests/server/integrations/resolve-claude-launch.test.ts, which builds a
   # relative path from the working directory (`D:`) to TEMP (`C:`); across
   # drives `path.relative` returns an absolute one. So the job is red until
-  # that test is fixed, and #2398 records it.
+  # that test is fixed, and #2398 records it. One failure appeared on one run
+  # only: apply-malformed.test.ts's two-caller race, on run 42949488007.
   #
   # `shell:` is absent on purpose: the default pwsh template ends in
   # `exit $LASTEXITCODE`. `cache: npm` shares its key with `windows-acl-proof`

@@ -2273,14 +2273,18 @@ Instances:
 
 **`vitest-windows` baseline (2026-11-11, PR #2399; the decision in #2398 is recorded here when it is taken).**
 Measured on `windows-latest` at the code of `master` commit 311a5a3. The job takes about nine
-minutes (8m45s to 9m25s over the first three runs), against nineteen to twenty-three for `check`, and
+minutes (8m45s to 10m53s over the first four runs), against nineteen to twenty-three for `check`, and
 starts with it, so it adds no wall clock to a PR. It collects and runs 832 test files. 139 tests
-skip there against 35 on Linux, all behind platform gates. On the bare hosted runner 19 tests in
-6 files fail, none of them because of the code under test: the runner's `TEMP` is an 8.3 short
-name on a different drive from the checkout, and it has no `\tmp` directory. The job resolves
-`TEMP` and creates `\tmp`, which leaves 2 failures, both in
-`tests/server/integrations/resolve-claude-launch.test.ts` (a relative path built across drives).
-So the job starts red on `master`. No test is skipped or quarantined to change that.
+skip there against 30 in `check` on the same commit; the difference was not audited test by test.
+On the bare hosted runner 19 tests in 6 files fail, with the same 19 on a second attempt. The
+causes are two properties of the runner: its `TEMP` is an 8.3 short name on a different drive
+from the checkout, and it has no `\tmp` directory. The job resolves `TEMP` and creates `\tmp`,
+which leaves 2 failures, both in `tests/server/integrations/resolve-claude-launch.test.ts` (a
+relative path built across drives). So the job starts red on `master`. No test is skipped or
+quarantined to change that. **One of the 19 is a product defect that the `TEMP` step now hides**:
+`resolveSafeCwd` and `resolveSafeCwdAsync` disagree on a short-name path (#2400, at least two
+tests in `tests/server/launcher/cwd-preview.test.ts`). One failure was seen on a single run and
+not again: the two-caller race in `tests/server/integrations/apply-malformed.test.ts`.
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
