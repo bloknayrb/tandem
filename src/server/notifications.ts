@@ -40,6 +40,12 @@ export function subscribe(cb: NotificationCallback): () => void {
   };
 }
 
+/** How many streams are listening right now. A notice pushed while this is
+ *  zero reaches nobody (there is no replay here). */
+export function notificationSubscriberCount(): number {
+  return subscribers.size;
+}
+
 /** Get current buffer contents (for testing or replay). */
 export function getBuffer(): readonly TandemNotification[] {
   return buffer;

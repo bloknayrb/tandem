@@ -55,6 +55,9 @@ interface Call {
   answer: (status: number, body: unknown) => Promise<void>;
   /** Fail this request at the network level. */
   fail: () => void;
+  /** Has the store aborted this request? (As real `fetch` does, the stub then
+   *  rejects it with an AbortError.) */
+  aborted: () => boolean;
 }
 let calls: Call[] = [];
 
@@ -72,7 +75,14 @@ beforeEach(() => {
     "fetch",
     vi.fn((_url: string, init?: RequestInit) => {
       return new Promise<Response>((resolve, reject) => {
+        const signal = init?.signal ?? undefined;
+        // Honour the request's signal, as real `fetch` does: a read the store
+        // aborts is rejected, not left hanging.
+        signal?.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted.", "AbortError")),
+        );
         calls.push({
+          aborted: () => signal?.aborted === true,
           method: init?.method ?? "GET",
           ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) as unknown } : {}),
           answer: async (status, body) => {
@@ -297,6 +307,112 @@ describe("SettingsModelsTab with the real local-model settings store", () => {
     await retry.answer(200, { editing: true });
     expectSettled(box(), true);
     expect(queryByTestId("local-model-editing-loading")).toBeNull();
+  });
+
+  /**
+   * Round 3: Retry and both Switch off buttons are removed (or replaced) by the
+   * state change they cause. A focused button that unmounts drops keyboard
+   * focus to `body`, so each hands focus to the checkbox — which never
+   * unmounts — before acting. Each case focuses the button first, as a
+   * keyboard user's Tab would, because a synthetic click moves no focus.
+   */
+  describe("keyboard focus survives the button that was pressed", () => {
+    /** Mount and fail the mount read: the Retry / Switch off state. */
+    async function mountFailed() {
+      const view = mount();
+      const get = await request(1);
+      const mountLoad = createLocalModelSettings().load();
+      get.fail();
+      await mountLoad;
+      await drain();
+      return view;
+    }
+
+    function focusAndCheck(button: HTMLElement) {
+      button.focus();
+      expect(document.activeElement).toBe(button);
+    }
+
+    it("Retry after a failed read: focus is on the checkbox, not on body, once the read has settled", async () => {
+      const { box, getByTestId, queryByTestId } = await mountFailed();
+      const retry = getByTestId("local-model-editing-retry");
+      focusAndCheck(retry);
+
+      await fireEvent.click(retry);
+      // Moved before the button goes, so there is no moment with focus on body.
+      expect(document.activeElement).toBe(box());
+      const second = await request(2);
+      await drain();
+      expect(queryByTestId("local-model-editing-retry")).toBeNull(); // replaced by "Checking…"
+      expect(document.activeElement).toBe(box());
+
+      await second.answer(200, { editing: true });
+      expectSettled(box(), true);
+      expect(retry.isConnected).toBe(false);
+      expect(document.activeElement).toBe(box());
+      expect(document.activeElement).not.toBe(document.body);
+      expect(wire()).toEqual([{ method: "GET" }, { method: "GET" }]);
+    });
+
+    it("Retry whose read fails again: focus stays on the checkbox while the buttons come back", async () => {
+      const { box, getByTestId } = await mountFailed();
+      const retry = getByTestId("local-model-editing-retry");
+      focusAndCheck(retry);
+      await fireEvent.click(retry);
+      const second = await request(2);
+      const retryLoad = createLocalModelSettings().load();
+      second.fail();
+      await retryLoad;
+      await drain();
+
+      expectUnsettled(box());
+      expect(getByTestId("local-model-editing-retry")).not.toBe(retry); // a new button
+      expect(document.activeElement).toBe(box());
+    });
+
+    it("Switch off after a failed read: focus is on the checkbox once the save has settled", async () => {
+      const { box, getByTestId, queryByTestId } = await mountFailed();
+      const off = getByTestId("local-model-editing-force-off");
+      focusAndCheck(off);
+
+      await fireEvent.click(off);
+      expect(document.activeElement).toBe(box());
+      const post = await request(2);
+      expect(wire()[1]).toEqual({ method: "POST", body: { editing: false } });
+
+      await post.answer(200, { editing: false, persisted: true });
+      expectSettled(box(), false);
+      expect(queryByTestId("local-model-editing-force-off")).toBeNull();
+      expect(off.isConnected).toBe(false);
+      expect(document.activeElement).toBe(box());
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("Switch off while 'Checking…': the save goes out without the read answering, and focus is on the checkbox", async () => {
+      const { box, getByTestId, queryByTestId } = mount();
+      const get = await request(1);
+      await drain();
+      const off = getByTestId("local-model-editing-force-off-pending");
+      focusAndCheck(off);
+
+      await fireEvent.click(off);
+      expect(document.activeElement).toBe(box());
+      // The held read was never answered: the click aborted it, and the POST
+      // is already out.
+      const post = await request(2);
+      expect(get.aborted()).toBe(true);
+      expect(wire()).toEqual([{ method: "GET" }, { method: "POST", body: { editing: false } }]);
+
+      await post.answer(200, { editing: false, persisted: true });
+      expectSettled(box(), false);
+      expect(queryByTestId("local-model-editing-loading")).toBeNull();
+      expect(queryByTestId("local-model-editing-force-off-pending")).toBeNull();
+      expect(queryByTestId("local-model-editing-load-error")).toBeNull();
+      expect(off.isConnected).toBe(false);
+      expect(document.activeElement).toBe(box());
+      expect(document.activeElement).not.toBe(document.body);
+      expect(wire()).toHaveLength(2);
+    });
   });
 
   it("a remount reads again and shows the unknown state while that read is in flight, whatever the last visit showed", async () => {

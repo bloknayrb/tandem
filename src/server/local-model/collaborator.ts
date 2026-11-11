@@ -32,6 +32,8 @@
  *    the run's first chat write ends the run; a reply already streaming
  *    finishes. The editor itself is never refused.
  */
+
+import { createHash } from "node:crypto";
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
 import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
@@ -48,6 +50,10 @@ import {
 } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
 import { readLiveMode } from "../mode.js";
+import {
+  announceLocalModelChange,
+  answeringWasAnnounced,
+} from "../models/local-model-announced.js";
 import {
   type LocalModelEditingState,
   localModelEditingState,
@@ -158,6 +164,18 @@ export interface CollaboratorDeps {
   /** Which saved entry would answer the next chat, for the "it was changed"
    *  notice (#2404). Absent means that notice is never raised. */
   answering?: () => AnsweringLocalModel | null;
+  /**
+   * The record of what a browser was actually told (`local-model-announced.ts`).
+   * With it, the model found at start-up is announced unless a browser was
+   * already told about exactly that model — so a change nobody saw cannot
+   * become the silent baseline by restarting the server. Absent (a test
+   * double), the start-up model is taken as the baseline and notices are
+   * raised live and for replay without being recorded.
+   */
+  announced?: {
+    wasAnnounced: (fingerprint: string) => boolean;
+    announce: (dedupKey: string, message: string, fingerprint: string) => void;
+  };
 }
 
 /** Exported so a test can pin that production really wires each seam: every
@@ -172,7 +190,22 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
   editingState: localModelEditingState,
   onModelsChanged: onModelsFileChanged,
   answering: answeringLocalModel,
+  announced: {
+    wasAnnounced: answeringWasAnnounced,
+    announce: (dedupKey, message, fingerprint) => {
+      announceLocalModelChange(dedupKey, message, { answering: fingerprint });
+    },
+  },
 };
+
+/** Identity of an answering model for the announced-record: the entry, where
+ *  it points and which model it names. A hash, so the Endpoint is not written
+ *  to a second file. */
+export function answeringFingerprint(m: AnsweringLocalModel): string {
+  return createHash("sha256")
+    .update(JSON.stringify([m.entryId, m.endpoint, m.modelId]))
+    .digest("hex");
+}
 
 /** Replay key of the "answering model was changed" notice. One key, so a
  *  burst of changes is one tray row with a count, and cannot push another
@@ -184,7 +217,7 @@ export const ANSWERING_CHANGED_NOTICE_KEY = "local-model-answering-changed";
  *  and short enough that it cannot carry a message of its own. */
 function quotableName(name: string): string {
   const cleaned = name
-    .replace(/[^\p{L}\p{N} ._:+()-]/gu, "")
+    .replace(/[^\p{L}\p{N} _+()-]/gu, "")
     .trim()
     .slice(0, 40);
   return cleaned.length > 0 ? `"${cleaned}"` : "an unnamed model";
@@ -201,7 +234,7 @@ function quotableName(name: string): string {
  * because it stays in the activity tray.
  */
 export function answeringChangedNotice(now: AnsweringLocalModel): string {
-  return `The local model that Tandem sends your chat to was changed: its Endpoint or model was edited, or a different model was chosen. It was set to ${quotableName(now.displayName)}. If you did not make this change, check Settings → Models.`;
+  return `Which local model Tandem sends your chat to was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
 }
 
 /**
@@ -732,11 +765,20 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     ) {
       return;
     }
+    announceAnswering(now);
+  }
+
+  function announceAnswering(now: AnsweringLocalModel): void {
+    const message = answeringChangedNotice(now);
+    if (deps.announced) {
+      deps.announced.announce(ANSWERING_CHANGED_NOTICE_KEY, message, answeringFingerprint(now));
+      return;
+    }
     const notice = {
       id: generateMessageId(),
       type: "general-error" as const,
       severity: "warning" as const,
-      message: answeringChangedNotice(now),
+      message,
       dedupKey: ANSWERING_CHANGED_NOTICE_KEY,
       timestamp: Date.now(),
     };
@@ -823,9 +865,19 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   // always early-returns in test builds). Nothing is resolved here: the config
   // is read per chat event.
   function wire(): void {
-    // The baseline for the "it was changed" notice: whatever would answer at
-    // start-up is what the user last left, and is not announced.
+    // The baseline for the "it was changed" notice. The model found at
+    // start-up is NOT assumed to be what the user last left: it is announced
+    // unless a browser was already told about exactly this model. Otherwise a
+    // change made with no window open, followed by a restart, would start as
+    // the silent baseline — and the same local caller can cause both.
     lastAnswering = deps.answering?.() ?? null;
+    if (
+      lastAnswering &&
+      deps.announced &&
+      !deps.announced.wasAnnounced(answeringFingerprint(lastAnswering))
+    ) {
+      announceAnswering(lastAnswering);
+    }
     stopWatchingModels = deps.onModelsChanged?.(onModelsChanged) ?? null;
     subscriberCb = onEvent;
     // "internal" is passed EXPLICITLY, not left to the default. Two correctness

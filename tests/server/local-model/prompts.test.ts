@@ -163,8 +163,9 @@ describe("EDITING_SYSTEM_PROMPT", () => {
   });
 
   it("agrees with the refusal the tool returns: both say to call no more tools", () => {
-    expect(EDITING_OFF_MESSAGE).toMatch(/Do not call any more tools/);
-    expect(EDITING_OFF_MESSAGE).toMatch(/your next message is your reply/);
+    // The same sentence in both, so the model hears one instruction twice
+    // rather than two that it has to reconcile.
+    expect(EDITING_OFF_MESSAGE).toMatch(/Call no more tools: your next message is your reply/);
     expect(EDITING_SYSTEM_PROMPT).toMatch(/Call no more tools: your next message is your reply/);
   });
 });

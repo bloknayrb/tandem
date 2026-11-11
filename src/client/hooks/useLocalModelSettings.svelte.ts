@@ -19,9 +19,11 @@ import { API_BASE } from "../utils/fileUpload.js";
  * **The checkbox must never show a state the server does not hold.** So:
  *  - a click applies optimistically, then the server's answer is adopted — every
  *    answer carries the value the server is acting on, including a failed save;
- *  - `known` is false until a load or a save has told us the server's value. The
- *    tab then shows no checkbox at all, only Retry and an explicit "Switch off",
- *    because an unticked box would claim "off" and could only be clicked to On;
+ *  - `known` is false until a load or a save has told us the server's value.
+ *    The tab then shows the box indeterminate and inert — it claims nothing and
+ *    a click on it does nothing — with Retry and an explicit "Switch off"
+ *    beside it, because an unticked live box would claim "off" and could only
+ *    be clicked to On;
  *  - loads and saves share ONE queue, so they reach the server, and are
  *    applied here, strictly in the order they were asked for: a read can never
  *    overwrite what a later save learned, and a save never waits on nothing;
@@ -48,6 +50,9 @@ let _loadFailed = $state(false);
 let _saveNotice = $state<string | null>(null);
 
 let _loadInFlight: Promise<void> | null = null;
+/** Aborts the read in flight. A save does this so it is never held up behind
+ *  a read that is slow or hung — above all "Switch off". */
+let _loadAbort: AbortController | null = null;
 /** Loads and saves, one at a time, in request order. */
 let _queue: Promise<void> = Promise.resolve();
 /** Saves asked for and not yet answered. While any is outstanding the display
@@ -68,10 +73,11 @@ function enqueue(task: () => Promise<void>): Promise<void> {
   return turn;
 }
 
-async function fetchEditing(): Promise<boolean> {
+async function fetchEditing(abort?: AbortSignal): Promise<boolean> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const res = await fetch(url, {
     method: "GET",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: abort ? AbortSignal.any([abort, timeout]) : timeout,
   });
   if (!res.ok) throw new Error(`GET ${API_MODELS_LOCAL_SETTINGS} → ${res.status}`);
   const body = (await res.json()) as LocalModelSettingsResponse;
@@ -84,9 +90,11 @@ export function loadLocalModelSettings(): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
   if (_loadInFlight) return _loadInFlight;
   _loading = true;
+  const abort = new AbortController();
+  _loadAbort = abort;
   _loadInFlight = enqueue(async () => {
     try {
-      const editing = await fetchEditing();
+      const editing = await fetchEditing(abort.signal);
       // A click made while this read was in flight owns the display until its
       // own answer arrives; this (older) answer must not flip the box back.
       if (_savesOutstanding === 0) {
@@ -108,6 +116,7 @@ export function loadLocalModelSettings(): Promise<void> {
     } finally {
       _loading = false;
       _loadInFlight = null;
+      if (_loadAbort === abort) _loadAbort = null;
     }
   });
   return _loadInFlight;
@@ -135,6 +144,9 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
   _known = true;
   _saveNotice = null;
   _savesOutstanding += 1;
+  // Do not wait behind a read: the click supersedes it, and its own answer
+  // will say what the server holds.
+  _loadAbort?.abort();
   const run = async (): Promise<void> => {
     let editing: boolean | null = null;
     let notice: string | null = null;
@@ -229,6 +241,7 @@ export function _resetLocalModelSettingsForTests(): void {
   _loadFailed = false;
   _saveNotice = null;
   _loadInFlight = null;
+  _loadAbort = null;
   _queue = Promise.resolve();
   _savesOutstanding = 0;
 }

@@ -768,15 +768,20 @@ describe("dispatch — editing off refuses every writing tool (#1123 R2.2)", () 
     // Round 2: was "do not call this tool again". The loop now gives the model
     // exactly one more turn, with no tools, so the message says so — a model
     // told only to avoid THIS tool would try another and waste that turn.
-    expect(EDITING_OFF_MESSAGE).toMatch(/do not call any more tools/i);
+    expect(EDITING_OFF_MESSAGE).toMatch(/call no more tools/i);
     expect(EDITING_OFF_MESSAGE).not.toMatch(/this tool again/i);
+    // Round 3: it no longer says the reading tools "are available" — the turn
+    // that follows a refusal offers no tools at all, so naming any would send
+    // the model after one that is not there.
+    expect(EDITING_OFF_MESSAGE).not.toMatch(/are available/i);
+    for (const tool of READ_TOOL_NAMES) expect(EDITING_OFF_MESSAGE).not.toContain(tool);
     expect(EDITING_OFF_MESSAGE).toMatch(/your next message is your reply/i);
     expect(EDITING_OFF_MESSAGE).toMatch(/answer the user in plain text/i);
   });
 
   it("the refusal, whole", () => {
     expect(EDITING_OFF_MESSAGE).toBe(
-      "Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Only get_outline and read_section are available. Do not call any more tools: your next message is your reply, so answer the user in plain text.",
+      "Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Call no more tools: your next message is your reply, so answer the user in plain text.",
     );
   });
 

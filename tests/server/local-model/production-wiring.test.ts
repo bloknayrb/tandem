@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_COLLABORATOR_DEPS } from "../../../src/server/local-model/collaborator.js";
 import { answeringLocalModel } from "../../../src/server/local-model/config-source.js";
+import { answeringWasAnnounced } from "../../../src/server/models/local-model-announced.js";
 
 /**
  * Source pins for the local model's production wiring (#1123, #2404), in the
@@ -115,5 +116,22 @@ describe("local-model production wiring (#1123, #2404)", () => {
 
   it("DEFAULT_COLLABORATOR_DEPS wires `answering` to answeringLocalModel, by identity", () => {
     expect(DEFAULT_COLLABORATOR_DEPS.answering).toBe(answeringLocalModel);
+  });
+
+  // Round 3. Absent, the collaborator falls back to "the model found at
+  // start-up is the baseline" — the silent restart this record exists to close.
+  it("DEFAULT_COLLABORATOR_DEPS wires `announced` to the announced-record, `wasAnnounced` by identity", () => {
+    expect(DEFAULT_COLLABORATOR_DEPS.announced).toBeDefined();
+    expect(DEFAULT_COLLABORATOR_DEPS.announced?.wasAnnounced).toBe(answeringWasAnnounced);
+    expect(typeof DEFAULT_COLLABORATOR_DEPS.announced?.announce).toBe("function");
+  });
+
+  it("the default `announce` records the fingerprint as the ANSWERING model, through announceLocalModelChange", async () => {
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, "export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {");
+    expect(body).toMatch(/wasAnnounced:\s*answeringWasAnnounced\s*,/);
+    expect(body).toMatch(
+      /announceLocalModelChange\(\s*dedupKey\s*,\s*message\s*,\s*\{\s*answering:\s*fingerprint\s*\}\s*\)/,
+    );
   });
 });

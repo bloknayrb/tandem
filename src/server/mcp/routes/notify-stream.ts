@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../../shared/constants.js";
 import type { TandemNotification } from "../../../shared/types.js";
 import { subscribe as subscribeNotifications } from "../../notifications.js";
-import { getStartupNotices } from "../../startup-notices.js";
+import { getStartupNotices, markStartupNoticeDelivered } from "../../startup-notices.js";
 
 export function handleNotifyStream(req: Request, res: Response): void {
   res.writeHead(200, {
@@ -32,6 +32,8 @@ export function handleNotifyStream(req: Request, res: Response): void {
   for (const notice of getStartupNotices()) {
     try {
       res.write(`data: ${JSON.stringify(notice)}\n\n`);
+      // Some notices need to know they were actually sent to a browser (#2404).
+      markStartupNoticeDelivered(notice);
     } catch (err) {
       console.error("[NotifyStream] Startup notice write failed:", err);
       break;

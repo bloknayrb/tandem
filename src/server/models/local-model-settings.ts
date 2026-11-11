@@ -50,6 +50,9 @@
  * raises an in-app notice — for any caller, the user's own click included,
  * because the server cannot tell them apart — and registers it for replay to a
  * browser that connects later in this run. Switching off withdraws the replay.
+ * `local-model-announced.ts` records whether a browser was actually sent it, so
+ * a start-up that finds commenting on with no browser ever told says so then:
+ * restarting the server cannot turn an unseen switch into the baseline.
  *
  * Nothing here touches the disk at import. A dark build never calls
  * `primeLocalModelSettings` (the call sits inside the `BYO_MODELS_ENABLED`
@@ -60,11 +63,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { generateMessageId } from "../../shared/utils.js";
 import { atomicWriteConfigFile, readBoundedJsonFileSync } from "../integrations/storage.js";
-import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
-import { addStartupNotice, removeStartupNotice } from "../startup-notices.js";
+import {
+  __resetLocalModelAnnouncedForTests,
+  announceLocalModelChange,
+  editingOnWasAnnounced,
+  recordEditingOff,
+} from "./local-model-announced.js";
 
 export const LOCAL_MODEL_SETTINGS_FILE_NAME = "local-model-settings.json";
 const LOCAL_MODEL_SETTINGS_VERSION = 1;
@@ -131,19 +137,10 @@ export const EDITING_ON_NOTICE =
   "Local models were allowed to comment on and suggest changes to your documents. If you did not switch this on, switch it off in Settings → Models.";
 
 function announceEditingOn(): void {
-  const notice = {
-    id: generateMessageId(),
-    type: "general-error" as const,
-    severity: "warning" as const,
-    message: EDITING_ON_NOTICE,
-    dedupKey: EDITING_ON_NOTICE_KEY,
-    timestamp: Date.now(),
-  };
-  // Live for a browser that is connected now, and registered for one that
-  // connects later in this run: a switch made while no window was open is
-  // exactly the one that must not go unseen.
-  addStartupNotice(notice);
-  pushNotification(notice);
+  // Live for a browser that is connected now, registered for one that connects
+  // later in this run, and recorded as "told" only once a browser was sent it —
+  // so a switch nobody saw is announced again after a restart.
+  announceLocalModelChange(EDITING_ON_NOTICE_KEY, EDITING_ON_NOTICE, { editing: true });
 }
 
 function serialize(file: string, editing: boolean): string {
@@ -232,7 +229,12 @@ export function primeLocalModelSettings(): void {
       }); local-model editing is off.`,
     );
   }
-  if (seq === 0) effective = read;
+  if (seq !== 0) return;
+  effective = read;
+  // Commenting is on at start-up and no browser was ever told: it was switched
+  // on by a request nobody saw (or its notice died with the last run). Say so
+  // now; the first browser to connect is sent it.
+  if (read && !editingOnWasAnnounced()) announceEditingOn();
 }
 
 /** The live setting plus the Off counter. Synchronous: read on every tool call. */
@@ -266,7 +268,7 @@ export async function setLocalModelEditing(value: boolean): Promise<SetEditingRe
     // Before any await: a run in flight stops writing at once.
     effective = false;
     offEpoch += 1;
-    removeStartupNotice(EDITING_ON_NOTICE_KEY);
+    recordEditingOff(EDITING_ON_NOTICE_KEY);
     // A failed write that the delete fallback made good still leaves the disk
     // reading off, which is what was asked for.
     await enqueue(() => writeDisk(false));
@@ -292,5 +294,5 @@ export function __resetLocalModelSettingsForTests(base?: string): void {
   offEpoch = 0;
   seq = 0;
   diskQueue = Promise.resolve();
-  removeStartupNotice(EDITING_ON_NOTICE_KEY);
+  __resetLocalModelAnnouncedForTests(base);
 }

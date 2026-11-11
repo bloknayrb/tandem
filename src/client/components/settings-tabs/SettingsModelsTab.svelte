@@ -40,6 +40,21 @@ void localModel.load();
 // it does nothing — Retry and Switch off are the controls for that state.
 const editingSettled = $derived(localModel.known && !localModel.loading);
 
+// Retry and Switch off are replaced or removed by the state change they cause.
+// A focused button that unmounts drops keyboard focus to the page, so each
+// hands focus to the checkbox first — the one control here that never unmounts.
+let editingBox = $state<HTMLInputElement | undefined>(undefined);
+
+function retryEditingRead() {
+  editingBox?.focus();
+  void localModel.load();
+}
+
+function forceEditingOff() {
+  editingBox?.focus();
+  void localModel.setEditing(false);
+}
+
 function syncEditingBox(input: HTMLInputElement) {
   input.checked = editingSettled && localModel.editing;
   input.indeterminate = !editingSettled;
@@ -327,6 +342,7 @@ async function confirmDelete(id: string) {
     <input
       type="checkbox"
       data-testid="local-model-editing-toggle"
+      bind:this={editingBox}
       checked={editingSettled && localModel.editing}
       indeterminate={!editingSettled}
       aria-disabled={!editingSettled}
@@ -353,7 +369,7 @@ async function confirmDelete(id: string) {
         <button
           type="button"
           data-testid="local-model-editing-retry"
-          onclick={() => localModel.load()}
+          onclick={retryEditingRead}
           style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
         >
           Retry
@@ -361,7 +377,7 @@ async function confirmDelete(id: string) {
         <button
           type="button"
           data-testid="local-model-editing-force-off"
-          onclick={() => localModel.setEditing(false)}
+          onclick={forceEditingOff}
           style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
         >
           Switch off
@@ -371,7 +387,7 @@ async function confirmDelete(id: string) {
         <button
           type="button"
           data-testid="local-model-editing-force-off-pending"
-          onclick={() => localModel.setEditing(false)}
+          onclick={forceEditingOff}
           style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
         >
           Switch off

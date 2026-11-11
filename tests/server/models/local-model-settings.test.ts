@@ -1,8 +1,16 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { handleNotifyStream } from "../../../src/server/mcp/routes/notify-stream.js";
+import {
+  __flushLocalModelAnnouncedForTests,
+  editingOnWasAnnounced,
+  LOCAL_MODEL_ANNOUNCED_FILE_NAME,
+} from "../../../src/server/models/local-model-announced.js";
 import {
   __resetLocalModelSettingsForTests,
   EDITING_ON_NOTICE,
@@ -20,10 +28,15 @@ import {
   primeModelStoreCache,
 } from "../../../src/server/models/registry.js";
 import {
+  getBuffer,
   resetForTesting as resetNotifications,
   subscribe as subscribeNotifications,
 } from "../../../src/server/notifications.js";
-import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
+import {
+  clearStartupNotices,
+  getStartupNotices,
+  markStartupNoticeDelivered,
+} from "../../../src/server/startup-notices.js";
 import type { ModelsFile } from "../../../src/shared/models/contract.js";
 import type { TandemNotification } from "../../../src/shared/types.js";
 
@@ -45,6 +58,8 @@ type WriteImpl = (
 const writeControl = vi.hoisted(() => ({
   impl: null as unknown,
   calls: [] as string[],
+  /** Every write started, of any file, so a test can wait for all of them. */
+  inFlight: [] as Promise<unknown>[],
 }));
 
 vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) => {
@@ -52,12 +67,16 @@ vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) =>
     await importOriginal<typeof import("../../../src/server/integrations/storage.js")>();
   return {
     ...actual,
-    atomicWriteConfigFile: async (file: string, content: string): Promise<void> => {
+    atomicWriteConfigFile: (file: string, content: string): Promise<void> => {
       const isSettings = file.endsWith("local-model-settings.json");
       if (isSettings) writeControl.calls.push(content);
       const impl = writeControl.impl as WriteImpl | null;
-      if (isSettings && impl) return impl(file, content, actual.atomicWriteConfigFile);
-      return actual.atomicWriteConfigFile(file, content);
+      const write =
+        isSettings && impl
+          ? impl(file, content, actual.atomicWriteConfigFile)
+          : actual.atomicWriteConfigFile(file, content);
+      writeControl.inFlight.push(write.catch(() => undefined));
+      return write;
     },
   };
 });
@@ -96,6 +115,25 @@ function holdFirstWrite(): { entered: Promise<void>; release: () => void } {
   return { entered, release };
 }
 
+/**
+ * Wait until nothing is being written. The announced-record
+ * (`local-model-announced.json`) is written behind the request that caused it,
+ * not awaited by it, so a test that lists the directory — and the teardown
+ * that deletes it — must wait for those writes too. `restart()` forgets the
+ * module's own queue, so the writer double's list is drained as well, until a
+ * whole turn of the event loop starts no new write.
+ */
+async function writesSettled(): Promise<void> {
+  await __flushLocalModelAnnouncedForTests();
+  let seen = -1;
+  while (seen !== writeControl.inFlight.length) {
+    seen = writeControl.inFlight.length;
+    await Promise.all(writeControl.inFlight);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await __flushLocalModelAnnouncedForTests();
+  }
+}
+
 /** The bytes reach the disk and THEN the write reports failure. */
 const PUBLISH_THEN_THROW: WriteImpl = async (file, content, real) => {
   await real(file, content);
@@ -125,6 +163,7 @@ describe("local-model editing setting (#1123)", () => {
     __resetLocalModelSettingsForTests(dir);
     writeControl.impl = null;
     writeControl.calls = [];
+    writeControl.inFlight = [];
     resetNotifications();
     clearStartupNotices();
     pushed = [];
@@ -134,6 +173,8 @@ describe("local-model editing setting (#1123)", () => {
 
   afterEach(async () => {
     writeControl.impl = null;
+    // Before the directory goes: a write still in flight would recreate it.
+    await writesSettled();
     resetNotifications();
     clearStartupNotices();
     __resetLocalModelSettingsForTests();
@@ -247,7 +288,13 @@ describe("local-model editing setting (#1123)", () => {
     it("leaves no temp file behind", async () => {
       await setLocalModelEditing(true);
       await setLocalModelEditing(false);
-      expect(fs.readdirSync(dir)).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
+      // Round 3: a browser is listening here, so the On was recorded as
+      // announced and the Off cleared that record — a second file, written
+      // behind the request. Both files, and nothing else.
+      await writesSettled();
+      const names = fs.readdirSync(dir).sort();
+      expect(names.filter((n) => n.endsWith(".tmp"))).toEqual([]);
+      expect(names).toEqual([LOCAL_MODEL_ANNOUNCED_FILE_NAME, LOCAL_MODEL_SETTINGS_FILE_NAME]);
     });
   });
 
@@ -588,7 +635,13 @@ describe("local-model editing setting (#1123)", () => {
         expect(isLocalModelEditingEnabled()).toBe(true);
         expect(fs.readFileSync(file).equals(before), "byte-identical").toBe(true);
         expect(writeControl.calls, "the writer was never called").toEqual([]);
-        expect(fs.readdirSync(dir)).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
+        // The only other file is the record that this On was announced
+        // (round 3); nothing was created beside the settings file for it.
+        await writesSettled();
+        expect(fs.readdirSync(dir).sort()).toEqual([
+          LOCAL_MODEL_ANNOUNCED_FILE_NAME,
+          LOCAL_MODEL_SETTINGS_FILE_NAME,
+        ]);
 
         // It was for this run of the server only.
         restart();
@@ -758,19 +811,70 @@ describe("local-model editing setting (#1123)", () => {
       expect(getStartupNotices()).toEqual([]);
     });
 
-    it("a prime that reads true announces nothing: the user switched it on in an earlier run", () => {
+    // Round 3: was "a prime that reads true announces nothing". On at start-up
+    // is no longer taken as what the user left: unless a browser was told, it
+    // is announced then.
+    it("a prime that reads true, with no record that a browser was told, announces it once", () => {
       write(JSON.stringify({ version: 1, editing: true }));
+      primeLocalModelSettings();
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(pushed).toHaveLength(1);
+      expect(pushed[0]).toMatchObject({
+        type: "general-error",
+        severity: "warning",
+        message: EDITING_ON_NOTICE,
+        dedupKey: EDITING_ON_NOTICE_KEY,
+      });
+      expect(getStartupNotices()).toEqual(pushed);
+
+      // A second prime in the same run (a browser heard the first) adds nothing.
+      primeLocalModelSettings();
+      expect(pushed).toHaveLength(1);
+    });
+
+    it("a prime that reads true is silent when a browser was already told", () => {
+      write(JSON.stringify({ version: 1, editing: true }));
+      fs.writeFileSync(
+        path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME),
+        JSON.stringify({ version: 1, editing: true, answering: null }),
+        "utf8",
+      );
       primeLocalModelSettings();
       expect(isLocalModelEditingEnabled()).toBe(true);
       expect(pushed).toEqual([]);
       expect(getStartupNotices()).toEqual([]);
     });
 
-    it("an On that already was on from the prime is redundant, and silent", async () => {
+    it.each([
+      ["editing off", JSON.stringify({ version: 1, editing: false })],
+      ["no file", null],
+      ["a later build's file saying true", JSON.stringify({ version: 2, editing: true })],
+    ])("a prime that reads off (%s) announces nothing", (_n, text) => {
+      if (text !== null) write(text);
+      primeLocalModelSettings();
+      expect(isLocalModelEditingEnabled()).toBe(false);
+      expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("a prime after a request announces nothing, though the disk says true and nobody was told", async () => {
+      await setLocalModelEditing(false);
       write(JSON.stringify({ version: 1, editing: true }));
       primeLocalModelSettings();
-      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: true });
+      expect(isLocalModelEditingEnabled()).toBe(false);
       expect(pushed).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    // Round 3: was "…is redundant, and silent" with nothing pushed at all. The
+    // prime now announces (nobody was told); the On after it still adds nothing.
+    it("an On that already was on from the prime is redundant: nothing beyond the prime's one notice", async () => {
+      write(JSON.stringify({ version: 1, editing: true }));
+      primeLocalModelSettings();
+      expect(pushed).toHaveLength(1);
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: true });
+      expect(pushed).toHaveLength(1);
+      expect(replayed()).toEqual(pushed);
     });
 
     it("an On that takes effect in memory only (a later build's file) is announced too", async () => {
@@ -794,6 +898,180 @@ describe("local-model editing setting (#1123)", () => {
       await setLocalModelEditing(true);
       await setLocalModelEditing(false);
       expect(getStartupNotices()).toEqual([other]);
+    });
+  });
+
+  describe("a switch nobody saw is announced again after a restart (#2404, round 3)", () => {
+    const announcedFile = () => path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    const announcedOnDisk = (): unknown => JSON.parse(fs.readFileSync(announcedFile(), "utf8"));
+    /** Everything pushed in this "process", whether or not anyone listened. */
+    const raised = () => getBuffer().filter((n) => n.dedupKey === EDITING_ON_NOTICE_KEY);
+    /**
+     * A new server process on the same app-data directory: the notification
+     * buffer, its subscribers, the replay list and every module variable are
+     * gone; only the files remain. Then the boot-time prime.
+     */
+    const newProcess = async () => {
+      await writesSettled();
+      resetNotifications();
+      clearStartupNotices();
+      __resetLocalModelSettingsForTests(dir);
+      primeLocalModelSettings();
+    };
+
+    beforeEach(() => {
+      // No browser: drop the subscriber the outer beforeEach attached.
+      resetNotifications();
+    });
+
+    it("(a) switched on with no browser → announced again at the next start → delivered → silent from then on", async () => {
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: true });
+      expect(raised()).toHaveLength(1);
+      expect(replayed()).toEqual(raised());
+      await writesSettled();
+      // Raised, but written to no stream: nothing is recorded as told.
+      expect(editingOnWasAnnounced()).toBe(false);
+      expect(fs.existsSync(announcedFile())).toBe(false);
+
+      await newProcess();
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(raised(), "raised again at the prime").toHaveLength(1);
+      const [again] = raised();
+      expect(again).toMatchObject({ message: EDITING_ON_NOTICE, severity: "warning" });
+      expect(getStartupNotices()).toEqual([again]);
+      expect(editingOnWasAnnounced()).toBe(false);
+
+      // Still nobody: a third start says it a third time.
+      await newProcess();
+      expect(raised()).toHaveLength(1);
+      const [third] = raised();
+      expect(getStartupNotices()).toEqual([third]);
+
+      // A browser connects and is sent the replay.
+      markStartupNoticeDelivered(third);
+      expect(editingOnWasAnnounced()).toBe(true);
+      await writesSettled();
+      expect(announcedOnDisk()).toEqual({ version: 1, editing: true, answering: null });
+
+      await newProcess();
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(raised(), "a browser was told: silent").toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("(b) switched on while a browser is connected → the next start is silent", async () => {
+      const seen: TandemNotification[] = [];
+      subscribeNotifications((n) => seen.push(n));
+      await setLocalModelEditing(true);
+      expect(seen.map((n) => n.message)).toEqual([EDITING_ON_NOTICE]);
+      expect(editingOnWasAnnounced()).toBe(true);
+
+      await newProcess();
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(raised()).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+    });
+
+    it("(c) on, never delivered, then off → the next start is off and silent", async () => {
+      await setLocalModelEditing(true);
+      const [undelivered] = replayed();
+      expect(undelivered).toBeDefined();
+      await setLocalModelEditing(false);
+      expect(getStartupNotices()).toEqual([]);
+      // The withdrawn notice can no longer mark anything as told.
+      if (undelivered) markStartupNoticeDelivered(undelivered);
+      expect(editingOnWasAnnounced()).toBe(false);
+
+      await newProcess();
+      expect(isLocalModelEditingEnabled()).toBe(false);
+      expect(raised()).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+      expect(fs.existsSync(announcedFile())).toBe(false);
+    });
+
+    it("on (told), off, on again with no browser → the second On is announced again at the next start", async () => {
+      const stop = subscribeNotifications(() => {});
+      await setLocalModelEditing(true);
+      expect(editingOnWasAnnounced()).toBe(true);
+      stop(); // the window is closed
+
+      await setLocalModelEditing(false);
+      expect(editingOnWasAnnounced(), "Off clears the record").toBe(false);
+      await setLocalModelEditing(true);
+      expect(editingOnWasAnnounced()).toBe(false);
+      await writesSettled();
+      expect(announcedOnDisk()).toEqual({ version: 1, editing: false, answering: null });
+
+      await newProcess();
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(raised()).toHaveLength(1);
+      expect(getStartupNotices()).toEqual(raised());
+    });
+
+    it("an unreadable announced-record costs one repeated notice, never silence", async () => {
+      subscribeNotifications(() => {});
+      await setLocalModelEditing(true);
+      await writesSettled();
+      expect(announcedOnDisk()).toEqual({ version: 1, editing: true, answering: null });
+      fs.writeFileSync(announcedFile(), "{broken", "utf8");
+
+      await newProcess();
+      expect(raised()).toHaveLength(1);
+    });
+
+    it("the real notify stream: the first browser to connect is sent the notice, and that is what records it", async () => {
+      await setLocalModelEditing(true);
+      const [raisedNotice] = raised();
+      expect(raisedNotice).toBeDefined();
+      await writesSettled();
+      expect(editingOnWasAnnounced()).toBe(false);
+
+      const app = express();
+      app.get("/api/notify-stream", handleNotifyStream);
+      const server = await new Promise<http.Server>((resolve, reject) => {
+        const s = app.listen(0, "127.0.0.1", () => resolve(s));
+        s.once("error", reject);
+      });
+      let request: http.ClientRequest | null = null;
+      try {
+        const address = server.address();
+        if (typeof address !== "object" || address === null) throw new Error("no address");
+
+        // The first `data:` event of the stream, whole.
+        const first = await new Promise<string>((resolve, reject) => {
+          request = http.get(
+            { host: "127.0.0.1", port: address.port, path: "/api/notify-stream" },
+            (res) => {
+              let text = "";
+              res.setEncoding("utf8");
+              res.on("data", (chunk: string) => {
+                text += chunk;
+                const event = /^data: (.*)\n\n/m.exec(text);
+                if (event?.[1] !== undefined) resolve(event[1]);
+              });
+              res.on("error", reject);
+              res.on("end", () => reject(new Error(`stream ended early: ${text}`)));
+            },
+          );
+          request.on("error", reject);
+        });
+
+        expect(JSON.parse(first)).toEqual(raisedNotice);
+        expect((JSON.parse(first) as TandemNotification).message).toBe(EDITING_ON_NOTICE);
+        // Written to a stream, so now — and only now — it counts as told.
+        expect(editingOnWasAnnounced()).toBe(true);
+        await writesSettled();
+        expect(announcedOnDisk()).toEqual({ version: 1, editing: true, answering: null });
+      } finally {
+        (request as http.ClientRequest | null)?.destroy();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+
+      // And so the next start is silent.
+      await newProcess();
+      expect(raised()).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
     });
   });
 

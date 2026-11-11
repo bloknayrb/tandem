@@ -20,6 +20,7 @@ import {
 import {
   ANSWERING_CHANGED_NOTICE_KEY,
   answeringChangedNotice,
+  answeringFingerprint,
   type CollaboratorDeps,
   classifyFailure,
   createLocalModelCollaborator,
@@ -2635,6 +2636,236 @@ describe("answeringChangedNotice — what it may carry (#2404)", () => {
       expect(text).not.toContain('"');
     });
   }
+
+  // Round 3: the text also covers a model found at start-up that no browser
+  // was told about, so it says "set or changed" and no longer asserts an edit.
+  it("the notice, whole", () => {
+    expect(answeringChangedNotice(base)).toBe(
+      'Which local model Tandem sends your chat to was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
+    );
+  });
+
+  // Round 3: `.` and `:` were allowed in a quoted name; they no longer are, so
+  // a display name cannot put a hostname, a URL or a path into the notice.
+  it("strips dots and colons, so a display name cannot carry an address", () => {
+    const text = answeringChangedNotice({
+      ...base,
+      displayName: "http://evil.example.com:8080/x 10.0.0.7",
+    });
+    expect(text).toContain('It was set to "httpevilexamplecom8080x 10007".');
+    const quoted = /It was set to "([^"]*)"/.exec(text)?.[1];
+    expect(quoted).toBeDefined();
+    expect(quoted).not.toMatch(/[.:/]/);
+  });
+
+  it("keeps what an ordinary model name needs: letters in any script, digits, space, _ + ( ) -", () => {
+    const text = answeringChangedNotice({
+      ...base,
+      displayName: "Qwen2.5:14b (local_GPU+fast) – モデル-1",
+    });
+    // The dot, the colon and the en dash go; the rest is kept as written.
+    expect(text).toContain('It was set to "Qwen2514b (local_GPU+fast)  モデル-1".');
+  });
+});
+
+describe("answeringFingerprint (#2404, round 3)", () => {
+  const base: AnsweringLocalModel = {
+    entryId: "entry-a",
+    endpoint: "http://someuser:hunter2pw@127.0.0.1:23457",
+    modelId: "qwen2.5:14b-instruct",
+    displayName: "Model A",
+  };
+
+  it("is the same for the same entry, endpoint and model — whatever the display name", () => {
+    expect(answeringFingerprint({ ...base })).toBe(answeringFingerprint(base));
+    expect(answeringFingerprint({ ...base, displayName: "Renamed" })).toBe(
+      answeringFingerprint(base),
+    );
+  });
+
+  it.each([
+    ["entryId", { entryId: "entry-b" }],
+    ["endpoint", { endpoint: "http://127.0.0.1:9999" }],
+    ["modelId", { modelId: "phi-4" }],
+  ] as const)("differs when only the %s differs", (_field, change) => {
+    expect(answeringFingerprint({ ...base, ...change })).not.toBe(answeringFingerprint(base));
+  });
+
+  it("does not run fields together: moving text from one field to the next is a different model", () => {
+    const a = answeringFingerprint({ ...base, entryId: "ab", endpoint: "c", modelId: "d" });
+    const b = answeringFingerprint({ ...base, entryId: "a", endpoint: "bc", modelId: "d" });
+    const c = answeringFingerprint({ ...base, entryId: "a", endpoint: "b", modelId: "cd" });
+    expect(new Set([a, b, c]).size).toBe(3);
+  });
+
+  it("is a hash: the Endpoint, its credentials, the model id and the entry id are not in it", () => {
+    const fp = answeringFingerprint(base);
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    for (const secret of [
+      base.endpoint,
+      "127.0.0.1",
+      "23457",
+      "hunter2pw",
+      "someuser",
+      base.modelId,
+      base.entryId,
+    ]) {
+      expect(fp).not.toContain(secret);
+    }
+  });
+});
+
+describe("collaborator — the model found at start-up is announced unless a browser was told (#2404, round 3)", () => {
+  const A: AnsweringLocalModel = {
+    entryId: "entry-a",
+    endpoint: "http://127.0.0.1:11434",
+    modelId: "qwen2.5:14b-instruct",
+    displayName: "Model A",
+  };
+  const B: AnsweringLocalModel = {
+    entryId: "entry-b",
+    endpoint: "http://localhost:8080",
+    modelId: "phi-4",
+    displayName: "Model B",
+  };
+
+  /**
+   * A collaborator with an `announced` record double. `told` is the set of
+   * fingerprints a browser was told about; `change(next)` is one registry write.
+   */
+  function harness(initial: AnsweringLocalModel | null, told: string[] = []) {
+    const cell: { now: AnsweringLocalModel | null } = { now: initial };
+    const wasAnnounced = vi.fn((fingerprint: string) => told.includes(fingerprint));
+    const announce = vi.fn((_dedupKey: string, _message: string, _fingerprint: string) => {});
+    let listener: (() => void) | null = null;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        answering: () => cell.now,
+        onModelsChanged: (cb) => {
+          listener = cb;
+          return () => {
+            listener = null;
+          };
+        },
+        announced: { wasAnnounced, announce },
+      }),
+    );
+    return {
+      collab,
+      wasAnnounced,
+      announce,
+      change: (next: AnsweringLocalModel | null) => {
+        cell.now = next;
+        if (!listener) throw new Error("onModelsChanged listener was never registered");
+        listener();
+      },
+    };
+  }
+
+  it("a model no browser was told about is announced once at wire, through the record", async () => {
+    const h = harness(A);
+    // Creation announces nothing and asks nothing.
+    expect(h.wasAnnounced).not.toHaveBeenCalled();
+    expect(h.announce).not.toHaveBeenCalled();
+
+    h.collab.__startForTests();
+    expect(h.wasAnnounced).toHaveBeenCalledTimes(1);
+    expect(h.wasAnnounced).toHaveBeenCalledWith(answeringFingerprint(A));
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    expect(h.announce).toHaveBeenCalledWith(
+      ANSWERING_CHANGED_NOTICE_KEY,
+      answeringChangedNotice(A),
+      answeringFingerprint(A),
+    );
+    // Through the record ONLY: the collaborator pushed and registered nothing
+    // itself, or a notice would exist that is never recorded as delivered.
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+
+    // A registry write that leaves it there says nothing more.
+    h.change({ ...A });
+    h.change({ ...A, displayName: "Renamed" });
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    await h.collab.stop();
+  });
+
+  it("a model a browser was already told about is silent at wire", async () => {
+    const h = harness(A, [answeringFingerprint(A)]);
+    h.collab.__startForTests();
+    expect(h.wasAnnounced).toHaveBeenCalledWith(answeringFingerprint(A));
+    expect(h.announce).not.toHaveBeenCalled();
+    expect(getBuffer()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("being told about a DIFFERENT model does not silence this one", async () => {
+    const h = harness(A, [answeringFingerprint(B)]);
+    h.collab.__startForTests();
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    expect(h.announce.mock.calls[0]?.[2]).toBe(answeringFingerprint(A));
+    await h.collab.stop();
+  });
+
+  it("no model at wire: nothing is asked and nothing is announced", async () => {
+    const h = harness(null);
+    h.collab.__startForTests();
+    expect(h.wasAnnounced).not.toHaveBeenCalled();
+    expect(h.announce).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
+
+  it("a later change is announced with the new model's fingerprint", async () => {
+    const h = harness(A, [answeringFingerprint(A)]);
+    h.collab.__startForTests();
+    expect(h.announce).not.toHaveBeenCalled();
+
+    h.change(B);
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    expect(h.announce).toHaveBeenLastCalledWith(
+      ANSWERING_CHANGED_NOTICE_KEY,
+      answeringChangedNotice(B),
+      answeringFingerprint(B),
+    );
+
+    const moved = { ...B, endpoint: "http://127.0.0.1:9999" };
+    h.change(moved);
+    expect(h.announce).toHaveBeenCalledTimes(2);
+    expect(h.announce).toHaveBeenLastCalledWith(
+      ANSWERING_CHANGED_NOTICE_KEY,
+      answeringChangedNotice(moved),
+      answeringFingerprint(moved),
+    );
+    expect(getBuffer()).toEqual([]);
+    await h.collab.stop();
+  });
+
+  it("a change during the run is announced even to a model a browser was told about before", async () => {
+    // The record answers "was the START-UP model told?". A change while the
+    // server runs is compared with what was answering a moment ago instead.
+    const h = harness(A, [answeringFingerprint(A), answeringFingerprint(B)]);
+    h.collab.__startForTests();
+    h.change(B);
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    expect(h.announce.mock.calls[0]?.[2]).toBe(answeringFingerprint(B));
+    // Only the wire asked the record.
+    expect(h.wasAnnounced).toHaveBeenCalledTimes(1);
+    await h.collab.stop();
+  });
+
+  it("none at wire → the first model saved is announced through the record", async () => {
+    const h = harness(null);
+    h.collab.__startForTests();
+    h.change(A);
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    expect(h.announce).toHaveBeenCalledWith(
+      ANSWERING_CHANGED_NOTICE_KEY,
+      answeringChangedNotice(A),
+      answeringFingerprint(A),
+    );
+    expect(h.wasAnnounced).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
 });
 
 describe("collaborator — a run that may not write ends honestly (#1123 R2, exit editing_off)", () => {

@@ -17,6 +17,9 @@ import {
   type KeychainBackend,
 } from "../../../src/server/integrations/keychain.js";
 import {
+  ANSWERING_CHANGED_NOTICE_KEY,
+  answeringChangedNotice,
+  answeringFingerprint,
   type CollaboratorDeps,
   createLocalModelCollaborator,
   DEFAULT_COLLABORATOR_DEPS,
@@ -32,6 +35,10 @@ import { EDITING_OFF_MESSAGE, READ_TOOL_NAMES } from "../../../src/server/local-
 import { populateYDoc } from "../../../src/server/mcp/document.js";
 import { registerModelsRoutes } from "../../../src/server/models/api-routes.js";
 import {
+  __flushLocalModelAnnouncedForTests,
+  answeringWasAnnounced,
+} from "../../../src/server/models/local-model-announced.js";
+import {
   __resetLocalModelSettingsForTests,
   EDITING_ON_NOTICE,
   EDITING_ON_NOTICE_KEY,
@@ -45,6 +52,7 @@ import {
 import {
   getBuffer,
   resetForTesting as resetNotifications,
+  subscribe as subscribeNotifications,
 } from "../../../src/server/notifications.js";
 import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
@@ -135,6 +143,9 @@ describe("production wiring of the collaborator's seams (#1123)", () => {
     expect(DEFAULT_COLLABORATOR_DEPS.editingState).toBe(localModelEditingState);
     expect(DEFAULT_COLLABORATOR_DEPS.onModelsChanged).toBe(onModelsFileChanged);
     expect(DEFAULT_COLLABORATOR_DEPS.answering).toBe(answeringLocalModel);
+    // Round 3: absent, the model found at start-up is the silent baseline.
+    expect(DEFAULT_COLLABORATOR_DEPS.announced).toBeDefined();
+    expect(DEFAULT_COLLABORATOR_DEPS.announced?.wasAnnounced).toBe(answeringWasAnnounced);
   });
 });
 
@@ -259,6 +270,10 @@ describe("switching editing through the real route reaches a run in flight (#112
   afterEach(async () => {
     await collab.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    // The announced-record is written behind the request that caused it; let
+    // it land before the directory is removed.
+    await __flushLocalModelAnnouncedForTests();
+    resetNotifications();
     __resetModelRegistryForTests();
     __resetLocalModelSettingsForTests();
     removeDoc(DOC);
@@ -316,6 +331,16 @@ describe("switching editing through the real route reaches a run in flight (#112
     await collab.stop();
     wireCollaborator({});
     expect(DEFAULT_COLLABORATOR_DEPS.runTurn).toBe(runLocalModelTurn);
+    // Round 3: this second wire finds a saved model that no browser was ever
+    // told about (no notify stream is open in this file), so it is announced
+    // at wire rather than taken as the baseline.
+    const STARTUP_MODEL_NOTICE = answeringChangedNotice({
+      entryId: "m-1",
+      endpoint: "http://127.0.0.1:11434",
+      modelId: "qwen2.5:14b-instruct",
+      displayName: "Local One",
+    });
+    expect(getBuffer().map((n) => n.message)).toEqual([STARTUP_MODEL_NOTICE]);
 
     // `Response` in this file is Express's type; the model answers with fetch's.
     const sse = (delta: unknown): globalThis.Response =>
@@ -385,13 +410,66 @@ describe("switching editing through the real route reaches a run in flight (#112
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
 
     // The run still delivered its text reply, and raised nothing of its own:
-    // the only notification is the route's "switched on" notice.
+    // after the wire's start-up notice, the only notification is the route's
+    // "switched on" notice.
     const chatRows = [
       ...getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).values(),
     ] as ChatMessage[];
     expect(chatRows.map((m) => m.text)).toEqual([REPLY]);
     expect(chatRows[0].author).toBe("claude");
-    expect(getBuffer().map((n) => n.message)).toEqual([EDITING_ON_NOTICE]);
+    expect(getBuffer().map((n) => n.message)).toEqual([STARTUP_MODEL_NOTICE, EDITING_ON_NOTICE]);
+  });
+
+  describe("the model found at wire, against the real announced-record (#2404, round 3)", () => {
+    const MODEL = {
+      entryId: "m-1",
+      endpoint: "http://127.0.0.1:11434",
+      modelId: "qwen2.5:14b-instruct",
+      displayName: "Local One",
+    };
+    const answeringNotes = () =>
+      getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
+
+    it("saved with no browser connected: a new wire announces it, and registers it for replay", async () => {
+      expect(answeringWasAnnounced(answeringFingerprint(MODEL))).toBe(false);
+
+      await collab.stop();
+      wireCollaborator({});
+
+      const notes = answeringNotes();
+      expect(notes).toHaveLength(1);
+      expect(notes[0].message).toBe(answeringChangedNotice(MODEL));
+      expect(getStartupNotices()).toEqual(notes);
+      // Raised, but still written to no stream: a third wire says it again.
+      expect(answeringWasAnnounced(answeringFingerprint(MODEL))).toBe(false);
+      await collab.stop();
+      wireCollaborator({});
+      expect(answeringNotes()).toHaveLength(2);
+    });
+
+    it("saved while a browser is connected: a new wire is silent", async () => {
+      const seen: string[] = [];
+      subscribeNotifications((n) => seen.push(n.message));
+      const moved = { ...MODEL, endpoint: "http://127.0.0.1:11435" };
+      const saved = await fetch(`${baseUrl}${API_MODELS}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          file: { ...REGISTRY, models: [{ ...REGISTRY.models[0], endpoint: moved.endpoint }] },
+          ifMatch: getModelsEtag(),
+        }),
+      });
+      expect(saved.status).toBe(200);
+      expect(seen).toEqual([answeringChangedNotice(moved)]);
+      expect(answeringWasAnnounced(answeringFingerprint(moved))).toBe(true);
+      // The model it replaced is no longer "the one a browser was told about".
+      expect(answeringWasAnnounced(answeringFingerprint(MODEL))).toBe(false);
+
+      await collab.stop();
+      wireCollaborator({});
+      expect(answeringNotes()).toHaveLength(1); // only the save's own
+      expect(seen).toHaveLength(1);
+    });
   });
 
   describe("switching on is announced (#2404)", () => {

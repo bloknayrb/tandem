@@ -29,6 +29,26 @@ let calls: { method: string; body?: unknown }[] = [];
 /** Responses a test holds open; consumed before the scripted `gets`/`posts`. */
 let held: Promise<Response>[] = [];
 let signals: unknown[] = [];
+/**
+ * When true, a HELD response is rejected with an AbortError as soon as its
+ * request's signal aborts — what real `fetch` does. Off by default: the older
+ * cases below hold a read whose answer arrives although a click superseded it
+ * (the stub ignores the abort), which is the race their guards exist for.
+ */
+let honourAbort = false;
+
+function abortable(
+  response: Promise<Response>,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  if (!signal) return response;
+  return new Promise<Response>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort);
+    response.then(resolve, reject);
+  });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -59,6 +79,7 @@ beforeEach(() => {
   calls = [];
   held = [];
   signals = [];
+  honourAbort = false;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.stubGlobal(
     "fetch",
@@ -70,7 +91,7 @@ beforeEach(() => {
       });
       signals.push(init?.signal);
       const waiting = held.shift();
-      if (waiting) return waiting;
+      if (waiting) return honourAbort ? abortable(waiting, init?.signal ?? undefined) : waiting;
       return respond(method === "POST" ? posts.shift() : gets.shift());
     }),
   );
@@ -408,6 +429,143 @@ describe("useLocalModelSettings — the display follows the last click", () => {
     expect(s.known).toBe(false);
     expect(s.loadFailed).toBe(true);
     expect(calls.map((c) => c.method)).toEqual(["GET", "POST", "GET"]);
+  });
+});
+
+/**
+ * Round 3: a save ABORTS a read in flight instead of queueing behind it, so
+ * "Switch off" is never held up by a read that is slow or hung. The fetch stub
+ * honours the request's signal here, as real `fetch` does; the held GET is
+ * never answered by the test, and `getAnswered` proves it.
+ */
+describe("useLocalModelSettings — a save does not wait behind a read", () => {
+  /** A GET held open that the test never answers. */
+  function hangGet() {
+    const d = deferred<Response>();
+    let answered = false;
+    void d.promise.then(() => {
+      answered = true;
+    });
+    held.push(d.promise);
+    honourAbort = true;
+    return { resolve: d.resolve, answered: () => answered };
+  }
+
+  it("Switch off over a hung mount read: the POST is sent while the GET is still unanswered", async () => {
+    const s = createLocalModelSettings();
+    const get = hangGet();
+    posts.push({ status: 200, body: { editing: false, persisted: true } });
+
+    const loading = s.load();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
+    expect(s.loading).toBe(true);
+    expect((signals[0] as AbortSignal).aborted).toBe(false);
+
+    const saving = s.setEditing(false);
+    // Synchronously with the click: the read is aborted.
+    expect((signals[0] as AbortSignal).aborted).toBe(true);
+    expect(s.editing).toBe(false);
+    expect(s.known).toBe(true);
+
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]).toEqual({ method: "POST", body: { editing: false } });
+    expect(get.answered(), "the GET never answered").toBe(false);
+
+    await Promise.all([loading, saving]);
+    expect(get.answered()).toBe(false);
+    // The aborted read is not a failed read: the save's answer is the state.
+    expect(s.editing).toBe(false);
+    expect(s.known).toBe(true);
+    expect(s.loadFailed).toBe(false);
+    expect(s.loading).toBe(false);
+    expect(s.saveNotice).toBeNull();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("the final state is the POST's answer, not the click: an Off the server did not take shows on", async () => {
+    const s = createLocalModelSettings();
+    const get = hangGet();
+    posts.push({ status: 500, body: { editing: true, persisted: false, code: "X" } });
+
+    const loading = s.load();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const saving = s.setEditing(false);
+    await Promise.all([loading, saving]);
+
+    expect(get.answered()).toBe(false);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "POST"]);
+    expect(s.editing).toBe(true);
+    expect(s.known).toBe(true);
+    expect(s.loadFailed).toBe(false);
+    expect(s.saveNotice).not.toBeNull();
+  });
+
+  it("an On clicked over a hung read is not held either", async () => {
+    const s = createLocalModelSettings();
+    const get = hangGet();
+    posts.push({ status: 200, body: { editing: true, persisted: true } });
+
+    const loading = s.load();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const saving = s.setEditing(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(get.answered()).toBe(false);
+    await Promise.all([loading, saving]);
+    expect(s.editing).toBe(true);
+    expect(s.known).toBe(true);
+  });
+
+  it("an answer to the aborted read that arrives late changes nothing", async () => {
+    const s = createLocalModelSettings();
+    const get = hangGet();
+    posts.push({ status: 200, body: { editing: false, persisted: true } });
+    const loading = s.load();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const saving = s.setEditing(false);
+    await Promise.all([loading, saving]);
+
+    get.resolve(jsonResponse(200, { editing: true }));
+    await vi.waitFor(() => expect(get.answered()).toBe(true));
+    expect(s.editing).toBe(false);
+    expect(s.known).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("the next read after an aborted one is a new request with a live signal", async () => {
+    const s = createLocalModelSettings();
+    hangGet();
+    posts.push({ status: 200, body: { editing: false, persisted: true } });
+    const loading = s.load();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await Promise.all([loading, s.setEditing(false)]);
+
+    gets.push({ status: 200, body: { editing: true } });
+    await s.load();
+    expect(calls.map((c) => c.method)).toEqual(["GET", "POST", "GET"]);
+    expect((signals[2] as AbortSignal).aborted).toBe(false);
+    expect(s.editing).toBe(true);
+    expect(s.known).toBe(true);
+  });
+
+  it("a read asked for AFTER a save is not aborted by it: it waits its turn and is applied", async () => {
+    const s = createLocalModelSettings();
+    honourAbort = true;
+    const heldPost = deferred<Response>();
+    held.push(heldPost.promise);
+    gets.push({ status: 200, body: { editing: false } });
+
+    const saving = s.setEditing(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const loading = s.load();
+    await Promise.resolve();
+    expect(calls.map((c) => c.method)).toEqual(["POST"]); // the GET waits its turn
+
+    heldPost.resolve(jsonResponse(200, { editing: true, persisted: true }));
+    await Promise.all([saving, loading]);
+    expect(calls.map((c) => c.method)).toEqual(["POST", "GET"]);
+    expect((signals[1] as AbortSignal).aborted).toBe(false);
+    expect(s.editing).toBe(false); // the later read is the newer word
   });
 });
 

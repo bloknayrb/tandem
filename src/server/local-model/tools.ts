@@ -193,7 +193,8 @@ const READ_TOOL_LIST = READ_TOOLS.map((t) => t.name).join(" and ");
  *  chat rather than spending its tool budget on refused calls. Worded as "not
  *  available for this reply" because it is also what a run that started in the
  *  chat tier hears after the user has switched editing on. */
-export const EDITING_OFF_MESSAGE = `Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Only ${READ_TOOL_LIST} are available. Do not call any more tools: your next message is your reply, so answer the user in plain text.`;
+export const EDITING_OFF_MESSAGE =
+  "Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Call no more tools: your next message is your reply, so answer the user in plain text.";
 
 function refusedOutcome(name: string): ToolOutcome {
   if (TOOLS.some((t) => t.name === name)) {
