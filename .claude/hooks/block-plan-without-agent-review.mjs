@@ -99,7 +99,7 @@ async function scanTranscript(transcriptPath) {
 }
 
 const envelope = await readEnvelope();
-const transcriptPath = envelope.transcript_path;
+const transcriptPath = envelope?.transcript_path;
 if (!transcriptPath) block("hook stdin missing transcript_path");
 
 // A read error mid-scan (a directory, EACCES, a locked file) rejects the read
