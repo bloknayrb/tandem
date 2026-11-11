@@ -86,10 +86,12 @@ import {
   saveSession,
   sessionModelIsStale,
   sourceFileChanged,
+  touchSession,
 } from "../session/manager.js";
 import { readPendingConflict } from "./conflict.js";
 import { isDirty } from "./dirty.js";
 import { getOpenDocs, hasDoc } from "./registry.js";
+import { captureRemapInput, remapEnvelopeWins } from "./reload-remap.js";
 
 const TAG = "[Tandem] Short-name records";
 
@@ -119,6 +121,11 @@ export interface LegacyPlan {
   oldScratch?: Y.Doc;
   /** Set by `adoptBeforePublish` when the sequence ended early. */
   stopped?: boolean;
+  /**
+   * An old-key session was deliberately left in place by the plan itself
+   * (store cannot persist, or the backup failed): keep it replayable.
+   */
+  keptOld?: boolean;
 }
 
 function samePath(a: string, b: string): boolean {
@@ -231,7 +238,7 @@ export async function planLegacyOpen(
         // recovery is `maybeRestoreSession`'s, exactly as on an open with no
         // short spelling; the old key is left alone and retried next time.
         destroyQuietly(oldScratch);
-        return untouched;
+        return { ...untouched, keptOld: true };
       }
       await quarantineSession(newLoaded.path);
       return {
@@ -264,7 +271,7 @@ export async function planLegacyOpen(
         `${TAG}: the annotation store cannot be written, so the session saved under the short path for %s was left in place.`,
         path.basename(resolved),
       );
-      return { ...untouched, session: newLoaded };
+      return { ...untouched, session: newLoaded, keptOld: true };
     }
 
     const oldAccessed = old.loaded.session.lastAccessed;
@@ -287,7 +294,7 @@ export async function planLegacyOpen(
         `${TAG}: could not store a backup of the second saved session for %s; it was left in place and will be retried.`,
         path.basename(resolved),
       );
-      return { ...untouched, session: newLoaded };
+      return { ...untouched, session: newLoaded, keptOld: true };
     }
     return {
       legacyPath,
@@ -357,8 +364,16 @@ async function diskWitness(filePath: string, format: string): Promise<Witness | 
   }
 }
 
-/** The stamp a witness gives one record: its range there, and the text that range covers. */
-type Stamp = { range: DocumentRange; textSnapshot: string };
+/**
+ * The stamp a witness gives one record: its range there, and the text that
+ * range covers. `verified` = the range came from the record's own relRange
+ * resolving in the witness document. A stamp taken from the bare stored range
+ * is NOT verified: a stored range can be stale in its own document, so the
+ * text it covers may not be the text the record was on.
+ */
+type Stamp = { range: DocumentRange; textSnapshot: string; verified: boolean };
+
+const stampProvenance = new WeakMap<object, boolean>();
 
 /**
  * Stamp a record that has no `textSnapshot` with the text its range covers in
@@ -373,11 +388,15 @@ function stampRecord<T extends AnnotationRecordV1>(rec: T, w: Witness): T {
   };
   if (raw.textSnapshot !== undefined || !raw.range) return rec;
   let range: DocumentRange | null = null;
+  let verified = false;
   if (raw.relRange) {
     try {
       const from = relPosToFlatOffset(w.doc, raw.relRange.fromRel as never);
       const to = relPosToFlatOffset(w.doc, raw.relRange.toRel as never);
-      if (from !== null && to !== null && from <= to) range = { from, to };
+      if (from !== null && to !== null && from <= to) {
+        range = { from, to };
+        verified = true;
+      }
     } catch {
       range = null;
     }
@@ -406,6 +425,7 @@ function stampRecord<T extends AnnotationRecordV1>(rec: T, w: Witness): T {
   delete stamped.textSnapshotBreaks;
   if (snap.truncated) stamped.textSnapshotTruncated = true;
   if (snap.breaks.length > 0) stamped.textSnapshotBreaks = snap.breaks;
+  stampProvenance.set(stamped, verified);
   return stamped as unknown as T;
 }
 
@@ -422,14 +442,14 @@ function stampAll(
     const out = stampRecord(rec, w);
     if (out !== rec) {
       const s = out as unknown as Stamp;
-      stamps.set(rec.id, { range: s.range, textSnapshot: s.textSnapshot });
+      stamps.set(rec.id, {
+        range: s.range,
+        textSnapshot: s.textSnapshot,
+        verified: stampProvenance.get(out) === true,
+      });
     }
     return out;
   });
-}
-
-function hasSnapshotless(records: readonly AnnotationRecordV1[]): boolean {
-  return records.some((r) => (r as { textSnapshot?: unknown }).textSnapshot === undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +588,43 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
     );
   };
 
+  /**
+   * Move records that just arrived from another copy of the document onto the
+   * live text, with the reload path's own arithmetic (`reload-remap.ts`):
+   * witness text → live text. Without it a record whose words survive at a
+   * shifted offset reads `degraded` for ever. Call inside the `withFileSync`
+   * that wrote them. Never remapped:
+   *  - an id whose anchor already resolves in the live document (a live CRDT
+   *    anchor beats arithmetic);
+   *  - an id stamped from a bare stored range (unverified: following that text
+   *    across the shift would mint a confident anchor on text nobody checked,
+   *    #1764). Those keep the lazy gate, which mints only at the same offsets.
+   */
+  const remapOnto = (
+    w: Witness | null,
+    ids: Iterable<string>,
+    stampOf: (id: string) => Stamp | undefined,
+  ): void => {
+    if (w === null || w.text === live) return;
+    const targets = new Set<string>();
+    for (const id of ids) {
+      if (liveAndAnchored(id)) continue;
+      const stamp = stampOf(id);
+      if (stamp !== undefined && !stamp.verified) continue;
+      // Snapshot-less and unstamped: nothing verifies its stored range either.
+      const rec = ctx.doc.getMap(Y_MAP_ANNOTATIONS).get(id) as
+        | { textSnapshot?: unknown }
+        | undefined;
+      if (rec === undefined || rec.textSnapshot === undefined) continue;
+      targets.add(id);
+    }
+    if (targets.size === 0) return;
+    const input = captureRemapInput(w.doc, ctx.openPath);
+    if (remapEnvelopeWins(ctx.doc, { ...input, newText: live, hunks: null }, targets)) {
+      for (const id of targets) wrote.add(id);
+    }
+  };
+
   // The new side is foreign: its envelope was merged by `wireAnnotationStore`.
   // Overlay the witness's anchor onto each record that came from it.
   // Only when the store can keep the stamp: one that lives in memory alone
@@ -581,7 +638,7 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
         textSnapshot?: unknown;
         relRange?: { fromRel: unknown; toRel: unknown };
       };
-      if (!rec || typeof rec !== "object" || rec.textSnapshot !== undefined) continue;
+      if (!rec || typeof rec !== "object") continue;
       if (mine?.has(id)) continue;
       if (rec.relRange) {
         const from = relPosToFlatOffset(ctx.doc, rec.relRange.fromRel as never);
@@ -606,6 +663,11 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
             map.set(rec.id, rec);
             wrote.add(rec.id);
           }
+          remapOnto(
+            w,
+            candidates.map((c) => c.id),
+            (id) => stamps.get(id),
+          );
         });
       }
     }
@@ -619,7 +681,9 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
   let discardedStamps = false;
   if (!featureOff) {
     const file = envelopePath(oldHash);
-    const read = await readRaw(file); // a read error other than ENOENT throws: retried
+    // A read error other than ENOENT throws: the caller marks the sequence
+    // stopped, the old session stays, and the next start retries.
+    const read = await readRaw(file);
     if (!("missing" in read)) {
       const parsed = parseAnnotationDoc(read.raw);
       if (!parsed.ok) {
@@ -631,7 +695,7 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
         oldFile = parsed.doc;
         extraTombstones = parsed.doc.tombstones;
         const w =
-          foreign === "old" && hasSnapshotless(parsed.doc.annotations)
+          foreign === "old" && parsed.doc.annotations.length > 0
             ? await foreignWitness(parsed.doc.meta.contentHash)
             : null;
         const before = stamps.size;
@@ -645,12 +709,17 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
         // A stamped record must not enter a document whose store cannot keep
         // the stamp; an unwired document has no ledger to carry tombstones.
         if (wired && (canPersist || !stampedHere)) {
-          const result = mergeForeignEnvelope(
-            ctx.doc,
-            { annotations, replies: parsed.doc.replies, tombstones: parsed.doc.tombstones },
-            newHash,
-          );
-          for (const id of result.annotationIds) wrote.add(id);
+          // One transaction for the merge and the remap, so no observer sees
+          // a record at the other copy's coordinates.
+          withFileSync(ctx.doc, () => {
+            const result = mergeForeignEnvelope(
+              ctx.doc,
+              { annotations, replies: parsed.doc.replies, tombstones: parsed.doc.tombstones },
+              newHash,
+            );
+            for (const id of result.annotationIds) wrote.add(id);
+            remapOnto(w, result.annotationIds, (id) => stamps.get(id));
+          });
           merged = true;
         } else if (stampedHere) {
           for (const a of parsed.doc.annotations) stamps.delete(a.id);
@@ -668,35 +737,62 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
     // wrote may be checked against its stamp (a copy that lost to the live one
     // must not replace the stamp the live one was written with).
     const foldStamps: Stamps = new Map();
-    const annotations = stampAll(
-      records.annotations,
-      loserWitness.text !== live ? loserWitness : null,
-      foldStamps,
-    );
-    const result = mergeSessionRecords(
-      ctx.doc,
-      { annotations, replies: records.replies },
-      newHash,
-      extraTombstones,
-    );
-    for (const id of result.annotationIds) {
-      wrote.add(id);
-      const stamp = foldStamps.get(id);
-      if (stamp !== undefined) stamps.set(id, stamp);
-      else stamps.delete(id);
-    }
+    const foldWitness = loserWitness.text !== live ? loserWitness : null;
+    const annotations = stampAll(records.annotations, foldWitness, foldStamps);
+    withFileSync(ctx.doc, () => {
+      const result = mergeSessionRecords(
+        ctx.doc,
+        { annotations, replies: records.replies },
+        newHash,
+        extraTombstones,
+      );
+      for (const id of result.annotationIds) {
+        wrote.add(id);
+        const stamp = foldStamps.get(id);
+        if (stamp !== undefined) stamps.set(id, stamp);
+        else stamps.delete(id);
+      }
+      remapOnto(foldWitness, result.annotationIds, (id) => foldStamps.get(id));
+    });
   }
 
   // Durability: every stamp written must be in the new envelope before a
   // witness can go; the old envelope is cleared only when the new one holds
   // everything it held.
   const stampedWrites = [...wrote].some((id) => stamps.has(id));
-  if (featureOff) return true;
+  if (featureOff) {
+    // The switch is per run: an envelope written while it was on can still be
+    // there, and it was not read above. The sequence ends, so nothing under
+    // the old key is removed and a later start (switch on) carries it over.
+    const leftBehind = await fs.stat(envelopePath(oldHash)).then(
+      () => true,
+      (err: NodeJS.ErrnoException) => err.code !== "ENOENT",
+    );
+    if (leftBehind) {
+      console.error(
+        `${TAG}: the annotation store is switched off, so the annotation file saved under the short path for %s was left in place.`,
+        path.basename(ctx.openPath),
+      );
+    }
+    return !leftBehind;
+  }
   // Old-envelope stamps were dropped because the store cannot keep them, and
   // the session they came from is not the document: removing that session now
   // would destroy the only witness.
   if (discardedStamps && ctx.oldScratch && ctx.survivor !== "old") return false;
   if (!canPersist) {
+    // The old envelope was read but cannot be made durable under the new key
+    // (store not wired for this document, read-only, or disabled for it): the
+    // sequence ends here, so the old session stays and the next start retries.
+    // Moving the session now would leave nothing that computes the old key
+    // again, and the old envelope's records and tombstones would age out.
+    if (oldFile !== null) {
+      console.error(
+        `${TAG}: the annotation file saved under the short path for %s could not be carried over; old records left in place.`,
+        path.basename(ctx.openPath),
+      );
+      return false;
+    }
     if (stampedWrites && (ctx.loser || ctx.survivor !== "disk")) {
       console.error(
         `${TAG}: anchor snapshots for %s could not be saved; old records left in place.`,
@@ -730,11 +826,38 @@ const pendingRemoval = new Map<string, string>();
  */
 export async function removePendingLegacySession(id: string): Promise<void> {
   legacyOpened.delete(id);
+  keptLegacy.delete(id);
   const legacyPath = pendingRemoval.get(id);
   if (legacyPath === undefined) return;
   pendingRemoval.delete(id);
   if (legacyPathIsOpen(legacyPath)) return;
   await deleteSession(legacyPath);
+}
+
+/**
+ * Old-key sessions left in place by a stop while their document is open:
+ * id → legacy path. Startup restore only replays a session whose stored
+ * `lastAccessed` is within 30 minutes of the newest one, and autosave keeps
+ * advancing the open document's own (new-key) session, so a kept session
+ * would fall out of that window and the retry it exists for would never run.
+ * `keepLegacySessionInWindow` re-stamps it after each autosave.
+ */
+const keptLegacy = new Map<string, string>();
+
+/**
+ * Called by autosave after it saved `id`'s session, with a time taken BEFORE
+ * that save. The kept session is stamped one millisecond earlier, so it stays
+ * in the restore window and can never be the newer of the two. Never throws.
+ */
+export async function keepLegacySessionInWindow(id: string, savedAt: number): Promise<void> {
+  const legacyPath = keptLegacy.get(id);
+  if (legacyPath === undefined) return;
+  try {
+    if (legacyPathIsOpen(legacyPath)) return;
+    await touchSession(legacyPath, savedAt - 1);
+  } catch (err) {
+    console.error(`${TAG}: could not refresh a kept session:`, err);
+  }
 }
 
 /** Session moves still running: id → the move. Close waits for it (below). */
@@ -764,6 +887,7 @@ export function legacyMoveInFlight(id: string): Promise<void> | undefined {
 /** Test-only. */
 export function _resetShortNameAdoptionForTests(): void {
   pendingRemoval.clear();
+  keptLegacy.clear();
   movesInFlight.clear();
   legacyOpened.clear();
 }
@@ -854,13 +978,16 @@ export async function finishLegacyOpen(
   args: { id: string; doc: Y.Doc; openPath: string; format: string; restored: boolean },
 ): Promise<void> {
   try {
-    // A stop keeps the old session only where it is still needed as a witness
-    // or as an unfolded loser. When the old session IS the document (it was
-    // restored and there is no second session), nothing depends on its file
-    // any more: leaving it would bring a closed document back, at the next
-    // start, as it was before every edit made since (R2.5).
-    const oldIsTheDocument = plan.sessionIsOld && args.restored && plan.loser === undefined;
-    if (plan.run && plan.oldSessionExists && (!plan.stopped || oldIsTheDocument)) {
+    // A stop keeps the old session in every shape, including the one where it
+    // IS the document. Its file is the only thing that makes a later start
+    // compute the old key again, and until the old envelope is durable under
+    // the new key that retry is what stands between its records and the
+    // 30-day cleanup. The cost is that a document closed before the retry
+    // succeeds can come back at the next start as the old session had it.
+    if ((plan.run && plan.oldSessionExists && plan.stopped) || plan.keptOld) {
+      keptLegacy.set(args.id, plan.legacyPath);
+    }
+    if (plan.run && plan.oldSessionExists && !plan.stopped) {
       await moveSession(
         args.id,
         args.doc,
@@ -911,12 +1038,14 @@ export async function adoptIntoOpenDocument(args: {
           `${TAG}: the annotation store cannot be written, so the session saved under the short path for %s was left in place.`,
           path.basename(args.openPath),
         );
+        keptLegacy.set(args.id, args.legacyPath);
         return;
       } else if ((await backUp(args.openPath, scratch, args.format)) !== "written") {
         console.error(
           `${TAG}: could not store a backup of the session saved under the short path for %s; it was left in place and will be retried.`,
           path.basename(args.openPath),
         );
+        keptLegacy.set(args.id, args.legacyPath);
         return;
       }
     }
@@ -929,6 +1058,7 @@ export async function adoptIntoOpenDocument(args: {
       survivor: "new",
       ...(scratch ? { oldScratch: scratch, loser: { side: "old" as const, scratch } } : {}),
     });
+    if (!ok && scratch !== null) keptLegacy.set(args.id, args.legacyPath);
     if (ok && scratch !== null) {
       // During startup restore a write must not stamp "now": the restore
       // window is measured from the newest stored `lastAccessed`. Carry the

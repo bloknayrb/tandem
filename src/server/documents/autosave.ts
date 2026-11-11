@@ -15,6 +15,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { readPendingConflict } from "./conflict.js";
 import { isDirty } from "./dirty.js";
 import { getOpenDocs } from "./registry.js";
+import { keepLegacySessionInWindow } from "./short-name-adoption.js";
 
 export function ensureAutoSave(): void {
   if (isAutoSaveRunning()) return;
@@ -36,10 +37,13 @@ export function ensureAutoSave(): void {
     for (const [docId, state] of getOpenDocs()) {
       const d = getOrCreateDocument(docId);
       try {
+        const savedAt = Date.now();
         await saveSession(state.filePath, state.format, d, {
           dirty: isDirty(docId),
           conflict: readPendingConflict(d),
         });
+        // A no-op unless a short-name carry-over left a session in place (#2400).
+        await keepLegacySessionInWindow(docId, savedAt);
       } catch (err) {
         failures++;
         console.error("[AutoSave] saveSession failed for %s:", state.filePath, err);
