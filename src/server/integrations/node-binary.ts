@@ -269,8 +269,10 @@ const NON_DURABLE_NODE_DIR_PATTERNS: readonly RegExp[] = [
   /[/\\]\.nodenv[/\\]shims(?:[/\\]|$)/i, // nodenv
   /fnm_multishells/i, // fnm's per-shell links
   // Scoop's shim launchers (`<scoop>\\shims\\node.exe` reads `node.shim` and
-  // starts the real Node). The real Node behind it is `apps\\nodejs\\current`,
-  // which `stableManagerPath` records when that directory is on PATH.
+  // starts the real Node). A stock `scoop install nodejs` adds no `node` shim:
+  // it puts `apps\\nodejs\\current` on PATH instead (#2358 PR 2b smoke,
+  // 2026-11-11), which `stableManagerPath` records. A shim appears only when
+  // one is added (`scoop shim add`, or another manifest), and is refused here.
   /[/\\]scoop[/\\]shims(?:[/\\]|$)/i,
   /[/\\](?:_npx|dlx|\.bun)[/\\]/i, // one-shot package-runner caches
   // A project's own dependencies: `npm run`, `npm exec` and direnv put
