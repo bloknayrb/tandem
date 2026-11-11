@@ -376,10 +376,20 @@ describe("a call whose request was cancelled before its turn", () => {
       { from: 0, to: 5, newText: "Late!", documentId: id },
       { signal: abort.signal },
     );
-    // The edit is in the queue, waiting, before it is cancelled: two
-    // operations are counted (the head and it), and its wait timer is armed.
-    expect(ownershipSnapshotForTests().queuedDocuments).toBe(1);
-    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
+    // The edit is in the queue, waiting, before it is cancelled: a call
+    // answered already would have settled by now, and it has not.
+    let answered = false;
+    cancelled.answer.then(
+      () => {
+        answered = true;
+      },
+      () => {
+        answered = true;
+      },
+    );
+    await settle();
+    expect(answered).toBe(false);
+    expect(isDocOpQueueBusy(id)).toBe(true);
     const timersWhileQueued = vi.getTimerCount();
     // What a client does when its own timeout fires or the user interrupts:
     // it sends `notifications/cancelled` for the request.

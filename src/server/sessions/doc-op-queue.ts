@@ -51,7 +51,7 @@
 /**
  * How long an operation waits for its turn before its caller is told the
  * document is busy. Below the stdio bridge's own 30 s request timeout
- * (`src/cli/mcp-stdio.ts`), which gives up without telling the server: a
+ * (`STDIO_BRIDGE_REQUEST_TIMEOUT_MS` in `shared/constants.ts`, used by `src/cli/mcp-stdio.ts`), which gives up without telling the server: a
  * waiting call is refused here first, and can never start later than this
  * after it was queued. `tests/server/doc-op-queue.test.ts` pins the relation.
  */
@@ -172,7 +172,10 @@ export function runDocOp<T>(
         // Reject BEFORE opening the gate: the caller's handler is then queued
         // ahead of the next entrant's turn. A lapse runs out of turn from that
         // handler, and must move the document before the next entrant's
-        // ownership check reads who holds it.
+        // ownership check reads who holds it. That holds for a handler
+        // attached DIRECTLY to the promise this function returned, one hop,
+        // as `runWhenDocIdle` does: wrap the promise first and the next
+        // entrant's turn comes before the handler again.
         reject(late ? new DocOpWaitExpired(limit) : new DocOpCancelled());
         open();
         return;

@@ -764,6 +764,13 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
  * `renameDocument` refusal in `RENAME_NEVER_CLAIMS`), `<mcpError>` for the
  * reply seam's refusal, whose code is computed. A mark added, dropped or
  * moved changes the list; review the change against ownership design §5.1.
+ *
+ * What this pin cannot see: a changed condition on a `<refused>` site (the
+ * control test covers the three range sites; for rename only the member list
+ * below does); a mark moved between two neighbouring refusals with the same
+ * code; a mark made some other way than a plain `noClaim(` call in
+ * `src/server`; and a member of `RENAME_NEVER_CLAIMS` that is commented out
+ * rather than removed.
  */
 const DOCUMENT_MARKS = [
   "<noDocumentError>",

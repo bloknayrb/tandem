@@ -628,9 +628,10 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
  * The one composite every ownership change goes through (ownership design
  * §4.3). **No enforcement here or anywhere in 1a.** Synchronous. From PR 1c
  * a claim, a take and a lapse call it at their turn in the document's
- * operation queue; the tab-close point, the user-open default, the stale-entry
- * backstop and a lapse whose wait ran out call it where they are
- * (`doc-op-queue.ts`'s header lists them). Of the design's five
+ * operation queue; the user-open default, the stale-entry backstop and a
+ * lapse whose wait ran out call it where they are. (The tab-close point does
+ * not come through here at all: `onDocumentClosed` deletes the entry itself.
+ * `doc-op-queue.ts`'s header lists all four.) Of the design's five
  * steps, 1a runs step 2 (the entry; `null` deletes it, so unowned is always
  * the absence of an entry) and step 5's seam; 1c adds step 1's loss record.
  * Step 1's handover is PR 2's, step 3 (change notices) PR 2's, step 4
