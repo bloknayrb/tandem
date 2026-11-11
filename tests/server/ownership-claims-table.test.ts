@@ -13,9 +13,10 @@
  *    (which is then undone); the table does not care which. Marked in the
  *    source but not rowed, because no fixture here reaches them: the
  *    "not open" answers inside a body (the document closed while the call
- *    waited; `ownership-enforcement.test.ts` has that case), `setChecked` on
- *    a .docx list, `markdown` that parses to no list items, and
- *    `renameDocument`'s `PATH_REJECTED` / `INVALID_PATH`. The rule is by
+ *    waited; `ownership-enforcement.test.ts` has that case), `markdown` that
+ *    parses to no list items, and `renameDocument`'s `PATH_REJECTED` and
+ *    `INVALID_PATH` (a symlinked or UNC-shaped target, which a test should
+ *    not create or touch). The rule is by
  *    what decides the refusal, not by its code: `INVALID_RANGE` for an
  *    inverted, fractional, negative or empty range leaves no claim, while
  *    `INVALID_RANGE` for an offset past the end keeps one (the control test
@@ -24,7 +25,11 @@
  *    `tandem_restoreBackup` with a malformed `backup` name answers
  *    `FILE_NOT_FOUND`, the same as a well-formed name that is not on disk.
  *    The table can only confirm marks that were made; it cannot find one
- *    that is missing.
+ *    that is missing. And a row answered before any claim is attempted
+ *    (preflight, an id the document does not hold, an ambiguous id) passes
+ *    with or without its mark. So the marks themselves are pinned from
+ *    source, below: every `noClaim(` site and every member of
+ *    `RENAME_NEVER_CLAIMS`, against a reviewed list.
  * 2. **The same refusals do not disturb a claim the caller already held.**
  * 3. **The holder's own call succeeds through every write tool**, does what
  *    the tool does, to the document that was named, and leaves the holder
@@ -40,6 +45,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -169,9 +175,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await close?.();
   close = undefined;
+  // Close the watches the real opens started before removing their files.
+  for (const d of getOpenDocs().values()) if (d.source === "file") unwatchFile(d.filePath);
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   resetOwnershipForTests();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   vi.unstubAllEnvs();
 });
 
@@ -319,6 +327,17 @@ const REFUSALS: RefusalRow[] = [
       return { id, args: { at: 0, op: "setChecked", documentId: id } };
     },
     code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editList",
+    what: "setChecked on a .docx list",
+    arrange: async () => {
+      // A real list, registered as a .docx (a .docx list has no checkbox state).
+      const { id, filePath } = await diskDoc("list.md", "- one\n- two\n");
+      addDoc(id, { id, filePath, format: "docx", readOnly: false, source: "file" });
+      return { id, args: { at: 0, op: "setChecked", checked: true, documentId: id } };
+    },
+    code: "FORMAT_ERROR",
   },
   {
     tool: "tandem_editList",
@@ -738,6 +757,146 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
   });
 });
 
+/**
+ * Every `noClaim(` in each tool file, in source order: the code it marks,
+ * `<noDocumentError>` for the shared not-open answer, `<refused>` where the
+ * mark is conditional (a range refusal decided by the offsets; a
+ * `renameDocument` refusal in `RENAME_NEVER_CLAIMS`), `<mcpError>` for the
+ * reply seam's refusal, whose code is computed. A mark added, dropped or
+ * moved changes the list; review the change against ownership design §5.1.
+ */
+const DOCUMENT_MARKS = [
+  "<noDocumentError>",
+  "READ_ONLY",
+  "INVALID_ARGUMENT",
+  "<noDocumentError>",
+  "READ_ONLY",
+  "FORMAT_ERROR",
+  "<noDocumentError>",
+  "INVALID_RANGE",
+  "INVALID_ARGUMENT",
+  "<refused>",
+  "<noDocumentError>",
+  "<refused>",
+  "INVALID_ARGUMENT",
+  "FORMAT_ERROR",
+  "INVALID_ARGUMENT",
+  "FILE_TOO_LARGE",
+  "INVALID_ARGUMENT",
+  "<noDocumentError>",
+  "READ_ONLY",
+  "FORMAT_ERROR",
+  "FILE_TOO_LARGE",
+  "<noDocumentError>",
+  "<noDocumentError>",
+  "NO_DOCUMENT",
+  "NO_DOCUMENT",
+  "INVALID_NAME",
+  "NO_DOCUMENT",
+  "BAD_REQUEST",
+  "INVALID_NAME",
+  "<refused>",
+  "NO_DOCUMENT",
+  "INVALID_PATH",
+  "FORMAT_ERROR",
+];
+
+const ANNOTATION_MARKS = [
+  "<noDocumentError>",
+  "INVALID_ARGUMENT",
+  "<noDocumentError>",
+  "<refused>",
+  "NOT_FOUND",
+  "INVALID_ARGUMENT",
+  "ANNOTATION_RESOLVED",
+  "ACCEPT_REFUSED",
+  "NOT_FOUND",
+  "INVALID_ARGUMENT",
+  "NOT_FOUND",
+  "INVALID_ARGUMENT",
+  "NOT_OWNED",
+  "ANNOTATION_RESOLVED",
+  "INVALID_ARGUMENT",
+  "INVALID_ARGUMENT",
+  "INVALID_ARGUMENT",
+  "<mcpError>",
+];
+
+const DOCX_MARKS = [
+  "<noDocumentError>",
+  "FORMAT_ERROR",
+  "INVALID_PATH",
+  "READ_ONLY",
+  "<noDocumentError>",
+  "<noDocumentError>",
+  "INVALID_PATH",
+  "FORMAT_ERROR",
+  "READ_ONLY",
+];
+
+describe("the never-claims marks, pinned from source", () => {
+  const read = (file: string) =>
+    fs.readFileSync(path.join(process.cwd(), "src/server/mcp", file), "utf8");
+
+  /**
+   * What each `noClaim(` wraps, in source order: the error code of the
+   * `mcpError(` it marks, or the helper or variable it is handed.
+   */
+  function marks(file: string): string[] {
+    const src = read(file);
+    const found: string[] = [];
+    for (const m of src.matchAll(/\bnoClaim\(/g)) {
+      const after = src.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + 400);
+      const code = after.match(/^\s*mcpError\(\s*"([A-Z_]+)"/);
+      const ternary = after.match(/^\s*\w+\s*\?\s*mcpError\(\s*"([A-Z_]+)"/);
+      const ident = after.match(/^\s*([A-Za-z_]+)(\(\))?/);
+      found.push(code?.[1] ?? ternary?.[1] ?? `<${ident?.[1] ?? "?"}>`);
+    }
+    return found;
+  }
+
+  it("mcp/document.ts", () => {
+    expect(marks("document.ts")).toEqual(DOCUMENT_MARKS);
+  });
+  it("mcp/annotations.ts", () => {
+    expect(marks("annotations.ts")).toEqual(ANNOTATION_MARKS);
+  });
+  it("mcp/docx-apply.ts", () => {
+    expect(marks("docx-apply.ts")).toEqual(DOCX_MARKS);
+  });
+
+  it("the renameDocument refusals that never claim", () => {
+    const src = read("document.ts");
+    const body = src.match(/const RENAME_NEVER_CLAIMS[^=]*=\s*new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
+    const members = [...body.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]);
+    expect(members).toEqual([
+      "NOT_FOUND",
+      "NOT_RENAMABLE",
+      "EXTENSION_MISMATCH",
+      "PATH_REJECTED",
+      "INVALID_NAME",
+      "INVALID_PATH",
+      "READ_ONLY",
+    ]);
+  });
+
+  it("no other file marks a refusal", () => {
+    const dir = path.join(process.cwd(), "src/server");
+    const hits: string[] = [];
+    const walk = (d: string) => {
+      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts") && /\bnoClaim\(/.test(fs.readFileSync(full, "utf8"))) {
+          hits.push(path.relative(dir, full).replace(/\\/g, "/"));
+        }
+      }
+    };
+    walk(dir);
+    expect(hits.sort()).toEqual(["mcp/annotations.ts", "mcp/document.ts", "mcp/docx-apply.ts"]);
+  });
+});
+
 describe("the holder's own call succeeds through every write tool", () => {
   /** A's, as `opened`, with another document active so a wrong target would show. */
   function hold(id: string): void {
@@ -883,6 +1042,8 @@ describe("the holder's own call succeeds through every write tool", () => {
     expect(getDocOwner(renamedId)).toMatchObject({ ownerId: A, kind: "opened" });
     const refused = await as(B, "tandem_appendContent", { content: "x", documentId: renamedId });
     expect(refused.code).toBe("NOT_DOC_OWNER");
+    expect(getDocOwner(docId("decoy"))).toBeUndefined();
+    decoyUntouched();
   });
 
   row("tandem_close", async () => {
@@ -894,6 +1055,8 @@ describe("the holder's own call succeeds through every write tool", () => {
     // The tab-close point drops the entry; the decoy tab is still open.
     expect(getDocOwner(id)).toBeUndefined();
     expect(getOpenDocs().has(docId("decoy"))).toBe(true);
+    expect(getDocOwner(docId("decoy"))).toBeUndefined();
+    decoyUntouched();
   });
 
   row("tandem_restoreBackup", async () => {

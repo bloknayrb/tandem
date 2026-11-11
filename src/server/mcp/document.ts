@@ -1018,7 +1018,7 @@ export function registerDocumentTools(server: McpServer): void {
                   );
                 }
                 const refused = mcpError("INVALID_RANGE", v.message, { reason: v.reason });
-                return rangeDecidedByArguments(v.reason, from, to) ? noClaim(refused) : refused;
+                return rangeDecidedByArguments(v.reason, from) ? noClaim(refused) : refused;
               }
 
               const fragment = r.doc.getXmlFragment("default");

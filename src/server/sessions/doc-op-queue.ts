@@ -2,13 +2,15 @@
  * The per-document operation queue (#2358, ADR-054; ownership design §5.1).
  *
  * **Flag-on only.** With ownership on, every MCP write tool's operation on a
- * document, every `tandem_open` take and every lapse runs at its turn in that
- * document's queue, so an ownership check and the write it guards cannot be
- * separated by another session's operation. With ownership off nothing calls
+ * document and every `tandem_open` take runs at its turn in that document's
+ * queue, so an ownership check and the write it guards cannot be separated by
+ * another session's operation. A lapse runs at its turn too, unless its wait
+ * runs out first (below). With ownership off nothing calls
  * this module: handlers run their bodies directly, as they always have.
  *
- * **Not every ownership change is queued.** Three run synchronously where
- * they are: the tab-close point (`onDocumentClosed`), the user-open default
+ * **Not every ownership change is queued.** Four run where they are, beside
+ * whatever operation is running: a lapse whose wait for its turn ran out
+ * ({@link runWhenDocIdle}), and three that are synchronous by design: the tab-close point (`onDocumentClosed`), the user-open default
  * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, `/api/convert`,
  * startup; it only
  * writes an entry where there is none, and writes nothing until Tandem's
@@ -167,8 +169,12 @@ export function runDocOp<T>(
       const late = Date.now() - queuedAt >= limit;
       if (late || options.signal?.aborted) {
         settle(documentId, mine);
-        open();
+        // Reject BEFORE opening the gate: the caller's handler is then queued
+        // ahead of the next entrant's turn. A lapse runs out of turn from that
+        // handler, and must move the document before the next entrant's
+        // ownership check reads who holds it.
         reject(late ? new DocOpWaitExpired(limit) : new DocOpCancelled());
+        open();
         return;
       }
       const done = () => {

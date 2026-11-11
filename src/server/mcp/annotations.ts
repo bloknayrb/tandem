@@ -469,7 +469,7 @@ export function registerAnnotationTools(server: McpServer): void {
                 const refused = rangeFailureToError(result);
                 // Decided by the offsets alone: it leaves no claim (#2358).
                 return result.code === "INVALID_RANGE" &&
-                  rangeDecidedByArguments(result.reason, from, to)
+                  rangeDecidedByArguments(result.reason, from)
                   ? noClaim(refused)
                   : refused;
               }

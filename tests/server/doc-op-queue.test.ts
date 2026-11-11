@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTimeoutMs } from "../../src/cli/mcp-stdio.js";
 import {
   DOC_OP_WAIT_MS,
   DocOpCancelled,
@@ -11,6 +10,7 @@ import {
   runDocOp,
   runWhenDocIdle,
 } from "../../src/server/sessions/doc-op-queue.js";
+import { STDIO_BRIDGE_REQUEST_TIMEOUT_MS } from "../../src/shared/constants.js";
 
 /**
  * The per-document operation queue (#2358, ADR-054; ownership design §5.1).
@@ -186,8 +186,9 @@ describe("the wait bound (Bryan, 2026-11-11)", () => {
     // The bridge gives up at its timeout without telling the server. A call
     // still waiting then must already have been refused here, with room for
     // the refusal to travel back.
-    const bridgeDefault = parseTimeoutMs(undefined);
-    expect(DOC_OP_WAIT_MS).toBeLessThanOrEqual((bridgeDefault * 2) / 3);
+    // Read from the shared constant, never from the bridge module: loading
+    // that installs process-level handlers in this worker.
+    expect(DOC_OP_WAIT_MS).toBeLessThanOrEqual((STDIO_BRIDGE_REQUEST_TIMEOUT_MS * 2) / 3);
   });
 
   it("a call that waits past the limit is refused, never runs, and leaves no queue entry", async () => {
@@ -389,6 +390,31 @@ describe("the wait bound (Bryan, 2026-11-11)", () => {
       expect(runs).toBe(1);
       expect(errors).toEqual([]);
       expect(isDocOpQueueBusy("d")).toBe(false);
+    });
+
+    it("a turn that comes late runs the change before the next entrant's turn", async () => {
+      // The late-turn path (the clock passed the limit, the timer has not
+      // fired): the change must land before the entrant behind it reads the
+      // state, or that entrant would be refused on the strength of an owner
+      // that is about to be moved.
+      const head = deferred();
+      const log: string[] = [];
+      const first = runDocOp("d", () => head.promise);
+      runWhenDocIdle(
+        "d",
+        () => void log.push("change"),
+        () => undefined,
+      );
+      await vi.advanceTimersByTimeAsync(DOC_OP_WAIT_MS - 5000);
+      const successor = runDocOp("d", () => void log.push("successor"));
+      // Past the change's limit, well inside the successor's, no timer run.
+      vi.setSystemTime(Date.now() + 6000);
+      head.resolve();
+      await first;
+      await successor;
+      expect(log).toEqual(["change", "successor"]);
+      await flush();
+      expect(log).toEqual(["change", "successor"]);
     });
 
     it("a change that throws at the limit is reported, not lost and not unhandled", async () => {

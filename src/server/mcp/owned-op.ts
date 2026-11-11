@@ -85,17 +85,14 @@ export function noClaim<T extends McpToolResult>(result: T): T {
 /**
  * Whether a `validateRange` rejection was decided by the offsets alone, with
  * no look at the document: a fractional offset, an inverted range, an empty
- * one (the check is reached only when `from === to`), or a negative offset.
+ * one (the check is reached only when `from === to`), or a negative start (a
+ * negative end with a start at or above zero is already `inverted`).
  * An offset past the end, a stale snapshot and a heading overlap depend on
  * live content and keep a claim (ownership design §5.1).
  */
-export function rangeDecidedByArguments(
-  reason: string | undefined,
-  from: number,
-  to: number,
-): boolean {
+export function rangeDecidedByArguments(reason: string | undefined, from: number): boolean {
   if (reason === "non-integer" || reason === "inverted" || reason === "empty") return true;
-  return reason === "out-of-bounds" && (from < 0 || to < 0);
+  return reason === "out-of-bounds" && from < 0;
 }
 
 function noOwner(tool: string): McpToolResult {
@@ -155,7 +152,7 @@ function busyEnvelope(err: unknown, documentId: string): McpToolResult | null {
  * document's queue. Short: the call has already had its own wait, and the
  * two together must stay under the stdio bridge's request timeout.
  */
-const FRESH_TAKE_WAIT_MS = 2_000;
+export const FRESH_TAKE_WAIT_MS = 2_000;
 
 /** Which document a write targets, as the tool resolves it today. */
 export type WriteTarget =

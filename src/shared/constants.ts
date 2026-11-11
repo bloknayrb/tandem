@@ -1,4 +1,14 @@
 export const DEFAULT_WS_PORT = 3478;
+/**
+ * How long the stdio bridge (`src/cli/mcp-stdio.ts`) waits for the server to
+ * answer one request before it answers the client itself, by default
+ * (`TANDEM_REQUEST_TIMEOUT_MS` overrides it). Here, not in the bridge module,
+ * so a test can read it without loading the bridge, which installs process
+ * handlers when it loads. The server's operation-queue wait limit must stay
+ * well under it (`tests/server/doc-op-queue.test.ts`).
+ */
+export const STDIO_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
+
 export const DEFAULT_MCP_PORT = 3479;
 
 /**

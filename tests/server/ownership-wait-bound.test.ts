@@ -17,10 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
+import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { ownedOpen, takeFreshDocument } from "../../src/server/mcp/owned-op.js";
+import { FRESH_TAKE_WAIT_MS, ownedOpen, takeFreshDocument } from "../../src/server/mcp/owned-op.js";
 import {
   type McpToolResult,
   mcpSuccess,
@@ -46,7 +47,7 @@ import {
   type TransportViewEntry,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { STDIO_BRIDGE_REQUEST_TIMEOUT_MS, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 
@@ -143,9 +144,11 @@ afterEach(async () => {
   vi.useRealTimers();
   await close?.();
   close = undefined;
+  // Close the watches the real opens started before removing their files.
+  for (const d of getOpenDocs().values()) if (d.source === "file") unwatchFile(d.filePath);
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   resetOwnershipForTests();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   vi.unstubAllEnvs();
 });
 
@@ -373,6 +376,11 @@ describe("a call whose request was cancelled before its turn", () => {
       { from: 0, to: 5, newText: "Late!", documentId: id },
       { signal: abort.signal },
     );
+    // The edit is in the queue, waiting, before it is cancelled: two
+    // operations are counted (the head and it), and its wait timer is armed.
+    expect(ownershipSnapshotForTests().queuedDocuments).toBe(1);
+    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
+    const timersWhileQueued = vi.getTimerCount();
     // What a client does when its own timeout fires or the user interrupts:
     // it sends `notifications/cancelled` for the request.
     abort.abort("client gave up");
@@ -384,6 +392,8 @@ describe("a call whose request was cancelled before its turn", () => {
     await head.done;
     expect((await after.answer).error).toBe(false);
     await settle();
+    // The cancelled edit's wait timer was cleared at its turn.
+    expect(vi.getTimerCount()).toBeLessThan(timersWhileQueued);
     // The cancelled edit's turn came and went without it.
     expect(text(ydoc)).toBe(before);
     expect(text(ydoc)).not.toContain("Late!");
@@ -418,7 +428,31 @@ describe("a call whose request was cancelled before its turn", () => {
   });
 });
 
+describe("the waits together stay under the stdio bridge's timeout", () => {
+  it("a call that waits its full limit and then creates a document still answers before the bridge gives up", () => {
+    // `tandem_convertToMarkdown` and `tandem_scratchpad` can wait once for
+    // their own turn and once more, briefly, to take what they created.
+    expect(DOC_OP_WAIT_MS + FRESH_TAKE_WAIT_MS).toBeLessThanOrEqual(
+      (STDIO_BRIDGE_REQUEST_TIMEOUT_MS * 3) / 4,
+    );
+  });
+});
+
 describe("a queue error from inside a body", () => {
+  it("tandem_open: one thrown by the open itself is not answered as this call's own wait", async () => {
+    const { id } = setupDoc("d");
+    const { DocOpWaitExpired } = await import("../../src/server/sessions/doc-op-queue.js");
+    await expect(
+      ownedOpen({ ownerId: A }, "tandem_open", {
+        predict: () => id,
+        open: async () => {
+          throw new DocOpWaitExpired(1);
+        },
+      }),
+    ).rejects.toBeInstanceOf(DocOpWaitExpired);
+    expect(getDocOwner(id)).toBeUndefined();
+  });
+
   it("is not answered as this call's own wait: the busy answer is only for a call that never started", async () => {
     const { id } = setupDoc("d");
     const { DocOpWaitExpired } = await import("../../src/server/sessions/doc-op-queue.js");
@@ -466,12 +500,12 @@ describe("a lapse behind an operation that never settles", () => {
     await vi.advanceTimersByTimeAsync(DOC_OP_WAIT_MS);
     expect((await waiting.answer).code).toBe("DOCUMENT_BUSY");
 
-    // And if it ever does settle, the skipped lapse does not run a second time.
-    setDocOwner(id, { ownerId: B, kind: "opened" }, "take");
     head.release();
     await head.done;
     await settle();
-    expect(getDocOwner(id)).toMatchObject({ ownerId: B, kind: "opened" });
+    // (That the lapse does not run a second time at its turn is pinned in
+    // `doc-op-queue.test.ts`, where the change counts its runs: here a second
+    // run would find its record gone and do nothing visible.)
   });
 });
 
@@ -483,7 +517,7 @@ describe("the take of a document a call just created", () => {
     const take = takeFreshDocument({ ownerId: A }, id).then(() => {
       returned = true;
     });
-    await vi.advanceTimersByTimeAsync(1999);
+    await vi.advanceTimersByTimeAsync(FRESH_TAKE_WAIT_MS - 1);
     expect(returned).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await take;

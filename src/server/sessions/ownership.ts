@@ -575,8 +575,11 @@ function lapse(record: OwnerRecord): void {
     if (entry.ownerId !== record.ownerId) continue;
     // At its turn in the document's queue (ownership design §4.3): at once
     // when nothing is in flight, otherwise after the running operation, so a
-    // document never changes owner in the middle of one. A deferred move
-    // re-checks everything it was decided on: this exact entry, this exact
+    // document does not change owner in the middle of one — with one
+    // exception: a lapse that has waited the queue's limit runs anyway, beside
+    // whatever is still running, so a dead owner cannot keep a document
+    // behind an operation that never settles. A deferred move re-checks
+    // everything it was decided on: this exact entry, this exact
     // record, still lapsed and still detached.
     runWhenDocIdle(
       documentId,
@@ -623,8 +626,11 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
 
 /**
  * The one composite every ownership change goes through (ownership design
- * §4.3). **No enforcement here or anywhere in 1a.** Synchronous in 1a; PR 1c
- * runs it at its turn in the document's operation queue. Of the design's five
+ * §4.3). **No enforcement here or anywhere in 1a.** Synchronous. From PR 1c
+ * a claim, a take and a lapse call it at their turn in the document's
+ * operation queue; the tab-close point, the user-open default, the stale-entry
+ * backstop and a lapse whose wait ran out call it where they are
+ * (`doc-op-queue.ts`'s header lists them). Of the design's five
  * steps, 1a runs step 2 (the entry; `null` deletes it, so unowned is always
  * the absence of an entry) and step 5's seam; 1c adds step 1's loss record.
  * Step 1's handover is PR 2's, step 3 (change notices) PR 2's, step 4

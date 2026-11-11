@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
 import { registerDiagnosticsTools } from "../../src/server/mcp/diagnostics.js";
@@ -334,7 +335,9 @@ describe("no queue, no refusal, nothing stamped while dark", () => {
         expect(ownershipSnapshotForTests()).toEqual(seeded);
       } finally {
         await close();
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        // Close the watch the real open started before removing its file.
+        unwatchFile(filePath);
+        fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     },
   );
