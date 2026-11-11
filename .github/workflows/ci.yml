@@ -173,6 +173,14 @@ jobs:
   # hazard bites, and this gate must not be able to go red for a line-ending
   # reason unrelated to ACLs.
   #
+  # #2400: the runner also holds specs that are not icacls proofs, the 8.3
+  # short-name document tests and the launcher's resolver-flavour describes.
+  # Their tests call `ctx.skip()` on a host with no short names or no free
+  # drive letter for `subst`; here that skip fails the job. The TEMP step is
+  # the one `vitest-windows` has (see its comment), copied so these specs run
+  # here in the environment they were measured in: 0 skipped on that job, with
+  # a long TEMP. They have not been run on a short TEMP.
+  #
   # Cost, measured against run 32325964215: `check` is 13m02s and every job starts
   # within 1s of the others, so this ~2-3min leg adds no PR wall clock; the repo
   # is public, so GitHub-hosted minutes are unmetered.
@@ -192,7 +200,10 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      - name: Real-icacls proof (#1299 recovery path)
+      - name: Give TEMP its long name
+        run: node -e "const fs=require('node:fs');const t=fs.realpathSync.native(require('node:os').tmpdir());fs.appendFileSync(process.env.GITHUB_ENV,'TEMP='+t+'\nTMP='+t+'\n')"
+
+      - name: Real-icacls proof (#1299 recovery path) and the #2400 short-name specs
         run: node scripts/ci/windows-acl-proof.mjs
         timeout-minutes: 10
 

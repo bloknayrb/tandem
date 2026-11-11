@@ -35,6 +35,14 @@ import {
 
 const BS = String.fromCharCode(92);
 const WIN = process.platform === "win32";
+/** Every shell call is bounded: a hung `cmd` or `subst` fails the test instead of the job. */
+const SHELL_TIMEOUT_MS = 15_000;
+/**
+ * Drive letters this file may `subst`. `short-name-documents.win.test.ts` runs
+ * in another worker at the same time and has its own, disjoint set, so the two
+ * cannot pick the same free letter.
+ */
+const SUBST_LETTERS = ["Q", "P", "K", "J"];
 
 let root: string;
 let home: string;
@@ -50,7 +58,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 afterEach(() => {
@@ -84,7 +92,10 @@ function tryLink(target: string, link: string): boolean {
 /** The 8.3 alias of an existing path, or null when the volume makes none. */
 function shortAliasOf(p: string): string | null {
   try {
-    const out = execSync(`cmd /d /c for %I in ("${p}") do @echo %~sI`, { encoding: "utf-8" });
+    const out = execSync(`cmd /d /c for %I in ("${p}") do @echo %~sI`, {
+      encoding: "utf-8",
+      timeout: SHELL_TIMEOUT_MS,
+    });
     const alias = out.trim().split(/\r?\n/).pop()?.trim() ?? "";
     return alias.includes("~") ? alias : null;
   } catch {
@@ -177,10 +188,10 @@ describe("each pair accepts, refuses and spells the same (R3.1)", () => {
   );
 
   it.runIf(WIN)("on a subst drive, keeping its drive letter", async (ctx) => {
-    const letter = ["Q", "P", "O", "N"].find((l) => !fs.existsSync(`${l}:${BS}`));
+    const letter = SUBST_LETTERS.find((l) => !fs.existsSync(`${l}:${BS}`));
     if (!letter) return ctx.skip();
     try {
-      execSync(`subst ${letter}: "${home}"`);
+      execSync(`subst ${letter}: "${home}"`, { timeout: SHELL_TIMEOUT_MS });
     } catch {
       return ctx.skip();
     }
@@ -191,7 +202,7 @@ describe("each pair accepts, refuses and spells the same (R3.1)", () => {
       expect(resolveSafeCwd(onDrive)).toBe(onDrive);
       expect(await resolveSafeCwdAsync(onDrive)).toBe(onDrive);
     } finally {
-      execSync(`subst ${letter}: /d`);
+      execSync(`subst ${letter}: /d`, { timeout: SHELL_TIMEOUT_MS });
     }
   });
 });

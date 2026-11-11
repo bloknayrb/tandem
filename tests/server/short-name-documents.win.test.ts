@@ -71,6 +71,16 @@ import { docFromMarkdown, simulateRestart } from "../helpers/short-name-fixture.
 
 const WIN = process.platform === "win32";
 const BS = String.fromCharCode(92);
+/** Every shell call is bounded: a hung `cmd` or `subst` fails the test instead of the job. */
+const SHELL_TIMEOUT_MS = 15_000;
+/**
+ * Drive letters this file may `subst`. `launcher/resolver-flavour.test.ts` runs
+ * in another worker at the same time and has its own, disjoint set, so the two
+ * cannot pick the same free letter.
+ */
+const SUBST_LETTERS = ["O", "N", "M", "L"];
+/** Windows can hold a just-closed file for a moment; retry the temp-dir deletes. */
+const RM_TEMP = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
 
 const LONG_DIR = "a folder with a long name";
 const LONG_FILE = "a long file name.md";
@@ -84,7 +94,10 @@ let longPath: string;
 /** The 8.3 alias of an existing path (every component short), or null when the volume makes none. */
 function shortAliasOf(p: string): string | null {
   try {
-    const out = execSync(`cmd /d /c for %I in ("${p}") do @echo %~sI`, { encoding: "utf-8" });
+    const out = execSync(`cmd /d /c for %I in ("${p}") do @echo %~sI`, {
+      encoding: "utf-8",
+      timeout: SHELL_TIMEOUT_MS,
+    });
     const alias = out.trim().split(/\r?\n/).pop()?.trim() ?? "";
     return alias.includes("~") ? alias : null;
   } catch {
@@ -113,7 +126,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await fs.rm(SESSION_DIR, { recursive: true, force: true });
+  await fs.rm(SESSION_DIR, RM_TEMP);
 });
 
 beforeEach(async () => {
@@ -138,7 +151,7 @@ afterEach(async () => {
   for (const f of await fs.readdir(SESSION_DIR).catch(() => [])) {
     await fs.rm(path.join(SESSION_DIR, f), { force: true });
   }
-  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(root, RM_TEMP);
 });
 
 describe.runIf(WIN)(
@@ -240,10 +253,10 @@ describe.runIf(WIN)(
 
     it("a subst drive keeps its drive letter; only the short components change (R1.3)", async (ctx) => {
       const dirAlias = shortLeafOf(longDir);
-      const letter = ["Q", "P", "O", "N"].find((l) => !fsSync.existsSync(`${l}:${BS}`));
+      const letter = SUBST_LETTERS.find((l) => !fsSync.existsSync(`${l}:${BS}`));
       if (dirAlias === null || !letter) return ctx.skip();
       try {
-        execSync(`subst ${letter}: "${root}"`);
+        execSync(`subst ${letter}: "${root}"`, { timeout: SHELL_TIMEOUT_MS });
       } catch {
         return ctx.skip();
       }
@@ -257,8 +270,13 @@ describe.runIf(WIN)(
         expect(viaLong.documentId).toBe(viaShort.documentId);
         await closeDocumentById(viaShort.documentId);
       } finally {
-        await simulateRestart();
-        execSync(`subst ${letter}: /d`);
+        // The mapping goes first, in its own `try`: a `simulateRestart()` that
+        // throws must not leave the drive letter mapped for the rest of the run.
+        try {
+          execSync(`subst ${letter}: /d`, { timeout: SHELL_TIMEOUT_MS });
+        } finally {
+          await simulateRestart();
+        }
       }
     });
 

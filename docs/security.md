@@ -657,7 +657,7 @@ bound in full, and the conditions that void the acceptance.
 
 - **[#1609](https://github.com/bloknayrb/tandem/issues/1609) — environment-derived path reads reached by `runDoctor` (three when accepted, two today). ACCEPTED 2026-09-08.** Its full entry is under *Resolved since this list was last reconciled* above rather than repeated here, because that section records the 2026-09-11 reconciliation that moved it out of the open list. Cross-referenced here so the accepted set is enumerable from one place: the bound is the **input** (`PATH` and `homedir()` — process environment a caller cannot steer by triggering diagnostics; the third read, `TANDEM_CLAUDE_CMD`, is now screened before any `stat`), not the sink, and it carries **no** revisit date deliberately.
 
-- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment. ACCEPTED by Bryan 2026-09-16; no revisit date, deliberately.** `resolveAndValidatePath` (`src/server/documents/open.ts:701-774`, measured at `ade78f8f`) screens the UNC / extended-length / device-namespace prefixes on the raw, resolved *and* `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. Since #2400 it also replaces a Windows 8.3 short component of the `realpath`'d string with the long name of the same directory entry (`src/server/file-io/short-names.ts`), after the third screen and before a fourth on the final string; that step reads names and `lstat`s, creates nothing, never changes the drive prefix, and adds no containment, so the property below is unchanged. The file holds **zero** `allowedRoots` and **zero** `assertPathSafe` calls; that is the verified property, re-derived after #1661 relocated the function.
+- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment. ACCEPTED by Bryan 2026-09-16; no revisit date, deliberately.** `resolveAndValidatePath` (`src/server/documents/open.ts:701-774`, measured at `ade78f8f`) screens the UNC / extended-length / device-namespace prefixes on the raw, resolved *and* `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. Since #2400 it also replaces a Windows 8.3 short component of the `realpath`'d string with the long name of the same directory entry (`src/server/file-io/short-names.ts`), after the third screen and before a fourth on the final string; that step calls the native `realpath` on each short-shaped prefix (which opens a handle on it) and `lstat`s that prefix and its long-named twin, creates nothing, never changes the drive prefix, and adds no containment, so the property below is unchanged. The file holds **zero** `allowedRoots` and **zero** `assertPathSafe` calls; that is the verified property, re-derived after #1661 relocated the function.
 
   **The bound.** An MCP client can open, edit and save any *existing* allowlisted file at any absolute path — arbitrary content into an existing `.md` / `.txt` / `.html` / `.docx`. It **cannot create** one: the resolver `fs.stat`s the resolved path (`resolveAndValidatePath`'s `fs.stat(resolved)`) with no existence branch in front of it, so a path that does not exist throws ENOENT. The extension allowlist, the size cap, the prefix screening and that cannot-create property together **are** the intended limit for a local-first editor whose job is opening the files you point it at. What makes it loud is the first step, not every step: `tandem_open` opens a visible tab.
 
@@ -802,6 +802,29 @@ not a reflex "it was dismissed before".
   current caller set only**, and that phrasing is deliberate: the safety property
   belongs to the callers, not to the flagged code. A new caller must screen
   before calling, so verify the call site rather than trusting the disposition.
+- **The five `js/path-injection` sinks #2400 added (PR #2407). All five alerts
+  stay OPEN and must not be dismissed**, for the reason alert 16 stays open: each
+  is the #1666 class (screened, not confined), not a false positive.
+  - *`fsp.realpath(p)` and `fsp.lstat(p)` in `currentDeps`*
+    (`src/server/file-io/short-names.ts`). The argument is a prefix of the
+    string `expandShortNames` was given, and that function's FIRST statement is
+    `rejectUnsafeWindowsPrefix` on the whole string, before any filesystem call;
+    it also refuses a string that is not absolute. Its callers have screened
+    already: `resolveAndValidatePath` (raw, resolved and `realpath`'d forms)
+    and save-as (`expandedSaveTarget` in `document-service.ts`, after the
+    target's own screens). The native result is never used as a path: only its
+    last component is read, and a candidate containing a separator or a colon
+    is refused.
+  - *The two `fs.readFile(filePath)` calls in `diskWitness`*
+    (`src/server/documents/short-name-adoption.ts`). The argument is the open
+    document's path, which is `resolveAndValidatePath`'s return value (four
+    screens, extension allowlist, size cap) or the registry's copy of it. The
+    same file is read by the open itself a few statements away.
+  - *`fsp.realpath(p)` in `nativeForm`* (`src/server/launcher/cwd-preview.ts`).
+    Preceded by `rejectUnsafeWindowsPrefix` on the same value in the same
+    function, and called only on a folder the launcher's gate
+    (`resolveRouteCwdAsync`) already accepted, on a bundled document folder, or
+    on the home directory. It is used for comparison and display only.
 - **`js/tainted-format-string` on `sessionPath` interpolations.** The flagged
   argument genuinely *is* the format string (a template literal), so the rule
   reads the shape correctly. The disposition rests on the value: the

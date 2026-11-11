@@ -2297,9 +2297,9 @@ are the figures #2398 uses.
   and the product compared the two: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher
   (the two equivalence tests in `tests/server/launcher/cwd-preview.test.ts`), the bundled-folder
   list against the drift preview's candidate (that file's third failure), and the document key in
-  `documents/open.ts` (three in `tests/server/adr-034-open-characterization.test.ts`). The fix
-  is expected to make those six pass on a short `TEMP` too (this job never has one, so it does
-  not show that). The step stays, and more tests depend on it than before: a document is now
+  `documents/open.ts` (three in `tests/server/adr-034-open-characterization.test.ts`). With the
+  fix those six pass on a short `TEMP` (measured 2026-11-11 on a Windows 11 PC with `TEMP` set to
+  a real 8.3 alias, not in this job, which never has one). The step stays, and more tests depend on it than before: a document is now
   keyed on its long path, so a test that computes an expected id or key from the raw temp path
   fails on a short `TEMP`. Whether
   the hosted runner's volume creates short names for NEW folders is what

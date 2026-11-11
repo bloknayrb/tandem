@@ -36,6 +36,11 @@
  * `core.autocrlf` × `.gitattributes eol=lf` hazard bites, and this gate must not
  * be able to go red for a line-ending reason that has nothing to do with ACLs.
  *
+ * #2400 added specs that are not about ACLs at all (`icacls: false` below). They
+ * use the same accounting for the same reason: they skip themselves on a host
+ * with no 8.3 short names or no free drive letter, and only this job turns that
+ * skip into a failure.
+ *
  * Wired by the `windows-acl-proof` job in `.github/workflows/ci.yml` and pinned by
  * `tests/scripts/windows-acl-proof-wiring.test.ts`, which also runs THIS FILE on
  * the ubuntu leg to prove the platform refusal is real.
@@ -50,8 +55,12 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
- * The real-`icacls` specs, each paired with the Windows-gated `describe` title
- * that must have executed.
+ * The specs this gate holds at "ran, not skipped", each paired with the
+ * Windows-gated `describe` title that must have executed. Most are the
+ * real-`icacls` proofs; an entry with `icacls: false` is a Windows-only spec of
+ * another kind (#2400's short-name and launcher-flavour tests) that can skip
+ * itself on a host missing what it needs. A spec file may appear more than once,
+ * with a different `suite` each time.
  *
  * The suite title is the load-bearing half. Pinning a file alone cannot tell a
  * run where the Windows describe was disabled from one where it passed — see the
@@ -60,7 +69,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
  * deliberate edit rather than silent drift.
  *
  * `tests/scripts/windows-acl-proof-wiring.test.ts` scans all of `tests/` for test
- * files that spawn real `icacls` and fails if one is missing from this list.
+ * files that spawn real `icacls` and fails if one is missing from this list, or
+ * is listed with `icacls: false`.
  */
 export const WINDOWS_ACL_PROOF_SPECS = [
   {
@@ -95,6 +105,45 @@ export const WINDOWS_ACL_PROOF_SPECS = [
       "the proof is a directly spawned `icacls /deny` and the EPERM→PERMISSION_DENIED " +
       "mapping; convert's snapshot runs on a path just found free, so it returns before " +
       "the doc-backup root repair and acl-win is normally not reached at all",
+  },
+  // #2400. The entries below are not icacls proofs (`icacls: false`). They are
+  // here because this is the only job that refuses a skip: their tests need a
+  // volume that makes 8.3 short names and a free drive letter for `subst`, and
+  // call `ctx.skip()` when the host gives neither. The advisory `vitest-windows`
+  // job accepts that skip; the 0-skipped rule below turns it into a failure.
+  {
+    spec: "tests/server/short-name-documents.win.test.ts",
+    suite: "a file named by an 8.3 short path is the same document as by its long path",
+    icacls: false,
+    realAcl: false,
+    realAclReason:
+      "the proof is the document key: which id, session file and envelope a short " +
+      "spelling opens. The store directory's ACL hardening is not what is under test",
+  },
+  // `resolver-flavour.test.ts` has no Windows-only describe: its five
+  // `it.runIf(WIN)` tests sit in three describes beside cross-platform ones, so
+  // each of the three is named. On Windows every test in them must run.
+  {
+    spec: "tests/server/launcher/resolver-flavour.test.ts",
+    suite: "each pair accepts, refuses and spells the same (R3.1)",
+    icacls: false,
+    realAcl: false,
+    realAclReason: "the launcher's cwd resolvers only read paths; nothing sets an ACL",
+  },
+  {
+    spec: "tests/server/launcher/resolver-flavour.test.ts",
+    suite: "home confinement and session resume answer as before (R3.3)",
+    icacls: false,
+    realAcl: false,
+    realAclReason: "the launcher's cwd resolvers only read paths; nothing sets an ACL",
+  },
+  {
+    spec: "tests/server/launcher/resolver-flavour.test.ts",
+    suite:
+      "previewCwdDrift says nothing for Tandem's own bundled folders, whichever spelling each side has (R3.2)",
+    icacls: false,
+    realAcl: false,
+    realAclReason: "the drift preview only reads paths; nothing sets an ACL",
   },
 ];
 
@@ -239,7 +288,8 @@ function main() {
         "--reporter=default",
         "--reporter=json",
         `--outputFile.json=${reportPath}`,
-        ...WINDOWS_ACL_PROOF_SPECS.map(({ spec }) => spec),
+        // A spec listed once per suite is still one file to vitest.
+        ...new Set(WINDOWS_ACL_PROOF_SPECS.map(({ spec }) => spec)),
       ],
       { cwd: ROOT, stdio: "inherit" },
     );
@@ -269,10 +319,10 @@ function main() {
     }
     if (!ok) {
       for (const failure of failures) console.error(`windows-acl-proof: ${failure}`);
-      fail("the real-icacls proof did not execute as required");
+      fail("a registered Windows-gated suite did not execute as required");
     }
 
-    console.log("windows-acl-proof: OK — every Windows-gated icacls suite ran in full");
+    console.log("windows-acl-proof: OK — every registered Windows-gated suite ran in full");
   } finally {
     rmSync(reportDir, { recursive: true, force: true });
   }
