@@ -107,6 +107,7 @@ import {
   type LoadedSession,
   loadSessionWithPath,
   narrowConflict,
+  peekSessionReadOnly,
   quarantineSession,
   restoreYDoc,
   type SessionFileEntry,
@@ -137,7 +138,7 @@ import {
   openDocumentWhenReady,
 } from "./registry.js";
 import { remapEnvelopeWins } from "./reload-remap.js";
-import { moveShortNameRecords } from "./short-name-records.js";
+import { moveShortNameRecords, rewriteMovedEnvelope } from "./short-name-records.js";
 import { wireFileWatcher } from "./watcher.js";
 
 /**
@@ -518,6 +519,7 @@ async function openResolved(
   // Records stored under the short spelling's key (#2400) are moved to this
   // document's key first, each kind only if this key has none of that kind.
   // After it the open is an ordinary open of the long spelling.
+  let movedEnvelope = false;
   if (legacyPath !== undefined) {
     const moved = await moveShortNameRecords(legacyPath, resolved);
     // A replayed restore entry's `readOnly` is the stored flag of the
@@ -527,14 +529,12 @@ async function openResolved(
     // it does on any restore: a tab stored read-only must not come back
     // writable because its session could not be moved.
     if (options?.fromRestore === true && !moved.session) {
-      let own: LoadedSession | null = null;
-      try {
-        own = await loadSessionWithPath(resolved);
-      } catch {
-        // Unreadable: `maybeRestoreSession` deals with it next; the flag stands.
-      }
-      if (own !== null) readOnly = derivedReadOnly || own.session.readOnly === true;
+      // A plain read of the flag: the real load, with its quarantine and its
+      // gates, is `maybeRestoreSession`'s alone.
+      const own = await peekSessionReadOnly(resolved);
+      if (own !== null) readOnly = derivedReadOnly || own;
     }
+    movedEnvelope = moved.envelope;
   }
   const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly, id);
   const restoredFromSession = restore.restored;
@@ -542,6 +542,7 @@ async function openResolved(
     await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
+  if (movedEnvelope) await rewriteMovedEnvelope(id, doc, resolved);
 
   // Second half of the fallback-anchor repair (#1800, site b), as an anchor
   // overlay (#1863). The clone-time repair (site a) ran BEFORE

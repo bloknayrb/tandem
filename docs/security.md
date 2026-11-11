@@ -826,13 +826,15 @@ not a reflex "it was dismissed before".
     annotation path helpers, so it is argued here and not inherited. Every
     argument is a file name inside Tandem's own sessions or annotations
     directory, built from a 64-hex hash of the path (or, for a pre-#1750
-    session, `encodeURIComponent` of it, which cannot hold a separator, a
-    colon or `..`). The only paths hashed are `resolveAndValidatePath`'s two
+    session, `encodeURIComponent` of it, which cannot hold a separator or a
+    colon, so the name stays one component of that directory). The only paths hashed are `resolveAndValidatePath`'s two
     outputs for one open: the canonical path and `legacyPath`, the string
     master produced for the same spelling, set after the same screens. No
     filesystem call is made on `legacyPath` itself. `link` refuses an existing
     target, a symlink included, so nothing is overwritten or followed, and the
-    link shares the old file's inode and so its mode and ACL. After a session
+    link shares the old file's inode and so its mode and ACL. If the old name
+    cannot be removed afterwards, both names are kept. The move runs only
+    while this process holds the annotation store lock. After a session
     move, `restampMovedSession` reads the new name and rewrites it through
     the ordinary session writer (`atomicWrite`, private mode) to store the
     long path; it touches that one name only. **Residual,

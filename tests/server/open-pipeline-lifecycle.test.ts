@@ -165,13 +165,15 @@ describe("file-watcher — .md", () => {
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
     // The watcher is armed with the document's own canonical path: the string
-    // its saves use. That is `realpathSync`'s result except where a component
-    // is a Windows 8.3 short name (a short `TEMP`), which the open expands
-    // (#2400) — so the expectation is the open's own result, and the second
-    // line says what that result is on any host with no short component.
+    // its saves use. That is the file's long path. The NATIVE realpath is the
+    // expected value on every host: it equals `realpathSync`'s result where no
+    // component is a Windows 8.3 short name, and where one is (a short `TEMP`)
+    // it is the expanded string the open must produce (#2400). Comparing with
+    // the JS flavour, or only with the open's own result, would pass under a
+    // short `TEMP` whatever the open returned.
     const calledPath = mockWatchFile.mock.calls[0][0];
     expect(calledPath).toBe(opened.filePath);
-    if (!/~\d/.test(filePath)) expect(calledPath).toBe(fsSync.realpathSync(filePath));
+    expect(calledPath).toBe(fsSync.realpathSync.native(filePath));
   });
 });
 
@@ -191,7 +193,8 @@ describe("file-watcher — .docx", () => {
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
     expect(mockWatchFile.mock.calls[0][0]).toBe(result.filePath);
-    if (!/~\d/.test(filePath)) expect(result.filePath).toBe(fsSync.realpathSync(filePath));
+    // The expected long path, on every host (see the .md case above).
+    expect(result.filePath).toBe(fsSync.realpathSync.native(filePath));
 
     // Content assertion — docx goes through the Buffer adapter branch; a
     // non-empty fragment proves that path works end-to-end. If the branch

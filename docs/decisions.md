@@ -2301,9 +2301,15 @@ are the figures #2398 uses.
   fix those six pass on a short `TEMP` (measured 2026-11-11 on a Windows 11 PC with `TEMP` set to
   a real 8.3 alias, not in this job, which never has one). The step stays, and more tests depend on it than before: a document is now
   keyed on its long path, so a test that computes an expected id or key from the raw temp path
-  fails on a short `TEMP`. Whether
-  the hosted runner's volume creates short names for NEW folders is what
-  `tests/server/short-name-documents.win.test.ts` reports as ran or skipped.
+  fails on a short `TEMP`. The hosted
+  runner's volume does create short names for new folders (measured on this PR's runs).
+- **`windows-acl-proof` now holds specs that are not `icacls` proofs (#2400).** The 8.3 short-name
+  document describe and three launcher resolver-flavour describes are registered with its runner,
+  so a skip or a failure there fails a required check. That check therefore also depends on the
+  runner image creating 8.3 names, supporting hard links and having a free `subst` drive letter.
+  It fails closed. If an image change turns it red on every PR, the recovery is one PR that
+  removes the `icacls: false` entries from `scripts/ci/windows-acl-proof.mjs` and their rows in
+  the wiring test; the specs keep running in the advisory `vitest-windows` job.
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in

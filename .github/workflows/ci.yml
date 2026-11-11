@@ -181,6 +181,15 @@ jobs:
   # here in the environment they were measured in: 0 skipped on that job, with
   # a long TEMP. They have not been run on a short TEMP.
   #
+  # This makes a REQUIRED check depend on three properties of the runner image
+  # that have nothing to do with ACLs: the system volume creates 8.3 short
+  # names, hard links work on it, and a `subst` drive letter is free. If an
+  # image change removes one, this job goes red on every PR (it fails closed,
+  # which is the point of the runner). Recovery, in one PR: remove the entries
+  # with `icacls: false` from `scripts/ci/windows-acl-proof.mjs` and their
+  # rows in `tests/scripts/windows-acl-proof-wiring.test.ts`; the specs keep
+  # running in the advisory `vitest-windows` job, where a skip passes.
+  #
   # Cost, measured against run 32325964215: `check` is 13m02s and every job starts
   # within 1s of the others, so this ~2-3min leg adds no PR wall clock; the repo
   # is public, so GitHub-hosted minutes are unmetered.

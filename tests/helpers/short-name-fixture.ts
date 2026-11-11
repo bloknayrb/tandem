@@ -25,7 +25,13 @@ import path from "node:path";
 import { vi } from "vitest";
 import * as Y from "yjs";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { closeStore, quiesceForTesting } from "../../src/server/annotations/store.js";
+import {
+  acquireStoreLock,
+  closeStore,
+  isStoreLockHeld,
+  quiesceForTesting,
+  releaseStoreLock,
+} from "../../src/server/annotations/store.js";
 import { resetForTesting as syncReset } from "../../src/server/annotations/sync.js";
 import { resetForTesting as dirtyReset } from "../../src/server/documents/dirty.js";
 import { removeDoc } from "../../src/server/documents/registry-testing.js";
@@ -131,8 +137,15 @@ export function forgetOnRestart(...filePaths: string[]): void {
  * Drop every open document the way a process exit does: durable annotation
  * writes are flushed, then the registry, the Y.Docs, the tombstone ledger and
  * the dirty state are gone. Files on disk are untouched.
+ *
+ * The annotation store lock goes the same way: a process that held it gives
+ * it up at exit and the next one takes it at start. A run that did not hold it
+ * (read-only beside another instance, the store switched off, a lock attempt
+ * that threw) is restarted without it; such a test takes it itself when its
+ * story says the next start would.
  */
 export async function simulateRestart(): Promise<void> {
+  const heldLock = isStoreLockHeld();
   for (const [id, state] of [...getOpenDocs()]) {
     await closeStore(docHash(state.filePath)).catch(() => {});
     clearFileSyncContext(id);
@@ -143,4 +156,8 @@ export async function simulateRestart(): Promise<void> {
   await quiesceForTesting();
   syncReset();
   dirtyReset();
+  if (heldLock) {
+    await releaseStoreLock();
+    await acquireStoreLock();
+  }
 }

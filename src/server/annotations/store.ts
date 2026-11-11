@@ -104,6 +104,13 @@ let annotationsDirReady = false;
 
 /** Read-only mode engaged when another live PID owns the lockfile. */
 let readOnly = false;
+/**
+ * True only while THIS process has the lockfile on disk under its own PID.
+ * Not the negation of `readOnly`: that flag starts `false`, stays `false` when
+ * `acquireStoreLock` throws before deciding, and is `false` with the feature
+ * off, where no lock is taken at all.
+ */
+let lockHeld = false;
 
 /**
  * Per-doc debounce queue. Guarded from concurrency by Node's single thread.
@@ -200,6 +207,7 @@ export async function acquireStoreLock(
   if (isFeatureDisabled()) {
     // Feature off — no lock, not readonly (store is entirely inert).
     readOnly = false;
+    lockHeld = false;
     return "locked";
   }
 
@@ -222,6 +230,7 @@ export async function acquireStoreLock(
       // path (the old early assignment at function entry let a concurrent
       // scheduleWrite or isStoreReadOnly() call see false before we owned it).
       readOnly = false;
+      lockHeld = true;
       return "locked";
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -232,6 +241,7 @@ export async function acquireStoreLock(
           `[ANNOTATION-STORE] Failed to take lock at ${lockPath}: ${(err as Error).message}. Running read-only.`,
         );
         readOnly = true;
+        lockHeld = false;
         return "readonly";
       }
 
@@ -239,6 +249,7 @@ export async function acquireStoreLock(
       const staleReclaimed = await tryReclaimStaleLock(lockPath, probe);
       if (!staleReclaimed) {
         readOnly = true;
+        lockHeld = false;
         return "readonly";
       }
       // Loop once more to try the exclusive create after unlinking.
@@ -247,6 +258,7 @@ export async function acquireStoreLock(
 
   // Two attempts failed — couldn't reclaim cleanly.
   readOnly = true;
+  lockHeld = false;
   return "readonly";
 }
 
@@ -413,6 +425,16 @@ export function isStoreReadOnly(): boolean {
 }
 
 /**
+ * Does this process hold the store lock right now? The question a caller asks
+ * before it moves or removes files in the annotations directory outside the
+ * store's own writer (#2400). False with the feature off, before
+ * `acquireStoreLock` has run, after it threw, and in read-only mode.
+ */
+export function isStoreLockHeld(): boolean {
+  return lockHeld;
+}
+
+/**
  * Returns true when the annotation store is entirely disabled via
  * `TANDEM_ANNOTATION_STORE=off`. In this mode `queueWrite`/`flush` are inert
  * no-ops, so any flow that relies on a durable write succeeding (e.g. rename
@@ -435,6 +457,7 @@ export async function releaseStoreLock(): Promise<void> {
     // ENOENT or parse error — nothing to release.
   }
   readOnly = false;
+  lockHeld = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -576,9 +599,14 @@ export type EnvelopeMoveResult = "moved" | "absent" | "occupied" | "failed";
  * touched (`occupied`). Otherwise the file is hard-linked to the new name and
  * the old name unlinked: `link` fails if the new name exists, so this never
  * overwrites, and the new name appears whole or not at all. The file is not
- * read and not rewritten, so its bytes and mtime are the old file's; its inner
- * `docHash` and `meta.filePath` are recomputed by the next durable write
- * (`snapshot()`), and the loader does not consult them.
+ * read and not rewritten here, so its bytes and mtime are the old file's. Its
+ * inner `docHash` and `meta.filePath` still name the short spelling: the
+ * LOADER does not consult them, but rename recovery reads other envelopes'
+ * `meta.filePath`, so the open forces a snapshot once the moved file has
+ * loaded cleanly (`rewriteMovedEnvelope` in `documents/short-name-records.ts`).
+ * If the old name cannot be removed after the link, both names are kept and
+ * the answer is still `moved`: no record is ever only under a name the open
+ * will not read.
  *
  * The caller guarantees no live document is using either key. Never throws.
  */
@@ -609,23 +637,39 @@ export async function moveEnvelopeFile(
     console.error("[ANNOTATION-STORE] moveEnvelopeFile: the file was left where it is:", err);
     return "failed";
   }
-  try {
-    await fs.unlink(from);
-  } catch (err) {
-    // Already gone (someone else removed it): the record is under the new
-    // name only, which is a completed move. Undoing here would lose it.
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return "moved";
-    }
-    // All or nothing: take the new name away again and leave the old record
-    // as it was, so the next open by that spelling tries again.
-    console.error("[ANNOTATION-STORE] moveEnvelopeFile: could not remove the old name:", err);
-    await fs.unlink(to).catch((undoErr: unknown) => {
-      console.error("[ANNOTATION-STORE] moveEnvelopeFile: could not undo the move:", undoErr);
-    });
-    return "failed";
+  if (!(await removeOldName(from))) {
+    // Both names now hold the same complete file. The open reads the new one;
+    // the old one is skipped by rename recovery while its path exists and
+    // ages out. Undoing instead would leave the record under a name the open
+    // does not read, and the first annotation write would then take its place.
+    console.error(
+      "[ANNOTATION-STORE] moveEnvelopeFile: moved, but the old name could not be removed and was left behind: %s",
+      path.basename(from),
+    );
   }
   return "moved";
+}
+
+/**
+ * Remove the old name of a record that is already linked under its new name.
+ * A file another process holds open without share-delete answers EBUSY or
+ * EPERM on Windows for a moment (antivirus, an indexer), so those are retried
+ * for about a second. `true` when the name is gone (ENOENT counts).
+ */
+export async function removeOldName(file: string): Promise<boolean> {
+  const delays = [0, 50, 150, 300, 500];
+  for (const delay of delays) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      await fs.unlink(file);
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return true;
+      if (code !== "EBUSY" && code !== "EPERM") return false;
+    }
+  }
+  return false;
 }
 
 async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {
@@ -970,6 +1014,7 @@ export function resetForTesting(): void {
   annotationsDirReady = false;
   readOnly = false;
   reclaimInFlight = null;
+  lockHeld = false;
 }
 
 const QUIESCE_CAP_MS = 5000;

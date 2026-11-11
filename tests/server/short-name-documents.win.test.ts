@@ -40,14 +40,17 @@ vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import {
+  acquireStoreLock,
   closeStore,
   envelopePath,
   quiesceForTesting,
+  releaseStoreLock,
   resetForTesting as storeReset,
 } from "../../src/server/annotations/store.js";
 import { resetForTesting as syncReset } from "../../src/server/annotations/sync.js";
 import { openFromDisk, openScratchpad } from "../../src/server/documents/open.js";
 import { docBackupsRoot } from "../../src/server/file-io/doc-backup.js";
+import { _setShortNameDepsForTests } from "../../src/server/file-io/short-names.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import {
   closeDocumentById,
@@ -146,12 +149,16 @@ beforeEach(async () => {
   await fs.writeFile(longPath, "alpha beta gamma\n", "utf-8");
   // A closed document's Y.Doc must not outlive a simulated restart.
   forgetOnRestart(longPath);
+  // What a real start does: records are moved only by an instance that holds
+  // the annotation store lock.
+  expect(await acquireStoreLock()).toBe("locked");
 });
 
 afterEach(async () => {
   await simulateRestart();
   stopAutoSave();
   await quiesceForTesting();
+  await releaseStoreLock();
   storeReset();
   syncReset();
   for (const f of await fs.readdir(SESSION_DIR).catch(() => [])) {
@@ -412,6 +419,76 @@ describe.runIf(WIN)(
       expect(annotationIds(opened.documentId)).toEqual(["ann_old"]);
       expect(await exists(envelopePath(docHash(oldKeyPath)))).toBe(false);
       expect(await exists(envelopePath(docHash(longPath)))).toBe(true);
+    });
+
+    // The live-document guard compares KEYS, and on Windows a key folds case.
+    // The host-neutral twin cannot show this: off Windows `docHash` is
+    // case-sensitive, so there the two strings below are two keys. The
+    // expansion failure is injected (`_setShortNameDepsForTests`); everything
+    // else, the alias included, is the real volume's.
+    it("a live document registered under the short string after a failed expansion keeps its records when the same short path is opened in another case (M4)", async (ctx) => {
+      const dirAlias = shortLeafOf(longDir);
+      if (dirAlias === null) return ctx.skip();
+      const short = path.join(dirAlias, LONG_FILE);
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const link = vi.spyOn(fs, "link");
+      try {
+        // The expansion fails (R4.5): the document opens under the short
+        // string itself, so that string's key holds a LIVE document's records.
+        _setShortNameDepsForTests({
+          platform: "win32",
+          realpathNative: async () => {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          },
+          lstat: (p) => fs.lstat(p, { bigint: true }),
+        });
+        const live = await openFromDisk(short);
+        _setShortNameDepsForTests(null);
+        const registered = getOpenDocs().get(live.documentId)?.filePath ?? "";
+        forgetOnRestart(registered);
+        expect(registered).toBe(fsSync.realpathSync(short));
+        expect(registered.toLowerCase()).not.toBe(longPath.toLowerCase());
+        const liveDoc = getOrCreateDocument(live.documentId);
+        withBrowser(liveDoc, () =>
+          liveDoc
+            .getMap(Y_MAP_ANNOTATIONS)
+            .set("ann_mine", annRecord({ id: "ann_mine", author: "user", rev: 1 })),
+        );
+        await saveCurrentSession();
+        await closeStore(docHash(registered));
+        const sessionBefore = await fs.readFile(sessionFile(registered));
+        const envelopeBefore = await fs.readFile(envelopePath(docHash(registered)));
+
+        // The same short path with its alias component in the other case,
+        // and the expansion working again.
+        const leaf = path.basename(dirAlias);
+        const recased = leaf === leaf.toLowerCase() ? leaf.toUpperCase() : leaf.toLowerCase();
+        const otherCase = path.join(path.dirname(dirAlias), recased, LONG_FILE);
+        const legacy = fsSync.realpathSync(otherCase);
+        // What makes this the case-folding test: another STRING, the same KEY.
+        expect(legacy).not.toBe(registered);
+        expect(docHash(legacy)).toBe(docHash(registered));
+        link.mockClear();
+
+        const second = await openFromDisk(otherCase);
+        await quiesceForTesting();
+        // The normal-open branch, where the move would have run.
+        expect(second.filePath).toBe(longPath);
+        expect(second.documentId).not.toBe(live.documentId);
+        expect(second.kind).toBe("fresh");
+        expect(link).not.toHaveBeenCalled();
+        expect(annotationIds(second.documentId)).not.toContain("ann_mine");
+        expect(annotationIds(live.documentId)).toContain("ann_mine");
+        expect((await fs.readFile(sessionFile(registered))).equals(sessionBefore)).toBe(true);
+        expect((await fs.readFile(envelopePath(docHash(registered)))).equals(envelopeBefore)).toBe(
+          true,
+        );
+        expect(await exists(sessionFile(longPath))).toBe(false);
+      } finally {
+        _setShortNameDepsForTests(null);
+        link.mockRestore();
+        errors.mockRestore();
+      }
     });
 
     it("a long-spelled open leaves records under the short spelling untouched", async (ctx) => {

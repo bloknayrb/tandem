@@ -20,7 +20,12 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
-import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
+import {
+  createStore,
+  getAnnotationsDir,
+  isStoreReadOnly,
+  removeOldName,
+} from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
 import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
@@ -697,6 +702,22 @@ export async function deleteSession(filePath: string): Promise<void> {
   }
 }
 
+/**
+ * The stored `readOnly` flag of the session under `filePath`'s current key,
+ * read without the loader's side effects (no quarantine, no notice, no
+ * fallback arbitration). `null` when there is no such file or it does not
+ * parse. For a caller that needs only the flag before the real load (#2400).
+ */
+export async function peekSessionReadOnly(filePath: string): Promise<boolean | null> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(sessionPathFor(filePath), "utf-8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return (parsed as { readOnly?: unknown }).readOnly === true;
+  } catch {
+    return null;
+  }
+}
+
 /** What {@link moveSessionFile} did. */
 export type SessionMoveResult = "moved" | "absent" | "occupied" | "failed";
 
@@ -709,8 +730,9 @@ export type SessionMoveResult = "moved" | "absent" | "occupied" | "failed";
  * The file under `fromPath`'s key is hard-linked to `toPath`'s current name
  * and then unlinked. `link` fails if the new name exists, so
  * the move can never overwrite, and the new name appears whole or not at all.
- * If the old name cannot be removed the new one is taken away again, so a
- * failed move leaves the old record as it was. After a completed move the
+ * If the old name then cannot be removed (retried for about a second), both
+ * names are kept and the answer is still `moved`: no record is ever only under
+ * a name the open will not read. After a move the
  * stored `filePath` is rewritten to `toPath` through the ordinary session
  * writer (best effort).
  *
@@ -734,23 +756,15 @@ export async function moveSessionFile(
     for (const from of [sessionPathFor(fromPath), legacySessionPath(fromPath)]) {
       if (from === null || from === to || !(await fileExists(from))) continue;
       await fs.link(from, to);
-      try {
-        await fs.unlink(from);
-      } catch (err) {
-        // Already gone (someone else removed it): the record is under the new
-        // name only, which is a completed move. Undoing here would lose it.
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          await restampMovedSession(to, toPath);
-          return "moved";
-        }
-        // All or nothing: a session left under BOTH names would be listed,
-        // and replayed at every start, for as long as the old name lived.
-        // Take the new name away again and leave the old record as it was.
-        console.error("[Tandem] moveSessionFile: could not remove the old name:", err);
-        await fs.unlink(to).catch((undoErr: unknown) => {
-          console.error("[Tandem] moveSessionFile: could not undo the move:", undoErr);
-        });
-        return "failed";
+      if (!(await removeOldName(from))) {
+        // Both names now hold the same complete session. The open reads the
+        // new one; the old one replays to the same document and ages out.
+        // Undoing instead would leave it under a name the open does not read,
+        // and the first autosave would then take its place.
+        console.error(
+          "[Tandem] moveSessionFile: moved, but the old name could not be removed and was left behind: %s",
+          path.basename(from),
+        );
       }
       await restampMovedSession(to, toPath);
       return "moved";

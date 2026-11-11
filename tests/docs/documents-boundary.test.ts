@@ -501,8 +501,14 @@ const FAN_OUT = [
   // spelling's. It touches the session and annotation-envelope stores through
   // one move function each, and nothing else.
   "server/documents/short-name-records.ts -> server/annotations/doc-hash.ts (value) x1",
+  // The four below serve one check: was the moved annotation file fully loaded
+  // into the document, so that rewriting it cannot drop anything.
+  "server/documents/short-name-records.ts -> server/annotations/schema.ts (value) x1",
   "server/documents/short-name-records.ts -> server/annotations/store.ts (value) x1",
+  "server/documents/short-name-records.ts -> server/annotations/sync.ts (value) x1",
+  "server/documents/short-name-records.ts -> server/events/queue.ts (value) x1",
   "server/documents/short-name-records.ts -> server/session/manager.ts (value) x1",
+  "server/documents/short-name-records.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",
