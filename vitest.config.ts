@@ -145,7 +145,7 @@ export default defineConfig({
           name: "client",
           environment: "happy-dom",
           // Per-project: `setupFiles` has no root fallback (see the root `env` note).
-          setupFiles: ["./tests/setup/app-data-isolation.ts"],
+          setupFiles: ["./tests/setup/app-data-isolation.ts", "./tests/setup/acl-win-mock.ts"],
           include: ["tests/client/**/*.test.ts"],
           // Same reason the node project below carries 15s, and the same
           // number: under vitest's parallel pool this project's specs exceed
@@ -175,7 +175,7 @@ export default defineConfig({
           name: "node",
           environment: "node",
           // Per-project: `setupFiles` has no root fallback (see the root `env` note).
-          setupFiles: ["./tests/setup/app-data-isolation.ts"],
+          setupFiles: ["./tests/setup/app-data-isolation.ts", "./tests/setup/acl-win-mock.ts"],
           // `exclude`, NOT a negated `include` entry. `include: [..., "!tests/client/**"]`
           // selects exactly the same 324 files -- verified by diffing
           // `vitest list --project=node --filesOnly` across both spellings -- but it
@@ -188,11 +188,12 @@ export default defineConfig({
           // would have seeded Unit 13's floors from a measurement that never happened.
           include: ["tests/**/*.test.ts"],
           exclude: [...configDefaults.exclude, "tests/client/**"],
-          // On Windows, integration tests that exercise `applyConfig`
-          // spawn icacls + pwsh (Get-Acl) once per write. Under vitest's
-          // parallel pool the spawn contention pushes some apply-heavy
-          // tests past the 5s default. 15s is enough headroom for the
-          // contended case; tests that genuinely hang still surface.
+          // Set when apply-heavy integration tests spawned icacls + pwsh
+          // (Get-Acl) once per write on Windows and the parallel pool's spawn
+          // contention pushed them past the 5s default. Since #2390 the setup
+          // mock removes those spawns in-process; the headroom is kept for the
+          // tests that still start child processes. Tests that genuinely hang
+          // still surface.
           testTimeout: 15_000,
         },
       },

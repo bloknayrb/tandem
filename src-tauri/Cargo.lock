@@ -6250,7 +6250,7 @@ dependencies = [
  "fs2",
  "keyring",
  "libappindicator-sys",
- "libloading 0.7.4",
+ "libloading 0.8.9",
  "log",
  "objc2-foundation",
  "rand 0.10.3",

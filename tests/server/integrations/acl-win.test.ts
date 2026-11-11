@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetCurrentUserSidForTests,
@@ -17,8 +17,22 @@ import {
   restoreAccessForCleanup,
 } from "../../helpers/win-acl-fixture.js";
 
+// #2390: opt out of tests/setup/acl-win-mock.ts — this file is the proof of the
+// real primitive (hoisted above the imports by vitest). The test below and the
+// windows-acl-proof runner check it took.
+vi.unmock(import("../../../src/server/integrations/acl-win.js"));
+
 const WIN_ONLY = process.platform === "win32";
 const execFileAsync = promisify(execFile);
+
+// File-level, so a lost `vi.unmock` also fails the ubuntu `check` leg, where the
+// "POSIX no-op" describe below would otherwise pass against the mock.
+it("uses the real acl-win module", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../src/server/integrations/acl-win.js")
+  >("../../../src/server/integrations/acl-win.js");
+  expect(setRestrictiveAcl).toBe(actual.setRestrictiveAcl);
+});
 
 describe.skipIf(!WIN_ONLY)("acl-win — Windows DACL hardening", () => {
   let tmpDir: string;
