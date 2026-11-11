@@ -808,3 +808,22 @@ describe("the window is opened only after the slow preparation (#2358 PR 2b, bef
     expect(tempsLeft()).toEqual([]);
   });
 });
+
+// Review of 8c8d211, H1: the config rename after a prepared temp retries
+// Windows' transient refusals, and each retry must re-run the re-check first,
+// or a refusal caused by Claude Code holding its config open becomes a lost
+// update. The retry runs only on win32, so this pins the wiring from source;
+// `withTransientRenameRetry`'s behaviour is tested in backup.test.ts.
+describe("the config rename's retry re-checks the file first (review H1)", () => {
+  it("passes the expectUnchanged re-check as the retry's beforeRetry", () => {
+    const source = readFileSync(
+      join(import.meta.dirname, "../../../src/server/integrations/apply.ts"),
+      "utf-8",
+    );
+    expect(source).toMatch(
+      /withTransientRenameRetry\(replace, \{ beforeRetry: recheckUnchanged \}\)/,
+    );
+    // And the re-check is the same one the commit guard runs.
+    expect(source.match(/await recheckUnchanged\(\);/g)).toHaveLength(1);
+  });
+});

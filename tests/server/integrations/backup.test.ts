@@ -15,6 +15,7 @@ import {
   SWEEP_BACKUP_PREFIX,
   shouldBackup,
   sweepBackupsOnStartup,
+  withTransientRenameRetry,
   writeBackup,
 } from "../../../src/server/integrations/backup.js";
 
@@ -330,5 +331,90 @@ describe("reserved backups (#2358 PR 2b: prepared before the read they hold)", (
     expect(fs.existsSync(fresh)).toBe(true);
     // Only the sweep's own prefix: setup's backups never use `.part`.
     expect(fs.existsSync(unrelated)).toBe(true);
+  });
+});
+
+describe("withTransientRenameRetry (#2358 PR 2b)", () => {
+  const refused = (code: string) => Object.assign(new Error(code), { code });
+
+  it("retries Windows' transient refusals until the rename goes through", async () => {
+    let calls = 0;
+    const rename = async () => {
+      if (++calls < 3) throw refused("EBUSY");
+    };
+    await withTransientRenameRetry(rename, { platform: "win32" });
+    expect(calls).toBe(3);
+  });
+
+  it("re-checks before each retry, and a check that throws stops it (review H1)", async () => {
+    let calls = 0;
+    let checks = 0;
+    const changed = new Error("changed");
+    const rename = async () => {
+      calls++;
+      throw refused("EPERM");
+    };
+    const beforeRetry = async () => {
+      // Claude Code finished its write while the rename was refused.
+      if (++checks === 2) throw changed;
+    };
+    await expect(withTransientRenameRetry(rename, { platform: "win32", beforeRetry })).rejects.toBe(
+      changed,
+    );
+    // The rename was never tried again after the check found the change.
+    expect(calls).toBe(2);
+    expect(checks).toBe(2);
+  });
+
+  it("gives up after six tries, and never retries off Windows or a non-transient error", async () => {
+    let calls = 0;
+    const alwaysBusy = async () => {
+      calls++;
+      throw refused("EBUSY");
+    };
+    await expect(withTransientRenameRetry(alwaysBusy, { platform: "win32" })).rejects.toThrow(
+      "EBUSY",
+    );
+    expect(calls).toBe(6);
+
+    calls = 0;
+    await expect(withTransientRenameRetry(alwaysBusy, { platform: "linux" })).rejects.toThrow();
+    expect(calls).toBe(1);
+
+    calls = 0;
+    const missing = async () => {
+      calls++;
+      throw refused("ENOENT");
+    };
+    await expect(withTransientRenameRetry(missing, { platform: "win32" })).rejects.toThrow();
+    expect(calls).toBe(1);
+  }, 10_000);
+});
+
+describe("discardReservedBackup logs a slot it cannot remove (#2358 PR 2b)", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-discard-"));
+  });
+  afterEach(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  it("names the slot in the log instead of failing silently", async () => {
+    const reserved = await reserveBackup(dir, SWEEP_BACKUP_PREFIX);
+    // A non-empty directory where the slot was: `rm` without `recursive` refuses it.
+    await reserved.handle.close();
+    fs.rmSync(reserved.partPath);
+    fs.mkdirSync(reserved.partPath);
+    fs.writeFileSync(path.join(reserved.partPath, "x"), "");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await discardReservedBackup(reserved);
+      const logged = errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("Could not remove the unfinished backup");
+      expect(logged).toContain(reserved.partPath);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

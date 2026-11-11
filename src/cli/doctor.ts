@@ -1801,7 +1801,7 @@ async function checkUserMcpConfig(
       // must not promise a startup repair (#2358 PR 2b review, M1).
       reportEntryCommand(r, servers.tandem, "tandem", "~/.claude.json", {
         cliAvailable,
-        stalePathFix: setupApplyRemedy(cliAvailable()),
+        sweepLeavesAlone: true,
       });
     }
   }
@@ -1903,7 +1903,8 @@ export function setupApplyRemedy(cliAvailable: boolean): string {
  * The remedy for a stale recorded path in an entry the boot sweep repairs
  * (`tandem-channel`, and the Claude Desktop entries), so the CLI arm says so.
  * Claude Code's `tandem` entry is not one of them when it is not Tandem's
- * bridge: its call site passes `setupApplyRemedy` instead.
+ * bridge: its call site passes `sweepLeavesAlone`, which selects
+ * `setupApplyRemedy` instead.
  *
  * Leads with the thing that always works. The boot repair is real but
  * conditional in two ways doctor cannot see and the user cannot act on:
@@ -1965,6 +1966,13 @@ interface EntryRemedy {
    * docblock actually argues for: an override, not a required field.
    */
   stalePathFix?: string;
+  /**
+   * The boot sweep never repairs this entry (Claude Code's `tandem` entry when
+   * it is not Tandem's bridge), so the default stale-path remedy must not say
+   * "Tandem also attempts this at startup". A flag rather than a precomputed
+   * `stalePathFix`, so the remedy is still built lazily (#2358 PR 2b review).
+   */
+  sweepLeavesAlone?: boolean;
   /**
    * Appended to whichever remedy fires — bare-command or stale-path.
    *
@@ -2041,7 +2049,11 @@ function reportEntryCommand(
   // exactly the healthy-machine cost `makeCliAvailability` defers to avoid.
   // `/api/diagnostics` is a request path, so that walk is not free.
   reportSpawnedCommand(r, entry, entryName, label, () =>
-    withSuffix(remedy.stalePathFix ?? repairRemedy(remedy.cliAvailable()), remedy.suffix),
+    withSuffix(
+      remedy.stalePathFix ??
+        (remedy.sweepLeavesAlone ? setupApplyRemedy : repairRemedy)(remedy.cliAvailable()),
+      remedy.suffix,
+    ),
   );
 }
 

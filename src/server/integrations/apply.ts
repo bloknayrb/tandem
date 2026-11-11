@@ -99,6 +99,7 @@ import {
   reserveBackup,
   SWEEP_BACKUP_PREFIX,
   shouldBackup,
+  withTransientRenameRetry,
   writeAllThrough,
   writeBackup,
 } from "./backup.js";
@@ -1530,6 +1531,18 @@ async function atomicWrite(
   } = {},
 ): Promise<void> {
   const { signal } = opts;
+  /** The `expectUnchanged` re-check, by path: throws ConfigChangedError on a change. */
+  const recheckUnchanged = async (): Promise<void> => {
+    const was = opts.expectUnchanged;
+    if (was === undefined) return;
+    const st = await stat(dest, { bigint: true });
+    const unchanged =
+      st.mtimeNs === was.mtimeNs &&
+      st.size === was.size &&
+      st.ino === was.ino &&
+      (await readFile(dest)).equals(was.bytes);
+    if (!unchanged) throw new ConfigChangedError(dest);
+  };
   if (signal?.aborted && opts.preparedTmp !== undefined) {
     // This call owns the prepared temp on every path, this one included.
     await discardPreparedTmp(opts.preparedTmp);
@@ -1592,18 +1605,9 @@ async function atomicWrite(
     if (process.env.VITEST === "true") await opts.beforeCommitForTests?.();
     throwIfAborted(signal);
     if (opts.requireExistingDest) await stat(dest);
-    if (opts.expectUnchanged !== undefined) {
-      // By PATH, never a retained handle: a rename-replace since the read is
-      // exactly what must be seen. One extra read, on boots that write at all.
-      const was = opts.expectUnchanged;
-      const st = await stat(dest, { bigint: true });
-      const unchanged =
-        st.mtimeNs === was.mtimeNs &&
-        st.size === was.size &&
-        st.ino === was.ino &&
-        (await readFile(dest)).equals(was.bytes);
-      if (!unchanged) throw new ConfigChangedError(dest);
-    }
+    // By PATH, never a retained handle: a rename-replace since the read is
+    // exactly what must be seen. One extra read, on boots that write at all.
+    await recheckUnchanged();
     throwIfAborted(signal);
   } catch (commitGuardErr) {
     await unlinkOrLeak(tmp, commitGuardErr);
@@ -1611,28 +1615,20 @@ async function atomicWrite(
   }
 
   try {
-    // A prepared temp is closed milliseconds before this rename (its ACL step
-    // ran before the caller's read), so on Windows an antivirus scan-on-close
-    // can still hold it: retry the transient refusals briefly, as the sweep
-    // backup's rename does. Unprepared temps keep today's single try, their
-    // ACL step having run between close and rename.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await rename(tmp, dest);
-        break;
-      } catch (renameErr) {
-        const code = (renameErr as NodeJS.ErrnoException).code;
-        const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
-        if (
-          opts.preparedTmp === undefined ||
-          process.platform !== "win32" ||
-          !transient ||
-          attempt >= 6
-        ) {
-          throw renameErr;
-        }
-        await new Promise((r) => setTimeout(r, 50 * attempt));
-      }
+    const replace = () => rename(tmp, dest);
+    if (opts.preparedTmp !== undefined) {
+      // A prepared temp is closed milliseconds before this rename (its ACL
+      // step ran before the caller's read), so on Windows an antivirus
+      // scan-on-close can still hold it: retry the transient refusals. But a
+      // refusal can also mean Claude Code has the CONFIG open to write it, and
+      // a retry after that write finished would replace it with content built
+      // from the older read (#2358 PR 2b review of 8c8d211, H1). So every retry
+      // re-runs the re-check first, and a change throws ConfigChangedError,
+      // which the sweep retries from a fresh read. Unprepared temps keep a
+      // single try: their ACL step runs between the close and the rename.
+      await withTransientRenameRetry(replace, { beforeRetry: recheckUnchanged });
+    } else {
+      await replace();
     }
     if (opts.committed) opts.committed.at = performance.now();
   } catch (err) {

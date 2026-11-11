@@ -235,15 +235,35 @@ export async function commitReservedBackup(
  * start).
  */
 async function renameWithRetry(from: string, to: string): Promise<void> {
+  await withTransientRenameRetry(() => promises.rename(from, to));
+}
+
+/**
+ * Run `renameOp` (an operation that renames a file Tandem just closed), retrying
+ * Windows' transient refusals (EPERM, EBUSY, EACCES) up to six tries with a
+ * 50, 100, … 250 ms back-off (about 750 ms in all). Elsewhere, and for any
+ * other error, the first failure stands.
+ *
+ * `beforeRetry` runs before every retry and may throw to stop it. A rename
+ * onto a file another process also writes MUST pass one that re-checks that
+ * file: a refusal can mean the other writer has it open, and a retry after it
+ * finished would replace its write (#2358 PR 2b review of 8c8d211, H1).
+ */
+export async function withTransientRenameRetry(
+  renameOp: () => Promise<void>,
+  opts: { beforeRetry?: () => Promise<void>; platform?: NodeJS.Platform } = {},
+): Promise<void> {
+  const platform = opts.platform ?? process.platform;
   for (let attempt = 1; ; attempt++) {
     try {
-      await promises.rename(from, to);
+      await renameOp();
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       const transient = code === "EPERM" || code === "EBUSY" || code === "EACCES";
-      if (process.platform !== "win32" || !transient || attempt >= 6) throw err;
+      if (platform !== "win32" || !transient || attempt >= 6) throw err;
       await new Promise((r) => setTimeout(r, 50 * attempt));
+      await opts.beforeRetry?.();
     }
   }
 }
