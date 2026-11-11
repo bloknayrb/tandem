@@ -198,7 +198,7 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
     announce: (dedupKey, message, fingerprint) => {
       announceLocalModelChange(dedupKey, message, { answering: fingerprint });
     },
-    none: recordAnsweringNone,
+    none: () => recordAnsweringNone(ANSWERING_CHANGED_NOTICE_KEY),
   },
 };
 

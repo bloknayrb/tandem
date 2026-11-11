@@ -21,9 +21,19 @@
  * it — receives notices but does not count: otherwise the caller that made the
  * change could mark it as seen and then restart the server.
  *
- * What this does not cover, and the register says so: a local PROCESS can send
- * whatever headers it likes, and can write this file and `models.json`
- * directly. It is outside what any notice can bound.
+ * What this does not cover, and the register says so:
+ *  - a local PROCESS can send whatever headers it likes, and can write this
+ *    file and `models.json` directly. It is outside what any notice can bound;
+ *  - a page on another loopback port can make Tandem's OWN page open the
+ *    stream for it, by framing it (the served client sends no
+ *    `frame-ancestors`) or opening it in a pop-up; that stream is same-origin
+ *    and counts. The notice then sits in that browser profile's activity tray,
+ *    but the desktop window is never sent it. Closing this needs a
+ *    `frame-ancestors` policy and "seen" recorded on a user acknowledgement
+ *    rather than on a stream write — an open decision on #2404;
+ *  - `http://tauri.localhost` is taken as the desktop WebView, but a browser
+ *    resolves `*.localhost` to loopback, so content served on port 80 of this
+ *    computer can present that origin.
  *
  * The read fails toward announcing: a missing, unreadable or malformed file
  * reads as "nothing was ever announced", so the cost of losing it is one
@@ -151,7 +161,10 @@ export function announceLocalModelChange(
 /** No local model would answer any more: forget which one the user was told
  *  about, so that one answering again — the same one included — is announced.
  *  Re-enabling a model the user disabled is a change they must be able to see. */
-export function recordAnsweringNone(): void {
+export function recordAnsweringNone(dedupKey?: string): void {
+  // Withdraw a notice still waiting to be replayed: it names a model that no
+  // longer answers, and its delivery would record that model as told.
+  if (dedupKey !== undefined) removeStartupNotice(dedupKey);
   if (load().answering !== null) record({ answering: null });
 }
 

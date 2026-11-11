@@ -16,11 +16,17 @@ import { getStartupNotices, markStartupNoticeDelivered } from "../../startup-not
  * was shown it. This is the narrower test, used only to decide whether a
  * notice counts as seen; every stream still receives every notice.
  *
- *  - the desktop WebView: its exact origin, which remote content cannot forge;
+ *  - the desktop WebView: its exact origin. Not unforgeable — a browser
+ *    resolves `*.localhost` to loopback, so content served on port 80 of this
+ *    computer can present it — but no page on any other port can;
  *  - the page Tandem serves: a same-origin request, which a browser marks
  *    `Sec-Fetch-Site: same-origin` (and, when it sends an `Origin` at all,
  *    gives this server's own host). A cross-origin page on another port is
  *    `same-site`, never `same-origin`.
+ *
+ * KNOWN GAP (#2404, open): this identifies Tandem's PAGE, not the user's
+ * window. A page on another loopback port can frame Tandem's page or open it
+ * in a pop-up, and the stream that page opens passes this test.
  *
  * Anything else — no `Sec-Fetch-Site`, the Vite dev origin, another loopback
  * port — is not counted, which costs a repeated notice and never a missed one.
