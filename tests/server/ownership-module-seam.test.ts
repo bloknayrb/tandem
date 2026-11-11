@@ -159,6 +159,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
+    "tests/server/ownership-wait-bound.test.ts",
   ];
 
   it("the files that stub the variable at all are a reviewed set", () => {
@@ -181,6 +182,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
+      "tests/server/ownership-wait-bound.test.ts",
     ]);
   });
 
@@ -196,6 +198,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
+      "tests/server/ownership-wait-bound.test.ts",
     ]);
   });
 

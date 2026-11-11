@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HolderView, OwnershipRefusalReason } from "../../src/server/sessions/ownership.js";
 import {
+  documentBusyRefusal,
   FOCUS_NOT_MOVED_WARNING,
   holderPhrase,
   type NotDocOwnerInput,
@@ -179,5 +180,29 @@ describe("what a refusal may say (R3.6)", () => {
     });
     expect(JSON.stringify(details)).not.toContain("http:secret");
     expect(text).not.toContain("http:secret");
+  });
+});
+
+describe("DOCUMENT_BUSY (the queue's wait bound)", () => {
+  it("says nothing ran, bounds the retry, and tells an edit to re-read first", () => {
+    const { message, details } = documentBusyRefusal({
+      reason: "wait-expired",
+      documentId: "doc-1",
+      waitedMs: 20_000,
+    });
+    expect(message).toBe(
+      "Another operation on this document has not finished, so this call was not run and nothing was changed. Retry once. If it is refused again, stop and tell the user: the document may be stuck on a slow save, and restarting Tandem clears it. If you are retrying an edit, read the document again first: the operation ahead of you may have changed it.",
+    );
+    expect(details).toEqual({ reason: "wait-expired", documentId: "doc-1", waitedMs: 20_000 });
+  });
+
+  it("names no holder and no document id in its message, for either reason", () => {
+    for (const reason of ["wait-expired", "cancelled"] as const) {
+      const { message, details } = documentBusyRefusal({ reason, documentId: "doc-1" });
+      expect(message).not.toContain("doc-1");
+      expect(message).not.toMatch(/owner-|session/);
+      expect(message).toContain("nothing was changed");
+      expect(Object.keys(details).sort()).toEqual(["documentId", "reason"]);
+    }
   });
 });

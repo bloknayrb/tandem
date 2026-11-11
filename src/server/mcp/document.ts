@@ -149,6 +149,7 @@ import {
   ownedOpen,
   ownedWrite,
   ownershipOn,
+  rangeDecidedByArguments,
   switchRefusal,
   takeFreshDocument,
   writeTarget,
@@ -1016,7 +1017,8 @@ export function registerDocumentTools(server: McpServer): void {
                       "Use tandem_resolveRange to find the text position.",
                   );
                 }
-                return mcpError("INVALID_RANGE", v.message, { reason: v.reason });
+                const refused = mcpError("INVALID_RANGE", v.message, { reason: v.reason });
+                return rangeDecidedByArguments(v.reason, from, to) ? noClaim(refused) : refused;
               }
 
               const fragment = r.doc.getXmlFragment("default");
@@ -1317,12 +1319,15 @@ export function registerDocumentTools(server: McpServer): void {
               // description warns about, so it must fail loudly rather than guess.
               const flatLength = flatDocLength(r.doc);
               if (!Number.isInteger(at) || at < 0 || at > flatLength) {
-                return mcpError(
+                const refused = mcpError(
                   "INVALID_RANGE",
                   `Offset ${at} is outside the document (0..${flatLength}). Re-read the list with ` +
                     "tandem_getOutline({ includeBlocks: true }) — an offset from before your last " +
                     "edit may no longer point where you expect.",
                 );
+                // A fractional or negative offset is wrong whatever the document
+                // holds, so it leaves no claim; one past the end depends on it.
+                return !Number.isInteger(at) || at < 0 ? noClaim(refused) : refused;
               }
               const pos = resolveToTextblock(fragment, toFlatOffset(at));
               if (!pos) {

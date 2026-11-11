@@ -34,13 +34,19 @@ import { getCurrentDoc, hasDoc } from "./document-service.js";
 
 export type { ToolCaller };
 
-import { runDocOp } from "../sessions/doc-op-queue.js";
+import {
+  DOC_OP_WAIT_MS,
+  DocOpCancelled,
+  DocOpWaitExpired,
+  runDocOp,
+} from "../sessions/doc-op-queue.js";
 import {
   callerView,
   claimForWrite,
   decideTake,
   type HolderView,
   heldDocumentIds,
+  logLimited,
   type OwnershipRefusal,
   otherAnswererOf,
   otherHolderOf,
@@ -48,7 +54,11 @@ import {
   reverseClaim,
   takeDocument,
 } from "../sessions/ownership.js";
-import { notDocOwnerRefusal, type RefusalFamily } from "../sessions/ownership-refusal.js";
+import {
+  documentBusyRefusal,
+  notDocOwnerRefusal,
+  type RefusalFamily,
+} from "../sessions/ownership-refusal.js";
 import { isErrorEnvelope, type McpToolResult, mcpError } from "./response.js";
 
 /** Whether ownership is enforced. The only flag read the tool files need. */
@@ -70,6 +80,22 @@ const neverClaims = new WeakSet<McpToolResult>();
 export function noClaim<T extends McpToolResult>(result: T): T {
   neverClaims.add(result);
   return result;
+}
+
+/**
+ * Whether a `validateRange` rejection was decided by the offsets alone, with
+ * no look at the document: a fractional offset, an inverted range, an empty
+ * one (the check is reached only when `from === to`), or a negative offset.
+ * An offset past the end, a stale snapshot and a heading overlap depend on
+ * live content and keep a claim (ownership design §5.1).
+ */
+export function rangeDecidedByArguments(
+  reason: string | undefined,
+  from: number,
+  to: number,
+): boolean {
+  if (reason === "non-integer" || reason === "inverted" || reason === "empty") return true;
+  return reason === "out-of-bounds" && (from < 0 || to < 0);
 }
 
 function noOwner(tool: string): McpToolResult {
@@ -101,6 +127,35 @@ function refusalEnvelope(
   });
   return mcpError("NOT_DOC_OWNER", message, details);
 }
+
+/**
+ * The answer for a call that left the document's queue without running: it
+ * waited past the limit, or its request was cancelled before its turn. Null
+ * for any other failure, which the caller rethrows. Nothing was claimed (the
+ * claim is the first thing inside the operation, which never ran).
+ */
+function busyEnvelope(err: unknown, documentId: string): McpToolResult | null {
+  const reason =
+    err instanceof DocOpWaitExpired
+      ? "wait-expired"
+      : err instanceof DocOpCancelled
+        ? "cancelled"
+        : null;
+  if (reason === null) return null;
+  const { message, details } = documentBusyRefusal({
+    reason,
+    documentId,
+    waitedMs: err instanceof DocOpWaitExpired ? err.waitedMs : undefined,
+  });
+  return mcpError("DOCUMENT_BUSY", message, details);
+}
+
+/**
+ * How long the take of a document this call just created may wait for that
+ * document's queue. Short: the call has already had its own wait, and the
+ * two together must stay under the stdio bridge's request timeout.
+ */
+const FRESH_TAKE_WAIT_MS = 2_000;
 
 /** Which document a write targets, as the tool resolves it today. */
 export type WriteTarget =
@@ -171,47 +226,55 @@ export function ownedWrite(
   const early = spec.preflight?.(documentId);
   if (early) return Promise.resolve(early);
 
-  return runDocOp(documentId, async () => {
-    // Closed while this call waited: nothing to check and nothing to claim.
-    // The body gives its own not-open answer for the id that was pinned.
-    if (!hasDoc(documentId)) return body(documentId);
-    if (spec.nothingToWrite?.(documentId)) return body(documentId);
+  return runDocOp(
+    documentId,
+    async () => {
+      // Closed while this call waited: nothing to check and nothing to claim.
+      // The body gives its own not-open answer for the id that was pinned.
+      if (!hasDoc(documentId)) return body(documentId);
+      if (spec.nothingToWrite?.(documentId)) return body(documentId);
 
-    // Ownership design §5.3: the operation-specific rows come first, so "already answered" is
-    // said before "someone else holds this" — a session told only the second
-    // would take the document and then be refused anyway.
-    const answering = spec.answers?.(documentId) ?? null;
-    if (answering) {
-      const other = otherAnswererOf(documentId, answering.annotationId, answering.item, ownerId);
-      if (other) {
-        return refusalEnvelope(
-          { ok: false, reason: "answered", holder: other.holder },
-          documentId,
-          ownerId,
-        );
+      // Ownership design §5.3: the operation-specific rows come first, so "already answered" is
+      // said before "someone else holds this" — a session told only the second
+      // would take the document and then be refused anyway.
+      const answering = spec.answers?.(documentId) ?? null;
+      if (answering) {
+        const other = otherAnswererOf(documentId, answering.annotationId, answering.item, ownerId);
+        if (other) {
+          return refusalEnvelope(
+            { ok: false, reason: "answered", holder: other.holder },
+            documentId,
+            ownerId,
+          );
+        }
       }
-    }
 
-    const decision = claimForWrite(documentId, ownerId);
-    if (!decision.ok) {
-      return refusalEnvelope(decision, documentId, ownerId, { family: spec.family, defaulted });
-    }
+      const decision = claimForWrite(documentId, ownerId);
+      if (!decision.ok) {
+        return refusalEnvelope(decision, documentId, ownerId, { family: spec.family, defaulted });
+      }
 
-    let result: McpToolResult;
-    try {
-      result = await body(documentId);
-    } catch (err) {
-      // A body that threw wrote nothing it can vouch for: do not leave the
-      // caller holding a document on the strength of it.
-      if (decision.claimed) reverseClaim(documentId, decision.claimed);
-      throw err;
-    }
-    if (neverClaims.has(result)) {
-      if (decision.claimed) reverseClaim(documentId, decision.claimed);
-    } else if (answering && !isErrorEnvelope(result)) {
-      recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
-    }
-    return result;
+      let result: McpToolResult;
+      try {
+        result = await body(documentId);
+      } catch (err) {
+        // A body that threw wrote nothing it can vouch for: do not leave the
+        // caller holding a document on the strength of it.
+        if (decision.claimed) reverseClaim(documentId, decision.claimed);
+        throw err;
+      }
+      if (neverClaims.has(result)) {
+        if (decision.claimed) reverseClaim(documentId, decision.claimed);
+      } else if (answering && !isErrorEnvelope(result)) {
+        recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
+      }
+      return result;
+    },
+    { signal: caller.signal },
+  ).catch((err: unknown) => {
+    const busy = busyEnvelope(err, documentId);
+    if (busy) return busy;
+    throw err;
   });
 }
 
@@ -266,6 +329,10 @@ export async function ownedOpen(
   const ownerId = caller.ownerId;
   if (ownerId === undefined) return noOwner(tool);
 
+  // One wait for the whole call, however many times it starts again. Only
+  // waiting is charged against it in effect: a hop that finds its queue idle
+  // runs whatever is left, and a hop is refused only by a busy queue.
+  const deadline = Date.now() + DOC_OP_WAIT_MS;
   for (let hop = 0; hop < 3; hop++) {
     const predicted = spec.predict();
     if (predicted === undefined) {
@@ -282,19 +349,30 @@ export async function ownedOpen(
       }
       return refused.envelope;
     }
-    const outcome = await runDocOp<McpToolResult | typeof RETRY>(predicted, async () => {
-      if (spec.predict() !== predicted) return RETRY;
-      const before = decideTake(predicted, ownerId);
-      if (!before.ok) return refusalEnvelope(before, predicted, ownerId);
-      const opened = await spec.open(predicted);
-      if (opened.targetChanged) return RETRY;
-      if (opened.openedId === undefined || !hasDoc(opened.openedId)) return opened.envelope;
-      const taken = takeDocument(opened.openedId, ownerId);
-      if (!taken.ok) {
-        return refusalEnvelope(taken, opened.openedId, ownerId, { openedAnyway: true });
-      }
-      return opened.envelope;
-    });
+    let outcome: McpToolResult | typeof RETRY;
+    try {
+      outcome = await runDocOp<McpToolResult | typeof RETRY>(
+        predicted,
+        async () => {
+          if (spec.predict() !== predicted) return RETRY;
+          const before = decideTake(predicted, ownerId);
+          if (!before.ok) return refusalEnvelope(before, predicted, ownerId);
+          const opened = await spec.open(predicted);
+          if (opened.targetChanged) return RETRY;
+          if (opened.openedId === undefined || !hasDoc(opened.openedId)) return opened.envelope;
+          const taken = takeDocument(opened.openedId, ownerId);
+          if (!taken.ok) {
+            return refusalEnvelope(taken, opened.openedId, ownerId, { openedAnyway: true });
+          }
+          return opened.envelope;
+        },
+        { signal: caller.signal, waitMs: Math.max(0, deadline - Date.now()) },
+      );
+    } catch (err) {
+      const busy = busyEnvelope(err, predicted);
+      if (busy) return busy;
+      throw err;
+    }
     if (outcome !== RETRY) return outcome;
   }
   return mcpError(
@@ -306,7 +384,8 @@ export async function ownedOpen(
 /**
  * A document this call just created (`tandem_scratchpad`, the Markdown file
  * `tandem_convertToMarkdown` wrote) becomes the caller's under the take rule,
- * at its turn in that document's own queue. The take rule decides, as it does
+ * at its turn in that document's own queue (waiting for it only briefly: if
+ * it stays busy the document is left untaken). The take rule decides, as it does
  * for `tandem_open`: an unowned document, or one another record holds as
  * `claimed` or `default`, becomes the caller's (and that record is told it
  * lost it); one another record holds as `opened` or `assigned` stays theirs
@@ -319,9 +398,25 @@ export async function takeFreshDocument(caller: ToolCaller, documentId: string):
   if (!ownershipEnabled()) return;
   const ownerId = caller.ownerId;
   if (ownerId === undefined) return;
-  await runDocOp(documentId, () => {
-    if (hasDoc(documentId)) takeDocument(documentId, ownerId);
-  });
+  try {
+    // No signal: the document already exists, so there is nothing to skip.
+    await runDocOp(
+      documentId,
+      () => {
+        if (hasDoc(documentId)) takeDocument(documentId, ownerId);
+      },
+      { waitMs: FRESH_TAKE_WAIT_MS },
+    );
+  } catch (err) {
+    // The new document's queue stayed busy. The document exists and the call
+    // that made it succeeded; it is simply not taken (the next write claims
+    // it). Nothing escapes into the calling tool's own error mapping.
+    if (!(err instanceof DocOpWaitExpired)) throw err;
+    logLimited(
+      "fresh-take-wait",
+      "[Tandem] A newly created document was not taken by its creator: its operation queue was busy",
+    );
+  }
 }
 
 /**

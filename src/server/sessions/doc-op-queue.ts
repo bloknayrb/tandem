@@ -9,7 +9,8 @@
  *
  * **Not every ownership change is queued.** Three run synchronously where
  * they are: the tab-close point (`onDocumentClosed`), the user-open default
- * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, startup; it only
+ * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, `/api/convert`,
+ * startup; it only
  * writes an entry where there is none, and writes nothing until Tandem's
  * Claude can be present, so PR 3b must queue it), and the backstop that
  * clears an entry whose record no longer exists (`liveEntry`, which every
@@ -29,11 +30,56 @@
  * reopened document behind it. Dropping the chain at close would let that
  * operation's write land beside a new holder's.
  *
- * **There is no timeout.** An operation that never settles (a save stalled on
- * a dead mount) holds every later MCP mutation of that document until the
- * server restarts. The design gives a bounded wait only to PR 5's route; a
- * wait bound here is a decision for the design, not this module.
+ * **The wait is bounded; the operation is not** (Bryan, 2026-11-11). An
+ * operation that finds the document busy waits at most {@link DOC_OP_WAIT_MS}
+ * for its turn. Past that its caller is refused ({@link DocOpWaitExpired}),
+ * it stops counting as queued, and when its turn does come it is skipped, so
+ * the order behind it holds. An operation whose caller's request was aborted
+ * by the time its turn comes is skipped the same way ({@link DocOpCancelled}).
+ * An operation that has started is never cancelled: if it never settles (a
+ * save stalled on a dead mount), every later operation on that document is
+ * refused after the limit, each leaving one small callback behind, and the
+ * chain stays occupied until the server restarts.
+ *
+ * **The turn callback is attached from the entrant's own call**, timer or no
+ * timer: the timer only marks the entrant as gone and rejects its promise.
  */
+
+/**
+ * How long an operation waits for its turn before its caller is told the
+ * document is busy. Below the stdio bridge's own 30 s request timeout
+ * (`src/cli/mcp-stdio.ts`), which gives up without telling the server: a
+ * waiting call is refused here first, and can never start later than this
+ * after it was queued. `tests/server/doc-op-queue.test.ts` pins the relation.
+ */
+export const DOC_OP_WAIT_MS = 20_000;
+
+let waitMs = DOC_OP_WAIT_MS;
+
+/** The caller waited {@link DOC_OP_WAIT_MS} for its turn and was not run. */
+export class DocOpWaitExpired extends Error {
+  readonly waitedMs: number;
+  constructor(waitedMs: number) {
+    super("the document's operation queue was busy for longer than the wait limit");
+    this.name = "DocOpWaitExpired";
+    this.waitedMs = waitedMs;
+  }
+}
+
+/** The caller's request was aborted before its turn came; it was not run. */
+export class DocOpCancelled extends Error {
+  constructor() {
+    super("the request was cancelled before its turn in the document's operation queue");
+    this.name = "DocOpCancelled";
+  }
+}
+
+export interface DocOpOptions {
+  /** The caller's request signal. Read once, when the operation's turn comes. */
+  signal?: AbortSignal;
+  /** A shorter wait than the limit: what is left of a deadline shared by several operations. */
+  waitMs?: number;
+}
 
 interface Chain {
   tail: Promise<void>;
@@ -42,12 +88,19 @@ interface Chain {
 
 const chains = new Map<string, Chain>();
 
+const timers = new Set<ReturnType<typeof setTimeout>>();
+
 /**
- * Run `fn` after every operation already queued for `documentId` has settled.
- * A rejected or throwing operation does not break the chain: its failure goes
- * to its own caller and the next operation runs.
+ * Run `fn` after every operation already queued for `documentId` has settled,
+ * or reject with {@link DocOpWaitExpired} / {@link DocOpCancelled} without
+ * running it. A rejected or throwing operation does not break the chain: its
+ * failure goes to its own caller and the next operation runs.
  */
-export function runDocOp<T>(documentId: string, fn: () => Promise<T> | T): Promise<T> {
+export function runDocOp<T>(
+  documentId: string,
+  fn: () => Promise<T> | T,
+  options: DocOpOptions = {},
+): Promise<T> {
   const existing = chains.get(documentId);
   const mine = existing ?? { tail: Promise.resolve(), pending: 0 };
   if (!existing) chains.set(documentId, mine);
@@ -62,16 +115,63 @@ export function runDocOp<T>(documentId: string, fn: () => Promise<T> | T): Promi
   });
   const previous = mine.tail;
   mine.tail = gate;
-  // An idle document starts its operation in this very tick, as a handler
-  // with no queue would: the synchronous head of the body (and so the
-  // ownership check and claim) runs before the caller's next line.
-  const result = existing ? previous.then(fn) : startNow(fn);
-  const done = () => {
-    settle(documentId, mine);
-    open();
-  };
-  result.then(done, done);
-  return result;
+
+  if (!existing) {
+    // An idle document starts its operation in this very tick, as a handler
+    // with no queue would: the synchronous head of the body (and so the
+    // ownership check and claim) runs before the caller's next line.
+    const result = startNow(fn);
+    const done = () => {
+      settle(documentId, mine);
+      open();
+    };
+    result.then(done, done);
+    return result;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    // Exactly one of three things ends the wait, decided on this one flag in
+    // synchronous code: the turn comes, the turn comes for an aborted
+    // request, or the timer fires first.
+    let waiting = true;
+    const limit = Math.max(0, options.waitMs ?? waitMs);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (!waiting) return;
+      waiting = false;
+      // Gone from the count now; the gate still opens only at its turn, so
+      // whatever is behind it cannot start beside the operation ahead.
+      settle(documentId, mine);
+      reject(new DocOpWaitExpired(limit));
+    }, limit);
+    timer.unref?.();
+    timers.add(timer);
+
+    // Attached here, from the entrant's own call, so `fn` runs in the
+    // entrant's async context whoever ran before it.
+    previous.then(() => {
+      if (!waiting) {
+        open();
+        return;
+      }
+      waiting = false;
+      clearTimeout(timer);
+      timers.delete(timer);
+      if (options.signal?.aborted) {
+        settle(documentId, mine);
+        open();
+        reject(new DocOpCancelled());
+        return;
+      }
+      const done = () => {
+        settle(documentId, mine);
+        open();
+      };
+      const result = startNow(fn);
+      result.then(done, done);
+      result.then(resolve, reject);
+    });
+  });
 }
 
 function startNow<T>(fn: () => Promise<T> | T): Promise<T> {
@@ -95,7 +195,12 @@ export function isDocOpQueueBusy(documentId: string): boolean {
 /**
  * Run `fn` now if `documentId`'s queue is idle, otherwise at its turn. For
  * ownership changes that are not tool calls (a lapse): synchronous when
- * nothing is in flight, and never in the middle of another record's operation.
+ * nothing is in flight, and never in the middle of another record's operation
+ * — **unless its wait runs out**. Then `fn` runs right there, out of turn,
+ * once: a document must not stay with a dead owner because one operation
+ * never settled. Its clock starts when it is queued, so it can then land
+ * beside an operation that has only just started. `fn` must therefore read
+ * the state it acts on when it runs, as the lapse step does.
  * A throw from a deferred `fn` is reported to `onError` and goes nowhere else.
  */
 export function runWhenDocIdle(
@@ -107,7 +212,17 @@ export function runWhenDocIdle(
     fn();
     return;
   }
-  runDocOp(documentId, fn).catch(onError);
+  runDocOp(documentId, fn).catch((err: unknown) => {
+    if (!(err instanceof DocOpWaitExpired)) {
+      onError(err);
+      return;
+    }
+    try {
+      fn();
+    } catch (late) {
+      onError(late);
+    }
+  });
 }
 
 /** How many documents have a live chain. For "nothing was created" assertions. */
@@ -115,7 +230,15 @@ export function docOpQueueSizeForTests(): number {
   return chains.size;
 }
 
-/** Forget every chain. Operations already chained still run. */
+/** Set the wait limit, or restore the default with no argument. */
+export function setDocOpWaitMsForTests(ms: number = DOC_OP_WAIT_MS): void {
+  waitMs = ms;
+}
+
+/** Forget every chain and wait timer, and restore the limit. Operations already chained still run. */
 export function resetDocOpQueuesForTests(): void {
   chains.clear();
+  for (const timer of timers) clearTimeout(timer);
+  timers.clear();
+  waitMs = DOC_OP_WAIT_MS;
 }

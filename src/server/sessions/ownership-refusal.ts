@@ -10,6 +10,9 @@
  * label it minted — never a client name, a file name, a status text or a
  * session id. `documentId` appears in `details` only.
  *
+ * **`DOCUMENT_BUSY`'s copy is here too** ({@link documentBusyRefusal}): the
+ * answer for a call that waited too long for a document's operation queue.
+ *
  * **What is written here is what PR 1c can reach.** `chat` and `post` arrive
  * with reply acceptance (PR 2), `unlinked` with the shim's identity (PR 4),
  * `unbound-child` with the handle (PR 3a), and the `released` and `assigned`
@@ -137,6 +140,44 @@ export function notDocOwnerRefusal(input: NotDocOwnerInput): NotDocOwnerRefusal 
       ...(defaulted && input.heldDocumentIds
         ? { heldDocumentIds: [...input.heldDocumentIds] }
         : {}),
+    },
+  };
+}
+
+/** Why a call left a document's operation queue without running. */
+export type DocumentBusyReason = "wait-expired" | "cancelled";
+
+export interface DocumentBusyRefusal {
+  message: string;
+  details: { reason: DocumentBusyReason; documentId: string; waitedMs?: number };
+}
+
+/**
+ * `DOCUMENT_BUSY` (#2358, ADR-054 amended 2026-11-11): the call waited for its
+ * turn in the document's operation queue and was not run. Nothing was claimed
+ * and nothing was written. It names no holder: it is about an operation that
+ * has not finished, not about who holds the document. The remedy is bounded
+ * ("once"), so a session behind an operation that never settles stops and
+ * tells the user rather than retrying every time the limit passes.
+ *
+ * The `cancelled` sentence has no reader in practice: the SDK sends no
+ * response for a request its client cancelled.
+ */
+export function documentBusyRefusal(input: {
+  reason: DocumentBusyReason;
+  documentId: string;
+  waitedMs?: number;
+}): DocumentBusyRefusal {
+  const message =
+    input.reason === "cancelled"
+      ? "This call was cancelled before its turn on this document. It was not run and nothing was changed."
+      : "Another operation on this document has not finished, so this call was not run and nothing was changed. Retry once. If it is refused again, stop and tell the user: the document may be stuck on a slow save, and restarting Tandem clears it. If you are retrying an edit, read the document again first: the operation ahead of you may have changed it.";
+  return {
+    message,
+    details: {
+      reason: input.reason,
+      documentId: input.documentId,
+      ...(input.waitedMs !== undefined ? { waitedMs: input.waitedMs } : {}),
     },
   };
 }

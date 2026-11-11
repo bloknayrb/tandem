@@ -44,6 +44,7 @@ import {
   noClaim,
   ownedWrite,
   ownershipOn,
+  rangeDecidedByArguments,
   type ToolCaller,
   type WriteTarget,
   writeTarget,
@@ -465,7 +466,12 @@ export function registerAnnotationTools(server: McpServer): void {
               );
               if (!result.ok) {
                 notifyRangeFailure(result, "tandem_comment", documentId);
-                return rangeFailureToError(result);
+                const refused = rangeFailureToError(result);
+                // Decided by the offsets alone: it leaves no claim (#2358).
+                return result.code === "INVALID_RANGE" &&
+                  rangeDecidedByArguments(result.reason, from, to)
+                  ? noClaim(refused)
+                  : refused;
               }
               const snap = store.captureSnapshot(result.range.from, result.range.to);
               // ADR-035: creates go through the lifecycle seam, not the store.

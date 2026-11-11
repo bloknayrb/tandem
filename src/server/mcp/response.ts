@@ -39,6 +39,11 @@ export function mcpStructured<T extends Record<string, unknown>>(data: T): McpTo
   };
 }
 
+/** What the MCP SDK passes a tool handler after its arguments; only the signal is read. */
+export interface ToolCallExtra {
+  signal?: AbortSignal;
+}
+
 /**
  * Wrap a handler for a tool that declares an `outputSchema`. Any result
  * lacking `structuredContent` (i.e. an `mcpError` envelope, including the
@@ -48,10 +53,12 @@ export function mcpStructured<T extends Record<string, unknown>>(data: T): McpTo
  * `{ error: true, code, message }` JSON that existing clients parse.
  */
 export function withStructuredErrors<TArgs extends Record<string, unknown>>(
-  handler: (args: TArgs) => Promise<McpToolResult>,
-): (args: TArgs) => Promise<McpToolResult> {
-  return async (args: TArgs) => {
-    const result = await handler(args);
+  handler: (args: TArgs, extra?: ToolCallExtra) => Promise<McpToolResult>,
+): (args: TArgs, extra?: ToolCallExtra) => Promise<McpToolResult> {
+  // `extra` is passed through so the request's abort signal reaches
+  // `withErrorBoundary` whichever wrapper is outermost.
+  return async (args: TArgs, extra?: ToolCallExtra) => {
+    const result = await handler(args, extra);
     if (result.structuredContent === undefined) return { ...result, isError: true };
     return result;
   };
@@ -172,10 +179,17 @@ export function noCallerRefusalMessage(toolName: string): string {
 export function withErrorBoundary<TArgs extends Record<string, unknown>>(
   toolName: string,
   handler: (args: TArgs, caller: ToolCaller) => Promise<McpToolResult>,
-): (args: TArgs) => Promise<McpToolResult> {
-  return async (args: TArgs) => {
+): (args: TArgs, extra?: ToolCallExtra) => Promise<McpToolResult> {
+  return async (args: TArgs, extra?: ToolCallExtra) => {
     try {
-      const caller = resolveToolCaller();
+      const resolved = resolveToolCaller();
+      // The request's abort signal rides on the caller, with ownership on
+      // only (an `ownerId` is set exactly then): dark, the caller object is
+      // what it always was.
+      const caller =
+        resolved?.ownerId !== undefined && extra?.signal !== undefined
+          ? { ...resolved, signal: extra.signal }
+          : resolved;
       if (caller === null) {
         logLimited(
           `no-caller:${toolName}`,

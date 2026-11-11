@@ -226,7 +226,8 @@ afterEach(async () => {
 });
 
 /**
- * Every write tool, addressed to the held document. The refusal is answered
+ * Every write tool, addressed to the held document. On a writable document
+ * of the right format that holds the annotation, the ownership refusal comes
  * before any other argument is looked at, so these need not be calls the
  * holder would succeed with; the holder's own success through each tool is
  * `ownership-claims-table.test.ts`.

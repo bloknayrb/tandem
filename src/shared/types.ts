@@ -73,6 +73,7 @@ export const ToolErrorCodeSchema = z.enum([
   "BACKUP_FAILED",
   "BAD_REQUEST",
   "CONFLICT",
+  "DOCUMENT_BUSY",
   "EMPTY_CONVERSION",
   "EMPTY_DOCUMENT",
   "EXTENSION_MISMATCH",

@@ -282,6 +282,22 @@ describe("no queue, no refusal, nothing stamped while dark", () => {
         await ok("tandem_resolveAnnotation", { id: "ann", action: "dismiss", documentId: d });
         expect(ydoc.getXmlFragment("default").toString()).toContain("Howdy");
 
+        // A reply to an id the document does not hold still sets and clears
+        // the typing marker, as it always has (flag-on, it is skipped).
+        let marker = 0;
+        const onTx = () => {
+          marker++;
+        };
+        ydoc.on("afterTransaction", onTx);
+        const missing = await call("tandem_annotationReply", {
+          annotationId: "no-such-annotation",
+          text: "r",
+          documentId: d,
+        });
+        ydoc.off("afterTransaction", onTx);
+        expect(missing.code).toBe("NOT_FOUND");
+        expect(marker).toBe(2);
+
         // An id in two documents: today's refusal, with no ownership detail.
         const ambiguous = await call("tandem_editAnnotation", { id: "dup", content: "x" });
         expect(ambiguous.code).toBe("INVALID_ARGUMENT");
@@ -369,8 +385,8 @@ describe("no queue, no refusal, nothing stamped while dark", () => {
     expect(opened).toBe(envelope);
     expect(expected).toBeUndefined();
 
+    // With its guard gone this would try to write an entry and throw.
     await takeFreshDocument(b, docId("fresh"));
-    expect(isDocOpQueueBusy(docId("fresh"))).toBe(false);
     expect(switchRefusal(b, "tandem_switchDocument", docId("d"))).toBeNull();
     expect(focusHeldByAnother(b, docId("d"))).toBe(false);
     expect(callerOwnerInfo(a)).toBeUndefined();

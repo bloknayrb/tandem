@@ -15,7 +15,16 @@
  *    "not open" answers inside a body (the document closed while the call
  *    waited; `ownership-enforcement.test.ts` has that case), `setChecked` on
  *    a .docx list, `markdown` that parses to no list items, and
- *    `renameDocument`'s `PATH_REJECTED` / `INVALID_PATH`.
+ *    `renameDocument`'s `PATH_REJECTED` / `INVALID_PATH`. The rule is by
+ *    what decides the refusal, not by its code: `INVALID_RANGE` for an
+ *    inverted, fractional, negative or empty range leaves no claim, while
+ *    `INVALID_RANGE` for an offset past the end keeps one (the control test
+ *    below). One refusal is decided by the arguments and still keeps the
+ *    claim, because its code is shared with a disk lookup:
+ *    `tandem_restoreBackup` with a malformed `backup` name answers
+ *    `FILE_NOT_FOUND`, the same as a well-formed name that is not on disk.
+ *    The table can only confirm marks that were made; it cannot find one
+ *    that is missing.
  * 2. **The same refusals do not disturb a claim the caller already held.**
  * 3. **The holder's own call succeeds through every write tool**, does what
  *    the tool does, to the document that was named, and leaves the holder
@@ -219,7 +228,71 @@ const REFUSALS: RefusalRow[] = [
     },
     code: "INVALID_ARGUMENT",
   },
+  {
+    tool: "tandem_edit",
+    what: "an inverted range",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: 5, to: 2, newText: "x", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
+  {
+    tool: "tandem_edit",
+    what: "a negative offset",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: -3, to: 2, newText: "x", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
+  // --- tandem_comment ------------------------------------------------------
+  {
+    tool: "tandem_comment",
+    what: "an inverted range",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: 5, to: 2, text: "c", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
+  {
+    tool: "tandem_comment",
+    what: "a negative offset",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: -3, to: 2, text: "c", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
+  {
+    tool: "tandem_comment",
+    what: "an empty range",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: 3, to: 3, text: "c", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
   // --- tandem_editList -----------------------------------------------------
+  {
+    tool: "tandem_editList",
+    what: "a fractional offset",
+    arrange: async () => {
+      const { id } = await diskDoc("list.md", "- one\n- two\n");
+      return { id, args: { at: 1.5, op: "remove", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
+  {
+    tool: "tandem_editList",
+    what: "a negative offset",
+    arrange: async () => {
+      const { id } = await diskDoc("list.md", "- one\n- two\n");
+      return { id, args: { at: -1, op: "remove", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
   {
     tool: "tandem_editList",
     what: "a read-only document",
@@ -603,10 +676,10 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
     const writes = Object.entries(TOOL_MODES)
       .filter(([, entry]) => entry.mode === "write")
       .map(([name]) => name);
-    // `tandem_comment`, `tandem_save` and `tandem_close` have no such refusal
-    // on an open document: every one of theirs is decided by live content,
-    // the disk or the save lock (and keeps the claim), or is "not open".
-    const none = ["tandem_close", "tandem_comment", "tandem_save"];
+    // `tandem_save` and `tandem_close` have no such refusal on an open
+    // document: every one of theirs is decided by the disk or the save lock
+    // (and keeps the claim), or is "not open".
+    const none = ["tandem_close", "tandem_save"];
     expect([...new Set(REFUSALS.map((r) => r.tool)), ...none].sort()).toEqual(writes.sort());
   });
 
@@ -624,6 +697,31 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
     // And the next record is not refused on the strength of it.
     const reader = await as(B, "tandem_comment", { from: 0, to: 2, text: "c", documentId: id });
     expect(reader.code).not.toBe("NOT_DOC_OWNER");
+  });
+
+  it("control: the same code decided by live content keeps the claim", async () => {
+    const { id } = memDoc("d");
+    const past = await as(A, "tandem_edit", { from: 9000, to: 9005, newText: "x", documentId: id });
+    expect(past.code).toBe("INVALID_RANGE");
+    expect(getDocOwner(id)).toMatchObject({ ownerId: A, kind: "claimed" });
+    const { id: second } = memDoc("second");
+    const comment = await as(A, "tandem_comment", {
+      from: 9000,
+      to: 9005,
+      text: "c",
+      documentId: second,
+    });
+    expect(comment.code).toBe("INVALID_RANGE");
+    expect(getDocOwner(second)).toMatchObject({ ownerId: A, kind: "claimed" });
+    const { id: listed } = await diskDoc("list.md", "- one\n- two\n");
+    const beyond = await as(A, "tandem_editList", { at: 9000, op: "remove", documentId: listed });
+    expect(beyond.code).toBe("INVALID_RANGE");
+    expect(getDocOwner(listed)).toMatchObject({ ownerId: A, kind: "claimed" });
+    // A malformed backup name shares its code with a disk lookup (see the header).
+    const { id: backed } = await diskDoc("b.md", "Body.\n");
+    const missing = await as(A, "tandem_restoreBackup", { backup: "x", documentId: backed });
+    expect(missing.code).toBe("FILE_NOT_FOUND");
+    expect(getDocOwner(backed)).toMatchObject({ ownerId: A, kind: "claimed" });
   });
 
   it.each(REFUSALS)("$tool — $what: a claim the caller already held is kept", async (row) => {
@@ -647,8 +745,11 @@ describe("the holder's own call succeeds through every write tool", () => {
     const { id: decoy } = memDoc("decoy", { text: "Decoy text, untouched." });
     setActiveDocId(decoy);
   }
-  const stillHeld = (id: string) =>
+  const stillHeld = (id: string) => {
     expect(getDocOwner(id)).toMatchObject({ ownerId: A, kind: "opened" });
+    // The check and any claim were made on the named document, not the active one.
+    expect(getDocOwner(docId("decoy"))).toBeUndefined();
+  };
   const decoyUntouched = () =>
     expect(text(getOrCreateDocument(docId("decoy")))).toContain("Decoy text, untouched.");
 
@@ -859,6 +960,25 @@ describe("the holder's own call succeeds through every write tool", () => {
     expect(refused.details?.reason).toBe("held");
   });
 
+  it("a call that names no document is checked on, and written to, the active one", async () => {
+    const { id, ydoc } = memDoc("d");
+    hold(id);
+    // B holds the decoy; A's own document is the active tab.
+    setDocOwner(docId("decoy"), { ownerId: B, kind: "opened" }, "take");
+    setActiveDocId(id);
+    const body = await as(A, "tandem_edit", { from: 0, to: 5, newText: "Howdy" });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(text(ydoc)).toContain("Howdy world");
+    decoyUntouched();
+    // And the other way round: with B's document active, the same call is
+    // refused on it, and A's document is not written to instead.
+    setActiveDocId(docId("decoy"));
+    const refused = await as(A, "tandem_edit", { from: 0, to: 5, newText: "Nope!" });
+    expect(refused.code).toBe("NOT_DOC_OWNER");
+    expect(text(ydoc)).not.toContain("Nope!");
+    decoyUntouched();
+  });
+
   it("covers exactly the tools the mode table calls writes", () => {
     const writes = Object.entries(TOOL_MODES)
       .filter(([, entry]) => entry.mode === "write")
@@ -897,8 +1017,11 @@ describe("tandem_open of a path the open path refuses (ownership design §5.4)",
   it("the real open path refuses that target before it acts, on an open document and on a fresh file", async () => {
     const { id, filePath } = await diskDoc("open.md", "On disk.\n");
     setDocOwner(id, { ownerId: B, kind: "claimed" }, "claim");
-    fs.writeFileSync(filePath, "Changed on disk.\n");
-    const before = text(getOrCreateDocument(id));
+    // A force reload always opens a transaction, changed file or not.
+    let transactions = 0;
+    getOrCreateDocument(id).on("afterTransaction", () => {
+      transactions++;
+    });
     const active = getActiveDocId();
     let target = "";
     await ownedOpen({ ownerId: A }, "tandem_open", {
@@ -912,7 +1035,7 @@ describe("tandem_open of a path the open path refuses (ownership design §5.4)",
     await expect(
       openFromDisk(filePath, { force: true, expectTargetId: target }),
     ).rejects.toMatchObject({ code: "OPEN_TARGET_CHANGED" });
-    expect(text(getOrCreateDocument(id))).toBe(before);
+    expect(transactions).toBe(0);
     expect(getActiveDocId()).toBe(active);
     const fresh = path.join(tmpDir, "fresh.md");
     fs.writeFileSync(fresh, "Fresh.\n");
