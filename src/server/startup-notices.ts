@@ -24,6 +24,9 @@
 import type { TandemNotification } from "../shared/types.js";
 
 const notices: TandemNotification[] = [];
+/** Called once, the first time the notice under that `dedupKey` is written to a
+ *  stream. For a notice whose owner must know it was actually seen (#2404). */
+const deliveryCallbacks = new Map<string, () => void>();
 let restoreInProgress = false;
 
 /** Register a notice; one with an existing `dedupKey` replaces that entry. */
@@ -40,8 +43,32 @@ export function addStartupNotice(notice: TandemNotification): void {
 
 /** Withdraw the notice registered under `dedupKey`, if any. */
 export function removeStartupNotice(dedupKey: string): void {
+  deliveryCallbacks.delete(dedupKey);
   const at = notices.findIndex((n) => n.dedupKey === dedupKey);
   if (at !== -1) notices.splice(at, 1);
+}
+
+/**
+ * Be told, once, when the notice currently registered under `dedupKey` is
+ * first written to a notify stream. Register AFTER `addStartupNotice`; a later
+ * registration under the same key replaces this one, and withdrawing the notice
+ * drops it.
+ */
+export function onStartupNoticeDelivered(dedupKey: string, cb: () => void): void {
+  deliveryCallbacks.set(dedupKey, cb);
+}
+
+/** `handleNotifyStream` calls this after writing a replayed notice to a stream. */
+export function markStartupNoticeDelivered(notice: TandemNotification): void {
+  if (notice.dedupKey === undefined) return;
+  const cb = deliveryCallbacks.get(notice.dedupKey);
+  if (!cb) return;
+  deliveryCallbacks.delete(notice.dedupKey);
+  try {
+    cb();
+  } catch (err) {
+    console.error("[StartupNotices] delivery callback threw:", err);
+  }
 }
 
 /** A copy, so a caller iterating it can't be disturbed by a later add. */
@@ -69,5 +96,6 @@ export function isStartupRestoreInProgress(): boolean {
 /** Test seam: the module is process-global state. Also closes the restore window. */
 export function clearStartupNotices(): void {
   notices.length = 0;
+  deliveryCallbacks.clear();
   restoreInProgress = false;
 }

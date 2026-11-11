@@ -323,6 +323,16 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // 2 writes (the docx buffer arm and the text arm of one restore triple) plus
   // the O_NOFOLLOW sidecar READ the idiom list counts conservatively (#1768).
   "src/server/documents/reload-family.ts": 3,
+  // #2404: `local-model-announced.json` (what a browser was actually told
+  // about local-model commenting and the answering model), through
+  // `atomicWriteConfigFile`. Tandem's OWN app-data root, never a Claude config
+  // file, so the accepted #1599 scope is unchanged.
+  "src/server/models/local-model-announced.ts": 1,
+  // #1123: `local-model-settings.json` (whether a local model may comment and
+  // suggest), through `atomicWriteConfigFile`; its `fs.promises.rm` fallback
+  // names no counted idiom. Tandem's OWN app-data root, never a Claude config
+  // file, so the accepted #1599 scope is unchanged.
+  "src/server/models/local-model-settings.ts": 1,
   "src/server/models/store.ts": 1,
   // 4th is `touchSession`, which rewrites one metadata field of a session
   // record in SESSION_DIR. Not a config writer, so the accepted scope in
