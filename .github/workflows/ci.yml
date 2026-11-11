@@ -235,15 +235,20 @@ jobs:
   #    TEMP at `runner.temp` instead (run 42949488007) made three real-icacls
   #    fixtures fail their own precondition under `D:\a\_temp`, and
   #    platform.test.ts fail because app data was no longer under LOCALAPPDATA.
-  #    **This step also hides one product defect, #2400**: `resolveSafeCwd` and
-  #    `resolveSafeCwdAsync` disagree on a short-name path, and
-  #    launcher/cwd-preview.test.ts fails on the bare runner because of it.
+  #    **This step also hides a product defect, #2400**: Node's JS
+  #    `fs.realpathSync` keeps an 8.3 short name where `fs.promises.realpath`
+  #    expands it, and the product uses both. Two sites are known. In
+  #    launcher/supervisor.ts `resolveSafeCwd` and `resolveSafeCwdAsync`
+  #    disagree (launcher/cwd-preview.test.ts fails on the bare runner). In
+  #    documents/open.ts a document is keyed on the short spelling
+  #    (adr-034-open-characterization.test.ts fails there).
   #  - the `\tmp` step. tests/server/document-service.test.ts writes under a
   #    literal `/tmp`, which Node resolves to `\tmp` on the working directory's
   #    drive; the runner has none there.
-  # Apart from #2400, the tests these two steps turn green depend on the host,
-  # not on the code under test. Fixing them is the way to remove a line here;
-  # adding a line here is not the way to fix a test.
+  # Apart from the #2400 tests (cwd-preview and adr-034-open-characterization),
+  # the tests these two steps turn green depend on the host, not on the code
+  # under test. Fixing them is the way to remove a line here; adding a line
+  # here is not the way to fix a test.
   #
   # Measured on this job's first runs, at master's code (2026-11-11): 19
   # failures in 6 files with neither accommodation (run 42947480897), 2 with

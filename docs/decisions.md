@@ -2274,19 +2274,30 @@ Instances:
 | `ownership-flag-on` (ADR-054) and `check`'s release-bundle ownership probe | `tests/scripts/ownership-flag-on-wiring.test.ts` — the job is also a *required* check while ownership ships dark (in branch protection since 2026-11-08), so its guarantees are enforced twice until the flip makes it advisory or removes it |
 
 **`vitest-windows` baseline (2026-11-11, PR #2399; the decision in #2398 is recorded here when it is taken).**
-Measured on `windows-latest` at the code of `master` commit 311a5a3. The job takes about nine
-minutes (8m45s to 10m53s over the first four runs), against nineteen to twenty-three for `check`, and
-starts with it, so it adds no wall clock to a PR. It collects and runs 832 test files. 139 tests
-skip there against 30 in `check` on the same commit; the difference was not audited test by test.
-On the bare hosted runner 19 tests in 6 files fail, with the same 19 on a second attempt. The
-causes are two properties of the runner: its `TEMP` is an 8.3 short name on a different drive
-from the checkout, and it has no `\tmp` directory. The job resolves `TEMP` and creates `\tmp`,
-which leaves 2 failures, both in `tests/server/integrations/resolve-claude-launch.test.ts` (a
-relative path built across drives); PR #2399 rewrote those two tests to stand in the temp
-directory instead. No test is skipped or quarantined. **One of the 19 is a product defect that the `TEMP` step now hides**:
-`resolveSafeCwd` and `resolveSafeCwdAsync` disagree on a short-name path (#2400, at least two
-tests in `tests/server/launcher/cwd-preview.test.ts`). One failure was seen on a single run and
-not again: the two-caller race in `tests/server/integrations/apply-malformed.test.ts`.
+Measured on `windows-latest` at PR head `e9b1bed`, which has `master` at 0b833ac merged in. These
+are the figures #2398 uses.
+
+- **Result:** green on two attempts. 842 test files collected and run, 15,104 tests passed.
+- **Skips:** 165 tests skip on Windows, in 37 files, 6 of them skipped whole. `check` skips 32 in
+  12 files on the same commit. The difference was compared per file from the two logs and not
+  audited gate by gate. The job cannot see a test that gains a `skipIf` on Windows, so a rise in
+  165 is what to look for.
+- **Duration:** about nine minutes for the job (6m58s to 10m53s over eleven runs), against
+  nineteen to twenty-four for `check`. It starts with `check`, so it adds no wall clock to a PR.
+- **Intermittent failures:** one in eleven runs, the two-caller race in
+  `tests/server/integrations/apply-malformed.test.ts`. Not quarantined.
+- **What the bare hosted runner does** (measured earlier in the same PR, at `master` 311a5a3's
+  code): 19 tests in 6 files fail, the same 19 on a second attempt, from two properties of the
+  runner. Its `TEMP` is an 8.3 short name on a different drive from the checkout, and it has no
+  `\tmp` directory. The job resolves `TEMP` and creates `\tmp`. That left 2 failures in
+  `tests/server/integrations/resolve-claude-launch.test.ts` (a relative path built across
+  drives), which PR #2399 rewrote. No test is skipped or quarantined.
+- **What the `TEMP` step hides:** five of the 19, and probably a sixth, are a product defect, #2400. Node's JS
+  `fs.realpathSync` keeps a short name where `fs.promises.realpath` expands it, and the product
+  uses both: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher (the two
+  equivalence tests in `tests/server/launcher/cwd-preview.test.ts`; its third failure was not
+  traced), and the document key in `documents/open.ts`
+  (three in `tests/server/adr-034-open-characterization.test.ts`).
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
