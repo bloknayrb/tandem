@@ -205,7 +205,7 @@ describe("local-model announced record (#2404)", () => {
 
     it("with a stream listening: recorded at once, and it survives a reload", async () => {
       const seen: TandemNotification[] = [];
-      subscribeNotifications((n) => seen.push(n));
+      subscribeNotifications((n) => seen.push(n), { ownWindow: true });
 
       const notice = announceLocalModelChange(EDITING_KEY, "switched on", { editing: true });
       expect(seen).toEqual([notice]);
@@ -224,7 +224,7 @@ describe("local-model announced record (#2404)", () => {
     });
 
     it("a stream that stopped listening before the notice does not count", async () => {
-      const stop = subscribeNotifications(() => {});
+      const stop = subscribeNotifications(() => {}, { ownWindow: true });
       stop();
       announceLocalModelChange(EDITING_KEY, "switched on", { editing: true });
       expect(editingOnWasAnnounced()).toBe(false);
@@ -318,7 +318,7 @@ describe("local-model announced record (#2404)", () => {
     });
 
     it("a newer answering model replaces the recorded fingerprint", async () => {
-      subscribeNotifications(() => {});
+      subscribeNotifications(() => {}, { ownWindow: true });
       announceLocalModelChange(ANSWERING_KEY, "set to A", { answering: "fp-a" });
       announceLocalModelChange(ANSWERING_KEY, "set to B", { answering: "fp-b" });
       expect(answeringWasAnnounced("fp-a")).toBe(false);
@@ -345,7 +345,7 @@ describe("local-model announced record (#2404)", () => {
     });
 
     it("clears a record that a browser was told, at once, and keeps the answering fingerprint", async () => {
-      subscribeNotifications(() => {});
+      subscribeNotifications(() => {}, { ownWindow: true });
       announceLocalModelChange(ANSWERING_KEY, "set to A", { answering: "fp-a" });
       announceLocalModelChange(EDITING_KEY, "switched on", { editing: true });
       expect(editingOnWasAnnounced()).toBe(true);
@@ -385,7 +385,7 @@ describe("local-model announced record (#2404)", () => {
   describe("a failed write", () => {
     it("does not throw, is logged, and leaves the in-memory record updated", async () => {
       writeControl.reject = true;
-      subscribeNotifications(() => {});
+      subscribeNotifications(() => {}, { ownWindow: true });
 
       expect(() =>
         announceLocalModelChange(EDITING_KEY, "switched on", { editing: true }),
@@ -405,7 +405,7 @@ describe("local-model announced record (#2404)", () => {
 
     it("does not poison the next write", async () => {
       writeControl.reject = true;
-      subscribeNotifications(() => {});
+      subscribeNotifications(() => {}, { ownWindow: true });
       announceLocalModelChange(EDITING_KEY, "switched on", { editing: true });
       await flush();
 

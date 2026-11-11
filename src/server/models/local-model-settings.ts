@@ -235,6 +235,10 @@ export function primeLocalModelSettings(): void {
   // on by a request nobody saw (or its notice died with the last run). Say so
   // now; the first browser to connect is sent it.
   if (read && !editingOnWasAnnounced()) announceEditingOn();
+  // Off at start-up, whatever the record says: clear a stale "told", so the
+  // next On is announced (the record can outlive a failed write on Off, or a
+  // settings file that fell back to off).
+  if (!read) recordEditingOff(EDITING_ON_NOTICE_KEY);
 }
 
 /** The live setting plus the Off counter. Synchronous: read on every tool call. */

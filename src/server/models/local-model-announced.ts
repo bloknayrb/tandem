@@ -10,12 +10,20 @@
  * callers), and after a restart an in-memory "already announced" is gone — the
  * changed state would simply be what the server starts with.
  *
- * So this file records the state as of the last announcement that **reached a
- * browser**, and start-up compares against it: anything saved that no browser
- * was told about is announced again, and registered for the first browser that
- * connects. "Reached a browser" means the notice was written to a notify
- * stream — either one that was connected when it was raised, or one that
- * connected later and was sent the replay.
+ * So this file records the state as of the last announcement that was sent to
+ * **Tandem's own window**, and start-up compares against it: anything saved
+ * that Tandem's window was never sent is announced again, and held for the
+ * first such window to connect. "Tandem's own window" is a notify stream the
+ * route judged to be opened by the desktop WebView or by the page Tandem
+ * serves (`isTandemOwnWindow`), either connected when the notice was raised or
+ * sent the replay later. Any other client of the stream — which is an
+ * unauthenticated loopback GET, so a page on another `127.0.0.1` port can open
+ * it — receives notices but does not count: otherwise the caller that made the
+ * change could mark it as seen and then restart the server.
+ *
+ * What this does not cover, and the register says so: a local PROCESS can send
+ * whatever headers it likes, and can write this file and `models.json`
+ * directly. It is outside what any notice can bound.
  *
  * The read fails toward announcing: a missing, unreadable or malformed file
  * reads as "nothing was ever announced", so the cost of losing it is one
@@ -33,7 +41,7 @@ import path from "node:path";
 import type { TandemNotification } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { atomicWriteConfigFile, readBoundedJsonFileSync } from "../integrations/storage.js";
-import { notificationSubscriberCount, pushNotification } from "../notifications.js";
+import { ownWindowSubscriberCount, pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
   addStartupNotice,
@@ -134,10 +142,17 @@ export function announceLocalModelChange(
   onStartupNoticeDelivered(dedupKey, () => record(delivered));
   // Count BEFORE pushing: a stream that connects during the push gets the
   // replay instead, and reports its own delivery.
-  const listening = notificationSubscriberCount() > 0;
+  const listening = ownWindowSubscriberCount() > 0;
   pushNotification(notice);
   if (listening) record(delivered);
   return notice;
+}
+
+/** No local model would answer any more: forget which one the user was told
+ *  about, so that one answering again — the same one included — is announced.
+ *  Re-enabling a model the user disabled is a change they must be able to see. */
+export function recordAnsweringNone(): void {
+  if (load().answering !== null) record({ answering: null });
 }
 
 /**

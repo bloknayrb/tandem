@@ -288,13 +288,13 @@ describe("local-model editing setting (#1123)", () => {
     it("leaves no temp file behind", async () => {
       await setLocalModelEditing(true);
       await setLocalModelEditing(false);
-      // Round 3: a browser is listening here, so the On was recorded as
-      // announced and the Off cleared that record — a second file, written
-      // behind the request. Both files, and nothing else.
+      // No window of Tandem's own is listening here, so the On was never
+      // recorded as told and the Off had no record to clear: the settings file
+      // is the only file, and nothing else.
       await writesSettled();
       const names = fs.readdirSync(dir).sort();
       expect(names.filter((n) => n.endsWith(".tmp"))).toEqual([]);
-      expect(names).toEqual([LOCAL_MODEL_ANNOUNCED_FILE_NAME, LOCAL_MODEL_SETTINGS_FILE_NAME]);
+      expect(names).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
     });
   });
 
@@ -635,13 +635,10 @@ describe("local-model editing setting (#1123)", () => {
         expect(isLocalModelEditingEnabled()).toBe(true);
         expect(fs.readFileSync(file).equals(before), "byte-identical").toBe(true);
         expect(writeControl.calls, "the writer was never called").toEqual([]);
-        // The only other file is the record that this On was announced
-        // (round 3); nothing was created beside the settings file for it.
+        // Nothing was created beside the settings file: with no window of
+        // Tandem's own listening, the On is not recorded as told either.
         await writesSettled();
-        expect(fs.readdirSync(dir).sort()).toEqual([
-          LOCAL_MODEL_ANNOUNCED_FILE_NAME,
-          LOCAL_MODEL_SETTINGS_FILE_NAME,
-        ]);
+        expect(fs.readdirSync(dir).sort()).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
 
         // It was for this run of the server only.
         restart();
@@ -815,6 +812,8 @@ describe("local-model editing setting (#1123)", () => {
     // is no longer taken as what the user left: unless a browser was told, it
     // is announced then.
     it("a prime that reads true, with no record that a browser was told, announces it once", () => {
+      // Tandem's own window is connected, so the announcement counts as told.
+      subscribeNotifications(() => {}, { ownWindow: true });
       write(JSON.stringify({ version: 1, editing: true }));
       primeLocalModelSettings();
       expect(isLocalModelEditingEnabled()).toBe(true);
@@ -961,7 +960,7 @@ describe("local-model editing setting (#1123)", () => {
 
     it("(b) switched on while a browser is connected → the next start is silent", async () => {
       const seen: TandemNotification[] = [];
-      subscribeNotifications((n) => seen.push(n));
+      subscribeNotifications((n) => seen.push(n), { ownWindow: true });
       await setLocalModelEditing(true);
       expect(seen.map((n) => n.message)).toEqual([EDITING_ON_NOTICE]);
       expect(editingOnWasAnnounced()).toBe(true);
@@ -990,7 +989,7 @@ describe("local-model editing setting (#1123)", () => {
     });
 
     it("on (told), off, on again with no browser → the second On is announced again at the next start", async () => {
-      const stop = subscribeNotifications(() => {});
+      const stop = subscribeNotifications(() => {}, { ownWindow: true });
       await setLocalModelEditing(true);
       expect(editingOnWasAnnounced()).toBe(true);
       stop(); // the window is closed
@@ -1009,7 +1008,7 @@ describe("local-model editing setting (#1123)", () => {
     });
 
     it("an unreadable announced-record costs one repeated notice, never silence", async () => {
-      subscribeNotifications(() => {});
+      subscribeNotifications(() => {}, { ownWindow: true });
       await setLocalModelEditing(true);
       await writesSettled();
       expect(announcedOnDisk()).toEqual({ version: 1, editing: true, answering: null });
@@ -1040,7 +1039,15 @@ describe("local-model editing setting (#1123)", () => {
         // The first `data:` event of the stream, whole.
         const first = await new Promise<string>((resolve, reject) => {
           request = http.get(
-            { host: "127.0.0.1", port: address.port, path: "/api/notify-stream" },
+            {
+              host: "127.0.0.1",
+              port: address.port,
+              path: "/api/notify-stream",
+              // What a browser sends for the page Tandem itself serves; without
+              // it the stream still gets the notice but does not count as
+              // Tandem's own window (see the attack test below).
+              headers: { "Sec-Fetch-Site": "same-origin" },
+            },
             (res) => {
               let text = "";
               res.setEncoding("utf8");

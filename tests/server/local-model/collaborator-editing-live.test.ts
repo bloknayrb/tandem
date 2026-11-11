@@ -449,7 +449,7 @@ describe("switching editing through the real route reaches a run in flight (#112
 
     it("saved while a browser is connected: a new wire is silent", async () => {
       const seen: string[] = [];
-      subscribeNotifications((n) => seen.push(n.message));
+      subscribeNotifications((n) => seen.push(n.message), { ownWindow: true });
       const moved = { ...MODEL, endpoint: "http://127.0.0.1:11435" };
       const saved = await fetch(`${baseUrl}${API_MODELS}`, {
         method: "POST",

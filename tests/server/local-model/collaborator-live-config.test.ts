@@ -559,7 +559,7 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       expect(answeringNotes()).toHaveLength(1);
     });
 
-    it("endpoint change: another; rename: none; disable and re-enable: none; another default: one", async () => {
+    it("endpoint change: another; rename: none; disable: none, re-enable: one; another default: one", async () => {
       const endpoints = ["http://127.0.0.1:11434", "http://localhost:8080", "http://[::1]:9090"];
       const modelIds = ["qwen2.5:14b-instruct", "phi-4"];
 
@@ -576,8 +576,9 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
         file([entry({ endpoint: endpoints[1], displayName: "Renamed", enabled: false })], "m-1"),
       );
       expect(answeringNotes()).toHaveLength(2);
+      // Answering again after none did is announced, even for the same entry.
       await save(file([entry({ endpoint: endpoints[1], displayName: "Renamed" })], "m-1"));
-      expect(answeringNotes()).toHaveLength(2);
+      expect(answeringNotes()).toHaveLength(3);
 
       const first = entry({ endpoint: endpoints[1], displayName: "Renamed" });
       const second = entry({
@@ -589,17 +590,17 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       });
       // Adding a second model while the default stays put changes nothing…
       await save(file([first, second], "m-1"));
-      expect(answeringNotes()).toHaveLength(2);
+      expect(answeringNotes()).toHaveLength(3);
       // …switching the default to it does.
       await save(file([first, second], "m-2"));
 
       const notes = answeringNotes();
-      expect(notes).toHaveLength(3);
-      expect(getBuffer()).toHaveLength(3); // and nothing else was said
-      expect(new Set(notes.map((n) => n.id)).size).toBe(3);
-      expect(notes[2].message).toContain('"Local Two"');
+      expect(notes).toHaveLength(4);
+      expect(getBuffer()).toHaveLength(4); // and nothing else was said
+      expect(new Set(notes.map((n) => n.id)).size).toBe(4);
+      expect(notes[3].message).toContain('"Local Two"');
       // One replay entry, the latest: the key replaces rather than stacks.
-      expect(getStartupNotices()).toEqual([notes[2]]);
+      expect(getStartupNotices()).toEqual([notes[3]]);
       for (const n of notes) {
         for (const endpoint of endpoints) {
           expect(n.message).not.toContain(endpoint);

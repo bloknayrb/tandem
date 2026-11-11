@@ -2365,13 +2365,18 @@ describe("collaborator — answering-changed notice (#2404)", () => {
     await h.collab.stop();
   });
 
-  it("model → none → the same model again is silent (switched off and on, or re-marked Default)", async () => {
+  // Was "is silent". A model answering again after none did is now announced
+  // even when it is the same entry: re-enabling a model the user switched off
+  // is a change they must be able to see (and their own off-and-on says so too).
+  it("model → none → the same model again is announced once", async () => {
     const h = harness(A);
     h.change(null);
-    h.fire(); // still none
-    h.change({ ...A });
+    h.fire(); // still none: nothing
     expect(getBuffer()).toEqual([]);
-    expect(getStartupNotices()).toEqual([]);
+    h.change({ ...A });
+    expect(getBuffer()).toHaveLength(1);
+    expect(getBuffer()[0].message).toBe(answeringChangedNotice(A));
+    expect(getStartupNotices()).toHaveLength(1);
     await h.collab.stop();
   });
 
@@ -2737,6 +2742,7 @@ describe("collaborator — the model found at start-up is announced unless a bro
     const cell: { now: AnsweringLocalModel | null } = { now: initial };
     const wasAnnounced = vi.fn((fingerprint: string) => told.includes(fingerprint));
     const announce = vi.fn((_dedupKey: string, _message: string, _fingerprint: string) => {});
+    const none = vi.fn(() => {});
     let listener: (() => void) | null = null;
     const collab = createLocalModelCollaborator(
       makeDeps({
@@ -2747,13 +2753,14 @@ describe("collaborator — the model found at start-up is announced unless a bro
             listener = null;
           };
         },
-        announced: { wasAnnounced, announce },
+        announced: { wasAnnounced, announce, none },
       }),
     );
     return {
       collab,
       wasAnnounced,
       announce,
+      none,
       change: (next: AnsweringLocalModel | null) => {
         cell.now = next;
         if (!listener) throw new Error("onModelsChanged listener was never registered");
@@ -2761,6 +2768,28 @@ describe("collaborator — the model found at start-up is announced unless a bro
       },
     };
   }
+
+  it("forgets the announced model when none answers any more, so the same one answering again is announced", async () => {
+    const h = harness(A, [answeringFingerprint(A)]);
+    h.collab.__startForTests();
+    expect(h.announce).not.toHaveBeenCalled(); // already told: silent at wire
+    h.change(null);
+    expect(h.none).toHaveBeenCalledTimes(1);
+    h.change(null); // still none: not again
+    expect(h.none).toHaveBeenCalledTimes(1);
+    h.change({ ...A });
+    expect(h.announce).toHaveBeenCalledTimes(1);
+    expect(h.announce.mock.calls[0][2]).toBe(answeringFingerprint(A));
+    await h.collab.stop();
+  });
+
+  it("does not call none when no model answered at wire", async () => {
+    const h = harness(null);
+    h.collab.__startForTests();
+    h.change(null);
+    expect(h.none).not.toHaveBeenCalled();
+    await h.collab.stop();
+  });
 
   it("a model no browser was told about is announced once at wire, through the record", async () => {
     const h = harness(A);

@@ -53,6 +53,7 @@ import { readLiveMode } from "../mode.js";
 import {
   announceLocalModelChange,
   answeringWasAnnounced,
+  recordAnsweringNone,
 } from "../models/local-model-announced.js";
 import {
   type LocalModelEditingState,
@@ -175,6 +176,8 @@ export interface CollaboratorDeps {
   announced?: {
     wasAnnounced: (fingerprint: string) => boolean;
     announce: (dedupKey: string, message: string, fingerprint: string) => void;
+    /** No local model answers any more: forget which one was announced. */
+    none: () => void;
   };
 }
 
@@ -195,6 +198,7 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
     announce: (dedupKey, message, fingerprint) => {
       announceLocalModelChange(dedupKey, message, { answering: fingerprint });
     },
+    none: recordAnsweringNone,
   },
 };
 
@@ -303,9 +307,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   /** The broken state the user was last told about, so one state is one notice. */
   let noticedStateKey: string | null = null;
   let stopWatchingModels: (() => void) | null = null;
-  /** The last model that would have answered, kept across "none" states so
-   *  switching a model off and on again, or re-marking the same default, is
-   *  not announced as a change. Null until one has been seen. */
+  /** The model that would answer as of the last registry change, or null when
+   *  none would. A model answering after "none" is always announced. */
   let lastAnswering: AnsweringLocalModel | null = null;
   let subscriberCb: ((e: TandemEvent) => void) | null = null;
   let current: RunSlot | null = null;
@@ -754,7 +757,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
    */
   function noticeAnsweringChange(): void {
     const now = deps.answering?.() ?? null;
-    if (now === null) return;
+    if (now === null) {
+      // No model answers now. Forget the last one, so that a model answering
+      // again is announced even if it is the very same entry: re-enabling a
+      // model the user switched off is a change they must be able to see. The
+      // user's own off-and-on therefore raises a notice too.
+      if (lastAnswering !== null) deps.announced?.none();
+      lastAnswering = null;
+      return;
+    }
     const before = lastAnswering;
     lastAnswering = now;
     if (
