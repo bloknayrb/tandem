@@ -45,7 +45,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withFileSync, withInternal } from "../../shared/origins.js";
 import type { DocumentRange, SessionData } from "../../shared/types.js";
-import { docHash } from "../annotations/doc-hash.js";
+import { contentHash, docHash } from "../annotations/doc-hash.js";
 import {
   type AnnotationDocV1,
   type AnnotationRecordV1,
@@ -378,10 +378,7 @@ function stampRecord<T extends AnnotationRecordV1>(rec: T, w: Witness): T {
     const valid =
       typeof stored.from === "number" &&
       typeof stored.to === "number" &&
-      validateFlatRange(w.text, stored.from, stored.to, {
-        allowEmpty: true,
-        surrogates: "ignore",
-      }).ok;
+      validateFlatRange(w.text, stored.from, stored.to, { allowEmpty: true }).ok;
     range = valid
       ? stored
       : clampToFlatLength(
@@ -527,19 +524,46 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
   // The foreign side is the key whose text is not the surviving document's.
   const foreign: "old" | "new" = ctx.survivor === "old" ? "new" : "old";
   let witness: Witness | null | undefined;
-  const foreignWitness = async (): Promise<Witness | null> => {
+  /**
+   * `envelopeHash` is the foreign envelope's stored `meta.contentHash`. A
+   * SESSION witness is the foreign text by construction. The file on disk is
+   * the foreign text only if nothing has saved over it since, and the one
+   * proof of that is the hash the envelope recorded at its last write: without
+   * a match the disk file is not used, and the records keep the lazy treatment
+   * they have on master (a stamp must never certify text a record was not on).
+   */
+  const foreignWitness = async (envelopeHash: string | undefined): Promise<Witness | null> => {
     if (witness !== undefined) return witness;
     const session =
       foreign === "old" ? ctx.oldScratch : ctx.loser?.side === "new" ? ctx.loser.scratch : null;
-    const w = session ? witnessOf(session) : await diskWitness(ctx.openPath, ctx.format);
+    let w: Witness | null;
+    if (session) {
+      w = witnessOf(session);
+    } else {
+      w = envelopeHash === undefined ? null : await diskWitness(ctx.openPath, ctx.format);
+      if (w !== null && contentHash(w.text) !== envelopeHash) w = null;
+    }
     // Equal text: stored ranges are as valid as they were. Nothing to stamp.
     witness = w !== null && w.text !== live ? w : null;
     return witness;
   };
+  /** Is this id live in the document with an anchor that resolves there? */
+  const liveAndAnchored = (id: string): boolean => {
+    const rec = ctx.doc.getMap(Y_MAP_ANNOTATIONS).get(id) as
+      | { relRange?: { fromRel: unknown; toRel: unknown } }
+      | undefined;
+    if (!rec?.relRange) return false;
+    return (
+      relPosToFlatOffset(ctx.doc, rec.relRange.fromRel as never) !== null &&
+      relPosToFlatOffset(ctx.doc, rec.relRange.toRel as never) !== null
+    );
+  };
 
   // The new side is foreign: its envelope was merged by `wireAnnotationStore`.
   // Overlay the witness's anchor onto each record that came from it.
-  if (foreign === "new" && !featureOff) {
+  // Only when the store can keep the stamp: one that lives in memory alone
+  // would be lost with the session and leave the envelope's copy unstamped.
+  if (foreign === "new" && canPersist) {
     const map = ctx.doc.getMap(Y_MAP_ANNOTATIONS);
     const mine = ctx.oldScratch?.getMap(Y_MAP_ANNOTATIONS);
     const candidates: AnnotationRecordV1[] = [];
@@ -558,7 +582,13 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
       candidates.push(rec);
     }
     if (candidates.length > 0) {
-      const w = await foreignWitness();
+      let newEnvelopeHash: string | undefined;
+      if (ctx.loser?.side !== "new") {
+        const own = await readRaw(envelopePath(newHash));
+        const parsedOwn = "missing" in own ? null : parseAnnotationDoc(own.raw);
+        if (parsedOwn?.ok) newEnvelopeHash = parsedOwn.doc.meta.contentHash;
+      }
+      const w = await foreignWitness(newEnvelopeHash);
       if (w !== null) {
         const stamped = stampAll(candidates, w, stamps);
         withFileSync(ctx.doc, () => {
@@ -577,6 +607,7 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
   let oldComplete = false;
   let extraTombstones: TombstoneRecordV1[] = [];
   let merged = false;
+  let discardedStamps = false;
   if (!featureOff) {
     const file = envelopePath(oldHash);
     const read = await readRaw(file); // a read error other than ENOENT throws: retried
@@ -592,10 +623,15 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
         extraTombstones = parsed.doc.tombstones;
         const w =
           foreign === "old" && hasSnapshotless(parsed.doc.annotations)
-            ? await foreignWitness()
+            ? await foreignWitness(parsed.doc.meta.contentHash)
             : null;
         const before = stamps.size;
-        const annotations = stampAll(parsed.doc.annotations, w, stamps);
+        // A record that is already live here with an anchor that resolves
+        // belongs to this document's own lineage (a carry-over that stopped
+        // half way and is being retried): its anchor is better than any stamp.
+        const annotations = parsed.doc.annotations.map((rec) =>
+          liveAndAnchored(rec.id) ? rec : stampAll([rec], w, stamps)[0],
+        );
         const stampedHere = stamps.size > before;
         // A stamped record must not enter a document whose store cannot keep
         // the stamp; an unwired document has no ledger to carry tombstones.
@@ -609,6 +645,7 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
           merged = true;
         } else if (stampedHere) {
           for (const a of parsed.doc.annotations) stamps.delete(a.id);
+          discardedStamps = true;
         }
       }
     }
@@ -618,10 +655,14 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
   if (ctx.loser) {
     const loserWitness = witnessOf(ctx.loser.scratch);
     const records = readSessionRecords(ctx.loser.scratch, newHash);
+    // Stamps go into a side table first: only a record the fold actually
+    // wrote may be checked against its stamp (a copy that lost to the live one
+    // must not replace the stamp the live one was written with).
+    const foldStamps: Stamps = new Map();
     const annotations = stampAll(
       records.annotations,
       loserWitness.text !== live ? loserWitness : null,
-      stamps,
+      foldStamps,
     );
     const result = mergeSessionRecords(
       ctx.doc,
@@ -629,7 +670,12 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
       newHash,
       extraTombstones,
     );
-    for (const id of result.annotationIds) wrote.add(id);
+    for (const id of result.annotationIds) {
+      wrote.add(id);
+      const stamp = foldStamps.get(id);
+      if (stamp !== undefined) stamps.set(id, stamp);
+      else stamps.delete(id);
+    }
   }
 
   // Durability: every stamp written must be in the new envelope before a
@@ -637,6 +683,10 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
   // everything it held.
   const stampedWrites = [...wrote].some((id) => stamps.has(id));
   if (featureOff) return true;
+  // Old-envelope stamps were dropped because the store cannot keep them, and
+  // the session they came from is not the document: removing that session now
+  // would destroy the only witness.
+  if (discardedStamps && ctx.oldScratch && ctx.survivor !== "old") return false;
   if (!canPersist) {
     if (stampedWrites && (ctx.loser || ctx.survivor !== "disk")) {
       console.error(
@@ -750,7 +800,13 @@ export async function finishLegacyOpen(
   args: { id: string; doc: Y.Doc; openPath: string; format: string; restored: boolean },
 ): Promise<void> {
   try {
-    if (plan.run && !plan.stopped && plan.oldSessionExists) {
+    // A stop keeps the old session only where it is still needed as a witness
+    // or as an unfolded loser. When the old session IS the document (it was
+    // restored and there is no second session), nothing depends on its file
+    // any more: leaving it would bring a closed document back, at the next
+    // start, as it was before every edit made since (R2.5).
+    const oldIsTheDocument = plan.sessionIsOld && args.restored && plan.loser === undefined;
+    if (plan.run && plan.oldSessionExists && (!plan.stopped || oldIsTheDocument)) {
       await moveSession(
         args.id,
         args.doc,

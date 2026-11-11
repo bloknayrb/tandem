@@ -44,7 +44,7 @@ vi.mock(import("../../src/server/file-io/doc-backup.js"), async (importOriginal)
   };
 });
 
-import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { contentHash, docHash } from "../../src/server/annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../../src/server/annotations/schema.js";
 import {
   closeStore,
@@ -632,6 +632,7 @@ describe("Requirement 2: records saved under the short spelling", () => {
       await storeEnvelope(fx.aliasPath, {
         annotations: [
           annRecord({ id: "shared", author: "user", content: "old copy", rev: 5 }),
+          annRecord({ id: "shared_new_higher", author: "user", content: "old copy", rev: 1 }),
           annRecord({ id: "old_only", author: "user", rev: 1 }),
           note,
           annRecord({ id: "killed_by_new", author: "user", rev: 1 }),
@@ -641,6 +642,7 @@ describe("Requirement 2: records saved under the short spelling", () => {
       await storeEnvelope(fx.longPath, {
         annotations: [
           annRecord({ id: "shared", author: "user", content: "new copy", rev: 2 }),
+          annRecord({ id: "shared_new_higher", author: "user", content: "new copy", rev: 4 }),
           annRecord({ id: "new_only", author: "user", rev: 1 }),
           annRecord({ id: "old_stone", author: "user", rev: 1 }),
         ],
@@ -649,8 +651,15 @@ describe("Requirement 2: records saved under the short spelling", () => {
 
       const opened = await openFromDisk(fx.aliasPath);
       const anns = liveAnnotations(opened.documentId);
-      expect([...anns.keys()].sort()).toEqual(["ann_note", "new_only", "old_only", "shared"]);
+      expect([...anns.keys()].sort()).toEqual([
+        "ann_note",
+        "new_only",
+        "old_only",
+        "shared",
+        "shared_new_higher",
+      ]);
       expect(anns.get("shared")?.content).toBe("old copy");
+      expect(anns.get("shared_new_higher")?.content).toBe("new copy");
       expect(anns.get("ann_note")?.type).toBe("note");
 
       const envelope = await readEnvelope(fx.longPath);
@@ -659,6 +668,7 @@ describe("Requirement 2: records saved under the short spelling", () => {
         "new_only",
         "old_only",
         "shared",
+        "shared_new_higher",
       ]);
       expect(envelope.tombstones.map((t) => t.id).sort()).toEqual(["killed_by_new", "old_stone"]);
       expect(await exists(envelopePath(docHash(fx.aliasPath)))).toBe(false);
@@ -768,13 +778,35 @@ describe("Requirement 2: records saved under the short spelling", () => {
       });
       await storeSession(fx.longPath, "alpha beta gamma delta\n", { lastAccessed: T0 + 5_000 });
       const opened = await openFromDisk(fx.aliasPath);
+      // Stamped (the texts differ), and the stamp is what lets it anchor.
+      expect(liveAnnotations(opened.documentId).get("ann_beta")?.textSnapshot).toBe("beta");
       expect(outcome(opened.documentId, "ann_beta")).not.toBe("degraded");
+      const after = liveAnnotations(opened.documentId).get("ann_beta");
+      expect(after?.range).toEqual({ from: 6, to: 10 });
+    });
+
+    it("does not use the file on disk as a witness when it is not the text the envelope was written on", async () => {
+      // No content hash on the envelope (or a stale one): the disk file proves
+      // nothing, so the record is left exactly as master would leave it.
+      await storeEnvelope(fx.longPath, { annotations: [annRecord(onBeta as never)] });
+      await storeSession(fx.aliasPath, "ZZZZ alpha beta gamma\n", { lastAccessed: T0 });
+      const opened = await openFromDisk(fx.aliasPath);
+      expect(liveAnnotations(opened.documentId).get("ann_beta")?.textSnapshot).toBeUndefined();
     });
 
     it("uses the file on disk as the witness when the other side has an envelope and no session", async () => {
       // The long document's envelope was made on the disk text; the short
       // session holds different, unsaved text and becomes the document.
-      await storeEnvelope(fx.longPath, { annotations: [annRecord(onBeta as never)] });
+      // The envelope records the hash of the text it was last written against;
+      // the disk file is trusted as the witness only when it still has it.
+      await storeEnvelope(fx.longPath, {
+        annotations: [annRecord(onBeta as never)],
+        meta: {
+          filePath: fx.longPath,
+          lastUpdated: T0,
+          contentHash: contentHash("alpha beta gamma"),
+        },
+      });
       await storeSession(fx.aliasPath, "ZZZZ alpha beta gamma\n", { lastAccessed: T0 });
       const opened = await openFromDisk(fx.aliasPath);
       expect(liveText(opened.documentId)).toContain("ZZZZ");
@@ -803,7 +835,12 @@ describe("Requirement 2: records saved under the short spelling", () => {
     expect(opened.kind).toBe("restored");
     vi.mocked(fs.readFile).mockRestore();
     expect(await exists(file)).toBe(true);
-    expect(await exists(sessionFile(fx.aliasPath))).toBe(true);
+
+    // The session it restored has moved to the new key all the same: left
+    // behind, it would bring the document back after a close, as it was before
+    // every later edit.
+    expect(await exists(sessionFile(fx.aliasPath))).toBe(false);
+    expect(await exists(sessionFile(fx.longPath))).toBe(true);
 
     // The next open by that spelling finishes the job.
     await closeDocumentById(opened.documentId);

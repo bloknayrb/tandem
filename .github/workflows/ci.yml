@@ -239,10 +239,14 @@ jobs:
   #    defect this step hid: Node's JS `fs.realpathSync` keeps an 8.3 short
   #    name where `fs.promises.realpath` expands it, and the product compared
   #    the two (the launcher's resolver pairs, the document key, the drift
-  #    preview's bundled-folder list). That is fixed (#2400), so those tests
-  #    now pass with a short TEMP as well; the step stays for the host-dependent
-  #    tests above. tests/server/short-name-documents.win.test.ts builds its own
-  #    short spellings and does not depend on TEMP's.
+  #    preview's bundled-folder list). That is fixed (#2400), so those tests are
+  #    expected to pass with a short TEMP as well (not run that way here: this
+  #    job never has one). The step stays, and more depends on it than before:
+  #    a document is now keyed on its LONG path, so any test that computes an
+  #    expected id or key from the raw temp path fails on a short TEMP.
+  #    tests/server/short-name-documents.win.test.ts builds its own short
+  #    spellings on a root taken from the native realpath, so it does not
+  #    depend on TEMP's.
   #  - the `\tmp` step. tests/server/document-service.test.ts writes under a
   #    literal `/tmp`, which Node resolves to `\tmp` on the working directory's
   #    drive; the runner has none there.

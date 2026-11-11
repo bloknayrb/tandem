@@ -117,9 +117,12 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // JS realpath, so the fixture's own prefix is whatever the host gives it;
-  // only the two components created below are compared by spelling.
-  root = fsSync.realpathSync(await fs.mkdtemp(path.join(os.tmpdir(), "tandem-shortwin-fx-")));
+  // The NATIVE realpath, so the fixture's own prefix is long even on a host
+  // whose TEMP is an 8.3 short name: the only short components in any path
+  // below are the ones each test builds.
+  root = fsSync.realpathSync.native(
+    await fs.mkdtemp(path.join(os.tmpdir(), "tandem-shortwin-fx-")),
+  );
   longDir = path.join(root, LONG_DIR);
   longPath = path.join(longDir, LONG_FILE);
   await fs.mkdir(longDir, { recursive: true });

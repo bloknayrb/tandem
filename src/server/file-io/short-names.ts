@@ -94,6 +94,9 @@ export async function expandShortNames(
 
   // `path.win32` always, never the host's `path`: this code only runs for
   // win32, and an injected-platform test on another host must walk the same way.
+  // Only an absolute path: a drive-relative (`C:x`) or relative string would
+  // send the calls below wherever the process happens to stand.
+  if (!path.win32.isAbsolute(p)) return { path: p };
   const root = path.win32.parse(p).root;
   const parts = p.slice(root.length).split(/([\\/]+)/);
   if (!parts.some((part, i) => i % 2 === 0 && looksLikeShortName(part))) return { path: p };
@@ -126,7 +129,7 @@ export async function expandShortNames(
         out = prefix;
         continue;
       }
-      if (candidate === "" || candidate === "." || candidate === ".." || /[\\/]/.test(candidate)) {
+      if (candidate === "" || candidate === "." || candidate === ".." || /[\\/:]/.test(candidate)) {
         throw new Error(`short-name expansion: unusable long name for ${part}`);
       }
       const [alias, long] = await Promise.all([deps.lstat(prefix), deps.lstat(parent + candidate)]);

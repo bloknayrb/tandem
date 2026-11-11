@@ -71,6 +71,16 @@ function spyOnResolverFs() {
   ];
 }
 
+/** Create a directory link; false where the host or filesystem will not make one. */
+function tryLink(target: string, link: string): boolean {
+  try {
+    fs.symlinkSync(target, link, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The 8.3 alias of an existing path, or null when the volume makes none. */
 function shortAliasOf(p: string): string | null {
   try {
@@ -137,12 +147,12 @@ describe("each pair accepts, refuses and spells the same (R3.1)", () => {
     );
   }
 
-  it("on ordinary, missing, non-directory, outside-home and linked folders", async () => {
+  it("on ordinary, missing, non-directory, outside-home and linked folders", async (ctx) => {
     const file = path.join(project, "README.md");
     fs.writeFileSync(file, "# hi\n");
     const link = path.join(home, "link to project");
     // A junction on Windows needs no privilege; elsewhere it is a symlink.
-    fs.symlinkSync(project, link, "junction");
+    if (!tryLink(project, link)) return ctx.skip();
     for (const c of [project, home, outside, file, link, path.join(home, "nope"), "relative", ""]) {
       await expectPairsAgree(c, home);
     }
@@ -240,11 +250,11 @@ describe("previewCwdDrift says nothing for Tandem's own bundled folders, whichev
   // Host-neutral form of the defect: the bundled list holds one spelling of the
   // folder and the candidate resolves to another. A link stands in for the
   // short spelling, which only Windows can make.
-  it("a bundled folder listed through a link matches the candidate's real path", async () => {
+  it("a bundled folder listed through a link matches the candidate's real path", async (ctx) => {
     const bundled = path.join(home, "Tandem", "sample");
     fs.mkdirSync(bundled, { recursive: true });
     const viaLink = path.join(home, "bundled link");
-    fs.symlinkSync(bundled, viaLink, "junction");
+    if (!tryLink(bundled, viaLink)) return ctx.skip();
     expect(await previewCwdDrift(base({ candidate: bundled, bundledDocDirs: [viaLink] }))).toEqual({
       drifted: false,
     });
@@ -257,11 +267,20 @@ describe("previewCwdDrift says nothing for Tandem's own bundled folders, whichev
     async (ctx) => {
       const bundled = path.join(home, "a bundled sample folder");
       fs.mkdirSync(bundled, { recursive: true });
-      const alias = shortAliasOf(bundled);
-      if (alias === null) return ctx.skip();
+      const full = shortAliasOf(bundled);
+      if (full === null) return ctx.skip();
+      // `%~sI` shortens EVERY component. Keep the long parent and take only the
+      // leaf's alias, so the candidate stays inside the (long) home and reaches
+      // the bundled-folder comparison instead of being refused at the gate.
+      const leaf = path.win32.basename(full);
+      if (!leaf.includes("~")) return ctx.skip();
+      const alias = path.join(home, leaf);
       expect(await previewCwdDrift(base({ candidate: bundled, bundledDocDirs: [alias] }))).toEqual({
         drifted: false,
       });
+      // Control: without the bundled list the short candidate IS reported, so
+      // the silence below comes from the bundled-folder comparison.
+      expect((await previewCwdDrift(base({ candidate: alias }))).drifted).toBe(true);
       expect(await previewCwdDrift(base({ candidate: alias, bundledDocDirs: [bundled] }))).toEqual({
         drifted: false,
       });

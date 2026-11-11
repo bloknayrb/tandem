@@ -51,7 +51,13 @@ export interface AliasFixture {
 
 /** One markdown file reachable under a long name and an alias-shaped one. */
 export async function makeAliasFixture(content = "alpha beta gamma\n"): Promise<AliasFixture> {
-  const dir = fsSync.realpathSync(await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-alias-")));
+  // The NATIVE realpath: on a Windows host whose TEMP is itself an 8.3 short
+  // name, the JS flavour would keep that alias in the fixture's "long" path and
+  // the product would then expand it. The fixture must not depend on how the
+  // host spells its temp directory.
+  const dir = fsSync.realpathSync.native(
+    await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-alias-")),
+  );
   const longPath = path.join(dir, LONG_NAME);
   const aliasPath = path.join(dir, ALIAS_NAME);
   await fsp.writeFile(longPath, content, "utf-8");

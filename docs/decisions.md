@@ -2298,7 +2298,10 @@ are the figures #2398 uses.
   (the two equivalence tests in `tests/server/launcher/cwd-preview.test.ts`), the bundled-folder
   list against the drift preview's candidate (that file's third failure), and the document key in
   `documents/open.ts` (three in `tests/server/adr-034-open-characterization.test.ts`). The fix
-  makes those six pass on a short `TEMP` too; the step stays for the host-dependent tests. Whether
+  is expected to make those six pass on a short `TEMP` too (this job never has one, so it does
+  not show that). The step stays, and more tests depend on it than before: a document is now
+  keyed on its long path, so a test that computes an expected id or key from the raw temp path
+  fails on a short `TEMP`. Whether
   the hosted runner's volume creates short names for NEW folders is what
   `tests/server/short-name-documents.win.test.ts` reports as ran or skipped.
 
