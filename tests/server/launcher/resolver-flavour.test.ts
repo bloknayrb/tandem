@@ -201,6 +201,25 @@ describe("each pair accepts, refuses and spells the same (R3.1)", () => {
       await expectPairsAgree(onDrive, `${letter}:${BS}`);
       expect(resolveSafeCwd(onDrive)).toBe(onDrive);
       expect(await resolveSafeCwdAsync(onDrive)).toBe(onDrive);
+
+      // R3.3 literals, measured on master (`0104cac`) on Windows 11 with a
+      // `subst` drive mapped to the home folder (PR #2407, comment 6806559564).
+      // The sync resolver is unchanged by #2400, so these are master's answers:
+      // against the PHYSICAL home the drive-letter path is outside it, against
+      // the drive root it is inside, and the physical path is inside.
+      expect(classifyRouteCwd(onDrive, { homeOverride: home })).toEqual({
+        ok: false,
+        reason: "outside-home",
+      });
+      expect(classifyRouteCwd(onDrive, { homeOverride: `${letter}:${BS}` })).toEqual({
+        ok: true,
+        cwd: onDrive,
+      });
+      expect(classifyRouteCwd(project, { homeOverride: home })).toEqual({ ok: true, cwd: project });
+      // The async twin is the one that changed: on master it accepted this
+      // candidate and returned the physical path; it now refuses, as the sync
+      // one always did.
+      expect(await resolveRouteCwdAsync(onDrive, { homeOverride: home })).toBeNull();
     } finally {
       execSync(`subst ${letter}: /d`, { timeout: SHELL_TIMEOUT_MS });
     }
