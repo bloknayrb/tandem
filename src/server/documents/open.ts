@@ -537,14 +537,11 @@ async function openResolved(
   // session becomes the document before anything is restored.
   const legacy: LegacyPlan | null =
     legacyPath !== undefined ? await planLegacyOpen(legacyPath, resolved, format) : null;
-  if (
-    legacy?.session &&
-    options?.fromRestore === true &&
-    options.readOnly === true &&
-    !legacy.sessionIsOld
-  ) {
+  if (legacy?.session && options?.fromRestore === true && !legacy.sessionIsOld) {
     // The replayed entry was the short-spelled session, but another session is
-    // the document: its own stored flag applies (upgrade-only).
+    // the document: its own stored flag applies, whichever way the replayed
+    // entry's flag pointed. (Its own entry's replay will not upgrade it later:
+    // see `wasOpenedFromShortSpelling`.)
     readOnly = derivedReadOnly || legacy.session.session.readOnly === true;
   }
   const restore = await maybeRestoreSession(

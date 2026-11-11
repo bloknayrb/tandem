@@ -948,6 +948,9 @@ async function moveSessionNow(
     console.error(`${TAG}: could not save the session for %s under its long path:`, openPath, err);
     return;
   }
+  // The old session is about to go: stop re-stamping it, or an autosave tick's
+  // rewrite could land after the unlink and bring it back.
+  keptLegacy.delete(id);
   if (!(await deleteSession(legacyPath))) {
     console.error(
       `${TAG}: the session saved under the short path for %s could not be removed; it will be retried when the document closes.`,
@@ -1030,7 +1033,18 @@ export async function finishLegacyOpen(
  * document wins and its content is never replaced; an old-key session is kept
  * as a backup and its records merged in. Never throws.
  */
-export async function adoptIntoOpenDocument(args: {
+export function adoptIntoOpenDocument(args: IntoOpenArgs): Promise<void> {
+  // Tracked from its first statement, not only from the session move: a close
+  // that starts while the records are still being merged must wait too, or
+  // the move would write a session after close deleted it.
+  const run = adoptIntoOpenDocumentNow(args).finally(() => {
+    if (movesInFlight.get(args.id) === run) movesInFlight.delete(args.id);
+  });
+  movesInFlight.set(args.id, run);
+  return run;
+}
+
+interface IntoOpenArgs {
   id: string;
   doc: Y.Doc;
   openPath: string;
@@ -1038,7 +1052,9 @@ export async function adoptIntoOpenDocument(args: {
   format: string;
   /** Startup restore replaying a stored entry, not a user's open. */
   fromRestore?: boolean;
-}): Promise<void> {
+}
+
+async function adoptIntoOpenDocumentNow(args: IntoOpenArgs): Promise<void> {
   let scratch: Y.Doc | null = null;
   try {
     if (legacyPathIsOpen(args.legacyPath)) return;
