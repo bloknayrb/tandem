@@ -44,7 +44,7 @@ import path from "node:path";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withFileSync, withInternal } from "../../shared/origins.js";
-import type { DocumentRange, SessionData } from "../../shared/types.js";
+import type { Annotation, DocumentRange, SessionData } from "../../shared/types.js";
 import { contentHash, docHash } from "../annotations/doc-hash.js";
 import {
   type AnnotationDocV1,
@@ -75,6 +75,7 @@ import {
   captureSnapshotFromText,
   clampToFlatLength,
   relPosToFlatOffset,
+  storedRangeStillMatches,
   validateFlatRange,
 } from "../positions.js";
 import {
@@ -605,22 +606,41 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
     ids: Iterable<string>,
     stampOf: (id: string) => Stamp | undefined,
   ): void => {
-    if (w === null || w.text === live) return;
+    if (w === null) return;
+    // Re-read: an already-open document can have been edited across the awaits above.
+    const liveNow = extractTextWithBreaks(ctx.doc).text;
+    if (w.text === liveNow) return;
+    const input = captureRemapInput(w.doc, ctx.openPath);
+    const anchorOf = (v: unknown): string => {
+      const r = v as { range?: unknown; relRange?: unknown } | null;
+      return JSON.stringify([r?.range ?? null, r?.relRange ?? null]);
+    };
     const targets = new Set<string>();
     for (const id of ids) {
       if (liveAndAnchored(id)) continue;
       const stamp = stampOf(id);
-      if (stamp !== undefined && !stamp.verified) continue;
-      // Snapshot-less and unstamped: nothing verifies its stored range either.
+      if (stamp !== undefined) {
+        if (stamp.verified) targets.add(id);
+        continue;
+      }
+      // Unstamped, so it carries its own snapshot (or none: skipped). Only
+      // the witness can vouch for where it is: its stored range still holds
+      // that snapshot there, or the witness document holds this same anchor
+      // and resolves it. Otherwise the remap's own probe could find the
+      // snapshot's words near a stale range and pin the record to a
+      // different copy of them; the lazy gate keeps it `degraded` instead.
       const rec = ctx.doc.getMap(Y_MAP_ANNOTATIONS).get(id) as
-        | { textSnapshot?: unknown }
+        | (Annotation & { textSnapshot?: unknown })
         | undefined;
       if (rec === undefined || rec.textSnapshot === undefined) continue;
-      targets.add(id);
+      const captured = input.entries.get(id);
+      const vouched =
+        (captured !== undefined && captured.trusted && anchorOf(captured.raw) === anchorOf(rec)) ||
+        storedRangeStillMatches(rec, w.text);
+      if (vouched) targets.add(id);
     }
     if (targets.size === 0) return;
-    const input = captureRemapInput(w.doc, ctx.openPath);
-    if (remapEnvelopeWins(ctx.doc, { ...input, newText: live, hunks: null }, targets)) {
+    if (remapEnvelopeWins(ctx.doc, { ...input, newText: liveNow, hunks: null }, targets)) {
       for (const id of targets) wrote.add(id);
     }
   };
