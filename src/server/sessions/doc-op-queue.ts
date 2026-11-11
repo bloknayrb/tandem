@@ -1,11 +1,19 @@
 /**
  * The per-document operation queue (#2358, ADR-054; ownership design §5.1).
  *
- * **Flag-on only.** With ownership on, every MCP mutation of a document, and
- * every ownership change that is not the close point, runs at its turn in that
+ * **Flag-on only.** With ownership on, every MCP write tool's operation on a
+ * document, every `tandem_open` take and every lapse runs at its turn in that
  * document's queue, so an ownership check and the write it guards cannot be
  * separated by another session's operation. With ownership off nothing calls
  * this module: handlers run their bodies directly, as they always have.
+ *
+ * **Not every ownership change is queued.** Three run synchronously where
+ * they are: the tab-close point (`onDocumentClosed`), the user-open default
+ * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, startup; it only
+ * writes an entry where there is none, and writes nothing until Tandem's
+ * Claude can be present, so PR 3b must queue it), and the backstop that
+ * clears an entry whose record no longer exists (`liveEntry`, which every
+ * decision runs first).
  *
  * **A leaf.** It imports nothing from the project.
  *

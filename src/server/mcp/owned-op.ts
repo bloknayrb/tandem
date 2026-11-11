@@ -217,15 +217,23 @@ export function ownedWrite(
 
 const RETRY = Symbol("retry");
 
+/**
+ * An `expectTargetId` no document can match (ids are hashes and basenames; a
+ * NUL is in neither): an open told to expect it refuses before it acts.
+ */
+const NO_TARGET = "\u0000no-target";
+
 export interface OwnedOpenSpec {
   /**
    * The id of the document this open targets — the open document that already
    * holds this file, or the id a fresh open would get — or undefined when the
-   * path will be refused before anything is opened. Synchronous.
+   * path will be refused before anything is opened (the open is then run
+   * with a target it cannot match, so it can only refuse). Synchronous.
    */
   predict: () => string | undefined;
   /**
-   * Run the open. With `expectTargetId`, it must act only on that target and
+   * Run the open. With `expectTargetId` (undefined only while ownership is
+   * off), it must act only on that target and
    * report `targetChanged` instead when the file's open document is another
    * one by the time it looks. `openedId` is the document now open, when the
    * open succeeded.
@@ -262,14 +270,17 @@ export async function ownedOpen(
     const predicted = spec.predict();
     if (predicted === undefined) {
       // The path is one the open path refuses, so this open is expected to
-      // fail. If it does not (the path changed under us), the take rule still
-      // decides who holds what was opened.
-      const opened = await spec.open(undefined);
-      if (opened.openedId === undefined || !hasDoc(opened.openedId)) return opened.envelope;
-      const taken = takeDocument(opened.openedId, ownerId);
-      return taken.ok
-        ? opened.envelope
-        : refusalEnvelope(taken, opened.openedId, ownerId, { openedAnyway: true });
+      // fail and nothing is checked. It is given a target no document can
+      // have, so it CANNOT act: if the path stopped being refused since the
+      // prediction, the open reports a changed target having done nothing,
+      // and the call starts again under a real prediction, in that
+      // document's queue. Nothing is ever opened, reloaded or taken here.
+      const refused = await spec.open(NO_TARGET);
+      if (refused.targetChanged) continue;
+      if (refused.openedId !== undefined) {
+        throw new Error("an open with no target opened a document");
+      }
+      return refused.envelope;
     }
     const outcome = await runDocOp<McpToolResult | typeof RETRY>(predicted, async () => {
       if (spec.predict() !== predicted) return RETRY;
@@ -295,8 +306,14 @@ export async function ownedOpen(
 /**
  * A document this call just created (`tandem_scratchpad`, the Markdown file
  * `tandem_convertToMarkdown` wrote) becomes the caller's under the take rule,
- * at its turn in that document's own queue. Best effort: if another record
- * got there first, the document stays theirs.
+ * at its turn in that document's own queue. The take rule decides, as it does
+ * for `tandem_open`: an unowned document, or one another record holds as
+ * `claimed` or `default`, becomes the caller's (and that record is told it
+ * lost it); one another record holds as `opened` or `assigned` stays theirs
+ * and the call still succeeds. Another record can hold it only if it got
+ * there between the creation and this turn, or — `tandem_convertToMarkdown`
+ * alone — if the Markdown file's document was already open while its file
+ * was missing from disk, so the conversion wrote the file under it.
  */
 export async function takeFreshDocument(caller: ToolCaller, documentId: string): Promise<void> {
   if (!ownershipEnabled()) return;

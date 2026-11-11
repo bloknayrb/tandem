@@ -706,19 +706,15 @@ export function registerApplyTools(server: McpServer): void {
           const e = err as Error & { code?: string };
           if (e.code === "NO_DOCUMENT") return noClaim(noDocumentError());
           if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-          // An upload or scratchpad source is decided by the document's source,
-          // fixed at open: it leaves no claim (#2358). The two sidecar refusals
-          // below it are decided by the disk and keep one.
+          // An upload or scratchpad source has no on-disk location to restore
+          // into (#1823: the same code list mode and tandem_applyChanges give
+          // it). It is decided by the document's source, fixed at open, so it
+          // leaves no claim (#2358).
           if (e.code === "INVALID_PATH") return noClaim(mcpError("INVALID_PATH", e.message));
           // A symlinked sidecar — or a FIFO / directory wearing the sidecar's name
-          // — is a path refusal the caller can act on, not a format problem. So is
-          // an upload/scratchpad source, which has no on-disk location to restore
-          // into (#1823: the same code list mode and tandem_applyChanges give it).
-          if (
-            e.code === "BACKUP_SYMLINK" ||
-            e.code === "BACKUP_NOT_A_FILE" ||
-            e.code === "INVALID_PATH"
-          ) {
+          // — is a path refusal the caller can act on, not a format problem. It
+          // is decided by the disk, so a claim made by this call is kept.
+          if (e.code === "BACKUP_SYMLINK" || e.code === "BACKUP_NOT_A_FILE") {
             return mcpError("INVALID_PATH", e.message);
           }
           if (e.code === "UNSUPPORTED_FORMAT") return noClaim(mcpError("FORMAT_ERROR", e.message));

@@ -1,0 +1,963 @@
+/**
+ * What each write tool leaves behind, row by row (#2358, ADR-054; ownership
+ * design §5.1). Flag on for the whole file; every caller is a real owner
+ * record, because only a record can claim.
+ *
+ * Three tables:
+ *
+ * 1. **A refusal decided by the arguments, or by a fact fixed at open, never
+ *    claims.** One row per tool and refusal, each run by a registered record
+ *    on a document nobody holds: the code is today's, and afterwards the
+ *    document is still unowned and no loss was recorded. Some rows are
+ *    answered before the queue and some inside the operation, after the claim
+ *    (which is then undone); the table does not care which. Marked in the
+ *    source but not rowed, because no fixture here reaches them: the
+ *    "not open" answers inside a body (the document closed while the call
+ *    waited; `ownership-enforcement.test.ts` has that case), `setChecked` on
+ *    a .docx list, `markdown` that parses to no list items, and
+ *    `renameDocument`'s `PATH_REJECTED` / `INVALID_PATH`.
+ * 2. **The same refusals do not disturb a claim the caller already held.**
+ * 3. **The holder's own call succeeds through every write tool**, does what
+ *    the tool does, to the document that was named, and leaves the holder
+ *    holding it. `ownership-enforcement.test.ts` has the other half: the same
+ *    tools refuse every other record.
+ */
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as Y from "yjs";
+import { openFromDisk } from "../../src/server/documents/open.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
+import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
+import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
+import { ownedOpen } from "../../src/server/mcp/owned-op.js";
+import { TOOL_MODES } from "../../src/server/mcp/tool-modes.js";
+import {
+  getDocOwner,
+  noteTransportRegistered,
+  ownershipSnapshotForTests,
+  resetOwnershipForTests,
+  setDocOwner,
+  setTransportView,
+  type TransportViewEntry,
+} from "../../src/server/sessions/ownership.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { withInternal } from "../../src/shared/origins.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { asTestCaller } from "../helpers/ownership-caller.js";
+import { timeoutMs } from "../helpers/timing.js";
+import { createMinimalDocx, seedAcceptedSuggestion } from "../helpers/wire-code-fixtures.js";
+
+const A = "claude:table-a";
+const B = "claude:table-b";
+
+/** `tandem_applyChanges` rewrites a real .docx; slow on a loaded Windows runner. */
+const REAL_DOCX_TIMEOUT_MS = timeoutMs(60_000, 300_000);
+
+let client: Client;
+let close: (() => Promise<void>) | undefined;
+let callingAs = A;
+let run = 0;
+let prefix = "";
+let tmpDir = "";
+
+const docId = (name: string) => `${prefix}-${name}`;
+
+type Body = {
+  error: boolean;
+  code?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+};
+
+async function as(owner: string, tool: string, args: Record<string, unknown> = {}): Promise<Body> {
+  callingAs = owner;
+  return parseResult(await client.callTool({ name: tool, arguments: args })) as Body;
+}
+
+interface DocOpts {
+  text?: string;
+  format?: string;
+  readOnly?: boolean;
+  source?: "file" | "upload";
+  filePath?: string;
+}
+
+/** An open document nobody holds, registered directly (no file behind it unless `filePath` says so). */
+function memDoc(name: string, opts: DocOpts = {}): { id: string; ydoc: Y.Doc } {
+  const id = docId(name);
+  const ydoc = getOrCreateDocument(id);
+  populateYDoc(ydoc, opts.text ?? "Hello world, this is a test document.");
+  const format = opts.format ?? "md";
+  addDoc(id, {
+    id,
+    filePath:
+      opts.filePath ??
+      (opts.source === "upload"
+        ? `upload://${id}/pasted.${format}`
+        : path.join(tmpDir, `${id}.${format}`)),
+    format,
+    readOnly: opts.readOnly ?? false,
+    source: opts.source ?? "file",
+  });
+  return { id, ydoc };
+}
+
+/** A real file, opened by the open path's own code (so lists are lists), held by nobody. */
+async function diskDoc(name: string, text: string): Promise<{ id: string; filePath: string }> {
+  const filePath = path.join(tmpDir, name);
+  fs.writeFileSync(filePath, text);
+  const opened = await openFromDisk(filePath);
+  return { id: opened.documentId, filePath };
+}
+
+function seed(ydoc: Y.Doc, id: string, extra: Record<string, unknown> = {}): void {
+  withInternal(ydoc, () =>
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+      id,
+      author: "claude",
+      type: "comment",
+      audience: "outbound",
+      range: { from: 0, to: 5 },
+      content: "original",
+      status: "pending",
+      timestamp: 1000,
+      rev: 1,
+      ...extra,
+    }),
+  );
+}
+
+const text = (ydoc: Y.Doc) => ydoc.getXmlFragment("default").toString();
+
+beforeEach(async () => {
+  vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  run++;
+  prefix = `tbl${run}`;
+  callingAs = A;
+  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+  const view: TransportViewEntry[] = [
+    { ownerId: A, openStreams: 1 },
+    { ownerId: B, openStreams: 1 },
+  ];
+  setTransportView(() => view);
+  noteTransportRegistered(A, { recordKind: "claude" });
+  noteTransportRegistered(B, { recordKind: "claude" });
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-claims-"));
+  ({ client, close } = await setupMcpServer(
+    [registerDocumentTools, registerAnnotationTools, registerApplyTools],
+    { dispatch: (fn) => asTestCaller(fn, { ownerId: callingAs }) },
+  ));
+});
+
+afterEach(async () => {
+  await close?.();
+  close = undefined;
+  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+  resetOwnershipForTests();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+});
+
+interface RefusalRow {
+  tool: string;
+  what: string;
+  /** Build the document; return its id and the call's arguments. */
+  arrange: () =>
+    | Promise<{ id: string; args: Record<string, unknown> }>
+    | {
+        id: string;
+        args: Record<string, unknown>;
+      };
+  code: string;
+}
+
+const NOTE = { type: "note", audience: "private", author: "user" };
+
+const REFUSALS: RefusalRow[] = [
+  // --- tandem_edit ---------------------------------------------------------
+  {
+    tool: "tandem_edit",
+    what: "a read-only document",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "html", readOnly: true });
+      return { id, args: { from: 0, to: 5, newText: "x", documentId: id } };
+    },
+    code: "READ_ONLY",
+  },
+  {
+    tool: "tandem_edit",
+    what: "a newline into a plain-text document",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "txt" });
+      return { id, args: { from: 0, to: 5, newText: "a\nb", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_edit",
+    what: "an empty range with an empty newText (nothing to do)",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: 3, to: 3, newText: "", documentId: id } };
+    },
+    code: "INVALID_RANGE",
+  },
+  {
+    tool: "tandem_edit",
+    what: "a point insertion that carries a textSnapshot",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { from: 3, to: 3, newText: "x", textSnapshot: "lo", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  // --- tandem_editList -----------------------------------------------------
+  {
+    tool: "tandem_editList",
+    what: "a read-only document",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "html", readOnly: true });
+      return { id, args: { at: 0, op: "remove", documentId: id } };
+    },
+    code: "READ_ONLY",
+  },
+  {
+    tool: "tandem_editList",
+    what: "a plain-text document",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "txt" });
+      return { id, args: { at: 0, op: "remove", documentId: id } };
+    },
+    code: "FORMAT_ERROR",
+  },
+  {
+    tool: "tandem_editList",
+    what: "setChecked with no `checked`",
+    arrange: async () => {
+      const { id } = await diskDoc("list.md", "- one\n- two\n");
+      return { id, args: { at: 0, op: "setChecked", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editList",
+    what: "insertAfter with no `markdown`",
+    arrange: async () => {
+      const { id } = await diskDoc("list.md", "- one\n- two\n");
+      return { id, args: { at: 0, op: "insertAfter", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editList",
+    what: "`markdown` over the size limit",
+    arrange: async () => {
+      const { id } = await diskDoc("list.md", "- one\n- two\n");
+      return {
+        id,
+        args: { at: 0, op: "insertAfter", markdown: "x".repeat(1_000_001), documentId: id },
+      };
+    },
+    code: "FILE_TOO_LARGE",
+  },
+  // --- tandem_appendContent ------------------------------------------------
+  {
+    tool: "tandem_appendContent",
+    what: "a read-only document",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "html", readOnly: true });
+      return { id, args: { content: "x", documentId: id } };
+    },
+    code: "READ_ONLY",
+  },
+  {
+    tool: "tandem_appendContent",
+    what: "a plain-text document",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "txt" });
+      return { id, args: { content: "x", documentId: id } };
+    },
+    code: "FORMAT_ERROR",
+  },
+  {
+    tool: "tandem_appendContent",
+    what: "content over the size limit",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { content: "x".repeat(1_000_001), documentId: id } };
+    },
+    code: "FILE_TOO_LARGE",
+  },
+  // --- tandem_rename -------------------------------------------------------
+  {
+    tool: "tandem_rename",
+    what: "an empty name",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { newName: "", documentId: id } };
+    },
+    code: "INVALID_NAME",
+  },
+  {
+    tool: "tandem_rename",
+    what: "a name with another extension",
+    arrange: async () => {
+      const { id } = await diskDoc("a.md", "Body.\n");
+      return { id, args: { newName: "a.txt", documentId: id } };
+    },
+    code: "EXTENSION_MISMATCH",
+  },
+  {
+    tool: "tandem_rename",
+    what: "an uploaded document",
+    arrange: () => {
+      const { id } = memDoc("d", { source: "upload" });
+      return { id, args: { newName: "n.md", documentId: id } };
+    },
+    code: "NOT_RENAMABLE",
+  },
+  {
+    tool: "tandem_rename",
+    what: "a read-only document",
+    arrange: async () => {
+      const { id } = await diskDoc("ro.html", "<p>Body.</p>\n");
+      return { id, args: { newName: "n.html", documentId: id } };
+    },
+    code: "READ_ONLY",
+  },
+  // --- tandem_convertToMarkdown --------------------------------------------
+  {
+    tool: "tandem_convertToMarkdown",
+    what: "a document that is not a .docx",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { documentId: id } };
+    },
+    code: "FORMAT_ERROR",
+  },
+  {
+    tool: "tandem_convertToMarkdown",
+    what: "a UNC output directory",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "docx" });
+      return { id, args: { outputPath: "//server/share", documentId: id } };
+    },
+    code: "INVALID_PATH",
+  },
+  // --- tandem_applyChanges -------------------------------------------------
+  {
+    tool: "tandem_applyChanges",
+    what: "a document that is not a .docx",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { documentId: id } };
+    },
+    code: "FORMAT_ERROR",
+  },
+  {
+    tool: "tandem_applyChanges",
+    what: "a UNC backupPath",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "docx" });
+      return { id, args: { backupPath: "//server/share/b.docx", documentId: id } };
+    },
+    code: "INVALID_PATH",
+  },
+  {
+    tool: "tandem_applyChanges",
+    what: "an uploaded .docx",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "docx", source: "upload" });
+      return { id, args: { documentId: id } };
+    },
+    code: "INVALID_PATH",
+  },
+  {
+    tool: "tandem_applyChanges",
+    what: "a read-only .docx",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "docx", readOnly: true });
+      return { id, args: { documentId: id } };
+    },
+    code: "READ_ONLY",
+  },
+  // --- tandem_restoreBackup (restore mode) ---------------------------------
+  {
+    tool: "tandem_restoreBackup",
+    what: "an uploaded document",
+    arrange: () => {
+      const { id } = memDoc("d", { source: "upload" });
+      return { id, args: { backup: "x", documentId: id } };
+    },
+    code: "INVALID_PATH",
+  },
+  {
+    tool: "tandem_restoreBackup",
+    what: "a writable .html",
+    arrange: () => {
+      const { id } = memDoc("d", { format: "html" });
+      return { id, args: { backup: "x", documentId: id } };
+    },
+    code: "FORMAT_ERROR",
+  },
+  {
+    tool: "tandem_restoreBackup",
+    what: "a read-only document",
+    arrange: () => {
+      const { id } = memDoc("d", { readOnly: true });
+      return { id, args: { backup: "x", documentId: id } };
+    },
+    code: "READ_ONLY",
+  },
+  // --- tandem_resolveAnnotation --------------------------------------------
+  {
+    tool: "tandem_resolveAnnotation",
+    what: "an id the document does not hold",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { id: "missing", action: "dismiss", documentId: id } };
+    },
+    code: "NOT_FOUND",
+  },
+  {
+    tool: "tandem_resolveAnnotation",
+    what: "a private note",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", NOTE);
+      return { id, args: { id: "ann", action: "dismiss", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_resolveAnnotation",
+    what: "an annotation that is already resolved",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", { status: "dismissed" });
+      return { id, args: { id: "ann", action: "dismiss", documentId: id } };
+    },
+    code: "ANNOTATION_RESOLVED",
+  },
+  {
+    tool: "tandem_resolveAnnotation",
+    what: "accepting Claude's own annotation",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann");
+      return { id, args: { id: "ann", action: "accept", documentId: id } };
+    },
+    code: "ACCEPT_REFUSED",
+  },
+  // --- tandem_removeAnnotation ---------------------------------------------
+  {
+    tool: "tandem_removeAnnotation",
+    what: "an id the document does not hold",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { id: "missing", documentId: id } };
+    },
+    code: "NOT_FOUND",
+  },
+  {
+    tool: "tandem_removeAnnotation",
+    what: "a private note",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", NOTE);
+      return { id, args: { id: "ann", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  // --- tandem_editAnnotation -----------------------------------------------
+  {
+    tool: "tandem_editAnnotation",
+    what: "an id the document does not hold",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { id: "missing", content: "x", documentId: id } };
+    },
+    code: "NOT_FOUND",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "a private note",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", NOTE);
+      return { id, args: { id: "ann", content: "x", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "the user's annotation",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", { author: "user" });
+      return { id, args: { id: "ann", content: "x", documentId: id } };
+    },
+    code: "NOT_OWNED",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "a resolved annotation",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", { status: "accepted" });
+      return { id, args: { id: "ann", content: "x", documentId: id } };
+    },
+    code: "ANNOTATION_RESOLVED",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "no editable field",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann");
+      return { id, args: { id: "ann", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "replacement text on an annotation that is not a comment",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", { type: "highlight" });
+      return { id, args: { id: "ann", newText: "x", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "replacement text over heading markup",
+    arrange: async () => {
+      const { id } = await diskDoc("h.md", "Para one\n\n## Head\n\nTail\n");
+      seed(getOrCreateDocument(id), "ann", { range: { from: 4, to: 13 }, suggestedText: "y" });
+      return { id, args: { id: "ann", newText: "x", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_editAnnotation",
+    what: "an id in two open documents",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "dup");
+      seed(memDoc("second").ydoc, "dup");
+      return { id, args: { id: "dup", content: "x" } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  // --- tandem_annotationReply ----------------------------------------------
+  {
+    tool: "tandem_annotationReply",
+    what: "an id the document does not hold",
+    arrange: () => {
+      const { id } = memDoc("d");
+      return { id, args: { annotationId: "missing", text: "r", documentId: id } };
+    },
+    code: "NOT_FOUND",
+  },
+  {
+    tool: "tandem_annotationReply",
+    what: "a private note",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", NOTE);
+      return { id, args: { annotationId: "ann", text: "r", documentId: id } };
+    },
+    code: "INVALID_ARGUMENT",
+  },
+  {
+    tool: "tandem_annotationReply",
+    what: "a resolved annotation",
+    arrange: () => {
+      const { id, ydoc } = memDoc("d");
+      seed(ydoc, "ann", { status: "dismissed" });
+      return { id, args: { annotationId: "ann", text: "r", documentId: id } };
+    },
+    code: "ANNOTATION_RESOLVED",
+  },
+];
+
+const nothingHeld = () => {
+  const snap = ownershipSnapshotForTests();
+  expect(snap.ownerByDoc, "a refused call left an ownership entry").toEqual([]);
+  expect(snap.losses, "a refused call left a loss record").toEqual([]);
+  expect(snap.answerers, "a refused call recorded an answerer").toBe(0);
+  expect(snap.queuedDocuments, "a refused call left a queue behind").toBe(0);
+};
+
+describe("a refusal decided by the arguments or by a fact fixed at open (ownership design §5.1)", () => {
+  it("the table has a row for every write tool that can give one", () => {
+    const writes = Object.entries(TOOL_MODES)
+      .filter(([, entry]) => entry.mode === "write")
+      .map(([name]) => name);
+    // `tandem_comment`, `tandem_save` and `tandem_close` have no such refusal
+    // on an open document: every one of theirs is decided by live content,
+    // the disk or the save lock (and keeps the claim), or is "not open".
+    const none = ["tandem_close", "tandem_comment", "tandem_save"];
+    expect([...new Set(REFUSALS.map((r) => r.tool)), ...none].sort()).toEqual(writes.sort());
+  });
+
+  it.each(REFUSALS)("$tool — $what: $code, and the document stays unowned", async (row) => {
+    const { id, args } = await row.arrange();
+    setActiveDocId(id);
+    const before = text(getOrCreateDocument(id));
+
+    const body = await as(A, row.tool, args);
+
+    expect(body.code, JSON.stringify(body)).toBe(row.code);
+    expect(getDocOwner(id)).toBeUndefined();
+    nothingHeld();
+    expect(text(getOrCreateDocument(id))).toBe(before);
+    // And the next record is not refused on the strength of it.
+    const reader = await as(B, "tandem_comment", { from: 0, to: 2, text: "c", documentId: id });
+    expect(reader.code).not.toBe("NOT_DOC_OWNER");
+  });
+
+  it.each(REFUSALS)("$tool — $what: a claim the caller already held is kept", async (row) => {
+    const { id, args } = await row.arrange();
+    setActiveDocId(id);
+    setDocOwner(id, { ownerId: A, kind: "claimed" }, "claim");
+    const entry = getDocOwner(id);
+
+    const body = await as(A, row.tool, args);
+
+    expect(body.code, JSON.stringify(body)).toBe(row.code);
+    // The very entry, not a re-made one: nothing was reversed and re-claimed.
+    expect(getDocOwner(id)).toBe(entry);
+  });
+});
+
+describe("the holder's own call succeeds through every write tool", () => {
+  /** A's, as `opened`, with another document active so a wrong target would show. */
+  function hold(id: string): void {
+    setDocOwner(id, { ownerId: A, kind: "opened" }, "take");
+    const { id: decoy } = memDoc("decoy", { text: "Decoy text, untouched." });
+    setActiveDocId(decoy);
+  }
+  const stillHeld = (id: string) =>
+    expect(getDocOwner(id)).toMatchObject({ ownerId: A, kind: "opened" });
+  const decoyUntouched = () =>
+    expect(text(getOrCreateDocument(docId("decoy")))).toContain("Decoy text, untouched.");
+
+  const covered: string[] = [];
+  const row = (tool: string, fn: () => Promise<void>, timeout?: number) => {
+    covered.push(tool);
+    it(`${tool}`, fn, timeout);
+  };
+
+  row("tandem_edit", async () => {
+    const { id, ydoc } = memDoc("d");
+    hold(id);
+    const body = await as(A, "tandem_edit", { from: 0, to: 5, newText: "Howdy", documentId: id });
+    expect(body.error).toBe(false);
+    expect(text(ydoc)).toContain("Howdy world");
+    stillHeld(id);
+    decoyUntouched();
+  });
+
+  row("tandem_appendContent", async () => {
+    const { id, ydoc } = memDoc("d");
+    hold(id);
+    const body = await as(A, "tandem_appendContent", { content: "Appended.", documentId: id });
+    expect(body.error).toBe(false);
+    expect(text(ydoc)).toContain("Appended.");
+    stillHeld(id);
+    decoyUntouched();
+  });
+
+  row("tandem_editList", async () => {
+    const { id } = await diskDoc("list.md", "- one\n- two\n");
+    hold(id);
+    const body = await as(A, "tandem_editList", { at: 0, op: "remove", documentId: id });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    const after = text(getOrCreateDocument(id));
+    expect(after).not.toContain("one");
+    expect(after).toContain("two");
+    stillHeld(id);
+  });
+
+  row("tandem_comment", async () => {
+    const { id, ydoc } = memDoc("d");
+    hold(id);
+    const body = await as(A, "tandem_comment", { from: 0, to: 5, text: "mine", documentId: id });
+    expect(body.error).toBe(false);
+    expect(ydoc.getMap(Y_MAP_ANNOTATIONS).size).toBe(1);
+    expect(getOrCreateDocument(docId("decoy")).getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+    stillHeld(id);
+  });
+
+  row("tandem_resolveAnnotation", async () => {
+    const { id, ydoc } = memDoc("d");
+    seed(ydoc, "ann");
+    hold(id);
+    const body = await as(A, "tandem_resolveAnnotation", {
+      id: "ann",
+      action: "dismiss",
+      documentId: id,
+    });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect((ydoc.getMap(Y_MAP_ANNOTATIONS).get("ann") as { status: string }).status).toBe(
+      "dismissed",
+    );
+    stillHeld(id);
+  });
+
+  row("tandem_removeAnnotation", async () => {
+    const { id, ydoc } = memDoc("d");
+    seed(ydoc, "ann");
+    hold(id);
+    const body = await as(A, "tandem_removeAnnotation", { id: "ann", documentId: id });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(ydoc.getMap(Y_MAP_ANNOTATIONS).has("ann")).toBe(false);
+    stillHeld(id);
+  });
+
+  row("tandem_editAnnotation", async () => {
+    const { id, ydoc } = memDoc("d");
+    seed(ydoc, "ann");
+    hold(id);
+    const body = await as(A, "tandem_editAnnotation", {
+      id: "ann",
+      content: "edited",
+      documentId: id,
+    });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect((ydoc.getMap(Y_MAP_ANNOTATIONS).get("ann") as { content: string }).content).toBe(
+      "edited",
+    );
+    stillHeld(id);
+  });
+
+  row("tandem_annotationReply", async () => {
+    const { id, ydoc } = memDoc("d");
+    seed(ydoc, "ann");
+    hold(id);
+    const body = await as(A, "tandem_annotationReply", {
+      annotationId: "ann",
+      text: "a reply",
+      documentId: id,
+    });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(JSON.stringify(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).toJSON())).toContain("a reply");
+    stillHeld(id);
+  });
+
+  row("tandem_save", async () => {
+    const { id, filePath } = await diskDoc("save.md", "Saved body.\n");
+    hold(id);
+    expect(
+      (await as(A, "tandem_edit", { from: 0, to: 5, newText: "Kept!", documentId: id })).error,
+    ).toBe(false);
+    const body = await as(A, "tandem_save", { documentId: id });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(fs.readFileSync(filePath, "utf8")).toContain("Kept! body.");
+    stillHeld(id);
+  });
+
+  row("tandem_rename", async () => {
+    const { id, filePath } = await diskDoc("before.md", "Body.\n");
+    hold(id);
+    const body = await as(A, "tandem_rename", { newName: "after.md", documentId: id });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, "after.md"))).toBe(true);
+    // The document is still open, under whichever id the rename gave it, and
+    // it is still A's: B is refused on it.
+    const renamed = [...getOpenDocs().values()].find((d) => d.filePath.endsWith("after.md"));
+    expect(renamed).toBeDefined();
+    const renamedId = renamed?.id as string;
+    expect(getDocOwner(renamedId)).toMatchObject({ ownerId: A, kind: "opened" });
+    const refused = await as(B, "tandem_appendContent", { content: "x", documentId: renamedId });
+    expect(refused.code).toBe("NOT_DOC_OWNER");
+  });
+
+  row("tandem_close", async () => {
+    const { id } = memDoc("d");
+    hold(id);
+    const body = await as(A, "tandem_close", { documentId: id });
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(getOpenDocs().has(id)).toBe(false);
+    // The tab-close point drops the entry; the decoy tab is still open.
+    expect(getDocOwner(id)).toBeUndefined();
+    expect(getOpenDocs().has(docId("decoy"))).toBe(true);
+  });
+
+  row("tandem_restoreBackup", async () => {
+    const { id, filePath } = await diskDoc("restore.md", "First version.\n");
+    hold(id);
+    // A save over the original bytes takes the pre-overwrite snapshot.
+    expect(
+      (await as(A, "tandem_edit", { from: 0, to: 5, newText: "Later", documentId: id })).error,
+    ).toBe(false);
+    expect((await as(A, "tandem_save", { documentId: id })).error).toBe(false);
+    expect(fs.readFileSync(filePath, "utf8")).toContain("Later version.");
+    const listed = await as(A, "tandem_restoreBackup", { documentId: id });
+    expect(listed.error, JSON.stringify(listed)).toBe(false);
+    const backups = listed.data?.backups as Array<{ name: string }>;
+    expect(backups.length).toBeGreaterThan(0);
+
+    const body = await as(A, "tandem_restoreBackup", { backup: backups[0].name, documentId: id });
+
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    expect(text(getOrCreateDocument(id))).toContain("First version.");
+    stillHeld(id);
+    // And the listing is a read: another record gets it too.
+    expect((await as(B, "tandem_restoreBackup", { documentId: id })).error).toBe(false);
+    stillHeld(id);
+  });
+
+  row(
+    "tandem_applyChanges",
+    async () => {
+      const filePath = path.join(tmpDir, "apply.docx");
+      fs.writeFileSync(filePath, await createMinimalDocx("Hello world"));
+      const id = docId("apply");
+      seedAcceptedSuggestion(getOrCreateDocument(id));
+      addDoc(id, { id, filePath, format: "docx", readOnly: false, source: "file" });
+      hold(id);
+      const before = fs.readFileSync(filePath);
+
+      const body = await as(A, "tandem_applyChanges", { documentId: id });
+
+      expect(body.error, JSON.stringify(body)).toBe(false);
+      expect(fs.readFileSync(filePath).equals(before)).toBe(false);
+      stillHeld(id);
+    },
+    REAL_DOCX_TIMEOUT_MS,
+  );
+
+  row("tandem_convertToMarkdown", async () => {
+    const filePath = path.join(tmpDir, "convert.docx");
+    fs.writeFileSync(filePath, await createMinimalDocx("Hello world"));
+    const { id } = memDoc("convert", { format: "docx", filePath, text: "Hello world" });
+    hold(id);
+
+    const body = await as(A, "tandem_convertToMarkdown", { documentId: id });
+
+    expect(body.error, JSON.stringify(body)).toBe(false);
+    const created = body.data?.documentId as string;
+    expect(created).not.toBe(id);
+    expect(fs.readFileSync(body.data?.outputPath as string, "utf8")).toContain("Hello world");
+    // The source is still A's, and the Markdown document this call created
+    // is A's too, by the take rule.
+    stillHeld(id);
+    expect(getDocOwner(created)).toMatchObject({ ownerId: A, kind: "opened" });
+    const refused = await as(B, "tandem_appendContent", { content: "x", documentId: created });
+    expect(refused.details?.reason).toBe("held");
+  });
+
+  it("covers exactly the tools the mode table calls writes", () => {
+    const writes = Object.entries(TOOL_MODES)
+      .filter(([, entry]) => entry.mode === "write")
+      .map(([name]) => name)
+      .sort();
+    expect([...covered].sort()).toEqual(writes);
+  });
+});
+
+describe("tandem_open of a path the open path refuses (ownership design §5.4)", () => {
+  const envelope = (text: string) => ({ content: [{ type: "text" as const, text }] });
+
+  it("is run with a target nothing can match, so it can only refuse: nothing is opened, reloaded or taken", async () => {
+    const { id } = memDoc("held");
+    setDocOwner(id, { ownerId: B, kind: "claimed" }, "claim");
+    const expected: Array<string | undefined> = [];
+
+    const result = await ownedOpen({ ownerId: A }, "tandem_open", {
+      predict: () => undefined,
+      open: async (expectTargetId) => {
+        expected.push(expectTargetId);
+        return { envelope: envelope('{"refused":true}') };
+      },
+    });
+
+    expect(result.content[0].text).toBe('{"refused":true}');
+    expect(expected).toHaveLength(1);
+    expect(expected[0]).toBeDefined();
+    // No document's id is that target: ids are hashes or basenames.
+    expect(getOpenDocs().has(expected[0] as string)).toBe(false);
+    expect(expected[0]).toContain("\u0000");
+    expect(getDocOwner(id)).toMatchObject({ ownerId: B, kind: "claimed" });
+    expect(ownershipSnapshotForTests().losses).toEqual([]);
+  });
+
+  it("the real open path refuses that target before it acts, on an open document and on a fresh file", async () => {
+    const { id, filePath } = await diskDoc("open.md", "On disk.\n");
+    setDocOwner(id, { ownerId: B, kind: "claimed" }, "claim");
+    fs.writeFileSync(filePath, "Changed on disk.\n");
+    const before = text(getOrCreateDocument(id));
+    const active = getActiveDocId();
+    let target = "";
+    await ownedOpen({ ownerId: A }, "tandem_open", {
+      predict: () => undefined,
+      open: async (expectTargetId) => {
+        target = expectTargetId as string;
+        return { envelope: envelope("{}") };
+      },
+    });
+
+    await expect(
+      openFromDisk(filePath, { force: true, expectTargetId: target }),
+    ).rejects.toMatchObject({ code: "OPEN_TARGET_CHANGED" });
+    expect(text(getOrCreateDocument(id))).toBe(before);
+    expect(getActiveDocId()).toBe(active);
+    const fresh = path.join(tmpDir, "fresh.md");
+    fs.writeFileSync(fresh, "Fresh.\n");
+    await expect(openFromDisk(fresh, { expectTargetId: target })).rejects.toMatchObject({
+      code: "OPEN_TARGET_CHANGED",
+    });
+    expect([...getOpenDocs().values()].some((d) => d.filePath.endsWith("fresh.md"))).toBe(false);
+  });
+
+  it("if the path became openable, the call starts again under a real prediction and the take rule decides in the queue", async () => {
+    const { id } = memDoc("d");
+    setDocOwner(id, { ownerId: B, kind: "opened" }, "take");
+    let predictions = 0;
+    const expected: Array<string | undefined> = [];
+
+    const result = await ownedOpen({ ownerId: A }, "tandem_open", {
+      // Refused at first; a real target from then on.
+      predict: () => (predictions++ === 0 ? undefined : id),
+      open: async (expectTargetId) => {
+        expected.push(expectTargetId);
+        // What the core does with a target that does not match.
+        return expectTargetId === id
+          ? { envelope: envelope("{}"), openedId: id }
+          : { envelope: envelope("{}"), targetChanged: true };
+      },
+    });
+
+    // B holds it as `opened`: refused before the open is run on the real target.
+    const body = JSON.parse(result.content[0].text) as Body;
+    expect(body.code).toBe("NOT_DOC_OWNER");
+    expect(body.details?.reason).toBe("held");
+    expect(body.message).not.toMatch(/^The document was opened/);
+    expect(expected).toHaveLength(1);
+    expect(expected[0]).not.toBe(id);
+    expect(getDocOwner(id)).toMatchObject({ ownerId: B, kind: "opened" });
+  });
+
+  it("an open that acted without a target is a fault, not a take", async () => {
+    const { id } = memDoc("d");
+    await expect(
+      ownedOpen({ ownerId: A }, "tandem_open", {
+        predict: () => undefined,
+        open: async () => ({ envelope: envelope("{}"), openedId: id }),
+      }),
+    ).rejects.toThrow("an open with no target opened a document");
+    expect(getDocOwner(id)).toBeUndefined();
+  });
+});

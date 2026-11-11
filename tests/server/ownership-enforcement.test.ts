@@ -225,7 +225,12 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-/** Every write tool, with arguments that would succeed for the document's owner. */
+/**
+ * Every write tool, addressed to the held document. The refusal is answered
+ * before any other argument is looked at, so these need not be calls the
+ * holder would succeed with; the holder's own success through each tool is
+ * `ownership-claims-table.test.ts`.
+ */
 const WRITE_CALLS: Array<{ tool: string; args: (id: string) => Record<string, unknown> }> = [
   { tool: "tandem_edit", args: (id) => ({ from: 0, to: 5, newText: "Howdy", documentId: id }) },
   { tool: "tandem_appendContent", args: (id) => ({ content: "More.", documentId: id }) },

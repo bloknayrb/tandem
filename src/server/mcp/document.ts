@@ -934,11 +934,14 @@ export function registerDocumentTools(server: McpServer): void {
               // range exactly as before — in particular the heading-overlap check, so
               // `(1, 1, "X")` inside `"## "` is still HEADING_OVERLAP.
               if (from === to && newText === "") {
-                return mcpError(
-                  "INVALID_RANGE",
-                  `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
-                    "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
-                  { reason: "empty" },
+                // Decided by the arguments alone, so it leaves no claim (#2358).
+                return noClaim(
+                  mcpError(
+                    "INVALID_RANGE",
+                    `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
+                      "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
+                    { reason: "empty" },
+                  ),
                 );
               }
 

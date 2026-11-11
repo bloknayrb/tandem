@@ -5,13 +5,22 @@
  * bypassed; nothing is stamped.
  *
  * Each test turns the flag off for itself, so it pins dark behaviour in the
- * `ownership-flag-on` job too. The tool-list test also builds the flag-on list
+ * `ownership-flag-on` job too. The enforcement test first builds, with the
+ * flag on, the state a flag-on server refuses on (real records, every document
+ * held by another one), and checks that it does refuse; then it turns the
+ * flag off and drives every kind of tool against that state, and calls each
+ * helper in `mcp/owned-op.ts` directly. Removing the flag guard from any one
+ * of the seven fails this file. The tool-list test also builds the flag-on list
  * and names every difference, so a new flag-on string cannot appear unlisted.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
@@ -20,10 +29,24 @@ import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/docume
 import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import {
+  callerOwnerInfo,
+  focusHeldByAnother,
+  heldAmong,
+  ownedOpen,
+  ownedWrite,
+  ownershipOn,
+  switchRefusal,
+  takeFreshDocument,
+} from "../../src/server/mcp/owned-op.js";
+import { runWithMcpContext } from "../../src/server/sessions/context.js";
 import { isDocOpQueueBusy, runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
+  noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
+  setDocOwner,
+  setTransportView,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -43,7 +66,6 @@ const REGISTRARS: Array<(server: McpServer) => void> = [
 
 let run = 0;
 let prefix = "";
-let callingAs = "claude:one";
 const docId = (name: string) => `${prefix}-${name}`;
 
 function setupDoc(name: string): Y.Doc {
@@ -60,7 +82,7 @@ async function server(flag: "" | "1") {
   if (flag === "1") vi.stubEnv("TANDEM_OWNERSHIP", "1");
   else vi.stubEnv("TANDEM_OWNERSHIP", "");
   return setupMcpServer(REGISTRARS, {
-    dispatch: (fn) => asTestCaller(fn, { ownerId: callingAs }),
+    dispatch: (fn) => asTestCaller(fn, { ownerId: "claude:one" }),
   });
 }
 
@@ -139,12 +161,29 @@ describe("tools/list while dark", () => {
 });
 
 describe("no queue, no refusal, nothing stamped while dark", () => {
-  it("two different callers both write, switch and close one document, and nothing is recorded", async () => {
-    const ydoc = setupDoc("d");
-    setupDoc("other");
+  const A = "claude:dark-a";
+  const B = "claude:dark-b";
+
+  /**
+   * The state a flag-ON server would refuse B on: two real records, and A
+   * holding every document as `opened`. Seeded with the flag on, because a
+   * dark server creates none of it; the test then turns the flag off.
+   */
+  function seedHeldByA(documentIds: string[]): void {
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    setTransportView(() => [
+      { ownerId: A, openStreams: 1 },
+      { ownerId: B, openStreams: 1 },
+    ]);
+    noteTransportRegistered(A, { recordKind: "claude" });
+    noteTransportRegistered(B, { recordKind: "claude" });
+    for (const id of documentIds) setDocOwner(id, { ownerId: A, kind: "opened" }, "take");
+  }
+
+  function seedAnnotation(ydoc: Y.Doc, id: string): void {
     withInternal(ydoc, () =>
-      ydoc.getMap(Y_MAP_ANNOTATIONS).set("ann", {
-        id: "ann",
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
         author: "claude",
         type: "comment",
         audience: "outbound",
@@ -155,68 +194,202 @@ describe("no queue, no refusal, nothing stamped while dark", () => {
         rev: 1,
       }),
     );
-    const { client, close } = await server("");
-    const call = async (owner: string, name: string, args: Record<string, unknown>) => {
-      callingAs = owner;
-      return parseResult(await client.callTool({ name, arguments: args })) as {
-        error: boolean;
-        code?: string;
-        data?: Record<string, unknown>;
-      };
-    };
+  }
+
+  type Body = {
+    error: boolean;
+    code?: string;
+    details?: Record<string, unknown>;
+    data?: Record<string, unknown>;
+  };
+
+  // The three shapes a tool call can arrive in. A dark server produces the
+  // first two (a context never carries an `ownerId` while dark); the third is
+  // the shape every flag guard in `owned-op.ts` would act on if it were gone.
+  const SHAPES: Array<{ name: string; dispatch: <T>(fn: () => T) => T }> = [
+    { name: "no request context", dispatch: (fn) => fn() },
+    {
+      name: "a context with no ownerId",
+      dispatch: (fn) => runWithMcpContext({ claudeSessionId: "dark-session" }, fn),
+    },
+    {
+      name: "a context naming a record that does not hold the document",
+      dispatch: (fn) => runWithMcpContext({ ownerId: B }, fn),
+    },
+  ];
+
+  it("the seeded state really is one a flag-on server refuses (so the dark test below can fail)", async () => {
+    setupDoc("d");
+    seedHeldByA([docId("d")]);
+    const { client, close } = await setupMcpServer(REGISTRARS, {
+      dispatch: (fn) => runWithMcpContext({ ownerId: B }, fn),
+    });
     try {
-      const d = docId("d");
-      expect(
-        (await call("claude:one", "tandem_comment", { from: 0, to: 5, text: "a", documentId: d }))
-          .error,
-      ).toBe(false);
-      expect(
-        (await call("claude:two", "tandem_comment", { from: 0, to: 5, text: "b", documentId: d }))
-          .error,
-      ).toBe(false);
-      expect(
-        (
-          await call("claude:two", "tandem_edit", {
-            from: 0,
-            to: 5,
-            newText: "Howdy",
-            documentId: d,
-          })
-        ).error,
-      ).toBe(false);
-      expect(
-        (
-          await call("claude:one", "tandem_annotationReply", {
-            annotationId: "ann",
-            text: "r",
-            documentId: d,
-          })
-        ).error,
-      ).toBe(false);
-      expect(
-        (
-          await call("claude:two", "tandem_annotationReply", {
-            annotationId: "ann",
-            text: "r",
-            documentId: d,
-          })
-        ).error,
-      ).toBe(false);
-      expect(
-        (await call("claude:two", "tandem_switchDocument", { documentId: docId("other") })).error,
-      ).toBe(false);
-      expect(getActiveDocId()).toBe(docId("other"));
-      const scratch = await call("claude:one", "tandem_scratchpad", { content: "x" });
-      expect(scratch.error).toBe(false);
-      const status = await call("claude:one", "tandem_status", {});
-      expect(status.data).not.toHaveProperty("owner");
-      const focus = await call("claude:two", "tandem_status", {
-        text: "s",
-        focusParagraph: 4,
-        documentId: d,
-      });
-      expect(focus.data).toEqual({ status: "s" });
-      expect((await call("claude:two", "tandem_close", { documentId: d })).error).toBe(false);
+      const refused = parseResult(
+        await client.callTool({
+          name: "tandem_comment",
+          arguments: { from: 0, to: 5, text: "x", documentId: docId("d") },
+        }),
+      ) as Body;
+      expect(refused.code).toBe("NOT_DOC_OWNER");
+      const switched = parseResult(
+        await client.callTool({
+          name: "tandem_switchDocument",
+          arguments: { documentId: docId("d") },
+        }),
+      ) as Body;
+      expect(switched.code).toBe("NOT_DOC_OWNER");
+    } finally {
+      await close();
+    }
+  });
+
+  it.each(SHAPES)(
+    "every tool acts on documents another record holds, and the ownership state does not move — $name",
+    async ({ dispatch }) => {
+      const ydoc = setupDoc("d");
+      const other = setupDoc("other");
+      seedAnnotation(ydoc, "ann");
+      seedAnnotation(ydoc, "dup");
+      seedAnnotation(other, "dup");
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-dark-"));
+      const filePath = path.join(tmpDir, "held.md");
+      fs.writeFileSync(filePath, "On disk.\n");
+      const opened = await openFromDisk(filePath);
+      seedHeldByA([docId("d"), docId("other"), opened.documentId]);
+      const seeded = ownershipSnapshotForTests();
+      expect(seeded.ownerByDoc).toHaveLength(3);
+      expect(seeded.records).toHaveLength(2);
+
+      vi.stubEnv("TANDEM_OWNERSHIP", "");
+      const { client, close } = await setupMcpServer(REGISTRARS, { dispatch });
+      const call = async (name: string, args: Record<string, unknown>) =>
+        parseResult(await client.callTool({ name, arguments: args })) as Body;
+      const ok = async (name: string, args: Record<string, unknown>) => {
+        const body = await call(name, args);
+        expect(body.error, `${name}: ${JSON.stringify(body)}`).toBe(false);
+        return body;
+      };
+      try {
+        const d = docId("d");
+        // Writes, each through a different wrapper.
+        await ok("tandem_comment", { from: 0, to: 5, text: "a", documentId: d });
+        await ok("tandem_edit", { from: 0, to: 5, newText: "Howdy", documentId: d });
+        await ok("tandem_appendContent", { content: "More.", documentId: d });
+        await ok("tandem_annotationReply", { annotationId: "ann", text: "r", documentId: d });
+        await ok("tandem_annotationReply", { annotationId: "ann", text: "again", documentId: d });
+        await ok("tandem_editAnnotation", { id: "ann", content: "edited", documentId: d });
+        await ok("tandem_resolveAnnotation", { id: "ann", action: "dismiss", documentId: d });
+        expect(ydoc.getXmlFragment("default").toString()).toContain("Howdy");
+
+        // An id in two documents: today's refusal, with no ownership detail.
+        const ambiguous = await call("tandem_editAnnotation", { id: "dup", content: "x" });
+        expect(ambiguous.code).toBe("INVALID_ARGUMENT");
+        expect(ambiguous.details).toEqual({
+          reason: "ambiguous-document",
+          documentIds: [d, docId("other")],
+        });
+
+        // Switch, open (a reload of a document A holds) and scratchpad.
+        await ok("tandem_switchDocument", { documentId: docId("other") });
+        expect(getActiveDocId()).toBe(docId("other"));
+        fs.writeFileSync(filePath, "Changed on disk.\n");
+        const reopened = await ok("tandem_open", { filePath, force: true });
+        expect(reopened.data?.documentId).toBe(opened.documentId);
+        expect(
+          getOrCreateDocument(opened.documentId).getXmlFragment("default").toString(),
+        ).toContain("Changed on disk.");
+        const scratch = await ok("tandem_scratchpad", { content: "x" });
+        expect(getOpenDocs().has(scratch.data?.documentId as string)).toBe(true);
+
+        // Status: no `owner` field, and a focus on A's document is applied
+        // with no warning.
+        const status = await ok("tandem_status", {});
+        expect(status.data).not.toHaveProperty("owner");
+        const focus = await ok("tandem_status", { text: "s", focusParagraph: 4, documentId: d });
+        expect(focus.data).toEqual({ status: "s" });
+
+        await ok("tandem_save", { documentId: opened.documentId });
+        await ok("tandem_close", { documentId: d });
+        expect(getOpenDocs().has(d)).toBe(false);
+
+        // Nothing was claimed, taken, lost, answered or queued: the state is
+        // exactly what was seeded (a dark close does not even drop the entry).
+        expect(ownershipSnapshotForTests()).toEqual(seeded);
+      } finally {
+        await close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("each wrapper helper is a passthrough while dark, even handed a caller that names a record", async () => {
+    // While dark `toolCaller` never yields an `ownerId`, so three of the
+    // helpers' flag guards (the take of a fresh document, the `owner` field,
+    // the held candidates) sit behind that one and no tool call can show them
+    // missing. Called directly, with the caller a flag-on server would build,
+    // each guard is the only thing between the call and the seeded state.
+    setupDoc("d");
+    setupDoc("fresh");
+    seedHeldByA([docId("d")]);
+    const seeded = ownershipSnapshotForTests();
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const envelope = { content: [{ type: "text" as const, text: "{}" }] };
+    const a = { ownerId: A };
+    const b = { ownerId: B };
+
+    let given: string | undefined = "unset";
+    const written = await ownedWrite(
+      b,
+      "tandem_comment",
+      {
+        given: undefined,
+        resolve: () => {
+          throw new Error("resolved a target while dark");
+        },
+      },
+      async (id) => {
+        given = id;
+        return envelope;
+      },
+    );
+    expect(written).toBe(envelope);
+    expect(given).toBeUndefined();
+
+    let expected: string | undefined = "unset";
+    const opened = await ownedOpen(b, "tandem_open", {
+      predict: () => {
+        throw new Error("predicted a target while dark");
+      },
+      open: async (expectTargetId) => {
+        expected = expectTargetId;
+        return { envelope, openedId: docId("d") };
+      },
+    });
+    expect(opened).toBe(envelope);
+    expect(expected).toBeUndefined();
+
+    await takeFreshDocument(b, docId("fresh"));
+    expect(isDocOpQueueBusy(docId("fresh"))).toBe(false);
+    expect(switchRefusal(b, "tandem_switchDocument", docId("d"))).toBeNull();
+    expect(focusHeldByAnother(b, docId("d"))).toBe(false);
+    expect(callerOwnerInfo(a)).toBeUndefined();
+    expect(heldAmong(a, [docId("d")])).toBeUndefined();
+    expect(ownershipOn()).toBe(false);
+    expect(ownershipSnapshotForTests()).toEqual(seeded);
+  });
+
+  it("a dark server that was never on records nothing at all", async () => {
+    setupDoc("d");
+    const { client, close } = await server("");
+    try {
+      const body = parseResult(
+        await client.callTool({
+          name: "tandem_comment",
+          arguments: { from: 0, to: 5, text: "a", documentId: docId("d") },
+        }),
+      ) as Body;
+      expect(body.error).toBe(false);
       expect(ownershipSnapshotForTests()).toEqual(EMPTY_SNAPSHOT);
     } finally {
       await close();

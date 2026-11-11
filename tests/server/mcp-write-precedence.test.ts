@@ -8,11 +8,18 @@
  * claim every document it touches — must be answered exactly as before, apart
  * from the one difference this file names (the typing marker of a call refused
  * before the queue). So every row runs
- * both ways.
+ * three ways: ownership off; ownership on with a caller that has no owner
+ * record (it passes through the queue and never claims); and ownership on
+ * with a **registered record**, where every call that reaches the operation
+ * claims the unowned document, so the rows also run through the claim, the
+ * check and the reversal, and the last test has the lone session write, hold
+ * what it wrote to, and write again as the holder. (What each refusal leaves
+ * behind, row by row, is `ownership-claims-table.test.ts`.)
  *
- * It imports nothing ownership-specific beyond the caller helper, so it runs
- * unchanged against the commit before PR 1c: that is how the rows were
- * checked to be today's behaviour and not this PR's.
+ * It imports nothing from PR 1c (the caller helper and the record functions
+ * are PR 1a's), so apart from that last test's holder assertion it runs unchanged against
+ * the commit before PR 1c: that is how the rows were checked to be today's
+ * behaviour and not this PR's.
  */
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -22,11 +29,17 @@ import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/re
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import {
+  getDocOwner,
+  noteTransportRegistered,
+  resetOwnershipForTests,
+  setTransportView,
+} from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, TEST_OWNER_ID } from "../helpers/ownership-caller.js";
 
 let client: Client;
 let close: (() => Promise<void>) | undefined;
@@ -76,9 +89,10 @@ async function call(tool: string, args: Record<string, unknown>): Promise<Body> 
 }
 
 describe.each([
-  { flag: "", name: "ownership off" },
-  { flag: "1", name: "ownership on, a lone session" },
-])("write-tool refusal precedence — $name", ({ flag }) => {
+  { flag: "", record: false, name: "ownership off" },
+  { flag: "1", record: false, name: "ownership on, a lone session with no record" },
+  { flag: "1", record: true, name: "ownership on, a lone session with a registered record" },
+])("write-tool refusal precedence — $name", ({ flag, record }) => {
   beforeEach(async () => {
     // Literal calls, so the reviewed lists in ownership-module-seam.test.ts see
     // which files turn the flag on and which turn it off.
@@ -87,6 +101,12 @@ describe.each([
     run++;
     prefix = `prec${run}`;
     for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    if (record) {
+      // The dispatch helper's caller, as a real owner record with a live
+      // transport: it claims what it writes to.
+      setTransportView(() => [{ ownerId: TEST_OWNER_ID, openStreams: 1 }]);
+      noteTransportRegistered(TEST_OWNER_ID, { recordKind: "claude" });
+    }
     ({ client, close } = await setupMcpServer([registerDocumentTools, registerAnnotationTools], {
       dispatch: ownershipTestDispatch,
     }));
@@ -96,6 +116,7 @@ describe.each([
     await close?.();
     close = undefined;
     for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    resetOwnershipForTests();
     vi.unstubAllEnvs();
   });
 
@@ -295,5 +316,38 @@ describe.each([
     // transactions). With ownership on the refusal is answered before the
     // document's queue, so the marker is never set.
     expect(transactions).toBe(flag === "1" ? 0 : 2);
+  });
+
+  it("a lone session's writes succeed, and with a record it holds what it wrote to and writes again as the holder", async () => {
+    const ydoc = doc("d", { text: "Hello world." });
+    seed(ydoc, "mine");
+    const d = docId("d");
+    expect(getDocOwner(d)).toBeUndefined();
+    expect(
+      (await call("tandem_comment", { from: 0, to: 5, text: "first", documentId: d })).error,
+    ).toBe(false);
+    // The claim is made by the first write that succeeds, as `claimed`.
+    const held = record && flag === "1" ? { ownerId: TEST_OWNER_ID, kind: "claimed" } : undefined;
+    if (held) expect(getDocOwner(d)).toMatchObject(held);
+    else expect(getDocOwner(d)).toBeUndefined();
+    // A refusal on the arguments does not disturb a claim already held.
+    expect((await call("tandem_edit", { from: 2, to: 2, newText: "", documentId: d })).code).toBe(
+      "INVALID_RANGE",
+    );
+    if (held) expect(getDocOwner(d)).toMatchObject(held);
+    // The holder's own writes, through three different wrappers.
+    expect(
+      (await call("tandem_edit", { from: 0, to: 5, newText: "Howdy", documentId: d })).error,
+    ).toBe(false);
+    expect(
+      (await call("tandem_editAnnotation", { id: "mine", content: "edited", documentId: d })).error,
+    ).toBe(false);
+    expect((await call("tandem_appendContent", { content: "More.", documentId: d })).error).toBe(
+      false,
+    );
+    expect(ydoc.getXmlFragment("default").toString()).toContain("Howdy");
+    expect(ydoc.getXmlFragment("default").toString()).toContain("More.");
+    if (held) expect(getDocOwner(d)).toMatchObject(held);
+    else expect(getDocOwner(d)).toBeUndefined();
   });
 });
