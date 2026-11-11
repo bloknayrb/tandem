@@ -22,6 +22,33 @@ FILE_PATH=$(printf '%s' "$INPUT" | node -e "
 # Normalize Windows backslashes
 FILE_PATH="${FILE_PATH//\\//}"
 
+# Worktree guard, the same one typecheck-on-edit.sh carries. The scanner below
+# runs from the main checkout and exempts files by their path relative to ITS
+# root (SKIP_FILE_RELS in scripts/check-semantic-tokens.ts), so an exempt file
+# edited in another worktree does not match the list and is reported as a
+# violation. Skip; the worktree's own pre-commit (lint-staged) runs the scanner
+# with the right root.
+#
+# Unlike that guard, this one also treats a drive path (C:/...) as absolute, and
+# compares it without regard to case: on Windows the tool input is a drive
+# path, so a "starts with /" test never fires there and a sibling worktree
+# (../tandem-fix-x) would still be scanned against the wrong root.
+case "$FILE_PATH" in */.claude/worktrees/*) exit 0 ;; esac
+_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"
+while [[ "$_PROJECT_DIR" == */ ]]; do _PROJECT_DIR="${_PROJECT_DIR%/}"; done
+# Known limits, all of which skip the advisory scan rather than run it wrongly:
+# a project dir and a file path in different forms (/c/x against C:/x), a POSIX
+# path that differs from the project dir only by case, and `..` segments.
+if [[ -n "$_PROJECT_DIR" ]]; then
+  if [[ "$FILE_PATH" == /* ]]; then
+    if [[ "$FILE_PATH" != "$_PROJECT_DIR"/* ]]; then exit 0; fi
+  elif [[ "$FILE_PATH" == [A-Za-z]:/* ]]; then
+    shopt -s nocasematch
+    if [[ "$FILE_PATH" != "$_PROJECT_DIR"/* ]]; then exit 0; fi
+    shopt -u nocasematch
+  fi
+fi
+
 # Only check src/client/ .ts and .svelte files
 if [[ -z "$FILE_PATH" ]] || [[ ! "$FILE_PATH" =~ /src/client/ ]] || [[ ! "$FILE_PATH" =~ \.(ts|svelte)$ ]]; then
   exit 0
