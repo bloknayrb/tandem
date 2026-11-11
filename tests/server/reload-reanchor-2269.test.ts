@@ -390,7 +390,6 @@ describe("the remap lands with the content — no window, no loss", () => {
         const to = relPosToFlatOffset(doc, rel.toRel);
         seen[id] = from === null || to === null ? "(dead)" : flat.slice(from, to);
       }
-      return true;
     });
 
     await fs.writeFile(filePath, NEW, "utf-8");

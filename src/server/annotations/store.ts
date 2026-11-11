@@ -565,6 +565,64 @@ export async function annotationFileExists(docHash: string): Promise<boolean> {
   }
 }
 
+/** What {@link moveEnvelopeFile} did. */
+export type EnvelopeMoveResult = "moved" | "absent" | "occupied" | "failed";
+
+/**
+ * Move an annotation envelope from one key to another (#2400: an envelope
+ * saved under a Windows 8.3 short spelling's key, to the long spelling's).
+ *
+ * Only into an empty place: when an envelope exists under `toHash` nothing is
+ * touched (`occupied`). Otherwise the file is hard-linked to the new name and
+ * the old name unlinked: `link` fails if the new name exists, so this never
+ * overwrites, and the new name appears whole or not at all. The file is not
+ * read and not rewritten, so its bytes and mtime are the old file's; its inner
+ * `docHash` and `meta.filePath` are recomputed by the next durable write
+ * (`snapshot()`), and the loader does not consult them.
+ *
+ * The caller guarantees no live document is using either key. Never throws.
+ */
+export async function moveEnvelopeFile(
+  fromHash: string,
+  toHash: string,
+): Promise<EnvelopeMoveResult> {
+  if (fromHash === toHash) return "absent";
+  const from = filePathFor(fromHash);
+  const to = filePathFor(toHash);
+  // Not `annotationFileExists`: that one answers "absent" for a read error
+  // and when the feature is off, and "absent" here would mean "safe to move".
+  const present = async (file: string): Promise<boolean> => {
+    try {
+      await fs.access(file);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw err;
+    }
+  };
+  try {
+    if (await present(to)) return "occupied";
+    if (!(await present(from))) return "absent";
+    await fs.link(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return "occupied";
+    console.error("[ANNOTATION-STORE] moveEnvelopeFile: the file was left where it is:", err);
+    return "failed";
+  }
+  try {
+    await fs.unlink(from);
+  } catch (err) {
+    // All or nothing: take the new name away again and leave the old record
+    // as it was, so the next open by that spelling tries again.
+    console.error("[ANNOTATION-STORE] moveEnvelopeFile: could not remove the old name:", err);
+    await fs.unlink(to).catch((undoErr: unknown) => {
+      console.error("[ANNOTATION-STORE] moveEnvelopeFile: could not undo the move:", undoErr);
+    });
+    return "failed";
+  }
+  return "moved";
+}
+
 async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {
   await ensureDirReady();
   const target = filePathFor(docHash);

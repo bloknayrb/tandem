@@ -67,7 +67,11 @@ import {
   writeEnvelopeToDisk,
 } from "../helpers/annotation-fixtures.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
-import { docFromMarkdown, simulateRestart } from "../helpers/short-name-fixture.js";
+import {
+  docFromMarkdown,
+  forgetOnRestart,
+  simulateRestart,
+} from "../helpers/short-name-fixture.js";
 
 const WIN = process.platform === "win32";
 const BS = String.fromCharCode(92);
@@ -140,6 +144,8 @@ beforeEach(async () => {
   longPath = path.join(longDir, LONG_FILE);
   await fs.mkdir(longDir, { recursive: true });
   await fs.writeFile(longPath, "alpha beta gamma\n", "utf-8");
+  // A closed document's Y.Doc must not outlive a simulated restart.
+  forgetOnRestart(longPath);
 });
 
 afterEach(async () => {
@@ -343,7 +349,7 @@ describe.runIf(WIN)(
       expect(getOpenDocs().size).toBe(1);
     });
 
-    it("records saved under the short spelling are carried over when it is opened that way again (R2.1)", async (ctx) => {
+    it("records saved under the short spelling are moved to the long spelling's key when it is opened that way again", async (ctx) => {
       const all = spellings();
       if (all === null) return ctx.skip();
       const [, short] = all[0];
@@ -367,9 +373,48 @@ describe.runIf(WIN)(
       expect(await exists(envelopePath(docHash(oldKeyPath)))).toBe(false);
       expect(await exists(sessionFile(longPath))).toBe(true);
       expect(await exists(envelopePath(docHash(longPath)))).toBe(true);
+      // A move, not a copy or a conversion: the session now names the long
+      // path, and nothing was written to a backups folder for either key.
+      const moved = JSON.parse(await fs.readFile(sessionFile(longPath), "utf-8"));
+      expect(moved.filePath).toBe(longPath);
+      expect(moved.dirty).toBe(true);
+      const backups = docBackupsRoot(resolveAppDataDir());
+      expect(await exists(path.join(backups, docHash(longPath)))).toBe(false);
+      expect(await exists(path.join(backups, docHash(oldKeyPath)))).toBe(false);
     });
 
-    it("a long-spelled open leaves records under the short spelling untouched (D2)", async (ctx) => {
+    it("a session already under the long spelling's key is the document; the short-spelled one is left as it is and its comments file still moves", async (ctx) => {
+      const all = spellings();
+      if (all === null) return ctx.skip();
+      const [, short] = all[0];
+      const oldKeyPath = fsSync.realpathSync(short);
+      await saveSession(oldKeyPath, "md", await docFromMarkdown("from the short spelling\n"), {
+        dirty: true,
+      });
+      await writeEnvelopeToDisk(
+        makeAnnotationDoc(docHash(oldKeyPath), oldKeyPath, {
+          annotations: [annRecord({ id: "ann_old", author: "user", rev: 1 })],
+        }),
+      );
+      await saveSession(longPath, "md", await docFromMarkdown("from the long spelling\n"), {
+        dirty: true,
+      });
+      const before = await fs.readFile(sessionFile(oldKeyPath));
+
+      const opened = await openFromDisk(short);
+      expect(opened.kind).toBe("restored");
+      const text = extractText(getOrCreateDocument(opened.documentId));
+      expect(text).toContain("from the long spelling");
+      expect(text).not.toContain("from the short spelling");
+      // Nothing merged, converted or backed up: the old session is untouched.
+      expect((await fs.readFile(sessionFile(oldKeyPath))).equals(before)).toBe(true);
+      // The other kind had an empty place and moved.
+      expect(annotationIds(opened.documentId)).toEqual(["ann_old"]);
+      expect(await exists(envelopePath(docHash(oldKeyPath)))).toBe(false);
+      expect(await exists(envelopePath(docHash(longPath)))).toBe(true);
+    });
+
+    it("a long-spelled open leaves records under the short spelling untouched", async (ctx) => {
       const all = spellings();
       if (all === null) return ctx.skip();
       const oldKeyPath = fsSync.realpathSync(all[0][1]);

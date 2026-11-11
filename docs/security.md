@@ -802,8 +802,8 @@ not a reflex "it was dismissed before".
   current caller set only**, and that phrasing is deliberate: the safety property
   belongs to the callers, not to the flagged code. A new caller must screen
   before calling, so verify the call site rather than trusting the disposition.
-- **The five `js/path-injection` sinks #2400 added (PR #2407). All five alerts
-  stay OPEN and must not be dismissed**, for the reason alert 16 stays open: each
+- **The `js/path-injection` sinks #2400 added (PR #2407). Their alerts stay
+  OPEN and must not be dismissed**, for the reason alert 16 stays open: each
   is the #1666 class (screened, not confined), not a false positive.
   - *`fsp.realpath(p)` and `fsp.lstat(p)` in `currentDeps`*
     (`src/server/file-io/short-names.ts`). The argument is a prefix of the
@@ -815,16 +815,28 @@ not a reflex "it was dismissed before".
     target's own screens). The native result is never used as a path: only its
     last component is read, and a candidate containing a separator or a colon
     is refused.
-  - *The two `fs.readFile(filePath)` calls in `diskWitness`*
-    (`src/server/documents/short-name-adoption.ts`). The argument is the open
-    document's path, which is `resolveAndValidatePath`'s return value (four
-    screens, extension allowlist, size cap) or the registry's copy of it. The
-    same file is read by the open itself a few statements away.
   - *`fsp.realpath(p)` in `nativeForm`* (`src/server/launcher/cwd-preview.ts`).
     Preceded by `rejectUnsafeWindowsPrefix` on the same value in the same
     function, and called only on a folder the launcher's gate
     (`resolveRouteCwdAsync`) already accepted, on a bundled document folder, or
     on the home directory. It is used for comparison and display only.
+  - *`fs.access`, `fs.link` and `fs.unlink` in `moveSessionFile`*
+    (`src/server/session/manager.ts`) *and `moveEnvelopeFile`*
+    (`src/server/annotations/store.ts`). A new caller of the session and
+    annotation path helpers, so it is argued here and not inherited. Every
+    argument is a file name inside Tandem's own sessions or annotations
+    directory, built from a 64-hex hash of the path (or, for a pre-#1750
+    session, `encodeURIComponent` of it, which cannot hold a separator, a
+    colon or `..`). The only paths hashed are `resolveAndValidatePath`'s two
+    outputs for one open: the canonical path and `legacyPath`, the string
+    master produced for the same spelling, set after the same screens. No
+    filesystem call is made on `legacyPath` itself. `link` refuses an existing
+    target, a symlink included, so nothing is overwritten or followed, and the
+    link shares the old file's inode and so its mode and ACL. **Residual,
+    recorded:** if a short alias (`AFOLDE~1`) has come to name a different
+    folder since the records were written, they move to that file's key. Master
+    attributes them to the same file on a short-spelled open; the move makes it
+    permanent.
 - **`js/tainted-format-string` on `sessionPath` interpolations.** The flagged
   argument genuinely *is* the format string (a template literal), so the rule
   reads the shape correctly. The disposition rests on the value: the

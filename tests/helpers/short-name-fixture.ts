@@ -29,10 +29,10 @@ import { closeStore, quiesceForTesting } from "../../src/server/annotations/stor
 import { resetForTesting as syncReset } from "../../src/server/annotations/sync.js";
 import { resetForTesting as dirtyReset } from "../../src/server/documents/dirty.js";
 import { removeDoc } from "../../src/server/documents/registry-testing.js";
-import { _resetShortNameAdoptionForTests } from "../../src/server/documents/short-name-adoption.js";
 import { clearFileSyncContext } from "../../src/server/events/queue.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { _setShortNameDepsForTests } from "../../src/server/file-io/short-names.js";
+import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
 import { withInternal } from "../../src/shared/origins.js";
@@ -46,6 +46,13 @@ export interface AliasFixture {
   longPath: string;
   /** The same file under its 8.3-shaped alias. */
   aliasPath: string;
+  /**
+   * Point the alias at the file again. A save replaces the file (temp file +
+   * rename), which leaves a hard link on the old inode; a real 8.3 name
+   * belongs to the directory entry and follows the save. Call after any save
+   * to disk that a later short-spelled open follows.
+   */
+  relinkAlias(): Promise<void>;
   cleanup(): Promise<void>;
 }
 
@@ -62,10 +69,17 @@ export async function makeAliasFixture(content = "alpha beta gamma\n"): Promise<
   const aliasPath = path.join(dir, ALIAS_NAME);
   await fsp.writeFile(longPath, content, "utf-8");
   await fsp.link(longPath, aliasPath);
+  // Either string can be the one a document is registered under (the alias is
+  // when the expansion fails).
+  forgetOnRestart(longPath, aliasPath);
   return {
     dir,
     longPath,
     aliasPath,
+    relinkAlias: async () => {
+      await fsp.rm(aliasPath, { force: true });
+      await fsp.link(longPath, aliasPath);
+    },
     cleanup: () => fsp.rm(dir, { recursive: true, force: true }),
   };
 }
@@ -99,6 +113,21 @@ export async function docFromMarkdown(markdown: string): Promise<Y.Doc> {
 }
 
 /**
+ * Ids whose Y.Doc a simulated restart drops even when the document is no
+ * longer open. A close untracks a document but leaves its Y.Doc in the
+ * provider's map (Hocuspocus unloads the room later, and no test here runs
+ * Hocuspocus), so a close followed by a "restart" and a reopen would load into
+ * the previous run's Y.Doc: the body twice, and annotations that never came
+ * from disk.
+ */
+const forgottenOnRestart = new Set<string>();
+
+/** Name the files whose documents `simulateRestart` must forget entirely. */
+export function forgetOnRestart(...filePaths: string[]): void {
+  for (const p of filePaths) forgottenOnRestart.add(docIdFromPath(p));
+}
+
+/**
  * Drop every open document the way a process exit does: durable annotation
  * writes are flushed, then the registry, the Y.Docs, the tombstone ledger and
  * the dirty state are gone. Files on disk are untouched.
@@ -110,8 +139,8 @@ export async function simulateRestart(): Promise<void> {
     removeDoc(id);
     removeDocument(id);
   }
+  for (const id of forgottenOnRestart) removeDocument(id);
   await quiesceForTesting();
   syncReset();
   dirtyReset();
-  _resetShortNameAdoptionForTests();
 }

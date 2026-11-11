@@ -46,10 +46,6 @@ import {
   isWritableOnDisk,
   noteFileWritable,
 } from "../documents/read-only-file.js";
-import {
-  legacyMoveInFlight,
-  removePendingLegacySession,
-} from "../documents/short-name-adoption.js";
 import { wireFileWatcher } from "../documents/watcher.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
@@ -1832,10 +1828,6 @@ export async function closeDocumentById(
   // deleted the session while leaving the document registered, open in every
   // tab, and still holding its save lock. It returned success: true.
   const safeId = path.basename(id);
-  // A short-name session move still writing (#2400) finishes first, so the
-  // session decision below is the last write. Nothing to wait for otherwise.
-  const legacyMove = legacyMoveInFlight(safeId);
-  if (legacyMove !== undefined) await legacyMove.catch(() => {});
   const docState = openDocs.get(safeId);
   if (!docState) {
     return { success: false, error: `Document ${id} not found.` };
@@ -1948,11 +1940,6 @@ export async function closeDocumentById(
       console.error("[Tandem] Failed to delete session for %s:", safeId, err);
     }
   }
-
-  // A session once stored under a short spelling of this file whose removal
-  // failed after its content was carried over (#2400): retry it now, or the
-  // closed document would come back at the next start.
-  await removePendingLegacySession(safeId);
 
   if (docCount() === 0) {
     stopAutoSave();

@@ -176,7 +176,7 @@ export async function saveSession(
   filePath: string,
   format: string,
   doc: Y.Doc,
-  opts?: { dirty?: boolean; conflict?: ExternalConflictState; lastAccessed?: number },
+  opts?: { dirty?: boolean; conflict?: ExternalConflictState },
 ): Promise<void> {
   let sourceFileMtime = 0;
   // Upload paths have no disk file — skip stat
@@ -203,12 +203,7 @@ export async function saveSession(
     format,
     ydocState,
     sourceFileMtime,
-    // `opts.lastAccessed` (#2400): a record carried over from another key at
-    // OPEN time keeps the stamp it had. A fresh `Date.now()` there would make
-    // one adopted document the newest session on disk, and after a hard kill
-    // inside the first autosave minute every other tab would fall outside the
-    // restore window measured against it.
-    lastAccessed: opts?.lastAccessed ?? Date.now(),
+    lastAccessed: Date.now(),
     modelRevision: DOCUMENT_MODEL_REVISION,
     ...(opts?.dirty ? { dirty: true } : {}),
     ...(opts?.conflict ? { conflict: opts.conflict } : {}),
@@ -362,12 +357,9 @@ async function readSessionFile(
     // identity of the document; `data.filePath` is an unvalidated string from a
     // bare `JSON.parse` that a tampered session file controls outright, and
     // `sourceFileChanged` used to `stat` it. Overwriting deletes that untrusted
-    // value rather than screening one hostile shape of it — and it cannot
-    // change which document is restored: the record was FOUND by the key of
-    // the caller's path, so the caller's path is by definition the one it
-    // belongs to. (That holds for #2400's carry-over too: a record stored
-    // under an 8.3 short spelling is looked up by the key of the caller's own
-    // screened short spelling, never by reading this field.) `narrowConflict` below
+    // value rather than screening one hostile shape of it — and the two spellings
+    // are equivalent by construction, since `sessionKey` normalizes separators,
+    // so this cannot change which document is restored. `narrowConflict` below
     // is the same don't-trust-loadSession-fields rule applied to `conflict`.
     // BOTH candidates are sanitized: an unsanitized fallback carrying
     // `filePath: "upload://…"` would short-circuit `sessionModelIsStale`
@@ -690,13 +682,8 @@ export async function touchSession(filePath: string, stamp: number): Promise<voi
  *
  * For an upload path `legacySessionPath` returns null and only the one name is
  * unlinked — uploads keep the legacy key, so the two names are the same file.
- *
- * Never rejects. Resolves `false` when a file survived its unlink (anything but
- * ENOENT), so a caller that removed the session because its content now lives
- * elsewhere can tell the removal did not happen (#2400).
  */
-export async function deleteSession(filePath: string): Promise<boolean> {
-  let removed = true;
+export async function deleteSession(filePath: string): Promise<void> {
   for (const target of [sessionPathFor(filePath), legacySessionPath(filePath)]) {
     if (target === null) continue;
     try {
@@ -704,12 +691,98 @@ export async function deleteSession(filePath: string): Promise<boolean> {
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
-        removed = false;
         console.error("[Tandem] deleteSession: failed to delete", target, err);
       }
     }
   }
-  return removed;
+}
+
+/** What {@link moveSessionFile} did. */
+export type SessionMoveResult = "moved" | "absent" | "occupied" | "failed";
+
+/**
+ * Move a stored session from one path's key to another's (#2400: a session
+ * saved under a Windows 8.3 short spelling, to the long spelling's key).
+ *
+ * Only into an empty place: when ANY session file exists under `toPath`'s key
+ * (either of its two names) nothing is touched and the answer is `occupied`.
+ * The file under `fromPath`'s key is hard-linked to `toPath`'s current name
+ * and then unlinked. `link` fails if the new name exists, so
+ * the move can never overwrite, and the new name appears whole or not at all.
+ * If the old name cannot be removed the new one is taken away again, so a
+ * failed move leaves the old record as it was. After a completed move the
+ * stored `filePath` is rewritten to `toPath` through the ordinary session
+ * writer (best effort).
+ *
+ * Both paths are the CALLER's own (screened) spellings. Nothing here lists the
+ * directory or reads a stored path. Never throws.
+ */
+export async function moveSessionFile(
+  fromPath: string,
+  toPath: string,
+): Promise<SessionMoveResult> {
+  const to = sessionPathFor(toPath);
+  try {
+    // Occupied when either name of the new key exists. A legacy-encoded name
+    // too long for the filesystem cannot exist, so it reads as absent.
+    for (const target of [to, legacySessionPath(toPath)]) {
+      if (target !== null && (await fileExists(target))) return "occupied";
+    }
+    // The old key's current name, else its pre-#1750 name. Either goes to the
+    // new key's CURRENT name: a legacy-encoded long path can exceed the
+    // filename limit, and the reader accepts the same JSON under both names.
+    for (const from of [sessionPathFor(fromPath), legacySessionPath(fromPath)]) {
+      if (from === null || from === to || !(await fileExists(from))) continue;
+      await fs.link(from, to);
+      try {
+        await fs.unlink(from);
+      } catch (err) {
+        // All or nothing: a session left under BOTH names would be listed,
+        // and replayed at every start, for as long as the old name lived.
+        // Take the new name away again and leave the old record as it was.
+        console.error("[Tandem] moveSessionFile: could not remove the old name:", err);
+        await fs.unlink(to).catch((undoErr: unknown) => {
+          console.error("[Tandem] moveSessionFile: could not undo the move:", undoErr);
+        });
+        return "failed";
+      }
+      await restampMovedSession(to, toPath);
+      return "moved";
+    }
+    return "absent";
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return "occupied";
+    console.error("[Tandem] moveSessionFile: the session was left where it is:", err);
+    return "failed";
+  }
+}
+
+/**
+ * Best effort, after a completed move: make the stored `filePath` the new
+ * path. Reads already replace it with the caller's path, but the listing
+ * (startup restore, Recent sessions, "Clear all") reports the stored one, and
+ * `deleteSession` of that stale spelling would compute the old key and remove
+ * nothing. An unparseable file is left for the open's own quarantine.
+ */
+async function restampMovedSession(file: string, filePath: string): Promise<void> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+    await atomicWrite(file, JSON.stringify({ ...parsed, filePath }), SESSION_FILE_WRITE);
+  } catch (err) {
+    console.error("[Tandem] moveSessionFile: the moved session keeps its old stored path:", err);
+  }
+}
+
+async function fileExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENAMETOOLONG") return false;
+    throw err;
+  }
 }
 
 // --- CTRL_ROOM persistence (chat history) ---

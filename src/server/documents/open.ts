@@ -137,14 +137,7 @@ import {
   openDocumentWhenReady,
 } from "./registry.js";
 import { remapEnvelopeWins } from "./reload-remap.js";
-import {
-  adoptBeforePublish,
-  adoptIntoOpenDocument,
-  finishLegacyOpen,
-  type LegacyPlan,
-  planLegacyOpen,
-  wasOpenedFromShortSpelling,
-} from "./short-name-adoption.js";
+import { moveShortNameRecords } from "./short-name-records.js";
 import { wireFileWatcher } from "./watcher.js";
 
 /**
@@ -337,35 +330,10 @@ interface ResolvedPath {
    * The string master's canonicalisation produced, set ONLY when expanding a
    * Windows 8.3 short name changed it (#2400). It is the key the caller's own
    * spelling used to be stored under, so it is the one place records saved
-   * before the fix can be looked for (`short-name-adoption.ts`). It has passed
+   * before the fix can be looked for (`short-name-records.ts`). It has passed
    * the same screens as `resolved`.
    */
   legacyPath?: string;
-}
-
-/**
- * One open at a time per document id (#2400). Two spellings of one file now
- * resolve to one id, so two concurrent opens share one Y.Doc: without this a
- * second open could load disk content into a document the first is still
- * restoring a session into. The second waits, then takes the already-open
- * branch. A rejected open does not poison the chain, and the entry is removed
- * when its tail settles. There is no timeout: an open that never settles holds
- * later opens of the same id.
- */
-const openChains = new Map<string, Promise<unknown>>();
-
-function serialisedPerId<T>(id: string, task: () => Promise<T>): Promise<T> {
-  const previous = openChains.get(id) ?? Promise.resolve();
-  const run = previous.then(task, task);
-  const tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  openChains.set(id, tail);
-  void tail.then(() => {
-    if (openChains.get(id) === tail) openChains.delete(id);
-  });
-  return run;
 }
 
 /**
@@ -390,6 +358,35 @@ export async function openFromDisk(
   options?: { force?: boolean; readOnly?: boolean },
 ): Promise<OpenSuccess> {
   return openValidated(filePath, options);
+}
+
+/**
+ * One open at a time per document id (#2400). Two spellings of one file now
+ * resolve to one id, and a short-spelled open MOVES records to that id's key
+ * (`short-name-records.ts`). Without this, a long-spelled open that has
+ * already looked for its records and found none, but has not registered the
+ * document yet, would not be seen by a concurrent short-spelled open: that one
+ * would move the old records under the key, and the first open's next write
+ * would replace them. Here the second open waits and then takes the
+ * already-open branch, which moves nothing. It runs on every platform, for
+ * every file open. A rejected open does not poison the chain, and the entry is
+ * removed when its tail settles. There is no timeout: an open that never
+ * settles holds later opens of the same id.
+ */
+const openChains = new Map<string, Promise<unknown>>();
+
+function serialisedPerId<T>(id: string, task: () => Promise<T>): Promise<T> {
+  const previous = openChains.get(id) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  openChains.set(id, tail);
+  void tail.then(() => {
+    if (openChains.get(id) === tail) openChains.delete(id);
+  });
+  return run;
 }
 
 /**
@@ -435,28 +432,14 @@ async function openResolved(
 
   // Already open — force-reload or switch to existing
   if (existing) {
-    // A short-spelled open of an already-open file (#2400, R2.3): the open
-    // document wins, and records still stored under the short spelling's key
-    // are carried into it. Before the force branch, so a reload keeps them.
-    // A replayed restore entry is a stored session's flag, not a request: it
+    // A short-spelled open of an already-open file (#2400): the open document
+    // is the document, and records still stored under the short spelling's key
+    // are left where they are. A replayed restore entry for that spelling
+    // carries the STORED flag of a session that is not this document, so it
     // must not turn the open document read-only.
     const explicitReadOnly =
-      options?.readOnly === true &&
-      !(
-        options.fromRestore === true &&
-        (legacyPath !== undefined || wasOpenedFromShortSpelling(existingId))
-      );
+      options?.readOnly === true && !(legacyPath !== undefined && options.fromRestore === true);
     if (!explicitReadOnly) readOnly = derivedReadOnly;
-    if (legacyPath !== undefined) {
-      await adoptIntoOpenDocument({
-        id: existingId,
-        doc: getDocument(existingId) ?? getOrCreateDocument(existingId),
-        openPath: existing.filePath,
-        legacyPath,
-        format: existing.format,
-        ...(options?.fromRestore === true ? { fromRestore: true } : {}),
-      });
-    }
     const forceReload = options?.force === true;
     if (forceReload) {
       // Force-reload stays inline — distinct lifecycle from normal open.
@@ -533,40 +516,36 @@ async function openResolved(
 
   // Normal open
   const doc = getOrCreateDocument(id);
-  // Records stored under the short spelling's key (#2400): decide which saved
-  // session becomes the document before anything is restored.
-  const legacy: LegacyPlan | null =
-    legacyPath !== undefined ? await planLegacyOpen(legacyPath, resolved, format) : null;
-  if (legacy?.session && options?.fromRestore === true && !legacy.sessionIsOld) {
-    // The replayed entry was the short-spelled session, but another session is
-    // the document: its own stored flag applies, whichever way the replayed
-    // entry's flag pointed. (Its own entry's replay will not upgrade it later:
-    // see `wasOpenedFromShortSpelling`.)
-    readOnly = derivedReadOnly || legacy.session.session.readOnly === true;
+  // Records stored under the short spelling's key (#2400) are moved to this
+  // document's key first, each kind only if this key has none of that kind.
+  // After it the open is an ordinary open of the long spelling.
+  let movedEnvelope = false;
+  if (legacyPath !== undefined) {
+    const moved = await moveShortNameRecords(legacyPath, resolved);
+    movedEnvelope = moved.envelope;
+    // A replayed restore entry's `readOnly` is the stored flag of the
+    // short-spelled session. It applies only when that session is now this
+    // document's session; otherwise the flag of the session this document
+    // does have applies (never weaker than the derived value).
+    if (options?.fromRestore === true && !moved.session) {
+      const own = await loadSessionWithPath(resolved).catch(() => null);
+      readOnly = derivedReadOnly || own?.session.readOnly === true;
+    }
   }
-  const restore = await maybeRestoreSession(
-    resolved,
-    doc,
-    fileName,
-    format,
-    readOnly,
-    id,
-    legacy?.session,
-  );
+  const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly, id);
   const restoredFromSession = restore.restored;
   if (!restoredFromSession) {
     await loadContentIntoDoc(doc, format, resolved, id);
   }
-  const legacyArgs = { id, doc, openPath: resolved, format, restored: restoredFromSession };
-  await finalizeDocOpen(
-    id,
-    doc,
-    resolved,
-    fileName,
-    format,
-    readOnly,
-    legacy ? () => adoptBeforePublish(legacy, legacyArgs) : undefined,
-  );
+  await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
+  if (movedEnvelope) {
+    // The moved file still names the short spelling's key and path inside.
+    // Nothing reads those on load, but a write would only happen on the next
+    // annotation change; rewrite it now so the file describes itself.
+    await persistEnvelopeNow(id, doc, resolved).catch((err: unknown) => {
+      console.error("[Tandem] Could not rewrite the moved annotation file:", err);
+    });
+  }
 
   // Second half of the fallback-anchor repair (#1800, site b), as an anchor
   // overlay (#1863). The clone-time repair (site a) ran BEFORE
@@ -656,11 +635,6 @@ async function openResolved(
   ) {
     await persistEnvelopeNow(id, doc, resolved);
   }
-
-  // Last, after the dirty flag and any conflict are back on the document: the
-  // session written under the long spelling's key must record both before the
-  // short-spelled one is removed (#2400).
-  if (legacy) await finishLegacyOpen(legacy, legacyArgs);
 
   return {
     ...buildResult(doc, {
@@ -1319,15 +1293,8 @@ async function maybeRestoreSession(
   format: string,
   readOnly: boolean,
   id: string,
-  /**
-   * A session the caller already loaded and chose (#2400: the one stored under
-   * a short spelling's key). `undefined` = load by `resolved`'s key, as always.
-   * `resolved` stays the path every hash and anchor below is computed from.
-   */
-  preloaded?: LoadedSession | null,
 ): Promise<RestoreResult> {
-  const loaded: LoadedSession | null =
-    preloaded !== undefined ? preloaded : await loadSessionWithPath(resolved);
+  const loaded: LoadedSession | null = await loadSessionWithPath(resolved);
   // `sessionModelIsStale` stays FIRST: a stale-model session returns before
   // `restoreYDoc` and never reaches the catch below — which is also why the
   // catch is not wrapped around it.
@@ -1563,8 +1530,6 @@ async function finalizeDocOpen(
   fileName: string,
   format: string,
   readOnly: boolean,
-  /** Runs once the store is wired and before the document is published (#2400). */
-  afterWire?: () => Promise<void>,
 ): Promise<void> {
   await openDocumentWhenReady(
     { id, filePath: resolved, format, readOnly, source: "file" },
@@ -1573,9 +1538,6 @@ async function finalizeDocOpen(
       await initSavedBaseline(doc, resolved);
       // Normal first open of a real file — enable rename recovery (#313).
       await wireAnnotationStore(id, doc, resolved, { allowRecovery: true });
-      // Records stored under a short spelling's key are merged here, before
-      // the document is published, so no read can see one unanchored first.
-      if (afterWire) await afterWire();
 
       // Register the autosave dirty-tracking observer NOW (#851), after content
       // has been loaded into the body — so the open-time baseline is "clean" and
@@ -1693,8 +1655,8 @@ export async function openFromRestore(
 ): Promise<OpenSuccess> {
   // Not through `openFromDisk`: restore is the one caller whose `readOnly` is a
   // STORED flag rather than a request, and when the replayed entry is a session
-  // saved under a short spelling of a file whose other session is (or becomes)
-  // the document, that flag must not travel with it (#2400).
+  // saved under a short spelling of a file whose document has its own session,
+  // that flag must not travel with it (#2400).
   return openValidated(entry.filePath, { readOnly: entry.readOnly, fromRestore: true });
 }
 
