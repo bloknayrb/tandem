@@ -5,8 +5,10 @@
  *
  * The problem this exists for: `tests/server/file-io/doc-backup-acl-repair.test.ts`
  * and the Windows half of `tests/server/integrations/acl-win.test.ts` are the only
- * tests that spawn real `icacls`, and CI's only vitest runner (the `check` job) is
- * `ubuntu-latest`. On Linux they skip, vitest exits 0, and — measured — the JSON
+ * tests that spawn real `icacls`, and when this was written no CI job ran vitest
+ * on Windows: `check` is `ubuntu-latest`. (The advisory `vitest-windows` job,
+ * #2397, came later; it accepts a skip and blocks nothing, so this runner stays.)
+ * On Linux they skip, vitest exits 0, and — measured — the JSON
  * reporter scores `doc-backup-acl-repair.test.ts` as file status `passed` with a
  * single `skipped` assertion. The suite's signal was indistinguishable from the
  * proof passing.

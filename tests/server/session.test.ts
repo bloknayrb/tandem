@@ -115,15 +115,16 @@ describe("Session persistence", () => {
         // two session files and one room, which is pre-existing and not fixed
         // here.
         //
-        // NO CI JOB RUNS THIS — because this file is not on a list, not
-        // because the mechanism is missing. The only vitest CI runs on Windows
-        // are the specs in `WINDOWS_ACL_PROOF_SPECS`
+        // NO REQUIRED CI JOB RUNS THIS — because this file is not on a list,
+        // not because the mechanism is missing. The only vitest a required
+        // check runs on Windows are the specs in `WINDOWS_ACL_PROOF_SPECS`
         // (`scripts/ci/windows-acl-proof.mjs`, spawned by the
         // `windows-acl-proof` job on `windows-latest`); this file is not one of
-        // them, and every other vitest job is ubuntu. So a change that stopped
-        // `docHash` lowercasing on win32 is invisible to CI — honest `skipIf`
-        // rather than the silently-vacuous #1529 shape, but a green `check` is
-        // not evidence about this case. Adding the spec to that list is the
+        // them. The advisory `vitest-windows` job (#2397) does run it on
+        // Windows, but a red there blocks no merge. So a change that stopped
+        // `docHash` lowercasing on win32 cannot fail a required check — honest
+        // `skipIf` rather than the silently-vacuous #1529 shape, but a green
+        // `check` is not evidence about this case. Adding the spec to that list is the
         // available fix, at the price of the >=1-passed/0-skipped-per-describe
         // contract the job enforces.
         expect(sessionKey("C:\\Docs\\A.md")).toBe(sessionKey("c:/docs/a.md"));

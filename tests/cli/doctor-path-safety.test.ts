@@ -514,7 +514,7 @@ describe("readClaudeConfig screens the path it is handed", () => {
  * The mirror is gone: the resolver returns the value itself. These pin that
  * value against each branch, with `platformOverride` rather than a runIf so
  * every branch runs on every runner -- a win32-gated spec is skipped forever on
- * this repo's ubuntu-only vitest job and reads exactly like a pass (#1529).
+ * this repo's ubuntu `check` job and reads exactly like a pass (#1529).
  */
 describe("claudeDesktopConfigTarget reports the input its path derives from", () => {
   const HOME = "/home/alice";
@@ -639,8 +639,8 @@ describe("a refused profile is reported rather than silently skipped", () => {
   // loader's backstop is what rejects. Reachable only where `path.posix.join`
   // turns a lone backslash into a `\\`-prefixed path, so it is gated the
   // opposite way from the usual trap — skipped on this Windows machine and RUN
-  // on CI's ubuntu job, which is the only vitest job there is. Its evidence is
-  // therefore CI, not a local green.
+  // on CI's ubuntu jobs, where every required run of the whole suite is. Its
+  // evidence is therefore CI, not a local green.
   //
   // Without it, folding that branch back into `enabledPlugins === null` leaves
   // the whole file green: measured, not assumed.
@@ -808,8 +808,8 @@ describe("the annotation-store check screens its app-data input", () => {
  * (`//attacker/share/x` -> `/attacker/share/x/annotations`), the derived screen
  * accepts the result, and the input screen is the only thing left. The first
  * test pins the collapse itself so the premise cannot rot silently; the second
- * is the discriminating assertion and runs on CI's ubuntu job, which is the
- * only vitest job there is.
+ * is the discriminating assertion and runs on CI's ubuntu jobs, where every
+ * required run of the whole suite is.
  */
 describe("the input screen is load-bearing where posix.join collapses the prefix", () => {
   const COLLAPSING = NETWORK_PATHS.filter(([, p]) => p.startsWith("//"));

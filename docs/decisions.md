@@ -2237,8 +2237,8 @@ Inverting the default fixes all three at once: deny is structural, and the hand-
 
 **Context.** Only five checks are required on `master`: `check`, the three
 `rust-test` legs, and `windows-acl-proof` (six since 2026-11-08, when
-`ownership-flag-on` joined them; see ADR-054). Everything else — `coverage`, CodeQL
-— reports red without blocking a merge. That is a deliberate cost decision, not
+`ownership-flag-on` joined them; see ADR-054). Everything else — `coverage`, CodeQL,
+and since #2397 `vitest-windows` — reports red without blocking a merge. That is a deliberate cost decision, not
 an oversight, and it is a repo setting rather than a tracked file.
 
 But a job outside the required set still carries guarantees people rely on, and
@@ -2270,7 +2270,34 @@ Instances:
 | Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 | `check`'s doc-link and vault-reachability step | `tests/scripts/check-links-wiring.test.ts` |
 | `reaper-build`'s `cargo test` (the Linux sidecar trampoline, #1988) | `tests/scripts/reaper-test-wiring.test.ts` |
+| `vitest-windows`: the full vitest suite on `windows-latest` (#2397), advisory; #2398 holds the dated decision on making it required | `tests/scripts/vitest-windows-wiring.test.ts` |
 | `ownership-flag-on` (ADR-054) and `check`'s release-bundle ownership probe | `tests/scripts/ownership-flag-on-wiring.test.ts` — the job is also a *required* check while ownership ships dark (in branch protection since 2026-11-08), so its guarantees are enforced twice until the flip makes it advisory or removes it |
+
+**`vitest-windows` baseline (2026-11-11, PR #2399; the decision in #2398 is recorded here when it is taken).**
+Measured on `windows-latest` at PR head `e9b1bed`, which has `master` at 0b833ac merged in. These
+are the figures #2398 uses.
+
+- **Result:** green on two attempts. 842 test files collected and run, 15,104 tests passed.
+- **Skips:** 165 tests skip on Windows, in 37 files, 6 of them skipped whole. `check` skips 32 in
+  12 files on the same commit. The difference was compared per file from the two logs and not
+  audited gate by gate. The job cannot see a test that gains a `skipIf` on Windows, so a rise in
+  165 is what to look for.
+- **Duration:** about nine minutes for the job (6m58s to 10m53s over eleven runs), against
+  nineteen to twenty-four for `check`. It starts with `check`, so it adds no wall clock to a PR.
+- **Intermittent failures:** one in eleven runs, the two-caller race in
+  `tests/server/integrations/apply-malformed.test.ts`. Not quarantined.
+- **What the bare hosted runner does** (measured earlier in the same PR, at `master` 311a5a3's
+  code): 19 tests in 6 files fail, the same 19 on a second attempt, from two properties of the
+  runner. Its `TEMP` is an 8.3 short name on a different drive from the checkout, and it has no
+  `\tmp` directory. The job resolves `TEMP` and creates `\tmp`. That left 2 failures in
+  `tests/server/integrations/resolve-claude-launch.test.ts` (a relative path built across
+  drives), which PR #2399 rewrote. No test is skipped or quarantined.
+- **What the `TEMP` step hides:** five of the 19, and probably a sixth, are a product defect, #2400. Node's JS
+  `fs.realpathSync` keeps a short name where `fs.promises.realpath` expands it, and the product
+  uses both: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher (the two
+  equivalence tests in `tests/server/launcher/cwd-preview.test.ts`; its third failure was not
+  traced), and the document key in `documents/open.ts`
+  (three in `tests/server/adr-034-open-characterization.test.ts`).
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
