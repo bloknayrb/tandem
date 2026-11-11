@@ -143,6 +143,7 @@ import {
   finishLegacyOpen,
   type LegacyPlan,
   planLegacyOpen,
+  wasOpenedFromShortSpelling,
 } from "./short-name-adoption.js";
 import { wireFileWatcher } from "./watcher.js";
 
@@ -440,7 +441,11 @@ async function openResolved(
     // A replayed restore entry is a stored session's flag, not a request: it
     // must not turn the open document read-only.
     const explicitReadOnly =
-      options?.readOnly === true && !(legacyPath !== undefined && options.fromRestore === true);
+      options?.readOnly === true &&
+      !(
+        options.fromRestore === true &&
+        (legacyPath !== undefined || wasOpenedFromShortSpelling(existingId))
+      );
     if (!explicitReadOnly) readOnly = derivedReadOnly;
     if (legacyPath !== undefined) {
       await adoptIntoOpenDocument({
@@ -449,6 +454,7 @@ async function openResolved(
         openPath: existing.filePath,
         legacyPath,
         format: existing.format,
+        ...(options?.fromRestore === true ? { fromRestore: true } : {}),
       });
     }
     const forceReload = options?.force === true;

@@ -226,6 +226,13 @@ export async function planLegacyOpen(
 
     const newScratch = tryDecode(newLoaded);
     if (newScratch === null) {
+      if (newLoaded.fallback !== undefined) {
+        // A pre-#1750 file under the new key may still be restorable. That
+        // recovery is `maybeRestoreSession`'s, exactly as on an open with no
+        // short spelling; the old key is left alone and retried next time.
+        destroyQuietly(oldScratch);
+        return untouched;
+      }
       await quarantineSession(newLoaded.path);
       return {
         legacyPath,
@@ -254,7 +261,8 @@ export async function planLegacyOpen(
       destroyQuietly(old.scratch);
       destroyQuietly(newScratch);
       console.error(
-        `${TAG}: the annotation store cannot be written, so the session saved under the short path for ${path.basename(resolved)} was left in place.`,
+        `${TAG}: the annotation store cannot be written, so the session saved under the short path for %s was left in place.`,
+        path.basename(resolved),
       );
       return { ...untouched, session: newLoaded };
     }
@@ -276,7 +284,8 @@ export async function planLegacyOpen(
       destroyQuietly(old.scratch);
       destroyQuietly(newScratch);
       console.error(
-        `${TAG}: could not store a backup of the second saved session for ${path.basename(resolved)}; it was left in place and will be retried.`,
+        `${TAG}: could not store a backup of the second saved session for %s; it was left in place and will be retried.`,
+        path.basename(resolved),
       );
       return { ...untouched, session: newLoaded };
     }
@@ -477,7 +486,7 @@ async function persistAndVerify(
     // A later verified mint may have refreshed `range` and added a live
     // `relRange`; the snapshot is what proves the stamp reached the file.
     if (rec === undefined || rec.textSnapshot !== stamp.textSnapshot) {
-      console.error(`${TAG}: the anchor snapshot for ${id} did not reach the annotation file.`);
+      console.error(`${TAG}: the anchor snapshot for %s did not reach the annotation file.`, id);
       return null;
     }
   }
@@ -500,7 +509,7 @@ function covers(now: AnnotationDocV1, old: AnnotationDocV1): boolean {
   for (const r of old.replies) if (!replies.has(r.id)) missing.push(r.id);
   for (const t of old.tombstones) if (!stones.has(t.id)) missing.push(t.id);
   if (missing.length > 0) {
-    console.error(`${TAG}: the new annotation file is missing ${missing.join(", ")}.`);
+    console.error(`${TAG}: the new annotation file is missing %s.`, missing.join(", "));
   }
   return missing.length === 0;
 }
@@ -690,7 +699,8 @@ async function adoptRecords(ctx: AdoptContext): Promise<boolean> {
   if (!canPersist) {
     if (stampedWrites && (ctx.loser || ctx.survivor !== "disk")) {
       console.error(
-        `${TAG}: anchor snapshots for ${path.basename(ctx.openPath)} could not be saved; old records left in place.`,
+        `${TAG}: anchor snapshots for %s could not be saved; old records left in place.`,
+        path.basename(ctx.openPath),
       );
       return false;
     }
@@ -719,6 +729,7 @@ const pendingRemoval = new Map<string, string>();
  * document is registered under that string.
  */
 export async function removePendingLegacySession(id: string): Promise<void> {
+  legacyOpened.delete(id);
   const legacyPath = pendingRemoval.get(id);
   if (legacyPath === undefined) return;
   pendingRemoval.delete(id);
@@ -726,13 +737,54 @@ export async function removePendingLegacySession(id: string): Promise<void> {
   await deleteSession(legacyPath);
 }
 
+/** Session moves still running: id → the move. Close waits for it (below). */
+const movesInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Ids opened in this run from a short spelling. A session entry replayed onto
+ * such a document at startup restore carries a STORED read-only flag from a
+ * session that did not become the document, so it must not upgrade it.
+ */
+const legacyOpened = new Set<string>();
+
+export function wasOpenedFromShortSpelling(id: string): boolean {
+  return legacyOpened.has(id);
+}
+
+/**
+ * Called by `closeDocumentById` before it reads anything: a session move that
+ * is mid-write would otherwise write the new-key session AFTER close deleted
+ * it, and the closed document would come back at the next start. `undefined`
+ * (nothing to wait for) on every open that had no short spelling.
+ */
+export function legacyMoveInFlight(id: string): Promise<void> | undefined {
+  return movesInFlight.get(id);
+}
+
 /** Test-only. */
 export function _resetShortNameAdoptionForTests(): void {
   pendingRemoval.clear();
+  movesInFlight.clear();
+  legacyOpened.clear();
 }
 
 /** Steps 3 and 4: make the document's session durable under the new key, then remove the old one. */
-async function moveSession(
+function moveSession(
+  id: string,
+  doc: Y.Doc,
+  openPath: string,
+  legacyPath: string,
+  format: string,
+  lastAccessed: number | undefined,
+): Promise<void> {
+  const run = moveSessionNow(id, doc, openPath, legacyPath, format, lastAccessed).finally(() => {
+    if (movesInFlight.get(id) === run) movesInFlight.delete(id);
+  });
+  movesInFlight.set(id, run);
+  return run;
+}
+
+async function moveSessionNow(
   id: string,
   doc: Y.Doc,
   openPath: string,
@@ -754,7 +806,8 @@ async function moveSession(
   }
   if (!(await deleteSession(legacyPath))) {
     console.error(
-      `${TAG}: the session saved under the short path for ${path.basename(openPath)} could not be removed; it will be retried when the document closes.`,
+      `${TAG}: the session saved under the short path for %s could not be removed; it will be retried when the document closes.`,
+      path.basename(openPath),
     );
     pendingRemoval.set(id, legacyPath);
   }
@@ -768,6 +821,7 @@ export async function adoptBeforePublish(
   plan: LegacyPlan,
   args: { id: string; doc: Y.Doc; openPath: string; format: string; restored: boolean },
 ): Promise<void> {
+  legacyOpened.add(args.id);
   if (!plan.run) return;
   try {
     const ok = await adoptRecords({
@@ -835,10 +889,13 @@ export async function adoptIntoOpenDocument(args: {
   openPath: string;
   legacyPath: string;
   format: string;
+  /** Startup restore replaying a stored entry, not a user's open. */
+  fromRestore?: boolean;
 }): Promise<void> {
   let scratch: Y.Doc | null = null;
   try {
     if (legacyPathIsOpen(args.legacyPath)) return;
+    legacyOpened.add(args.id);
     const newHash = docHash(args.openPath);
     const persistable =
       isStoreFeatureDisabled() || storeCanPersist(newHash, args.openPath, args.id);
@@ -851,12 +908,14 @@ export async function adoptIntoOpenDocument(args: {
         // The store cannot keep a stamp: keep the text safe and leave the rest.
         await backUp(args.openPath, scratch, args.format, { acceptAnyIdentical: true });
         console.error(
-          `${TAG}: the annotation store cannot be written, so the session saved under the short path for ${path.basename(args.openPath)} was left in place.`,
+          `${TAG}: the annotation store cannot be written, so the session saved under the short path for %s was left in place.`,
+          path.basename(args.openPath),
         );
         return;
       } else if ((await backUp(args.openPath, scratch, args.format)) !== "written") {
         console.error(
-          `${TAG}: could not store a backup of the session saved under the short path for ${path.basename(args.openPath)}; it was left in place and will be retried.`,
+          `${TAG}: could not store a backup of the session saved under the short path for %s; it was left in place and will be retried.`,
+          path.basename(args.openPath),
         );
         return;
       }
@@ -871,7 +930,23 @@ export async function adoptIntoOpenDocument(args: {
       ...(scratch ? { oldScratch: scratch, loser: { side: "old" as const, scratch } } : {}),
     });
     if (ok && scratch !== null) {
-      await moveSession(args.id, args.doc, args.openPath, args.legacyPath, args.format, undefined);
+      // During startup restore a write must not stamp "now": the restore
+      // window is measured from the newest stored `lastAccessed`. Carry the
+      // open document's own stored stamp (else the old session's).
+      let lastAccessed: number | undefined;
+      if (args.fromRestore === true) {
+        const own = await loadSessionWithPath(args.openPath).catch(() => null);
+        lastAccessed =
+          carriedLastAccessed(own?.session) ?? carriedLastAccessed(loaded?.session ?? undefined);
+      }
+      await moveSession(
+        args.id,
+        args.doc,
+        args.openPath,
+        args.legacyPath,
+        args.format,
+        lastAccessed,
+      );
     }
   } catch (err) {
     console.error(

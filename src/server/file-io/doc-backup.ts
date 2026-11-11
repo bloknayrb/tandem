@@ -421,6 +421,7 @@ async function writeSnapshotFile(
   filePath: string,
   original: Buffer,
   existing: string[],
+  opts: { flush?: boolean } = {},
 ): Promise<string> {
   // 0o700 mode on the per-path subdir. Windows ignores it; the root's
   // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
@@ -432,7 +433,15 @@ async function writeSnapshotFile(
   const snapshotName = snapshotFilename(filePath);
   const snapshotPath = path.join(subdir, snapshotName);
   try {
-    await fs.writeFile(snapshotPath, original, { flag: "wx", mode: 0o600 });
+    // `flush` fsyncs the data before the handle closes. The content-taking
+    // path asks for it: its caller removes the only other copy next, so the
+    // snapshot must survive a power loss (#2400). The pre-overwrite path does
+    // not: the file it copies is still on disk.
+    await fs.writeFile(snapshotPath, original, {
+      flag: "wx",
+      mode: 0o600,
+      ...(opts.flush ? { flush: true } : {}),
+    });
   } catch (writeErr) {
     // Remove any partial file so it never counts as a valid snapshot.
     // Best-effort: if the cleanup itself fails, the partial survives until
@@ -656,9 +665,13 @@ export async function writeDocBackupContent(
         // Could not refresh its age: fall through and write a fresh copy.
       }
     }
-    const snapshotPath = await writeSnapshotFile(subdir, filePath, bytes, existing);
+    const snapshotPath = await writeSnapshotFile(subdir, filePath, bytes, existing, {
+      flush: true,
+    });
     console.error(
-      `[DocBackup] Stored session content of ${path.basename(filePath)} -> ${snapshotPath}`,
+      "[DocBackup] Stored session content of %s -> %s",
+      path.basename(filePath),
+      snapshotPath,
     );
     return "written";
   } catch (err) {

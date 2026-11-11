@@ -859,9 +859,23 @@ export function readSessionRecords(
   docHash: string,
 ): Pick<AnnotationDocV1, "annotations" | "replies"> {
   const annotations: AnnotationRecordV1[] = [];
-  for (const value of scratch.getMap(Y_MAP_ANNOTATIONS).values()) {
-    const rec = normalizeAnnotation(value, docHash);
-    if (rec && typeof rec.id === "string") annotations.push(rec);
+  for (const [key, value] of scratch.getMap(Y_MAP_ANNOTATIONS).entries()) {
+    let rec: AnnotationRecordV1 | null = null;
+    try {
+      rec = normalizeAnnotation(value, docHash);
+    } catch {
+      rec = null;
+    }
+    if (rec && typeof rec.id === "string") {
+      annotations.push(rec);
+    } else {
+      // The session holding this entry is about to be retired: say what was
+      // not carried, by key only (never content).
+      console.error(
+        "[ANNOTATION-STORE] readSessionRecords: dropping an unreadable annotation entry, key=%s",
+        key,
+      );
+    }
   }
   const replies: AnnotationReplyRecordV1[] = [];
   for (const value of scratch.getMap(Y_MAP_ANNOTATION_REPLIES).values()) {
