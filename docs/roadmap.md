@@ -12,7 +12,7 @@ this file in the same PR, or say what replaced it. Every status below carries th
 last checked. Re-check before relying on it, and use `gh issue view` rather than trusting a
 state recorded here.
 
-_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the open-work lists and exit criteria dropped every issue named here that had closed (#2187, #2188, #2192, #2219, #2180, #2201, #1696 and #1734) and gained #2269, #2294 and #2286. On 2026-10-29, after #2324–#2330 merged, they dropped the issues those PRs closed (#2001, #2064, #2069, #2070, #2269, #2294, #1662, #1683, #1725, #1943, #1949 and #2231); #1949's dated gate is now #2323._
+_Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 is still the latest release; both licensing consts and `BYO_MODELS_ENABLED` still off). That pass re-checked every issue named here and added the v1.0-relevant issues filed since 2026-09-28; the exit-criteria statuses keep their own 2026-09-28 date. The pricing row under Decisions still owed was narrowed to the accountant question on 2026-10-22, once the price was confirmed as decided. On 2026-10-28 the open-work lists and exit criteria dropped every issue named here that had closed (#2187, #2188, #2192, #2219, #2180, #2201, #1696 and #1734) and gained #2269, #2294 and #2286. On 2026-10-29, after #2324–#2330 merged, they dropped the issues those PRs closed (#2001, #2064, #2069, #2070, #2269, #2294, #1662, #1683, #1725, #1943, #1949 and #2231); #1949's dated gate is now #2323. On 2026-11-10 (v0.30.0 is the latest release; every flag still off) the ownership programme and the release shape were added to "Where v1.0 stands", and two exit-criteria rows gained the 2026-11 hardware observations; the other statuses were not re-checked._
 
 ## Active — Toward v1.0
 
@@ -21,9 +21,26 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 i
 
 ### Where v1.0 stands
 
-The code is essentially complete. What remains is the licence gate's last checks, the
-commercial setup, hardware verification, and two flag flips.
+One feature programme is still being built: document ownership (#2358). After it, what
+remains is the licence gate's last checks, the commercial setup, hardware verification, and
+the flag flips.
 
+**Release shape (Bryan, 2026-11-10).** v0.31.0 is the release before ownership turns on: it
+carries the Claude Code setup entry's move to Tandem's stdio bridge (PR 2b of
+[the ownership plan](plans/2358-ownership.md), live, with its own hardware smoke). The release
+after it is meant to be feature complete, with ownership, Claude's replies inside a user's
+comment thread (#2360) and honest chat status (#2167) all on, so that the licence flip is the
+only flag left to flip before v1.0. The local-model flip moves into that release too, ahead of
+the licence flip. Commercial readiness and the hardware matrix below still stand before v1.0
+either way.
+
+0. **Document ownership (#2358): one Claude answers each comment.** Design v5 and the plan
+   are merged, and so are PR 1a (identity, dark) and PR 1b (the #1952 wake-address fix, live).
+   PR 2b (#2370, the setup entry) is merged too and ships live in v0.31.0. Still to build, all dark until the flip: PR 1c
+   (enforcement), 2 (inbox and replies), 3a and 3b (Tandem's own Claude binding, presence,
+   starts and wakes), 4 (push and shim identity), 5 (controls) and 6 (the flip). #2360's
+   switch merges right before the flip and ships in the same release. The plan's manual
+   check runs after both flips, before that release.
 1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; one thing remains before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
    and real-key activation), which needs a signed key.
@@ -32,8 +49,9 @@ commercial setup, hardware verification, and two flag flips.
    and all of it is unchecked. #1117, the old commercial-infra tracker, was closed on
    2026-06-13 with every box unchecked, so it tracks nothing.
 3. **Hardware verification.** This covers the install matrix (#2034). Windows is the only
-   platform with a machine on hand.
-4. **Two flips at the cut, in two independent systems:**
+   platform with a machine on hand; Ubuntu 22.04 runs in a VM on it, and macOS has none.
+4. **Two flips besides ownership's, in two independent systems** (local models in the release
+   after v0.31.0, licensing at the v1.0 cut):
    - **Licensing.** `LICENSE_GATE_ENABLED` (`tsup.config.ts`) and `LICENSE_UPDATE_ENDPOINT`
      (`src-tauri/src/lib.rs`) flip together. `tests/docs/license-flip-consts.test.ts` fails
      on a half-flip.
@@ -117,22 +135,23 @@ a fresh decision, the install matrix, and an announcement (#1467). Full policy:
 
 ## v1.0.0 Exit Criteria
 
-Each criterion below carries a status, checked 2026-09-28. The last recorded hardware smoke is
+Each criterion below carries a status, checked 2026-09-28. The last full hardware smoke is
 [the v0.25.0 run](release-smoke-checklist.md#what-the-v0250-run-settled). None is recorded for
-v0.26.0, v0.27.0 or v0.28.0.
+v0.26.0, v0.27.0 or v0.28.0. v0.30.0 has partial runs (the Windows updater and the Linux VM
+rows, on #2349), and the bridge entry's pre-release smoke is on #2370.
 
 **Install matrix (D12 = full parity). UNMET. Tracker: #2034.**
 - Windows 10 22H2 and Windows 11 23H2. Only Windows 11 build 26200 has been observed. On it, a fresh install passed on the v0.22.1 run. The updater and file association (cold and warm) passed on the v0.22.1 and v0.23.0 runs, and the updater passed again on v0.25.0.
 - macOS 14 Sonoma, on both Intel and Apple Silicon, as a notarized `.app` with no Gatekeeper warning. The v0.25.0 build notarized with "Accepted". Two real-hardware observations exist (Gatekeeper silent, updater v0.19.0→v0.20.0), but the OS and CPU went unrecorded, so neither ticks this row.
 - macOS 26.1 on Apple Silicon (M1). Unobserved.
-- Ubuntu 22.04 LTS (`.AppImage` and `.deb`). `.deb` install-and-load is automated per tag in an `ubuntu:22.04` container (and in `ubuntu:24.04`, `debian:12` and `debian:13`, beyond the exit criteria). The AppImage is unobserved.
+- Ubuntu 22.04 LTS (`.AppImage` and `.deb`). `.deb` install-and-load is automated per tag in an `ubuntu:22.04` container (and in `ubuntu:24.04`, `debian:12` and `debian:13`, beyond the exit criteria). The v0.30.0 AppImage ran on Ubuntu 22.04.5 in a VM on 2026-11-04 (results on #2349); it does not run on 20.04, whose glibc is older than the 2.34 the build needs (#2356).
 - Fedora 39 (`.rpm`). The per-tag container is **Fedora 44**, not 39. Either change the criterion or run 39.
 - Windows `.msi`. `bundle.targets` is `"all"`, so an MSI ships, but no smoke row covers it.
 
 **Functional gates**
 - **Claude Code CLI works zero-config:** loopback-exempt, and tools work unchanged. Checked at RC.
 - **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) needs a migration to the v2 SDK packages (`@modelcontextprotocol/server` and friends, per #1506's 2026-09-29 pass), so until it lands a modern-only Claude Code would break Tandem outright.
-- **Tauri update flow.** PARTIAL. Download → install → restart must work on all three platforms, with the sidecar restarting and no data loss. Observed on macOS once and on Windows three times, most recently v0.24.1→v0.25.0 (closing #1596). Linux has not been observed. The `MayHaveFailed` arm, which should show the banner, is untested. A successful update writes nothing to `tandem.log` at the release log level, so someone has to watch the window.
+- **Tauri update flow.** PARTIAL. Download → install → restart must work on all three platforms, with the sidecar restarting and no data loss. Observed on macOS once and on Windows three times, most recently v0.24.1→v0.25.0 (closing #1596); Bryan also reported v0.29.0→v0.30.0 installing without trouble on Windows (2026-11-03, #2349). Linux has not been observed. The `MayHaveFailed` arm, which should show the banner, is untested. A successful update writes nothing to `tandem.log` at the release log level, so someone has to watch the window.
 - **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. Since #1711 the tutorial is a three-item getting-started checklist, and "complete" means all three items ticked by the real actions (accept or dismiss a comment from Claude, ask Claude something, make an edit), never by the × dismiss. `tests/e2e/onboarding-tutorial.spec.ts` drives that in a browser and re-checks the remaining seeds' anchors after the interaction; the anchor regression test is `tests/design-system-impl/tutorial-anchor.test.ts`. No desktop run is recorded, and the redesign shipped without user testing (no beta-tester responses, 2026-10-30).
 - **Dark/light toggle** works on desktop and in the browser. No recorded run.
 - **First-run wizard and keychain.** UNMET. One-click Claude Code connect has to work on all three platforms (detect → connect → `/mcp` shows Tandem's tools). The OS keychain must also pass a store→read round-trip on Windows Credential Manager and macOS Keychain, which CI cannot do. The rows exist in the smoke checklist (§1–§2, #1761), but no run of them is recorded.
