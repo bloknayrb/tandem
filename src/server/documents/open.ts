@@ -860,8 +860,11 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   if (canonical) {
     const expanded = await expandShortNames(resolved);
     if (expanded.failed !== undefined) {
+      // Constant format string: the path is caller-controlled and must not
+      // sit in the printf-style slot (CodeQL js/tainted-format-string).
       console.error(
-        `[Tandem] Could not expand the short name in ${resolved}; opening it under that spelling:`,
+        "[Tandem] Could not expand the short name in %s; opening it under that spelling:",
+        resolved,
         expanded.failed,
       );
     } else if (
