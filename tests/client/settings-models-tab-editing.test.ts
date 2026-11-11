@@ -146,6 +146,13 @@ describe("SettingsModelsTab — local-model editing control", () => {
     expect(queryByTestId("local-model-editing-toggle")).not.toBeNull();
   });
 
+  it("says that replies in comment threads are part of what it switches", () => {
+    const { getByTestId } = mount();
+    expect(getByTestId("local-model-editing-section").textContent).toMatch(
+      /reply in comment threads/,
+    );
+  });
+
   it("is off by default and carries the experimental / review wording", () => {
     const { getByTestId } = mount();
     expect((getByTestId("local-model-editing-toggle") as HTMLInputElement).checked).toBe(false);
@@ -186,11 +193,11 @@ describe("SettingsModelsTab — local-model editing control", () => {
   });
 
   it("shows a save notice as an alert", () => {
-    pose.saveNotice = "This could not be saved, so it stays off.";
+    pose.saveNotice = "This could not be switched on. It is off for now.";
     const { getByTestId } = mount();
     const alert = getByTestId("local-model-editing-error");
     expect(alert.getAttribute("role")).toBe("alert");
-    expect(alert.textContent).toMatch(/stays off/);
+    expect(alert.textContent).toMatch(/off for now/);
   });
 
   it("with the value unknown after a failed load: no checkbox, Retry and an explicit Switch off", async () => {
@@ -209,5 +216,12 @@ describe("SettingsModelsTab — local-model editing control", () => {
     const { queryByTestId } = mount();
     expect(queryByTestId("local-model-editing-toggle")).toBeNull();
     expect(queryByTestId("local-model-editing-loading")).not.toBeNull();
+  });
+
+  it("offers Switch off while the value is still being read, so a hung read cannot block it", async () => {
+    pose = { editing: false, known: false, loadFailed: false, saveNotice: null };
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("local-model-editing-force-off-pending"));
+    expect(setEditing).toHaveBeenCalledWith(false);
   });
 });

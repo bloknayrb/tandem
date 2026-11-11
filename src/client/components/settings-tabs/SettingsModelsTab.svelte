@@ -22,9 +22,10 @@ const models = createModels();
 // The server-owned "let local models comment and suggest changes" setting
 // (#1123, ADR-039's opt-in tier). Loaded on every mount of this tab: the tab
 // body is rebuilt on each tab switch and modal open, so this is also how a
-// change made in another window is picked up. The call returns at once while
-// dark, and its state writes land in promise continuations, not in this
-// component's initialisation.
+// change made in another window is picked up (there is no live refresh). The
+// call returns at once while dark. Lit, it sets the store's `loading` flag
+// during this component's initialisation, which is outside any reaction, and
+// everything else lands in promise continuations.
 //
 // Deliberately NOT gated on `readOnly`. That flag means the localStorage
 // settings were written by a newer Tandem; this setting is a server file with
@@ -344,18 +345,30 @@ async function confirmDelete(id: string) {
       </button>
     </div>
   {:else}
+    <!-- Switch off is offered here too: a read that hangs must not be the
+         reason editing cannot be turned off. -->
     <div
       data-testid="local-model-editing-loading"
+      role="status"
       aria-busy="true"
-      style="font-size: 12px; color: var(--tandem-fg-subtle);"
+      style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2); font-size: 12px; color: var(--tandem-fg-subtle);"
     >
-      Checking…
+      <span>Checking…</span>
+      <button
+        type="button"
+        data-testid="local-model-editing-force-off-pending"
+        onclick={() => localModel.setEditing(false)}
+        style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+      >
+        Switch off
+      </button>
     </div>
   {/if}
   <p style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
-    Experimental — review every suggestion. When this is off, local models can read your
-    document and reply in chat only. A change here applies from your next message; switching it
-    off also stops a reply that is already running from adding comments or suggestions.
+    Experimental — review every suggestion. When this is on, a local model can add comments,
+    suggest replacements and reply in comment threads. When it is off, local models can read
+    your document and reply in chat only. A change here applies from your next message;
+    switching it off also stops a reply that is already running from adding more.
   </p>
   {#if localModel.saveNotice}
     <div

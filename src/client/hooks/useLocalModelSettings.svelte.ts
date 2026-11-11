@@ -22,8 +22,16 @@ import { API_BASE } from "../utils/fileUpload.js";
  *  - `known` is false until a load or a save has told us the server's value. The
  *    tab then shows no checkbox at all, only Retry and an explicit "Switch off",
  *    because an unticked box would claim "off" and could only be clicked to On;
- *  - requests are serialized, and a load that started before a save cannot
- *    overwrite what the save learned.
+ *  - loads and saves share ONE queue, so they reach the server, and are
+ *    applied here, strictly in the order they were asked for: a read can never
+ *    overwrite what a later save learned, and a save never waits on nothing;
+ *  - a read that fails drops back to "unknown" rather than keep showing a value
+ *    that another window or a restart may have changed;
+ *  - every request has a timeout, so a hung server ends in the unknown state
+ *    (with its Switch off) instead of a box that never settles.
+ *
+ * There is no live refresh: the value is read when the Models tab mounts. A
+ * change made in another window shows up the next time the tab is opened.
  *
  * `$state` is written only from event handlers and promise continuations, never
  * inside a reaction.
@@ -36,14 +44,28 @@ let _loadFailed = $state(false);
 let _saveNotice = $state<string | null>(null);
 
 let _loadInFlight: Promise<void> | null = null;
-/** Bumped by every save, so a load that began earlier is discarded. */
-let _saveGeneration = 0;
-let _saveQueue: Promise<void> = Promise.resolve();
+/** Loads and saves, one at a time, in request order. */
+let _queue: Promise<void> = Promise.resolve();
 
 const url = `${API_BASE}${API_MODELS_LOCAL_SETTINGS}`;
+/** Long enough for a busy loopback server, short enough that a hung one ends
+ *  in the unknown state while the user is still looking at the tab. */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+function enqueue(task: () => Promise<void>): Promise<void> {
+  const turn = _queue.then(task, task);
+  _queue = turn.then(
+    () => undefined,
+    () => undefined,
+  );
+  return turn;
+}
 
 async function fetchEditing(): Promise<boolean> {
-  const res = await fetch(url, { method: "GET" });
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`GET ${API_MODELS_LOCAL_SETTINGS} → ${res.status}`);
   const body = (await res.json()) as LocalModelSettingsResponse;
   if (typeof body.editing !== "boolean") throw new Error("malformed local-model settings");
@@ -54,23 +76,26 @@ async function fetchEditing(): Promise<boolean> {
 export function loadLocalModelSettings(): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
   if (_loadInFlight) return _loadInFlight;
-  const generation = _saveGeneration;
   _loading = true;
-  _loadInFlight = (async () => {
+  _loadInFlight = enqueue(async () => {
     try {
-      const editing = await fetchEditing();
-      if (generation !== _saveGeneration) return; // a save has newer knowledge
-      _editing = editing;
+      _editing = await fetchEditing();
       _known = true;
       _loadFailed = false;
+      // What the server says now supersedes whatever a past save reported.
+      _saveNotice = null;
     } catch (err) {
       console.warn("[models] local-model settings load failed", err);
-      if (generation === _saveGeneration) _loadFailed = true;
+      // Not "keep the last value": another window or a restart may have
+      // changed it, and a stale box is exactly the lie this store exists to
+      // avoid.
+      _known = false;
+      _loadFailed = true;
     } finally {
       _loading = false;
       _loadInFlight = null;
     }
-  })();
+  });
   return _loadInFlight;
 }
 
@@ -80,7 +105,7 @@ function noticeFor(requested: boolean, answer: LocalModelSettingsPostResponse): 
     return "This is on for now, but it could not be saved and may be off after Tandem restarts.";
   }
   return requested
-    ? "This could not be saved, so it stays off."
+    ? "This could not be switched on. It is off for now."
     : "Switched off for now, but it could not be saved and may be on again after Tandem restarts.";
 }
 
@@ -90,7 +115,6 @@ function noticeFor(requested: boolean, answer: LocalModelSettingsPostResponse): 
  */
 export function setLocalModelEditing(value: boolean): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
-  _saveGeneration += 1;
   // Optimistic, synchronously in the handler: the control does not bounce.
   const before = { editing: _editing, known: _known };
   _editing = value;
@@ -99,6 +123,7 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
   const run = async (): Promise<void> => {
     try {
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ editing: value }),
@@ -131,12 +156,7 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
       }
     }
   };
-  const turn = _saveQueue.then(run, run);
-  _saveQueue = turn.then(
-    () => undefined,
-    () => undefined,
-  );
-  return turn;
+  return enqueue(run);
 }
 
 export interface LocalModelSettingsState {
@@ -182,6 +202,5 @@ export function _resetLocalModelSettingsForTests(): void {
   _loadFailed = false;
   _saveNotice = null;
   _loadInFlight = null;
-  _saveGeneration = 0;
-  _saveQueue = Promise.resolve();
+  _queue = Promise.resolve();
 }

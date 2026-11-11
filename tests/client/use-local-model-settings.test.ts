@@ -26,17 +26,30 @@ type Reply = { status: number; body: unknown } | "network-error";
 let gets: Reply[] = [];
 let posts: Reply[] = [];
 let calls: { method: string; body?: unknown }[] = [];
+/** Responses a test holds open; consumed before the scripted `gets`/`posts`. */
+let held: Promise<Response>[] = [];
+let signals: unknown[] = [];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 function respond(reply: Reply | undefined): Promise<Response> {
   if (reply === undefined || reply === "network-error") {
     return Promise.reject(new TypeError("fetch failed"));
   }
-  return Promise.resolve(
-    new Response(JSON.stringify(reply.body), {
-      status: reply.status,
-      headers: { "Content-Type": "application/json" },
-    }),
-  );
+  return Promise.resolve(jsonResponse(reply.status, reply.body));
 }
 
 beforeEach(() => {
@@ -44,6 +57,8 @@ beforeEach(() => {
   gets = [];
   posts = [];
   calls = [];
+  held = [];
+  signals = [];
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.stubGlobal(
     "fetch",
@@ -53,6 +68,9 @@ beforeEach(() => {
         method,
         ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) as unknown } : {}),
       });
+      signals.push(init?.signal);
+      const waiting = held.shift();
+      if (waiting) return waiting;
       return respond(method === "POST" ? posts.shift() : gets.shift());
     }),
   );
@@ -104,13 +122,51 @@ describe("useLocalModelSettings — load", () => {
     expect(calls.filter((c) => c.method === "GET")).toHaveLength(1);
   });
 
-  it("a load that began before a save cannot overwrite what the save learned", async () => {
+  it("a failed refresh drops back to unknown rather than keep a value that may be stale", async () => {
+    const s = createLocalModelSettings();
+    gets.push({ status: 200, body: { editing: true } });
+    await s.load();
+    expect(s.known).toBe(true);
+    gets.push("network-error");
+    await s.load();
+    expect(s.known).toBe(false);
+    expect(s.loadFailed).toBe(true);
+  });
+
+  it("a successful load clears a notice left by an earlier save", async () => {
+    const s = createLocalModelSettings();
+    posts.push({ status: 500, body: { editing: false, persisted: false, code: "X" } });
+    await s.setEditing(true);
+    expect(s.saveNotice).not.toBeNull();
+    gets.push({ status: 200, body: { editing: false } });
+    await s.load();
+    expect(s.saveNotice).toBeNull();
+  });
+
+  it("every request carries a timeout signal, so a hung server cannot leave the box unsettled", async () => {
     const s = createLocalModelSettings();
     gets.push({ status: 200, body: { editing: false } });
     posts.push({ status: 200, body: { editing: true, persisted: true } });
+    await s.load();
+    await s.setEditing(true);
+    expect(signals).toHaveLength(2);
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("a load asked for before a save is applied before it, however late its answer arrives", async () => {
+    const s = createLocalModelSettings();
+    // The GET is HELD: its answer (off) arrives only after the click. If loads
+    // and saves were not one queue, the late answer would overwrite the save.
+    const heldGet = deferred<Response>();
+    held.push(heldGet.promise);
+    posts.push({ status: 200, body: { editing: true, persisted: true } });
     const loading = s.load();
     const saving = s.setEditing(true);
+    await Promise.resolve();
+    expect(calls.map((c) => c.method)).toEqual(["GET"]); // the POST waits its turn
+    heldGet.resolve(jsonResponse(200, { editing: false }));
     await Promise.all([loading, saving]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "POST"]);
     expect(s.editing).toBe(true);
   });
 });
@@ -127,13 +183,13 @@ describe("useLocalModelSettings — save", () => {
     expect(s.saveNotice).toBeNull();
   });
 
-  it("a failed On shows off, with a notice that it stays off", async () => {
+  it("a failed On shows off, with a notice that it is off for now", async () => {
     const s = createLocalModelSettings();
     posts.push({ status: 500, body: { editing: false, persisted: false, code: "X" } });
     await s.setEditing(true);
     expect(s.editing).toBe(false);
     expect(s.known).toBe(true);
-    expect(s.saveNotice).toMatch(/stays off/);
+    expect(s.saveNotice).toMatch(/could not be switched on. It is off for now/);
   });
 
   it("a failed Off still shows off, and warns it may be on again after a restart", async () => {
@@ -171,12 +227,18 @@ describe("useLocalModelSettings — save", () => {
     expect(s.saveNotice).not.toBeNull();
   });
 
-  it("serializes overlapping saves, so the last click is the last request", async () => {
+  it("serializes overlapping saves: the second is not sent until the first has answered", async () => {
     const s = createLocalModelSettings();
-    posts.push({ status: 200, body: { editing: true, persisted: true } });
+    // The first POST is HELD. Unserialized, the second would go out at once and
+    // the first's late answer (on) would be applied last.
+    const heldPost = deferred<Response>();
+    held.push(heldPost.promise);
     posts.push({ status: 200, body: { editing: false, persisted: true } });
     const a = s.setEditing(true);
     const b = s.setEditing(false);
+    await Promise.resolve();
+    expect(calls.map((c) => c.body)).toEqual([{ editing: true }]);
+    heldPost.resolve(jsonResponse(200, { editing: true, persisted: true }));
     await Promise.all([a, b]);
     expect(calls.map((c) => c.body)).toEqual([{ editing: true }, { editing: false }]);
     expect(s.editing).toBe(false);

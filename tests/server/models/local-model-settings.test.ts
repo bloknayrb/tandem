@@ -359,10 +359,14 @@ describe("local-model editing setting (#1123)", () => {
       expect(isLocalModelEditingEnabled()).toBe(false);
     });
 
-    it("failed redundant ON while already on → still on, reported as not persisted", async () => {
+    // `persisted` means "the disk agrees with the effective value". The rewrite
+    // failed, but the earlier successful write is still there saying on, so
+    // on IS persisted — reporting otherwise would warn about a restart that
+    // changes nothing.
+    it("failed redundant ON while already on → still on, and still persisted by the earlier write", async () => {
       await setLocalModelEditing(true);
       failWrites(REJECT);
-      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: false });
+      expect(await setLocalModelEditing(true)).toEqual({ editing: true, persisted: true });
       expect(isLocalModelEditingEnabled()).toBe(true);
       // The earlier successful write is untouched: on is not deleted from under a UI that says on.
       expect(onDisk().editing).toBe(true);
@@ -373,6 +377,24 @@ describe("local-model editing setting (#1123)", () => {
       failWrites(PUBLISH_THEN_THROW);
       expect(await setLocalModelEditing(false)).toEqual({ editing: false, persisted: true });
       expect(fs.existsSync(file)).toBe(false);
+    });
+
+    it("an ON superseded by a later ON reports the value the server ended on, not 'off'", async () => {
+      // Two windows both switch on. The first request's own write lands but it
+      // was superseded, so on its own view editing is still off; it must wait
+      // for the queue and report what the second request made true.
+      const first = setLocalModelEditing(true);
+      const second = setLocalModelEditing(true);
+      expect(await first).toEqual({ editing: true, persisted: true });
+      expect(await second).toEqual({ editing: true, persisted: true });
+    });
+
+    it("an ON superseded by a later OFF reports off, and not as a saved On", async () => {
+      const on = setLocalModelEditing(true);
+      const off = setLocalModelEditing(false);
+      expect(await on).toEqual({ editing: false, persisted: false });
+      expect(await off).toEqual({ editing: false, persisted: true });
+      expect(onDisk().editing).toBe(false);
     });
 
     it("one failed write does not poison the next request", async () => {

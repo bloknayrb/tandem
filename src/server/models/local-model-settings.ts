@@ -188,6 +188,21 @@ export function isLocalModelEditingEnabled(): boolean {
   return effective;
 }
 
+/**
+ * What a request reports. Taken AFTER every write queued so far has finished,
+ * so a request that a later one superseded reports the value the server ended
+ * on rather than its own stale view (an On overtaken by a second On must not
+ * answer "off"). `persisted` is the disk agreeing with that value — and, for a
+ * request that asked for On, the value actually being on: an On that left
+ * editing off was not honoured, whatever the disk says.
+ */
+async function settled(requested: boolean): Promise<SetEditingResult> {
+  await diskQueue;
+  const onDisk = readEditing(filePath());
+  const agrees = onDisk === effective;
+  return { editing: effective, persisted: agrees && (effective || !requested) };
+}
+
 /** Switch the setting. See the module header for the ordering guarantees. */
 export async function setLocalModelEditing(value: boolean): Promise<SetEditingResult> {
   const mine = ++seq;
@@ -197,18 +212,17 @@ export async function setLocalModelEditing(value: boolean): Promise<SetEditingRe
     offEpoch += 1;
     // A failed write that the delete fallback made good still leaves the disk
     // reading off, which is what was asked for.
-    const disk = await enqueue(() => writeDisk(false));
-    return { editing: effective, persisted: disk.agrees && !effective };
+    await enqueue(() => writeDisk(false));
+    return settled(false);
   }
-  const disk = await enqueue(async () => {
+  await enqueue(async () => {
     const outcome = await writeDisk(true);
     // Only if the On itself was written, and nothing later arrived: an Off
     // issued while this write was in flight has already set `effective` and
     // queued its own write behind us.
     if (outcome.written && seq === mine) effective = true;
-    return outcome;
   });
-  return { editing: effective, persisted: disk.written && effective };
+  return settled(true);
 }
 
 /** Test seam: point the module at a temp dir (or reset it) and forget all state. */

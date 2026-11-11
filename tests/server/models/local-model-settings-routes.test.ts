@@ -392,18 +392,16 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
   });
 
   describe("write failure", () => {
-    it("a failed redundant ON → 500 carrying the effective editing: true and persisted: false", async () => {
+    // The rewrite failed, but the earlier write still says on, so the disk
+    // agrees with the effective value: nothing to warn about.
+    it("a failed redundant ON → 200, still on and still persisted by the earlier write", async () => {
       const base = await listen(makeApp({ live: true }));
       await postSetting(base, { editing: true });
       writeControl.failSettingsWrites = true;
 
       const res = await postSetting(base, { editing: true });
-      expect(res.status).toBe(500);
-      expect(res.body).toEqual({
-        editing: true,
-        persisted: false,
-        code: ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED,
-      });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ editing: true, persisted: true });
       expect((await getSetting(base)).body).toEqual({ editing: true });
     });
 

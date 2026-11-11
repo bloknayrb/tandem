@@ -52,6 +52,11 @@ export type LocalModelResolution =
   | { kind: "none" }
   | ({ kind: "unusable" } & LocalModelUnusable);
 
+/** An entry id for a log line: bounded, and quoted so a newline cannot forge one. */
+function logId(id: string): string {
+  return JSON.stringify(id.slice(0, 64));
+}
+
 function unusable(
   reason: LocalModelUnusableReason,
   keyParts: readonly string[],
@@ -86,14 +91,18 @@ export function resolveLocalModel(): LocalModelResolution {
     if (!entry.enabled) return { kind: "none" };
     if (!isLocalProvider(entry.provider)) return { kind: "none" };
     if (!entry.endpoint) {
-      return unusable("no-endpoint", [entry.id], `default entry "${entry.id}" has no endpoint`);
+      return unusable(
+        "no-endpoint",
+        [entry.id],
+        `default entry ${logId(entry.id)} has no endpoint`,
+      );
     }
     const check = validateEndpoint(entry.endpoint);
     if (!check.ok) {
       return unusable(
         "endpoint-rejected",
         [entry.id, entry.endpoint, check.code],
-        `default entry "${entry.id}" endpoint rejected (${check.code})`,
+        `default entry ${logId(entry.id)} endpoint rejected (${check.code})`,
       );
     }
     return {

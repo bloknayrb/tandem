@@ -326,6 +326,7 @@ license-update-window-ended
 license-window-support-link
 local-model-editing-error
 local-model-editing-force-off
+local-model-editing-force-off-pending
 local-model-editing-load-error
 local-model-editing-loading
 local-model-editing-retry

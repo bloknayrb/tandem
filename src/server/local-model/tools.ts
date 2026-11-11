@@ -185,11 +185,15 @@ export const READ_TOOL_NAMES: ReadonlySet<string> = new Set(["get_outline", "rea
 /** The tool list a chat-tier run is offered: exactly the reading tools. */
 export const READ_TOOLS: ToolSchema[] = TOOLS.filter((t) => READ_TOOL_NAMES.has(t.name));
 
-/** What the model is told when it calls a writing tool with editing off. Names
- *  no writing tool, and says what to do instead so it answers in chat rather
- *  than spending its tool budget on refused calls. */
-export const EDITING_OFF_MESSAGE =
-  "Commenting on and suggesting changes to the document are switched off, so nothing was written. Only get_outline and read_section are available. Do not call this tool again: answer the user in plain text instead.";
+/** "get_outline and read_section", derived so a third reading tool is named too. */
+const READ_TOOL_LIST = READ_TOOLS.map((t) => t.name).join(" and ");
+
+/** What the model is told when it calls a writing tool in a run that may not
+ *  write. Names no writing tool, and says what to do instead so it answers in
+ *  chat rather than spending its tool budget on refused calls. Worded as "not
+ *  available for this reply" because it is also what a run that started in the
+ *  chat tier hears after the user has switched editing on. */
+export const EDITING_OFF_MESSAGE = `Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Only ${READ_TOOL_LIST} are available. Do not call this tool again: answer the user in plain text instead.`;
 
 function refusedOutcome(name: string): ToolOutcome {
   if (TOOLS.some((t) => t.name === name)) {
@@ -201,7 +205,7 @@ function refusedOutcome(name: string): ToolOutcome {
   return {
     result: {
       error: "UNKNOWN_TOOL",
-      message: `No tool named ${name}. Only get_outline and read_section are available. Answer the user in plain text.`,
+      message: `No tool named ${name}. Only ${READ_TOOL_LIST} are available. Answer the user in plain text.`,
     },
     effect: { kind: "refused", tool: name, errorCode: "UNKNOWN_TOOL" },
   };

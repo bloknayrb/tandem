@@ -145,7 +145,7 @@ export interface CollaboratorDeps {
   diagnose?: () => LocalModelUnusable | null;
   /**
    * The user's editing setting plus its Off counter (#1123). **Absent means no
-   * writes** — the default is supplied only in `DEFAULT_DEPS`, never by `??` at
+   * writes** — the default is supplied only in `DEFAULT_COLLABORATOR_DEPS`, never by `??` at
    * the read, so a double that forgets it gets a chat-tier collaborator.
    */
   editingState?: () => LocalModelEditingState;
@@ -154,7 +154,10 @@ export interface CollaboratorDeps {
   onModelsChanged?: (cb: () => void) => () => void;
 }
 
-const DEFAULT_DEPS: CollaboratorDeps = {
+/** Exported so a test can pin that production really wires each seam: every
+ *  one of them fails closed when absent, so a dropped line here would turn a
+ *  feature off without failing anything else. */
+export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
   runTurn: runLocalModelTurn,
   resolveConfig: resolveLocalModelConfig,
   subscribe,
@@ -173,9 +176,9 @@ const DEFAULT_DEPS: CollaboratorDeps = {
  */
 export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
   "no-default-chosen":
-    "A saved local model did not answer, because no default model had been chosen. Mark one as Default in Settings → Models, then send your message again.",
+    "A saved local model did not answer, because no default model had been chosen. To have it answer, mark it as Default in Settings → Models.",
   "endpoint-rejected":
-    "Your default local model did not answer, because its Endpoint was not accepted. It must be a plain http address on this computer, such as http://127.0.0.1:11434, with no user name or password. Edit the model in Settings → Models, then send your message again.",
+    "Your default local model did not answer, because its Endpoint was not accepted. It must be a plain http loopback address on this computer, such as http://127.0.0.1:11434, with no user name or password. Edit the model in Settings → Models, then send your message again.",
   "no-endpoint":
     "Your default local model did not answer, because it had no Endpoint saved. Edit the model in Settings → Models, then send your message again.",
 };
@@ -226,7 +229,7 @@ export function classifyFailure(metrics: LoopMetrics): string {
   return "The local model could not reach the server or complete the request.";
 }
 
-export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DEPS) {
+export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_COLLABORATOR_DEPS) {
   /** The broken state the user was last told about, so one state is one notice. */
   let noticedStateKey: string | null = null;
   let stopWatchingModels: (() => void) | null = null;
