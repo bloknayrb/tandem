@@ -26,19 +26,19 @@
  */
 
 /** Pinned Node.js version for the bundled sidecar. Verified against nodejs.org's release index. */
-export const DEFAULT_NODE_VERSION = "22.23.4";
+export const DEFAULT_NODE_VERSION = "22.23.5";
 
 /**
  * SHA-256 of each release archive for `DEFAULT_NODE_VERSION`, keyed by Rust
- * target triple. Taken from the official SHASUMS256.txt on 2026-10-21; its signature
+ * target triple. Taken from the official SHASUMS256.txt on 2026-11-11; its signature
  * (`SHASUMS256.txt.sig`) verified against releaser key
  * 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 from nodejs/release-keys.
  */
 export const NODE_ARCHIVE_SHA256 = {
-  "x86_64-pc-windows-msvc": "cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20",
-  "aarch64-pc-windows-msvc": "a8b8cd79cbbb3062435f449591d98dd63730bbbf30ce2d7cc3a6376c236cb111",
-  "x86_64-apple-darwin": "efcc2b0db6f94bf53eddb038fe2b370277a042bd29e4f19b8f8e23598795b819",
-  "aarch64-apple-darwin": "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428",
-  "x86_64-unknown-linux-gnu": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
-  "aarch64-unknown-linux-gnu": "f7a1e486dbc8b286847815b477d4fb5e9fb963ed4489c3e1588853d685f589f9",
+  "x86_64-pc-windows-msvc": "4a191082e9706866830379d577d2cc8a50c776fcd9436a8d061b063ed0d9a0e3",
+  "aarch64-pc-windows-msvc": "c1856817f611738c77534efbff8a5a17990593eab24046bc8d2c23a77a160d13",
+  "x86_64-apple-darwin": "c53383238206b9ae4db23c5d8a63645e2e753bec8ab51a49cc81939aa64e9422",
+  "aarch64-apple-darwin": "e7131995759b61a0170b646010d2ad35a5d37b4cb0d471f3e8317eac6f742f3d",
+  "x86_64-unknown-linux-gnu": "c54118104acc524633b5abe106bbf44a53126ec8b4e5fa105cb92b5d7de8a1a1",
+  "aarch64-unknown-linux-gnu": "8bd3dc69eee8f3f226315a80d7d1d4faccf217a4c8fae500168ac2e38f3bdba3",
 };
