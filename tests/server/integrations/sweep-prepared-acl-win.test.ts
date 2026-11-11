@@ -40,19 +40,24 @@ it("uses the real acl-win module", async () => {
   expect(setRestrictiveAcl).toBe(actual.setRestrictiveAcl);
 });
 
-/** The file's DACL as SDDL, read the way `assertNoBroadAce` reads it. */
+/**
+ * The file's DACL as SDDL, read the way `assertNoBroadAce` reads it: PowerShell
+ * 7 first, then Windows PowerShell 5.1. The 5.1 fallback drops `PSModulePath`,
+ * because one inherited from a PowerShell 7 parent (CI's job shell) makes 5.1
+ * load 7's copy of `Microsoft.PowerShell.Security` and fail ("The member Sddl
+ * is already present").
+ */
 async function sddl(file: string): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "Import-Module Microsoft.PowerShell.Security; (Get-Acl -LiteralPath $env:TANDEM_SDDL_PATH).Sddl",
-    ],
-    { env: { ...process.env, TANDEM_SDDL_PATH: file } },
-  );
-  return stdout.trim();
+  const script = "(Get-Acl -LiteralPath $env:TANDEM_SDDL_PATH).Sddl";
+  const args = ["-NoProfile", "-NonInteractive", "-Command", script];
+  const env: NodeJS.ProcessEnv = { ...process.env, TANDEM_SDDL_PATH: file };
+  try {
+    return (await execFileAsync("pwsh.exe", args, { env })).stdout.trim();
+  } catch {
+    const legacyEnv = { ...env };
+    delete legacyEnv.PSModulePath;
+    return (await execFileAsync("powershell.exe", args, { env: legacyEnv })).stdout.trim();
+  }
 }
 
 describe.skipIf(!WIN_ONLY)("sweep prepared files — Windows ACL proof (#2358 PR 2b)", () => {
