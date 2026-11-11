@@ -737,6 +737,12 @@ export async function moveSessionFile(
       try {
         await fs.unlink(from);
       } catch (err) {
+        // Already gone (someone else removed it): the record is under the new
+        // name only, which is a completed move. Undoing here would lose it.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          await restampMovedSession(to, toPath);
+          return "moved";
+        }
         // All or nothing: a session left under BOTH names would be listed,
         // and replayed at every start, for as long as the old name lived.
         // Take the new name away again and leave the old record as it was.

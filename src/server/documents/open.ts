@@ -519,17 +519,17 @@ async function openResolved(
   // Records stored under the short spelling's key (#2400) are moved to this
   // document's key first, each kind only if this key has none of that kind.
   // After it the open is an ordinary open of the long spelling.
-  let movedEnvelope = false;
   if (legacyPath !== undefined) {
     const moved = await moveShortNameRecords(legacyPath, resolved);
-    movedEnvelope = moved.envelope;
     // A replayed restore entry's `readOnly` is the stored flag of the
-    // short-spelled session. It applies only when that session is now this
-    // document's session; otherwise the flag of the session this document
-    // does have applies (never weaker than the derived value).
+    // short-spelled session. When this document has a session of its own
+    // that was not that one, its flag applies instead (never weaker than the
+    // derived value). With no session of its own the entry's flag stands, as
+    // it does on any restore: a tab stored read-only must not come back
+    // writable because its session could not be moved.
     if (options?.fromRestore === true && !moved.session) {
       const own = await loadSessionWithPath(resolved).catch(() => null);
-      readOnly = derivedReadOnly || own?.session.readOnly === true;
+      if (own !== null) readOnly = derivedReadOnly || own.session.readOnly === true;
     }
   }
   const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly, id);
@@ -538,14 +538,6 @@ async function openResolved(
     await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
-  if (movedEnvelope) {
-    // The moved file still names the short spelling's key and path inside.
-    // Nothing reads those on load, but a write would only happen on the next
-    // annotation change; rewrite it now so the file describes itself.
-    await persistEnvelopeNow(id, doc, resolved).catch((err: unknown) => {
-      console.error("[Tandem] Could not rewrite the moved annotation file:", err);
-    });
-  }
 
   // Second half of the fallback-anchor repair (#1800, site b), as an anchor
   // overlay (#1863). The clone-time repair (site a) ran BEFORE

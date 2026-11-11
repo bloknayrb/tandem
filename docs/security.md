@@ -832,7 +832,10 @@ not a reflex "it was dismissed before".
     master produced for the same spelling, set after the same screens. No
     filesystem call is made on `legacyPath` itself. `link` refuses an existing
     target, a symlink included, so nothing is overwritten or followed, and the
-    link shares the old file's inode and so its mode and ACL. **Residual,
+    link shares the old file's inode and so its mode and ACL. After a session
+    move, `restampMovedSession` reads the new name and rewrites it through
+    the ordinary session writer (`atomicWrite`, private mode) to store the
+    long path; it touches that one name only. **Residual,
     recorded:** if a short alias (`AFOLDE~1`) has come to name a different
     folder since the records were written, they move to that file's key. Master
     attributes them to the same file on a short-spelled open; the move makes it

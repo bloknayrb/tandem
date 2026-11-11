@@ -22,18 +22,19 @@
  *   under the short string (an expansion that failed earlier in this run
  *   opened it under master's string), its records are being written and are
  *   not moved.
- * - **Never while this instance cannot write the annotation store.** A
- *   read-only instance (another Tandem holds the store lock) moves neither
- *   kind: it must not write annotation files, and moving the session alone
- *   would leave the envelope with nothing that computes its key again. Both
- *   stay for an instance that holds the lock.
+ * - **Never while this instance does not own the annotation store.** A
+ *   read-only instance (another Tandem holds the store lock), and one started
+ *   with the store switched off (which takes no lock), move neither kind:
+ *   such an instance must not write annotation files, and moving the session
+ *   alone would leave the envelope with nothing that computes its key again.
+ *   Both stay for an instance that holds the lock.
  *
  * After the move the open is an ordinary open of the long spelling.
  */
 
 import path from "node:path";
 import { docHash } from "../annotations/doc-hash.js";
-import { isStoreReadOnly, moveEnvelopeFile } from "../annotations/store.js";
+import { isStoreFeatureDisabled, isStoreReadOnly, moveEnvelopeFile } from "../annotations/store.js";
 import { moveSessionFile } from "../session/manager.js";
 import { getOpenDocs } from "./registry.js";
 
@@ -69,7 +70,7 @@ export async function moveShortNameRecords(
   const nothing: ShortNameMove = { session: false, envelope: false };
   try {
     if (legacyPathIsOpen(legacyPath)) return nothing;
-    if (isStoreReadOnly()) return nothing;
+    if (isStoreReadOnly() || isStoreFeatureDisabled()) return nothing;
     // Independent: a failure moving one kind neither undoes nor blocks the other.
     const envelope = await moveEnvelopeFile(docHash(legacyPath), docHash(resolved));
     const session = await moveSessionFile(legacyPath, resolved);

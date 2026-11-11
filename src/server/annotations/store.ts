@@ -612,6 +612,11 @@ export async function moveEnvelopeFile(
   try {
     await fs.unlink(from);
   } catch (err) {
+    // Already gone (someone else removed it): the record is under the new
+    // name only, which is a completed move. Undoing here would lose it.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return "moved";
+    }
     // All or nothing: take the new name away again and leave the old record
     // as it was, so the next open by that spelling tries again.
     console.error("[ANNOTATION-STORE] moveEnvelopeFile: could not remove the old name:", err);

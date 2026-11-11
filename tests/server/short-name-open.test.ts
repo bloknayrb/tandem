@@ -565,8 +565,12 @@ describe("records saved under the short spelling are moved, per kind, only into 
     expect(await sessionFiles()).toEqual([`${sessionKey(fx.longPath)}.json`]);
     await quiesceForTesting();
     const envelope = await readEnvelope(fx.longPath);
-    expect(envelope.docHash).toBe(docHash(fx.longPath));
-    expect(envelope.meta.filePath).toBe(fx.longPath);
+    // The open does not rewrite the moved file (a forced write after a failed
+    // read would replace it with an empty one). Its inner key and path stay
+    // the short spelling's until the next annotation write; the loader does
+    // not read them.
+    expect(envelope.docHash).toBe(docHash(fx.aliasPath));
+    expect(envelope.meta.filePath).toBe(fx.aliasPath);
     expect(envelope.annotations.map((a) => a.id).sort()).toEqual(["ann_comment", "ann_note"]);
     const storedNote = envelope.annotations.find((a) => a.id === "ann_note");
     expect(storedNote?.type).toBe("note");
@@ -1059,6 +1063,70 @@ describe("records saved under the short spelling are moved, per kind, only into 
     }
   });
 
+  it("with the annotation store switched off for the run nothing moves either (that instance takes no lock)", async () => {
+    await storeOldPair();
+    const frozenSession = await freeze(oldSession());
+    const frozenEnvelope = await freeze(oldEnvelope());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const link = vi.spyOn(fs, "link");
+    vi.stubEnv("TANDEM_ANNOTATION_STORE", "off");
+    try {
+      const opened = await openFromDisk(fx.aliasPath);
+      expect(opened.kind).toBe("fresh");
+      expect(link).not.toHaveBeenCalled();
+      await expectUntouched(oldSession(), frozenSession);
+      await expectUntouched(oldEnvelope(), frozenEnvelope);
+      await closeDocumentById(opened.documentId);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    await simulateRestart();
+    const again = await openFromDisk(fx.aliasPath);
+    expect(again.kind).toBe("restored");
+    expect(hasComment(again.documentId)).toBe(true);
+    expect(await exists(oldEnvelope())).toBe(false);
+  });
+
+  // The open must not write the moved envelope back on its own: when the load
+  // of the new name fails, the map is empty, and a forced snapshot would
+  // replace every comment, note, reply and tombstone with nothing.
+  it("a moved envelope whose read then fails is left intact on disk, not replaced by an empty one", async () => {
+    await storeOldPair();
+    const before = await fs.readFile(oldEnvelope());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const restoreReads = failReadsOf(newEnvelope(), "EBUSY");
+
+    const opened = await openFromDisk(fx.aliasPath);
+    await quiesceForTesting();
+    restoreReads();
+
+    // The obstacle was real: nothing was loaded from it.
+    expect(hasComment(opened.documentId)).toBe(false);
+    expect(await exists(oldEnvelope())).toBe(false);
+    expect((await fs.readFile(newEnvelope())).equals(before)).toBe(true);
+  });
+
+  it("an old name that is already gone when it is unlinked counts as moved: the new name is kept", async () => {
+    await storeOldPair();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const realUnlink = fs.unlink.bind(fs);
+    const spy = vi.spyOn(fs, "unlink").mockImplementation((async (p: unknown) => {
+      if (p === oldEnvelope() || p === oldSession()) {
+        await realUnlink(p as string);
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      return realUnlink(p as string);
+    }) as never);
+
+    const opened = await openFromDisk(fx.aliasPath);
+    spy.mockRestore();
+    expect(opened.kind).toBe("restored");
+    expect(hasComment(opened.documentId)).toBe(true);
+    expect(await sessionFiles()).toEqual([`${sessionKey(fx.longPath)}.json`]);
+    expect(await exists(newEnvelope())).toBe(true);
+    expect(await exists(oldEnvelope())).toBe(false);
+  });
+
   // --- 9: an old-key session that cannot be decoded -------------------------
 
   it.each([
@@ -1248,6 +1316,26 @@ describe("records saved under the short spelling are moved, per kind, only into 
       const id = docIdFromPath(fx.longPath);
       expect(liveText(id)).toContain("from the short spelling");
       expect(await sessionFiles()).toEqual([`${sessionKey(fx.longPath)}.json`]);
+      expectReadOnly(id, true);
+    });
+
+    it("a short entry stored read-only whose session could not move still opens read-only", async () => {
+      await storeSession(fx.aliasPath, OLD_TEXT);
+      await editStoredSession(fx.aliasPath, setReadOnly);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const realLink = fs.link.bind(fs);
+      const link = vi.spyOn(fs, "link").mockImplementation((async (from: unknown, to: unknown) => {
+        if (from === sessionFile(fx.aliasPath)) {
+          throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+        }
+        return realLink(from as string, to as string);
+      }) as never);
+      expect(await restoreOpenDocuments(null)).toBe(1);
+      link.mockRestore();
+      const id = docIdFromPath(fx.longPath);
+      // Not moved, and the document has no session of its own: the entry's
+      // flag stands, as on any restore.
+      expect(await exists(sessionFile(fx.aliasPath))).toBe(true);
       expectReadOnly(id, true);
     });
 
