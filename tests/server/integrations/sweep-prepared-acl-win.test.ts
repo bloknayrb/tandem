@@ -16,7 +16,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertNoBroadAce, setRestrictiveAcl } from "../../../src/server/integrations/acl-win.js";
+import {
+  assertNoBroadAce,
+  setRestrictiveAcl,
+  withoutPsModulePath,
+} from "../../../src/server/integrations/acl-win.js";
 import { prepareAtomicTmp } from "../../../src/server/integrations/apply.js";
 import {
   commitReservedBackup,
@@ -54,8 +58,7 @@ async function sddl(file: string): Promise<string> {
   try {
     return (await execFileAsync("pwsh.exe", args, { env })).stdout.trim();
   } catch {
-    const legacyEnv = { ...env };
-    delete legacyEnv.PSModulePath;
+    const legacyEnv = withoutPsModulePath(env);
     return (await execFileAsync("powershell.exe", args, { env: legacyEnv })).stdout.trim();
   }
 }

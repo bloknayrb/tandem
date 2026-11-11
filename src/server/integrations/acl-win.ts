@@ -73,6 +73,22 @@ function throwIfAborted(signal?: AbortSignal): void {
  * installed outside the system directory and has no fixed path, so PATH is its
  * genuine discovery mechanism rather than a lookup we could have anchored.
  */
+/**
+ * `env` without `PSModulePath`, matched case-insensitively (Windows variable
+ * names are). Windows PowerShell 5.1 started with a PowerShell 7 parent's
+ * `PSModulePath` loads 7's copy of `Microsoft.PowerShell.Security` and fails
+ * ("The member Sddl is already present", #2358 PR 2b), so `Get-Acl` is never
+ * found and the ACL verify fails closed. 5.1 rebuilds its own default path
+ * when the variable is absent.
+ */
+export function withoutPsModulePath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() !== "psmodulepath") out[key] = value;
+  }
+  return out;
+}
+
 async function runPowerShell(
   script: string,
   env: NodeJS.ProcessEnv,
@@ -87,8 +103,10 @@ async function runPowerShell(
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
     try {
+      // Reached only when pwsh.exe is not on PATH; a PowerShell 7 parent
+      // started from elsewhere can still have handed down its PSModulePath.
       return await execFileAsync(systemBin("WindowsPowerShell\\v1.0\\powershell.exe"), args, {
-        env,
+        env: withoutPsModulePath(env),
         signal,
       });
     } catch (fallbackErr) {
