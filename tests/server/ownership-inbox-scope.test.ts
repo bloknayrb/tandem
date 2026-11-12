@@ -303,6 +303,34 @@ describe("R1.1: a default poll reads what its caller holds or may claim, and no 
     expect(deliveryRegistry.entriesIn(docB.id)).toEqual([]);
   });
 
+  it("R1.6: a notice a handover kept sits below the claim's sinceSeq; what the claiming pass registered is above it", async () => {
+    // B holds `u` and is handed a comment and an accept notice there.
+    setDocOwner(docU.id, { ownerId: B, kind: "opened" }, "take", B);
+    annotation(docU.ydoc, "cu");
+    annotation(docU.ydoc, "n", { author: "claude", status: "accepted" });
+    expect(itemIds(await reader(B).poll())).toEqual(["cu", "n"]);
+    const noticeKey = `${docU.id}:n#accepted`;
+    const kept = deliveryRegistry.lookup("a", noticeKey, 0);
+    expect(kept, "the notice's entry").toBeDefined();
+    // Ownership leaves B to unowned: the handover retires the comment's
+    // entry and keeps the notice's.
+    setDocOwner(docU.id, null, "lapse");
+    expect(deliveryRegistry.lookup("a", noticeKey, 0)).toBe(kept);
+    expect(deliveryRegistry.entriesIn(docU.id).map((e) => e.base)).toEqual([noticeKey]);
+
+    // A's poll is handed both (the notice was never acknowledged) and claims `u`.
+    expect(itemIds(await reader(A).poll())).toEqual(["cu", "n"]);
+    const entry = getDocOwner(docU.id);
+    expect(entry).toMatchObject({ ownerId: A, kind: "claimed" });
+    const sinceSeq = entry?.sinceSeq as number;
+    // Design §8.5 counts as handed only live entries ABOVE sinceSeq: the
+    // kept notice is below it (never counted), the comment's new entry,
+    // registered by this very pass, is above it.
+    expect(kept?.seq).toBeLessThanOrEqual(sinceSeq);
+    const comment = deliveryRegistry.entriesIn(docU.id).find((e) => e.base === `${docU.id}:cu`);
+    expect(comment?.seq).toBeGreaterThan(sinceSeq);
+  });
+
   it("a stale entry reads as unowned: the poll that claims it runs a handover in the commit (a duplicate, never a loss)", async () => {
     // Fabricated, as in the handover tests: no production path writes an
     // entry for a record that does not exist.

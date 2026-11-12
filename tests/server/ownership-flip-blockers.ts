@@ -42,8 +42,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "that holder was handed and never acknowledged, so once a handover keeps the notice, that " +
       "reader acknowledges it and is never handed it, nor is a fresh reader; a poll's claim over " +
       "a stale entry runs a handover that writes handoverSeq above notices the same poll handed; " +
-      "and a claim refused at commit does not undo a cursor-less poll's acknowledgement of an " +
-      "entry that predates it.",
+      "a claim refused at commit does not undo a cursor-less poll's acknowledgement of an " +
+      "entry that predates it; and a mark moved by exclusion drops the reader's held seqs there, " +
+      "so a Solo-held kept notice is passed with it.",
   },
   {
     gap:

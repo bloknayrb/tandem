@@ -1134,10 +1134,14 @@ export interface InboxPollScope {
    * answers `"may-claim"`. `sinceSeq` is the registry counter before this
    * poll's pass over the document. Never throws. Answers `"held"` when the
    * caller holds the document afterwards; `"refused"` when a check refused it
-   * and nothing changed; `"changed"` when the ownership change ran but the
-   * caller does not hold the document after it (a re-entrant lapse, or a
-   * failure after the entry was written): its handover may already have
-   * re-owed the document's items, which the caller must not undo.
+   * and nothing changed; `"changed"` when `setDocOwner` was called but the
+   * caller does not hold the document after it (a re-entrant lapse moved it
+   * on): its handover may already have re-owed the document's items, which
+   * the caller must not undo. `setDocOwner` is total, so one that failed
+   * before writing the entry also reads `"changed"`; the inbox then keeps
+   * this poll's cursor-less ledger keys (a missed undo, never a loss of an
+   * entry). Judged unreachable: with `sinceSeq` given, nothing before the
+   * entry write can throw.
    */
   claim(documentId: string, sinceSeq: number, stillOpen: boolean): InboxClaimOutcome;
   /** The documents the caller holds right now (empty for no record). */
