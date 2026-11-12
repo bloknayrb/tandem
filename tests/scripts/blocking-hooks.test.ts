@@ -237,7 +237,10 @@ describe("block-plan-without-agent-review.mjs", () => {
   bashOnly("the wrapper turns a gate that cannot run into a block", () => {
     // An absolute bash, because the child's PATH is emptied to hide `node`.
     const run = spawnSync("/bin/bash", [path.join(HOOKS, "block-plan-without-agent-review.sh")], {
-      input: "{}",
+      // No `input`: with `node` hidden nothing in the wrapper reads stdin, so
+      // bash can exit before the parent's write lands and `spawnSync` then
+      // reports EPIPE in `run.error` (seen in CI under load, 2026-11-12).
+      stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
       env: { ...process.env, PATH: "/nonexistent" },
     });
