@@ -50,6 +50,7 @@ import {
   getOpenDocs,
 } from "./mcp/document-service.js";
 import { setGreetingReplyClassifier, snapshotUserChat } from "./mcp/greeting-reply.js";
+import { deliveryRegistry } from "./mcp/inbox-cursor.js";
 import { shutdownSearchWorker } from "./mcp/search-worker.js";
 import {
   APP_VERSION,
@@ -81,6 +82,7 @@ import {
 } from "./session/manager.js";
 import {
   applyUserOpenDefaultToDocuments,
+  setOwnershipSeqSource,
   setOwnershipTransportMode,
 } from "./sessions/ownership.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
@@ -778,6 +780,12 @@ async function main() {
   // The resolved LAN IP is used in the Host-header allowlist so browsers on
   // the LAN can connect. undefined for loopback binds.
   const resolvedLanIP = bindCheck.resolvedLanIP;
+
+  // Ownership (#2358, ADR-054; ownership design §2): an ownership entry's
+  // `sinceSeq` is the inbox delivery registry's counter. Wired here, before
+  // either transport branch, so both modes have it. Only a flag-on
+  // `setDocOwner` ever calls it.
+  setOwnershipSeqSource(() => deliveryRegistry.counter);
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that

@@ -31,6 +31,7 @@ import {
 import type { ToolCaller } from "../../src/server/sessions/caller.js";
 import {
   DOC_OP_WAIT_MS,
+  docOpWaitTimersForTests,
   isDocOpQueueBusy,
   runDocOp,
 } from "../../src/server/sessions/doc-op-queue.js";
@@ -389,8 +390,9 @@ describe("a call whose request was cancelled before its turn", () => {
     );
     await settle();
     expect(answered).toBe(false);
-    expect(isDocOpQueueBusy(id)).toBe(true);
-    const timersWhileQueued = vi.getTimerCount();
+    // Exactly one wait for a turn is running, and it is the edit's: the head
+    // started on an idle queue and never waited.
+    expect(docOpWaitTimersForTests()).toBe(1);
     // What a client does when its own timeout fires or the user interrupts:
     // it sends `notifications/cancelled` for the request.
     abort.abort("client gave up");
@@ -402,8 +404,9 @@ describe("a call whose request was cancelled before its turn", () => {
     await head.done;
     expect((await after.answer).error).toBe(false);
     await settle();
-    // The cancelled edit's wait timer was cleared at its turn.
-    expect(vi.getTimerCount()).toBeLessThan(timersWhileQueued);
+    // The cancelled edit's wait timer was cleared at its turn (and the
+    // comment's at its own): a wait left running would still be counted.
+    expect(docOpWaitTimersForTests()).toBe(0);
     // The cancelled edit's turn came and went without it.
     expect(text(ydoc)).toBe(before);
     expect(text(ydoc)).not.toContain("Late!");

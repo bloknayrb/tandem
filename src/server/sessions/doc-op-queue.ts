@@ -8,9 +8,11 @@
  * runs out first (below). With ownership off nothing calls
  * this module: handlers run their bodies directly, as they always have.
  *
- * **Not every ownership change is queued.** Four run where they are, beside
- * whatever operation is running: a lapse whose wait for its turn ran out
- * ({@link runWhenDocIdle}), and three that are synchronous by design: the tab-close point (`onDocumentClosed`), the user-open default
+ * **Not every ownership change is queued.** Four run where they are, not at a
+ * turn of their own: a lapse whose wait for its turn ran out
+ * ({@link runWhenDocIdle}: beside the operation still running when its timer
+ * fires first, or between two operations when its late turn comes first), and
+ * three that are synchronous by design: the tab-close point (`onDocumentClosed`), the user-open default
  * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, `/api/convert`,
  * startup; it only
  * writes an entry where there is none, and writes nothing until Tandem's
@@ -110,9 +112,10 @@ export function runDocOp<T>(
   if (!existing) chains.set(documentId, mine);
   mine.pending++;
   // The tail is replaced BEFORE `fn` can run, with a gate that opens when this
-  // operation settles: an operation queued from inside `fn`'s synchronous head
-  // (a lapse triggered by a claim, say) then waits for this one instead of
-  // chaining onto the old, already-resolved tail.
+  // operation settles: an operation queued from inside `fn` (a lapse triggered
+  // when a write's claim is applied at its outcome, say) then waits for this
+  // one, behind whatever was queued meanwhile, instead of chaining onto the
+  // old, already-resolved tail.
   let open!: () => void;
   const gate = new Promise<void>((resolve) => {
     open = resolve;
@@ -123,7 +126,7 @@ export function runDocOp<T>(
   if (!existing) {
     // An idle document starts its operation in this very tick, as a handler
     // with no queue would: the synchronous head of the body (and so the
-    // ownership check and claim) runs before the caller's next line.
+    // ownership check) runs before the caller's next line.
     const result = startNow(fn);
     const done = () => {
       settle(documentId, mine);
@@ -240,6 +243,11 @@ export function runWhenDocIdle(
       onError(late);
     }
   });
+}
+
+/** How many waits for a turn have a timer running. */
+export function docOpWaitTimersForTests(): number {
+  return timers.size;
 }
 
 /** How many documents have a live chain. For "nothing was created" assertions. */
