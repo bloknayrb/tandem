@@ -642,6 +642,16 @@ describe("the run's logs", () => {
       "c#1",
     ]);
     expect(damagedLogLines(dir)).toEqual([]);
+    // A whole record that lost only its newline was counted as recorded: kept.
+    fs.appendFileSync(trialsPath(dir), '{"trialId":"d#1"}');
+    appendTrial(dir, { trialId: "e#1" });
+    expect(readTrials<{ trialId: string }>(dir).map((t) => t.trialId)).toEqual([
+      "a#1",
+      "b#1",
+      "c#1",
+      "d#1",
+      "e#1",
+    ]);
     fs.writeFileSync(trialsPath(dir), '{"trialId":"a#1"}\n{"trialId":"b#\n{"trialId":"c#1"}\n');
     expect(damagedLogLines(dir)).toEqual([
       "trials.jsonl has unreadable line(s) 2 that are not a torn last line",

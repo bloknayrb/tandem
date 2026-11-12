@@ -200,7 +200,8 @@ export function fixtureProblems(
 }
 /**
  * Append one record as one line. If a killed process left the file ending in
- * half a line, that fragment is cut off first: it was never a recorded trial
+ * half a line, that fragment is cut off first (a complete record that lost
+ * only its newline is kept and its line ended): it was never a recorded trial
  * (the trial is run again), and leaving it in place would make it an
  * unreadable line in the MIDDLE of the log once this record follows it, which
  * the reader and the report rightly treat as damage.
@@ -209,7 +210,18 @@ function appendLine(file: string, record: unknown): void {
   if (fs.existsSync(file)) {
     const buf = fs.readFileSync(file);
     if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) {
-      fs.truncateSync(file, buf.lastIndexOf(0x0a) + 1);
+      const start = buf.lastIndexOf(0x0a) + 1;
+      let complete = false;
+      try {
+        JSON.parse(buf.subarray(start).toString("utf8"));
+        complete = true;
+      } catch {
+        complete = false;
+      }
+      // A whole record that lost only its newline WAS read as recorded (so it
+      // is not run again): keep it and end its line. Only a fragment is cut.
+      if (complete) fs.appendFileSync(file, "\n", "utf8");
+      else fs.truncateSync(file, start);
     }
   }
   fs.appendFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
