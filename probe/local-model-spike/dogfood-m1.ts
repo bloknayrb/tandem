@@ -27,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { parseArgs, tierArg } from "./harness/args.js";
-import { isolateAppData, printable, say } from "./harness/entry-common.js";
+import { captureProductLogs, isolateAppData, printable, say } from "./harness/entry-common.js";
 import { isMain } from "./harness/main-guard.js";
 
 const DOC = `# Project Plan
@@ -57,6 +57,9 @@ export async function main(argv: readonly string[]): Promise<number> {
   // The product's app data goes to a throwaway directory, set before it loads.
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-dogfood-"));
   isolateAppData(scratch);
+  // The product's own stderr can carry bytes written by the endpoint; it goes
+  // to a file in the scratch directory, never to the terminal raw.
+  captureProductLogs(path.join(scratch, "product-stderr.log"));
   try {
     const [{ runTrial }, { harnessConfig }, { classifyTrial }, { claimCheck }] = await Promise.all([
       import("./harness/trial.js"),
@@ -75,7 +78,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     const ending = classifyTrial(obs);
 
     say(`[dogfood] ended: ${ending.ending} (${ending.detail})`);
-    if (obs.loop) say(`[dogfood] metrics: ${JSON.stringify(obs.loop.metrics)}`);
+    if (obs.loop) say(printable(`[dogfood] metrics: ${JSON.stringify(obs.loop.metrics)}`, 1000));
     for (const step of obs.loop?.steps ?? []) {
       for (const call of step.toolCalls) {
         say(printable(`[dogfood]   turn ${step.turn}: ${call.name} -> ${JSON.stringify(call.outcome)}`, 1000));

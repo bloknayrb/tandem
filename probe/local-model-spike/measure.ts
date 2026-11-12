@@ -33,6 +33,7 @@ import { parseArgs, tierArg } from "./harness/args.js";
 import { captureProductLogs, gitState, isolateAppData, printable, say } from "./harness/entry-common.js";
 import { isMain } from "./harness/main-guard.js";
 import { isSafeRunId, makeRunId, RUNS_DIR, runDirFor } from "./harness/paths.js";
+import { existingRunDir } from "./harness/run-store.js";
 
 const USAGE =
   'usage: measure.ts --model <tag> --tier chat|editing --hardware "<description>" [--screen] [--repeats <n>] [--endpoint <url>] [--resume <run id>] [--include-extended] [--clear-stale-lock]';
@@ -47,7 +48,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const mode = flags.has("screen") ? "screen" : "full";
   const repeats = Number(values.get("repeats") ?? "1");
 
-  if (!modelTag || !tier || (!hardware && !flags.has("print-app-data"))) {
+  if (!modelTag || !tier || !hardware) {
     say(USAGE);
     return 2;
   }
@@ -61,20 +62,18 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 
   const runId = resume ?? makeRunId({ date: new Date(), tier, mode, modelTag });
-  const runDir = runDirFor(runId, runsDir);
-  if (resume !== undefined && !fs.existsSync(runDir)) {
-    say(`no such run: ${resume}`);
+  let runDir: string;
+  try {
+    // A resumed run must be a real directory directly inside the runs
+    // directory BEFORE anything is written into it.
+    runDir = resume !== undefined ? existingRunDir(resume, runsDir) : runDirFor(runId, runsDir);
+  } catch (err) {
+    say(printable(err instanceof Error ? err.message : String(err)));
     return 2;
   }
 
   // BEFORE the product is loaded: its app data goes inside the run directory.
-  const appData = isolateAppData(runDir);
-  if (flags.has("print-app-data")) {
-    const { resolveAppDataDir, SESSION_DIR } = await import("../../src/server/platform.js");
-    say(JSON.stringify({ appData, resolved: resolveAppDataDir(), sessionDir: SESSION_DIR }));
-    fs.rmSync(runDir, { recursive: true, force: true });
-    return 0;
-  }
+  isolateAppData(runDir);
   captureProductLogs(path.join(runDir, "product-stderr.log"));
 
   const [{ runMeasurement }, { runTrial }, { preflight }, { computeFingerprint }, { harnessConfig }] =

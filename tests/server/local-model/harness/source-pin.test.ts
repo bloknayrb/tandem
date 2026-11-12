@@ -133,11 +133,27 @@ describe("the harness defines no loop, prompt, tool schema or chat request of it
 });
 
 describe("nothing in the harness reaches a shipped bundle or the published package", () => {
-  it("no file under src/ imports from probe/", () => {
+  it("no file under src/ names the harness in any import form", () => {
     const offenders: string[] = [];
-    for (const file of tsFiles(path.join(ROOT, "src"))) {
-      if (/from\s+["'][^"']*probe\//.test(read(file))) offenders.push(path.relative(ROOT, file));
-    }
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(ts|tsx|svelte|js|mjs|cjs)$/.test(entry.name)) {
+          // Static import, side-effect import, dynamic import or require.
+          if (/["'`][^"'`\n]*probe\/local-model-spike/.test(read(full))) {
+            const text = read(full)
+              .split("\n")
+              .filter(
+                (l) =>
+                  /["'`][^"'`\n]*probe\/local-model-spike/.test(l) && !/^\s*(\*|\/\/|\/\*)/.test(l),
+              );
+            if (text.length > 0) offenders.push(path.relative(ROOT, full));
+          }
+        }
+      }
+    };
+    walk(path.join(ROOT, "src"));
     expect(offenders).toEqual([]);
   });
 

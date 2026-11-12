@@ -208,6 +208,22 @@ export function acquireLock(runDir: string, opts: LockOptions = {}): () => void 
     }
     const aside = `${file}.stale-${randomBytes(4).toString("hex")}`;
     fs.renameSync(file, aside);
+    // What was moved aside must be the lock that was judged stale. If another
+    // clearer got there first, this is its LIVE lock: put it back and refuse.
+    let moved: LockBody | null = null;
+    try {
+      moved = JSON.parse(fs.readFileSync(aside, "utf8")) as LockBody;
+    } catch {
+      moved = null;
+    }
+    if (!moved || moved.pid !== holder.pid || moved.host !== holder.host || moved.startedAt !== holder.startedAt) {
+      try {
+        fs.renameSync(aside, file);
+      } catch {
+        // Someone holds the lock path again; leave the aside file for a person to look at.
+      }
+      throw new Error("the lock changed while it was being cleared: another process has taken this run. Not cleared.");
+    }
     fs.rmSync(aside, { force: true });
     create(); // throws EEXIST if another process took the lock in between
   }

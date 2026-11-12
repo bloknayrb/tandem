@@ -43,10 +43,11 @@ export function gitState(): { commit: string; dirty: boolean | "unknown" } {
  */
 export function captureProductLogs(file: string): void {
   const write = (level: string, args: unknown[]) => {
-    const text = args
-      .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === "string" ? a : JSON.stringify(a)))
-      .join(" ");
+    // Nothing here may throw into the product code that called console.error.
     try {
+      const text = args
+        .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === "string" ? a : String(JSON.stringify(a))))
+        .join(" ");
       fs.appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), level, text })}\n`, "utf8");
     } catch {
       // A log line that cannot be written is dropped, never printed raw.
