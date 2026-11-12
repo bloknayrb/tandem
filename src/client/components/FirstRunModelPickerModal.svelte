@@ -12,6 +12,7 @@
 import { untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
 import { createModels } from "../hooks/useModels.svelte.js";
+import { createModelsWriteAccess } from "../hooks/useModelsWriteAccess.svelte";
 import type { ModelProvider } from "../hooks/useTandemSettings.svelte.js";
 import { trapTab } from "../utils/focus-trap.js";
 
@@ -23,6 +24,10 @@ interface Props {
 const { onComplete }: Props = $props();
 
 const models = createModels();
+// Once the server has refused a save from this page (#2404: only Tandem's own
+// window can change these settings), Save stays focusable but does nothing;
+// the refusal's own sentence is already in `saveError`. Skip stays live.
+const access = createModelsWriteAccess();
 
 interface ProviderOption {
   value: ModelProvider;
@@ -117,7 +122,7 @@ function selectProvider(next: ModelProvider) {
 
 async function handleSave(e: SubmitEvent) {
   e.preventDefault();
-  if (!canSave || saving) return;
+  if (!canSave || saving || access.blocked) return;
   saving = true;
   saveError = null;
   try {
@@ -290,6 +295,8 @@ function handleSkip() {
         <button
           type="submit"
           disabled={!canSave || saving}
+          aria-disabled={access.blocked}
+          style={access.blocked ? "opacity: 0.5; cursor: not-allowed;" : undefined}
           data-testid="first-run-save"
           class="frm-btn frm-btn-primary"
         >

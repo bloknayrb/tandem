@@ -1,9 +1,11 @@
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import {
   API_MODELS_LOCAL_SETTINGS,
+  ERROR_CODE_OWN_WINDOW_ONLY,
   type LocalModelSettingsPostResponse,
   type LocalModelSettingsResponse,
 } from "../../shared/models/contract.js";
+import { noteModelsWriteRefused } from "../models/write-refusal.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /**
@@ -140,6 +142,7 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
   // Optimistic, synchronously in the handler: the control does not bounce.
   const before = _editing;
+  const knownBefore = _known;
   _editing = value;
   _known = true;
   _saveNotice = null;
@@ -150,6 +153,8 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
   const run = async (): Promise<void> => {
     let editing: boolean | null = null;
     let notice: string | null = null;
+    /** The server refused because this is not Tandem's own window (#2404). */
+    let refused = false;
     try {
       const res = await fetch(url, {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -157,8 +162,19 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ editing: value }),
       });
-      const answer = (await res.json().catch(() => null)) as LocalModelSettingsPostResponse | null;
-      if (answer && typeof answer.editing === "boolean" && typeof answer.persisted === "boolean") {
+      const answer = (await res.json().catch(() => null)) as
+        | (LocalModelSettingsPostResponse & { code?: string })
+        | null;
+      if (res.status === 403 && answer?.code === ERROR_CODE_OWN_WINDOW_ONLY) {
+        // Nothing reached the setting, so there is nothing to re-read and no
+        // per-click message: the Models tab says why, once, at the top.
+        refused = true;
+        noteModelsWriteRefused();
+      } else if (
+        answer &&
+        typeof answer.editing === "boolean" &&
+        typeof answer.persisted === "boolean"
+      ) {
         editing = answer.editing;
         notice = noticeFor(value, answer);
       } else {
@@ -182,6 +198,17 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
     // answer arriving while a later one is still queued is dropped: the later
     // click is what the user is looking at, and its own answer is on its way.
     if (_savesOutstanding > 0) return;
+    if (refused && knownBefore) {
+      // The value was known before the click and the server did not change
+      // it: put the box back. Never show the click as applied.
+      _editing = before;
+      _known = true;
+      _loadFailed = false;
+      _saveNotice = null;
+      return;
+    }
+    // Refused from an unknown state: the read this click aborted never said
+    // what the server holds, so the box goes back to unknown, not to "off".
     if (editing === null) {
       _editing = before;
       _known = false;

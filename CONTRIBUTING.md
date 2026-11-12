@@ -59,6 +59,17 @@ start: the LAN bind ships dark behind `LAN_BIND_ENABLED` in `src/shared/constant
 ([ADR-056](docs/decisions.md#adr-056-the-non-loopback-bind-ships-dark)). See
 [docs/security.md](docs/security.md) for the full network posture.
 
+**The Vite page is not "Tandem's own window".** The saved model settings (`POST /api/models` and
+`POST /api/models/local-settings`) can be changed only from the desktop app or from the page the
+server itself serves on `:3479` (#2404). The dev client on `:5173` is neither, so the server needs
+to be told that this one page may: `TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173`.
+`npm run dev:standalone` sets it for the server it starts. `npm run dev:server` on its own and
+`npm run dev:tauri` do not — export it in the shell first. A debug `dev:tauri` window also adopts a
+server already running on `:3479`, with whatever environment that server was started with. Without
+the variable the Models tab says these settings can only be changed in Tandem's own window, and the
+one-time model reconcile logs a refusal to the console and tries again at the next load. See
+[docs/configuration.md](docs/configuration.md).
+
 Start the server *before* connecting Claude Code. Vite hot-reloads client code; server changes need
 a `dev:server` restart and then `/mcp` in Claude Code.
 

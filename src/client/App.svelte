@@ -89,6 +89,7 @@ import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { licenseStore } from "./hooks/useLicense.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { createModels } from "./hooks/useModels.svelte";
+import { modelsPageAccess } from "./hooks/useModelsWriteAccess.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createPendingUpdateBanner } from "./hooks/usePendingUpdateBanner.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
@@ -2643,6 +2644,7 @@ const shouldShowModelPicker = $derived(
       hasConfiguredDefault: modelsStore.defaultModelId !== null,
       dismissed: modelPickerDismissed,
       loading: modelsStore.loading,
+      pageCannotChangeModels: modelsPageAccess() === "foreign",
     }),
 );
 </script>

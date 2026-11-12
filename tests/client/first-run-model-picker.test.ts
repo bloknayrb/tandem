@@ -20,6 +20,7 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 const setDefault = vi.fn<(...args: unknown[]) => Promise<boolean>>();
@@ -62,6 +63,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
 });
+
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
 
 describe("FirstRunModelPickerModal — local-first default", () => {
   it("defaults to Ollama and shows the endpoint field, not an API key", () => {

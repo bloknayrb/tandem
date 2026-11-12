@@ -37,6 +37,10 @@ import { registerModelsRoutes } from "../../../src/server/models/api-routes.js";
 import {
   __flushLocalModelAnnouncedForTests,
   answeringWasAnnounced,
+  editingOnWasAnnounced,
+  LOCAL_MODEL_BASELINE_FILE_NAME,
+  SETTINGS_CHANGED_NOTICE,
+  SETTINGS_CHANGED_NOTICE_KEY,
 } from "../../../src/server/models/local-model-announced.js";
 import {
   __resetLocalModelSettingsForTests,
@@ -44,6 +48,7 @@ import {
   EDITING_ON_NOTICE_KEY,
   localModelEditingState,
 } from "../../../src/server/models/local-model-settings.js";
+import { createOwnWindowPolicy } from "../../../src/server/models/own-window.js";
 import {
   __resetModelRegistryForTests,
   getModelsEtag,
@@ -135,6 +140,17 @@ const REGISTRY: ModelsFile = {
   defaultModelId: "m-1",
 };
 
+/**
+ * How the writes in this file reach the routes (#2404). The routes accept a
+ * request only from Tandem's own window, or from the one origin the development
+ * allowance names. The DEFAULT here is the allowance origin, because that is
+ * the path on which a change is still announced as it happens; a test of the
+ * user's own change sets `writeOrigin` to `OWN_WINDOW_ORIGIN`.
+ */
+const ALLOWANCE_ORIGIN = "http://127.0.0.1:5173";
+const OWN_WINDOW_ORIGIN = `http://${TAURI_HOSTNAME}`;
+let writeOrigin = ALLOWANCE_ORIGIN;
+
 describe("production wiring of the collaborator's seams (#1123)", () => {
   it("DEFAULT_COLLABORATOR_DEPS wires every seam that fails closed when absent", () => {
     expect(DEFAULT_COLLABORATOR_DEPS.runTurn).toBe(runLocalModelTurn);
@@ -159,12 +175,12 @@ describe("switching editing through the real route reaches a run in flight (#112
   let duringRun: (opts: RunTurnOpts) => Promise<void>;
   let seq = 0;
 
-  const headers = { Origin: `http://${TAURI_HOSTNAME}`, "content-type": "application/json" };
+  const headersNow = () => ({ Origin: writeOrigin, "content-type": "application/json" });
 
   async function setEditing(editing: boolean): Promise<void> {
     const res = await fetch(`${baseUrl}${API_MODELS_LOCAL_SETTINGS}`, {
       method: "POST",
-      headers,
+      headers: headersNow(),
       body: JSON.stringify({ editing }),
     });
     // A refused switch would make every assertion below vacuous.
@@ -203,6 +219,7 @@ describe("switching editing through the real route reaches a run in flight (#112
   }
 
   beforeEach(async () => {
+    writeOrigin = ALLOWANCE_ORIGIN;
     resetQueue();
     resetNotifications();
     clearStartupNotices();
@@ -216,6 +233,10 @@ describe("switching editing through the real route reaches a run in flight (#112
     });
 
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-editing-live-"));
+    // Not the first start with local models switched on (that one takes the
+    // model it finds as the baseline, silently): every wire in this file is a
+    // LATER start, so the marker is already on disk (#2404).
+    fs.writeFileSync(path.join(tmpDir, LOCAL_MODEL_BASELINE_FILE_NAME), '{"version":1}\n', "utf8");
     __resetModelRegistryForTests(tmpDir);
     __resetLocalModelSettingsForTests(tmpDir);
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -243,6 +264,7 @@ describe("switching editing through the real route reaches a run in flight (#112
     app.use(express.json());
     registerModelsRoutes(app, passthrough, passthrough, {
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
+      ownWindow: createOwnWindowPolicy({ getBound: () => null, allowance: ALLOWANCE_ORIGIN }),
       localModelSettingsEnabled: true,
     });
     await new Promise<void>((resolve, reject) => {
@@ -255,7 +277,7 @@ describe("switching editing through the real route reaches a run in flight (#112
 
     const saved = await fetch(`${baseUrl}${API_MODELS}`, {
       method: "POST",
-      headers,
+      headers: headersNow(),
       body: JSON.stringify({ file: REGISTRY, ifMatch: getModelsEtag() }),
     });
     expect(saved.status).toBe(200);
@@ -331,15 +353,11 @@ describe("switching editing through the real route reaches a run in flight (#112
     await collab.stop();
     wireCollaborator({});
     expect(DEFAULT_COLLABORATOR_DEPS.runTurn).toBe(runLocalModelTurn);
-    // Round 3: this second wire finds a saved model that no browser was ever
-    // told about (no notify stream is open in this file), so it is announced
-    // at wire rather than taken as the baseline.
-    const STARTUP_MODEL_NOTICE = answeringChangedNotice({
-      entryId: "m-1",
-      endpoint: "http://127.0.0.1:11434",
-      modelId: "qwen2.5:14b-instruct",
-      displayName: "Local One",
-    });
+    // This second wire finds a saved model that the record does not name (it
+    // was saved through the allowance origin and no notify stream is open in
+    // this file), so the start-up notice is raised at wire rather than the
+    // model being taken as the baseline.
+    const STARTUP_MODEL_NOTICE = SETTINGS_CHANGED_NOTICE;
     expect(getBuffer().map((n) => n.message)).toEqual([STARTUP_MODEL_NOTICE]);
 
     // `Response` in this file is Express's type; the model answers with fetch's.
@@ -411,7 +429,8 @@ describe("switching editing through the real route reaches a run in flight (#112
 
     // The run still delivered its text reply, and raised nothing of its own:
     // after the wire's start-up notice, the only notification is the route's
-    // "switched on" notice.
+    // "switched on" notice (the switch came through the allowance origin, so
+    // it is announced as #2403 built it).
     const chatRows = [
       ...getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).values(),
     ] as ChatMessage[];
@@ -427,24 +446,29 @@ describe("switching editing through the real route reaches a run in flight (#112
       modelId: "qwen2.5:14b-instruct",
       displayName: "Local One",
     };
+    /** The live notice: a save in this run that was not from Tandem's own window. */
     const answeringNotes = () =>
       getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
+    /** The start-up notice: a wire that finds a model the record does not name. */
+    const startupNotes = () =>
+      getBuffer().filter((n) => n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY);
 
-    it("saved with no browser connected: a new wire announces it, and registers it for replay", async () => {
+    it("saved with no browser connected: a new wire raises the start-up notice, and registers it for replay", async () => {
       expect(answeringWasAnnounced(answeringFingerprint(MODEL))).toBe(false);
 
       await collab.stop();
       wireCollaborator({});
 
-      const notes = answeringNotes();
+      const notes = startupNotes();
       expect(notes).toHaveLength(1);
-      expect(notes[0].message).toBe(answeringChangedNotice(MODEL));
+      expect(notes[0]).toMatchObject({ message: SETTINGS_CHANGED_NOTICE, severity: "warning" });
       expect(getStartupNotices()).toEqual(notes);
+      expect(answeringNotes()).toEqual([]);
       // Raised, but still written to no stream: a third wire says it again.
       expect(answeringWasAnnounced(answeringFingerprint(MODEL))).toBe(false);
       await collab.stop();
       wireCollaborator({});
-      expect(answeringNotes()).toHaveLength(2);
+      expect(startupNotes()).toHaveLength(2);
     });
 
     it("saved while a browser is connected: a new wire is silent", async () => {
@@ -453,7 +477,7 @@ describe("switching editing through the real route reaches a run in flight (#112
       const moved = { ...MODEL, endpoint: "http://127.0.0.1:11435" };
       const saved = await fetch(`${baseUrl}${API_MODELS}`, {
         method: "POST",
-        headers,
+        headers: headersNow(),
         body: JSON.stringify({
           file: { ...REGISTRY, models: [{ ...REGISTRY.models[0], endpoint: moved.endpoint }] },
           ifMatch: getModelsEtag(),
@@ -468,6 +492,7 @@ describe("switching editing through the real route reaches a run in flight (#112
       await collab.stop();
       wireCollaborator({});
       expect(answeringNotes()).toHaveLength(1); // only the save's own
+      expect(startupNotes()).toEqual([]);
       expect(seen).toHaveLength(1);
     });
   });
@@ -488,6 +513,16 @@ describe("switching editing through the real route reaches a run in flight (#112
         dedupKey: EDITING_ON_NOTICE_KEY,
       });
       expect(getStartupNotices()).toEqual([note]);
+    });
+
+    it("ON from Tandem's own window is the user's own: no notification, and recorded at once", async () => {
+      writeOrigin = OWN_WINDOW_ORIGIN;
+      await setEditing(true);
+
+      expect(onNotes()).toEqual([]);
+      expect(getBuffer()).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
+      expect(editingOnWasAnnounced()).toBe(true);
     });
 
     it("a second ON while already on says nothing", async () => {

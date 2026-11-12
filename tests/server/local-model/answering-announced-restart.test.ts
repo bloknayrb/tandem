@@ -15,6 +15,8 @@ import {
   __flushLocalModelAnnouncedForTests,
   __resetLocalModelAnnouncedForTests,
   LOCAL_MODEL_ANNOUNCED_FILE_NAME,
+  LOCAL_MODEL_BASELINE_FILE_NAME,
+  SETTINGS_CHANGED_NOTICE_KEY,
 } from "../../../src/server/models/local-model-announced.js";
 import {
   getBuffer,
@@ -102,14 +104,24 @@ describe("answering-changed notice across restarts, production wiring (#2404)", 
     if (!fs.existsSync(file)) return null;
     return (JSON.parse(fs.readFileSync(file, "utf8")) as { answering: string | null }).answering;
   };
-  const answeringNotices = () =>
-    getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
-  const pendingReplay = () =>
-    getStartupNotices().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
+  /**
+   * Either notice that says which model answers was changed: the live one
+   * (a change in this run that did not come from Tandem's own window — the
+   * listener double passes no source) and the start-up one (a start that
+   * finds a model answering which the record does not name).
+   */
+  const aboutAnswering = (n: { dedupKey?: string }) =>
+    n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY || n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY;
+  const answeringNotices = () => getBuffer().filter(aboutAnswering);
+  const pendingReplay = () => getStartupNotices().filter(aboutAnswering);
 
   beforeEach(async () => {
     dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-answering-restart-"));
     file = path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    // Not the first start with local models switched on: that one takes the
+    // model it finds as the baseline, silently (see the announced module).
+    // Every case here is about a LATER start, so the marker is already there.
+    fs.writeFileSync(path.join(dir, LOCAL_MODEL_BASELINE_FILE_NAME), '{"version":1}\n', "utf8");
     __resetLocalModelAnnouncedForTests(dir);
     resetNotifications();
     clearStartupNotices();

@@ -30,11 +30,13 @@
  */
 import {
   API_MODELS,
+  ERROR_CODE_OWN_WINDOW_ONLY,
   type ModelsGetResponse,
   type ModelsPostBody,
 } from "../../shared/models/contract.js";
 import { loadSettings } from "../hooks/useTandemSettings.js";
 import { projectModelsFile } from "../models/project.js";
+import { noteModelsWriteRefused } from "../models/write-refusal.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /** localStorage flag — separate key so it never touches the settings schema. */
@@ -69,6 +71,10 @@ export async function reconcileModelsToServerOnce(): Promise<ReconcileOutcome> {
     const body: ModelsPostBody = {
       file: projectModelsFile(models, settings.defaultModelId ?? null),
       ifMatch: etag,
+      // Tells the server this is the one-time reconcile, so that it does not
+      // tell the user "your change means a different model now answers" for a
+      // write they did not make by hand (#2404). It grants nothing.
+      reconcile: true,
     };
     const postRes = await fetch(`${API_BASE}${API_MODELS}`, {
       method: "POST",
@@ -90,6 +96,9 @@ export async function reconcileModelsToServerOnce(): Promise<ReconcileOutcome> {
       .json()
       .then((b: { code?: string }) => b?.code)
       .catch(() => undefined);
+    // Not Tandem's own window (#2404): every later write from this page will
+    // be refused too, so the Models tab says so instead of failing per click.
+    if (postRes.status === 403 && code === ERROR_CODE_OWN_WINDOW_ONLY) noteModelsWriteRefused();
     console.warn(
       `[tandem] model-registry reconcile POST failed (status ${postRes.status}${
         code ? `, ${code}` : ""

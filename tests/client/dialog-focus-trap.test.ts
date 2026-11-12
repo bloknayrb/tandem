@@ -25,6 +25,7 @@ import SettingsModal from "../../src/client/components/SettingsModal.svelte";
 import { loadSettings } from "../../src/client/hooks/useTandemSettings";
 import { focusablesWithin } from "../../src/client/utils/focus-trap";
 import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({
   isTauriRuntime: vi.fn(() => false),
@@ -93,6 +94,10 @@ function assertTrapped(container: HTMLElement) {
   expect(recover.defaultPrevented).toBe(true);
   expect(document.activeElement).toBe(first);
 }
+
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
 
 describe("CommandPalette traps Tab (#1778)", () => {
   it("wraps forward, backward, and recovers stranded focus", () => {

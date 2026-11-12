@@ -14,6 +14,8 @@ import {
   answeringWasAnnounced,
   editingOnWasAnnounced,
   recordAnsweringNone,
+  SETTINGS_CHANGED_NOTICE,
+  SETTINGS_CHANGED_NOTICE_KEY,
 } from "../../../src/server/models/local-model-announced.js";
 import {
   __resetLocalModelSettingsForTests,
@@ -129,7 +131,12 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
     primeLocalModelSettings();
   }
 
+  /** The live notice: commenting was switched on by a request that did not
+   *  come from Tandem's own window (`"unspecified"` below stands for that). */
   const editingNotices = () => getBuffer().filter((n) => n.dedupKey === EDITING_ON_NOTICE_KEY);
+  /** The start-up notice: a prime found it on with no record the user was told. */
+  const startupNotices = () =>
+    getBuffer().filter((n) => n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY);
 
   beforeEach(async () => {
     dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-own-window-"));
@@ -150,7 +157,7 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
   });
 
   it("the attack: switch on unseen, open the stream as a foreign page, restart — it is announced again", async () => {
-    await setLocalModelEditing(true); // no window open
+    await setLocalModelEditing(true, "unspecified"); // no window open
     expect(editingNotices()).toHaveLength(1);
 
     const foreign: (Headers | undefined)[] = [
@@ -170,7 +177,8 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
     expect(ownWindowSubscriberCount()).toBe(0);
 
     restart();
-    expect(editingNotices(), "raised again at start-up").toHaveLength(1);
+    expect(startupNotices(), "raised again at start-up").toHaveLength(1);
+    expect(startupNotices()[0]?.message).toBe(SETTINGS_CHANGED_NOTICE);
   });
 
   it.each<[string, Headers]>([
@@ -179,7 +187,7 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
   ])(
     "%s opening the stream marks it seen, and the next start is silent",
     async (_name, headers) => {
-      await setLocalModelEditing(true);
+      await setLocalModelEditing(true, "unspecified");
       const { res, written } = fakeResponse();
       handleNotifyStream(fakeRequest(headers), res);
       expect(written.join("")).toContain(EDITING_ON_NOTICE);
@@ -188,19 +196,20 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
 
       restart();
       expect(editingNotices()).toEqual([]);
+      expect(startupNotices()).toEqual([]);
     },
   );
 
   it("live: a foreign stream connected at switch-on does not count; Tandem's window does", async () => {
     const stop = subscribeNotifications(() => {});
-    await setLocalModelEditing(true);
+    await setLocalModelEditing(true, "unspecified");
     await __flushLocalModelAnnouncedForTests();
     expect(editingOnWasAnnounced()).toBe(false);
     stop();
 
-    await setLocalModelEditing(false);
+    await setLocalModelEditing(false, "unspecified");
     subscribeNotifications(() => {}, { ownWindow: true });
-    await setLocalModelEditing(true);
+    await setLocalModelEditing(true, "unspecified");
     expect(editingOnWasAnnounced()).toBe(true);
   });
 
@@ -213,10 +222,10 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
     primeLocalModelSettings(); // no settings file: off
     expect(editingOnWasAnnounced()).toBe(false);
 
-    await setLocalModelEditing(true); // nobody watching
+    await setLocalModelEditing(true, "unspecified"); // nobody watching
     await __flushLocalModelAnnouncedForTests();
     restart();
-    expect(editingNotices()).toHaveLength(1);
+    expect(startupNotices()).toHaveLength(1);
   });
 
   it("recordAnsweringNone forgets the fingerprint, so the same model answering again is unannounced", async () => {

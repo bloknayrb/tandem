@@ -25,6 +25,7 @@ import {
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
+import { MODELS_DEV_ORIGIN_ENV } from "../../shared/models/contract.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
@@ -39,6 +40,12 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { isWalkthroughPending, markWalkthroughConfirmed } from "../integrations/walkthrough.js";
 import { type AiRefusal, aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
+import {
+  type BoundAddress,
+  createOwnWindowPolicy,
+  ownWindowGate,
+  resolveModelsDevOrigin,
+} from "../models/own-window.js";
 import { ownershipEnabled } from "../ownership-flag.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
@@ -60,6 +67,7 @@ import {
 } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { registerChannelRoutes } from "./channel-routes.js";
+import { mountClient } from "./client-static.js";
 import { type DiagnosticsToolDeps, registerDiagnosticsTools } from "./diagnostics.js";
 import { registerDocumentTools } from "./document.js";
 import { getGenerationId } from "./document-service.js";
@@ -798,6 +806,12 @@ export async function startMcpServerHttp(
    * entry point in HTTP mode; omitted in tests → route not registered.
    */
   shutdownWiring?: import("./routes/shutdown.js").ShutdownRouteDeps,
+  /**
+   * Where the built client is served from. Defaults to the bundle's sibling
+   * `client/` directory, which does not exist under tsx or vitest — a test
+   * passes a directory of its own to exercise the static mount (#2404).
+   */
+  clientDir: string = CLIENT_DIST,
 ): Promise<Server> {
   // ADR-056: `main()` refuses a non-loopback bind before getting here. This is
   // the function that calls `listen`, so the guard also covers a future
@@ -1201,7 +1215,26 @@ export async function startMcpServerHttp(
   // for the rest its first layer is the SDK Host check (copy), then
   // lanAwareApiMiddleware, then the parser — it never answers a success. See
   // api-body-preparse.ts.
-  app.use(createApiBodyPreParser({ sdkHostGate, mw: lanAwareApiMiddleware, largeBody }));
+  //
+  // The two local-model settings POSTs are also tested for Tandem's own window
+  // here, before their body is read (#2404). `boundAddress` is filled in by the
+  // listen callback below, so the policy compares against the port actually
+  // bound; until then only the desktop WebView's origins can match.
+  let boundAddress: BoundAddress | null = null;
+  const modelsDevOrigin = resolveModelsDevOrigin(process.env[MODELS_DEV_ORIGIN_ENV]);
+  if (modelsDevOrigin.log) console.error(modelsDevOrigin.log);
+  const modelsOwnWindow = createOwnWindowPolicy({
+    getBound: () => boundAddress,
+    allowance: modelsDevOrigin.origin,
+  });
+  app.use(
+    createApiBodyPreParser({
+      sdkHostGate,
+      mw: lanAwareApiMiddleware,
+      largeBody,
+      modelsOwnWindowGate: ownWindowGate(modelsOwnWindow),
+    }),
+  );
 
   // Mount SDK app (handles /mcp with 100kb body parser + DNS rebinding). Its
   // parser reads every body the pre-parse router above did not.
@@ -1306,26 +1339,18 @@ export async function startMcpServerHttp(
   // loopback-for-mutation, 503 on keychain unavailability).
   registerModelsRoutes(app, largeBody, lanAwareApiMiddleware, {
     keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS }),
+    ownWindow: modelsOwnWindow,
   });
 
   // Serve built client assets when present (populated by `vite build`).
-  // express.static falls through for paths it doesn't find, so /mcp, /api/*,
-  // /health, and channel routes registered above continue to work normally.
-  // Static routes and SPA fallback intentionally omit apiMiddleware — they only serve
-  // static assets, no sensitive data.
-  if (existsSync(CLIENT_DIST)) {
-    // Express 5 types omit express.static and res.sendFile — they exist at runtime.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    app.use((express as any).static(CLIENT_DIST, { index: "index.html" }));
-    // SPA fallback: serve index.html for client-side routes not matched above
-    const indexPath = join(CLIENT_DIST, "index.html");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    app.get("/{*path}", (_req: import("express").Request, res: any) => {
-      res.sendFile(indexPath);
-    });
-    console.error(`[Tandem] Serving client from ${CLIENT_DIST}`);
+  // Registered after every /mcp, /api, /health and channel route, so those are
+  // answered before a request can reach it. See client-static.ts for the
+  // framing headers every response from here carries (#2404).
+  if (existsSync(clientDir)) {
+    mountClient(app, clientDir);
+    console.error(`[Tandem] Serving client from ${clientDir}`);
   } else {
-    console.error(`[Tandem] No client dist at ${CLIENT_DIST} — run 'npm run build' first`);
+    console.error(`[Tandem] No client dist at ${clientDir} — run 'npm run build' first`);
   }
 
   // The OUTER-app half of the JSON error handler (#1822 item 3). Registered
@@ -1343,6 +1368,14 @@ export async function startMcpServerHttp(
     const httpServer = app.listen(port, host, () => {
       httpServer.removeListener("error", reject);
       httpServer.on("error", (err: Error) => console.error("[Tandem] HTTP server error:", err));
+      // What the listener is REALLY bound to, not the configured values: a
+      // caller that listens on port 0 must not make `http://127.0.0.1:0` an
+      // accepted origin (#2404).
+      const addr = httpServer.address();
+      boundAddress =
+        addr !== null && typeof addr === "object"
+          ? { address: addr.address, port: addr.port }
+          : null;
       // The self-arm wake transport (ADR-049). Attached to the http.Server
       // rather than the Express app because it is a protocol upgrade — it
       // carries its own guard, and `resolvedLanIP` is passed only so the Host

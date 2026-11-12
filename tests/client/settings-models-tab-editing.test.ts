@@ -26,6 +26,7 @@ import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 interface ModelsPose {
   models?: ModelRegistryEntry[];
@@ -149,6 +150,10 @@ afterEach(() => {
   cleanup();
 });
 
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
+
 describe("SettingsModelsTab — local-model editing control", () => {
   it("loads the setting when the tab mounts", () => {
     mount();
@@ -237,8 +242,12 @@ describe("SettingsModelsTab — local-model editing control", () => {
 
   it("points aria-describedby at the experimental / review-every-suggestion help text", () => {
     const { getByTestId, container } = mount();
-    const id = toggle(getByTestId).getAttribute("aria-describedby");
-    expect(id).toBeTruthy();
+    // Two references since #2404: the help text first, then the own-window
+    // message (an empty live region unless this page cannot change the setting).
+    const ids = (toggle(getByTestId).getAttribute("aria-describedby") ?? "").split(" ");
+    expect(ids).toEqual(["local-model-editing-help", "models-own-window-msg"]);
+    for (const ref of ids) expect(container.querySelectorAll(`[id="${ref}"]`)).toHaveLength(1);
+    const id = ids[0];
     const matches = container.querySelectorAll(`[id="${id}"]`);
     expect(matches).toHaveLength(1); // the reference resolves, and to one element
     const help = matches[0]?.textContent ?? "";

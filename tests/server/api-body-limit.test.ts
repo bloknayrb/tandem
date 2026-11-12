@@ -481,7 +481,11 @@ describe("#1981 F — ROUTE_OWNED_BODY_PARSERS lists every route-level body pars
       let kinds: string[] | undefined;
       if (/\brejectOversizeLicenseBody\b/.test(reg.call)) kinds = ["license"];
       else if (/\bscratchpadJsonBody\b/.test(reg.call)) kinds = ["scratchpad"];
-      else if (/\blargeBody\b/.test(reg.call)) kinds = ["upload", "reload", "small"];
+      else if (/\blargeBody\b/.test(reg.call)) {
+        // "models-own-window" (#2404): the two local-model settings POSTs, whose
+        // pre-parse layer tests for Tandem's own window before the 100 kB parser.
+        kinds = ["upload", "reload", "small", "models-own-window"];
+      }
       if (!kinds) continue;
       expect(reg.method, `${reg.constant}: the pre-parse router registers POST only`).toBe("post");
       const path = VALUES.get(reg.constant);
@@ -521,7 +525,13 @@ describe("#1981 G — the pre-parse router never answers a success", () => {
     const sdkHostGate = vi.fn();
     const mw = vi.fn();
     const largeBody = vi.fn();
-    const router = createApiBodyPreParser({ sdkHostGate, mw, largeBody }) as unknown as {
+    const modelsOwnWindowGate = vi.fn();
+    const router = createApiBodyPreParser({
+      sdkHostGate,
+      mw,
+      largeBody,
+      modelsOwnWindowGate,
+    }) as unknown as {
       stack: Array<{
         handle: unknown;
         route?: {
@@ -551,7 +561,23 @@ describe("#1981 G — the pre-parse router never answers a success", () => {
       expect(route.methods).toEqual({ post: true });
       expect(route.stack[0].handle).toBe(mw);
       expect(parsers.has(route.stack[route.stack.length - 1].handle)).toBe(true);
-      for (const h of route.stack.slice(1, -1)) expect(h.handle).toBe(rejectOversizeLicenseBody);
+      // The only handlers allowed between `mw` and the parser: the licence
+      // route's declared-length check, and (#2404) the own-window test on the
+      // two local-model settings POSTs — and that one on exactly those paths.
+      const routePaths = Array.isArray(route.path) ? route.path : [route.path];
+      const ownWindowLayer = routePaths.every(
+        (p) => ROUTE_OWNED_BODY_PARSERS[p] === "models-own-window",
+      );
+      for (const h of route.stack.slice(1, -1)) {
+        expect(h.handle).toBe(ownWindowLayer ? modelsOwnWindowGate : rejectOversizeLicenseBody);
+      }
+      if (ownWindowLayer) {
+        expect(route.stack.map((l) => l.handle)).toEqual([
+          mw,
+          modelsOwnWindowGate,
+          smallBodyParser,
+        ]);
+      }
       paths.push(...(Array.isArray(route.path) ? route.path : [route.path]));
     }
     expect(paths.sort()).toEqual(Object.keys(ROUTE_OWNED_BODY_PARSERS).sort());

@@ -22,12 +22,17 @@ import {
   registerModelsRoutes,
 } from "../../../src/server/models/api-routes.js";
 import {
+  __flushLocalModelAnnouncedForTests,
+  LOCAL_MODEL_ANNOUNCED_FILE_NAME,
+} from "../../../src/server/models/local-model-announced.js";
+import {
   __resetLocalModelSettingsForTests,
   isLocalModelEditingEnabled,
   LOCAL_MODEL_SETTINGS_FILE_NAME,
   localModelEditingState,
   primeLocalModelSettings,
 } from "../../../src/server/models/local-model-settings.js";
+import { webViewOnlyPolicy } from "../../../src/server/models/own-window.js";
 import {
   __resetModelRegistryForTests,
   getCachedModelsFile,
@@ -45,8 +50,10 @@ import {
   API_MODELS_LOCAL_SETTINGS,
   ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS,
   ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED,
+  ERROR_CODE_OWN_WINDOW_ONLY,
   type ModelsEntry,
   type ModelsFile,
+  OWN_WINDOW_ONLY_MESSAGE,
 } from "../../../src/shared/models/contract.js";
 import { readRegistrar } from "../../helpers/api-route-source.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
@@ -80,6 +87,7 @@ const ALLOWED_ORIGIN = `http://${TAURI_HOSTNAME}`;
 const passthrough = (_req: Request, _res: Response, next: NextFunction) => next();
 
 const deps = (over: Partial<ModelsRoutesDeps> = {}): ModelsRoutesDeps => ({
+  ownWindow: webViewOnlyPolicy(),
   keychain: createKeychain({
     service: KEYCHAIN_SERVICE_MODELS,
     backend: { get: () => null, set: () => {}, delete: () => false },
@@ -203,6 +211,10 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       ),
     );
     writeControl.failSettingsWrites = false;
+    // The test origin is Tandem's own window (#2404), so an On records itself
+    // in `local-model-announced.json` without the route waiting for that write.
+    // Let it land before the directory is removed.
+    await __flushLocalModelAnnouncedForTests();
     __resetLocalModelSettingsForTests();
     __resetModelRegistryForTests();
     _resetModelsReconcileGuardForTests();
@@ -256,6 +268,7 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       const base = await listen(makeApp({ live: true }));
       await postSetting(base, { editing: true });
 
+      await __flushLocalModelAnnouncedForTests();
       __resetLocalModelSettingsForTests(dir);
       primeLocalModelSettings();
       const again = await listen(makeApp({ live: true }));
@@ -290,13 +303,19 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       return answers;
     }
 
-    it("a missing Origin → 403 BAD_ORIGIN", async () => {
+    it("a missing Origin → 403 OWN_WINDOW_ONLY", async () => {
       const answers = await expectNoChange(
         (base) =>
           call(base, "POST", API_MODELS_LOCAL_SETTINGS, { json: { editing: true }, origin: null }),
         403,
       );
-      expect((answers[0].body as { code?: string }).code).toBe("BAD_ORIGIN");
+      for (const a of answers) {
+        expect(a.body).toEqual({
+          error: "FORBIDDEN",
+          code: ERROR_CODE_OWN_WINDOW_ONLY,
+          message: OWN_WINDOW_ONLY_MESSAGE,
+        });
+      }
     });
 
     it.each([
@@ -304,13 +323,24 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       "http://localhost:5173",
       "null",
       "http://127.0.0.1.evil.example",
-    ])("a foreign Origin (%s) → 403 BAD_ORIGIN", async (origin) => {
+      // #2404: origins the shared allowlist admits, and these routes do not.
+      "http://127.0.0.1:8080",
+      "http://tauri.localhost:8080",
+      "https://tauri.localhost:443",
+      "tauri://localhost:1",
+    ])("an Origin that is not Tandem's own window (%s) → 403 OWN_WINDOW_ONLY", async (origin) => {
       const answers = await expectNoChange(
         (base) =>
           call(base, "POST", API_MODELS_LOCAL_SETTINGS, { json: { editing: true }, origin }),
         403,
       );
-      expect((answers[0].body as { code?: string }).code).toBe("BAD_ORIGIN");
+      for (const a of answers) {
+        expect(a.body).toEqual({
+          error: "FORBIDDEN",
+          code: ERROR_CODE_OWN_WINDOW_ONLY,
+          message: OWN_WINDOW_ONLY_MESSAGE,
+        });
+      }
     });
 
     it("a foreign Origin cannot switch it OFF either", async () => {
@@ -473,9 +503,15 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       expect((await getSetting(base)).body).toEqual({ editing: true });
       // ...and the later build's file was not written.
       expect(fs.readFileSync(settingsFile).equals(before), "byte-identical").toBe(true);
-      expect(fs.readdirSync(dir)).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
+      // The one other file: the record that the user switched this on in
+      // Tandem's own window (#2404), which the test origin is.
+      await __flushLocalModelAnnouncedForTests();
+      expect(fs.readdirSync(dir).sort()).toEqual(
+        [LOCAL_MODEL_ANNOUNCED_FILE_NAME, LOCAL_MODEL_SETTINGS_FILE_NAME].sort(),
+      );
 
       // A restart of the server process reads the file, which says off to this build.
+      await __flushLocalModelAnnouncedForTests();
       __resetLocalModelSettingsForTests(dir);
       primeLocalModelSettings();
       const again = await listen(makeApp({ live: true }));
@@ -620,7 +656,12 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
     it("a settings POST with no models.json creates none", async () => {
       const base = await listen(makeApp({ live: true }));
       await postSetting(base, { editing: true });
-      expect(fs.readdirSync(dir)).toEqual([LOCAL_MODEL_SETTINGS_FILE_NAME]);
+      // Besides the setting itself, only the record that the user switched it
+      // on in Tandem's own window (#2404, the test origin). No models.json.
+      await __flushLocalModelAnnouncedForTests();
+      expect(fs.readdirSync(dir).sort()).toEqual(
+        [LOCAL_MODEL_ANNOUNCED_FILE_NAME, LOCAL_MODEL_SETTINGS_FILE_NAME].sort(),
+      );
     });
 
     it("GET /api/models does not carry the setting", async () => {
@@ -682,6 +723,7 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       expect(fs.readFileSync(settingsFile).equals(bytes)).toBe(true);
 
       // Nor after a restart that re-reads both files.
+      await __flushLocalModelAnnouncedForTests();
       __resetLocalModelSettingsForTests(dir);
       primeLocalModelSettings();
       expect(isLocalModelEditingEnabled()).toBe(true);

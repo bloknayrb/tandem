@@ -4,13 +4,16 @@ import {
   API_MODELS,
   ERROR_CODE_MODELS_BUSY,
   ERROR_CODE_MODELS_STALE,
+  ERROR_CODE_OWN_WINDOW_ONLY,
   type ModelsGetResponse,
   type ModelsPostBody,
   type ModelsPostResponse,
+  OWN_WINDOW_ONLY_MESSAGE,
 } from "../../shared/models/contract.js";
 import { reconcileModelsToServerOnce } from "../actions/reconcile-models-registry.js";
 import { createDefaultKeychainBackend } from "../keychain/keychain-backend.js";
 import { projectModelsFile } from "../models/project.js";
+import { modelsWriteWasRefused, noteModelsWriteRefused } from "../models/write-refusal.js";
 import type { AgentLabelSource } from "../utils/agentLabel.js";
 import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { API_BASE } from "../utils/fileUpload.js";
@@ -172,11 +175,16 @@ async function storeSecret(ref: string, plaintext: string): Promise<void> {
  *   - `stale` (409 MODELS_STALE)  — our `ifMatch` lost a race; re-GET + reconcile;
  *   - `busy`  (429 MODELS_BUSY)   — a concurrent write held the single-flight;
  *                                   TRANSIENT, a re-POST clears it (do NOT reload);
+ *   - `refused` (403 OWN_WINDOW_ONLY) — this page is not Tandem's own window
+ *                                   (#2404). Terminal for the whole page: roll
+ *                                   back, say why, and latch the shared
+ *                                   "blocked" state so the Models tab stops
+ *                                   offering what cannot be saved;
  *   - `failed` (400/500/network)  — terminal; roll back.
  * Folding `busy` into `failed` (the pre-review behavior) turned a retryable
  * two-window collision into silent data loss.
  */
-type PostFailure = "stale" | "busy" | "failed";
+type PostFailure = "stale" | "busy" | "refused" | "failed";
 type PostOutcome = { ok: true; etag: string } | { ok: false; kind: PostFailure };
 
 /** How many times to re-POST through a `busy` (single-flight) collision before giving up. */
@@ -208,6 +216,10 @@ async function postCurrent(): Promise<PostOutcome> {
   }
   if (res.status === 429 && parsed.code === ERROR_CODE_MODELS_BUSY) {
     return { ok: false, kind: "busy" };
+  }
+  if (res.status === 403 && parsed.code === ERROR_CODE_OWN_WINDOW_ONLY) {
+    noteModelsWriteRefused();
+    return { ok: false, kind: "refused" };
   }
   return { ok: false, kind: "failed" };
 }
@@ -312,6 +324,10 @@ async function writeThrough(apply: () => void): Promise<WriteOutcome> {
       }
       // `busy` (retries exhausted) is transient — tell the user to retry rather
       // than implying their change was rejected. `failed` is terminal.
+      // `refused`: the plain reason, for the surfaces outside the Models tab
+      // (the edit modal, the first-run picker); the tab shows its own notice
+      // once and hides this banner.
+      if (first.kind === "refused") return rollback(OWN_WINDOW_ONLY_MESSAGE);
       return rollback(
         first.kind === "busy"
           ? "Model registry is busy; please try again."
@@ -466,6 +482,12 @@ export function createModels(): ModelsState {
     },
     async addModel(entry, plaintextApiKey) {
       assertValidPatch(entry);
+      // Already refused once from this page (#2404): do not store a secret for
+      // a write that will be refused again.
+      if (modelsWriteWasRefused()) {
+        _saveError = OWN_WINDOW_ONLY_MESSAGE;
+        return null;
+      }
       const id = generateModelId();
       let apiKeyRef: string | undefined;
       if (plaintextApiKey && plaintextApiKey.length > 0) {
@@ -491,6 +513,10 @@ export function createModels(): ModelsState {
       assertValidPatch(patch);
       const existing = _models.find((m) => m.id === id);
       if (!existing) return false;
+      if (modelsWriteWasRefused()) {
+        _saveError = OWN_WINDOW_ONLY_MESSAGE;
+        return false;
+      }
       let newRef: string | undefined;
       if (plaintextApiKey !== undefined && plaintextApiKey.length > 0) {
         // Store the NEW secret but do NOT delete the old ref yet — a failed write

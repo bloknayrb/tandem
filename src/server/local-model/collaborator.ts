@@ -52,14 +52,20 @@ import { extractText } from "../mcp/document.js";
 import { readLiveMode } from "../mode.js";
 import {
   announceLocalModelChange,
+  announceStartupMismatch,
   answeringWasAnnounced,
+  finishFirstLitStart,
+  isFirstLitStart,
   recordAnsweringNone,
+  recordBaselineAnswering,
+  recordSetByUser,
+  retryUnsavedRecord,
 } from "../models/local-model-announced.js";
 import {
   type LocalModelEditingState,
   localModelEditingState,
 } from "../models/local-model-settings.js";
-import { onModelsFileChanged } from "../models/registry.js";
+import { type ModelsFileChange, onModelsFileChanged } from "../models/registry.js";
 import { pushNotification } from "../notifications.js";
 import { addStartupNotice } from "../startup-notices.js";
 import type { LocalModelConfig } from "./config.js";
@@ -159,25 +165,43 @@ export interface CollaboratorDeps {
    * the read, so a double that forgets it gets a chat-tier collaborator.
    */
   editingState?: () => LocalModelEditingState;
-  /** Be told when the saved registry changes; returns the unsubscribe. Absent
-   *  means never told. */
-  onModelsChanged?: (cb: () => void) => () => void;
+  /** Be told when the saved registry changes, and how (#2404: a change from
+   *  Tandem's own window is the user's and is not announced); returns the
+   *  unsubscribe. Absent means never told. A caller that passes no change is
+   *  treated as an unspecified source, which is announced. */
+  onModelsChanged?: (cb: (change?: ModelsFileChange) => void) => () => void;
   /** Which saved entry would answer the next chat, for the "it was changed"
    *  notice (#2404). Absent means that notice is never raised. */
   answering?: () => AnsweringLocalModel | null;
   /**
-   * The record of what a browser was actually told (`local-model-announced.ts`).
-   * With it, the model found at start-up is announced unless a browser was
-   * already told about exactly that model — so a change nobody saw cannot
-   * become the silent baseline by restarting the server. Absent (a test
-   * double), the start-up model is taken as the baseline and notices are
-   * raised live and for replay without being recorded.
+   * The record of what the user chose in Tandem's own window, or was told
+   * (`local-model-announced.ts`). With it, the model found at start-up raises
+   * the start-up notice unless the record names exactly that model — so a file
+   * changed underneath cannot become the silent baseline by restarting the
+   * server. Absent (a test double), the start-up model is taken as the
+   * baseline and notices are raised live and for replay without being recorded.
    */
   announced?: {
     wasAnnounced: (fingerprint: string) => boolean;
+    /** A live warning, for a change NOT made from Tandem's own window. */
     announce: (dedupKey: string, message: string, fingerprint: string) => void;
-    /** No local model answers any more: forget which one was announced. */
+    /** No local model answers any more: forget which one was recorded. */
     none: () => void;
+    /** The user's own change made this model answer, or edited it: record it
+     *  at once, no notice. Absent: nothing is recorded. */
+    setByUser?: (fingerprint: string) => void;
+    /** An own-window write that changed nothing recorded: retry a record
+     *  write that failed. */
+    retry?: () => void;
+    /** Is this the first start with the flag on? Absent: never. */
+    firstLitStart?: () => boolean;
+    /** Take the model found at a first lit start as the baseline. */
+    baseline?: (fingerprint: string) => void;
+    /** Start-up found a model answering that the record does not name.
+     *  Absent: the live notice is raised instead, as before #2404's fix. */
+    startupMismatch?: (fingerprint: string) => void;
+    /** Wiring is done: write the first-lit-start marker if it is missing. */
+    finishStart?: () => void;
   };
 }
 
@@ -199,6 +223,16 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
       announceLocalModelChange(dedupKey, message, { answering: fingerprint });
     },
     none: () => recordAnsweringNone(ANSWERING_CHANGED_NOTICE_KEY),
+    setByUser: (fingerprint) => {
+      recordSetByUser({ answering: fingerprint }, ANSWERING_CHANGED_NOTICE_KEY);
+    },
+    retry: retryUnsavedRecord,
+    firstLitStart: isFirstLitStart,
+    baseline: recordBaselineAnswering,
+    startupMismatch: (fingerprint) => {
+      announceStartupMismatch({ answering: fingerprint });
+    },
+    finishStart: finishFirstLitStart,
   },
 };
 
@@ -228,11 +262,34 @@ function quotableName(name: string): string {
 }
 
 /**
+ * What the user is told when their own change made a DIFFERENT model start
+ * answering without their touching that model (#2404): with A the default and
+ * B enabled, deleting A makes B answer. An info notice: it goes to the
+ * activity tray and expires by itself. Never the Endpoint or the model id.
+ */
+export function answeringSwitchedNotice(now: AnsweringLocalModel): string {
+  return `Your change means the local model ${quotableName(now.displayName)} now answers your chat.`;
+}
+
+/**
+ * Did this write add the entry, edit it, or make it the default? The route
+ * receives a whole replacement file, not an intent, so it is decided by
+ * comparing the file before and after. Both are the store's canonical form.
+ */
+export function entryTouchedByWrite(change: ModelsFileChange, entryId: string): boolean {
+  const before = change.before.models.find((m) => m.id === entryId);
+  const after = change.after.models.find((m) => m.id === entryId);
+  if (!before || !after) return true;
+  if (JSON.stringify(before) !== JSON.stringify(after)) return true;
+  return change.after.defaultModelId === entryId && change.before.defaultModelId !== entryId;
+}
+
+/**
  * What the user is told when the local model that would answer their chat is
- * changed (#2404). A saved model takes effect on the next chat with no
- * restart, and the route's origin and loopback gates do not prove the user
- * made the write — so the change is announced, for any writer, the user's own
- * Settings edit included. One text for every kind of change: it never carries
+ * changed by a write that did not come from Tandem's own window (#2404) — the
+ * development allowance; a change from Tandem's own window is the user's and
+ * is not announced. A saved model takes effect on the next chat with no
+ * restart, so such a change must not be silent. One text for every kind of change: it never carries
  * the Endpoint (which `GET /api/models` withholds from a non-loopback caller)
  * or the model id (which for llama.cpp is often a file path). Past tense,
  * because it stays in the activity tray.
@@ -752,34 +809,55 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   }
 
   /**
-   * Announce a change to WHICH model answers, or WHERE it points (#2404).
-   * Compares the entry, its Endpoint and its model id — not its display name,
-   * so a rename is not announced as a different model. Live through
-   * `pushNotification`, and registered for replay to a browser that connects
-   * later in this run, because a change made while no window was open is the
-   * one that must not go unseen. Never chat, never the event queue.
+   * A change to WHICH model answers, or WHERE it points (#2404). Compares the
+   * entry, its Endpoint and its model id — not its display name, so a rename is
+   * not a different model.
+   *
+   * A write from Tandem's own window is the user's own: no warning, and the
+   * record is set at once — but only when that write changed which model
+   * answers, or added, edited or defaulted the answering entry. A write that
+   * left the answering model alone records nothing and withdraws nothing, so
+   * the user's unrelated edit can never bless a model some other writer put
+   * there. The one thing their own change can do without their noticing is
+   * make a different, untouched model start answering; that raises one info
+   * notice (never for the one-time reconcile).
+   *
+   * Any other write is announced: live through `pushNotification`, and
+   * registered for replay to a browser that connects later in this run. Never
+   * chat, never the event queue.
    */
-  function noticeAnsweringChange(): void {
+  function noticeAnsweringChange(change?: ModelsFileChange): void {
     const now = deps.answering?.() ?? null;
     if (now === null) {
       // No model answers now. Forget the last one, so that a model answering
-      // again is announced even if it is the very same entry: re-enabling a
-      // model the user switched off is a change they must be able to see. The
-      // user's own off-and-on therefore raises a notice too.
+      // again is compared afresh even if it is the very same entry.
       if (lastAnswering !== null) deps.announced?.none();
       lastAnswering = null;
       return;
     }
     const before = lastAnswering;
     lastAnswering = now;
-    if (
-      before !== null &&
-      before.entryId === now.entryId &&
-      before.endpoint === now.endpoint &&
-      before.modelId === now.modelId
-    ) {
+    const identityChanged =
+      before === null ||
+      before.entryId !== now.entryId ||
+      before.endpoint !== now.endpoint ||
+      before.modelId !== now.modelId;
+    if (change?.source === "own-window") {
+      const touched = entryTouchedByWrite(change, now.entryId);
+      if (identityChanged || touched) deps.announced?.setByUser?.(answeringFingerprint(now));
+      else deps.announced?.retry?.();
+      if (identityChanged && !touched && !change.reconcile) {
+        pushNotification({
+          id: generateMessageId(),
+          type: "general-error",
+          severity: "info",
+          message: answeringSwitchedNotice(now),
+          timestamp: Date.now(),
+        });
+      }
       return;
     }
+    if (!identityChanged) return;
     announceAnswering(now);
   }
 
@@ -807,8 +885,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
    * then broken again is reported again even when no chat arrived while it was
    * fixed, and Solo or licence-refused chats cannot keep a stale latch alive.
    */
-  function onModelsChanged(): void {
-    noticeAnsweringChange();
+  function onModelsChanged(change?: ModelsFileChange): void {
+    noticeAnsweringChange(change);
     if (noticedStateKey === null) return;
     const now = deps.resolveConfig() ? null : (deps.diagnose?.() ?? null);
     if (now?.stateKey !== noticedStateKey) noticedStateKey = null;
@@ -880,11 +958,12 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   // always early-returns in test builds). Nothing is resolved here: the config
   // is read per chat event.
   function wire(): void {
-    // The baseline for the "it was changed" notice. The model found at
-    // start-up is NOT assumed to be what the user last left: it is announced
-    // unless a browser was already told about exactly this model. Otherwise a
-    // change made with no window open, followed by a restart, would start as
-    // the silent baseline — and the same local caller can cause both.
+    // The start-up check (#2404). The model found at start-up is NOT assumed
+    // to be what the user last left: unless the record names exactly this
+    // model — because the user chose it in Tandem's own window, or was told —
+    // the start-up notice is raised. Otherwise a file changed underneath
+    // would start as the silent baseline. The one exception is the first
+    // start with the flag on, which takes what it finds as the baseline.
     lastAnswering = deps.answering?.() ?? null;
     if (lastAnswering === null) {
       // Nothing answers at start-up: forget which model the user was told
@@ -898,8 +977,12 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       deps.announced &&
       !deps.announced.wasAnnounced(answeringFingerprint(lastAnswering))
     ) {
-      announceAnswering(lastAnswering);
+      const fingerprint = answeringFingerprint(lastAnswering);
+      if (deps.announced.firstLitStart?.()) deps.announced.baseline?.(fingerprint);
+      else if (deps.announced.startupMismatch) deps.announced.startupMismatch(fingerprint);
+      else announceAnswering(lastAnswering);
     }
+    deps.announced?.finishStart?.();
     stopWatchingModels = deps.onModelsChanged?.(onModelsChanged) ?? null;
     subscriberCb = onEvent;
     // "internal" is passed EXPLICITLY, not left to the default. Two correctness

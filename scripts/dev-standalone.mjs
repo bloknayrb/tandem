@@ -158,6 +158,19 @@ function attachUnexpectedExit(child, label, children, shutdownState) {
   });
 }
 
+/**
+ * The page this script serves is Vite's, on :5173 — not Tandem's own window, so
+ * the server refuses to let it change the local-model settings (#2404) unless
+ * it is told, in its own environment, that this one origin may. Only the SERVER
+ * child gets the variable, and a value the developer already exported wins.
+ * `vite.config.ts` pins the host and port (`strictPort`), so the origin is fixed.
+ */
+export const VITE_DEV_ORIGIN = "http://127.0.0.1:5173";
+export function withModelsDevOrigin(env) {
+  if (env.TANDEM_MODELS_DEV_ORIGIN !== undefined) return env;
+  return { ...env, TANDEM_MODELS_DEV_ORIGIN: VITE_DEV_ORIGIN };
+}
+
 export async function launchStandalone({
   env = process.env,
   fetchImpl = fetch,
@@ -172,7 +185,7 @@ export async function launchStandalone({
 
   const client = spawnImpl(binCommand("vite"), [], { env, cwd: process.cwd() });
   const server = spawnImpl(binCommand("tsx"), ["watch", "src/server/index.ts"], {
-    env,
+    env: withModelsDevOrigin(env),
     cwd: process.cwd(),
   });
   children.push(client, server);

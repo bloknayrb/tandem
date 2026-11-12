@@ -14,6 +14,14 @@ interface Props {
    * than the tab banner because the modal is the active surface during a save.
    */
   error?: string | null;
+  /**
+   * The server will not take a save from this page (#2404: only Tandem's own
+   * window can change these settings). Save stays in the dialog and focusable
+   * (`aria-disabled`, not `disabled`, which would drop keyboard focus) but does
+   * nothing, by click or by Enter; `error` carries the reason. The dialog is
+   * kept open so nothing the user typed is thrown away.
+   */
+  saveUnavailable?: boolean;
   onCancel: () => void;
   /**
    * Save handler.
@@ -41,7 +49,7 @@ interface Props {
   }) => void;
 }
 
-const { entry, error, onCancel, onSave }: Props = $props();
+const { entry, error, saveUnavailable = false, onCancel, onSave }: Props = $props();
 
 // v1.0 ships LOCAL providers only; cloud BYO keys are v1.1. `disabled` is
 // derived from the contract's `isLocalProvider` (single source of truth for the
@@ -110,7 +118,7 @@ const canSave = $derived(
 
 function handleSubmit(e: SubmitEvent) {
   e.preventDefault();
-  if (!canSave) return;
+  if (!canSave || saveUnavailable) return;
 
   // Build the payload. plaintextApiKey is set ONLY when the user typed a
   // new key (add mode or "Replace key" path). In no-op edit, the field is
@@ -320,6 +328,8 @@ function startReplacingKey() {
         class="mem-btn mem-btn--primary"
         data-testid="model-edit-save"
         disabled={!canSave}
+        aria-disabled={saveUnavailable}
+        style={saveUnavailable ? "opacity: 0.5; cursor: not-allowed;" : undefined}
       >
         {isEditing ? "Save changes" : "Add model"}
       </button>

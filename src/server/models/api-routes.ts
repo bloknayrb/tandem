@@ -24,9 +24,19 @@
  * proxying an outbound request. Only the opaque `apiKeyRef` is persisted; the
  * registry file itself holds no plaintext (the schema is `.strict()`).
  *
- * All routes mirror `src/server/integrations/api-routes.ts`'s gating — origin
- * allowlist + loopback-for-mutation, and (registry route) a `.strict()`
- * safeParse defense-in-depth. `POST` (not `PUT`): `Access-Control-Allow-Methods`
+ * **The two POSTs that decide what a local model does accept a request only
+ * from Tandem's own window** (#2404): `POST /api/models` and
+ * `POST /api/models/local-settings` test the browser-set `Origin` against
+ * Tandem's own page origins exactly (`own-window.ts`), not against the shared
+ * allowlist, which admits any `127.0.0.1` port. The decision is made before
+ * the body is read (the pre-parse router runs the same test) and again in the
+ * handler, which is the authoritative call and learns how the write got in.
+ * The secrets routes stay on the shared allowlist: a stored key does not change
+ * which model answers or where text is sent.
+ *
+ * The other mutating routes mirror `src/server/integrations/api-routes.ts`'s
+ * gating — origin allowlist + loopback-for-mutation, and (registry route) a
+ * `.strict()` safeParse defense-in-depth. `POST` (not `PUT`): `Access-Control-Allow-Methods`
  * omits PUT, so a PUT preflight from the cross-origin `tauri.localhost` client
  * would be rejected. The keychain is scoped to a separate service
  * (`tandem-models`, `KEYCHAIN_SERVICE_MODELS`) so refs can't cross over with
@@ -61,6 +71,7 @@ import {
 import type { Keychain } from "../integrations/keychain.js";
 import type { Handler } from "../mcp/routes/_shared.js";
 import { isLocalModelEditingEnabled, setLocalModelEditing } from "./local-model-settings.js";
+import { type OwnWindowPolicy, refuseNotOwnWindow } from "./own-window.js";
 import {
   getCachedModelsFile,
   getModelsEtag,
@@ -74,6 +85,12 @@ export const API_MODELS_SECRET = "/api/models/secrets/:ref";
 
 export interface ModelsRoutesDeps {
   keychain: Keychain;
+  /**
+   * Decides whether a request to one of the two settings POSTs comes from
+   * Tandem's own window (#2404). Required: a registration without it would
+   * have to fall back to something, and every fallback is wider.
+   */
+  ownWindow: OwnWindowPolicy;
   /**
    * Are the local-model settings routes live? Defaults to `BYO_MODELS_ENABLED`,
    * so in a release they answer 404 and neither read nor write anything while
@@ -106,17 +123,24 @@ export function registerModelsRoutes(
 ): void {
   app.options(API_MODELS, mw);
   app.get(API_MODELS, mw, makeGetModelsHandler());
-  app.post(API_MODELS, mw, largeBody, makePostModelsHandler());
+  app.post(API_MODELS, mw, largeBody, makePostModelsHandler(deps.ownWindow));
   app.options(API_MODELS_SECRET, mw);
   app.post(API_MODELS_SECRET, mw, largeBody, makePostSecretHandler(deps));
   app.delete(API_MODELS_SECRET, mw, makeDeleteSecretHandler(deps));
-  // No `largeBody`: the body is one boolean, read by the app's default JSON
-  // parser. The OPTIONS registration is what answers the preflight — the
+  // The body is one boolean. In the server it is read by the pre-parse router
+  // (100 kB), after that router's own-window test; `largeBody` here is the
+  // backstop that keeps this registration in `ROUTE_OWNED_BODY_PARSERS`'s
+  // table. The OPTIONS registration is what answers the preflight — the
   // desktop WebView's JSON POST is cross-origin, and the 204 comes from `mw`.
   const settingsLive = deps.localModelSettingsEnabled ?? BYO_MODELS_ENABLED;
   app.options(API_MODELS_LOCAL_SETTINGS, mw);
   app.get(API_MODELS_LOCAL_SETTINGS, mw, makeGetLocalSettingsHandler(settingsLive));
-  app.post(API_MODELS_LOCAL_SETTINGS, mw, makePostLocalSettingsHandler(settingsLive));
+  app.post(
+    API_MODELS_LOCAL_SETTINGS,
+    mw,
+    largeBody,
+    makePostLocalSettingsHandler(settingsLive, deps.ownWindow),
+  );
 }
 
 /**
@@ -142,8 +166,12 @@ function makeGetLocalSettingsHandler(live: boolean): Handler {
 /**
  * `POST /api/models/local-settings` (#1123) — body `{ editing: boolean }`.
  *
- * Origin, then loopback, before anything else (a `text/plain` simple request
- * carries no allowlisted Origin and no parsed body). The body must hold the
+ * Tandem's own window, then loopback, before anything else (#2404): the
+ * `Origin` must be exactly one of Tandem's own page origins, so a page on
+ * another loopback port is refused whatever it sends, and Off is refused from
+ * there exactly as On is — an exemption for Off would mean reading the body
+ * before the origin decision. A `text/plain` simple request from Tandem's own
+ * page carries no parsed body and is answered 400. The body must hold the
  * boolean itself; nothing is coerced. The server never trusts a client's word
  * per request for what the local model may do: this route is the only writer,
  * and the collaborator reads the result server-side.
@@ -155,9 +183,13 @@ function makeGetLocalSettingsHandler(live: boolean): Handler {
  * Not licence-gated: it starts nothing and reaches no model. The local model
  * itself is refused per chat event in `collaborator.ts`.
  */
-function makePostLocalSettingsHandler(live: boolean): Handler {
+function makePostLocalSettingsHandler(live: boolean, ownWindow: OwnWindowPolicy): Handler {
   return async (req: Request, res: Response) => {
-    if (assertOriginAllowlisted(req, res, API_MODELS_LOCAL_SETTINGS)) return;
+    const source = ownWindow.classify(req);
+    if (source === null) {
+      refuseNotOwnWindow(res);
+      return;
+    }
     if (assertLoopbackForMutation(req, res)) return;
     if (!live) {
       res.status(404).json({ error: "NOT_FOUND" });
@@ -172,7 +204,7 @@ function makePostLocalSettingsHandler(live: boolean): Handler {
       });
       return;
     }
-    const result = await setLocalModelEditing(editing);
+    const result = await setLocalModelEditing(editing, source);
     const body: LocalModelSettingsPostResponse = result.persisted
       ? result
       : { ...result, code: ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED };
@@ -228,7 +260,8 @@ function makeGetModelsHandler(): Handler {
 
 /**
  * Whole-file replace of the server-side registry (#1123 M2). Body is an
- * envelope `{ file, ifMatch }`: gated origin → loopback → `.strict()` safeParse
+ * envelope `{ file, ifMatch, reconcile? }`: Tandem's own window (#2404, see the
+ * module header) → loopback → `.strict()` safeParse
  * of `file` (defense-in-depth) → optimistic-concurrency check on `ifMatch`
  * (matching `POST /api/integrations`'s gating shape). `ifMatch` is the ETag the
  * client last saw from `GET`; a stale token → 409 so the client reconciles
@@ -237,12 +270,24 @@ function makeGetModelsHandler(): Handler {
  * write → 429. Deliberately NOT license-gated — a registry-config write is not
  * an AI action (the local model itself is refused per run in
  * `collaborator.ts`, #1521).
+ *
+ * This route answers while `BYO_MODELS_ENABLED` is off, because the client's
+ * one-time reconcile posts through it while dark; so the own-window test is a
+ * live change in a dark build. How the write got in travels with it to the
+ * registry's change listeners (`meta`), which is where the notices are decided
+ * — the listeners run inside the persist call, before this handler regains
+ * control. The handler itself never touches the record of what the user was
+ * told: it runs dark, and that record must not.
  */
-function makePostModelsHandler(): Handler {
+function makePostModelsHandler(ownWindow: OwnWindowPolicy): Handler {
   return async (req: Request, res: Response) => {
-    if (assertOriginAllowlisted(req, res, API_MODELS)) return;
+    const source = ownWindow.classify(req);
+    if (source === null) {
+      refuseNotOwnWindow(res);
+      return;
+    }
     if (assertLoopbackForMutation(req, res)) return;
-    const envelope = req.body as { file?: unknown; ifMatch?: unknown };
+    const envelope = req.body as { file?: unknown; ifMatch?: unknown; reconcile?: unknown };
     if (typeof envelope?.ifMatch !== "string") {
       res.status(400).json({
         error: "BAD_REQUEST",
@@ -261,7 +306,11 @@ function makePostModelsHandler(): Handler {
       return;
     }
     try {
-      const result = await persistModelsFileIfMatch(parsed.data, envelope.ifMatch);
+      const result = await persistModelsFileIfMatch(parsed.data, envelope.ifMatch, {
+        source,
+        // Only the literal `true`, and it only ever suppresses an info notice.
+        reconcile: envelope.reconcile === true,
+      });
       if (result.ok) {
         const ok: ModelsPostResponse = { etag: result.etag };
         res.status(200).json(ok);

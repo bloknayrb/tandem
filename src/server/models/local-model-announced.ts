@@ -1,61 +1,75 @@
 /**
- * `local-model-announced.json` — what a browser has actually been told about the
- * two things #2404 makes visible: that local models may comment, and which
- * local model answers chat (#1123, register entry in docs/security.md).
+ * `local-model-announced.json` — what the user last set from Tandem's own
+ * window, or was told, about the two things a local-model change can do
+ * without their noticing: that local models may comment, and which local model
+ * answers chat (#1123, #2404; register entry #2410 in docs/security.md).
  *
- * Both are changed through routes whose origin and loopback gates do not prove
- * the user made the request, so each change is announced in the app. An
- * in-memory notice is not enough on its own: the same local actor that can call
- * those routes can also restart the server (`POST /api/shutdown` takes the same
- * callers), and after a restart an in-memory "already announced" is gone — the
- * changed state would simply be what the server starts with.
+ * **Who can change those settings now.** The two routes accept a request only
+ * from Tandem's own window (`own-window.ts`), so a web page on another
+ * loopback port can no longer change either. A change from Tandem's own window
+ * is the user's: it raises no warning, and the record is updated to match it
+ * at once (`recordSetByUser`). What is left that can make the settings on disk
+ * differ from this record:
+ *  - a process writing `models.json` or `local-model-settings.json` directly;
+ *  - data from another build, or a restored copy of Tandem's data;
+ *  - a record write that failed after the user's own change;
+ *  - a write admitted through the development allowance
+ *    (`TANDEM_MODELS_DEV_ORIGIN`), which is NOT an own-window write and is
+ *    announced as it happens, as #2403 built it (`announceLocalModelChange`).
  *
- * So this file records the state as of the last announcement that was sent to
- * **Tandem's own window**, and start-up compares against it: anything saved
- * that Tandem's window was never sent is announced again, and held for the
- * first such window to connect. "Tandem's own window" is a notify stream the
- * route judged to be opened by the desktop WebView or by the page Tandem
- * serves (`isTandemOwnWindow`), either connected when the notice was raised or
- * sent the replay later. Any other client of the stream — which is an
- * unauthenticated loopback GET, so a page on another `127.0.0.1` port can open
- * it — receives notices but does not count: otherwise the caller that made the
- * change could mark it as seen and then restart the server.
+ * **The start-up check.** Start-up compares the settings it finds with this
+ * record and, where they differ, raises ONE notice (`announceStartupMismatch`)
+ * whose copy claims no more than is known. It is held for the first of
+ * Tandem's own windows to connect, and "told" is recorded when it is written
+ * to such a stream (`isTandemOwnWindow` in the notify-stream route). That is
+ * still a stream write, not a person reading, and it is acceptable now for a
+ * different reason than before: a page on another port can no longer create
+ * the mismatch, and whoever can — a process writing the files — could rewrite
+ * this record too. The one exception is the development allowance: a page on
+ * the allowed port can make a change and then open Tandem's page in a pop-up,
+ * whose stream counts. The register says so.
  *
- * What this does not cover, and the register says so:
- *  - a local PROCESS can send whatever headers it likes, and can write this
- *    file and `models.json` directly. It is outside what any notice can bound;
- *  - a page on another loopback port can make Tandem's OWN page open the
- *    stream for it, by framing it (the served client sends no
- *    `frame-ancestors`) or opening it in a pop-up; that stream is same-origin
- *    and counts. The notice then sits in that browser profile's activity tray,
- *    but the desktop window is never sent it. Closing this needs a
- *    `frame-ancestors` policy and "seen" recorded on a user acknowledgement
- *    rather than on a stream write — decided 2026-11-11, owed before the
- *    flip in its own change (#2404, an open finding until then);
- *  - `http://tauri.localhost` is taken as the desktop WebView, but a browser
- *    resolves `*.localhost` to loopback, so content served on port 80 of this
- *    computer can present that origin.
+ * The notice's parts are kept CURRENT while it waits: a later change to which
+ * model answers replaces the fingerprint it will record, and Off or "no model
+ * answers" removes its part. So what delivery records is the state as of
+ * delivery, never a value captured at boot — otherwise the user's own change,
+ * made before their window's stream connected, would be overwritten by the
+ * older value and announced, falsely, at the next start.
  *
- * The read fails toward announcing: a missing, unreadable or malformed file
- * reads as "nothing was ever announced", so the cost of losing it is one
- * repeated notice, never a silent change. A failed write that was RECORDING a
- * notice has the same cost. A failed write that was CLEARING the record (Off,
- * or no model answering) is worse: the file still says "told", so the same
- * state switched back on with no window open would not be re-announced after
- * a restart. Two things narrow that. Start-up clears the record again whenever
- * commenting is off or no local model answers (`primeLocalModelSettings`, the
- * collaborator's `wire`). And a write that failed is remembered (`unsaved`) and
- * tried again by the next announcement, which is the moment a stale "told"
- * would start to matter. What is left is a disk that refuses every one of
- * those writes, which is logged and not otherwise bounded.
+ * **The first start with the flag on** takes the answering model it finds as
+ * the baseline, so nobody is warned at the flip for something they did not do:
+ * a dark build's one-time reconcile writes `models.json` from the browser's
+ * stored models, and nothing records it, because nothing here runs while dark.
+ * "First" is a durable marker of its own (`local-model-baseline.json`), never
+ * inferred from a missing record alone: the baseline is taken only when the
+ * marker does not exist AND no record exists (both absent is the upgrading
+ * cohort's state). Anything else found at either path — a file of any content,
+ * a directory, a link, an unreadable entry — counts as present, so a lost
+ * record or a lost marker fails toward announcing. The baseline covers the
+ * answering model only: commenting found switched on at a first lit start is
+ * still announced, because no dark build can write that file. The marker is
+ * written at the end of the collaborator's wiring, after the baseline record
+ * itself reached the disk; a crash before that repeats the baseline at the
+ * next start, which is harmless. It is also written in a lit stdio-mode start,
+ * where no window exists; that is harmless too.
+ *
+ * The read fails toward announcing: a missing, unreadable, linked, oversized,
+ * malformed or newer-version file reads as "nothing was ever recorded". A
+ * failed write is remembered (`unsaved`) and tried again by the next change or
+ * announcement — including one that arrives while the failing write is still
+ * in flight — and start-up clears the record again whenever commenting is off
+ * or no local model answers. What is left is a disk that refuses every one of
+ * those writes, which is logged and costs a repeated notice.
  *
  * It lives in `models/` so that both the settings module and the collaborator
  * can use it (a file outside `local-model/` may not import the engine). A dark
  * build never reaches it: its callers are the settings setter and prime, and
- * the collaborator's wiring, all behind `BYO_MODELS_ENABLED`. Nothing here
+ * the collaborator's wiring, all behind `BYO_MODELS_ENABLED`. The route
+ * handlers never call it — `POST /api/models` runs while dark. Nothing here
  * touches the disk at import.
  */
 
+import fs from "node:fs";
 import path from "node:path";
 
 import type { TandemNotification } from "../../shared/types.js";
@@ -70,13 +84,21 @@ import {
 } from "../startup-notices.js";
 
 export const LOCAL_MODEL_ANNOUNCED_FILE_NAME = "local-model-announced.json";
+/** Written once, at the first start with the flag on. See the module header. */
+export const LOCAL_MODEL_BASELINE_FILE_NAME = "local-model-baseline.json";
 const VERSION = 1;
 const MAX_BYTES = 4096;
 
+/** Replay key and text of the start-up notice (#2404). The text claims no
+ *  more than is known, and carries no endpoint, path or credential. */
+export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
+export const SETTINGS_CHANGED_NOTICE =
+  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
+
 interface Announced {
-  /** Has a browser been told that commenting is on? */
+  /** Did the user switch commenting on themselves, or were they told it is on? */
   editing: boolean;
-  /** Fingerprint of the answering model a browser was last told about. */
+  /** Fingerprint of the answering model the user last chose or was told about. */
   answering: string | null;
 }
 
@@ -85,9 +107,26 @@ let announced: Announced | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
 /** The last write failed, so the file may say more than the record does. */
 let unsaved = false;
+/** Writes queued and not yet settled. One of them may still fail. */
+let inFlight = 0;
+/** What the pending start-up notice will record when it is delivered. */
+let startupParts: Partial<Announced> | null = null;
+/** Memo of the first-lit-start decision, and whether the marker was missing. */
+let firstLit: boolean | null = null;
+let markerMissing = false;
+let markerQueued = false;
+let markerWrite: Promise<void> = Promise.resolve();
+
+function dir(): string {
+  return basePath ?? resolveAppDataDir();
+}
 
 function filePath(): string {
-  return path.join(basePath ?? resolveAppDataDir(), LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+  return path.join(dir(), LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+}
+
+function markerPath(): string {
+  return path.join(dir(), LOCAL_MODEL_BASELINE_FILE_NAME);
 }
 
 function load(): Announced {
@@ -111,13 +150,17 @@ function load(): Announced {
   return fresh;
 }
 
-function persist(): void {
-  const snapshot = { version: VERSION, ...load() };
+/** Queue a write of the record as it stands WHEN THE WRITE RUNS, so a retry
+ *  never publishes an older state. Resolves to whether it reached the disk. */
+function persist(): Promise<boolean> {
   const file = filePath();
-  writeQueue = writeQueue
+  inFlight += 1;
+  const run = writeQueue
     .then(async () => {
+      const snapshot = { version: VERSION, ...load() };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
       unsaved = false;
+      return true;
     })
     .catch((err: unknown) => {
       unsaved = true;
@@ -127,35 +170,126 @@ function persist(): void {
           err instanceof Error ? err.message : String(err)
         }).`,
       );
+      return false;
+    })
+    .finally(() => {
+      inFlight -= 1;
     });
+  writeQueue = run.then(() => undefined);
+  return run;
+}
+
+/** Is the file possibly behind the record? True while a write is unsettled
+ *  too: it may yet fail, and nothing later would know to try again. */
+function needsRetry(): boolean {
+  return unsaved || inFlight > 0;
 }
 
 function record(change: Partial<Announced>): void {
   Object.assign(load(), change);
-  persist();
+  void persist();
 }
 
-/** Was a browser already told that commenting is on? */
+/** Keep the pending start-up notice's answering part current (module header). */
+function refreshStartupAnswering(fingerprint: string): void {
+  if (startupParts && Object.hasOwn(startupParts, "answering")) {
+    startupParts.answering = fingerprint;
+  }
+}
+
+function dropStartupPart(part: keyof Announced): void {
+  if (!startupParts || !Object.hasOwn(startupParts, part)) return;
+  delete startupParts[part];
+  if (Object.keys(startupParts).length === 0) {
+    startupParts = null;
+    removeStartupNotice(SETTINGS_CHANGED_NOTICE_KEY);
+  }
+}
+
+/** Was commenting switched on by the user, or were they told it is on? */
 export function editingOnWasAnnounced(): boolean {
   return load().editing;
 }
 
-/** Was a browser already told about this answering model (by fingerprint)? */
+/** Did the user choose this answering model, or were they told about it? */
 export function answeringWasAnnounced(fingerprint: string): boolean {
   return load().answering === fingerprint;
 }
 
+function exists(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch (err) {
+    // Only "there is nothing here" is absent. Anything else found, or any
+    // other failure to look, counts as present: fail toward announcing.
+    return (err as NodeJS.ErrnoException)?.code !== "ENOENT";
+  }
+}
+
 /**
- * Raise one of the two notices: live to every connected browser, and
- * registered for replay to one that connects later in this run. The record on
- * disk is updated only once the notice has actually been written to a stream,
- * so a change nobody saw is announced again after a restart.
+ * Is this the first start with the flag on? Decided once per process, from
+ * `lstat` alone: true only when neither the marker nor the record exists.
+ * Called at the top of `primeLocalModelSettings`, before anything could write
+ * either file, and consulted by the collaborator's wiring.
  */
-export function announceLocalModelChange(
-  dedupKey: string,
-  message: string,
-  delivered: Partial<Announced>,
-): TandemNotification {
+export function isFirstLitStart(): boolean {
+  if (firstLit === null) {
+    markerMissing = !exists(markerPath());
+    firstLit = markerMissing && !exists(filePath());
+  }
+  return firstLit;
+}
+
+/**
+ * The end of the collaborator's wiring. Writes the marker if it was missing —
+ * at a first lit start only after the record itself (the baseline, even an
+ * empty one) reached the disk, so either file alone ends the baseline and a
+ * crash in between cannot leave a marker with no record.
+ */
+export function finishFirstLitStart(): void {
+  const first = isFirstLitStart();
+  if (!markerMissing || markerQueued) return;
+  markerQueued = true;
+  const file = markerPath();
+  const recorded = first ? persist() : Promise.resolve(true);
+  markerWrite = recorded.then(async (ok) => {
+    if (!ok) return;
+    try {
+      await atomicWriteConfigFile(file, `${JSON.stringify({ version: VERSION }, null, 2)}\n`);
+    } catch (err) {
+      console.error(
+        `[tandem] ${LOCAL_MODEL_BASELINE_FILE_NAME} could not be written (${
+          err instanceof Error ? err.message : String(err)
+        }).`,
+      );
+    }
+  });
+}
+
+/** The first lit start found this model answering: take it as the baseline. */
+export function recordBaselineAnswering(fingerprint: string): void {
+  record({ answering: fingerprint });
+}
+
+/**
+ * A change accepted from Tandem's own window: the user's own. No notice; the
+ * record matches it at once. `withdrawKey` names a pending LIVE notice that
+ * this change makes stale (the answering one names a model).
+ */
+export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string): void {
+  if (withdrawKey !== undefined) removeStartupNotice(withdrawKey);
+  if (typeof change.answering === "string") refreshStartupAnswering(change.answering);
+  record(change);
+}
+
+/** An own-window write that changed nothing recorded here: nothing to record,
+ *  but a record write that failed (or may yet fail) is tried again now. */
+export function retryUnsavedRecord(): void {
+  if (needsRetry()) void persist();
+}
+
+function raise(dedupKey: string, message: string, onDelivered: () => void): TandemNotification {
   const notice: TandemNotification = {
     id: generateMessageId(),
     type: "general-error",
@@ -165,43 +299,77 @@ export function announceLocalModelChange(
     timestamp: Date.now(),
   };
   addStartupNotice(notice);
-  onStartupNoticeDelivered(dedupKey, () => record(delivered));
+  onStartupNoticeDelivered(dedupKey, onDelivered);
   // Count BEFORE pushing: a stream that connects during the push gets the
   // replay instead, and reports its own delivery.
   const listening = ownWindowSubscriberCount() > 0;
   pushNotification(notice);
-  if (listening) record(delivered);
+  if (listening) onDelivered();
   // Nobody was sent this, so nothing new is recorded — but if an earlier write
-  // failed, the file may still say "told" about exactly this state (a failed
-  // clear on Off, then On again). Write the record as it stands, or the next
-  // start would read the stale file and stay silent.
-  else if (unsaved) persist();
+  // failed, or is still in flight and may fail, the file may still say "told"
+  // about exactly this state (a failed clear on Off, then On again). Write the
+  // record as it stands, or the next start would read the stale file and stay
+  // silent.
+  else if (needsRetry()) void persist();
   return notice;
 }
 
-/** No local model would answer any more: forget which one the user was told
- *  about, so that one answering again — the same one included — is announced.
- *  Re-enabling a model the user disabled is a change they must be able to see. */
+/**
+ * Raise one of the two LIVE notices, for a change that was not made from
+ * Tandem's own window (the development allowance): live to every connected
+ * browser, and registered for replay to one that connects later in this run.
+ * The record on disk is updated only once the notice has actually been written
+ * to one of Tandem's own windows, so a change nobody saw is announced again
+ * after a restart.
+ */
+export function announceLocalModelChange(
+  dedupKey: string,
+  message: string,
+  delivered: Partial<Announced>,
+): TandemNotification {
+  if (typeof delivered.answering === "string") refreshStartupAnswering(delivered.answering);
+  return raise(dedupKey, message, () => record(delivered));
+}
+
+/**
+ * Start-up found the settings on disk differing from the record. Both callers
+ * (commenting on; a model answering) merge into ONE notice.
+ */
+export function announceStartupMismatch(part: Partial<Announced>): TandemNotification {
+  startupParts = { ...(startupParts ?? {}), ...part };
+  return raise(SETTINGS_CHANGED_NOTICE_KEY, SETTINGS_CHANGED_NOTICE, () => {
+    // The parts as they stand NOW, not as they were when this was raised.
+    if (startupParts) record({ ...startupParts });
+  });
+}
+
+/** No local model would answer any more: forget which one the user chose or
+ *  was told about, so that one answering again — the same one included — is
+ *  compared afresh. */
 export function recordAnsweringNone(dedupKey?: string): void {
   // Withdraw a notice still waiting to be replayed: it names a model that no
   // longer answers, and its delivery would record that model as told.
   if (dedupKey !== undefined) removeStartupNotice(dedupKey);
+  dropStartupPart("answering");
   if (load().answering !== null) record({ answering: null });
 }
 
 /**
  * Commenting was switched off. Off needs no announcement, so the pending
  * replay is withdrawn and the record cleared at once — the next On is then
- * announced afresh.
+ * compared afresh.
  */
 export function recordEditingOff(dedupKey: string): void {
   removeStartupNotice(dedupKey);
+  dropStartupPart("editing");
   if (load().editing) record({ editing: false });
 }
 
-/** Wait for queued writes. Tests only. */
-export function __flushLocalModelAnnouncedForTests(): Promise<void> {
-  return writeQueue;
+/** Wait for queued writes, the marker included. Tests only. */
+export async function __flushLocalModelAnnouncedForTests(): Promise<void> {
+  await writeQueue;
+  await markerWrite;
+  await writeQueue;
 }
 
 /** Test seam: point the module at a temp dir (or reset it) and forget state. */
@@ -209,5 +377,11 @@ export function __resetLocalModelAnnouncedForTests(base?: string): void {
   basePath = base ?? null;
   announced = null;
   unsaved = false;
+  inFlight = 0;
+  startupParts = null;
+  firstLit = null;
+  markerMissing = false;
+  markerQueued = false;
+  markerWrite = Promise.resolve();
   writeQueue = Promise.resolve();
 }

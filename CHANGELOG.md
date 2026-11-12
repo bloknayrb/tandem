@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ready for v1.0: everyone walks through setup once (#2198).** This does nothing before 1.0. The first time you start Tandem 1.0, the setup wizard opens with your current setup filled in. **Keep this setup** confirms it in one click (or **Continue without connecting** if nothing is set up); closing the wizard brings it back the next time you start Tandem, until you keep or connect. It also asks when Tandem's own Claude should start, and doesn't start it on its own until you have kept or connected; a chat message or a Start click still starts it.
 - **Ready for v1.0: the first run of 1.0 greets everyone once more (#2197).** This does nothing before 1.0. Tandem's own Claude sends its one-time hello again on the first run of 1.0, even if it already greeted you in an earlier version.
 
+### Security
+
+- **Tandem's browser page can no longer be embedded inside another page (#2404).** The page Tandem serves at its `http://127.0.0.1` address now tells the browser not to load it in a frame. If you had embedded it (an editor's built-in browser panel that uses frames may be one case; unverified), you will see the browser's refusal page there instead: open Tandem in an ordinary browser tab at its `http://127.0.0.1` address. The desktop app is not affected.
+- **Saved model settings can only be changed from Tandem's own window (#2404).** The request that saves the list of models is now accepted only from the Tandem desktop app or from the page Tandem itself serves, and refused from any other web page on this computer, which the earlier check let through. Nothing changes in how Tandem behaves: local models are not switched on in this release, and the only thing that uses this request today is a one-time tidy-up of settings saved by older versions, which still works from Tandem's own window. Developers running the client from Vite: see `TANDEM_MODELS_DEV_ORIGIN` in `docs/configuration.md`.
+
 ## [0.31.0] - 2026-11-11
 
 ### What's New
