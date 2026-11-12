@@ -854,13 +854,24 @@ not a reflex "it was dismissed before".
     the expansion runs on the destination the caller named, which that finding
     already accepts as unconfined.
   - *`fsp.realpath(p)` in `nativeForm`* (`src/server/launcher/cwd-preview.ts`).
-    Preceded by `rejectUnsafeWindowsPrefix` on the same value in the same
-    function, and called only on a folder the launcher's gate
-    (`resolveRouteCwdAsync`) already accepted, on a bundled document folder, or
-    on the home directory. It is used for comparison and display only. This one
-    is neither #1666 nor #1654: its inputs are home-confined by the gate and
-    screened before the call, and master already made the same native call on
-    the same inputs (in the async resolver this PR moved to the JS flavour).
+    Used for comparison and display only. It has four inputs, and what holds
+    for all of them is the screen, not confinement: `nativeForm` runs
+    `rejectUnsafeWindowsPrefix` on the value itself before its one call and
+    returns the string untouched if that refuses it. The inputs:
+    - the candidate folder, after `resolveRouteCwdAsync` accepted it. This is
+      the only one that is home-confined;
+    - the running session's folder, after `resolveSafeCwdAsync` accepted it,
+      which screens and resolves but does not confine;
+    - the home directory, after the same `resolveSafeCwdAsync`;
+    - each bundled document folder (`comparableBundledDir`). These are install
+      and data folders the app itself supplies (`resolveBundledDocDirs`), not
+      caller input, and they lie outside home.
+
+    So this is neither #1666 nor #1654. For the first three, master made a
+    native realpath call on the same folders: its async resolvers used
+    `fsp.realpath`, on the raw screened string where this code calls it on
+    the JS-realpath result. **For the bundled folders the call is new:** master
+    compared them as strings and resolved nothing.
   - *`fs.access`, `fs.link` and `fs.unlink` in `moveSessionFile`*
     (`src/server/session/manager.ts`) *and `moveEnvelopeFile`*
     (`src/server/annotations/store.ts`). A new caller of the session and

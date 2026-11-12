@@ -2080,8 +2080,11 @@ describe("records saved under the short spelling are moved, per kind, only into 
 
       // Newer name unreadable: the same.
       const restoreReads = failReadsOf(newSession(), "EACCES");
-      expect(await peekSessionReadOnly(fx.longPath)).toBeNull();
-      restoreReads();
+      try {
+        expect(await peekSessionReadOnly(fx.longPath)).toBeNull();
+      } finally {
+        restoreReads();
+      }
     });
 
     // The quarantine that does happen is the load's own (`maybeRestoreSession`):
