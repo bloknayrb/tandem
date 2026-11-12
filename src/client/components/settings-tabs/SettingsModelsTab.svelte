@@ -40,6 +40,11 @@ const access = createModelsWriteAccess();
 // (`LiveRegion.svelte`). The region below is mounted empty and its text
 // arrives after a real delay — or, when the server's refusal lands while the
 // tab is open, with that state change itself.
+//
+// KNOWN LIMIT, accepted — do not "fix" it by filling the region at once. For
+// these 300 ms the element the unavailable controls are described by is empty,
+// so a control focused inside that window is announced as unavailable with no
+// reason. Filling it at mount removes the delay and, with it, the announcement.
 const ANNOUNCE_DELAY_MS = 300;
 let announceReady = $state(false);
 onMount(() => {

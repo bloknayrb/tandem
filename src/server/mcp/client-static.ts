@@ -14,10 +14,23 @@
  * a request) carried Tandem's own origin. The local-model settings are now
  * changed only from Tandem's own window, and a framed copy is not that.
  *
- * What it does not do: stop a pop-up or a top-level navigation to Tandem's
- * page (those load it as an ordinary window), or cover the Vite dev server and
- * the desktop app, neither of which is served from here — a release desktop
- * build loads the client through Tauri's asset protocol.
+ * **A page that opens Tandem's page gets no handle on it.** The same responses
+ * carry `Cross-Origin-Opener-Policy: same-origin`, which puts Tandem's page in
+ * a browsing-context group of its own: a page on another origin that opened it
+ * (`window.open`) is left with a closed-looking reference and can neither
+ * close nor steer the window it opened. That matters for the one notice whose
+ * subject is a model another page could have saved — the page that planted it
+ * could otherwise pop Tandem up, let it be counted as told, and close it
+ * before anyone looked. With the handle severed, the window stays on screen
+ * until the user closes it. Nothing in the client needs an opener across
+ * origins: its only `window.open` is for external links, already
+ * `noopener,noreferrer`, and it has no pop-up sign-in flow.
+ *
+ * What none of this does: stop a pop-up or a top-level navigation to Tandem's
+ * page (those load it as an ordinary, visible window, and its stream then
+ * counts as the user's own), or cover the Vite dev server and the desktop app,
+ * neither of which is served from here — a release desktop build loads the
+ * client through Tauri's asset protocol.
  *
  * No `Access-Control-Allow-Origin` is set here (CLAUDE.md Critical Rule 8),
  * and no general header library is involved. The `<meta>` CSP in `index.html`
@@ -33,11 +46,14 @@ import type { Express, NextFunction, Request, Response } from "express";
 import express from "express";
 
 export const FRAME_ANCESTORS_CSP = "frame-ancestors 'none'";
+export const OPENER_POLICY = "same-origin";
 
-/** Sets the two framing headers. Exported for the test of the mount. */
+/** Sets the two framing headers and the opener policy. Exported for the test
+ *  of the mount. */
 export function refuseFraming(_req: Request, res: Response, next: NextFunction): void {
   res.setHeader("Content-Security-Policy", FRAME_ANCESTORS_CSP);
   res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Cross-Origin-Opener-Policy", OPENER_POLICY);
   next();
 }
 

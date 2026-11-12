@@ -5,7 +5,11 @@ import path from "node:path";
 import express from "express";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { FRAME_ANCESTORS_CSP, mountClient } from "../../src/server/mcp/client-static.js";
+import {
+  FRAME_ANCESTORS_CSP,
+  mountClient,
+  OPENER_POLICY,
+} from "../../src/server/mcp/client-static.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
@@ -58,6 +62,7 @@ function conditionalGet(
 function expectFramingRefusedRaw(headers: Record<string, string | string[] | undefined>): void {
   expect(headers["content-security-policy"]).toBe("frame-ancestors 'none'");
   expect(headers["x-frame-options"]).toBe("DENY");
+  expect(headers["cross-origin-opener-policy"]).toBe("same-origin");
   expect(headers["access-control-allow-origin"]).toBeUndefined();
 }
 
@@ -65,12 +70,16 @@ function expectFramingRefused(res: Response): void {
   expect(res.headers.get("content-security-policy")).toBe(FRAME_ANCESTORS_CSP);
   expect(res.headers.get("content-security-policy")).toBe("frame-ancestors 'none'");
   expect(res.headers.get("x-frame-options")).toBe("DENY");
+  // A page that opens Tandem's page keeps no handle on it.
+  expect(res.headers.get("cross-origin-opener-policy")).toBe(OPENER_POLICY);
+  expect(res.headers.get("cross-origin-opener-policy")).toBe("same-origin");
   // Critical Rule 8: the document is never made cross-origin readable.
   expect(res.headers.get("access-control-allow-origin")).toBeNull();
 }
 
 function expectNoFramingHeaders(res: Response): void {
   expect(res.headers.get("x-frame-options")).toBeNull();
+  expect(res.headers.get("cross-origin-opener-policy")).toBeNull();
   expect(res.headers.get("content-security-policy") ?? "").not.toContain("frame-ancestors");
 }
 
@@ -207,6 +216,18 @@ describe("the real server: the served document refuses framing; /api, /mcp and /
     expect(res.status).toBe(200);
     await res.text();
     expectNoFramingHeaders(res);
+  });
+
+  it("the notification stream (an SSE response, not the client document) does not carry them", async () => {
+    const abort = new AbortController();
+    const res = await fetch(`${base}/api/notify-stream`, { signal: abort.signal });
+    try {
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+      expectNoFramingHeaders(res);
+    } finally {
+      abort.abort();
+    }
   });
 
   it("GET /health does not carry them", async () => {
