@@ -67,7 +67,7 @@ import { CTRL_ROOM } from "../../shared/constants.js";
 /** Which kind of item an entry versions: annotation, user reply, or chat message. */
 export type EntryKind = "a" | "r" | "c";
 
-/** One returned item version. Removed only by {@link DeliveryRegistry.retire} or `reset`. */
+/** One returned item version. Removed only by {@link DeliveryRegistry.retire}, `retireWhere` or `reset`. */
 export interface RegistryEntry {
   readonly seq: number;
   readonly kind: EntryKind;
@@ -313,6 +313,42 @@ export class DeliveryRegistry {
     remove(this.#byBase, baseId(entry.kind, entry.base), entry);
     remove(this.#byScope, entry.scope, entry);
     this.#unacked.get(entry.scope)?.delete(entry);
+  }
+
+  /**
+   * {@link retire} every entry of one DOCUMENT scope that `drop` selects, in
+   * one pass over the scope (per-entry `retire` searches the scope's list each
+   * time, which is quadratic for a whole scope). Returns how many went.
+   *
+   * Two phases, so a `drop` that throws has changed nothing: the scope is
+   * partitioned first, and only then are the dropped entries removed from
+   * every index. The kept entries stay in seq order, which `unseenIn`'s
+   * binary search relies on, and a scope left with none stops being listed
+   * by `documentScopes`.
+   *
+   * Never the chat scope: a chat entry carries `received` and hand-out
+   * tokens, which only `reset` may forget. The one caller is the ownership
+   * handover (`handOverDocumentInbox` in `awareness.ts`).
+   */
+  retireWhere(scope: string, drop: (entry: RegistryEntry) => boolean): number {
+    if (scope === CHAT_SCOPE) return 0;
+    const entries = this.#byScope.get(scope);
+    if (!entries) return 0;
+    const kept: RegistryEntry[] = [];
+    const dropped: RegistryEntry[] = [];
+    for (const entry of entries) (drop(entry) ? dropped : kept).push(entry);
+    if (dropped.length === 0) return 0;
+    const unacked = this.#unacked.get(scope);
+    for (const entry of dropped) {
+      const id = versionId(entry.kind, entry.base, entry.editedAt);
+      if (this.#byVersion.get(id) === entry) this.#byVersion.delete(id);
+      if (this.#bySeq.get(entry.seq) === entry) this.#bySeq.delete(entry.seq);
+      remove(this.#byBase, baseId(entry.kind, entry.base), entry);
+      unacked?.delete(entry);
+    }
+    if (kept.length > 0) this.#byScope.set(scope, kept);
+    else this.#byScope.delete(scope);
+    return dropped.length;
   }
 
   /** The highest seq in a scope, or 0. */

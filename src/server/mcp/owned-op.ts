@@ -522,7 +522,7 @@ export function callerOwnerInfo(
 
 /**
  * Where the caller stands on an open document for an inbox poll (ownership
- * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. For PR 2b's inbox
+ * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. For the scope PR's inbox
  * scope, which must not read `caller.ownerId` itself; nothing in production
  * calls it yet. `"neither"` while ownership is off (`inboxScopeOf`'s own
  * guard), and for a caller with no owner id or no owner record.

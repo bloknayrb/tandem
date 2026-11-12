@@ -4,6 +4,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ownershipEnabled } from "../../src/server/ownership-flag.js";
 import { OWNERSHIP_ENABLED } from "../../src/shared/constants.js";
+import {
+  type FlipBlocker,
+  flipBlockerViolations,
+  OWNERSHIP_FLIP_BLOCKERS,
+} from "./ownership-flip-blockers.js";
 
 /**
  * The ownership flag ships dark (#2358, ADR-054; ownership design §12).
@@ -42,6 +47,9 @@ describe("ownershipEnabled() without a build define (tsx, vitest)", () => {
 });
 
 describe("the release literal", () => {
+  // The flip-blocker check below is redundant with this pin until the flip PR
+  // edits it: while this says `false`, that check passes whatever the list
+  // holds. It bites at the moment someone changes this line.
   it("is false", () => {
     expect(OWNERSHIP_ENABLED).toBe(false);
   });
@@ -103,5 +111,52 @@ describe("the default test run is flag-off", () => {
     ];
     expect(files.length).toBeGreaterThan(1);
     for (const f of files) expect(read(f), f).not.toContain("TANDEM_OWNERSHIP");
+  });
+});
+
+describe("the flip cannot land with a blocker open (tests/server/ownership-flip-blockers.ts)", () => {
+  const open: FlipBlocker[] = [
+    { gap: "a gap", closedBy: "a PR" },
+    { gap: "another", closedBy: "a decision" },
+  ];
+
+  it("the check is a pure function of the literal and the list", () => {
+    // On with a non-empty list fails, one message per open row.
+    expect(flipBlockerViolations(true, open)).toHaveLength(2);
+    expect(flipBlockerViolations(true, open)[0]).toContain("a gap");
+    // On with an empty list passes.
+    expect(flipBlockerViolations(true, [])).toEqual([]);
+    // Off passes either way.
+    expect(flipBlockerViolations(false, open)).toEqual([]);
+    expect(flipBlockerViolations(false, [])).toEqual([]);
+  });
+
+  it("the source literal and the real list pass it", () => {
+    // The imported source literal, never `ownershipEnabled()`: the
+    // ownership-flag-on job turns the runtime flag on with the literal still
+    // `false`, and must stay green.
+    expect(flipBlockerViolations(OWNERSHIP_ENABLED, OWNERSHIP_FLIP_BLOCKERS)).toEqual([]);
+  });
+
+  it("every row names its gap and what closes it, and the gap (a) row names a test that exists", () => {
+    for (const row of OWNERSHIP_FLIP_BLOCKERS) {
+      expect(row.gap.trim().length, row.gap).toBeGreaterThan(20);
+      expect(row.closedBy.trim().length, row.gap).toBeGreaterThan(5);
+    }
+    expect(new Set(OWNERSHIP_FLIP_BLOCKERS.map((row) => row.gap)).size).toBe(
+      OWNERSHIP_FLIP_BLOCKERS.length,
+    );
+    const handover = read("tests/server/ownership-handover.test.ts");
+    const title =
+      "FLIP-BLOCKER gap (a): the previous owner's poll is handed the item, and its acknowledgement hides it from a fresh cursor";
+    expect(handover).toContain(`it("${title}"`);
+    expect(OWNERSHIP_FLIP_BLOCKERS.some((row) => row.closedBy.includes(title))).toBe(true);
+  });
+
+  it("the plan's flip row points at the list instead of restating it", () => {
+    const plan = read("docs/plans/2358-ownership.md");
+    const row = plan.split("\n").find((line) => line.startsWith("| **6. Flip** |")) as string;
+    expect(row).toContain("tests/server/ownership-flip-blockers.ts");
+    expect(row).not.toMatch(/notifications\/cancelled|probeRefusal|callTool/);
   });
 });

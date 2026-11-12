@@ -1,7 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
-import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
+  Y_MAP_CHAT_STREAM,
+} from "../../shared/constants.js";
 import { crossBasename } from "../../shared/cross-basename.js";
 import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
@@ -26,10 +31,10 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
-import { getDocumentStore } from "./document-store.js";
+import { getDocumentStore, YDocStore } from "./document-store.js";
 import { isGreetingReply } from "./greeting-reply.js";
 import {
   CHAT_SCOPE,
@@ -231,6 +236,125 @@ export function resetInbox(): void {
   replySurfacedIds.clear();
   deliveryRegistry.reset();
   ledgerGeneration += 1;
+  handoverReadFailureLoggedAt = 0;
+}
+
+/** When the handover's annotation-read failure was last logged (one line a minute). */
+let handoverReadFailureLoggedAt = 0;
+
+/** Fixed text: nothing from the error, the document or its records. */
+const HANDOVER_READ_FAILED =
+  "[Tandem] an ownership handover found the document's annotations unreadable (or the document not open), so every item on it is owed again, accept and dismiss notices included (they may repeat).";
+
+/**
+ * The keys on `documentId` that are a CURRENT accept/dismiss notice: the key
+ * of a current Claude-authored annotation at its current status, **unless any
+ * other current record on the document has that key** — whatever that
+ * record's type, audience or author, a malformed one included. Keys alone
+ * cannot tell a notice from a comment: annotation ids are client-written, so
+ * a user comment whose id ends `#accepted` has the very key of a notice. And
+ * the colliding record need not be a comment now to be one later (a note, a
+ * highlight, a private comment), so any record with the key gives it up: when
+ * in doubt the key is forgotten, which costs one duplicate notice. (A
+ * colliding record that is DELETED at the handover cannot be seen here.)
+ *
+ * Null when the annotations cannot be read (the document is not open, its
+ * Y.Doc is gone, or the read throws). Nothing here creates a document or
+ * writes one: the Y.Doc comes from the non-creating getter.
+ */
+function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<string> | null {
+  try {
+    const doc = getCurrentDoc(documentId);
+    if (!doc || !ydoc) return null;
+    const annotations = new YDocStore(ydoc, doc.filePath, doc.id).listAnnotations();
+    // How many current Claude records have each notice key: two with one key
+    // (the same id under two map keys) are each other's "other record".
+    const claimed = new Map<string, number>();
+    for (const ann of annotations) {
+      if (ann.author !== "claude") continue;
+      const key = inboxLedgerKey(documentId, ann);
+      claimed.set(key, (claimed.get(key) ?? 0) + 1);
+    }
+    const keys = new Set<string>();
+    for (const [key, count] of claimed) if (count === 1) keys.add(key);
+    // Every record's bare-id key, read from the map itself so that a record
+    // the sanitising read skips as malformed still counts. A Claude record's
+    // own bare key is never its notice key (that one carries the status).
+    for (const ann of annotations) keys.delete(ledgerKey(documentId, ann.id));
+    ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((value, mapKey) => {
+      keys.delete(ledgerKey(documentId, mapKey));
+      const id = (value as { id?: unknown } | null)?.id;
+      if (typeof id === "string") keys.delete(ledgerKey(documentId, id));
+    });
+    return keys;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The inbox half of an ownership handover (#2358, ADR-054; ownership design
+ * §6.3's rule): the document's ownership just left a record, so every user
+ * comment and user thread reply any poll was handed there stops counting as
+ * seen, for every reader — a cursor reader whatever its mark, a fresh one, a
+ * cursor-less one. It hands nothing itself: each later hand-out goes through
+ * the collectors and every gate they apply, which is why this applies **no
+ * gate of its own** (a record that is held, private or resolved now and
+ * qualifies later must not be lost because it was skipped here, and
+ * forgetting an item the collectors will never hand out reveals nothing).
+ *
+ * Accept and dismiss notices about Claude's own annotations are left exactly
+ * as they are ({@link currentNoticeKeys}); when in doubt a key is forgotten,
+ * which costs one duplicate.
+ *
+ * **Reached only through the ownership module's seam**, which `index.ts`
+ * wires at boot and which nothing calls while ownership is off; this file
+ * reads no flag (`tests/server/ownership-source-pins.test.ts`). Synchronous,
+ * and it makes no Y.Doc write and emits nothing on any push path.
+ *
+ * The order errs toward a duplicate hand-out if a step fails: after the
+ * annotation read (and its log line, if it failed), the quiet records go
+ * first (so the document is at least read again), then the registry, then
+ * the cursor-less ledgers.
+ */
+export function handOverDocumentInbox(documentId: string): void {
+  const ydoc = getDocument(documentId);
+  const read = currentNoticeKeys(documentId, ydoc);
+  const notices = read ?? new Set<string>();
+  if (read === null) {
+    const now = Date.now();
+    if (now - handoverReadFailureLoggedAt >= 60_000) {
+      handoverReadFailureLoggedAt = now;
+      console.error(HANDOVER_READ_FAILED);
+    }
+  }
+
+  // No reader may skip this document on a quiet record made before now
+  // (ownership design R4.5). The state and its transaction listener stay:
+  // deleting the state would attach a second listener when it is next seen.
+  const state = ydoc ? quietDocs.get(ydoc) : undefined;
+  if (state) {
+    state.quiet.legacy = null;
+    state.quiet.cursor = null;
+  }
+
+  // Cursor readers: forget the entries, so the item gets a new seq above
+  // every mark the next time the collectors hand it out.
+  deliveryRegistry.retireWhere(
+    documentId,
+    (entry) => entry.kind === "r" || !notices.has(entry.base),
+  );
+
+  // Cursor-less readers. By key prefix, not from the registry's entries: these
+  // ledgers can hold a key whose registry entry `carryHeld` already retired.
+  // A document id holds no colon (`docIdFromPath`), so the prefix is exact.
+  const prefix = ledgerKey(documentId, "");
+  for (const key of [...surfacedIds.keys()]) {
+    if (key.startsWith(prefix) && !notices.has(key)) surfacedIds.delete(key);
+  }
+  for (const key of [...replySurfacedIds]) {
+    if (key.startsWith(prefix)) replySurfacedIds.delete(key);
+  }
 }
 
 /** What `appendClaudeChatMessage` returns: the new message id, or the licence refusal. */
@@ -744,8 +868,10 @@ function logInboxDrop(
  *    remove an item from a pass, never add one. The two contracts say this
  *    differently, so each keeps its own record:
  *    - `legacy` (cursor-less polls): the shared ledger was not reset
- *      (`ledgerGeneration`), and between resets it only ever gains entries —
- *      named polls of this document included. A skipped legacy pass commits
+ *      (`ledgerGeneration`), and between resets a POLL only ever adds entries
+ *      to it — named polls of this document included. (An ownership handover
+ *      removes this document's entries, and clears both of its quiet records
+ *      in the same step: `handOverDocumentInbox`.) A skipped legacy pass commits
  *      nothing, so an item a skip passes over is still owed on the next pass
  *      that is not skipped; an interval in another mode cannot lose anything.
  *    - `cursor` (#2064, #2294): the registry epoch is the same; NO entry has
@@ -767,7 +893,9 @@ function logInboxDrop(
  *      it as delivered for good. An entry RETIRED since (`carryHeld`) only
  *      re-owes: if its item qualifies it is handed again (a duplicate for this
  *      reader, which had seen it), so skipping misses a duplicate, never an
- *      item. A FRESH reader (null mark) is never skipped: what it has seen moves
+ *      item. (An ownership handover retires entries of items that ARE owed
+ *      again to every reader, so there a skip would miss an item: it clears
+ *      this record in the same step, `handOverDocumentInbox`.) A FRESH reader (null mark) is never skipped: what it has seen moves
  *      with other readers' acknowledgements.
  * Everything else the pass reads is in that Y.Doc (annotations, replies), and
  * `admit` is a pure schema check. So the pass would produce nothing again, and
