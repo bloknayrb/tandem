@@ -709,16 +709,25 @@ export async function deleteSession(filePath: string): Promise<void> {
  * notice). `null` when there is no such file or none parses. For a caller that needs only the flag before the real load (#2400).
  */
 export async function peekSessionReadOnly(filePath: string): Promise<boolean | null> {
-  // The file the loader would restore first, then the other: the loader
-  // promotes the second only when the first does not parse.
+  // The file the loader would restore first. Like the loader, the second is
+  // consulted ONLY when the first is corrupt JSON: a first file that cannot be
+  // read, or that parses to something that is not a record, restores nothing
+  // there, so there is no session whose flag could apply.
   for (const file of await sessionNamesNewestFirst(filePath)) {
+    let raw: string;
     try {
-      const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
-      return (parsed as { readOnly?: unknown }).readOnly === true;
+      raw = await fs.readFile(file, "utf-8");
     } catch {
-      // Unreadable under this name.
+      return null;
     }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return (parsed as { readOnly?: unknown }).readOnly === true;
   }
   return null;
 }

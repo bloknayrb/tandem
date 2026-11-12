@@ -831,8 +831,8 @@ not a reflex "it was dismissed before".
   belongs to the callers, not to the flagged code. A new caller must screen
   before calling, so verify the call site rather than trusting the disposition.
 - **The `js/path-injection` sinks #2400 added (PR #2407). Their alerts stay
-  OPEN and must not be dismissed**, for the reason alert 16 stays open: each
-  is the #1666 class (screened, not confined), not a false positive.
+  OPEN and must not be dismissed.** None is a false positive, and they are not
+  all the same class; each is named for what it is below.
   - *`fs.realpathSync.native(p)` and `fs.lstatSync(p)` in `currentDeps`*
     (`src/server/file-io/short-names.ts`). Each argument is built from the
     string `expandShortNames` was given: its drive root copied through
@@ -847,12 +847,20 @@ not a reflex "it was dismissed before".
     and save-as (`expandedSaveTarget` in `document-service.ts`, after the
     target's own screens). The native result is never used as a path: only its
     last component is read, and a candidate containing a separator or a colon
-    is refused.
+    is refused. **Which accepted finding it falls under depends on the
+    caller.** On the open path it is the #1666 class: a screened path that is
+    not confined to any directory, which is the resolver's accepted bound. On
+    the save-as path it belongs with #1654 (caller-named write destinations):
+    the expansion runs on the destination the caller named, which that finding
+    already accepts as unconfined.
   - *`fsp.realpath(p)` in `nativeForm`* (`src/server/launcher/cwd-preview.ts`).
     Preceded by `rejectUnsafeWindowsPrefix` on the same value in the same
     function, and called only on a folder the launcher's gate
     (`resolveRouteCwdAsync`) already accepted, on a bundled document folder, or
-    on the home directory. It is used for comparison and display only.
+    on the home directory. It is used for comparison and display only. This one
+    is neither #1666 nor #1654: its inputs are home-confined by the gate and
+    screened before the call, and master already made the same native call on
+    the same inputs (in the async resolver this PR moved to the JS flavour).
   - *`fs.access`, `fs.link` and `fs.unlink` in `moveSessionFile`*
     (`src/server/session/manager.ts`) *and `moveEnvelopeFile`*
     (`src/server/annotations/store.ts`). A new caller of the session and
@@ -866,8 +874,13 @@ not a reflex "it was dismissed before".
     filesystem call is made on `legacyPath` itself. `link` refuses an existing
     target, a symlink included, so nothing is overwritten or followed, and the
     link shares the old file's inode and so its mode and ACL. If the old name
-    cannot be removed afterwards, both names are kept. The move runs only
-    while this process holds the annotation store lock. After a session
+    cannot be removed afterwards, both names are kept. The annotation-file
+    move, and the move of a session that has an annotation file under the old
+    key, run only while this process holds the annotation store lock. A
+    session with no annotation file under the old key moves regardless, so its
+    `link`, `unlink` and stored-path rewrite can run in an instance that does
+    not hold the lock (session files have no lock of their own, on master
+    either). After a session
     move, `restampMovedSession` reads the new name and rewrites it through
     the ordinary session writer (`atomicWrite`, private mode) to store the
     long path; it touches that one name only. Two reads use the same computed

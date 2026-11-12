@@ -2056,6 +2056,34 @@ describe("records saved under the short spelling are moved, per kind, only into 
       expect(await peekSessionReadOnly(fx.aliasPath)).toBe(true);
     });
 
+    // The probe follows the loader's own rule for a key with two file names:
+    // the older name is consulted only when the newer one is corrupt JSON.
+    it("the probe reads the older name only when the newer one is corrupt JSON, as the loader does", async () => {
+      const legacy = path.join(SESSION_DIR, `${legacySessionKey(fx.longPath)}.json`);
+      await storeSession(fx.longPath, NEW_TEXT);
+      await editStoredSession(fx.longPath, (stored) => {
+        stored.readOnly = true;
+      });
+      // The older, read-only record under the pre-#1750 name.
+      await fs.writeFile(legacy, await fs.readFile(newSession()));
+      const earlier = new Date(Date.now() - 60_000);
+      await fs.utimes(legacy, earlier, earlier);
+
+      // Newer name corrupt: the loader promotes the older one, so its flag applies.
+      await fs.writeFile(newSession(), CORRUPT, "utf-8");
+      expect(await peekSessionReadOnly(fx.longPath)).toBe(true);
+
+      // Newer name parses but is not a record: the loader restores nothing,
+      // and does not fall back, so no flag applies.
+      await fs.writeFile(newSession(), "42", "utf-8");
+      expect(await peekSessionReadOnly(fx.longPath)).toBeNull();
+
+      // Newer name unreadable: the same.
+      const restoreReads = failReadsOf(newSession(), "EACCES");
+      expect(await peekSessionReadOnly(fx.longPath)).toBeNull();
+      restoreReads();
+    });
+
     // The quarantine that does happen is the load's own (`maybeRestoreSession`):
     // one file set aside and one notice, the same through either spelling.
     it.each([

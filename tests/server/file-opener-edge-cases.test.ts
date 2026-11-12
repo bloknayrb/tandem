@@ -391,9 +391,11 @@ describe("openFromDisk — UNC paths are rejected BEFORE canonicalization", () =
     });
     // `realpathSync` is no longer the only filesystem call the resolver makes
     // (#2400 added the 8.3 short-name expansion: a native realpath and two
-    // lstats), and a spy on one function sees nothing of the others. Every one
-    // of them is watched here; `short-name-open.test.ts` repeats this with the
-    // expansion forced on, which is the only way it can run off Windows.
+    // lstats), and a spy on one function sees nothing of the others. The ones
+    // below are watched here. `fs.realpathSync.native` is NOT: replacing
+    // `realpathSync` leaves its `.native` as the original function, and off
+    // Windows the expansion never calls it. `short-name-open.test.ts` spies it
+    // with the expansion forced on, which is where that ordering is proven.
     const others = [
       vi.spyOn(fsSync, "lstatSync"),
       vi.spyOn(fsSync, "statSync"),
