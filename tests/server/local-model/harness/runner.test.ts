@@ -28,6 +28,7 @@ import type {
 } from "../../../../probe/local-model-spike/harness/record.js";
 import {
   acquireLock,
+  appendTrial,
   damagedLogLines,
   existingRunDir,
   fixtureProblems,
@@ -631,6 +632,15 @@ describe("the run's logs", () => {
     fs.mkdirSync(dir);
     fs.writeFileSync(trialsPath(dir), '{"trialId":"a#1"}\n{"trialId":"b#1"}\n{"trialId":"c#');
     expect(readTrials<{ trialId: string }>(dir).map((t) => t.trialId)).toEqual(["a#1", "b#1"]);
+    expect(damagedLogLines(dir)).toEqual([]);
+    // A kill mid-append and a resume that appends after it: the fragment is
+    // cut, so the log stays readable (correctness review, High).
+    appendTrial(dir, { trialId: "c#1" });
+    expect(readTrials<{ trialId: string }>(dir).map((t) => t.trialId)).toEqual([
+      "a#1",
+      "b#1",
+      "c#1",
+    ]);
     expect(damagedLogLines(dir)).toEqual([]);
     fs.writeFileSync(trialsPath(dir), '{"trialId":"a#1"}\n{"trialId":"b#\n{"trialId":"c#1"}\n');
     expect(damagedLogLines(dir)).toEqual([

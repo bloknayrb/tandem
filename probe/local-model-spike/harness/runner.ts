@@ -165,7 +165,8 @@ export function machineRefusal(stored: RunIdentity, now: RunSession): string | n
   if (first === undefined) return null;
   const changed: string[] = [];
   if (first.host !== now.host) changed.push(`host (was ${JSON.stringify(first.host)}, now ${JSON.stringify(now.host)})`);
-  if (first.hardware !== now.hardware) {
+  const norm = (h: string) => h.trim().replace(/\s+/g, " ");
+  if (norm(first.hardware) !== norm(now.hardware)) {
     changed.push(`hardware (was ${JSON.stringify(first.hardware)}, now ${JSON.stringify(now.hardware)})`);
   }
   if (changed.length === 0) return null;

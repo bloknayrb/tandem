@@ -152,7 +152,11 @@ function sha256(text: string): string {
 export function readFixtures(runDir: string): Record<string, StoredFixture> {
   const file = fixturesPath(runDir);
   if (!fs.existsSync(file)) return {};
-  return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, StoredFixture>;
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, StoredFixture>;
+  } catch (err) {
+    throw new Error(`fixtures.json in this run cannot be read (${err instanceof Error ? err.message : String(err)}); the documents the model saw cannot be shown`);
+  }
 }
 
 /**
@@ -196,25 +200,19 @@ export function fixtureProblems(
 }
 /**
  * Append one record as one line. If a killed process left the file ending in
- * half a line, start a new line first: otherwise this record would be glued
- * onto the fragment and lost with it.
+ * half a line, that fragment is cut off first: it was never a recorded trial
+ * (the trial is run again), and leaving it in place would make it an
+ * unreadable line in the MIDDLE of the log once this record follows it, which
+ * the reader and the report rightly treat as damage.
  */
 function appendLine(file: string, record: unknown): void {
-  let lead = "";
   if (fs.existsSync(file)) {
-    const size = fs.statSync(file).size;
-    if (size > 0) {
-      const fd = fs.openSync(file, "r");
-      try {
-        const last = Buffer.alloc(1);
-        fs.readSync(fd, last, 0, 1, size - 1);
-        if (last[0] !== 0x0a) lead = "\n";
-      } finally {
-        fs.closeSync(fd);
-      }
+    const buf = fs.readFileSync(file);
+    if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) {
+      fs.truncateSync(file, buf.lastIndexOf(0x0a) + 1);
     }
   }
-  fs.appendFileSync(file, `${lead}${JSON.stringify(record)}\n`, "utf8");
+  fs.appendFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
 }
 export function appendTrial(runDir: string, record: unknown): void {
   appendLine(trialsPath(runDir), record);

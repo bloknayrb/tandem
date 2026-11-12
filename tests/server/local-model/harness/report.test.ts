@@ -577,6 +577,18 @@ describe("a verdict is bound to the whole record (review M1)", () => {
     expect(resealed.reasons.join("\n")).toContain("was written for a different record");
   });
 
+  it("planned.json cannot move a trial into another group (correctness review, High)", () => {
+    const trials = run(20, { unanswerable: 5 }).map(reseal);
+    const moved = plan(trials).map((p) =>
+      p.group === "unanswerable" && Number(p.scenarioId.split("-")[1]) < 5
+        ? { ...p, group: "no-action" as Group }
+        : p,
+    );
+    const r = report([], { trials, planned: moved, verdicts: agreeAll(trials) });
+    expect(r.outcome).toBe("INCONCLUSIVE");
+    expect(r.reasons.join("\n")).toContain("its record and planned.json disagree");
+  });
+
   it("a scorerPass that does not follow from the ending and score is caught even when resealed", () => {
     const trials = run().map(reseal);
     const i = trials.findIndex((t) => t.trialId === "answerable-4#1");
@@ -869,7 +881,7 @@ describe("the reading file", () => {
       "WHAT WAS WRITTEN",
       "notices the user was shown (1)",
       "claim check:",
-      "scorer: pass",
+      "scorer (provisional; read the reply first): pass",
       "document inlined in the prompt: yes",
       "FIXTURE TEXTS",
       "Body of the fixture.",
@@ -877,6 +889,9 @@ describe("the reading file", () => {
     ]) {
       expect(text, needed).toContain(needed);
     }
+    // The scorer's word comes after the reply and the writes.
+    expect(text.indexOf("scorer (provisional")).toBeGreaterThan(text.indexOf("WHAT WAS WRITTEN"));
+    expect(text.indexOf("scorer (provisional")).toBeGreaterThan(text.indexOf("FINAL REPLY"));
     // Every line holding hostile text carries the block prefix.
     const lines = text.split("\n");
     expect(

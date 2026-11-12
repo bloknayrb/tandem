@@ -86,10 +86,6 @@ export function renderReadingFile(input: ReadingInput): string {
     out.push(
       `  claim check: ${t.claims.suspect ? "SUSPECT" : "not flagged"}${t.claims.flags.length > 0 ? ` — ${t.claims.flags.map((f) => `${f.kind} in ${f.where}`).join("; ")}` : ""} (a reading-order flag, not a verdict)`,
     );
-    out.push(
-      `  scorer: ${t.scorerPass ? "pass" : "fail"}${t.score.failureMode ? ` (${t.score.failureMode})` : ""}${t.ending !== "completed" ? " — failed by its ending; your verdict cannot be 'pass'" : ""}`,
-    );
-    for (const note of t.score.notes) out.push(...field("scorer note", note));
     const sig = t.signals;
     const marks = [
       sig.reasoning !== "none" ? `reasoning: ${sig.reasoning}` : "",
@@ -136,6 +132,12 @@ export function renderReadingFile(input: ReadingInput): string {
     }
     out.push(`  notices the user was shown (${t.notices.length}):`);
     for (const nt of t.notices) out.push(`      [${quoted(nt.severity)}] ${quoted(nt.message)}`);
+    // The scorer's provisional verdict comes LAST, after everything the reader
+    // judges, so the reply is read before the scorer's word is seen.
+    out.push(
+      `  scorer (provisional; read the reply first): ${t.scorerPass ? "pass" : "fail"}${t.score.failureMode ? ` (${t.score.failureMode})` : ""}${t.ending !== "completed" ? " — failed by its ending; your verdict cannot be 'pass'" : ""}`,
+    );
+    for (const note of t.score.notes) out.push(...field("scorer note", note));
   });
 
   out.push("");

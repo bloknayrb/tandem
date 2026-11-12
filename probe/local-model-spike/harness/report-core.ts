@@ -130,7 +130,7 @@ function correctedPass(t: TrialRecord, checked: CheckedVerdicts): boolean | null
 function oneMachineRun(identity: RunIdentity): boolean {
   return (
     new Set(identity.sessions.map((x) => x.host)).size <= 1 &&
-    new Set(identity.sessions.map((x) => x.hardware)).size <= 1
+    new Set(identity.sessions.map((x) => x.hardware.trim().replace(/\s+/g, " "))).size <= 1
   );
 }
 
@@ -165,7 +165,16 @@ export function computeReport(input: ReportInput): Report {
   const infraTrials = new Set(infra.map((i) => i.trialId));
 
   const checked = checkVerdicts(input.verdicts, identity.runId, [...byTrial.values()], input.rubricVersion);
-  const integrity = [...recordProblems(trials), ...(input.logProblems ?? [])];
+  // planned.json is outside every hash, and the groups, gating and
+  // denominators are read from it: each record must agree with its plan.
+  const planById = new Map(planned.map((p) => [p.trialId, p]));
+  const planMismatch = trials
+    .filter((t) => {
+      const p = planById.get(t.trialId);
+      return p !== undefined && (p.group !== t.group || p.scenarioId !== t.scenarioId);
+    })
+    .map((t) => `trial ${t.trialId}: its record and planned.json disagree on its group or scenario`);
+  const integrity = [...recordProblems(trials), ...planMismatch, ...(input.logProblems ?? [])];
 
   // --- groups ---
   const groupOrder: Group[] = [];

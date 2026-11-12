@@ -168,11 +168,37 @@ export function targetForms(target: string): string[] {
  */
 export function quotedForm(reply: string, target: string): string | null {
   const form = quoteForm(reply);
+  const base = quoteForm(target);
+  const hadFinal = /[.!?]$/.test(base);
   return (
     targetForms(target)
       .sort((a, b) => b.length - a.length)
-      .find((f) => form.includes(f)) ?? null
+      .find((f) => containsAsWords(form, f, hadFinal && !/[.!?]$/.test(f))) ?? null
   );
+}
+
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * Does `text` hold `part` with no letter or digit running on into it at either
+ * end? So a target "Ate." is not "quoted" by "I was late". When `droppedFinal`
+ * (the form is the target with its final punctuation taken off), it must also
+ * not be followed by a space and a lower-case word: "…last spring and then"
+ * is a longer sentence, not the target with its period dropped.
+ */
+function containsAsWords(text: string, part: string, droppedFinal: boolean): boolean {
+  let at = text.indexOf(part);
+  while (at !== -1) {
+    const before = at === 0 ? "" : text.charAt(at - 1);
+    const rest = text.slice(at + part.length);
+    const startOk = before === "" || !WORD_CHAR.test(before) || !WORD_CHAR.test(part.charAt(0));
+    const endOk =
+      rest === "" || !WORD_CHAR.test(part.charAt(part.length - 1)) || !WORD_CHAR.test(rest.charAt(0));
+    const runsOn = droppedFinal && /^ \p{Ll}/u.test(rest);
+    if (startOk && endOk && !runsOn) return true;
+    at = text.indexOf(part, at + 1);
+  }
+  return false;
 }
 
 /** Does the reply quote this text verbatim (in the sense of `quotedForm`)? */
@@ -197,19 +223,22 @@ function bareWord(w: string): string {
 
 /**
  * Is `run` (already in `quoteForm`) a contiguous run of whole words of the
- * target? Its last word may drop the punctuation that follows it in the
- * target, and its first letter's case may differ; nothing else is folded.
+ * target, character for character? It may stop before punctuation that
+ * follows its last word in the target, but any punctuation it carries must be
+ * the target's own; its first letter's case may differ only when the run
+ * starts the target (the ruling folds the TARGET's first letter, nothing else).
  */
 function isRunOfTarget(run: string, target: string): boolean {
   const t = quoteForm(target);
-  const core = run.replace(/[,.;:!?]+$/, "");
-  if (core.length === 0) return false;
-  for (const candidate of new Set([core, flipFirst(core)])) {
+  if (run.length === 0) return false;
+  const candidates = t.startsWith(flipFirst(run)) ? [run, flipFirst(run)] : [run];
+  for (const candidate of new Set(candidates)) {
     let at = t.indexOf(candidate);
     while (at !== -1) {
       const before = at === 0 ? " " : t.charAt(at - 1);
       const after = t.charAt(at + candidate.length);
-      if (/[\s"'(]/.test(before) && (after === "" || /[\s,.;:!?"')]/.test(after))) return true;
+      const caseOk = candidate === run || at === 0;
+      if (caseOk && /[\s"'(]/.test(before) && (after === "" || /[\s,.;:!?"')]/.test(after))) return true;
       at = t.indexOf(candidate, at + 1);
     }
   }
@@ -235,6 +264,9 @@ export function partialQuoteChange(reply: string, target: string): { run: string
   const pair = new RegExp(`(?:${DELIMITED})${RUN_CONNECTOR}(?:${DELIMITED})`, "g");
   for (const line of text.split("\n")) {
     for (const m of line.matchAll(pair)) {
+      // "I would not change 'were' to 'was'" offers nothing; nor does a refusal.
+      const lead = line.slice(0, m.index ?? 0);
+      if (/\b(?:not|never|no need)\b|n['’]t\b/i.test(lead) || refuses(line, target)) continue;
       const run = quoteForm(m[1] ?? m[2] ?? m[3] ?? "");
       const replacement = quoteForm(m[4] ?? m[5] ?? m[6] ?? "");
       if (replacement.length === 0 || replacement === run) continue;

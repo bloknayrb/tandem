@@ -138,6 +138,9 @@ describe("cases the diff review found", () => {
       `"were reorganized" → "was reorganized"`,
       // The run's last word may drop the punctuation that follows it in the target.
       `"two shifts in August" → "two shifts from August"`,
+      // ...or keep it, and a run that starts the target may change its first letter's case.
+      `"in August." → "from August."`,
+      `"the team of dispatchers" → "the dispatch team"`,
     ]) {
       const r = on(change, reply);
       expect(r.pass, reply).toBe(true);
@@ -150,6 +153,12 @@ describe("cases the diff review found", () => {
       // A run that is not the target's words, or not whole words of it.
       `Change "weer" to "was".`,
       `Change "ere reorganized" to "as reorganized".`,
+      // A word re-cased in the middle of the sentence, or punctuation the target does not have there.
+      `"Were reorganized" → "was reorganized"`,
+      `"dispatchers," → "dispatchers"`,
+      `"August;" → "August:"`,
+      // A pair the reply says it would NOT make.
+      `I would not change "were" to "was"; it is correct as written.`,
       // The same text as its replacement.
       `Change "were reorganized" to "were reorganized".`,
       // A replacement with no quotation of what it replaces.
@@ -157,6 +166,13 @@ describe("cases the diff review found", () => {
     ]) {
       expect(on(change, reply).pass, reply).toBe(false);
     }
+    // The whole target is found only as words: not inside a longer word, and
+    // not with its period dropped inside a longer sentence that runs on.
+    const short: Scenario = { ...change, expect: { kind: "offer-change", target: "Ate." } };
+    expect(on(short, `I was late, so here it is: "We had eaten."`).failureMode).toBe("NO_QUOTE");
+    expect(
+      on(change, `${target.slice(0, -1)} and then it was fine. Suggested: "${fixed}"`).failureMode,
+    ).toBe("NO_QUOTE");
     // A comment request is not passed by a partial quote: it quotes the whole target or the selection.
     expect(on(comment, `Change "were" to "was": the subject "team" is singular.`).failureMode).toBe(
       "NO_QUOTE",
@@ -236,6 +252,11 @@ describe("cases the diff review found", () => {
     expect(six).toMatch(/sentence-final punctuation/);
     expect(six).toMatch(/case of the target's first letter only/);
     expect(six).toMatch(/wrapped across consecutive ">" lines/);
+    expect(six).toMatch(/no re-cased word, and no\s+punctuation the target does not have/);
+    expect(six).toMatch(/with or without quote marks/);
+    expect(RUBRIC_TEXT).toMatch(/falseClaim "yes" AND verdict "fail"/);
+    expect(RUBRIC_TEXT).toMatch(/For falseClaim only/);
+    expect(RUBRIC_TEXT).toMatch(/\[editing-request\]\s+requests to edit or comment/);
     expect(six).toMatch(/"NO_OFFER": the quote is there/);
     expect(RUBRIC_TEXT).toMatch(/There is no "agree"/);
     expect(RUBRIC_TEXT).not.toMatch(/"agree", or \{ "override"/);
@@ -398,7 +419,7 @@ describe("cases the diff review found", () => {
       RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
       RUBRIC_TEXT.indexOf("7. WHAT"),
     );
-    expect(six).toMatch(/READ GROUP-3 PASSES AS CLOSELY AS FAILS/);
+    expect(six).toMatch(/READ \[editing-request\] PASSES AS CLOSELY AS FAILS/);
     expect(six).toMatch(/restates the target inside a\s+verdict, refusal, promise or question/);
     expect(six).toMatch(/names anything in the\s+target/);
   });
