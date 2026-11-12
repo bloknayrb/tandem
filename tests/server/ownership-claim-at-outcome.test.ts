@@ -42,6 +42,7 @@ import {
 } from "../../src/server/mcp/owned-op.js";
 import { type McpToolResult, mcpError, mcpSuccess } from "../../src/server/mcp/response.js";
 import {
+  DOC_OP_WAIT_MS,
   docOpWaitTimersForTests,
   isDocOpQueueBusy,
   runDocOp,
@@ -452,6 +453,13 @@ describe("while the body runs, readers outside the queue see the document as uno
     const write = heldWrite(A, "d");
     expect(inboxScopeOf(docId("d"), A)).toBe("neither");
     expect(inboxScopeOf(docId("d"), B)).toBe("neither");
+    // Amended by the scope PR (Bryan, 2026-11-12, "Release it after 20
+    // seconds"): within the queue's wait bound, measured from when the
+    // operation running now started, the document stays out of every scope;
+    // at the bound it reads as claimable again, though the write still runs.
+    const startedAt = Date.now();
+    expect(inboxScopeOf(docId("d"), B, startedAt + DOC_OP_WAIT_MS - 1_000)).toBe("neither");
+    expect(inboxScopeOf(docId("d"), B, startedAt + DOC_OP_WAIT_MS + 1_000)).toBe("may-claim");
     write.release();
     await write.answer;
     expect(inboxScopeOf(docId("d"), A)).toBe("holds");

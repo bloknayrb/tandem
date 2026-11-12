@@ -171,15 +171,24 @@ describe("the handover is wired in a running server, and reachable only through 
     expect(body).toContain("getDocument(documentId)");
   });
 
-  it("the registry's bulk retire has one caller, the inbox's handover", () => {
+  // Amended by the scope PR: a second caller, `undoPassOn`, retires the
+  // entries a failed or unclaimed poll created (R1.7). Still awareness.ts only,
+  // and each call is inside its named function.
+  it("the registry's bulk retire has two callers, the inbox's handover and the poll's undo", () => {
     expect(filesNaming(/\bretireWhere\(/)).toEqual([
       "src/server/mcp/awareness.ts",
       "src/server/mcp/inbox-cursor.ts",
     ]);
-    expect(awareness.match(/\bretireWhere\(/g)).toHaveLength(1);
+    expect(awareness.match(/\bretireWhere\(/g)).toHaveLength(2);
     const start = awareness.indexOf("export function handOverDocumentInbox(");
     const body = awareness.slice(start, awareness.indexOf("\n}\n", start));
     expect(body).toMatch(/deliveryRegistry\.retireWhere\(\s*documentId,/);
+    const undoStart = awareness.indexOf("function undoPassOn(");
+    expect(undoStart).toBeGreaterThan(-1);
+    const undo = awareness.slice(undoStart, awareness.indexOf("\n}\n", undoStart));
+    expect(undo).toMatch(
+      /deliveryRegistry\.retireWhere\(documentId, \(entry\) => entry\.seq > before\)/,
+    );
     // `inbox-cursor.ts`: the definition only.
     const cursor = SRC_FILES.get("src/server/mcp/inbox-cursor.ts") as string;
     expect(cursor.match(/\bretireWhere\(/g)).toHaveLength(1);
@@ -364,5 +373,38 @@ describe("an ownerId is never published (ADR-054; OwnerRecord.ownerId)", () => {
       "src/server/sessions/context.ts",
       "src/server/sessions/ownership.ts",
     ]);
+  });
+});
+
+describe("the inbox's door into ownership (the scope PR)", () => {
+  const filesNaming = (pattern: RegExp) =>
+    [...SRC_FILES]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort();
+
+  it("the stuck-write release's clock is read only by the ownership module", () => {
+    // Recorded in the queue, read only in `ownership.ts` (the brief's amendment 3).
+    expect(filesNaming(/\bdocOpBusySince\b/)).toEqual([
+      "src/server/sessions/doc-op-queue.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    expect(filesNaming(/\bdocOpWaitLimitMs\b/)).toEqual([
+      "src/server/sessions/doc-op-queue.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+
+  it("only the inbox handler reaches the poll scope and its claim", () => {
+    // Any other importer would get a claim path that bypasses the inbox
+    // commit's rules (claims only after validation and the ledger commits).
+    expect(filesNaming(/\binboxOwnership\b/)).toEqual([
+      "src/server/mcp/awareness.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    for (const hook of [/\bsetInboxClaimCheckForTests\b/, /\bsetInboxScopeReadForTests\b/]) {
+      expect(filesNaming(hook)).toEqual(["src/server/sessions/ownership.ts"]);
+    }
+    expect(filesNaming(/"poll-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
   });
 });

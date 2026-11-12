@@ -55,6 +55,7 @@ import { handleClose } from "../../src/server/mcp/routes/close.js";
 import { DOC_OP_WAIT_MS, runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
   applyUserOpenDefault,
+  DEFAULT_GRACE_MS,
   getDocOwner,
   noteTransportChanged,
   noteTransportRegistered,
@@ -85,7 +86,7 @@ import { makeRes } from "../helpers/route-recorder.js";
 
 const A = "claude:handover-a";
 const B = "claude:handover-b";
-/** A third record: the fresh-cursor and cursor-less readers poll as it. */
+/** A third record: a bystander, never the holder. */
 const C = "claude:handover-c";
 
 const inboxSchema = z.object(checkInboxOutputShape);
@@ -125,6 +126,10 @@ function lapseNow(ownerId: string): void {
     vi.advanceTimersByTime(20);
   } finally {
     vi.useRealTimers();
+    // Back to the real grace: under inbox scope the lapsed record's next
+    // poll may claim the document again, which arms a grace that must not
+    // end mid-test.
+    setGraceMsForTests(DEFAULT_GRACE_MS);
   }
 }
 
@@ -225,8 +230,13 @@ function reader(owner: string) {
   };
 }
 
-/** A cursor-less (legacy) poll. */
-const legacyPoll = () => pollAs(C);
+/**
+ * A cursor-less (legacy) poll, as A. Under inbox scope (the scope PR) a poll
+ * reads only what its record holds or may claim, so the cursor-less reader of
+ * these cases is the record that held the document (and, once ownership has
+ * left it to unowned, may claim it again).
+ */
+const legacyPoll = () => pollAs(A);
 
 const actionIds = (inbox: Inbox) => inbox.userActions.map((a) => a.id).sort();
 const replyIds = (inbox: Inbox) => inbox.userReplies.map((r) => r.id).sort();
@@ -346,6 +356,13 @@ interface HandoverPath {
   own?: (doc: Doc) => Promise<void> | void;
   /** Ownership leaves that record. Returns the document as it is afterwards (a close reopens it). */
   leave: (doc: Doc) => Promise<Doc>;
+  /** The record holding the document before it leaves. Default: A. */
+  holder?: string;
+  /**
+   * The record that reads the document after the handover: its new holder,
+   * or (where it becomes unowned) a record that may claim it. Default: B.
+   */
+  next?: string;
 }
 
 const PATHS: HandoverPath[] = [
@@ -388,6 +405,7 @@ const PATHS: HandoverPath[] = [
   },
   {
     name: "a lapse to Tandem's Claude (the default rule while it is present)",
+    next: TANDEM_OWNER_ID,
     leave: async (doc) => {
       setTandemPresenceSource(() => true);
       lapseNow(A);
@@ -420,26 +438,6 @@ const PATHS: HandoverPath[] = [
       }
       release();
       await stuck;
-      return doc;
-    },
-  },
-  {
-    name: "the clearing of an entry whose record is gone",
-    // Fabricated, as in `ownership-enforcement.test.ts`: no production path
-    // writes an entry for a record that does not exist. A is handed the item
-    // as a registered record that does not hold the document.
-    own: (doc) => {
-      setDocOwner(doc.id, { ownerId: "claude:handover-ghost", kind: "claimed" }, "claim");
-    },
-    leave: async (doc) => {
-      const wrote = await as(B, "tandem_comment", {
-        from: 6,
-        to: 11,
-        text: "clears the stale entry",
-        documentId: doc.id,
-      });
-      expect(wrote.error).toBe(false);
-      expect(getDocOwner(doc.id)).toMatchObject({ ownerId: B });
       return doc;
     },
   },
@@ -515,6 +513,7 @@ for (const via of ["POST /api/close", "tandem_close"] as const) {
     },
     {
       name: `a tab close through ${via} while Tandem's Claude holds it by default, then a reopen`,
+      holder: TANDEM_OWNER_ID,
       own: (doc) => {
         setTandemPresenceSource(() => true);
         applyUserOpenDefault(doc.id);
@@ -542,26 +541,29 @@ function seedItem(doc: Doc, kind: ItemKind): (inbox: Inbox) => boolean {
 describe.each(PATHS)("ownership leaves a record: $name (R1.1, R1.2)", (handoverPath) => {
   describe.each<ItemKind>(["comment", "reply"])("a user %s", (kind) => {
     /**
-     * A is handed the item and acknowledges it; ownership leaves; the reader
-     * under test is then handed it once.
+     * The holder is handed the item and acknowledges it; ownership leaves;
+     * the record that reads the document next (its new holder, or one that
+     * may claim it) is then handed it once, on a fresh cursor or on one whose
+     * mark had already passed it.
      *
-     * **The fresh cursor polls before any other poll.** Every poll still reads
-     * every document and acknowledgement is not scoped yet (gap (a)), so any
-     * other poll first would be handed the re-owed item and its
-     * acknowledgement would hide it from a fresh cursor again.
+     * Under inbox scope (the scope PR) the "past" reader's mark passes the
+     * item because the document was not its to answer: its default polls
+     * read the document as empty while the holder had it (R1.2).
      */
     async function scenario(who: "fresh" | "past"): Promise<void> {
+      const holder = handoverPath.holder ?? A;
+      const nextOwner = handoverPath.next ?? B;
       const doc = await (handoverPath.open?.() ?? Promise.resolve(mkDoc("d")));
       await (handoverPath.own ?? ((d: Doc) => claim(d.id)))(doc);
       const handed = seedItem(doc, kind);
 
-      const a = reader(A);
-      expect(handed(await a.poll()), "A is handed it").toBe(true);
-      expect(handed(await a.poll()), "A acknowledged it").toBe(false);
-      const b = reader(B);
+      const a = reader(holder);
+      expect(handed(await a.poll()), "the holder is handed it").toBe(true);
+      expect(handed(await a.poll()), "the holder acknowledged it").toBe(false);
+      const b = reader(nextOwner);
       if (who === "past") {
-        // A fresh reader counts what A acknowledged as seen: B's mark passes it.
-        expect(handed(await b.poll()), "B's mark passes it unhanded").toBe(false);
+        // Not its document: its mark passes the item unhanded.
+        expect(handed(await b.poll()), "the next reader's mark passes it unhanded").toBe(false);
         expect(handed(await b.poll())).toBe(false);
       }
 
@@ -570,7 +572,7 @@ describe.each(PATHS)("ownership leaves a record: $name (R1.1, R1.2)", (handoverP
       const after = await handoverPath.leave(doc);
       expect(markOf(after.id), "handoverSeq is the registry's counter").toBe(counterAtHandover);
 
-      const next = who === "fresh" ? reader(C) : b;
+      const next = who === "fresh" ? reader(nextOwner) : b;
       expect(handed(await next.poll()), `the ${who} reader is handed it`).toBe(true);
       expect(handed(await next.poll()), "and only once").toBe(false);
     }
@@ -600,50 +602,59 @@ const NOTICE_PATHS = PATHS.filter(
 describe.each(NOTICE_PATHS)(
   "comments are owed again and notices are not: $name (R1.2, R1.3, R1.7)",
   (handoverPath) => {
-    it("cursor-less, a reader past the mark and the previous owner are each handed the comment, never the notice", async () => {
-      // Each path's own document and holder: `claimed`, `opened` by a real
-      // `tandem_open`, or Tandem's Claude by default.
-      const doc = await (handoverPath.open?.() ?? Promise.resolve(mkDoc("d")));
-      await (handoverPath.own ?? ((d: Doc) => claim(d.id)))(doc);
-      annotation(doc.ydoc, "c1");
-      annotation(doc.ydoc, "n1", { author: "claude", status: "accepted" });
+    /**
+     * Every notice path leaves the document unowned, so after the handover
+     * one record claims it with its first poll, and under inbox scope only
+     * that record reads it. `whoReads` is that record: a bystander (B), whose
+     * cursor-less poll and cursor past the mark are each handed the comment,
+     * or the previous holder alone (the lone-session case), on its own cursor
+     * and cursor-less.
+     */
+    it.each(["a bystander", "the previous holder"] as const)(
+      "cursor-less and past the mark, %s is handed the comment, never the notice",
+      async (whoReads) => {
+        // Each path's own document and holder: `claimed`, `opened` by a real
+        // `tandem_open`, or Tandem's Claude by default.
+        const holder = handoverPath.holder ?? A;
+        const after = whoReads === "a bystander" ? B : holder;
+        const doc = await (handoverPath.open?.() ?? Promise.resolve(mkDoc("d")));
+        await (handoverPath.own ?? ((d: Doc) => claim(d.id)))(doc);
+        annotation(doc.ydoc, "c1");
+        annotation(doc.ydoc, "n1", { author: "claude", status: "accepted" });
 
-      const a = reader(A);
-      const first = await a.poll();
-      expect(actionIds(first)).toEqual(["c1"]);
-      expect(responseIds(first)).toEqual(["n1"]);
-      await a.poll();
-      const b = reader(B);
-      const passed = await b.poll();
-      expect([...actionIds(passed), ...responseIds(passed)]).toEqual([]);
-      // Into the cursor-less ledger first, or the cursor-less arm passes on master.
-      const legacyFirst = await legacyPoll();
-      expect(actionIds(legacyFirst)).toEqual(["c1"]);
-      expect(responseIds(legacyFirst)).toEqual(["n1"]);
-      const legacyAgain = await legacyPoll();
-      expect([...actionIds(legacyAgain), ...responseIds(legacyAgain)]).toEqual([]);
+        const a = reader(holder);
+        const first = await a.poll();
+        expect(actionIds(first)).toEqual(["c1"]);
+        expect(responseIds(first)).toEqual(["n1"]);
+        await a.poll();
+        const b = reader(after);
+        const passed = await b.poll();
+        expect([...actionIds(passed), ...responseIds(passed)]).toEqual([]);
+        // Into the cursor-less ledger first, or the cursor-less arm passes on master.
+        const legacyFirst = await pollAs(holder);
+        expect(actionIds(legacyFirst)).toEqual(["c1"]);
+        expect(responseIds(legacyFirst)).toEqual(["n1"]);
+        const legacyAgain = await pollAs(holder);
+        expect([...actionIds(legacyAgain), ...responseIds(legacyAgain)]).toEqual([]);
 
-      const counter = deliveryRegistry.counter;
-      const after = await handoverPath.leave(doc);
-      expect(markOf(after.id)).toBe(counter);
+        const counter = deliveryRegistry.counter;
+        const left = await handoverPath.leave(doc);
+        expect(markOf(left.id)).toBe(counter);
 
-      const legacyAfter = await legacyPoll();
-      expect(actionIds(legacyAfter), "cursor-less: the comment").toEqual(["c1"]);
-      expect(responseIds(legacyAfter), "cursor-less: no notice").toEqual([]);
-      expect(actionIds(await legacyPoll())).toEqual([]);
+        const legacyAfter = await pollAs(after);
+        expect(actionIds(legacyAfter), "cursor-less: the comment").toEqual(["c1"]);
+        expect(responseIds(legacyAfter), "cursor-less: no notice").toEqual([]);
+        expect(actionIds(await pollAs(after))).toEqual([]);
+        expect(getDocOwner(left.id), "that poll claimed it").toMatchObject({ ownerId: after });
 
-      const bAfter = await b.poll();
-      expect(actionIds(bAfter), "past the mark: the comment").toEqual(["c1"]);
-      expect(responseIds(bAfter), "past the mark: no notice").toEqual([]);
+        const bAfter = await b.poll();
+        expect(actionIds(bAfter), "past the mark: the comment").toEqual(["c1"]);
+        expect(responseIds(bAfter), "past the mark: no notice").toEqual([]);
 
-      // The lone-session case: the record that held it, on its own cursor.
-      const aAfter = await a.poll();
-      expect(actionIds(aAfter), "the previous owner: the comment").toEqual(["c1"]);
-      expect(responseIds(aAfter), "the previous owner: no notice").toEqual([]);
-
-      // The mark outlives whatever came next (a reopen, an unowned spell).
-      expect(markOf(after.id)).toBe(counter);
-    });
+        // The mark outlives whatever came next (a reopen, an unowned spell).
+        expect(markOf(left.id)).toBe(counter);
+      },
+    );
   },
 );
 
@@ -652,12 +663,17 @@ describe.each(NOTICE_PATHS)(
 // private function with nothing but the document id (pinned from source in
 // `ownership-source-pins.test.ts`).
 
-/** A holds `d`, was handed the item and acknowledged it; B's mark passed it. */
+/**
+ * A holds `d`, was handed the item and acknowledged it; a second cursor of
+ * A's (`b`) then passed it as seen. Under inbox scope a reader past the mark
+ * must be one the document is read for: after a lapse to unowned, A's next
+ * poll may claim it again.
+ */
 async function seenByAll(_doc: Doc, handed: (inbox: Inbox) => boolean) {
   const a = reader(A);
   expect(handed(await a.poll())).toBe(true);
   expect(handed(await a.poll())).toBe(false);
-  const b = reader(B);
+  const b = reader(A);
   expect(handed(await b.poll())).toBe(false);
   expect(handed(await b.poll())).toBe(false);
   return { a, b };
@@ -678,22 +694,32 @@ describe("a cursor-less reader (R1.2)", () => {
   });
 });
 
-describe("gap (a), as it stands", () => {
-  // FLIP-BLOCKER gap (a): the scope PR must flip this test. Named in
-  // `tests/server/ownership-flip-blockers.ts`.
-  it("FLIP-BLOCKER gap (a): the previous owner's poll is handed the item, and its acknowledgement hides it from a fresh cursor", async () => {
+describe("gap (a), closed by inbox scope", () => {
+  // The handover PR's gap (a), flipped by the scope PR: the previous owner,
+  // any other session and a cursor-less poll no longer read the document, so
+  // none of them can acknowledge the re-owed item away from its new holder.
+  it("after a handover from A to B, A's next poll does not read the document, and a fresh cursor as B is handed the item", async () => {
     const doc = mkDoc("d");
     claim(doc.id);
     annotation(doc.ydoc, "c1");
     const handed = (inbox: Inbox) => actionIds(inbox).includes("c1");
-    const { a } = await seenByAll(doc, handed);
+    const a = reader(A);
+    expect(handed(await a.poll())).toBe(true);
+    expect(handed(await a.poll())).toBe(false);
 
-    lapseNow(A);
+    setDocOwner(doc.id, { ownerId: B, kind: "opened" }, "take", B);
+    expect(markOf(doc.id), "the handover ran").toBeGreaterThan(0);
 
-    // Asserted, or this would pass with no handover at all.
-    expect(handed(await a.poll()), "the previous owner is handed it again").toBe(true);
-    await a.poll();
-    expect(handed(await reader(C).poll()), "a fresh cursor is not").toBe(false);
+    // A, C and cursor-less polls by both, repeatedly: none reads the document.
+    for (let i = 0; i < 2; i++) {
+      expect(handed(await a.poll()), "the previous owner").toBe(false);
+      expect(handed(await reader(C).poll()), "another session").toBe(false);
+      expect(handed(await pollAs(A)), "cursor-less, the previous owner").toBe(false);
+      expect(handed(await pollAs(C)), "cursor-less, another session").toBe(false);
+    }
+    const fresh = reader(B);
+    expect(handed(await fresh.poll()), "a fresh cursor as B is handed it").toBe(true);
+    expect(handed(await fresh.poll()), "once").toBe(false);
   });
 });
 
@@ -707,26 +733,30 @@ describe("items on other documents are untouched (R1.2)", () => {
     annotation(two.ydoc, "c2");
     reply(two.ydoc, "c2", "r2");
 
+    // Each holder is handed its own document's items and acknowledges them;
+    // B also takes them cursor-less (so they are in the cursor-less ledger).
     const a = reader(A);
-    expect(actionIds(await a.poll())).toEqual(["c1", "c2"]);
+    expect(actionIds(await a.poll())).toEqual(["c1"]);
     await a.poll();
     const b = reader(B);
-    expect(actionIds(await b.poll())).toEqual([]);
-    const legacy = await legacyPoll();
-    expect(actionIds(legacy)).toEqual(["c1", "c2"]);
+    expect(actionIds(await b.poll())).toEqual(["c2"]);
+    await b.poll();
+    const legacy = await pollAs(B);
+    expect(actionIds(legacy)).toEqual(["c2"]);
     expect(replyIds(legacy)).toEqual(["r2"]);
 
     lapseNow(A);
     expect(getDocOwner(two.id)).toMatchObject({ ownerId: B });
     expect(markOf(two.id)).toBeUndefined();
 
-    const fresh = await reader(C).poll();
+    // B reads both now: the first document is unowned and B may claim it.
+    const fresh = await reader(B).poll();
     expect(actionIds(fresh), "fresh").toEqual(["c1"]);
     expect(replyIds(fresh)).toEqual([]);
     const past = await b.poll();
     expect(actionIds(past), "past the mark").toEqual(["c1"]);
     expect(replyIds(past)).toEqual([]);
-    const legacyAfter = await legacyPoll();
+    const legacyAfter = await pollAs(B);
     expect(actionIds(legacyAfter), "cursor-less").toEqual(["c1"]);
     expect(replyIds(legacyAfter)).toEqual([]);
   });
@@ -798,7 +828,7 @@ describe("an item that does not qualify at the handover is not lost (R1.2: no ga
     // A cursor reader whose numeric mark predates the comment and its
     // cursor-less hand-out. (A fresh cursor would count the acknowledged
     // entry as seen and retire nothing.)
-    const early = reader(B);
+    const early = reader(A);
     await early.poll();
     await early.poll();
     annotation(doc.ydoc, "c1");
@@ -820,7 +850,7 @@ describe("an item that does not qualify at the handover is not lost (R1.2: no ga
     const doc = mkDoc("d");
     claim(doc.id);
     const handed = (inbox: Inbox) => replyIds(inbox).includes("r1");
-    const early = reader(B);
+    const early = reader(A);
     await early.poll();
     await early.poll();
     annotation(doc.ydoc, "parent", { author: "claude" });
@@ -947,8 +977,9 @@ describe("privacy: a handover reveals nothing (ADR-027)", () => {
     const again = await b.poll();
     expect(again.hasNew).toBe(false);
 
-    // A cursor-less poll, whose ledger held none of it, sees the same and no more.
-    const legacy = await legacyPoll();
+    // A cursor-less poll by B, which now holds the document (its cursor poll
+    // above claimed it) and whose ledger held none of it, sees the same and no more.
+    const legacy = await pollAs(B);
     expect(actionIds(legacy)).toEqual(controls.actions);
     expect(replyIds(legacy)).toEqual(controls.replies);
     expect(JSON.stringify(legacy)).not.toContain("SECRET");
@@ -960,8 +991,9 @@ describe("an item already in a reader's held list (Solo)", () => {
   it("leaves the held list at the handover, is not handed in Solo, and is handed once when Solo lifts", async () => {
     const doc = mkDoc("d");
     claim(doc.id);
-    // B has a numeric mark from before the comment existed.
-    const b = reader(B);
+    // A second cursor of the holder's, with a numeric mark from before the
+    // comment existed (under inbox scope only the holder reads the document).
+    const b = reader(A);
     await b.poll();
     await b.poll();
     annotation(doc.ydoc, "c1");
@@ -1011,7 +1043,9 @@ describe("notices behave exactly as on master (R1.3)", () => {
     await buildWorld();
     const doc = mkDoc("d");
     claim(doc.id);
-    const below = reader(B);
+    // Every reader is a cursor of A's: under inbox scope the holder, and once
+    // ownership left it, a record that may claim it, is the one that reads.
+    const below = reader(A);
     await below.poll();
     await below.poll();
 
@@ -1020,7 +1054,7 @@ describe("notices behave exactly as on master (R1.3)", () => {
     const a = reader(A);
     await a.poll();
     await a.poll();
-    const above = reader(B);
+    const above = reader(A);
     await above.poll();
     await above.poll();
 
@@ -1028,7 +1062,7 @@ describe("notices behave exactly as on master (R1.3)", () => {
     expect(responseIds(await a.poll())).toEqual(["unacked"]);
     // A reader that was handed the unacknowledged notice and has not passed
     // its cursor back: its mark is above the notice, which nobody acknowledged.
-    const aboveUnacked = reader(B);
+    const aboveUnacked = reader(A);
     if (who === "aboveUnacked") {
       expect(responseIds(await aboveUnacked.poll())).toContain("unacked");
     }
@@ -1041,7 +1075,7 @@ describe("notices behave exactly as on master (R1.3)", () => {
         ? legacyPoll
         : who === "fresh"
           ? (() => {
-              const fresh = reader(C);
+              const fresh = reader(A);
               return () => fresh.poll();
             })()
           : who === "below"
@@ -1189,15 +1223,17 @@ describe("notices behave exactly as on master (R1.3)", () => {
 });
 
 describe("what is not a handover (R1.1)", () => {
-  it("a claim of an unowned document and the user-open default re-owe nothing and write no mark", async () => {
+  it("a claim of an unowned document (by a poll or a write) and the user-open default re-owe nothing and write no mark", async () => {
     const claimed = mkDoc("claimed");
+    const written = mkDoc("written");
     const defaulted = mkDoc("defaulted");
     annotation(claimed.ydoc, "c1");
-    annotation(defaulted.ydoc, "c2");
     const handed = (inbox: Inbox) => actionIds(inbox);
+    // A claim by a poll (the scope PR): A is handed c1 and so claims `claimed`.
     const a = reader(A);
-    expect(handed(await a.poll())).toEqual(["c1", "c2"]);
+    expect(handed(await a.poll())).toEqual(["c1"]);
     await a.poll();
+    expect(getDocOwner(claimed.id)).toMatchObject({ ownerId: A, kind: "claimed" });
     const b = reader(B);
     expect(handed(await b.poll())).toEqual([]);
     expect(deliveryRegistry.counter).toBeGreaterThan(0);
@@ -1207,10 +1243,10 @@ describe("what is not a handover (R1.1)", () => {
       from: 0,
       to: 5,
       text: "a claim",
-      documentId: claimed.id,
+      documentId: written.id,
     });
     expect(wrote.error).toBe(false);
-    expect(getDocOwner(claimed.id)).toMatchObject({ ownerId: A, kind: "claimed" });
+    expect(getDocOwner(written.id)).toMatchObject({ ownerId: A, kind: "claimed" });
     // The user-open default, with Tandem's Claude present so it really assigns.
     setTandemPresenceSource(() => true);
     applyUserOpenDefault(defaulted.id);
@@ -1222,9 +1258,10 @@ describe("what is not a handover (R1.1)", () => {
     expect(handed(await b.poll())).toEqual([]);
 
     // And the wiring is live in this run: a real handover does both.
+    setTandemPresenceSource(() => false);
     const counter = deliveryRegistry.counter;
     lapseNow(A);
-    expect(ownershipSnapshotForTests().handoverSeq).toEqual([[claimed.id, counter]]);
+    expect(new Map(ownershipSnapshotForTests().handoverSeq).get(claimed.id)).toBe(counter);
     expect(handed(await b.poll())).toEqual(["c1"]);
   });
 });
@@ -1242,9 +1279,8 @@ describe("no reader skips the document on a stale quiet record (R1.5)", () => {
       claim(doc.id);
       annotation(doc.ydoc, "c1");
       const handed = (inbox: Inbox) => actionIds(inbox).includes("c1");
-      // Polls are dispatched as B or cursor-less, never as the detached A: a
-      // poll re-judges its own record's attachment.
-      const b = reader(B);
+      // Polls are the holder's (under inbox scope only it reads the document).
+      const b = reader(A);
       const poll = contract === "cursor" ? () => b.poll() : legacyPoll;
       expect(handed(await poll())).toBe(true);
       // The quiet fixed point is recorded by a pass that returns nothing.

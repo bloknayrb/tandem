@@ -327,8 +327,9 @@ export class DeliveryRegistry {
    * by `documentScopes`.
    *
    * Never the chat scope: a chat entry carries `received` and hand-out
-   * tokens, which only `reset` may forget. The one caller is the ownership
-   * handover (`handOverDocumentInbox` in `awareness.ts`).
+   * tokens, which only `reset` may forget. Two callers, both in
+   * `awareness.ts`: the ownership handover (`handOverDocumentInbox`) and the
+   * scope PR's undo of a failed or unclaimed poll (`undoPassOn`).
    */
   retireWhere(scope: string, drop: (entry: RegistryEntry) => boolean): number {
     if (scope === CHAT_SCOPE) return 0;

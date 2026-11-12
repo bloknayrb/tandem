@@ -403,6 +403,32 @@ export const checkInboxOutputShape = {
   }),
 };
 
+/**
+ * What `tandem_checkInbox` adds on a server with ownership on (#2358 scope
+ * PR; ownership design §6.6, `holding` and `notYours` only — `changed` is
+ * the change-notice PR's). Spread into the inbox schema only when the tool is
+ * registered flag-on, so a dark server's `tools/list` carries no ownership
+ * field. Optional, so a server registered flag-on and polled after a test
+ * turns the flag off still answers within its schema.
+ */
+export const checkInboxOwnershipShape = {
+  ownership: z
+    .object({
+      holding: z
+        .array(z.string())
+        .describe(
+          "Ids of the documents this session holds after this poll. A poll that returns you items on a document nobody holds makes it yours",
+        ),
+      notYours: z
+        .array(z.string())
+        .describe(
+          "The document this poll named, when it is not yours to answer now: nothing on it was returned. Do not open it unless the user asks you to work on it",
+        ),
+    })
+    .optional()
+    .describe("Which open documents are yours to answer"),
+};
+
 // ---------------------------------------------------------------------------
 // tandem_listDocuments
 // ---------------------------------------------------------------------------

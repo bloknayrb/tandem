@@ -67,9 +67,13 @@ import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js"
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
 import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
+
+// #2358 scope PR: flag-on, a poll reads only what its record holds or may
+// claim, so this suite's one caller is a registered record (see the helper).
+registerTestCallerRecord();
 
 let client: Client;
 let close: (() => Promise<void>) | undefined;

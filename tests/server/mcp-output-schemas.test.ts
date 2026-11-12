@@ -42,23 +42,31 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import {
   checkInboxOutputShape,
+  checkInboxOwnershipShape,
   diagnosticsOutputShape,
   getAnnotationsOutputShape,
   getTextContentOutputShape,
   listDocumentsOutputShape,
   searchOutputShape,
   statusOutputShape,
+  statusOwnershipShape,
 } from "../../src/server/mcp/output-schemas.js";
+import { ownershipOn } from "../../src/server/mcp/owned-op.js";
 import { makeDiagnosticsHandler } from "../../src/server/mcp/routes/diagnostics.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
+import { inboxOwnership } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
+
+// #2358 scope PR: flag-on, a poll reads only what its record holds or may
+// claim, so this suite's one caller is a registered record (see the helper).
+registerTestCallerRecord();
 
 let client: Client;
 let close: (() => Promise<void>) | undefined;
@@ -92,6 +100,20 @@ type ToolResult = {
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
+
+/**
+ * The output shape each tool was registered with: flag-on (the
+ * `ownership-flag-on` job) `tandem_status` and `tandem_checkInbox` add their
+ * optional ownership fields, which a registered test caller (#2358 scope PR)
+ * now receives. Flag off these are exactly the dark shapes, so the strict
+ * match below still proves a dark response carries no ownership key.
+ */
+const inboxShape = (): ZodRawShape =>
+  inboxOwnership.responseField()
+    ? { ...checkInboxOutputShape, ...checkInboxOwnershipShape }
+    : checkInboxOutputShape;
+const statusShape = (): ZodRawShape =>
+  ownershipOn() ? { ...statusOutputShape, ...statusOwnershipShape } : statusOutputShape;
 
 function textEnvelope(result: ToolResult): { error: boolean; data?: unknown } {
   const textContent = result.content.find((c) => c.type === "text");
@@ -247,7 +269,7 @@ describe("tandem_status structured output", () => {
       name: "tandem_status",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, statusOutputShape);
+    const sc = expectStructuredMatch(result, statusShape());
     expect(sc.running).toBe(true);
     expect(sc.mode).toBe("tandem");
     expect(sc.activeDocument).toBeNull();
@@ -261,7 +283,7 @@ describe("tandem_status structured output", () => {
       name: "tandem_status",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, statusOutputShape);
+    const sc = expectStructuredMatch(result, statusShape());
     expect(sc.documentCount).toBe(1);
     expect((sc.activeDocument as { documentId: string }).documentId).toBe("schema-status-doc");
   });
@@ -272,7 +294,7 @@ describe("tandem_status structured output", () => {
       name: "tandem_status",
       arguments: { text: "Reviewing section 2" },
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, statusOutputShape);
+    const sc = expectStructuredMatch(result, statusShape());
     expect(sc.status).toBe("Reviewing section 2");
   });
 
@@ -281,7 +303,7 @@ describe("tandem_status structured output", () => {
       name: "tandem_status",
       arguments: { text: "hello" },
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, statusOutputShape);
+    const sc = expectStructuredMatch(result, statusShape());
     expect(sc.warning).toContain("No document open");
   });
 });
@@ -407,7 +429,7 @@ describe("tandem_checkInbox structured output (no channel shim attached)", () =>
       name: "tandem_checkInbox",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, checkInboxOutputShape);
+    const sc = expectStructuredMatch(result, inboxShape());
     expect(sc.hasNew).toBe(false);
     expect(sc.summary).toBe("No new actions.");
     expect(sc.userActions).toEqual([]);
@@ -455,7 +477,7 @@ describe("tandem_checkInbox structured output (no channel shim attached)", () =>
       name: "tandem_checkInbox",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, checkInboxOutputShape);
+    const sc = expectStructuredMatch(result, inboxShape());
 
     expect(sc.hasNew).toBe(true);
     const actions = sc.userActions as Array<Record<string, unknown>>;
@@ -486,7 +508,7 @@ describe("tandem_checkInbox structured output (no channel shim attached)", () =>
       name: "tandem_checkInbox",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, checkInboxOutputShape);
+    const sc = expectStructuredMatch(result, inboxShape());
     expect(JSON.stringify(sc)).not.toContain("secret note content");
     expect(sc.userActions).toEqual([]);
   });
@@ -594,7 +616,7 @@ describe("error envelopes from outputSchema'd tools", () => {
       name: "tandem_checkInbox",
       arguments: {},
     })) as ToolResult;
-    const sc = expectStructuredMatch(result, checkInboxOutputShape);
+    const sc = expectStructuredMatch(result, inboxShape());
     expect(sc.summary).toMatch(/^No document is open\./);
   });
 });
