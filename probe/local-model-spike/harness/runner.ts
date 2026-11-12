@@ -1,0 +1,318 @@
+/**
+ * The run loop: preflight, identity, lock, then one trial after another with
+ * every scored trial appended to the log as it finishes. Resumable: a scored
+ * trial is never run twice and never skipped; an attempt that ended in an
+ * infrastructure error is run again.
+ *
+ * All outside facts (the clock, the commit, the preflight, the trial runner,
+ * the fingerprint) come in through `RunDeps`, so the dry run drives this exact
+ * function with scripted ones.
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import type { LocalModelConfig } from "../../../src/server/local-model/index.js";
+import { evaluateTrial } from "./evaluate.js";
+import type { ModelFacts } from "./ollama-meta.js";
+import { makeRunId, runDirFor, sha256Hex } from "./paths.js";
+import type { PreflightResult } from "./preflight.js";
+import { canonicalJson, type InfraRecord, type PlannedTrial, type TrialRecord } from "./record.js";
+import {
+  acquireLock,
+  appendInfra,
+  appendTrial,
+  existingRunDir,
+  identityPath,
+  readIdentity,
+  readTrials,
+  resumeRefusal,
+  type RunIdentity,
+  type RunIdentityKey,
+  type RunMode,
+  type RunSession,
+  writeIdentity,
+} from "./run-store.js";
+import { fixtureFor, selectScenarios } from "./scenarios/index.js";
+import type { Scenario, Tier } from "./scenarios/types.js";
+import type { TrialInput, TrialObservation } from "./trial.js";
+import { validateScenarios } from "./validate.js";
+
+/** Consecutive infrastructure errors after which the run stops itself. */
+export const MAX_CONSECUTIVE_INFRASTRUCTURE = 3;
+
+/**
+ * A trial that ended in an error before the model produced any text at all (an
+ * HTTP 500, an unreadable response). ONE of these is the model's failure and
+ * is scored. Several in a row is a server that is down or out of memory: a run
+ * that scored them would print FAIL for an endpoint fault. So they are held
+ * back while the streak lasts; if it reaches the limit they are logged as
+ * infrastructure and the run stops, otherwise they are scored as they are.
+ */
+function isSilentError(record: TrialRecord): boolean {
+  return record.ending === "error" && record.turns.every((t) => t.text.length === 0);
+}
+
+export interface RunOptions {
+  modelTag: string;
+  endpoint: string;
+  tier: Tier;
+  mode: RunMode;
+  repeats: number;
+  hardware: string;
+  includeExtended: boolean;
+  /** Resume this run id instead of starting a new run. */
+  resume?: string;
+  /** The id of a NEW run, chosen by the caller before the product is loaded
+   *  (the app-data directory is pointed inside the run directory first). */
+  runId?: string;
+  clearStaleLock: boolean;
+  runsDir: string;
+}
+
+export interface RunDeps {
+  now: () => Date;
+  commit: () => { commit: string; dirty: boolean | "unknown" };
+  config: (modelTag: string, endpoint: string) => LocalModelConfig;
+  preflight: (config: LocalModelConfig) => Promise<PreflightResult>;
+  fingerprint: () => Promise<string>;
+  runTrial: (input: TrialInput) => Promise<TrialObservation>;
+  log: (line: string) => void;
+  /** Called with the run directory once it is known, before any trial. */
+  onRunDir?: (runDir: string) => void;
+}
+
+export interface RunResult {
+  status: "complete" | "stopped" | "refused";
+  reason?: string;
+  runId?: string;
+  runDir?: string;
+  scoredThisSession: number;
+  infraThisSession: number;
+}
+
+export function planTrials(scenarios: Scenario[], repeats: number): PlannedTrial[] {
+  const out: PlannedTrial[] = [];
+  for (let r = 1; r <= repeats; r++) {
+    for (const s of scenarios) {
+      out.push({ trialId: `${s.id}#${r}`, scenarioId: s.id, group: s.group, repeat: r });
+    }
+  }
+  return out;
+}
+
+/** A hash of exactly which scenarios, with which content, a run measures. */
+export function scenarioSetHash(scenarios: Scenario[]): string {
+  return sha256Hex(
+    canonicalJson(scenarios.map((s) => ({ ...s, fixtureHash: sha256Hex(fixtureFor(s).markdown) }))),
+  ).slice(0, 16);
+}
+
+function identityKey(
+  opts: RunOptions,
+  facts: ModelFacts,
+  commit: string,
+  fingerprint: string,
+  setHash: string,
+): RunIdentityKey {
+  return {
+    commit,
+    modelDigest: facts.digest,
+    ollamaVersion: facts.ollamaVersion,
+    fingerprint,
+    tier: opts.tier,
+    mode: opts.mode,
+    repeats: opts.repeats,
+    scenarioSetHash: setHash,
+    includeExtended: opts.includeExtended,
+  };
+}
+
+function seconds(ms: number | null): string {
+  return ms === null ? "–" : `${(ms / 1000).toFixed(0)}s`;
+}
+
+export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<RunResult> {
+  const none = { scoredThisSession: 0, infraThisSession: 0 };
+  let scenarios: Scenario[];
+  try {
+    scenarios = selectScenarios({ tier: opts.tier, mode: opts.mode, includeExtended: opts.includeExtended });
+  } catch (err) {
+    return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
+  }
+
+  // Every gold anchor, selection and target is checked through the product's
+  // own dispatch before anything else. A bank that does not resolve measures nothing.
+  const problems = validateScenarios(scenarios);
+  if (problems.length > 0) {
+    return {
+      status: "refused",
+      reason: `the scenario bank does not validate:\n  - ${problems.join("\n  - ")}`,
+      ...none,
+    };
+  }
+
+  const config = deps.config(opts.modelTag, opts.endpoint);
+  const pre = await deps.preflight(config);
+  for (const line of pre.notes) deps.log(line);
+  if (!pre.ok) return { status: "refused", reason: pre.stop, ...none };
+
+  const { commit, dirty } = deps.commit();
+  const fingerprint = await deps.fingerprint();
+  const setHash = scenarioSetHash(scenarios);
+  const key = identityKey(opts, pre.facts, commit, fingerprint, setHash);
+  const planned = planTrials(scenarios, opts.repeats);
+  const session: RunSession = {
+    startedAt: deps.now().toISOString(),
+    dirty,
+    hardware: opts.hardware,
+    contextLength: pre.facts.contextLength,
+    serverSettings: pre.facts.serverSettings,
+    toolSupport: pre.facts.toolSupport === true ? "yes" : "unknown",
+    host: os.hostname(),
+  };
+
+  let runDir: string;
+  let identity: RunIdentity;
+  if (opts.resume !== undefined) {
+    try {
+      runDir = existingRunDir(opts.resume, opts.runsDir);
+      identity = readIdentity(runDir);
+    } catch (err) {
+      return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
+    }
+    const refusal = resumeRefusal(identity, key);
+    if (refusal) return { status: "refused", reason: `cannot resume ${opts.resume}: ${refusal}`, ...none };
+  } else {
+    const runId =
+      opts.runId ??
+      makeRunId({ date: deps.now(), tier: opts.tier, mode: opts.mode, modelTag: opts.modelTag });
+    runDir = runDirFor(runId, opts.runsDir);
+    if (fs.existsSync(identityPath(runDir))) {
+      return { status: "refused", reason: `run already exists: ${runId}`, ...none };
+    }
+    fs.mkdirSync(runDir, { recursive: true });
+    identity = { ...key, runId, modelTag: opts.modelTag, endpoint: opts.endpoint, sessions: [] };
+  }
+
+  let release: () => void;
+  try {
+    release = acquireLock(runDir, { clearStale: opts.clearStaleLock });
+  } catch (err) {
+    return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
+  }
+
+  let scored = 0;
+  let infra = 0;
+  try {
+    identity.sessions.push(session);
+    writeIdentity(runDir, identity);
+    fs.writeFileSync(path.join(runDir, "planned.json"), `${JSON.stringify(planned, null, 2)}\n`, "utf8");
+    deps.onRunDir?.(runDir);
+    deps.log(`Run ${identity.runId}`);
+    deps.log(`  directory: ${runDir}`);
+    deps.log(`  fingerprint: ${fingerprint}   scenarios: ${scenarios.length}   repeats: ${opts.repeats}`);
+
+    const done = new Set(readTrials<TrialRecord>(runDir).map((t) => t.trialId));
+    const todo = planned.filter((p) => !done.has(p.trialId));
+    const byId = new Map(scenarios.map((s) => [s.id, s]));
+    let consecutiveInfra = 0;
+    const held: TrialRecord[] = [];
+    const durations: number[] = [];
+
+    for (let i = 0; i < todo.length; i++) {
+      const plan = todo[i];
+      const scenario = byId.get(plan.scenarioId) as Scenario;
+      const observation = await deps.runTrial({
+        markdown: fixtureFor(scenario).markdown,
+        prompt: scenario.prompt,
+        selectedText: scenario.selectedText,
+        tier: opts.tier,
+        config,
+      });
+      const evaluated = evaluateTrial({
+        runId: identity.runId,
+        trialId: plan.trialId,
+        repeat: plan.repeat,
+        scenario,
+        observation,
+        contextLength: pre.facts.contextLength,
+      });
+      const position = `[${done.size + i + 1}/${planned.length}]`;
+      if (!evaluated.scored) {
+        const rec: InfraRecord = {
+          runId: identity.runId,
+          trialId: plan.trialId,
+          scenarioId: plan.scenarioId,
+          group: plan.group,
+          detail: evaluated.classification.detail,
+          at: deps.now().toISOString(),
+        };
+        appendInfra(runDir, rec);
+        infra += 1;
+        consecutiveInfra += 1;
+        deps.log(`${position} ${plan.trialId}  NOT SCORED (infrastructure: ${rec.detail})`);
+        if (consecutiveInfra >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
+          return {
+            status: "stopped",
+            reason: `${MAX_CONSECUTIVE_INFRASTRUCTURE} endpoint errors in a row. Nothing was scored for them. Fix the endpoint, then resume with --resume ${identity.runId}`,
+            runId: identity.runId,
+            runDir,
+            scoredThisSession: scored,
+            infraThisSession: infra,
+          };
+        }
+        continue;
+      }
+      const r = evaluated.record;
+      if (isSilentError(r)) {
+        held.push(r);
+        deps.log(`${position} ${plan.trialId}  ERROR before any text (${r.detail}) — held`);
+        if (held.length + consecutiveInfra >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
+          for (const h of held) {
+            appendInfra(runDir, {
+              runId: identity.runId,
+              trialId: h.trialId,
+              scenarioId: h.scenarioId,
+              group: h.group,
+              detail: `repeated-error:${h.detail}`,
+              at: deps.now().toISOString(),
+            } satisfies InfraRecord);
+            infra += 1;
+          }
+          return {
+            status: "stopped",
+            reason: `${MAX_CONSECUTIVE_INFRASTRUCTURE} trials in a row failed before the model produced any text (${r.detail}). That is the server, not the model: nothing was scored for them. Fix the endpoint, then resume with --resume ${identity.runId}`,
+            runId: identity.runId,
+            runDir,
+            scoredThisSession: scored,
+            infraThisSession: infra,
+          };
+        }
+        continue;
+      }
+      // The streak is over: what was held is the model's own failure.
+      for (const h of held.splice(0)) {
+        appendTrial(runDir, h);
+        scored += 1;
+      }
+      consecutiveInfra = 0;
+      appendTrial(runDir, r);
+      scored += 1;
+      durations.push(observation.totalMs);
+      const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
+      const left = todo.length - i - 1;
+      const outcome = r.ending !== "completed" ? r.ending.toUpperCase() : r.scorerPass ? "pass" : `fail (${r.score.failureMode ?? "?"})`;
+      deps.log(
+        `${position} ${plan.trialId}  ${outcome}${r.claims.suspect ? "  [suspect]" : ""}  first text ${seconds(r.timeToFirstTextMs)}  total ${seconds(r.totalMs)}  about ${Math.round((mean * left) / 60_000)} min left`,
+      );
+    }
+    for (const h of held.splice(0)) {
+      appendTrial(runDir, h);
+      scored += 1;
+    }
+    return { status: "complete", runId: identity.runId, runDir, scoredThisSession: scored, infraThisSession: infra };
+  } finally {
+    release();
+  }
+}

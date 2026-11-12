@@ -73,8 +73,10 @@ import {
 } from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
 
-/** Inline the whole document into the prompt below this length; else windowed reads. */
-const INLINE_CHAR_LIMIT = 8000;
+/** Inline the whole document into the prompt below this length; else windowed reads.
+ *  Exported for the measurement harness (`probe/local-model-spike/`), which
+ *  checks its fixtures against it instead of restating the number. */
+export const INLINE_CHAR_LIMIT = 8000;
 /** Coalesce streamed deltas: flush at most this often OR every FLUSH_CHARS chars. */
 const STREAM_FLUSH_MS = 120;
 const STREAM_FLUSH_CHARS = 80;
@@ -95,8 +97,10 @@ const STREAM_FLUSH_CHARS = 80;
  */
 const MAX_STREAMED_CHARS = 64 * 1024;
 
-/** Appended once when {@link MAX_STREAMED_CHARS} is hit, so the cut is visible. */
-const TRUNCATION_MARKER = "\n\n_[Reply truncated — the model exceeded the streaming limit.]_";
+/** Appended once when {@link MAX_STREAMED_CHARS} is hit, so the cut is visible.
+ *  Exported for the measurement harness, which recognises a capped reply by it. */
+export const TRUNCATION_MARKER =
+  "\n\n_[Reply truncated — the model exceeded the streaming limit.]_";
 
 /**
  * Wire-level twin of {@link MAX_STREAMED_CHARS} (#1292).

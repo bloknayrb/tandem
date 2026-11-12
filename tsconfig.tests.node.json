@@ -63,6 +63,11 @@
     // `tests/scripts/typecheck-tests-wiring.test.ts` accepts it, and its orphan
     // sweep (which walks only `tests/`) is unaffected.
     "infra/**/*.ts",
+    // The local-model measurement harness (#1123). It drives the shipped
+    // collaborator through its exports, so a renamed or removed export under
+    // `src/server/local-model/` must turn this check red with an error naming a
+    // harness file -- which is how it stopped loading unnoticed once before.
+    "probe/**/*.ts",
     "tests/build/**/*.ts",
     "tests/channel/**/*.ts",
     "tests/cli/**/*.ts",

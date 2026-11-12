@@ -149,3 +149,7 @@ coverage/
 # plugins and themes are personal.
 .obsidian/*
 !.obsidian/app.json
+
+# Local-model measurement runs (#1123): one directory per run, written by
+# `probe/local-model-spike/measure.ts`. Model output and local paths; never committed.
+probe/local-model-spike/runs/

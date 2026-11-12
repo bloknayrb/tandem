@@ -11,10 +11,15 @@
  * Deterministic (index-based content, no RNG) so the fixture is reproducible.
  *
  * Run: npx tsx probe/local-model-spike/generate-envelope.ts
+ *
+ * Kept as the record of how `fixtures/envelope-50page.md` was made. It writes
+ * the file only when run directly; importing it does nothing.
  */
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { isMain } from "./harness/main-guard.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, "fixtures", "envelope-50page.md");
@@ -59,46 +64,50 @@ function filler(section: number, para: number): string {
   );
 }
 
-const lines: string[] = [];
-lines.push("# Annual Operating Review");
-lines.push("");
-lines.push("This document is the full annual operating review. It is intentionally long to exercise reading and anchoring at the fifty-page performance envelope.");
-lines.push("");
-
-// Seeded targets placed in TOPICALLY-ALIGNED sections (a reasoning model can
-// navigate to them via the outline) at varied depth — a fair windowed-reading
-// test, not a needle-in-haystack lottery. Index → TOPICS:
-//   2 Cost Structure (early), 13 Regional Performance (mid), 30 Forecast Accuracy
-//   (later), 34 Audit Findings (~p38), 49 Closing Remarks (end).
-const SEED: Record<number, string[]> = {
-  2: [
-    "The total budget for the year is $1,200,000 according to the early plan.",
-    "Material costs in this division were $73,400, which is flagged for review.",
-  ],
-  13: ["The quarterly variance is $5,000 in this region, which warrants a closer look."],
-  30: ["The quarterly variance is $5,000 in this region, which warrants a closer look."],
-  34: ["The final sign-off deadline is September 30, 2026, pending the audit."],
-  49: ["Restating the figure from earlier, the total budget for the year is $1,500,000 in the revised plan."],
-};
-
-TOPICS.forEach((topic, i) => {
-  // Natural headings (no number prefix) so read_section matching isn't an artifact.
-  lines.push(`## ${topic}`);
+export function generate(): void {
+  const lines: string[] = [];
+  lines.push("# Annual Operating Review");
   lines.push("");
-  // ~6 paragraphs per section → ~50-55 pages overall.
-  for (let p = 0; p < 6; p++) {
-    if (p === 1 && SEED[i]) {
-      for (const seeded of SEED[i]) lines.push(seeded);
-    }
-    lines.push(filler(i, p));
+  lines.push("This document is the full annual operating review. It is intentionally long to exercise reading and anchoring at the fifty-page performance envelope.");
+  lines.push("");
+
+  // Seeded targets placed in TOPICALLY-ALIGNED sections (a reasoning model can
+  // navigate to them via the outline) at varied depth — a fair windowed-reading
+  // test, not a needle-in-haystack lottery. Index → TOPICS:
+  //   2 Cost Structure (early), 13 Regional Performance (mid), 30 Forecast Accuracy
+  //   (later), 34 Audit Findings (~p38), 49 Closing Remarks (end).
+  const SEED: Record<number, string[]> = {
+    2: [
+      "The total budget for the year is $1,200,000 according to the early plan.",
+      "Material costs in this division were $73,400, which is flagged for review.",
+    ],
+    13: ["The quarterly variance is $5,000 in this region, which warrants a closer look."],
+    30: ["The quarterly variance is $5,000 in this region, which warrants a closer look."],
+    34: ["The final sign-off deadline is September 30, 2026, pending the audit."],
+    49: ["Restating the figure from earlier, the total budget for the year is $1,500,000 in the revised plan."],
+  };
+
+  TOPICS.forEach((topic, i) => {
+    // Natural headings (no number prefix) so read_section matching isn't an artifact.
+    lines.push(`## ${topic}`);
     lines.push("");
-  }
-});
+    // ~6 paragraphs per section → ~50-55 pages overall.
+    for (let p = 0; p < 6; p++) {
+      if (p === 1 && SEED[i]) {
+        for (const seeded of SEED[i]) lines.push(seeded);
+      }
+      lines.push(filler(i, p));
+      lines.push("");
+    }
+  });
 
-const md = lines.join("\n");
-mkdirSync(dirname(OUT), { recursive: true });
-writeFileSync(OUT, md, "utf8");
+  const md = lines.join("\n");
+  mkdirSync(dirname(OUT), { recursive: true });
+  writeFileSync(OUT, md, "utf8");
 
-const words = md.split(/\s+/).filter(Boolean).length;
-console.log(`Wrote ${OUT}`);
-console.log(`Sections: ${TOPICS.length}, words: ${words}, ~pages: ${Math.round(words / 500)}`);
+  const words = md.split(/\s+/).filter(Boolean).length;
+  console.log(`Wrote ${OUT}`);
+  console.log(`Sections: ${TOPICS.length}, words: ${words}, ~pages: ${Math.round(words / 500)}`);
+}
+
+if (isMain(import.meta.url)) generate();

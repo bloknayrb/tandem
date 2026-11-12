@@ -1,19 +1,24 @@
 /**
- * Scenario bank for the #1123 M0 spike.
+ * The June 2026 scenario bank (#1123 M0), kept as it was measured then.
  *
- * Each scenario is a SELF-GRADING record: it carries the gold anchor + content
- * predicates the scorer checks, so grading is a pure function, not a judgment.
- * Stratified across THREE fixtures and across target location, occurrence-index
- * disambiguation, quote length, instruction phrasing, and distractors.
+ * Every record is unchanged from the spike: same ids, same prompts, same gold
+ * anchors, same June fixtures (`../../fixtures/*.md`). What changed is where
+ * each one is used now (`index.ts` does the mapping):
  *
- * Gold anchors are stated as (quoted_text, occurrence_index) and resolved by
- * findOccurrence against extractText(fixture) — the same path the model's
- * output takes — so a gold label that doesn't resolve is a scenario bug caught
- * FAIL-FAST by batch.ts's validateScenarios(), not a silent mis-grade.
+ *   12 comment + 12 replacement  → editing tier, groups "comment" / "replacement"
+ *   12 chat                      → editing tier, group "question" (not chat-tier
+ *                                  group 1: they carry no must-not predicate and
+ *                                  sit on fixtures with no planted distractor)
+ *   3 no-op                      → editing tier, group "edit-no-action"
+ *   6 sequence + 6 fifty-page    → the extended bank, out of a default run
  *
- * Counts (medium fixtures): comment 12, replacement 12, chat 12, no-op 3,
- * sequence 6. Batch runs each × 2 seeds (>=20 trials/op). Envelope scenarios
- * are embedded directly in this file (see the final section below).
+ * 51 records in all: 12 + 12 + 12 + 3 + 6, plus 6 on the 50-page fixture
+ * (3 comment, 1 chat, 1 replacement, 1 sequence). The spike's header counted
+ * them differently.
+ *
+ * Gold anchors are stated as (quoted_text, occurrence_index). At start-up the
+ * run checks every one through the product's own dispatch on a scratch
+ * document, and refuses to start if one does not resolve.
  */
 
 export type Operation = "comment" | "replacement" | "chat" | "no-op" | "sequence";
@@ -45,10 +50,10 @@ export interface SequenceAssertion {
   chat_must_match_any?: string[]; // verify/summary step keywords in final chat content
 }
 
-export interface Scenario {
+export interface JuneScenario {
   id: string;
   operation: Operation;
-  fixture: string; // path relative to probe/local-model-spike/
+  fixture: string; // path relative to probe/local-model-spike/ (LF text)
   envelope?: boolean;
   prompt: string;
   target: AnchorRef & { acceptable_anchors?: AnchorRef[] };
@@ -63,7 +68,7 @@ const PROD = "fixtures/product-notes-medium.md";
 const RES = "fixtures/research-brief-medium.md";
 const ENV = "fixtures/envelope-50page.md";
 
-export const SCENARIOS: Scenario[] = [
+export const JUNE_SCENARIOS: JuneScenario[] = [
   // ===================== comment-on-quote (12) =====================
   {
     id: "comment-cost-contradiction",
@@ -576,7 +581,3 @@ export const SCENARIOS: Scenario[] = [
     strata: ["envelope", "read-decide-act-verify", "cross-section-contradiction"],
   },
 ];
-
-export function listFixtures(): string[] {
-  return [...new Set(SCENARIOS.map((s) => s.fixture))];
-}

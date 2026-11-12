@@ -1,12 +1,14 @@
 /**
  * Tool-use turn loop for the local-model collaborator (#1123 M1, ADR-039) —
- * productionized from `probe/local-model-spike/loop.ts`.
+ * productionized from the June 2026 spike's own loop. That copy is gone: the
+ * measurement harness (`probe/local-model-spike/`) now drives THIS loop, so a
+ * change here changes what is measured.
  *
  * Wires the chat client <-> tool dispatch over a single Y.Doc, with hard
  * budgets and per-run metrics. Malformed tool-call JSON is a MEASURED outcome
  * (recorded), not a crash. Transport-agnostic.
  *
- * Production additions over the harness:
+ * Production additions over the spike's loop:
  *  - `signal`: an AbortSignal threaded into the chat client so a shutdown,
  *    document switch, or superseding message can abort an in-flight turn
  *    (exit "aborted"); under ADR-039 "one active agent at a time".
