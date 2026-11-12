@@ -654,7 +654,9 @@ export function registerDocumentTools(server: McpServer): void {
         // Which document this open targets, by the open path's own code. An
         // unsafe path throws in `resolveOpenPath` before any filesystem call
         // and is left for `openFromDisk` to refuse; for any other path the
-        // only disk access here is that function's own `realpathSync`.
+        // only disk access here is that function's own: `realpathSync`, and on
+        // Windows, for a path with an 8.3-shaped component, the short-name
+        // expansion's `realpathSync.native` and `lstatSync` (#2400).
         predict: () => {
           try {
             return findOpenTarget(resolveOpenPath(filePath)).id;

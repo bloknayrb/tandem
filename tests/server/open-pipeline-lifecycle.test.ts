@@ -52,7 +52,13 @@ beforeEach(async () => {
   }
   setActiveDocId(null);
   vi.clearAllMocks();
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-lifecycle-"));
+  // The native realpath, so the root is the long spelling on a host whose TEMP
+  // is an 8.3 short path: these tests store sessions by the path they typed,
+  // and must not depend on how the host spells TEMP (#2400). The short-spelled
+  // form of this same sequence is in `short-name-open.test.ts`.
+  tmpDir = fsSync.realpathSync.native(
+    await fs.mkdtemp(path.join(os.tmpdir(), "tandem-lifecycle-")),
+  );
 });
 
 afterEach(async () => {
@@ -160,13 +166,20 @@ describe("file-watcher — .md", () => {
     const filePath = path.join(tmpDir, "watch-md.md");
     await fs.writeFile(filePath, "# Watch test");
 
-    await openFromDisk(filePath);
+    const opened = await openFromDisk(filePath);
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
-    // First argument should be the canonically resolved file path
+    // The watcher is armed with the document's own canonical path: the string
+    // its saves use. That is the file's long path. The NATIVE realpath is the
+    // expected value on every host: it equals `realpathSync`'s result where no
+    // component is a Windows 8.3 short name, and where one is (a short `TEMP`)
+    // it is the expanded string the open must produce (#2400). Comparing with
+    // the JS flavour, or only with the open's own result, would pass under a
+    // short `TEMP` whatever the open returned.
     const calledPath = mockWatchFile.mock.calls[0][0];
-    expect(calledPath).toBe(fsSync.realpathSync(filePath));
+    expect(calledPath).toBe(opened.filePath);
+    expect(calledPath).toBe(fsSync.realpathSync.native(filePath));
   });
 });
 
@@ -185,7 +198,9 @@ describe("file-watcher — .docx", () => {
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
-    expect(mockWatchFile.mock.calls[0][0]).toBe(fsSync.realpathSync(filePath));
+    expect(mockWatchFile.mock.calls[0][0]).toBe(result.filePath);
+    // The expected long path, on every host (see the .md case above).
+    expect(result.filePath).toBe(fsSync.realpathSync.native(filePath));
 
     // Content assertion — docx goes through the Buffer adapter branch; a
     // non-empty fragment proves that path works end-to-end. If the branch

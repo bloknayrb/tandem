@@ -1432,7 +1432,12 @@ describe("applyChangesCore — the backup sidecar", () => {
 
     counter += 1;
     DOC_ID = `backup-test-doc-${counter}`;
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-apply-backup-"));
+    // The NATIVE realpath: `applyChangesCore` canonicalises the backup's parent
+    // with `fs.promises.realpath`, which expands a Windows 8.3 alias, so under a
+    // short TEMP the reported backup directory is the long spelling of this one.
+    tmpDir = fs.realpathSync.native(
+      await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-apply-backup-")),
+    );
     docPath = path.join(tmpDir, "doc.docx");
     await fsp.writeFile(
       docPath,

@@ -147,9 +147,12 @@ export function findChangelogPath(startDir: string): string | undefined {
 }
 /**
  * Directories holding Tandem's own auto-opened documents, for the #1282 drift
- * preview's exclusion list. Canonicalized, because the candidate it is compared
- * against always is — an un-realpath'd entry silently fails to match wherever
- * the install path involves a junction or a Windows 8.3 short name.
+ * preview's exclusion list. Canonicalized with the JS realpath, which resolves
+ * a junction but KEEPS a Windows 8.3 short name — so an entry here can be a
+ * short spelling of a folder the candidate names by its long one. The consumer
+ * (`previewCwdDrift`) therefore compares the native form of both sides rather
+ * than these strings as they stand (#2400); do not rely on this list being in
+ * any one spelling.
  *
  * Warns when it resolves to nothing. Three `undefined`-tolerant seams sit
  * between `findRepoFile` and the consumer (`string | undefined` constants, an

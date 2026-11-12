@@ -2307,12 +2307,24 @@ are the figures #2398 uses.
   `\tmp` directory. The job resolves `TEMP` and creates `\tmp`. That left 2 failures in
   `tests/server/integrations/resolve-claude-launch.test.ts` (a relative path built across
   drives), which PR #2399 rewrote. No test is skipped or quarantined.
-- **What the `TEMP` step hides:** five of the 19, and probably a sixth, are a product defect, #2400. Node's JS
-  `fs.realpathSync` keeps a short name where `fs.promises.realpath` expands it, and the product
-  uses both: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher (the two
-  equivalence tests in `tests/server/launcher/cwd-preview.test.ts`; its third failure was not
-  traced), and the document key in `documents/open.ts`
-  (three in `tests/server/adr-034-open-characterization.test.ts`).
+- **What the `TEMP` step hid, until #2400 was fixed:** five of the 19, and a sixth, were a product
+  defect. Node's JS `fs.realpathSync` keeps a short name where `fs.promises.realpath` expands it,
+  and the product compared the two: `resolveSafeCwd` against `resolveSafeCwdAsync` in the launcher
+  (the two equivalence tests in `tests/server/launcher/cwd-preview.test.ts`), the bundled-folder
+  list against the drift preview's candidate (that file's third failure), and the document key in
+  `documents/open.ts` (three in `tests/server/adr-034-open-characterization.test.ts`). With the
+  fix those six pass on a short `TEMP` (measured 2026-11-11 on a Windows 11 PC with `TEMP` set to
+  a real 8.3 alias, not in this job, which never has one). The step stays, and more tests depend on it than before: a document is now
+  keyed on its long path, so a test that computes an expected id or key from the raw temp path
+  fails on a short `TEMP`. The hosted
+  runner's volume does create short names for new folders (measured on this PR's runs).
+- **`windows-acl-proof` now holds specs that are not `icacls` proofs (#2400).** The 8.3 short-name
+  document describe and three launcher resolver-flavour describes are registered with its runner,
+  so a skip or a failure there fails a required check. That check therefore also depends on the
+  runner image creating 8.3 names, supporting hard links and having a free `subst` drive letter.
+  It fails closed. If an image change turns it red on every PR, the recovery is one PR that
+  removes the `icacls: false` entries from `scripts/ci/windows-acl-proof.mjs` and their rows in
+  the wiring test; the specs keep running in the advisory `vitest-windows` job.
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in
