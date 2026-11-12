@@ -1041,10 +1041,11 @@ function makeCwdPreviewHandler(deps: LauncherRoutesDeps): Handler {
 
     // Shed load rather than queue it. This is the only launcher route doing
     // unbounded filesystem work, and the hazard is the same one the async
-    // resolvers were written for, one level down: `fsp.realpath` keeps the event
-    // loop free but holds a libuv THREADPOOL slot (default 4) for the full SMB
-    // timeout, and it takes no AbortSignal — so an aborted request keeps its
-    // thread. Four concurrent probes against a hung mapped drive would starve
+    // resolvers were written for, one level down: an async realpath (the JS
+    // flavour in the resolvers, the native one `previewCwdDrift` compares with)
+    // keeps the event loop free but holds a libuv THREADPOOL slot (default 4)
+    // for the full SMB timeout, and it takes no AbortSignal — so an aborted
+    // request keeps its thread. Four concurrent probes against a hung mapped drive would starve
     // the pool that atomic saves, session writes and the annotation writer share,
     // and the symptom would be saves hanging with nothing pointing here.
     // Shedding costs nothing: every failure on this route is already "no drift".

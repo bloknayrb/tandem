@@ -335,9 +335,14 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/models/local-model-settings.ts": 1,
   "src/server/models/store.ts": 1,
   // 4th is `touchSession`, which rewrites one metadata field of a session
-  // record in SESSION_DIR. Not a config writer, so the accepted scope in
-  // docs/security.md is unchanged.
-  "src/server/session/manager.ts": 4,
+  // record in SESSION_DIR; 5th is `restampMovedSession`'s `atomicWrite`, which
+  // rewrites the stored path of a session moved from a short spelling's key
+  // (#2400). Neither is a config writer, so the accepted scope in
+  // docs/security.md is unchanged. That move's `fs.link` / `fs.unlink` (here
+  // and in `annotations/store.ts`) are outside this census by design: it
+  // counts the idioms that write file CONTENT, and a link or unlink gives an
+  // existing file another name or takes one away without writing a byte.
+  "src/server/session/manager.ts": 5,
   "src/server/version-check.ts": 1,
 };
 

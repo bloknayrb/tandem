@@ -41,6 +41,7 @@
  *     ordering that keeps segment order correct.
  */
 
+import fsSync from "fs";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -119,7 +120,13 @@ beforeEach(async () => {
   storeReset();
   notificationsReset();
   vi.clearAllMocks();
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-adr034-"));
+  // The NATIVE realpath, so the root is the long spelling on every host. On a
+  // Windows machine whose TEMP is an 8.3 alias (`C:\Users\AFOLDE~1\...`) the
+  // open pipeline expands it (#2400), and a spec that keys a mock on the path
+  // BEFORE the open would then be matching a spelling the product never uses.
+  // The JS `fs.realpath` keeps the alias, so it would not do. Where an open
+  // result is in hand, key on its `filePath` instead.
+  tmpDir = fsSync.realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(), "tandem-adr034-")));
   // SESSION_DIR is shared across the whole file while tmpDir is per-test, so a
   // session written by one case would be restored by the next and silently
   // inflate its counts.
@@ -842,7 +849,7 @@ describe("file-watcher reload notification", () => {
       await fs.writeFile(filePath, "# Watched\n");
       const opened = await openFromDisk(filePath);
 
-      const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
+      const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === opened.filePath);
       expect(registered, "control: the open actually registered a watcher").toBeDefined();
       const onChange = registered?.[1] as () => Promise<void>;
 
@@ -893,7 +900,7 @@ describe("file-watcher reload notification", () => {
     await fs.writeFile(filePath, "# Watched\n");
     const opened = await openFromDisk(filePath);
 
-    const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
+    const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === opened.filePath);
     expect(registered, "control: the open actually registered a watcher").toBeDefined();
     const onChange = registered?.[1] as () => Promise<void>;
 
@@ -914,7 +921,7 @@ describe("file-watcher reload notification", () => {
     await fs.writeFile(filePath, "# Doomed\n");
     const opened = await openFromDisk(filePath);
 
-    const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
+    const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === opened.filePath);
     const onChange = registered?.[1] as () => Promise<void>;
 
     await fs.rm(filePath);
@@ -1068,7 +1075,8 @@ describe("toWireResult keeps the payload the wire sites already ship", () => {
     await fs.writeFile(filePath, "# Restored\n");
     const first = await openFromDisk(filePath);
     expect(first.kind, "control: the first open is fresh").toBe("fresh");
-    await saveSession(filePath, "md", getOrCreateDocument(first.documentId));
+    // Under the path the open settled on, as the product's own autosave does.
+    await saveSession(first.filePath, "md", getOrCreateDocument(first.documentId));
 
     // Drop every trace of the open document, so the reopen takes the restore
     // path rather than `handleAlreadyOpen`.

@@ -98,6 +98,7 @@ import type { Annotation, ExternalConflictState, FlatOffset } from "../../shared
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { isDarkDocx, supportedExtensions } from "../file-io/docx-flag.js";
 import { getAdapter } from "../file-io/index.js";
+import { expandShortNames } from "../file-io/short-names.js";
 import { detectFormat, docIdFromPath, extractText } from "../mcp/document-model.js";
 import { injectTutorialAnnotations } from "../mcp/tutorial-annotations.js";
 import { anchoredRange, relPosToFlatOffset, storedRangeStillMatches } from "../positions.js";
@@ -106,6 +107,7 @@ import {
   type LoadedSession,
   loadSessionWithPath,
   narrowConflict,
+  peekSessionReadOnly,
   quarantineSession,
   restoreYDoc,
   type SessionFileEntry,
@@ -136,6 +138,7 @@ import {
   openDocumentWhenReady,
 } from "./registry.js";
 import { remapEnvelopeWins } from "./reload-remap.js";
+import { moveShortNameRecords, rewriteMovedEnvelope } from "./short-name-records.js";
 import { wireFileWatcher } from "./watcher.js";
 
 /**
@@ -324,6 +327,14 @@ interface ResolvedPath {
   format: string;
   readOnly: boolean;
   id: string;
+  /**
+   * The string master's canonicalisation produced, set ONLY when expanding a
+   * Windows 8.3 short name changed it (#2400). It is the key the caller's own
+   * spelling used to be stored under, so it is the one place records saved
+   * before the fix can be looked for (`short-name-records.ts`). It has passed
+   * the same screens as `resolved`.
+   */
+  legacyPath?: string;
 }
 
 /**
@@ -356,9 +367,60 @@ export async function openFromDisk(
     expectTargetId?: string;
   },
 ): Promise<OpenSuccess> {
-  const { resolved, format, readOnly: derivedReadOnly } = await resolveAndValidatePath(filePath);
+  return openValidated(filePath, options);
+}
+
+/**
+ * One open at a time per document id (#2400). Two spellings of one file now
+ * resolve to one id, and a short-spelled open MOVES records to that id's key
+ * (`short-name-records.ts`). Without this, a long-spelled open that has
+ * already looked for its records and found none, but has not registered the
+ * document yet, would not be seen by a concurrent short-spelled open: that one
+ * would move the old records under the key, and the first open's next write
+ * would replace them. Here the second open waits and then takes the
+ * already-open branch, which moves nothing. It runs on every platform, for
+ * every file open. A rejected open does not poison the chain, and the entry is
+ * removed when its tail settles. There is no timeout: an open that never
+ * settles holds later opens of the same id.
+ */
+const openChains = new Map<string, Promise<unknown>>();
+
+const settled = (): undefined => undefined;
+
+function serialisedPerId<T>(id: string, task: () => Promise<T>): Promise<T> {
+  const previous = openChains.get(id) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const tail = run.then(settled, settled);
+  openChains.set(id, tail);
+  void tail.then(() => {
+    if (openChains.get(id) === tail) openChains.delete(id);
+  });
+  return run;
+}
+
+/**
+ * The one place a file path enters the open pipeline: screened and
+ * canonicalised first, then opened under the per-id chain. `fromRestore` is
+ * not on `openFromDisk`'s public options because only `openFromRestore` may
+ * say it.
+ */
+interface OpenOptions {
+  force?: boolean;
+  readOnly?: boolean;
+  fromRestore?: boolean;
+  /** See `openFromDisk`. */
+  expectTargetId?: string;
+}
+
+async function openValidated(filePath: string, options?: OpenOptions): Promise<OpenSuccess> {
+  const target = await resolveAndValidatePath(filePath);
+  return serialisedPerId(target.id, () => openResolved(target, options));
+}
+
+async function openResolved(target: ResolvedPath, options?: OpenOptions): Promise<OpenSuccess> {
+  const { resolved, format, readOnly: derivedReadOnly, legacyPath } = target;
   // Caller may override the derived readOnly (e.g. force changelog read-only).
-  const readOnly = options?.readOnly === true ? true : derivedReadOnly;
+  let readOnly = options?.readOnly === true ? true : derivedReadOnly;
   const fileName = path.basename(resolved);
   // Looked up HERE, after `resolveAndValidatePath`'s stat and with no await
   // before the branch below, so the answer cannot be stale by the time it is
@@ -376,6 +438,14 @@ export async function openFromDisk(
 
   // Already open — force-reload or switch to existing
   if (existing) {
+    // A short-spelled open of an already-open file (#2400): the open document
+    // is the document, and records still stored under the short spelling's key
+    // are left where they are. A replayed restore entry for that spelling
+    // carries the STORED flag of a session that is not this document, so it
+    // must not turn the open document read-only.
+    const explicitReadOnly =
+      options?.readOnly === true && !(legacyPath !== undefined && options.fromRestore === true);
+    if (!explicitReadOnly) readOnly = derivedReadOnly;
     const forceReload = options?.force === true;
     if (forceReload) {
       // Force-reload stays inline — distinct lifecycle from normal open.
@@ -446,7 +516,7 @@ export async function openFromDisk(
       resolved,
       readOnly,
       existing,
-      options?.readOnly === true,
+      explicitReadOnly,
     );
   }
 
@@ -454,12 +524,33 @@ export async function openFromDisk(
   // No open document holds this file, so the target is the path's own id.
   const id = existingId;
   const doc = getOrCreateDocument(id);
+  // Records stored under the short spelling's key (#2400) are moved to this
+  // document's key first, each kind only if this key has none of that kind.
+  // After it the open is an ordinary open of the long spelling.
+  let movedEnvelope = false;
+  if (legacyPath !== undefined) {
+    const moved = await moveShortNameRecords(legacyPath, resolved);
+    // A replayed restore entry's `readOnly` is the stored flag of the
+    // short-spelled session. When this document has a session of its own
+    // that was not that one, its flag applies instead (never weaker than the
+    // derived value). With no session of its own the entry's flag stands, as
+    // it does on any restore: a tab stored read-only must not come back
+    // writable because its session could not be moved.
+    if (options?.fromRestore === true && !moved.session) {
+      // A plain read of the flag: the real load, with its quarantine and its
+      // gates, is `maybeRestoreSession`'s alone.
+      const own = await peekSessionReadOnly(resolved);
+      if (own !== null) readOnly = derivedReadOnly || own;
+    }
+    movedEnvelope = moved.envelope;
+  }
   const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly, id);
   const restoredFromSession = restore.restored;
   if (!restoredFromSession) {
     await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
+  if (movedEnvelope) await rewriteMovedEnvelope(id, doc, resolved);
 
   // Second half of the fallback-anchor repair (#1800, site b), as an anchor
   // overlay (#1863). The clone-time repair (site a) ran BEFORE
@@ -708,7 +799,19 @@ function assertSafePathPrefix(p: string): void {
  * caller can get a canonical path that skipped one.
  */
 export function resolveOpenPath(filePath: string): string {
-  // ORDER IS THE POINT. `realpathSync` on `\\evil.com\share\x.md` OPENS the SMB
+  return resolveOpenTarget(filePath).resolved;
+}
+
+/**
+ * {@link resolveOpenPath} plus `legacyPath`: the string master's
+ * canonicalisation produced, set only when expanding a Windows 8.3 short name
+ * changed it (#2400). Synchronous throughout, so the wrapper that predicts an
+ * open's target and the open itself compute one string.
+ */
+function resolveOpenTarget(filePath: string): { resolved: string; legacyPath?: string } {
+  // ORDER IS THE POINT. No filesystem call below — `realpathSync`, the 8.3
+  // short-name expansion (#2400) — may run on a string that has not been
+  // screened. `realpathSync` on `\\evil.com\share\x.md` OPENS the SMB
   // connection — and leaks the NTLM hash — before any post-canonicalization
   // check could reject it, so the UNC gate has to run first, on the raw input
   // and on `path.resolve`'s output.
@@ -724,9 +827,11 @@ export function resolveOpenPath(filePath: string): string {
   let resolved = path.resolve(filePath);
   assertSafePathPrefix(resolved);
 
+  let canonical = true;
   try {
     resolved = fsSync.realpathSync(resolved);
   } catch (err: unknown) {
+    canonical = false;
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
       console.error(
@@ -739,7 +844,42 @@ export function resolveOpenPath(filePath: string): string {
   // Defense-in-depth, kept deliberately: a Windows junction can canonicalize to
   // a UNC target that neither pre-check could see.
   assertSafePathPrefix(resolved);
-  return resolved;
+
+  // Windows 8.3 short names (#2400). `realpathSync` above is Node's JS
+  // implementation and keeps an alias such as `AFOLDE~1`, so one file used to
+  // be keyed twice. Expand the alias components only: the native realpath would
+  // also turn a mapped drive into a UNC string and a `subst` drive into its
+  // physical path, and every path without a short component must keep exactly
+  // the string it has today. Runs AFTER the screen above (and screens for
+  // itself), only when `realpathSync` succeeded, and never refuses a file: on
+  // any failure the string above stands and the document is keyed as before.
+  let legacyPath: string | undefined;
+  if (canonical) {
+    const expanded = expandShortNames(resolved);
+    if (expanded.failed !== undefined) {
+      // Constant format string: the path is caller-controlled and must not
+      // sit in the printf-style slot (CodeQL js/tainted-format-string).
+      console.error(
+        "[Tandem] Could not expand the short name in %s; opening it under that spelling:",
+        resolved,
+        expanded.failed,
+      );
+    } else if (
+      expanded.path !== resolved &&
+      rejectUnsafeWindowsPrefix(expanded.path) === null &&
+      // An alias's extension is the long one cut to three characters. If the
+      // long name is not one this build opens, or reads as another format,
+      // keep the spelling that opens today.
+      supportedExtensions().has(path.extname(expanded.path).toLowerCase()) &&
+      detectFormat(expanded.path) === detectFormat(resolved)
+    ) {
+      legacyPath = resolved;
+      resolved = expanded.path;
+    }
+  }
+  // The final string is screened whichever branch produced it.
+  assertSafePathPrefix(resolved);
+  return { resolved, ...(legacyPath !== undefined ? { legacyPath } : {}) };
 }
 
 /**
@@ -773,7 +913,7 @@ export function findOpenTarget(resolved: string): { id: string; existing: OpenDo
  * stat is used only for the size check and is not returned.
  */
 async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
-  const resolved = resolveOpenPath(filePath);
+  const { resolved, legacyPath } = resolveOpenTarget(filePath);
 
   const ext = path.extname(resolved).toLowerCase();
   assertSupportedExtension(ext);
@@ -807,7 +947,7 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   const readOnly = !SAVEABLE_FORMATS.has(format);
   const id = docIdFromPath(resolved);
 
-  return { resolved, format, readOnly, id };
+  return { resolved, format, readOnly, id, ...(legacyPath !== undefined ? { legacyPath } : {}) };
 }
 
 /**
@@ -1568,7 +1708,11 @@ function buildResult(
 export async function openFromRestore(
   entry: Pick<SessionFileEntry, "filePath" | "readOnly">,
 ): Promise<OpenSuccess> {
-  return await openFromDisk(entry.filePath, { readOnly: entry.readOnly });
+  // Not through `openFromDisk`: restore is the one caller whose `readOnly` is a
+  // STORED flag rather than a request, and when the replayed entry is a session
+  // saved under a short spelling of a file whose document has its own session,
+  // that flag must not travel with it (#2400).
+  return openValidated(entry.filePath, { readOnly: entry.readOnly, fromRestore: true });
 }
 
 /**
