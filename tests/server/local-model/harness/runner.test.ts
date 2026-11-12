@@ -28,13 +28,20 @@ import type {
 } from "../../../../probe/local-model-spike/harness/record.js";
 import {
   acquireLock,
+  damagedLogLines,
   existingRunDir,
+  fixtureProblems,
   lockPath,
+  type RunIdentity,
+  type RunSession,
+  readFixtures,
   readInfra,
   readTrials,
+  trialsPath,
 } from "../../../../probe/local-model-spike/harness/run-store.js";
 import {
   MAX_CONSECUTIVE_INFRASTRUCTURE,
+  machineRefusal,
   type RunDeps,
   type RunOptions,
   runMeasurement,
@@ -173,10 +180,31 @@ describe("a run", () => {
     expect(fs.readdirSync(root)).toEqual(["runs"]);
     expect(fs.readdirSync(runsDir)).toEqual([result.runId]);
     expect(fs.readdirSync(runDir).sort()).toEqual([
+      "fixtures.json",
       "identity.json",
       "planned.json",
       "trials.jsonl",
     ]);
+    // The documents the model saw are stored with the run, each matching every
+    // trial that ran on it (review M3: the reader sees these, not the checkout's).
+    const stored = readFixtures(runDir);
+    expect(Object.keys(stored).sort()).toEqual([...new Set(trials.map((t) => t.fixture))].sort());
+    expect(fixtureProblems(stored, trials)).toEqual([]);
+    for (const t of trials) expect(t.documentHash).toBe(stored[t.fixture].sha256);
+    // A stored text edited afterwards, or a trial whose document differs, is caught.
+    const key = trials[0].fixture;
+    expect(
+      fixtureProblems(
+        { ...stored, [key]: { ...stored[key], text: `${stored[key].text}!` } },
+        trials,
+      ).join("\n"),
+    ).toMatch(/does not match its own hash/);
+    expect(
+      fixtureProblems(stored, [{ ...trials[0], documentHash: "0".repeat(64) }]).join("\n"),
+    ).toMatch(/ran on a different text/);
+    expect(fixtureProblems({}, trials.slice(0, 1)).join("\n")).toMatch(
+      /is not stored in fixtures.json/,
+    );
     // The lock is released.
     expect(fs.existsSync(lockPath(runDir))).toBe(false);
     // A progress line per trial, with timings and an estimate.
@@ -241,9 +269,9 @@ describe("a run", () => {
     expect(result.scoredThisSession).toBe(0);
     expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
     expect(readInfra<InfraRecord>(result.runDir as string).map((i) => i.detail)).toEqual([
-      "repeated-error:http-500",
-      "repeated-error:http-500",
-      "repeated-error:http-500",
+      "held-silent-error:http-500",
+      "held-silent-error:http-500",
+      "held-silent-error:http-500",
     ]);
   });
 
@@ -290,17 +318,51 @@ describe("a run", () => {
     }
   });
 
-  it("scores a short streak of errors at the very end of the run", async () => {
+  it("holds a streak still open at the run's end, and a resume runs those trials again", async () => {
     let n = 0;
     stubScript(() => {
       n += 1;
       return n >= 19 ? { status: 500 } : ANSWER;
     });
-    const result = await runMeasurement(options(), deps());
-    expect(result.status).toBe("complete");
-    const trials = readTrials<TrialRecord>(result.runDir as string);
+    const first = await runMeasurement(options(), deps());
+    expect(first.status).toBe("stopped");
+    expect(first.reason).toMatch(/reached its end with 2 trial\(s\) held/);
+    const runDir = first.runDir as string;
+    expect(readTrials<TrialRecord>(runDir)).toHaveLength(18);
+    expect(readInfra<InfraRecord>(runDir).map((i) => i.detail)).toEqual([
+      "held-silent-error:http-500",
+      "held-silent-error:http-500",
+    ]);
+
+    stubScript([ANSWER]);
+    const second = await runMeasurement(options({ resume: first.runId }), deps());
+    expect(second.status).toBe("complete");
+    const trials = readTrials<TrialRecord>(runDir);
     expect(trials).toHaveLength(20);
-    expect(trials.slice(-2).map((t) => t.ending)).toEqual(["error", "error"]);
+    expect(trials.filter((t) => t.ending === "error")).toEqual([]);
+  });
+
+  it("on a resume, a held trial that errors with a different detail is held again, not scored at once", async () => {
+    stubScript([{ status: 500 }]);
+    const first = await runMeasurement(options(), deps());
+    expect(first.status).toBe("stopped");
+    const runDir = first.runDir as string;
+
+    let n = 0;
+    stubScript(() => {
+      n += 1;
+      return n === 1 ? { status: 400 } : ANSWER;
+    });
+    const d = deps();
+    const second = await runMeasurement(options({ resume: first.runId }), d);
+    expect(second.status).toBe("complete");
+    // Held (a different error from the one it was held for), then scored when
+    // the next trial showed the server answering.
+    expect(d.lines.some((l) => /ERROR before any text \(http-400\) — held$/.test(l))).toBe(true);
+    expect(d.lines.some((l) => /again, as when it was held/.test(l))).toBe(false);
+    const trials = readTrials<TrialRecord>(runDir);
+    expect(trials).toHaveLength(20);
+    expect(trials.filter((t) => t.ending === "error").map((t) => t.detail)).toEqual(["http-400"]);
   });
 
   it("refuses to start when a gold anchor does not resolve through the product's dispatch", async () => {
@@ -410,6 +472,11 @@ describe("a run", () => {
     });
     expect(unknown.status).toBe("refused");
     expect(unknown.reason).toMatch(/digest is unknown/);
+
+    // Another machine: the hardware description given on the command line.
+    const elsewhere = await resume({}, { hardware: "a desktop with a GPU" });
+    expect(elsewhere.status).toBe("refused");
+    expect(elsewhere.reason).toMatch(/measured on one machine[\s\S]*hardware \(was "test bench"/);
 
     // A dirty tree or a later date does not refuse a resume.
     const again = await resume({ commit: () => ({ commit: "a".repeat(40), dirty: true }) });
@@ -538,6 +605,40 @@ describe("the preflight", () => {
   });
 });
 
+describe("a resume on another machine (review M2)", () => {
+  it("is refused on a different host or hardware description", () => {
+    const session: RunSession = {
+      startedAt: "t",
+      dirty: false,
+      hardware: "laptop",
+      contextLength: 4096,
+      serverSettings: "unknown",
+      toolSupport: "yes",
+      host: "h1",
+    };
+    const stored = { sessions: [session] } as unknown as RunIdentity;
+    expect(machineRefusal(stored, { ...session, startedAt: "later", dirty: true })).toBeNull();
+    expect(machineRefusal(stored, { ...session, host: "h2" })).toMatch(
+      /host \(was "h1", now "h2"\)/,
+    );
+    expect(machineRefusal(stored, { ...session, hardware: "desktop" })).toMatch(/hardware/);
+  });
+});
+
+describe("the run's logs", () => {
+  it("a torn last line is dropped quietly; a damaged line before it is reported", () => {
+    const dir = path.join(runsDir, "logs");
+    fs.mkdirSync(dir);
+    fs.writeFileSync(trialsPath(dir), '{"trialId":"a#1"}\n{"trialId":"b#1"}\n{"trialId":"c#');
+    expect(readTrials<{ trialId: string }>(dir).map((t) => t.trialId)).toEqual(["a#1", "b#1"]);
+    expect(damagedLogLines(dir)).toEqual([]);
+    fs.writeFileSync(trialsPath(dir), '{"trialId":"a#1"}\n{"trialId":"b#\n{"trialId":"c#1"}\n');
+    expect(damagedLogLines(dir)).toEqual([
+      "trials.jsonl has unreadable line(s) 2 that are not a torn last line",
+    ]);
+  });
+});
+
 describe("the run lock", () => {
   it("lets one process in, and clears a stale lock only on request and only when the holder is gone", () => {
     const dir = path.join(runsDir, "r1");
@@ -588,6 +689,61 @@ describe("the run lock", () => {
     );
     expect(JSON.parse(fs.readFileSync(lockPath(dir), "utf8")).pid).toBe(333);
     expect(fs.readdirSync(dir)).toEqual(["lock"]);
+  });
+
+  it("the put-back never replaces a lock a third process took meanwhile (review L1)", () => {
+    const dir = path.join(runsDir, "r3");
+    fs.mkdirSync(dir);
+    acquireLock(dir, { pid: 111, host: "h" });
+    const lockAt = (pid: number) =>
+      `${JSON.stringify({ pid, host: "h", startedAt: `2026-11-12T1${pid % 10}:00:00.000Z` })}\n`;
+    let swapped = false;
+    const isRunning = () => {
+      if (!swapped) {
+        swapped = true;
+        fs.writeFileSync(lockPath(dir), lockAt(333)); // a second clearer took it
+      }
+      return false;
+    };
+    // After this clearer moved the lock aside, a third process takes the run.
+    const realRead = fs.readFileSync;
+    vi.spyOn(fs, "readFileSync").mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      ...rest: unknown[]
+    ) => {
+      if (typeof file === "string" && file.includes(".stale-") && !fs.existsSync(lockPath(dir))) {
+        fs.writeFileSync(lockPath(dir), lockAt(444));
+      }
+      return (realRead as (...a: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    expect(() => acquireLock(dir, { pid: 222, host: "h", clearStale: true, isRunning })).toThrow(
+      /could not be put back because another lock is in its place/,
+    );
+    vi.restoreAllMocks();
+    expect(JSON.parse(fs.readFileSync(lockPath(dir), "utf8")).pid).toBe(444);
+    const aside = fs.readdirSync(dir).filter((f) => f.startsWith("lock.stale-"));
+    expect(aside).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, aside[0]), "utf8")).pid).toBe(333);
+  });
+
+  it("a refusal says how to clear the lock by hand (review L2)", () => {
+    const dir = path.join(runsDir, "r4");
+    fs.mkdirSync(dir);
+    acquireLock(dir, { pid: 111, host: "h" });
+    for (const opts of [
+      { pid: 222, host: "h" },
+      { pid: 222, host: "h", clearStale: true, isRunning: () => true },
+    ]) {
+      let message = "";
+      try {
+        acquireLock(dir, opts);
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain("delete");
+      expect(message).toContain(lockPath(dir));
+      expect(message).toMatch(/process id can be reused/);
+    }
   });
 
   it("a locked run refuses a second measure process", async () => {

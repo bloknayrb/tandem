@@ -6,6 +6,9 @@
  * Writes, in the run directory:
  *   reading.txt             every trial, in reading order, with the rubric
  *   verdicts.template.json  one empty entry per trial
+ * The documents shown are the ones the model saw, from the run's own
+ * `fixtures.json`, never the checkout's fixtures; the script refuses (exit 2)
+ * when a stored document, or a trial record, does not match its hash.
  * The reader copies the template to `verdicts.json`, fills in every entry and
  * the `reader` field, and runs `report.ts`. This script never writes
  * `verdicts.json`; verdicts already there (same trial, same hash) are carried
@@ -15,13 +18,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { parseArgs } from "./harness/args.js";
-import { isolateAppData, printable, say } from "./harness/entry-common.js";
+import { printable, say } from "./harness/entry-common.js";
 import { isMain } from "./harness/main-guard.js";
 import { RUNS_DIR } from "./harness/paths.js";
 import { readingOrder, renderReadingFile } from "./harness/reading.js";
-import type { TrialRecord } from "./harness/record.js";
+import { recordHash, type TrialRecord } from "./harness/record.js";
 import { RUBRIC_VERSION } from "./harness/rubric.js";
-import { existingRunDir, readIdentity, readTrials } from "./harness/run-store.js";
+import {
+  damagedLogLines,
+  existingRunDir,
+  fixtureProblems,
+  readFixtures,
+  readIdentity,
+  readTrials,
+} from "./harness/run-store.js";
 import { parseVerdictFile, verdictTemplate } from "./harness/verdicts.js";
 
 export async function main(argv: readonly string[]): Promise<number> {
@@ -41,12 +51,23 @@ export async function main(argv: readonly string[]): Promise<number> {
   const identity = readIdentity(runDir);
   const trials = readTrials<TrialRecord>(runDir);
 
-  // The fixture texts come from the product's own extraction, so the product
-  // is loaded — after its app data is pointed inside the run directory.
-  isolateAppData(runDir);
-  const { fixtureTexts } = await import("./harness/fixture-texts.js");
+  // What the model saw, as stored at run time, and records unchanged since.
+  const fixtures = readFixtures(runDir);
+  const problems = [
+    ...damagedLogLines(runDir),
+    ...fixtureProblems(fixtures, trials),
+    ...trials
+      .filter((t) => recordHash(t) !== t.hash)
+      .map((t) => `trial ${t.trialId}: the record does not match its own hash (it was changed after the run)`),
+  ];
+  if (problems.length > 0) {
+    say("Refusing to write a reading file: what would be shown is not what was run.");
+    for (const p of problems.slice(0, 20)) say(`  - ${printable(p)}`);
+    if (problems.length > 20) say(`  … and ${problems.length - 20} more`);
+    return 2;
+  }
   const used = new Set(trials.map((t) => t.fixture));
-  const texts = fixtureTexts([...used]);
+  const texts = new Map([...used].map((key) => [key, fixtures[key].text] as const));
 
   fs.writeFileSync(
     path.join(runDir, "reading.txt"),

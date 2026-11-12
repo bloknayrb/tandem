@@ -234,8 +234,8 @@ describe("entry scripts", () => {
         name,
       ).toBe(true);
     }
-    // The three that load the product do it after `isolateAppData(`.
-    for (const name of ["measure.ts", "read.ts", "dogfood-m1.ts"]) {
+    // The two that load the product do it after `isolateAppData(`.
+    for (const name of ["measure.ts", "dogfood-m1.ts"]) {
       const src = read(path.join(SPIKE, name));
       const isolate = src.indexOf("isolateAppData(", src.indexOf("export async function main"));
       const firstDynamic = src.indexOf("await import(");
@@ -245,8 +245,11 @@ describe("entry scripts", () => {
         isolate,
       );
     }
-    // The report loads no product code at all, statically or dynamically.
-    expect(read(path.join(SPIKE, "report.ts"))).not.toMatch(/import\(/);
+    // The reading file and the report load no product code at all, statically
+    // or dynamically: they show and judge the documents stored with the run.
+    for (const name of ["read.ts", "report.ts"]) {
+      expect(read(path.join(SPIKE, name)), name).not.toMatch(/import\(/);
+    }
   });
 
   it("recognise the same script under two spellings of its path, including Windows ones", () => {
@@ -304,5 +307,49 @@ describe("the model config a trial runs with is what the product's resolver buil
     );
     vi.doUnmock("../../../../src/server/models/registry.js");
     vi.resetModules();
+  });
+});
+
+describe("what the reading file tells the reader about the product (review L10)", () => {
+  it("'The document text is never changed by a tool' holds for every tool the product offers", async () => {
+    const Y = await import("yjs");
+    const { loadMarkdown } = await import("../../../../src/server/file-io/markdown.js");
+    const { extractText } = await import("../../../../src/server/mcp/document-model.js");
+    const { dispatch, TOOLS } = await import("../../../../src/server/local-model/tools.js");
+    const reading = read(path.join(SPIKE, "harness", "reading.ts"));
+    expect(reading).toContain("The document text is never changed by a tool.");
+
+    const doc = new Y.Doc();
+    loadMarkdown(doc, "# Heading\n\nThe first sentence is here. The second sentence follows it.\n");
+    const before = {
+      text: extractText(doc),
+      tree: JSON.stringify(doc.getXmlFragment("default").toJSON()),
+    };
+    const ctx = { ydoc: doc, canEdit: () => true };
+    let annotationId = "";
+    // A valid call of each tool; a NEW tool fails here until it is given one
+    // and the sentence in the reading file is shown to still hold for it.
+    const calls: Record<string, () => Record<string, unknown>> = {
+      get_outline: () => ({}),
+      read_section: () => ({ heading: "Heading" }),
+      comment_on_quote: () => ({ quoted_text: "The first sentence is here.", comment: "c" }),
+      propose_replacement: () => ({
+        quoted_text: "The second sentence follows it.",
+        suggested_text: "A different sentence entirely.",
+      }),
+      reply_to_annotation: () => ({ annotation_id: annotationId, text: "a reply" }),
+    };
+    expect(TOOLS.map((t) => t.name).sort()).toEqual(Object.keys(calls).sort());
+    for (const tool of TOOLS) {
+      const outcome = dispatch(tool.name, calls[tool.name](), ctx);
+      const eff = outcome.effect;
+      if (eff.kind === "comment" || eff.kind === "replacement" || eff.kind === "reply") {
+        expect(eff.ok, tool.name).toBe(true);
+      }
+      if (eff.kind === "comment" && eff.annotationId) annotationId = eff.annotationId;
+      expect(extractText(doc), tool.name).toBe(before.text);
+      expect(JSON.stringify(doc.getXmlFragment("default").toJSON()), tool.name).toBe(before.tree);
+    }
+    doc.destroy();
   });
 });

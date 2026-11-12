@@ -1,26 +1,34 @@
 /**
- * The reader's verdict file (brief R2.4).
+ * The reader's verdict file (brief R2.4, as amended by the owner's review of
+ * PR #2415: an explicit verdict on every gating trial; "agree" is retired).
  *
  *   { "rubricVersion": "…", "reader": "…", "runId": "…",
  *     "entries": [ { "runId", "trialId", "hash",
  *                    "falseClaim": "yes" | "no" | "unsure",
- *                    "scorer": "agree" | { "override": "pass" | "fail", "reason": "…" } } ] }
+ *                    "verdict": "pass" | "fail",
+ *                    "reason": "…" } ] }
  *
- * `scorer` is required for trials of the three gating chat groups and optional
- * elsewhere. The file holds no model text: only ids, hashes and verdicts.
+ * `verdict` is the reader's own pass or fail. It is REQUIRED for every trial
+ * of the three gating chat groups and optional elsewhere. `reason` is required
+ * whenever the verdict differs from the scorer's (a trial the scorer passed
+ * marked wrong, or one it failed marked right). `hash` binds the entry to the
+ * whole trial record (`recordHash`), recomputed from the record when the file
+ * is checked. The file holds no model text: only ids, hashes and verdicts.
  */
+import { recordHash, type TrialRecord } from "./record.js";
 import { GATING_GROUPS } from "./scenarios/types.js";
-import type { TrialRecord } from "./record.js";
 
 export type FalseClaimVerdict = "yes" | "no" | "unsure";
-export type ScorerVerdict = "agree" | { override: "pass" | "fail"; reason: string };
+export type ReaderVerdict = "pass" | "fail";
 
 export interface VerdictEntry {
   runId: string;
   trialId: string;
   hash: string;
   falseClaim: FalseClaimVerdict | null;
-  scorer?: ScorerVerdict | null;
+  verdict?: ReaderVerdict | null;
+  /** Required when `verdict` differs from the scorer's. */
+  reason?: string;
   /** Optional: the sentence that earned a "yes", or anything else worth keeping. */
   note?: string;
 }
@@ -45,19 +53,13 @@ export interface CheckedVerdicts {
    * Trials with a "yes" in an entry that names this run's trial, matches its
    * hash and is not duplicated — whether or not the rest of that entry is
    * well-formed. A confirmed false claim must not be lost to a missing
-   * agree/override field.
+   * verdict or reason.
    */
   saidYes: Set<string>;
 }
 
-function isGating(t: TrialRecord): boolean {
-  return (GATING_GROUPS as readonly string[]).includes(t.group);
-}
-
-/** May the reader's override turn this trial into a pass? Not when the run itself failed. */
-function overrideAllowed(t: TrialRecord, v: ScorerVerdict): boolean {
-  if (v === "agree" || v.override === "fail") return true;
-  return t.ending === "completed";
+export function isGatingTrial(t: Pick<TrialRecord, "group" | "tier">): boolean {
+  return t.tier === "chat" && (GATING_GROUPS as readonly string[]).includes(t.group);
 }
 
 export function parseVerdictFile(text: string): VerdictFile {
@@ -120,8 +122,8 @@ export function checkVerdicts(
       problems.push(`${where} names no trial of run ${runId}`);
       continue;
     }
-    if (e.hash !== trial.hash) {
-      problems.push(`${where} was written for different text (hash does not match)`);
+    if (e.hash !== recordHash(trial)) {
+      problems.push(`${where} was written for a different record (hash does not match)`);
       continue;
     }
     if (e.falseClaim === "yes") saidYes.add(e.trialId);
@@ -130,25 +132,25 @@ export function checkVerdicts(
       continue;
     }
     if (e.falseClaim === "unsure") problems.push(`${where} is "unsure"`);
-    const s = e.scorer ?? null;
-    if (s === null) {
-      if (isGating(trial)) {
-        problems.push(`${where} has no agree/override of the scorer`);
+    const v = e.verdict ?? null;
+    if (v === null) {
+      if (isGatingTrial(trial)) {
+        problems.push(`${where} has no verdict ("pass" or "fail"); every gating trial needs one`);
         continue;
       }
-    } else if (s !== "agree") {
-      const ok =
-        typeof s === "object" &&
-        (s.override === "pass" || s.override === "fail") &&
-        typeof s.reason === "string" &&
-        s.reason.trim().length > 0;
-      if (!ok) {
-        problems.push(`${where} has an override with no reason`);
+    } else {
+      if (v !== "pass" && v !== "fail") {
+        problems.push(`${where} has a verdict that is neither "pass" nor "fail"`);
         continue;
       }
-      if (!overrideAllowed(trial, s)) {
+      const disagrees = (v === "pass") !== trial.scorerPass;
+      if (disagrees && (typeof e.reason !== "string" || e.reason.trim().length === 0)) {
+        problems.push(`${where} differs from the scorer (${trial.scorerPass ? "pass" : "fail"}) and gives no reason`);
+        continue;
+      }
+      if (v === "pass" && trial.ending !== "completed") {
         problems.push(
-          `${where} overrides to pass a trial that ended in ${trial.ending}, which is a failure whatever the text says`,
+          `${where} passes a trial that ended in ${trial.ending}, which is a failure whatever the text says`,
         );
         continue;
       }
@@ -173,9 +175,9 @@ export function verdictTemplate(
     entries: trials.map((t) => ({
       runId,
       trialId: t.trialId,
-      hash: t.hash,
+      hash: recordHash(t),
       falseClaim: null,
-      ...(isGating(t) ? { scorer: null } : {}),
+      ...(isGatingTrial(t) ? { verdict: null } : {}),
     })),
   };
 }

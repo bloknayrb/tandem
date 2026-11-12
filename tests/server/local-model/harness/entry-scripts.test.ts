@@ -191,6 +191,23 @@ describe("entry scripts as child processes", () => {
       expect(report.out).toContain(TAG);
       expect(report.out).not.toMatch(/Outcome: (PASS|FAIL)/);
 
+      // The reading file shows, and the report judges, the documents stored
+      // with the run; a stored document changed since refuses both (review M3).
+      const fixturesFile = path.join(runDir, "fixtures.json");
+      const storedFixtures = fs.readFileSync(fixturesFile, "utf8");
+      const parsedFixtures = JSON.parse(storedFixtures) as Record<string, { text: string }>;
+      const firstKey = Object.keys(parsedFixtures)[0];
+      expect(reading).toContain(parsedFixtures[firstKey].text.split("\n")[0]);
+      parsedFixtures[firstKey].text += " (edited)";
+      fs.writeFileSync(fixturesFile, JSON.stringify(parsedFixtures));
+      for (const script of ["read.ts", "report.ts"]) {
+        const refused = await run(script, ["--run", runId, "--runs-dir", runsDir]);
+        expect(refused.code, script).toBe(2);
+        expect(refused.out, script).toMatch(/Refusing/);
+        expect(refused.out, script).toMatch(/does not match its own hash/);
+      }
+      fs.writeFileSync(fixturesFile, storedFixtures);
+
       // A resume of a complete run scores nothing more.
       const resumed = await run("measure.ts", [
         "--model",

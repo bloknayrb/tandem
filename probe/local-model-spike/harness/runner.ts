@@ -23,6 +23,8 @@ import {
   appendInfra,
   appendTrial,
   existingRunDir,
+  MAX_CONSECUTIVE_INFRASTRUCTURE,
+  storeFixture,
   identityPath,
   readIdentity,
   readInfra,
@@ -39,31 +41,37 @@ import type { Scenario, Tier } from "./scenarios/types.js";
 import type { TrialInput, TrialObservation } from "./trial.js";
 import { validateScenarios } from "./validate.js";
 
-/** Consecutive infrastructure errors after which the run stops itself. */
-export const MAX_CONSECUTIVE_INFRASTRUCTURE = 3;
+export { MAX_CONSECUTIVE_INFRASTRUCTURE };
 
 /**
- * A trial that ended in an error before the model produced any text at all (an
- * HTTP 500, an unreadable response). Such an error is the model's failure and
- * is SCORED (brief R2.6). But several in a row usually mean a server that is
- * down or out of memory, and a run that scored them would print FAIL for an
- * endpoint fault. So:
+ * THE SILENT-ERROR RULE. A trial that ended in an error before the model
+ * produced any text at all (an HTTP 500, an unreadable response) is, alone, the
+ * model's failure and is scored (brief R2.6). Several in a row usually mean a
+ * server that is down or out of memory, and a run that scored them would print
+ * FAIL for an endpoint fault. One rule decides:
  *
- *  - while a streak of them lasts they are held back, not yet written;
- *  - when the streak (together with any plain endpoint errors in it) reaches
- *    the limit, the run STOPS, and the held trials are logged in `infra.jsonl`
- *    as `repeated-error:…`, not scored;
- *  - when a trial ends any other way, what was held is scored as it stands;
- *  - on a resume, a trial that already has a `repeated-error` record is scored
- *    at once if it errors the same way again. The person who resumed has
- *    looked at the endpoint; an error that survives that is the model's. This
- *    is what lets a run whose model really does fail this way finish.
+ *  1. A silent-error trial is HELD, not scored, while its streak is open. A
+ *     streak is consecutive trials that produced nothing scorable: held silent
+ *     errors and plain endpoint errors.
+ *  2. A trial that ends any other way closes the streak: the server answered,
+ *     so what was held is the model's own failure and is scored as it stands.
+ *  3. A streak that reaches MAX_CONSECUTIVE_INFRASTRUCTURE stops the run. A
+ *     streak still open when the run reaches its last trial is NOT closed by
+ *     the end: both are logged in `infra.jsonl` as `held-silent-error:<detail>`,
+ *     not scored, reported as unscored, and run again on resume.
+ *  4. On a resume, a trial with such a record is scored at once when it errors
+ *     silently AGAIN WITH THE SAME DETAIL (the person who resumed has looked at
+ *     the endpoint; the same error twice is the model's). That scored trial
+ *     neither extends nor closes the streak around it. With a different detail
+ *     it is held again under rule 1.
  */
 function isSilentError(record: TrialRecord): boolean {
   return record.ending === "error" && record.turns.every((t) => t.text.length === 0);
 }
 
-const REPEATED_ERROR = "repeated-error:";
+export const HELD_SILENT_ERROR = "held-silent-error:";
+
+/** The rule above is stated in every report header (`SILENT_ERROR_RULE_TEXT` in `report-core.ts`). */
 
 export interface RunOptions {
   modelTag: string;
@@ -144,6 +152,24 @@ function identityKey(
 
 function seconds(ms: number | null): string {
   return ms === null ? "–" : `${(ms / 1000).toFixed(0)}s`;
+}
+
+/**
+ * A resume must run on the machine the run started on: the report's outcome
+ * describes one machine (a deep-document trial that times out on a slow laptop
+ * is a failure THERE). The host name and the hardware description given on
+ * the command line must both match the first session's.
+ */
+export function machineRefusal(stored: RunIdentity, now: RunSession): string | null {
+  const first = stored.sessions[0];
+  if (first === undefined) return null;
+  const changed: string[] = [];
+  if (first.host !== now.host) changed.push(`host (was ${JSON.stringify(first.host)}, now ${JSON.stringify(now.host)})`);
+  if (first.hardware !== now.hardware) {
+    changed.push(`hardware (was ${JSON.stringify(first.hardware)}, now ${JSON.stringify(now.hardware)})`);
+  }
+  if (changed.length === 0) return null;
+  return `a run is measured on one machine, and these differ from where it started: ${changed.join("; ")}. Pass the same --hardware text on the same computer, or start a new run`;
 }
 
 export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<RunResult> {
@@ -246,7 +272,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
       host: os.hostname(),
     };
     if (stored !== undefined) {
-      const refusal = resumeRefusal(stored, key);
+      const refusal = resumeRefusal(stored, key) ?? machineRefusal(stored, session);
       if (refusal) return refuse(`cannot resume ${opts.resume}: ${refusal}`);
       identity = stored;
     } else {
@@ -277,33 +303,37 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
     const done = new Set(readTrials<TrialRecord>(runDir).map((t) => t.trialId));
     const todo = planned.filter((p) => !done.has(p.trialId));
     const byId = new Map(scenarios.map((s) => [s.id, s]));
-    // Trials already stopped on once: scored without holding if they error again.
-    const stoppedOnBefore = new Set(
-      readInfra<InfraRecord>(runDir)
-        .filter((r) => r.detail.startsWith(REPEATED_ERROR))
-        .map((r) => r.trialId),
-    );
+    // Rule 4: trials held before, with the detail of their latest hold.
+    const heldBefore = new Map<string, string>();
+    for (const r of readInfra<InfraRecord>(runDir)) {
+      if (r.detail.startsWith(HELD_SILENT_ERROR)) heldBefore.set(r.trialId, r.detail.slice(HELD_SILENT_ERROR.length));
+    }
     /** Consecutive trials that produced nothing scorable: endpoint errors and held silent errors. */
     let streak = 0;
     const held: TrialRecord[] = [];
     const durations: number[] = [];
 
-    const scoreNow = (r: TrialRecord) => {
+    const scoreNow = (r: TrialRecord, documentText: string) => {
+      storeFixture(runDir, r.fixture, documentText);
       appendTrial(runDir, r);
       scored += 1;
     };
-    const stop = (why: string): RunResult => {
+    const heldTexts = new Map<string, string>();
+    const logHeld = () => {
       for (const h of held.splice(0)) {
         appendInfra(runDir, {
           runId: identity.runId,
           trialId: h.trialId,
           scenarioId: h.scenarioId,
           group: h.group,
-          detail: `${REPEATED_ERROR}${h.detail}`,
+          detail: `${HELD_SILENT_ERROR}${h.detail}`,
           at: deps.now().toISOString(),
         } satisfies InfraRecord);
         infra += 1;
       }
+    };
+    const stop = (why: string): RunResult => {
+      logHeld();
       return {
         status: "stopped",
         reason: `${why} Nothing was scored for them. Check the endpoint, then resume with --resume ${identity.runId}`,
@@ -354,8 +384,15 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
       }
 
       const r = evaluated.record;
-      if (isSilentError(r) && !stoppedOnBefore.has(r.trialId)) {
+      if (isSilentError(r)) {
+        if (heldBefore.get(r.trialId) === r.detail) {
+          // Rule 4: the same silent error again, after a resume.
+          scoreNow(r, observation.documentText);
+          deps.log(`${position} ${plan.trialId}  ERROR before any text (${r.detail}) again, as when it was held — scored`);
+          continue;
+        }
         held.push(r);
+        heldTexts.set(r.trialId, observation.documentText);
         streak += 1;
         deps.log(`${position} ${plan.trialId}  ERROR before any text (${r.detail}) — held`);
         if (streak >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
@@ -366,10 +403,10 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         continue;
       }
 
-      // The streak is over: what was held is the model's own failure.
-      for (const h of held.splice(0)) scoreNow(h);
+      // Rule 2: the streak is over; what was held is the model's own failure.
+      for (const h of held.splice(0)) scoreNow(h, heldTexts.get(h.trialId) ?? "");
       streak = 0;
-      scoreNow(r);
+      scoreNow(r, observation.documentText);
       durations.push(observation.totalMs);
       const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
       const left = todo.length - i - 1;
@@ -383,8 +420,20 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         `${position} ${plan.trialId}  ${outcome}${r.claims.suspect ? "  [suspect]" : ""}  first text ${seconds(r.timeToFirstTextMs)}  total ${seconds(r.totalMs)}  about ${Math.round((mean * left) / 60_000)} min left`,
       );
     }
-    // The run reached its end: a short streak at the very end is scored.
-    for (const h of held.splice(0)) scoreNow(h);
+    // Rule 3: the end of the run does not close a streak. What is held stays
+    // unscored and is run again on resume.
+    if (held.length > 0) {
+      const n = held.length;
+      logHeld();
+      return {
+        status: "stopped",
+        reason: `the run reached its end with ${n} trial(s) held: they failed before any text, and no later trial showed the server answering. They are not scored. Check the endpoint, then resume with --resume ${identity.runId} to run them again`,
+        runId: identity.runId,
+        runDir,
+        scoredThisSession: scored,
+        infraThisSession: infra,
+      };
+    }
     return { status: "complete", runId: identity.runId, runDir, scoredThisSession: scored, infraThisSession: infra };
   } finally {
     release();

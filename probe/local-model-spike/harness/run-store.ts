@@ -4,12 +4,15 @@
  *   identity.json   what was measured, on what, and each session that ran it
  *   trials.jsonl    one line per SCORED trial (never rewritten, only appended)
  *   infra.jsonl     one line per attempt that ended in an infrastructure error
+ *   fixtures.json   each document's flat text exactly as the trials' model saw
+ *                   it, with its SHA-256; the reading file and the report use
+ *                   these, never the checkout's fixtures
  *   lock            the process writing this run
  *
  * Imports nothing from `src/`, so an entry script can use it before the
  * app-data directory is pointed at the run.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +20,9 @@ import path from "node:path";
 import { isSafeRunId } from "./paths.js";
 
 export type RunMode = "full" | "screen";
+
+/** Consecutive trials with nothing scorable after which a run stops itself (see `runner.ts`). */
+export const MAX_CONSECUTIVE_INFRASTRUCTURE = 3;
 
 /** The fields a resume must find unchanged. */
 export interface RunIdentityKey {
@@ -51,19 +57,38 @@ export interface RunIdentity extends RunIdentityKey {
 
 export const UNKNOWN = "unknown";
 
-function readJsonLines<T>(file: string): T[] {
-  if (!fs.existsSync(file)) return [];
-  const out: T[] = [];
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    if (line.trim() === "") continue;
+/**
+ * Lines of a JSONL file that could not be parsed. Only the LAST line may be
+ * torn (a process killed mid-append; that trial was not recorded, so it is
+ * simply run again). Any other unreadable line was a recorded trial that has
+ * been damaged since, and a reader of the file must say so, not drop it quietly.
+ */
+export interface JsonLines<T> {
+  records: T[];
+  /** 1-based line numbers of unreadable lines that are not the last line. */
+  damaged: number[];
+}
+
+export function readJsonLinesChecked<T>(file: string): JsonLines<T> {
+  if (!fs.existsSync(file)) return { records: [], damaged: [] };
+  const records: T[] = [];
+  const damaged: number[] = [];
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  let last = lines.length - 1;
+  while (last >= 0 && lines[last].trim() === "") last -= 1;
+  lines.forEach((line, i) => {
+    if (line.trim() === "") return;
     try {
-      out.push(JSON.parse(line) as T);
+      records.push(JSON.parse(line) as T);
     } catch {
-      // A torn last line from a killed process: the trial was not recorded, so
-      // it is simply run again.
+      if (i !== last) damaged.push(i + 1);
     }
-  }
-  return out;
+  });
+  return { records, damaged };
+}
+
+function readJsonLines<T>(file: string): T[] {
+  return readJsonLinesChecked<T>(file).records;
 }
 
 export function identityPath(runDir: string): string {
@@ -77,6 +102,9 @@ export function infraPath(runDir: string): string {
 }
 export function lockPath(runDir: string): string {
   return path.join(runDir, "lock");
+}
+export function fixturesPath(runDir: string): string {
+  return path.join(runDir, "fixtures.json");
 }
 
 export function readIdentity(runDir: string): RunIdentity {
@@ -92,6 +120,79 @@ export function readTrials<T>(runDir: string): T[] {
 }
 export function readInfra<T>(runDir: string): T[] {
   return readJsonLines<T>(infraPath(runDir));
+}
+
+/**
+ * Unreadable lines in the run's logs that are not a torn last line, in words.
+ * The report counts each as a reason the run cannot be judged.
+ */
+export function damagedLogLines(runDir: string): string[] {
+  const out: string[] = [];
+  for (const [name, file] of [
+    ["trials.jsonl", trialsPath(runDir)],
+    ["infra.jsonl", infraPath(runDir)],
+  ] as const) {
+    const { damaged } = readJsonLinesChecked<unknown>(file);
+    if (damaged.length > 0) out.push(`${name} has unreadable line(s) ${damaged.join(", ")} that are not a torn last line`);
+  }
+  return out;
+}
+
+// --- the documents the model saw --------------------------------------------
+
+export interface StoredFixture {
+  sha256: string;
+  text: string;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+export function readFixtures(runDir: string): Record<string, StoredFixture> {
+  const file = fixturesPath(runDir);
+  if (!fs.existsSync(file)) return {};
+  return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, StoredFixture>;
+}
+
+/**
+ * Record a document's flat text the first time a trial on it is scored. The
+ * first text stored for a key is kept: a later trial on different text keeps
+ * its own `documentHash`, and `fixtureProblems` then refuses the run.
+ */
+export function storeFixture(runDir: string, key: string, text: string): void {
+  const all = readFixtures(runDir);
+  if (all[key] !== undefined) return;
+  all[key] = { sha256: sha256(text), text };
+  const tmp = `${fixturesPath(runDir)}.tmp-${randomBytes(4).toString("hex")}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, "utf8");
+  fs.renameSync(tmp, fixturesPath(runDir));
+}
+
+/**
+ * Why the stored documents cannot be shown to be the ones each trial ran on,
+ * or [] when every trial's `documentHash` names a stored text that still
+ * hashes to it. `read.ts` and `report.ts` refuse a run with any problem.
+ */
+export function fixtureProblems(
+  stored: Record<string, StoredFixture>,
+  trials: { trialId: string; fixture: string; documentHash?: string }[],
+): string[] {
+  const out: string[] = [];
+  for (const [key, f] of Object.entries(stored)) {
+    if (typeof f?.text !== "string" || sha256(f.text) !== f.sha256) {
+      out.push(`fixtures.json: the stored text of ${JSON.stringify(key)} does not match its own hash`);
+    }
+  }
+  for (const t of trials) {
+    const f = stored[t.fixture];
+    if (f === undefined) {
+      out.push(`trial ${t.trialId}: its document ${JSON.stringify(t.fixture)} is not stored in fixtures.json`);
+    } else if (t.documentHash !== f.sha256) {
+      out.push(`trial ${t.trialId}: ran on a different text of ${JSON.stringify(t.fixture)} than the one stored`);
+    }
+  }
+  return out;
 }
 /**
  * Append one record as one line. If a killed process left the file ending in
@@ -218,33 +319,48 @@ export function acquireLock(runDir: string, opts: LockOptions = {}): () => void 
     const describe = holder
       ? `process ${holder.pid} on ${holder.host}, since ${holder.startedAt}`
       : "an unreadable lock file";
+    const byHand = `If you are sure no harness process is writing this run (a process id can be reused by an unrelated program after a restart), delete ${file} by hand and start again.`;
     if (!opts.clearStale) {
       throw new Error(
-        `this run is locked by ${describe}. If that process is no longer running, start again with --clear-stale-lock.`,
+        `this run is locked by ${describe}. If that process is no longer running, start again with --clear-stale-lock. ${byHand}`,
       );
     }
     if (!holder || holder.host !== me.host || isRunning(holder.pid)) {
       throw new Error(
-        `this run is locked by ${describe}, and that lock cannot be shown to be stale (another computer, or the process is still running). Not cleared.`,
+        `this run is locked by ${describe}, and that lock cannot be shown to be stale (another computer, or a process with that id is running). Not cleared. ${byHand}`,
       );
     }
     const aside = `${file}.stale-${randomBytes(4).toString("hex")}`;
     fs.renameSync(file, aside);
     // What was moved aside must be the lock that was judged stale. If another
     // clearer got there first, this is its LIVE lock: put it back and refuse.
+    let movedText: string | null = null;
     let moved: LockBody | null = null;
     try {
-      moved = JSON.parse(fs.readFileSync(aside, "utf8")) as LockBody;
+      movedText = fs.readFileSync(aside, "utf8");
+      moved = JSON.parse(movedText) as LockBody;
     } catch {
       moved = null;
     }
     if (!moved || moved.pid !== holder.pid || moved.host !== holder.host || moved.startedAt !== holder.startedAt) {
-      try {
-        fs.renameSync(aside, file);
-      } catch {
-        // Someone holds the lock path again; leave the aside file for a person to look at.
+      // Put it back with an EXCLUSIVE create, never a rename: on Windows
+      // `renameSync` replaces an existing file, so a rename back could clobber
+      // a lock a third process has taken in the meantime.
+      let restored = false;
+      if (movedText !== null) {
+        try {
+          fs.writeFileSync(file, movedText, { flag: "wx" });
+          restored = true;
+        } catch {
+          restored = false;
+        }
       }
-      throw new Error("the lock changed while it was being cleared: another process has taken this run. Not cleared.");
+      if (restored) fs.rmSync(aside, { force: true });
+      throw new Error(
+        restored
+          ? "the lock changed while it was being cleared: another process has taken this run. Not cleared."
+          : `the lock changed while it was being cleared, and could not be put back because another lock is in its place. The moved lock is at ${aside}; look at both before you resume. Not cleared.`,
+      );
     }
     fs.rmSync(aside, { force: true });
     create(); // throws EEXIST if another process took the lock in between

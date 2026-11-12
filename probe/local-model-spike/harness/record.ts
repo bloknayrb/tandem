@@ -43,6 +43,9 @@ export interface TrialRecord {
   /** The loop's own exit word. */
   exit: string;
   fixture: string;
+  /** SHA-256 of the document's flat text as this trial's model saw it. The text
+   *  itself is stored once per fixture in the run's `fixtures.json`. */
+  documentHash: string;
   prompt: string;
   selectedText?: string;
   /** The task as the product composed it (message plus any selection). */
@@ -75,7 +78,7 @@ export interface TrialRecord {
   metrics: { turns: number; toolCalls: number; jsonParseFailures: number };
   timeToFirstTextMs: number | null;
   totalMs: number;
-  /** Binds a verdict to exactly this text (see `trialHash`). */
+  /** Binds a verdict to exactly this record (see `recordHash`). */
   hash: string;
 }
 
@@ -105,29 +108,37 @@ export function canonicalJson(value: unknown): string {
   return canonical(value);
 }
 
+/** JSON round trip: what a record is once it has been written and read back. */
+function asStored(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+
 /**
- * What a verdict is a verdict ON: the trial, the reply the chat row holds,
- * every turn's text, and what was written. Canonical JSON, so two different
- * splits of the same characters cannot share a hash.
+ * What a verdict is a verdict ON: the WHOLE stored record except its own
+ * `hash` — the reply, every turn's text, what was written, the ending, the
+ * scorer's result, the prompt, the scenario id, the document's hash and every
+ * signal. Computed over the record as it reads back from disk (a JSON round
+ * trip first, so a field left `undefined` hashes the same before and after
+ * storage), with keys sorted at every depth.
+ *
+ * The report recomputes it from the record it reads, never trusting the
+ * stored `hash`: a record changed after the run no longer matches its own
+ * hash, and a verdict written for the old record no longer matches the new.
  */
-export function trialHash(parts: {
-  trialId: string;
-  reply: string;
-  turns: TurnText[];
-  writes: WriteLog;
-}): string {
-  return createHash("sha256")
-    .update(
-      canonical({
-        trialId: parts.trialId,
-        reply: parts.reply,
-        turns: parts.turns.map((t) => t.text),
-        writes: parts.writes,
-      }),
-      "utf8",
-    )
-    .digest("hex")
-    .slice(0, 32);
+export function recordHash(record: TrialRecord | Omit<TrialRecord, "hash">): string {
+  const rest = asStored(record) as Partial<TrialRecord>;
+  delete rest.hash;
+  return createHash("sha256").update(canonical(rest), "utf8").digest("hex").slice(0, 32);
+}
+
+/** The record with its `hash` set. */
+export function sealRecord(record: Omit<TrialRecord, "hash">): TrialRecord {
+  return { ...record, hash: recordHash(record) } as TrialRecord;
+}
+
+/** SHA-256 of a document's flat text, as stored in `documentHash`. */
+export function documentHash(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 export type { Classification };

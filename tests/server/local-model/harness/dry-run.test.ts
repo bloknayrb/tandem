@@ -677,6 +677,22 @@ describe("endings and what counts as a scored trial", () => {
     expect(rec.ending).toBe("error_frame");
     expect(rec.scorerPass).toBe(false);
   });
+
+  it("a clean exit whose raw stream the tap could not read to its end is not scored as completed (review L7)", async () => {
+    const { obs } = await runScripted(s(), [{ content: ["Revenue was $4.82 million."] }]);
+    expect(classifyTrial(obs)).toEqual({ ending: "completed", detail: "clean" });
+    const unread = { ...obs, fetches: obs.fetches.map((f) => ({ ...f, readIncomplete: true })) };
+    expect(classifyTrial(unread)).toEqual({
+      ending: "infrastructure",
+      detail: "tap-read-incomplete",
+    });
+    // An error frame that WAS read still decides first.
+    const both = {
+      ...unread,
+      fetches: unread.fetches.map((f, i) => (i === 0 ? { ...f, errorFrame: true } : f)),
+    };
+    expect(classifyTrial(both).ending).toBe("error_frame");
+  });
 });
 
 describe("visible reasoning (R2.7)", () => {
@@ -772,6 +788,36 @@ describe("the fetch tap observes and changes nothing", () => {
     await tap.settle(20);
     expect(cancelled).toBe(true);
     expect(tap.records[0].readIncomplete).toBe(true);
+  });
+
+  it("settle marks the response it could not finish reading, not whichever came last (review L7)", async () => {
+    const enc = new TextEncoder();
+    let call = 0;
+    vi.stubGlobal("fetch", async () => {
+      call += 1;
+      if (call === 1) {
+        // A stream that never ends.
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(c) {
+              c.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"a"}}]}\n\n'));
+              return new Promise((r) => setTimeout(r, 5));
+            },
+          }),
+        );
+      }
+      return new Response('data: {"choices":[{"delta":{"content":"b"}}]}\n\ndata: [DONE]\n\n');
+    });
+    const tap = installFetchTap();
+    const first = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    // The product gives up on its side. (A tee branch's cancel settles only
+    // once the other branch is cancelled too, which settle() does below.)
+    const gaveUp = first.body?.cancel();
+    const second = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    await second.text();
+    await tap.settle(30);
+    await gaveUp;
+    expect(tap.records.map((r) => r.readIncomplete)).toEqual([true, false]);
   });
 
   it("a scratch document used by a trial starts with nothing written", async () => {

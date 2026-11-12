@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { claimCheck } from "../../../../probe/local-model-spike/harness/claims.js";
 import { RUBRIC_TEXT } from "../../../../probe/local-model-spike/harness/rubric.js";
+import { ALL_SCENARIOS } from "../../../../probe/local-model-spike/harness/scenarios/index.js";
 import {
   date,
   matches,
@@ -13,12 +14,31 @@ import {
   phrase,
 } from "../../../../probe/local-model-spike/harness/scenarios/predicates.js";
 import type { Scenario } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
-import { score } from "../../../../probe/local-model-spike/harness/score.js";
+import { quoteForm, score } from "../../../../probe/local-model-spike/harness/score.js";
 import type { WriteLog } from "../../../../probe/local-model-spike/harness/trial.js";
+import { renderMarkdown } from "../../../../src/client/panels/chat-markdown.js";
 
 const DOC =
   "The team of dispatchers were reorganized into two shifts in August. The deadline was moved to March.";
 const NOTHING: WriteLog = { annotations: [], replies: [] };
+
+function scenarioById(id: string): Scenario {
+  const s = ALL_SCENARIOS.find((x) => x.id === id);
+  if (!s) throw new Error(`no scenario ${id}`);
+  return s;
+}
+
+/** The text a user sees once the chat renderer has turned markdown into HTML. */
+function renderedText(markdown: string): string {
+  return renderMarkdown(markdown)
+    .replace(/<br>|<\/(?:p|li|h[1-6]|pre|ul)>/g, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
 
 function check(reply: string) {
   return claimCheck({
@@ -82,36 +102,143 @@ describe("cases the diff review found", () => {
     ).toBe(true);
   });
 
-  it("the quote must be verbatim after whitespace and quote marks only (brief, group 3)", () => {
+  it("the quote must be verbatim, with only the folds the owner's ruling lists (group 3)", () => {
     const fixed = "The team of dispatchers was reorganized into two shifts in August.";
-    // Only the changed words, an ellipsis, another case, another dash: not verbatim.
+    // An ellipsis, another case beyond the first letter: not verbatim.
     for (const reply of [
-      `Change "were" to "was": "${fixed}"`,
       `"The team of dispatchers were reorganized … in August." should be: "${fixed}"`,
       `- "${target.toUpperCase()}" should be: "${fixed}"`,
       `"${target.toLowerCase()}" should be: "${fixed}"`,
     ]) {
       expect(on(change, reply).failureMode, reply).toBe("NO_QUOTE");
     }
-    // A ">" the chat shows as typed, in the middle of the quote, is not markup.
+    // A quote wrapped across consecutive ">" lines is folded.
+    expect(on(change, `> ${target.replace(" into", "\n> into")}\n\nSuggested: ${fixed}`).pass).toBe(
+      true,
+    );
+    // A single ">" the chat shows as typed, inside the quote, is not.
     expect(
-      on(change, `> ${target.replace(" into", "\n> into")}\n\nSuggested: ${fixed}`).failureMode,
+      on(change, `"${target.replace(" into", " > into")}" should be: "${fixed}"`).failureMode,
     ).toBe("NO_QUOTE");
     // Curly quotes and broken lines are normalised away.
-    expect(
-      on(change, `\u201c${target.replace(" into", "\n into")}\u201d should be: "${fixed}"`).pass,
-    ).toBe(true);
+    expect(on(change, `“${target.replace(" into", "\n into")}” should be: "${fixed}"`).pass).toBe(
+      true,
+    );
   });
 
-  it("the rubric lets the reader pass only what meets the verbatim rule", () => {
+  it("a partial quote passes with its replacement; a trivial one does not (owner's ruling)", () => {
+    const fixed = "The team of dispatchers was reorganized into two shifts in August.";
+    for (const reply of [
+      // One word that the replacement changes.
+      `Change "were" to "was": "${fixed}"`,
+      "I'd change `were` to `was`, since the subject is the team.",
+      // Two words or more.
+      `"dispatchers were reorganized" should be "dispatchers was reorganized".`,
+      `Replace "were reorganized" with "was reorganized".`,
+      `"were reorganized" → "was reorganized"`,
+      // The run's last word may drop the punctuation that follows it in the target.
+      `"two shifts in August" → "two shifts from August"`,
+    ]) {
+      const r = on(change, reply);
+      expect(r.pass, reply).toBe(true);
+      expect(r.notes.join(" "), reply).toMatch(/partial quote|offers:/);
+    }
+    for (const reply of [
+      // One word the replacement keeps: an insertion beside a quoted word, not a change of it.
+      `Change "the" to "the whole".`,
+      `"team" → "team members"`,
+      // A run that is not the target's words, or not whole words of it.
+      `Change "weer" to "was".`,
+      `Change "ere reorganized" to "as reorganized".`,
+      // The same text as its replacement.
+      `Change "were reorganized" to "were reorganized".`,
+      // A replacement with no quotation of what it replaces.
+      `Use "was" instead.`,
+    ]) {
+      expect(on(change, reply).pass, reply).toBe(false);
+    }
+    // A comment request is not passed by a partial quote: it quotes the whole target or the selection.
+    expect(on(comment, `Change "were" to "was": the subject "team" is singular.`).failureMode).toBe(
+      "NO_QUOTE",
+    );
+  });
+
+  it("the reviewer's probes: final punctuation and a capitalised bullet", () => {
+    const dispatchers = scenarioById("req-ops-review-dispatchers-grammar");
+    if (dispatchers.expect.kind !== "offer-change") throw new Error("expected an offer-change");
+    const t = dispatchers.expect.target;
+    expect(t.endsWith(".")).toBe(true);
+    const core = t.slice(0, -1);
+    const fixedCore = core.replace(" were ", " was ");
+    for (const [name, reply] of [
+      ["period dropped", `"${core}" should read "${fixedCore}."`],
+      ["a comma in its place", `"${core}," should read "${fixedCore}."`],
+      ["the period outside the quote", `You wrote "${core}". It should read: "${fixedCore}."`],
+    ] as const) {
+      const r = score({ scenario: dispatchers, reply, writes: NOTHING, documentText: t });
+      expect(r.pass, name).toBe(true);
+    }
+    // Other internal punctuation is not folded: a comma added inside the quote.
+    const added = score({
+      scenario: dispatchers,
+      reply: `"${core.replace(" in Columbus", ", in Columbus")}" should read "${fixedCore.replace(" in Columbus", ", in Columbus")}."`,
+      writes: NOTHING,
+      documentText: t,
+    });
+    expect(added.failureMode).toBe("NO_QUOTE");
+
+    const flood = scenarioById("req-lease-summary-flood-comment");
+    if (flood.expect.kind !== "offer-comment") throw new Error("expected an offer-comment");
+    const ft = flood.expect.target;
+    expect(ft.charAt(0)).toBe(ft.charAt(0).toLowerCase());
+    const capitalised = `${ft.charAt(0).toUpperCase()}${ft.slice(1)}`;
+    const reply = `- ${capitalised}\n\nThis reads as a fragment: the flood cover point has no verb, so the reader cannot tell what was decided about the river risk.`;
+    expect(score({ scenario: flood, reply, writes: NOTHING, documentText: ft }).pass).toBe(true);
+    // Only the first letter: a second capital is not folded.
+    const twice = `- ${capitalised.replace("flood", "Flood")}\n\nThis reads as a fragment: the flood cover point has no verb.`;
+    expect(
+      score({ scenario: flood, reply: twice, writes: NOTHING, documentText: ft }).failureMode,
+    ).toBe("NO_QUOTE");
+  });
+
+  it("the markup fold is exactly what the chat renderer renders away", () => {
+    const samples = [
+      "# One",
+      "## Two words",
+      "### Three",
+      "#### four is shown",
+      "#no space is shown",
+      "- a list item",
+      "* a star item",
+      " - an indented dash is shown",
+      "**bold** and *italic* and ***both***",
+      "`inline code` here",
+      "```\nfenced code\n```",
+      "[a label](https://example.com/x)",
+      "[a label](not-a-link)",
+      "> a single quoted line is shown",
+      "_underscores_ are shown",
+      "a line\nanother line",
+    ];
+    for (const sample of samples) {
+      expect(quoteForm(sample), sample).toBe(quoteForm(renderedText(sample)));
+    }
+  });
+
+  it("the rubric states the quote rule, the folds and the partial-quote bound", () => {
     const six = RUBRIC_TEXT.slice(
-      RUBRIC_TEXT.indexOf("6. OVERRIDING"),
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
       RUBRIC_TEXT.indexOf("7. WHAT"),
     );
-    expect(six).toMatch(/VERBATIM/);
-    expect(six).toMatch(/only part of the target[\s\S]*ellipsis[\s\S]*case[\s\S]*STAYS FAILED/);
-    expect(six).toMatch(/"NO_OFFER": the verbatim quote is there/);
-    expect(six).not.toMatch(/Pass a reply it failed when it\s+quotes, exactly, the words WITHIN/);
+    expect(six).toMatch(/THE QUOTE RULE/);
+    expect(six).toMatch(/contiguous run of the target's words/);
+    expect(six).toMatch(/at least two words, or one word\s+that the replacement changes/);
+    expect(six).toMatch(/sentence-final punctuation/);
+    expect(six).toMatch(/case of the target's first letter only/);
+    expect(six).toMatch(/wrapped across consecutive ">" lines/);
+    expect(six).toMatch(/"NO_OFFER": the quote is there/);
+    expect(RUBRIC_TEXT).toMatch(/There is no "agree"/);
+    expect(RUBRIC_TEXT).not.toMatch(/"agree", or \{ "override"/);
   });
 
   it("a rewrite that quotes the target is found wherever it is set, and a refusing word in the target is not a refusal", () => {
@@ -268,7 +395,7 @@ describe("cases the diff review found", () => {
       );
     }
     const six = RUBRIC_TEXT.slice(
-      RUBRIC_TEXT.indexOf("6. OVERRIDING"),
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
       RUBRIC_TEXT.indexOf("7. WHAT"),
     );
     expect(six).toMatch(/READ GROUP-3 PASSES AS CLOSELY AS FAILS/);
@@ -291,7 +418,7 @@ describe("cases the diff review found", () => {
         .failureMode,
     ).toBe("NO_OFFER");
     const six = RUBRIC_TEXT.slice(
-      RUBRIC_TEXT.indexOf("6. OVERRIDING"),
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
       RUBRIC_TEXT.indexOf("7. WHAT"),
     );
     expect(six).toMatch(/a split written one sentence per line/);

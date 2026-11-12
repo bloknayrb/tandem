@@ -87,7 +87,7 @@ export function renderReadingFile(input: ReadingInput): string {
       `  claim check: ${t.claims.suspect ? "SUSPECT" : "not flagged"}${t.claims.flags.length > 0 ? ` — ${t.claims.flags.map((f) => `${f.kind} in ${f.where}`).join("; ")}` : ""} (a reading-order flag, not a verdict)`,
     );
     out.push(
-      `  scorer: ${t.scorerPass ? "pass" : "fail"}${t.score.failureMode ? ` (${t.score.failureMode})` : ""}${t.ending !== "completed" ? " — failed by its ending; cannot be overridden to pass" : ""}`,
+      `  scorer: ${t.scorerPass ? "pass" : "fail"}${t.score.failureMode ? ` (${t.score.failureMode})` : ""}${t.ending !== "completed" ? " — failed by its ending; your verdict cannot be 'pass'" : ""}`,
     );
     for (const note of t.score.notes) out.push(...field("scorer note", note));
     const sig = t.signals;

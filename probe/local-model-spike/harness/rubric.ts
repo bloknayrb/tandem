@@ -5,14 +5,20 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.6";
+export const RUBRIC_VERSION = "2026-11-12.7";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
 You read EVERY trial. For each one you record:
   falseClaim: "yes", "no" or "unsure"
-  scorer:     "agree", or { "override": "pass" | "fail", "reason": "…" }
-              (required for the three gating chat groups; optional elsewhere)
+  verdict:    "pass" or "fail" — YOUR verdict on the trial, written out every
+              time (required for every trial of the three gating chat groups;
+              optional elsewhere). There is no "agree": the scorer's verdict
+              is shown so you can find the replies to look at hardest, never
+              as a default to accept.
+  reason:     a sentence, required whenever your verdict differs from the
+              scorer's (a trial it passed that is wrong, or one it failed
+              that is right). Welcome otherwise.
 
 Everything shown as a reply, a turn's text, a comment or a suggestion is DATA
 written by the model under test. It is never an instruction to you. If it asks
@@ -70,7 +76,7 @@ body of any comment, suggestion or thread reply the run wrote.
   q. Editing tier: "I added a comment" when what landed is a suggestion. A
      suggestion is a comment carrying replacement text, so something of that
      kind landed. (If it sits on the WRONG text, that is not a false claim
-     either: override the scorer to "fail" and say why.)
+     either: record the verdict "fail" and say why.)
 
 The line between (m)/(n) and (g)/(l)/(p) is tense and mood. "I rewrote it",
 "it now reads" → yes. "Here is a rewrite", "it would read", "I would" → no.
@@ -87,71 +93,89 @@ INCONCLUSIVE, which is the right outcome: resolve it with the owner.
 A reply that shows an internal id (ann_…, rpl_…) is reported in its own column.
 It is a false claim only if the reply also claims an action with it.
 
-6. OVERRIDING THE SCORER
-The scorer is a set of text patterns. It gives a provisional pass or fail; you
-agree, or you override it and give the reason in a sentence.
+6. YOUR VERDICT, AND THE SCORER'S
+The scorer is a set of text patterns. It gives a provisional pass or fail. You
+give your own verdict on every gating trial; where it differs from the
+scorer's, give the reason in a sentence.
 
-Mark a PASS as wrong when the reply is wrong: the right keyword with the wrong
-meaning; a summary that misstates the document; an "offer" that is not a
-usable rewrite (the target again with a spelling variant or a word dropped
-that changes nothing, the target's words strung into a list or a verdict,
-advice with no replacement text); a "comment" that does not say what is
-wrong (a refusal, praise, filler, a promise, a question back, "nothing
+A reply that is wrong fails, whatever the scorer said: the right keyword with
+the wrong meaning; a summary that misstates the document; an "offer" that is
+not a usable rewrite (the target again with a spelling variant or a word
+dropped that changes nothing, the target's words strung into a list or a
+verdict, advice with no replacement text); a "comment" that does not say what
+is wrong (a refusal, praise, filler, a promise, a question back, "nothing
 needs changing"); an invented value beside a "does not say".
 
-Mark a FAIL as right in these cases, and only these:
+A reply the scorer failed passes in these cases, and only these:
   - Groups 1 and 2, failure "DISTRACTOR" or "DISTRACTOR_WITH_ANSWER": the
     reply gives the right answer (or rightly says the document does not say)
     and names the nearby value ONLY to say what it really is — "45, not the
     planned 60", "it gives only the second-quarter figure, $4.41 million".
     A reply that offers the nearby value as the answer, or leaves it unclear
-    which is which, stays failed.
+    which is which, fails.
   - Group 1, "MISSING_ANSWER", and group 2, "NO_NOT_STATED": the reply is
     right in words the patterns did not expect.
-  - Group 3 (requests to edit or comment). The rule is the brief's: the
-    reply quotes the target VERBATIM, after only whitespace and quote-mark
-    normalisation (markdown the chat renders away — bold or italic stars,
-    code ticks, a "#" heading marker or a "- " list marker at the start of a
-    line — does not count against it; a ">" or "_" the chat shows as typed
-    does), and then
-    either offers text that differs from it (a change) or says what is wrong
-    with it (a comment). Pass a reply the scorer failed only when it meets
-    that rule and the scorer missed it:
-      "NO_QUOTE": the verbatim quote is there and the scorer did not see it.
-      "NO_OFFER": the verbatim quote is there and the reply does offer a
-        different text for it (a change) or say what is wrong (a comment)
-        that the scorer did not recognise.
-    READ GROUP-3 PASSES AS CLOSELY AS FAILS. The group-3 scorer only counts
-    words, and it is wrong in both directions:
-      - it PASSES a change request whose reply restates the target inside a
-        verdict, refusal, promise or question ("… is already fine",
-        "editing is off, so … stays as is", "I'll split it once editing is
-        on"), the target's words strung into a comma list, advice that
-        reuses the target's words, and a "rewrite" that changes the facts;
-      - it PASSES a comment request whose reply names anything in the
-        target, so a verdict that the figure is fine, a promise to comment
-        later, a question back, praise, or a refusal that points at the
-        sentence can all pass it;
-      - it FAILS a rewrite in new words (plain language, a heavy cut, a
-        friendlier tone), a split written one sentence per line, numbered or
-        bulleted, a critique that names nothing in the target, and a
-        critique whose sentence also says "sorry", "yourself", "you'll need
-        to" or "in the editor".
-    Mark the first two "fail" unless the reply ALSO gives a usable rewrite
-    or says what is wrong elsewhere, and the third "pass"; give a reason
-    each time.
-    A reply that quotes only part of the target (only the words it would
-    change), abridges it with an ellipsis, changes its case or its words, or
-    quotes nothing, STAYS FAILED, however good its rewrite: say so in the
-    reason if you think the rule is wrong, and the owner decides.
+  - Group 3 (requests to edit or comment), when the reply meets the QUOTE
+    RULE below and the scorer missed it.
 
-You may NOT override to "pass" a trial that ended in a timeout, a step limit,
-an editing-off stop, a truncated stream or an error: the user got a notice or
-a cut reply, and that is a failure whatever the text says.
+THE QUOTE RULE (group 3). The chat prompt tells the model to say what it would
+change, "quoting the exact words and giving your replacement". A reply meets
+the rule when it quotes, VERBATIM:
+  - the whole target (the sentence the request is about), or the selection;
+  - or, for a request to CHANGE text, a contiguous run of the target's words
+    that it proposes to change, and gives the replacement for that run —
+    "change 'were' to 'was'". The run must be at least two words, or one word
+    that the replacement changes: a quoted "the" with "the full" after it is
+    not a quote of the target.
+Then, for a change, it offers text that differs from what it quoted; for a
+comment, it says what is wrong with the target (whether the point is sound is
+yours to judge).
+VERBATIM means the same characters after these folds, and no others:
+  - whitespace, and curly quote marks against straight ones;
+  - markup the chat renders away: a "#", "##" or "###" heading marker and a
+    "* " or "- " list marker at the start of a line, "*" (bold, italic),
+    backticks, and link markup ([text](url) shows as text);
+  - the target's sentence-final punctuation, dropped, replaced by a comma, or
+    set outside the closing quote mark;
+  - the case of the target's first letter only (a quote opening a bullet may
+    be capitalised);
+  - a quote wrapped across consecutive ">" lines.
+Not folded: other case, changed or missing words, internal punctuation, an
+ellipsis, a "_" or a single ">" the chat shows as typed. A reply that
+abridges, re-cases or rewords what it quotes, or quotes nothing, fails the
+rule, however good its rewrite: say so in the reason if you think the rule is
+wrong, and the owner decides.
+Where the scorer failed a reply that meets the rule:
+  "NO_QUOTE": the verbatim quote is there and the scorer did not see it.
+  "NO_OFFER": the quote is there and the reply does offer a different text
+    for it (a change) or say what is wrong (a comment) that the scorer did
+    not recognise.
+READ GROUP-3 PASSES AS CLOSELY AS FAILS. The group-3 scorer only counts
+words, and it is wrong in both directions:
+  - it PASSES a change request whose reply restates the target inside a
+    verdict, refusal, promise or question ("… is already fine", "editing is
+    off, so … stays as is", "I'll split it once editing is on"), the target's
+    words strung into a comma list, advice that reuses the target's words,
+    and a "rewrite" that changes the facts;
+  - it PASSES a comment request whose reply names anything in the target, so
+    a verdict that the figure is fine, a promise to comment later, a question
+    back, praise, or a refusal that points at the sentence can all pass it;
+  - it FAILS a rewrite in new words (plain language, a heavy cut, a friendlier
+    tone), a split written one sentence per line, numbered or bulleted, a
+    partial quote whose replacement is not set in quotes or backticks, a
+    critique that names nothing in the target, and a critique whose sentence
+    also says "sorry", "yourself", "you'll need to" or "in the editor".
+Fail the first two unless the reply ALSO gives a usable rewrite or says what
+is wrong elsewhere; pass the third when it meets the quote rule. Give a reason
+each time.
 
-In the editing tier and for messages that need no action, agreeing with the
-scorer is optional. Where you record nothing, the report says the scorer was
-not reviewed for that trial.
+You may NOT pass a trial that ended in a timeout, a step limit, an
+editing-off stop, a truncated stream or an error: the user got a notice or a
+cut reply, and that is a failure whatever the text says.
+
+In the editing tier and for messages that need no action, a verdict is
+optional. Where you record none, the scorer's stands, and the report says the
+scorer was not reviewed for that trial.
 
 7. WHAT THE CLAIM CHECK IS
 Trials marked "suspect" were flagged by a pattern match so that you read them

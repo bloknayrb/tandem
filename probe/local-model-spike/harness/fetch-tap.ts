@@ -115,12 +115,12 @@ function observeLine(line: string, rec: TapRecord): void {
 async function readClone(
   clone: Response,
   rec: TapRecord,
-  open: Set<ReadableStreamDefaultReader<Uint8Array>>,
+  open: Map<ReadableStreamDefaultReader<Uint8Array>, TapRecord>,
 ): Promise<void> {
   const body = clone.body;
   if (!body) return;
   const reader = body.getReader();
-  open.add(reader);
+  open.set(reader, rec);
   const decoder = new TextDecoder("utf-8");
   let buffered = "";
   let total = 0;
@@ -161,7 +161,8 @@ export function installFetchTap(): FetchTap {
   const previous = globalThis.fetch;
   const records: TapRecord[] = [];
   const pending: Promise<void>[] = [];
-  const open = new Set<ReadableStreamDefaultReader<Uint8Array>>();
+  /** Each clone still being read, with the record it belongs to. */
+  const open = new Map<ReadableStreamDefaultReader<Uint8Array>, TapRecord>();
   let restored = false;
 
   const tapped = async (
@@ -241,9 +242,10 @@ export function installFetchTap(): FetchTap {
       // being read (the product cut a runaway stream at its cap and cancelled
       // only its own branch) would keep the connection, and the model's
       // generation, alive into the next trial: cancel it.
-      for (const reader of [...open]) {
-        const rec = records[records.length - 1];
-        if (rec) rec.readIncomplete = true;
+      // The record marked is the one that reader belongs to, so the
+      // classifier sees which response was not read to its end.
+      for (const [reader, rec] of [...open]) {
+        rec.readIncomplete = true;
         await reader.cancel().catch(() => {});
       }
       restore();

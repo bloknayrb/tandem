@@ -5,7 +5,7 @@
 import { systemPromptFor } from "../../../src/server/local-model/index.js";
 import { claimCheck } from "./claims.js";
 import { type Classification, classifyTrial } from "./classify.js";
-import { type ToolStep, type TrialRecord, trialHash } from "./record.js";
+import { documentHash, sealRecord, type ToolStep, type TrialRecord } from "./record.js";
 import { score } from "./score.js";
 import type { Scenario } from "./scenarios/types.js";
 import {
@@ -74,7 +74,7 @@ export function evaluateTrial(input: {
     scenario.group === "thread" ||
     scenario.group === "sequence";
 
-  const record: TrialRecord = {
+  const record: TrialRecord = sealRecord({
     runId: input.runId,
     trialId: input.trialId,
     scenarioId: scenario.id,
@@ -85,6 +85,7 @@ export function evaluateTrial(input: {
     detail: classification.detail,
     exit: obs.loop.metrics.exit,
     fixture: scenario.fixture,
+    documentHash: documentHash(obs.documentText),
     prompt: scenario.prompt,
     ...(scenario.selectedText !== undefined ? { selectedText: scenario.selectedText } : {}),
     composedTask: obs.turnOpts?.task ?? "",
@@ -122,12 +123,6 @@ export function evaluateTrial(input: {
     },
     timeToFirstTextMs: obs.timeToFirstTextMs,
     totalMs: obs.totalMs,
-    hash: trialHash({
-      trialId: input.trialId,
-      reply: obs.reply,
-      turns: obs.turns,
-      writes: obs.writes,
-    }),
-  };
+  });
   return { scored: true, record };
 }

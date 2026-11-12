@@ -27,7 +27,12 @@
  *       an unreadable response, an error with no attributable cause → a scored
  *       failure (`error`).
  *  5. Exit `clean`: if any raw stream carried an error frame → `error_frame`
- *     (a scored failure); otherwise `completed`.
+ *     (a scored failure); else if the tap could not read some response to its
+ *     end (so an error frame in the unread tail could be missed) →
+ *     infrastructure (`tap-read-incomplete`, run again on resume); otherwise
+ *     `completed`.
+ *  The exit is matched exhaustively: a new exit in the product's loop fails
+ *  the typecheck here until it is classified.
  *
  * Known misses, both directions:
  *  - an HTTP 500 that is the server's own fault (out of memory while loading)
@@ -73,39 +78,60 @@ export function classifyTrial(obs: TrialObservation): Classification {
     return { ending: "stream_cap", detail: "sink-streaming-cap" };
   }
 
-  if (exit === "timeout") return { ending: "timeout", detail: "timeout" };
-  if (exit === "max_turns" || exit === "max_tool_calls") return { ending: "budget", detail: exit };
-  if (exit === "editing_off") return { ending: "editing_off", detail: "editing_off" };
-  if (exit === "aborted") return { ending: "infrastructure", detail: "aborted-by-harness" };
-  if (exit === "doc-swapped") return { ending: "infrastructure", detail: "doc-swapped" };
-
-  if (exit === "error") {
-    const last = obs.fetches[obs.fetches.length - 1];
-    if (last?.thrown && last.thrown.name !== "AbortError") {
-      return { ending: "infrastructure", detail: `fetch-threw:${last.thrown.code ?? "unknown"}` };
+  switch (exit) {
+    case "timeout":
+      return { ending: "timeout", detail: "timeout" };
+    case "max_turns":
+    case "max_tool_calls":
+      return { ending: "budget", detail: exit };
+    case "editing_off":
+      return { ending: "editing_off", detail: "editing_off" };
+    case "aborted":
+      return { ending: "infrastructure", detail: "aborted-by-harness" };
+    case "doc-swapped":
+      return { ending: "infrastructure", detail: "doc-swapped" };
+    case "error":
+      return classifyError(obs, errorMessage);
+    case "clean":
+      if (obs.fetches.some((f) => f.errorFrame)) return { ending: "error_frame", detail: "error-frame" };
+      // The tap could not read some response to its end, so an error frame in
+      // the unread tail would be missed: this run cannot be shown to be clean.
+      if (obs.fetches.some((f) => f.readIncomplete)) {
+        return { ending: "infrastructure", detail: "tap-read-incomplete" };
+      }
+      return { ending: "completed", detail: "clean" };
+    default: {
+      // A new exit in the product's loop must be classified here, not fall
+      // through as a pass: this line stops the typecheck until it is.
+      const unhandled: never = exit;
+      return { ending: "error", detail: `unclassified-exit:${String(unhandled)}` };
     }
-    if (last && last.status !== null && INFRASTRUCTURE_STATUSES.has(last.status)) {
-      return { ending: "infrastructure", detail: `http-${last.status}` };
-    }
-    if (/invalid local-model endpoint/.test(errorMessage ?? "")) {
-      return { ending: "infrastructure", detail: "invalid-endpoint" };
-    }
-    if (last && last.status !== null && last.status >= 400) {
-      return { ending: "error", detail: `http-${last.status}` };
-    }
-    if (/exceeded .*cap/.test(errorMessage ?? "")) return { ending: "error", detail: "response-cap" };
-    const failing = obs.turns[obs.turns.length - 1];
-    if (failing && failing.hadToolCalls === null && failing.text.length > 0) {
-      // The failing request had already streamed text: the user watched a
-      // reply start and then got a notice.
-      return { ending: "error", detail: "error-after-text" };
-    }
-    if (/non-JSON response/.test(errorMessage ?? "")) return { ending: "error", detail: "unreadable" };
-    return { ending: "error", detail: "unattributed" };
   }
+}
 
-  if (obs.fetches.some((f) => f.errorFrame)) return { ending: "error_frame", detail: "error-frame" };
-  return { ending: "completed", detail: "clean" };
+function classifyError(obs: TrialObservation, errorMessage: string | undefined): Classification {
+  const last = obs.fetches[obs.fetches.length - 1];
+  if (last?.thrown && last.thrown.name !== "AbortError") {
+    return { ending: "infrastructure", detail: `fetch-threw:${last.thrown.code ?? "unknown"}` };
+  }
+  if (last && last.status !== null && INFRASTRUCTURE_STATUSES.has(last.status)) {
+    return { ending: "infrastructure", detail: `http-${last.status}` };
+  }
+  if (/invalid local-model endpoint/.test(errorMessage ?? "")) {
+    return { ending: "infrastructure", detail: "invalid-endpoint" };
+  }
+  if (last && last.status !== null && last.status >= 400) {
+    return { ending: "error", detail: `http-${last.status}` };
+  }
+  if (/exceeded .*cap/.test(errorMessage ?? "")) return { ending: "error", detail: "response-cap" };
+  const failing = obs.turns[obs.turns.length - 1];
+  if (failing && failing.hadToolCalls === null && failing.text.length > 0) {
+    // The failing request had already streamed text: the user watched a
+    // reply start and then got a notice.
+    return { ending: "error", detail: "error-after-text" };
+  }
+  if (/non-JSON response/.test(errorMessage ?? "")) return { ending: "error", detail: "unreadable" };
+  return { ending: "error", detail: "unattributed" };
 }
 
 export function isScored(ending: TrialEnding): boolean {

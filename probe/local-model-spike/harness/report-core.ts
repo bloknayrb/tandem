@@ -19,11 +19,26 @@
  * A trial that did not end `completed` (timeout, step limit, editing-off stop,
  * truncated stream, error) is a failure in BOTH rates, whatever its text holds.
  */
-import type { InfraRecord, PlannedTrial, TrialRecord } from "./record.js";
-import type { RunIdentity } from "./run-store.js";
+import { type InfraRecord, type PlannedTrial, recordHash, type TrialRecord } from "./record.js";
+import { MAX_CONSECUTIVE_INFRASTRUCTURE, type RunIdentity } from "./run-store.js";
 import { GATING_GROUPS, GROUP_TITLES, type Group } from "./scenarios/types.js";
 import { wilson } from "./stats.js";
-import { type CheckedVerdicts, checkVerdicts, type VerdictFile } from "./verdicts.js";
+import {
+  type CheckedVerdicts,
+  checkVerdicts,
+  isGatingTrial,
+  type VerdictFile,
+} from "./verdicts.js";
+
+/** Stated in every report header; the rule itself is in `runner.ts` (THE SILENT-ERROR RULE). */
+export const SILENT_ERROR_RULE_TEXT = `Silent errors (an error before the model produced any text): held while a streak of them or of endpoint errors is open; a trial that ends any other way scores what was held; a streak of ${MAX_CONSECUTIVE_INFRASTRUCTURE} stops the run, and a streak still open at the run's end is held; held trials are unscored and run again on resume, where the same error with the same detail is scored.`;
+
+/** Known limits of the instrument, printed in every report header. */
+export const KNOWN_LIMITS: readonly string[] = [
+  "A resume writes into the run directory (and points app data there) before it takes the run's lock; a second process resuming the same run at the same moment can touch the directory before one of them is refused.",
+  "Node's fetch has a default 300-second headers timeout of its own; if the server sends no headers until a model has loaded, a load longer than that may fail the warm-up before its 10-minute limit (unverified).",
+  "A trial that timed out may leave the server still generating; on a CPU laptop that can slow the next trial.",
+];
 
 /** Observed rate every gating group must reach. No statistical lower bound. */
 export const PASS_RATE = 0.8;
@@ -76,6 +91,8 @@ export interface ReportInput {
   fingerprint: { current: string; published: string | null; statement: string };
   /** Other full runs found for the same model digest and tier. */
   otherFullRuns?: string[];
+  /** Damage found in the run's logs (unreadable lines that are not a torn last line). */
+  logProblems?: string[];
 }
 
 function isGatingGroup(g: Group): boolean {
@@ -96,15 +113,38 @@ function failureModes(trials: TrialRecord[]): string[] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`);
 }
 
-/** Does this trial pass after the reader's verdict? Null when there is no usable verdict. */
+/**
+ * Does this trial pass after the reader's verdict? Null when there is no
+ * usable verdict. A gating trial passes only on the reader's explicit
+ * "pass"; elsewhere a missing verdict leaves the scorer's word standing.
+ */
 function correctedPass(t: TrialRecord, checked: CheckedVerdicts): boolean | null {
   const v = checked.byTrial.get(t.trialId);
   if (!v || !checked.rubricCurrent || v.falseClaim === "unsure" || v.falseClaim === null) return null;
   if (t.ending !== "completed") return false;
   if (v.falseClaim === "yes") return false;
-  const s = v.scorer ?? "agree";
-  if (s === "agree") return t.scorerPass;
-  return s.override === "pass";
+  if (v.verdict === "pass" || v.verdict === "fail") return v.verdict === "pass";
+  return isGatingTrial(t) ? null : t.scorerPass;
+}
+
+function oneMachineRun(identity: RunIdentity): boolean {
+  return (
+    new Set(identity.sessions.map((x) => x.host)).size <= 1 &&
+    new Set(identity.sessions.map((x) => x.hardware)).size <= 1
+  );
+}
+
+/** Records that do not match their own hash, or whose scorer verdict disagrees with their own ending and score. */
+function recordProblems(trials: TrialRecord[]): string[] {
+  const out: string[] = [];
+  for (const t of trials) {
+    if (recordHash(t) !== t.hash) {
+      out.push(`trial ${t.trialId}: the record does not match its own hash (it was changed after the run)`);
+    } else if (t.scorerPass !== (t.ending === "completed" && t.score?.pass === true)) {
+      out.push(`trial ${t.trialId}: scorerPass does not follow from its ending and score`);
+    }
+  }
+  return out;
 }
 
 export function computeReport(input: ReportInput): Report {
@@ -125,6 +165,7 @@ export function computeReport(input: ReportInput): Report {
   const infraTrials = new Set(infra.map((i) => i.trialId));
 
   const checked = checkVerdicts(input.verdicts, identity.runId, [...byTrial.values()], input.rubricVersion);
+  const integrity = [...recordProblems(trials), ...(input.logProblems ?? [])];
 
   // --- groups ---
   const groupOrder: Group[] = [];
@@ -152,7 +193,7 @@ export function computeReport(input: ReportInput): Report {
       timeouts: scoredTrials.filter((t) => t.ending === "timeout").length,
       scorerReviewed: scoredTrials.filter((t) => {
         const v = checked.byTrial.get(t.trialId);
-        return v !== undefined && v.scorer !== undefined && v.scorer !== null;
+        return v?.verdict === "pass" || v?.verdict === "fail";
       }).length,
       failureModes: failureModes(scoredTrials),
       perScenario: scenarioIds.map((scenarioId) => {
@@ -220,6 +261,10 @@ export function computeReport(input: ReportInput): Report {
     if (duplicateTrials.size > 0) reasons.push(`the trial log holds duplicate records: ${[...duplicateTrials].join(", ")}`);
     if (foreign > 0) reasons.push(`${foreign} record(s) in the trial log belong to another run`);
     if (unplanned > 0) reasons.push(`${unplanned} record(s) in the trial log are not trials of this run`);
+    for (const p of integrity) reasons.push(p);
+    if (!oneMachineRun(identity)) {
+      reasons.push("the run's sessions ran on more than one host or hardware description, so it describes no single machine");
+    }
     for (const p of checked.problems) reasons.push(p);
     if (input.verdicts !== null && checked.missing.length > 0) {
       reasons.push(`${checked.missing.length} trial(s) have no usable verdict`);
@@ -267,18 +312,35 @@ export function computeReport(input: ReportInput): Report {
   }
 
   // --- text ---
-  const session = identity.sessions[identity.sessions.length - 1];
+  const sessions = identity.sessions;
+  const first = sessions[0];
+  const oneMachine = oneMachineRun(identity);
+  const anyDirty = sessions.some((x) => x.dirty !== false);
   lines.push(`Outcome: ${outcome}`);
-  lines.push(`  on: ${session?.hardware ?? "unknown hardware"}`);
+  lines.push(`  on: ${first?.hardware ?? "unknown hardware"}${oneMachine ? "" : "   (MIXED: see the sessions below)"}`);
   lines.push(`  model: ${identity.modelTag}   digest: ${identity.modelDigest}   Ollama: ${identity.ollamaVersion}`);
   lines.push(`  tier: ${identity.tier}   run: ${identity.runId}   repeats: ${identity.repeats}`);
-  lines.push(`  commit: ${identity.commit}${session?.dirty === true ? " (working tree was dirty)" : ""}   fingerprint: ${identity.fingerprint}`);
-  lines.push(`  context length: ${session?.contextLength ?? "unknown"}`);
+  lines.push(`  commit: ${identity.commit}${anyDirty ? " (a session ran with a dirty or unknown working tree: see below)" : ""}   fingerprint: ${identity.fingerprint}`);
+  lines.push(`  sessions (${sessions.length}):`);
+  sessions.forEach((x, i) => {
+    const dirty = x.dirty === true ? "DIRTY working tree" : x.dirty === false ? "clean working tree" : "working tree state unknown";
+    lines.push(
+      `    ${i + 1}. ${x.startedAt}   host: ${x.host}   hardware: ${x.hardware}   context length: ${x.contextLength}   ${dirty}`,
+    );
+  });
+  if (!oneMachine) {
+    lines.push(
+      "  MIXED MACHINES: this run's sessions ran on more than one host or hardware description, so its outcome describes no single machine. (A resume on another machine is refused; this run was written another way.)",
+    );
+  }
   lines.push(
     input.verdicts === null
       ? `  reader: no verdict file   (current rubric ${input.rubricVersion})`
       : `  reader: ${input.verdicts.reader || "not named"}   rubric of the verdict file: ${input.verdicts.rubricVersion}   (current rubric ${input.rubricVersion})`,
   );
+  lines.push(`  ${SILENT_ERROR_RULE_TEXT}`);
+  lines.push("  Known limits:");
+  for (const k of KNOWN_LIMITS) lines.push(`    - ${k}`);
   if (outcome === "SCREEN") {
     lines.push("");
     lines.push("This is a SCREEN: a fixed subset of the chat tier. It cannot pass or fail a model.");
@@ -293,7 +355,11 @@ export function computeReport(input: ReportInput): Report {
   }
   if (outcome === "PASS" || outcome === "FAIL") {
     lines.push("");
-    lines.push("This outcome describes the hardware named above: a trial that timed out there is a failure there.");
+    lines.push(
+      oneMachine
+        ? "This outcome describes the hardware named above: a trial that timed out there is a failure there."
+        : "This outcome describes no single machine: its sessions ran on different hosts or hardware.",
+    );
   }
   if (reasons.length > 0) {
     lines.push("");

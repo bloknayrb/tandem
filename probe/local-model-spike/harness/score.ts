@@ -102,19 +102,40 @@ function scoreNotStated(reply: string, mustNot: Pattern[]): ScoreResult {
 }
 
 /**
+ * Join a quotation wrapped across consecutive blockquote lines: on every line
+ * that starts with `>` and follows another such line, the marker is removed,
+ * so "> The team of\n> dispatchers" reads as one run of text.
+ */
+function unwrapBlockquotes(text: string): string {
+  const lines = text.split("\n");
+  return lines
+    .map((line, i) => (i > 0 && /^[ \t]*>/.test(lines[i - 1]) && /^[ \t]*>/.test(line) ? line.replace(/^[ \t]*>[ \t]?/, "") : line))
+    .join("\n");
+}
+
+/**
  * For comparing a quotation with the document (brief: "verbatim after
- * whitespace and quote-mark normalisation"). Beyond that, only markup the
- * chat panel renders away (`src/client/panels/chat-markdown.ts`) is removed:
- * `*` emphasis and backtick code marks, and a `- ` / `* ` list marker or a
- * `#` heading marker at the start of a line. Case, wording, dashes, `_` and a
- * `>` (which the chat shows as typed) are NOT folded. Known looseness: a
- * stray single `*` inside a quote is removed too, though the chat would show
- * it.
+ * whitespace and quote-mark normalisation", with the folds the owner's review
+ * of PR #2415 added). Folded, and nothing else:
+ *  - whitespace runs, and curly quote marks to straight ones;
+ *  - exactly the markup the chat panel renders away
+ *    (`src/client/panels/chat-markdown.ts`): a `#`, `##` or `###` heading
+ *    marker followed by a space at the start of a line; a `* ` or `- ` list
+ *    marker at the start of a line (column 0); every `*` and every backtick;
+ *    link markup `[text](url)` to `text`. Pinned against the renderer by
+ *    `review-cases.test.ts`;
+ *  - a quotation wrapped across consecutive `>` lines.
+ * Case, wording, dashes, `_`, internal punctuation and a single `>` line's
+ * marker (the chat shows it as typed) are NOT folded. Known looseness: a stray
+ * single `*` inside a quote is removed too, though the chat would show it.
+ * The target's sentence-final punctuation and first-letter case are folded in
+ * `targetForms`, not here.
  */
 export function quoteForm(text: string): string {
-  return text
-    .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
-    .replace(/^[ \t]*[-*][ \t]+/gm, "")
+  return unwrapBlockquotes(text.replace(/\r\n/g, "\n"))
+    .replace(/^#{1,3} /gm, "")
+    .replace(/^[*-] /gm, "")
+    .replace(/\[([^\]\n]{1,500})\]\(([^)\n]{1,2000})\)/g, "$1")
     .replace(/[*`]/g, "")
     .replace(/[‘’‚‛′]/g, "'")
     .replace(/[“”„‟″]/g, '"')
@@ -122,10 +143,112 @@ export function quoteForm(text: string): string {
     .trim();
 }
 
-/** Does the reply quote this text verbatim (in the sense of `quoteForm`)? */
+function flipFirst(text: string): string {
+  const c = text.charAt(0);
+  const flipped = c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase();
+  return flipped + text.slice(1);
+}
+
+/**
+ * Every form of the target a verbatim quotation may take: as written; with
+ * its sentence-final punctuation dropped (which also covers a comma in its
+ * place and the mark set outside the closing quote, since the comparison is a
+ * substring); and each of those with its first letter's case changed.
+ */
+export function targetForms(target: string): string[] {
+  const base = quoteForm(target);
+  const forms = [base];
+  if (/[.!?]$/.test(base)) forms.push(base.slice(0, -1).trimEnd());
+  return [...new Set([...forms, ...forms.map(flipFirst)])].filter((f) => f.length > 0);
+}
+
+/**
+ * The form of the target this reply quotes verbatim (in the sense of
+ * `quoteForm` and `targetForms`), longest first, or null when it quotes none.
+ */
+export function quotedForm(reply: string, target: string): string | null {
+  const form = quoteForm(reply);
+  return (
+    targetForms(target)
+      .sort((a, b) => b.length - a.length)
+      .find((f) => form.includes(f)) ?? null
+  );
+}
+
+/** Does the reply quote this text verbatim (in the sense of `quotedForm`)? */
 export function quotesVerbatim(reply: string, text: string): boolean {
-  const wanted = quoteForm(text);
-  return wanted.length > 0 && quoteForm(reply).includes(wanted);
+  return quotedForm(reply, text) !== null;
+}
+
+/** Delimited quotations on one line: double or single quotes, or backticks. */
+const DELIMITED = String.raw`"([^"\n]{1,400}?)"|(?<![A-Za-z0-9])'([^'\n]{1,400}?)'(?![A-Za-z0-9])|\x60([^\x60\n]{1,400}?)\x60`;
+/** What joins a quoted run to its replacement: "to", "with", "→", "should be"… */
+const RUN_CONNECTOR = String.raw`\s*(?:,\s*)?(?:→|->|=>|⇒|(?:should|could|would|might)\s+(?:be|read|become|say)|to|with|into|becomes?|reads?|as)\s*:?\s*`;
+
+/** Words of a quotation, for the partial-run bound. */
+function words(text: string): string[] {
+  return text.split(" ").filter((w) => /[\p{L}\p{N}]/u.test(w));
+}
+
+/** A word compared for "the replacement changes it": case and edge punctuation folded. */
+function bareWord(w: string): string {
+  return w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").toLowerCase();
+}
+
+/**
+ * Is `run` (already in `quoteForm`) a contiguous run of whole words of the
+ * target? Its last word may drop the punctuation that follows it in the
+ * target, and its first letter's case may differ; nothing else is folded.
+ */
+function isRunOfTarget(run: string, target: string): boolean {
+  const t = quoteForm(target);
+  const core = run.replace(/[,.;:!?]+$/, "");
+  if (core.length === 0) return false;
+  for (const candidate of new Set([core, flipFirst(core)])) {
+    let at = t.indexOf(candidate);
+    while (at !== -1) {
+      const before = at === 0 ? " " : t.charAt(at - 1);
+      const after = t.charAt(at + candidate.length);
+      if (/[\s"'(]/.test(before) && (after === "" || /[\s,.;:!?"')]/.test(after))) return true;
+      at = t.indexOf(candidate, at + 1);
+    }
+  }
+  return false;
+}
+
+/** Minimum words in a partial quotation whose replacement need not change every word. */
+export const PARTIAL_RUN_MIN_WORDS = 2;
+
+/**
+ * A partial quotation with its replacement (the owner's ruling on PR #2415):
+ * a delimited, verbatim run of the target's words, joined by a connector
+ * ("to", "with", "→", "should be"…) to a delimited replacement for that run,
+ * on one line — "change 'were' to 'was'", "'were reorganized' → 'was
+ * reorganized'". The run must be at least PARTIAL_RUN_MIN_WORDS words, or one
+ * word that the replacement changes (the replacement does not hold that word
+ * again), so a quoted "the" with "the full" after it is not a quote of the
+ * target. The replacement must differ from the run. Change requests only: a
+ * comment request quotes the whole target or the selection.
+ */
+export function partialQuoteChange(reply: string, target: string): { run: string; replacement: string } | null {
+  const text = reply.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'");
+  const pair = new RegExp(`(?:${DELIMITED})${RUN_CONNECTOR}(?:${DELIMITED})`, "g");
+  for (const line of text.split("\n")) {
+    for (const m of line.matchAll(pair)) {
+      const run = quoteForm(m[1] ?? m[2] ?? m[3] ?? "");
+      const replacement = quoteForm(m[4] ?? m[5] ?? m[6] ?? "");
+      if (replacement.length === 0 || replacement === run) continue;
+      if (!isRunOfTarget(run, target)) continue;
+      const runWords = words(run);
+      if (runWords.length === 0) continue;
+      if (runWords.length < PARTIAL_RUN_MIN_WORDS) {
+        const word = bareWord(runWords[0]);
+        if (words(replacement).some((w) => bareWord(w) === word)) continue;
+      }
+      return { run, replacement };
+    }
+  }
+  return null;
 }
 
 function trimSpan(s: string): string {
@@ -175,8 +298,8 @@ const AFTER_TARGET =
  * <rewrite>"); and in either, what follows a lead-in ("I'd change it to …").
  * All spans, delimited or not, are judged by the same `isOffer`.
  */
-export function looseSpans(reply: string, target: string): string[] {
-  const original = quoteForm(target);
+export function looseSpans(reply: string, target: string, quoted?: string): string[] {
+  const original = quoted ?? quoteForm(target);
   const spans: string[] = [];
   for (const raw of reply.replace(/\r\n/g, "\n").split("\n")) {
     const line = raw.replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/, "");
@@ -318,24 +441,32 @@ function isOffer(span: string, target: string): boolean {
  */
 function scoreOfferChange(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  if (!quotesVerbatim(reply, target)) {
+  const quoted = quotedForm(reply, target);
+  if (quoted !== null) {
+    const offer = [...offeredSpans(reply), ...looseSpans(reply, target, quoted)].find((s) =>
+      isOffer(s, target),
+    );
+    if (offer) return { pass: true, notes: [`offers: ${offer.slice(0, 120)}`] };
+  }
+  const partial = partialQuoteChange(reply, target);
+  if (partial) {
+    return {
+      pass: true,
+      notes: [`partial quote: ${partial.run.slice(0, 80)} → ${partial.replacement.slice(0, 80)}`],
+    };
+  }
+  if (quoted === null) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
-      notes: ["does not quote the whole target text verbatim"],
+      notes: ["quotes neither the whole target verbatim nor a run of its words with a replacement for that run"],
     };
   }
-  const offer = [...offeredSpans(reply), ...looseSpans(reply, target)].find((s) =>
-    isOffer(s, target),
-  );
-  if (!offer) {
-    return {
-      pass: false,
-      failureMode: "NO_OFFER",
-      notes: ["quotes the target but offers no different text for it"],
-    };
-  }
-  return { pass: true, notes: [`offers: ${offer.slice(0, 120)}`] };
+  return {
+    pass: false,
+    failureMode: "NO_OFFER",
+    notes: ["quotes the target but offers no different text for it"],
+  };
 }
 
 /**
@@ -350,14 +481,14 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
  */
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  if (!quotesVerbatim(reply, target)) {
+  const original = quotedForm(reply, target);
+  if (original === null) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
       notes: ["does not quote the whole target text verbatim"],
     };
   }
-  const original = quoteForm(target);
   // What is left once the quotation and every refusing sentence are removed.
   // The quotation goes first, so a refusing word inside the target cannot
   // take the sentence that quotes it down with it.

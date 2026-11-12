@@ -7,8 +7,9 @@
  * Reads the run directory (`identity.json`, `planned.json`, `trials.jsonl`,
  * `infra.jsonl`, and `verdicts.json` when the reader has written one) and the
  * tracked `fingerprint.json`. Loads nothing from the product. Works for any
- * model name. Exit codes: 0 printed (whatever the outcome); 2 could not read
- * the run.
+ * model name. Refuses (exit 2) when the run's stored documents
+ * (`fixtures.json`) are not the ones its trials ran on. Exit codes: 0 printed
+ * (whatever the outcome); 2 could not read the run, or refused it.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -21,8 +22,11 @@ import type { InfraRecord, PlannedTrial, TrialRecord } from "./harness/record.js
 import { computeReport } from "./harness/report-core.js";
 import { RUBRIC_VERSION } from "./harness/rubric.js";
 import {
+  damagedLogLines,
   existingRunDir,
+  fixtureProblems,
   identityPath,
+  readFixtures,
   readIdentity,
   readInfra,
   readTrials,
@@ -91,15 +95,24 @@ export async function main(argv: readonly string[]): Promise<number> {
       verdictProblem = `verdicts.json could not be read: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
+  const trials = readTrials<TrialRecord>(runDir);
+  const docProblems = fixtureProblems(readFixtures(runDir), trials);
+  if (docProblems.length > 0) {
+    say("Refusing to report: the documents stored with this run are not the ones its trials ran on.");
+    for (const p of docProblems.slice(0, 20)) say(`  - ${printable(p)}`);
+    if (docProblems.length > 20) say(`  … and ${docProblems.length - 20} more`);
+    return 2;
+  }
   const report = computeReport({
     identity,
     planned,
-    trials: readTrials<TrialRecord>(runDir),
+    trials,
     infra: readInfra<InfraRecord>(runDir),
     verdicts,
     rubricVersion: RUBRIC_VERSION,
     fingerprint: readFingerprintFile(),
     otherFullRuns: otherFullRuns(identity, runsDir),
+    logProblems: damagedLogLines(runDir),
   });
   // Model tags and server metadata are untrusted text: print them bounded and
   // without control characters.

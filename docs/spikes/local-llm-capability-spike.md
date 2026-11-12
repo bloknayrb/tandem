@@ -155,7 +155,7 @@ These are determined by the harness design + first principles, independent of th
 - **A trial is the product's own chat path.** `harness/trial.ts` builds a document, hands a `chat:message` event to the shipped `createLocalModelCollaborator`, and injects a turn runner that calls the shipped `runLocalModelTurn` and keeps each turn's streamed text. Whether the document is inlined, how a selection is worded, the temperature, the transport, streaming, the response cap, the per-turn timeout, the run deadline and the turn and tool-call budgets are decided by product code on the way through. The harness defines no loop, prompt, tool schema or chat request; a source pin in `tests/server/local-model/harness/source-pin.test.ts` holds that.
 - **What is scored is what the user sees.** The reply scored for a trial is the text the chat row holds after the run, including on a timeout, a step-limit exit or an error, where the product flushes partial text. Every turn's text is kept as well, because a preamble shown for a moment can carry a false claim.
 - **Scenarios.** Chat tier: three gating groups — questions the document answers (24), questions it does not answer (22), requests only the editing tier can carry out (22) — on new fixtures with planted distractors, a quarter of group one on documents too long to inline; plus six messages that need no action. Editing tier: June's 12 comment, 12 replacement, 12 chat (as questions) and 3 no-op scenarios, unchanged, plus two thread scenarios. June's 6 sequences and 6 fifty-page scenarios are kept in an extended bank that is out of a default run.
-- **Every reply is read.** `read.ts` writes a reading file (suspects first) and a verdict template; the reader records a false-claim verdict for every trial and agrees with or overrides the scorer for each gating-group trial, against the rubric in `harness/rubric.ts`. `report.ts` prints PASS, FAIL or INCONCLUSIVE for a full chat-tier run, REPORTED for the editing tier and SCREEN for a screen.
+- **Every reply is read.** `read.ts` writes a reading file (suspects first) and a verdict template; the reader records a false-claim verdict for every trial and their own pass or fail for each gating-group trial (with a reason wherever it differs from the scorer's), against the rubric in `harness/rubric.ts`. `report.ts` prints PASS, FAIL or INCONCLUSIVE for a full chat-tier run, REPORTED for the editing tier and SCREEN for a screen.
 - **It cannot silently stop loading again.** `probe/**/*.ts` is in the test typecheck, the dry run (scripted streamed responses, no model, no network) runs in `check`, and a fingerprint of everything the model sees or is limited by is pinned in `probe/local-model-spike/fingerprint.json`.
 
 ### What was removed, and what was kept as history
@@ -195,7 +195,7 @@ npx tsx probe/local-model-spike/measure.ts --model <tag> --tier chat --screen --
 npx tsx probe/local-model-spike/measure.ts --model <tag> --tier chat --hardware "<what it ran on>"
 npx tsx probe/local-model-spike/measure.ts --model <tag> --tier editing --hardware "<what it ran on>"
 
-# continue a run that was stopped (repeat the same --tier and, for a screen, --screen)
+# continue a run that was stopped (repeat the same --tier, the same --hardware text, on the same computer; and, for a screen, --screen)
 npx tsx probe/local-model-spike/measure.ts --model <tag> --tier chat --hardware "<what it ran on>" --resume <run id>
 # after Ctrl+C the run's lock stays behind: add --clear-stale-lock to that resume
 

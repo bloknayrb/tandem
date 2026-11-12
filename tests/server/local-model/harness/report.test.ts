@@ -8,14 +8,17 @@ import {
   readingOrder,
   renderReadingFile,
 } from "../../../../probe/local-model-spike/harness/reading.js";
-import type {
-  InfraRecord,
-  PlannedTrial,
-  TrialRecord,
+import {
+  type InfraRecord,
+  type PlannedTrial,
+  sealRecord,
+  type TrialRecord,
 } from "../../../../probe/local-model-spike/harness/record.js";
 import {
   computeReport,
+  KNOWN_LIMITS,
   type ReportInput,
+  SILENT_ERROR_RULE_TEXT,
 } from "../../../../probe/local-model-spike/harness/report-core.js";
 import { RUBRIC_VERSION } from "../../../../probe/local-model-spike/harness/rubric.js";
 import type { RunIdentity } from "../../../../probe/local-model-spike/harness/run-store.js";
@@ -58,9 +61,14 @@ function identity(over: Partial<RunIdentity> = {}): RunIdentity {
   };
 }
 
+/** A record with its hash recomputed, as the run would have written it. */
+function reseal(t: TrialRecord): TrialRecord {
+  return sealRecord(t);
+}
+
 function trial(group: Group, n: number, over: Partial<TrialRecord> = {}): TrialRecord {
   const scenarioId = `${group}-${n}`;
-  return {
+  return reseal({
     runId: RUN,
     trialId: `${scenarioId}#1`,
     scenarioId,
@@ -71,6 +79,7 @@ function trial(group: Group, n: number, over: Partial<TrialRecord> = {}): TrialR
     detail: "clean",
     exit: "clean",
     fixture: "f",
+    documentHash: "d",
     prompt: "q",
     composedTask: "q",
     inlined: true,
@@ -96,9 +105,9 @@ function trial(group: Group, n: number, over: Partial<TrialRecord> = {}): TrialR
     metrics: { turns: 1, toolCalls: 0, jsonParseFailures: 0 },
     timeToFirstTextMs: 1000,
     totalMs: 60_000,
-    hash: `hash-${scenarioId}`,
+    hash: "",
     ...over,
-  };
+  });
 }
 
 const GROUPS: Group[] = ["answerable", "unanswerable", "editing-request"];
@@ -137,13 +146,26 @@ function agreeAll(
 ): VerdictFile {
   const file = verdictTemplate(RUN, trials, RUBRIC_VERSION);
   file.reader = "review session";
+  const byId = new Map(trials.map((t) => [t.trialId, t]));
+  // The reader's own verdict, written out, on every gating trial: here it
+  // matches the scorer's, so no reason is needed.
   file.entries = file.entries.map((e) =>
-    patch({ ...e, falseClaim: "no", ...("scorer" in e ? { scorer: "agree" as const } : {}) }),
+    patch({
+      ...e,
+      falseClaim: "no",
+      ...("verdict" in e ? { verdict: byId.get(e.trialId)?.scorerPass ? "pass" : "fail" } : {}),
+    }),
   );
   return file;
 }
 
-function report(trials: TrialRecord[], over: Partial<ReportInput> = {}) {
+/**
+ * The report over these trials, each resealed first (tests edit records in
+ * place to set up a case; the run would have hashed what it wrote). A test of
+ * a record changed AFTER the run passes it in `over.trials`, unsealed.
+ */
+function report(input: TrialRecord[], over: Partial<ReportInput> = {}) {
+  const trials = input.map(reseal);
   return computeReport({
     identity: identity(),
     planned: plan(trials),
@@ -188,7 +210,7 @@ describe("a full chat-tier run", () => {
     // The reader finds two of the scorer's failures were right.
     const fixed = agreeAll(trials, (e) =>
       e.trialId === "unanswerable-0#1" || e.trialId === "unanswerable-1#1"
-        ? { ...e, scorer: { override: "pass", reason: "says it another way" } }
+        ? { ...e, verdict: "pass", reason: "says it another way" }
         : e,
     );
     const up = report(trials, { verdicts: fixed });
@@ -201,9 +223,7 @@ describe("a full chat-tier run", () => {
     const all = run(20, { answerable: 4 });
     const down = report(all, {
       verdicts: agreeAll(all, (e) =>
-        e.trialId === "answerable-10#1"
-          ? { ...e, scorer: { override: "fail", reason: "wrong year" } }
-          : e,
+        e.trialId === "answerable-10#1" ? { ...e, verdict: "fail", reason: "wrong year" } : e,
       ),
     });
     expect(down.outcome).toBe("FAIL");
@@ -240,7 +260,7 @@ describe("a full chat-tier run", () => {
     partial.entries = partial.entries
       .slice(0, 10)
       .map((e) =>
-        e.trialId === "answerable-2#1" ? { ...e, falseClaim: "yes" as const, scorer: null } : e,
+        e.trialId === "answerable-2#1" ? { ...e, falseClaim: "yes" as const, verdict: null } : e,
       );
     const r = report(trials, { verdicts: partial });
     expect(r.outcome).toBe("FAIL");
@@ -269,7 +289,7 @@ describe("a full chat-tier run", () => {
     const forced = report(trials, {
       verdicts: agreeAll(trials, (e) =>
         e.trialId === "answerable-0#1"
-          ? { ...e, scorer: { override: "pass", reason: "the text was right" } }
+          ? { ...e, verdict: "pass", reason: "the text was right" }
           : e,
       ),
     });
@@ -342,13 +362,38 @@ describe("a full chat-tier run", () => {
         /current rubric is/,
       ],
       [
-        "a gating entry with no agree/override",
+        "a gating entry with no verdict",
         {
           verdicts: agreeAll(trials, (e) =>
-            e.trialId === "answerable-1#1" ? { ...e, scorer: null } : e,
+            e.trialId === "answerable-1#1" ? { ...e, verdict: null } : e,
           ),
         },
-        /no agree\/override/,
+        /has no verdict \("pass" or "fail"\); every gating trial needs one/,
+      ],
+      [
+        "a gating entry that only says it agrees with the scorer (retired)",
+        {
+          verdicts: agreeAll(trials, (e) =>
+            e.trialId === "answerable-1#1"
+              ? ({ ...e, verdict: undefined, scorer: "agree" } as unknown as VerdictEntry)
+              : e,
+          ),
+        },
+        /has no verdict \("pass" or "fail"\)/,
+      ],
+      [
+        "a verdict that differs from the scorer with no reason",
+        {
+          verdicts: agreeAll(trials, (e) =>
+            e.trialId === "answerable-1#1" ? { ...e, verdict: "fail" } : e,
+          ),
+        },
+        /differs from the scorer \(pass\) and gives no reason/,
+      ],
+      [
+        "damage in the run's logs",
+        { logProblems: ["trials.jsonl has unreadable line(s) 3 that are not a torn last line"] },
+        /unreadable line\(s\) 3/,
       ],
       ["no reader named", { verdicts: { ...agreeAll(trials), reader: "" } }, /names no reader/],
       [
@@ -414,7 +459,7 @@ describe("a full chat-tier run", () => {
           ...t,
           trialId: `${t.scenarioId}#2`,
           repeat: 2,
-          hash: `${t.hash}-2`,
+          hash: "",
         })),
       ];
       const r = report(doubled);
@@ -492,6 +537,107 @@ describe("a full chat-tier run", () => {
         /group "editing-request" was not part of this run/,
       );
     });
+  });
+});
+
+describe("a verdict is bound to the whole record (review M1)", () => {
+  it("a reply or turn rewritten under the stored hash is caught, and the verdict no longer binds", () => {
+    const trials = run().map(reseal);
+    const verdicts = agreeAll(trials);
+    const i = trials.findIndex((t) => t.trialId === "answerable-3#1");
+    // Changed after the run and after the reader's verdict; the stored hash kept.
+    const tampered = [...trials];
+    tampered[i] = {
+      ...trials[i],
+      reply: "something else entirely",
+      turns: [{ turn: 1, text: "something else entirely", hadToolCalls: false }],
+    };
+    const r = report([], { trials: tampered, planned: plan(trials), verdicts });
+    expect(r.outcome).toBe("INCONCLUSIVE");
+    const why = r.reasons.join("\n");
+    expect(why).toContain("trial answerable-3#1: the record does not match its own hash");
+    expect(why).toContain('entry for "answerable-3#1" was written for a different record');
+  });
+
+  it("flipping ending and scorerPass cannot turn a FAIL into a PASS", () => {
+    const trials = run(20, { unanswerable: 5 }).map(reseal);
+    const verdicts = agreeAll(trials);
+    expect(report([], { trials, planned: plan(trials), verdicts }).outcome).toBe("FAIL");
+    const flipped = trials.map((t) =>
+      t.group === "unanswerable" && !t.scorerPass
+        ? { ...t, scorerPass: true, score: { pass: true, notes: [] } }
+        : t,
+    );
+    const r = report([], { trials: flipped, planned: plan(trials), verdicts });
+    expect(r.outcome).toBe("INCONCLUSIVE");
+    expect(r.text).not.toMatch(/Outcome: PASS/);
+    // Even resealed (a new record, not an edit), the reader's verdict was for the old one.
+    const resealed = report([], { trials: flipped.map(reseal), planned: plan(trials), verdicts });
+    expect(resealed.outcome).toBe("INCONCLUSIVE");
+    expect(resealed.reasons.join("\n")).toContain("was written for a different record");
+  });
+
+  it("a scorerPass that does not follow from the ending and score is caught even when resealed", () => {
+    const trials = run().map(reseal);
+    const i = trials.findIndex((t) => t.trialId === "answerable-4#1");
+    const odd = [...trials];
+    odd[i] = reseal({ ...trials[i], ending: "timeout", exit: "timeout" }); // scorerPass still true
+    const r = report([], { trials: odd, planned: plan(trials), verdicts: agreeAll(odd) });
+    expect(r.outcome).toBe("INCONCLUSIVE");
+    expect(r.reasons.join("\n")).toContain("scorerPass does not follow from its ending and score");
+  });
+
+  it("the hash covers the prompt, the scenario, the document and the score", () => {
+    const base = trial("answerable", 1);
+    for (const over of [
+      { prompt: "another question" },
+      { scenarioId: "answerable-2" },
+      { documentHash: "other" },
+      { score: { pass: true, notes: ["x"] } },
+      { ending: "budget" as const },
+    ]) {
+      expect(reseal({ ...base, ...over }).hash, JSON.stringify(over)).not.toBe(base.hash);
+    }
+    // Stable across a write and a read.
+    expect(reseal(JSON.parse(JSON.stringify(base)) as TrialRecord).hash).toBe(base.hash);
+  });
+});
+
+describe("the sessions of a run, and the header (review M2, M4, item 7)", () => {
+  it("prints every session, and flags a dirty one", () => {
+    const trials = run();
+    const id = identity();
+    id.sessions.push({ ...id.sessions[0], startedAt: "2026-11-13T09:00:00.000Z", dirty: true });
+    const r = report(trials, { identity: id });
+    expect(r.text).toContain("sessions (2):");
+    expect(r.text).toContain("1. 2026-11-12T10:00:00.000Z");
+    expect(r.text).toContain("2. 2026-11-13T09:00:00.000Z");
+    expect(r.text).toContain("DIRTY working tree");
+    expect(r.text).toContain("a session ran with a dirty or unknown working tree");
+    expect(r.outcome).toBe("PASS");
+  });
+
+  it("a run whose sessions ran on different machines describes no single machine", () => {
+    const trials = run();
+    for (const change of [{ host: "other-host" }, { hardware: "a desktop with a GPU" }]) {
+      const id = identity();
+      id.sessions.push({ ...id.sessions[0], ...change });
+      const r = report(trials, { identity: id });
+      expect(r.outcome, JSON.stringify(change)).toBe("INCONCLUSIVE");
+      expect(r.text).toContain("MIXED MACHINES");
+      expect(r.reasons.join("\n")).toContain("describes no single machine");
+    }
+  });
+
+  it("states the silent-error rule and the known limits", () => {
+    const r = report(run());
+    expect(r.text).toContain(SILENT_ERROR_RULE_TEXT);
+    expect(SILENT_ERROR_RULE_TEXT).toMatch(/streak still open at the run's end is held/);
+    expect(SILENT_ERROR_RULE_TEXT).toMatch(/same error with the same detail is scored/);
+    for (const k of KNOWN_LIMITS) expect(r.text).toContain(k);
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/before it takes the run's lock/);
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/300-second headers timeout/);
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/slow the next trial/);
   });
 });
 
@@ -605,7 +751,7 @@ describe("what the report says about the reading", () => {
     expect(r.text).toContain(
       `reader: review session   rubric of the verdict file: ${RUBRIC_VERSION}`,
     );
-    // No-action entries carry no agree/override, so their corrected rate says so.
+    // No-action entries carry no verdict, so their corrected rate says so.
     expect(r.text).toMatch(
       /corrected by the reader: 2\/2 \(100%\) — the reader reviewed the scorer on 0 of 2/,
     );
