@@ -525,7 +525,7 @@ export function callerOwnerInfo(
  * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. The tool-side name
  * of the scope read. **The inbox does not use it**: `awareness.ts` may not
  * import this file, so since the scope PR it reaches the same read through
- * `inboxOwnership` in `sessions/ownership.ts`. Nothing in production calls
+ * the inbox's own door in `sessions/ownership.ts`. Nothing in production calls
  * this. `"neither"` while ownership is off (`inboxScopeOf`'s own guard), and
  * for a caller with no owner id or no owner record.
  */
