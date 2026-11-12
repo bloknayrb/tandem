@@ -5,7 +5,9 @@
  *
  * **Ships dark.** Every exported function that production code calls returns at
  * once while `ownershipEnabled()` is false, so a release build never creates a
- * record, an entry or a timer. The `ownership-flag-on` CI job runs everything
+ * record, an entry or a timer. (The wiring seams — `setTransportView`,
+ * `setOwnershipSeqSource` and their kin — only store a function, which
+ * nothing calls while dark.) The `ownership-flag-on` CI job runs everything
  * flag-on.
  *
  * **What is here.** PR 1a: records, labels, display kinds, attachment and lapse
@@ -175,8 +177,10 @@ const ownerByDoc = new Map<string, OwnershipEntry>();
 const handoverSeq = new Map<string, number>();
 /**
  * Claims by writes whose outcome is not known yet (PR 2a). **Nothing reads
- * this to decide anything**: no reader, no decision, `recordHoldsState` and
- * no scope predicate. It exists so the tab-close point can cancel a claim
+ * this to decide who holds or may claim a document**: no reader, no check, no
+ * take, `recordHoldsState` and no scope predicate. Only the settle of the
+ * same write looks its own token up. It exists so the tab-close point can
+ * cancel a claim
  * (a document closed during the write gets no entry, even if it is reopened
  * before the write returns), and so tests can count it.
  */
@@ -952,9 +956,10 @@ export function dropWriteClaim(pending: PendingClaim): void {
  * caller now holds the document.
  */
 export function settleWriteClaim(pending: PendingClaim, stillOpen: boolean): boolean {
-  if (!ownershipEnabled()) return false;
   try {
-    if (!pendingClaims.delete(pending) || !stillOpen) return false;
+    // Before the flag is read, so the token goes whatever happens next.
+    const registered = pendingClaims.delete(pending);
+    if (!ownershipEnabled() || !registered || !stillOpen) return false;
     const { documentId, callerId } = pending;
     const standing = standingOf(documentId, callerId, ownerByDoc.get(documentId));
     if (!standing.ok || standing.holds || standing.claim === null) return false;
@@ -1088,9 +1093,14 @@ export function otherHolderOf(
   return { holder: viewOf(entry.ownerId) };
 }
 
-/** The ids of the documents `ownerId` holds. */
+/**
+ * The ids of the documents `ownerId` holds. A reader: an entry whose record is
+ * gone holds nothing (`readEntry`'s rule), so an id with no record is told it
+ * holds nothing.
+ */
 export function heldDocumentIds(ownerId: string): string[] {
   const held: string[] = [];
+  if (!records.has(ownerId)) return held;
   for (const [documentId, entry] of ownerByDoc)
     if (entry.ownerId === ownerId) held.push(documentId);
   return held;

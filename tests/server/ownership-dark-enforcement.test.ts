@@ -10,7 +10,8 @@
  * held by another one), and checks that it does refuse; then it turns the
  * flag off and drives every kind of tool against that state, and calls each
  * helper in `mcp/owned-op.ts` directly. Removing the flag guard from any one
- * of them fails this file (PR 2a's additions have their own test below). The tool-list test also builds the flag-on list
+ * of them fails this file. PR 2a's additions have their own test below; of
+ * their guards, `inboxScope` has none of its own (it calls `inboxScopeOf`). The tool-list test also builds the flag-on list
  * and names every difference, so a new flag-on string cannot appear unlisted.
  */
 
@@ -424,6 +425,16 @@ describe("no queue, no refusal, nothing stamped while dark", () => {
     expect(ownershipSnapshotForTests().pendingClaims).toBe(1);
     expect(settleWriteClaim(live, true)).toBe(true);
     expect(ownershipSnapshotForTests().ownerByDoc.map(([id]) => id)).toContain(docId("probe"));
+
+    // A claim left pending by a flag-on write, settled after the flag went
+    // off: the token goes, and nothing is claimed.
+    setupDoc("late");
+    const late = beginWriteClaim(docId("late"), B);
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    expect(settleWriteClaim(late, true)).toBe(false);
+    vi.stubEnv("TANDEM_OWNERSHIP", "1");
+    expect(ownershipSnapshotForTests().pendingClaims).toBe(0);
+    expect(ownershipSnapshotForTests().ownerByDoc.map(([id]) => id)).not.toContain(docId("late"));
 
     const seeded = ownershipSnapshotForTests();
     vi.stubEnv("TANDEM_OWNERSHIP", "");

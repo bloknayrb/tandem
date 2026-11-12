@@ -808,8 +808,11 @@ describe("a refusal decided by the arguments or by a fact fixed at open (ownersh
  *   three range sites. For rename, the member list below pins which codes
  *   are in the set, not the condition at the mark: a condition that excluded
  *   a member, or stopped consulting the set, passes here, and only the rename
- *   rows of the table (which run four of the six members) and the
- *   `PATH_REJECTED` row would notice;
+ *   rows of the table that reach the mark (three of the six members:
+ *   `EXTENSION_MISMATCH`, `NOT_RENAMABLE`, `READ_ONLY`; the "empty name" row
+ *   is answered by the preflight, before the queue) and the `PATH_REJECTED`
+ *   row would notice. `NOT_FOUND`, `INVALID_PATH` and a non-empty invalid
+ *   name's `INVALID_NAME` have no row that reaches it;
  * - anything after the first code inside one `noClaim(...)`: a ternary's
  *   second arm is not read;
  * - a mark moved between two neighbouring refusals with the same code;

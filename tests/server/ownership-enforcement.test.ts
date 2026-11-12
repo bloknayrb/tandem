@@ -219,7 +219,6 @@ afterEach(async () => {
   }
   await close?.();
   close = undefined;
-  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   // Close the watches the real opens started before removing their files
   // (an open handle keeps the directory busy on Windows).
   for (const d of getOpenDocs().values()) if (d.source === "file") unwatchFile(d.filePath);

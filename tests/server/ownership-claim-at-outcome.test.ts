@@ -25,7 +25,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
-import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -379,9 +379,15 @@ describe("while the body runs, readers outside the queue see the document as uno
     expect(callerOwnerInfo(a)?.holding).toEqual([]);
     // 4. The id-keyed tools' held candidates, for the writer itself.
     expect(heldAmong(a, [docId("d")])).toBeUndefined();
-    // And the held list a refusal on ANOTHER document carries for the writer.
-    const refused = await as(A, "tandem_comment", { from: 0, to: 5, text: "c" });
-    expect(refused.code === "NOT_DOC_OWNER" ? refused.details?.heldDocumentIds : []).toEqual([]);
+    // And the held list a refusal on ANOTHER document carries for the writer:
+    // a write that names no document, refused on B's active one.
+    setActiveDocId(docId("other"));
+    const heldInRefusal = async () => {
+      const refused = await as(A, "tandem_comment", { from: 0, to: 5, text: "c" });
+      expect(refused.code).toBe("NOT_DOC_OWNER");
+      return refused.details?.heldDocumentIds ?? [];
+    };
+    expect(await heldInRefusal()).toEqual([]);
     expect(getDocOwner(docId("d"))).toBeUndefined();
     expect(ownershipSnapshotForTests().pendingClaims).toBe(1);
 
@@ -398,6 +404,7 @@ describe("while the body runs, readers outside the queue see the document as uno
     expect(focusHeldByAnother(b, docId("d"))).toBe(true);
     expect(callerOwnerInfo(a)?.holding).toEqual([docId("d")]);
     expect(heldAmong(a, [docId("d")])).toEqual([docId("d")]);
+    expect(await heldInRefusal()).toEqual([docId("d")]);
     expect(ownershipSnapshotForTests().pendingClaims).toBe(0);
   });
 
@@ -460,6 +467,30 @@ describe("inside the queue only the outcome is seen (R1.2, R1.4)", () => {
     expect(refused.details?.reason).toBe("claimed");
     // The holder's second write claimed nothing again: the very same entry.
     expect(getDocOwner(docId("d"))).toBe(claimed);
+  });
+
+  it("a claiming write that itself waited for its turn: the write queued behind it still finds the claim in effect", async () => {
+    // The case that tells "applied inside the queued operation" from "applied
+    // in a continuation of its promise". A write that starts on an idle queue
+    // hides the difference (its promise is the operation's own); one that
+    // waited is answered through a wrapper a hop later, after the next
+    // entrant's turn is already queued. So: a blocker first, the claiming
+    // write behind it, and another record's write directly behind that.
+    setupDoc("d");
+    let unblock!: () => void;
+    const blocker = runDocOp(docId("d"), () => new Promise<void>((r) => (unblock = r)));
+    const first = heldWrite(A, "d");
+    expect(first.entered()).toBe(false);
+    const behind = as(B, "tandem_comment", { from: 0, to: 5, text: "b", documentId: docId("d") });
+    await new Promise((r) => setTimeout(r, 15));
+    first.release();
+    unblock();
+    await blocker;
+    await first.answer;
+    const refused = await behind;
+    expect(refused.code).toBe("NOT_DOC_OWNER");
+    expect(refused.details?.reason).toBe("claimed");
+    expect(holds(A, "d")).toBe(true);
   });
 
   it("a second record's write queued behind a refused first claims the document itself", async () => {

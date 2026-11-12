@@ -279,26 +279,32 @@ export function ownedWrite(
         const result = await body(documentId);
         // The write has happened. Nothing from here on may fail the call: a
         // client told INTERNAL_ERROR would retry and write twice.
-        try {
-          if (!neverClaims.has(result)) {
-            // Answered-once does not depend on the claim: the answer is on
-            // the thread whether or not the caller ends up holding the
-            // document (it closed meanwhile, its record is gone).
-            if (answering && !isErrorEnvelope(result)) {
-              recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
-            }
-            if (pending) {
-              // Cleared only once it is settled: if reading the registry
-              // throws, the `finally` still drops the token.
-              settleWriteClaim(pending, hasDoc(documentId));
-              pending = null;
-            }
-          }
-        } catch {
+        if (neverClaims.has(result)) return result;
+        const failed = () =>
           logLimited(
             "write-outcome",
             `[Tandem] ${tool} ran, but recording its ownership outcome failed; its result is returned as it was`,
           );
+        // Answered-once and the claim do not depend on each other, in either
+        // direction: the answer is on the thread whether or not the caller
+        // ends up holding the document (it closed meanwhile, its record is
+        // gone), and a failure recording one must not skip the other.
+        try {
+          if (answering && !isErrorEnvelope(result)) {
+            recordAnswerer(documentId, answering.annotationId, answering.item, ownerId);
+          }
+        } catch {
+          failed();
+        }
+        try {
+          if (pending) {
+            // Cleared only once it is settled: if reading the registry
+            // throws, the `finally` still drops the token.
+            settleWriteClaim(pending, hasDoc(documentId));
+            pending = null;
+          }
+        } catch {
+          failed();
         }
         return result;
       } finally {
@@ -518,11 +524,10 @@ export function callerOwnerInfo(
  * Where the caller stands on an open document for an inbox poll (ownership
  * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. For PR 2b's inbox
  * scope, which must not read `caller.ownerId` itself; nothing in production
- * calls it yet. `"neither"` while ownership is off, and for a caller with no
- * owner id or no owner record.
+ * calls it yet. `"neither"` while ownership is off (`inboxScopeOf`'s own
+ * guard), and for a caller with no owner id or no owner record.
  */
 export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
-  if (!ownershipEnabled()) return "neither";
   return inboxScopeOf(documentId, caller.ownerId);
 }
 
