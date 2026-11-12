@@ -461,6 +461,13 @@ describe("while the body runs, readers outside the queue see the document as uno
 
 describe("inside the queue only the outcome is seen (R1.2, R1.4)", () => {
   it("a second write queued behind a successful first finds the claim in effect", async () => {
+    // This pins the OUTCOME a queued write finds. It does not tell a claim
+    // applied inside the queued operation from one applied in a continuation
+    // of its promise: the first write here starts on an idle queue, where a
+    // continuation attached to the same promise still runs before the next
+    // entrant's turn. Only the next test ("a claiming write that itself
+    // waited for its turn") tells the two apart. Neither is a duplicate of
+    // the other; keep both.
     setupDoc("d");
     const first = heldWrite(A, "d");
     const ownSecond = as(A, "tandem_comment", {
