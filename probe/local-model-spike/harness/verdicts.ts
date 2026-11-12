@@ -21,6 +21,8 @@ export interface VerdictEntry {
   hash: string;
   falseClaim: FalseClaimVerdict | null;
   scorer?: ScorerVerdict | null;
+  /** Optional: the sentence that earned a "yes", or anything else worth keeping. */
+  note?: string;
 }
 
 export interface VerdictFile {
@@ -67,7 +69,10 @@ export function parseVerdictFile(text: string): VerdictFile {
     rubricVersion: String(raw.rubricVersion ?? ""),
     reader: String(raw.reader ?? ""),
     runId: String(raw.runId ?? ""),
-    entries: raw.entries as VerdictEntry[],
+    // Anything that is not an object is dropped here and shows up as a missing verdict.
+    entries: (raw.entries as unknown[]).filter(
+      (e): e is VerdictEntry => typeof e === "object" && e !== null && !Array.isArray(e),
+    ),
   };
 }
 
@@ -95,6 +100,9 @@ export function checkVerdicts(
     );
   }
   if (file.reader.trim() === "") problems.push("verdict file names no reader");
+  if (file.runId !== runId) {
+    problems.push(`verdict file is for run ${JSON.stringify(file.runId)}, not ${runId}`);
+  }
 
   const saidYes = new Set<string>();
   const known = new Map(trials.map((t) => [t.trialId, t]));

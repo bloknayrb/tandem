@@ -25,6 +25,7 @@ import {
   existingRunDir,
   identityPath,
   readIdentity,
+  readInfra,
   readTrials,
   resumeRefusal,
   type RunIdentity,
@@ -43,15 +44,26 @@ export const MAX_CONSECUTIVE_INFRASTRUCTURE = 3;
 
 /**
  * A trial that ended in an error before the model produced any text at all (an
- * HTTP 500, an unreadable response). ONE of these is the model's failure and
- * is scored. Several in a row is a server that is down or out of memory: a run
- * that scored them would print FAIL for an endpoint fault. So they are held
- * back while the streak lasts; if it reaches the limit they are logged as
- * infrastructure and the run stops, otherwise they are scored as they are.
+ * HTTP 500, an unreadable response). Such an error is the model's failure and
+ * is SCORED (brief R2.6). But several in a row usually mean a server that is
+ * down or out of memory, and a run that scored them would print FAIL for an
+ * endpoint fault. So:
+ *
+ *  - while a streak of them lasts they are held back, not yet written;
+ *  - when the streak (together with any plain endpoint errors in it) reaches
+ *    the limit, the run STOPS, and the held trials are logged in `infra.jsonl`
+ *    as `repeated-error:…`, not scored;
+ *  - when a trial ends any other way, what was held is scored as it stands;
+ *  - on a resume, a trial that already has a `repeated-error` record is scored
+ *    at once if it errors the same way again. The person who resumed has
+ *    looked at the endpoint; an error that survives that is the model's. This
+ *    is what lets a run whose model really does fail this way finish.
  */
 function isSilentError(record: TrialRecord): boolean {
   return record.ending === "error" && record.turns.every((t) => t.text.length === 0);
 }
+
+const REPEATED_ERROR = "repeated-error:";
 
 export interface RunOptions {
   modelTag: string;
@@ -78,6 +90,8 @@ export interface RunDeps {
   fingerprint: () => Promise<string>;
   runTrial: (input: TrialInput) => Promise<TrialObservation>;
   log: (line: string) => void;
+  /** The scenario bank to draw from. Defaults to the real one (test seam). */
+  scenarios?: (opts: { tier: Tier; mode: RunMode; includeExtended: boolean }) => Scenario[];
   /** Called with the run directory once it is known, before any trial. */
   onRunDir?: (runDir: string) => void;
 }
@@ -136,7 +150,11 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
   const none = { scoredThisSession: 0, infraThisSession: 0 };
   let scenarios: Scenario[];
   try {
-    scenarios = selectScenarios({ tier: opts.tier, mode: opts.mode, includeExtended: opts.includeExtended });
+    scenarios = (deps.scenarios ?? selectScenarios)({
+      tier: opts.tier,
+      mode: opts.mode,
+      includeExtended: opts.includeExtended,
+    });
   } catch (err) {
     return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
   }
@@ -216,9 +234,42 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
     const done = new Set(readTrials<TrialRecord>(runDir).map((t) => t.trialId));
     const todo = planned.filter((p) => !done.has(p.trialId));
     const byId = new Map(scenarios.map((s) => [s.id, s]));
-    let consecutiveInfra = 0;
+    // Trials already stopped on once: scored without holding if they error again.
+    const stoppedOnBefore = new Set(
+      readInfra<InfraRecord>(runDir)
+        .filter((r) => r.detail.startsWith(REPEATED_ERROR))
+        .map((r) => r.trialId),
+    );
+    /** Consecutive trials that produced nothing scorable: endpoint errors and held silent errors. */
+    let streak = 0;
     const held: TrialRecord[] = [];
     const durations: number[] = [];
+
+    const scoreNow = (r: TrialRecord) => {
+      appendTrial(runDir, r);
+      scored += 1;
+    };
+    const stop = (why: string): RunResult => {
+      for (const h of held.splice(0)) {
+        appendInfra(runDir, {
+          runId: identity.runId,
+          trialId: h.trialId,
+          scenarioId: h.scenarioId,
+          group: h.group,
+          detail: `${REPEATED_ERROR}${h.detail}`,
+          at: deps.now().toISOString(),
+        } satisfies InfraRecord);
+        infra += 1;
+      }
+      return {
+        status: "stopped",
+        reason: `${why} Nothing was scored for them. Check the endpoint, then resume with --resume ${identity.runId}`,
+        runId: identity.runId,
+        runDir,
+        scoredThisSession: scored,
+        infraThisSession: infra,
+      };
+    };
 
     for (let i = 0; i < todo.length; i++) {
       const plan = todo[i];
@@ -239,6 +290,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         contextLength: pre.facts.contextLength,
       });
       const position = `[${done.size + i + 1}/${planned.length}]`;
+
       if (!evaluated.scored) {
         const rec: InfraRecord = {
           runId: identity.runId,
@@ -250,67 +302,46 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         };
         appendInfra(runDir, rec);
         infra += 1;
-        consecutiveInfra += 1;
+        streak += 1;
         deps.log(`${position} ${plan.trialId}  NOT SCORED (infrastructure: ${rec.detail})`);
-        if (consecutiveInfra >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
-          return {
-            status: "stopped",
-            reason: `${MAX_CONSECUTIVE_INFRASTRUCTURE} endpoint errors in a row. Nothing was scored for them. Fix the endpoint, then resume with --resume ${identity.runId}`,
-            runId: identity.runId,
-            runDir,
-            scoredThisSession: scored,
-            infraThisSession: infra,
-          };
+        if (streak >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
+          return stop(`${streak} trials in a row ended in endpoint errors.`);
         }
         continue;
       }
+
       const r = evaluated.record;
-      if (isSilentError(r)) {
+      if (isSilentError(r) && !stoppedOnBefore.has(r.trialId)) {
         held.push(r);
+        streak += 1;
         deps.log(`${position} ${plan.trialId}  ERROR before any text (${r.detail}) — held`);
-        if (held.length + consecutiveInfra >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
-          for (const h of held) {
-            appendInfra(runDir, {
-              runId: identity.runId,
-              trialId: h.trialId,
-              scenarioId: h.scenarioId,
-              group: h.group,
-              detail: `repeated-error:${h.detail}`,
-              at: deps.now().toISOString(),
-            } satisfies InfraRecord);
-            infra += 1;
-          }
-          return {
-            status: "stopped",
-            reason: `${MAX_CONSECUTIVE_INFRASTRUCTURE} trials in a row failed before the model produced any text (${r.detail}). That is the server, not the model: nothing was scored for them. Fix the endpoint, then resume with --resume ${identity.runId}`,
-            runId: identity.runId,
-            runDir,
-            scoredThisSession: scored,
-            infraThisSession: infra,
-          };
+        if (streak >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
+          return stop(
+            `${streak} trials in a row failed before the model produced any text (${r.detail}): that looks like the server, not the model.`,
+          );
         }
         continue;
       }
+
       // The streak is over: what was held is the model's own failure.
-      for (const h of held.splice(0)) {
-        appendTrial(runDir, h);
-        scored += 1;
-      }
-      consecutiveInfra = 0;
-      appendTrial(runDir, r);
-      scored += 1;
+      for (const h of held.splice(0)) scoreNow(h);
+      streak = 0;
+      scoreNow(r);
       durations.push(observation.totalMs);
       const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
       const left = todo.length - i - 1;
-      const outcome = r.ending !== "completed" ? r.ending.toUpperCase() : r.scorerPass ? "pass" : `fail (${r.score.failureMode ?? "?"})`;
+      const outcome =
+        r.ending !== "completed"
+          ? r.ending.toUpperCase()
+          : r.scorerPass
+            ? "pass"
+            : `fail (${r.score.failureMode ?? "?"})`;
       deps.log(
         `${position} ${plan.trialId}  ${outcome}${r.claims.suspect ? "  [suspect]" : ""}  first text ${seconds(r.timeToFirstTextMs)}  total ${seconds(r.totalMs)}  about ${Math.round((mean * left) / 60_000)} min left`,
       );
     }
-    for (const h of held.splice(0)) {
-      appendTrial(runDir, h);
-      scored += 1;
-    }
+    // The run reached its end: a short streak at the very end is scored.
+    for (const h of held.splice(0)) scoreNow(h);
     return { status: "complete", runId: identity.runId, runDir, scoredThisSession: scored, infraThisSession: infra };
   } finally {
     release();

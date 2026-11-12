@@ -166,7 +166,9 @@ describe("entry scripts as child processes", () => {
         hardware: "test bench, CPU only",
         contextLength: 4096,
       });
-      expect(identity.commit).toMatch(/^[0-9a-f]{40}$/);
+      // "unknown" where git will not answer for this checkout (the child runs with
+      // another HOME, so a `safe.directory` entry may not apply): never fatal.
+      expect(identity.commit).toMatch(/^(?:[0-9a-f]{40}|unknown)$/);
       const fingerprint = JSON.parse(fs.readFileSync(path.join(SPIKE, "fingerprint.json"), "utf8"));
       expect(identity.fingerprint).toBe(fingerprint.current); // tsx computes what `check` pins
 

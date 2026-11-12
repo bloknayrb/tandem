@@ -66,10 +66,10 @@ export const UNANSWERABLE: Scenario[] = [
     prompt: "How much did the two replacement compressors cost?",
     expect: {
       kind: "not-stated",
-      mustNot: [number("45,000"), number("35,000"), number("310,000"), number("275,000")],
+      mustNot: [number("310,000"), number("275,000")],
     },
     answer:
-      "The review blames the maintenance overrun on the compressors but gives no cost for them; $310,000, $275,000 and the stated $45,000 overrun are totals for all maintenance.",
+      "The review blames the maintenance overrun on the compressors but gives no cost for them; $310,000 and $275,000 are totals for all maintenance. A reply that offers the stated overrun as the compressors' cost is an inference the document does not make: the reader decides.",
   },
 
   // --- clinic-handbook -----------------------------------------------------
@@ -127,7 +127,7 @@ export const UNANSWERABLE: Scenario[] = [
     selectedText: "Last year 41 of 46 employees completed the training on time",
     expect: {
       kind: "not-stated",
-      mustNot: [percent("92"), number("46")],
+      mustNot: [percent("92")],
     },
     answer:
       "The excerpt gives only last year's training figure (41 of 46, stated as 92%); there is nothing about any earlier year.",
@@ -139,13 +139,13 @@ export const UNANSWERABLE: Scenario[] = [
     tier: "chat",
     group: "unanswerable",
     fixture: "lease-summary",
-    prompt: "What will the monthly rent be during the 3-year renewal period?",
+    prompt: "How much rent did the previous tenant of this unit pay?",
     expect: {
       kind: "not-stated",
       mustNot: [number("9,600"), number("7,350")],
     },
     answer:
-      "The summary gives the option to renew for 3 years but no rent for that period; $9,600 is the first-year rent and $7,350 the previous unit's rent.",
+      "The summary says nothing about a previous tenant of this unit; $9,600 is this lease's first-year rent and $7,350 is what the tenant paid for its own previous unit.",
   },
   {
     id: "una-lease-summary-signer",

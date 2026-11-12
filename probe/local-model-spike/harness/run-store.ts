@@ -93,11 +93,33 @@ export function readTrials<T>(runDir: string): T[] {
 export function readInfra<T>(runDir: string): T[] {
   return readJsonLines<T>(infraPath(runDir));
 }
+/**
+ * Append one record as one line. If a killed process left the file ending in
+ * half a line, start a new line first: otherwise this record would be glued
+ * onto the fragment and lost with it.
+ */
+function appendLine(file: string, record: unknown): void {
+  let lead = "";
+  if (fs.existsSync(file)) {
+    const size = fs.statSync(file).size;
+    if (size > 0) {
+      const fd = fs.openSync(file, "r");
+      try {
+        const last = Buffer.alloc(1);
+        fs.readSync(fd, last, 0, 1, size - 1);
+        if (last[0] !== 0x0a) lead = "\n";
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  }
+  fs.appendFileSync(file, `${lead}${JSON.stringify(record)}\n`, "utf8");
+}
 export function appendTrial(runDir: string, record: unknown): void {
-  fs.appendFileSync(trialsPath(runDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendLine(trialsPath(runDir), record);
 }
 export function appendInfra(runDir: string, record: unknown): void {
-  fs.appendFileSync(infraPath(runDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendLine(infraPath(runDir), record);
 }
 
 /**

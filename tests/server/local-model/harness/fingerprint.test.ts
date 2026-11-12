@@ -110,13 +110,14 @@ describe("the fingerprint", () => {
     expect(budgets.toolCallBudget.exit).toBe("max_tool_calls");
     const timeouts = inputs.timeouts as {
       firstTurnTimeoutMs: number;
-      secondTurnTimeoutSeconds: number;
+      secondTurnTimeoutMs: number;
       clockStepMs: number;
     };
     // The second turn's timeout is what was left of the run deadline, so it is
     // shorter than a full turn: the deadline is in the fingerprint too.
     expect(timeouts.firstTurnTimeoutMs).toBeGreaterThan(0);
-    expect(timeouts.secondTurnTimeoutSeconds * 1000).toBeLessThan(timeouts.firstTurnTimeoutMs);
+    expect(timeouts.secondTurnTimeoutMs).toBeLessThan(timeouts.firstTurnTimeoutMs);
+    expect(timeouts.secondTurnTimeoutMs % 1000).toBe(0); // a virtual clock: no real time leaks in
     expect((inputs.sinkCap as { tail: string }).tail).toContain("Reply truncated");
     expect(
       (inputs.editingOff as { secondRequest: Record<string, unknown> }).secondRequest.tools,

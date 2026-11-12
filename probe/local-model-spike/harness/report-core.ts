@@ -49,6 +49,10 @@ export interface GroupReport {
   /** Null when verdicts do not cover every scored trial of the group. */
   correctedPasses: number | null;
   timeouts: number;
+  /** Scored trials on which the reader recorded agree or an override. */
+  scorerReviewed: number;
+  /** "KIND n" for each way the scorer failed a trial of this group. */
+  failureModes: string[];
   perScenario: { scenarioId: string; scorer: string; corrected: string | null }[];
 }
 
@@ -80,6 +84,16 @@ function isGatingGroup(g: Group): boolean {
 
 function pct(n: number, d: number): string {
   return d === 0 ? "n/a" : `${Math.round((n / d) * 100)}%`;
+}
+
+function failureModes(trials: TrialRecord[]): string[] {
+  const counts = new Map<string, number>();
+  for (const t of trials) {
+    if (t.scorerPass) continue;
+    const kind = t.ending !== "completed" ? `ended:${t.ending}` : (t.score.failureMode ?? "unknown");
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`);
 }
 
 /** Does this trial pass after the reader's verdict? Null when there is no usable verdict. */
@@ -136,6 +150,11 @@ export function computeReport(input: ReportInput): Report {
         ? null
         : corrected.filter((c) => c === true).length,
       timeouts: scoredTrials.filter((t) => t.ending === "timeout").length,
+      scorerReviewed: scoredTrials.filter((t) => {
+        const v = checked.byTrial.get(t.trialId);
+        return v !== undefined && v.scorer !== undefined && v.scorer !== null;
+      }).length,
+      failureModes: failureModes(scoredTrials),
       perScenario: scenarioIds.map((scenarioId) => {
         const ts = scoredTrials.filter((t) => t.scenarioId === scenarioId);
         const cs = ts.map((t) => correctedPass(t, checked));
@@ -165,6 +184,10 @@ export function computeReport(input: ReportInput): Report {
     "claim-check suspects (unread flag, not a verdict)": count((t) => t.claims.suspect),
     "promise without action (claim check)": count((t) => t.claims.flags.some((f) => f.kind === "promise")),
     "leaked internal id": count((t) => t.claims.leakedIds.length > 0),
+    "a tool call the product could not parse": count((t) => t.metrics.jsonParseFailures > 0),
+    "would pass with inline reasoning removed (informational)": count(
+      (t) => !t.scorerPass && t.scorerPassWithoutReasoning,
+    ),
     "reply shows reasoning": count((t) => t.signals.replyShowsReasoning),
     "reasoning in a separate field": count((t) => t.signals.reasoning === "separate" || t.signals.reasoning === "inline+separate"),
     "reasoning only, user got nothing": count((t) => t.signals.reasoning === "reasoning-only"),
@@ -172,6 +195,9 @@ export function computeReport(input: ReportInput): Report {
     "reply not in the document's language": count((t) => t.signals.otherLanguage),
     "reply repeats the system prompt": count((t) => t.signals.repeatsPrompt),
     "prompt over the context length": count((t) => t.signals.context.overContext === true),
+    "…of which judged on an estimate (characters / 4), not a reported token count": count(
+      (t) => t.signals.context.overContext === true && t.signals.context.estimated,
+    ),
     "infrastructure attempts (not scored)": infra.length,
   };
 
@@ -248,10 +274,18 @@ export function computeReport(input: ReportInput): Report {
   lines.push(`  tier: ${identity.tier}   run: ${identity.runId}   repeats: ${identity.repeats}`);
   lines.push(`  commit: ${identity.commit}${session?.dirty === true ? " (working tree was dirty)" : ""}   fingerprint: ${identity.fingerprint}`);
   lines.push(`  context length: ${session?.contextLength ?? "unknown"}`);
+  lines.push(
+    input.verdicts === null
+      ? `  reader: no verdict file   (current rubric ${input.rubricVersion})`
+      : `  reader: ${input.verdicts.reader || "not named"}   rubric of the verdict file: ${input.verdicts.rubricVersion}   (current rubric ${input.rubricVersion})`,
+  );
   if (outcome === "SCREEN") {
     lines.push("");
     lines.push("This is a SCREEN: a fixed subset of the chat tier. It cannot pass or fail a model.");
     lines.push("Intervals below are 95% Wilson intervals on few trials. Overlapping intervals are not a ranking.");
+    lines.push(
+      "The rates are the UNREAD scorer's. Its patterns fail some right replies, above all one that names the nearby value while giving the right answer, so a model that explains more can score lower. Read the replies before preferring one model to another.",
+    );
   }
   if (outcome === "REPORTED") {
     lines.push("");
@@ -307,13 +341,20 @@ export function computeReport(input: ReportInput): Report {
   for (const g of groups) {
     const scorer = `${g.scorerPasses}/${g.scored} (${pct(g.scorerPasses, g.scored)})`;
     const corrected =
-      g.correctedPasses === null ? "not available (verdicts incomplete)" : `${g.correctedPasses}/${g.scored} (${pct(g.correctedPasses, g.scored)})`;
+      g.correctedPasses === null
+        ? "not available (verdicts incomplete)"
+        : `${g.correctedPasses}/${g.scored} (${pct(g.correctedPasses, g.scored)})${
+            g.scorerReviewed < g.scored
+              ? ` — the reader reviewed the scorer on ${g.scorerReviewed} of ${g.scored}; the rest stand on the scorer and the false-claim verdict alone`
+              : ""
+          }`;
     lines.push("");
     lines.push(`  ${g.title} [${g.group}]${g.gating ? " — GATING" : ""}`);
     lines.push(`    scorer rate: ${scorer}    corrected by the reader: ${corrected}`);
     lines.push(
       `    scenarios with a scored trial: ${g.scenariosScored}    timeouts: ${g.timeouts}    unscored (infrastructure only): ${g.unscored}    not run: ${g.unrun}`,
     );
+    if (g.failureModes.length > 0) lines.push(`    scorer failures by kind: ${g.failureModes.join(", ")}`);
     if (outcome === "SCREEN") {
       const w = wilson(g.scorerPasses, g.scored);
       lines.push(`    95% interval on the scorer rate: ${Math.round(w.lo * 100)}%–${Math.round(w.hi * 100)}%`);

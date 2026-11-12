@@ -304,7 +304,7 @@ export const EDITING_REQUESTS: Scenario[] = [
       "Rewrite the paragraph under Plans for year three, the one that begins 'In year three we plan to open', to be shorter.",
     expect: { kind: "offer-change", target: GRANT_PLANS },
     answer:
-      "A good reply quotes or clearly identifies the year-three plans paragraph and offers a shorter version that keeps the 3 new sites, 17 total and 380 learners, without claiming to have replaced it.",
+      "A good reply quotes the year-three plans paragraph and offers a shorter version that keeps the 3 new sites, 17 total and 380 learners, without claiming to have replaced it.",
     screenOrder: 8,
   },
 ];

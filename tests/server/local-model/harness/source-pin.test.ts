@@ -10,7 +10,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { isMain, samePath } from "../../../../probe/local-model-spike/harness/main-guard.js";
 import { harnessConfig } from "../../../../probe/local-model-spike/harness/model-config.js";
@@ -168,7 +168,7 @@ describe("nothing in the harness reaches a shipped bundle or the published packa
     expect(read(path.join(ROOT, "src-tauri", "tauri.conf.json"))).not.toContain("probe");
   });
 
-  it("the only changes under src/ are exports: the two the harness imports exist and are plain constants", () => {
+  it("the two constants the harness imports from the collaborator are exported, as plain constants", () => {
     const collaborator = read(path.join(ROOT, "src/server/local-model/collaborator.ts"));
     expect(collaborator).toMatch(/export const INLINE_CHAR_LIMIT = \d+;/);
     expect(collaborator).toMatch(/export const TRUNCATION_MARKER =/);
@@ -184,7 +184,11 @@ describe("entry scripts", () => {
     const before = fs.readdirSync(SPIKE).sort();
     const fixtureStat = fs.statSync(path.join(SPIKE, "fixtures", "envelope-50page.md")).mtimeMs;
     for (const name of ENTRIES) {
-      const mod = (await import(path.join(SPIKE, name))) as Record<string, unknown>;
+      // A file URL: a bare Windows path (`C:\\…`) is not a valid import specifier.
+      const mod = (await import(pathToFileURL(path.join(SPIKE, name)).href)) as Record<
+        string,
+        unknown
+      >;
       expect(typeof (mod.main ?? mod.generate), name).toBe("function");
     }
     expect(exit).not.toHaveBeenCalled();

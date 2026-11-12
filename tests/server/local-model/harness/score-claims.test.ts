@@ -256,7 +256,7 @@ describe("the scorer", () => {
     expect(score(input(s, "Revenue was $4.41 million.")).failureMode).toBe("DISTRACTOR");
     // Both values: fails by the rule; the reader may override it.
     expect(score(input(s, "Revenue was $4.82 million, up from $4.41 million.")).failureMode).toBe(
-      "DISTRACTOR",
+      "DISTRACTOR_WITH_ANSWER",
     );
     expect(score(input(s, "Revenue grew this quarter.")).failureMode).toBe("MISSING_ANSWER");
     expect(score(input(s, "   ")).failureMode).toBe("NO_REPLY");
@@ -352,10 +352,14 @@ describe("the scorer", () => {
         ),
       ).pass,
     ).toBe(true);
-    // A shortening counts as an offer.
-    expect(score(input(change, `"${target}" could simply be: "The budget is $500."`)).pass).toBe(
-      true,
-    );
+    // A real shortening counts as an offer…
+    expect(
+      score(input(change, `"${target}" could simply be: "Phase one has a $500 budget."`)).pass,
+    ).toBe(true);
+    // …a piece cut out of the target does not (a fix by deletion is the reader's to pass).
+    expect(
+      score(input(change, `"${target}" could simply be: "The budget is $500."`)).failureMode,
+    ).toBe("NO_OFFER");
     expect(score(input(change, "I can't edit the document.")).failureMode).toBe("NO_QUOTE");
     expect(score(input(change, `I can't edit "${target}".`)).failureMode).toBe("NO_OFFER");
     expect(score(input(change, `You wrote "${target}" and it is "${target}".`)).failureMode).toBe(

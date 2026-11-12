@@ -247,6 +247,110 @@ describe("a run", () => {
     ]);
   });
 
+  it("on a resume, a trial it already stopped on is scored if it fails the same way: the run can finish", async () => {
+    stubScript([{ status: 500 }]);
+    const first = await runMeasurement(options(), deps());
+    expect(first.status).toBe("stopped");
+    const runDir = first.runDir as string;
+
+    // Still failing after the person looked at the endpoint: the model's failure.
+    let n = 0;
+    stubScript(() => {
+      n += 1;
+      return n <= 3 ? { status: 500 } : ANSWER;
+    });
+    const second = await runMeasurement(options({ resume: first.runId }), deps());
+    expect(second.status).toBe("complete");
+    const trials = readTrials<TrialRecord>(runDir);
+    expect(trials).toHaveLength(20);
+    expect(new Set(trials.map((t) => t.trialId)).size).toBe(20);
+    expect(trials.filter((t) => t.ending === "error").map((t) => t.detail)).toEqual([
+      "http-500",
+      "http-500",
+      "http-500",
+    ]);
+  });
+
+  it("counts endpoint errors and held errors in one streak, in either order, and logs what it held", async () => {
+    for (const order of [
+      [{ status: 500 }, { status: 500 }, { connectionError: "ECONNREFUSED" }],
+      [{ connectionError: "ECONNREFUSED" }, { status: 500 }, { connectionError: "ECONNREFUSED" }],
+    ] as ScriptedTurn[][]) {
+      let n = 0;
+      stubScript(() => order[Math.min(n++, order.length - 1)]);
+      const result = await runMeasurement(
+        options(),
+        deps({ now: () => new Date(Date.UTC(2026, 10, 12, 10, 0, order.length + n)) }),
+      );
+      expect(result.status).toBe("stopped");
+      expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
+      // Every attempt is logged and counted, the held ones included.
+      expect(readInfra<InfraRecord>(result.runDir as string)).toHaveLength(3);
+      fs.rmSync(result.runDir as string, { recursive: true, force: true });
+    }
+  });
+
+  it("scores a short streak of errors at the very end of the run", async () => {
+    let n = 0;
+    stubScript(() => {
+      n += 1;
+      return n >= 19 ? { status: 500 } : ANSWER;
+    });
+    const result = await runMeasurement(options(), deps());
+    expect(result.status).toBe("complete");
+    const trials = readTrials<TrialRecord>(result.runDir as string);
+    expect(trials).toHaveLength(20);
+    expect(trials.slice(-2).map((t) => t.ending)).toEqual(["error", "error"]);
+  });
+
+  it("refuses to start when a gold anchor does not resolve through the product's dispatch", async () => {
+    const calls = stubScript([ANSWER]);
+    const real = selectScenarios({ tier: "editing", mode: "full" });
+    const broken = real.map((s, i) =>
+      i === 0 && s.expect.kind === "annotation"
+        ? {
+            ...s,
+            expect: { ...s.expect, target: { quoted_text: "words that are not in the fixture" } },
+          }
+        : s,
+    );
+    const preflightCalled = { n: 0 };
+    const result = await runMeasurement(
+      options({ tier: "editing", mode: "full" }),
+      deps({
+        scenarios: () => broken,
+        preflight: async () => {
+          preflightCalled.n += 1;
+          return OK_PREFLIGHT;
+        },
+      }),
+    );
+    expect(result.status).toBe("refused");
+    expect(result.reason).toMatch(/does not validate/);
+    expect(result.reason).toContain(real[0].id);
+    expect(calls).toHaveLength(0);
+    expect(preflightCalled.n).toBe(0);
+    expect(fs.readdirSync(runsDir)).toEqual([]);
+  });
+
+  it("a half-written last line from a killed process does not swallow the next trial", async () => {
+    stubScript([ANSWER]);
+    const first = await runMeasurement(options(), deps());
+    const runDir = first.runDir as string;
+    const file = path.join(runDir, "trials.jsonl");
+    const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+    // Keep 5 whole records and half of the sixth, with no newline.
+    fs.writeFileSync(file, `${lines.slice(0, 5).join("\n")}\n${lines[5].slice(0, 40)}`, "utf8");
+    expect(readTrials<TrialRecord>(runDir)).toHaveLength(5);
+
+    const second = await runMeasurement(options({ resume: first.runId }), deps());
+    expect(second.status).toBe("complete");
+    expect(second.scoredThisSession).toBe(15);
+    const ids = readTrials<TrialRecord>(runDir).map((t) => t.trialId);
+    expect(ids).toHaveLength(20);
+    expect(new Set(ids).size).toBe(20);
+  });
+
   it("scores a single error between good trials as the model's failure", async () => {
     let n = 0;
     stubScript(() => {
@@ -416,6 +520,30 @@ describe("the run lock", () => {
     expect(fs.existsSync(lockPath(dir))).toBe(true);
     second();
     expect(fs.existsSync(lockPath(dir))).toBe(false);
+  });
+
+  it("a clearer that finds the lock has changed hands puts it back and refuses", () => {
+    const dir = path.join(runsDir, "r2");
+    fs.mkdirSync(dir);
+    acquireLock(dir, { pid: 111, host: "h" });
+    // Between this clearer reading the stale lock and moving it aside, another
+    // process cleared it and took the run.
+    let swapped = false;
+    const isRunning = () => {
+      if (!swapped) {
+        swapped = true;
+        fs.writeFileSync(
+          lockPath(dir),
+          `${JSON.stringify({ pid: 333, host: "h", startedAt: "2026-11-12T11:00:00.000Z" })}\n`,
+        );
+      }
+      return false;
+    };
+    expect(() => acquireLock(dir, { pid: 222, host: "h", clearStale: true, isRunning })).toThrow(
+      /lock changed while it was being cleared/,
+    );
+    expect(JSON.parse(fs.readFileSync(lockPath(dir), "utf8")).pid).toBe(333);
+    expect(fs.readdirSync(dir)).toEqual(["lock"]);
   });
 
   it("a locked run refuses a second measure process", async () => {

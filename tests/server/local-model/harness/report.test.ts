@@ -21,6 +21,7 @@ import { RUBRIC_VERSION } from "../../../../probe/local-model-spike/harness/rubr
 import type { RunIdentity } from "../../../../probe/local-model-spike/harness/run-store.js";
 import type { Group } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
 import {
+  parseVerdictFile,
   type VerdictEntry,
   type VerdictFile,
   verdictTemplate,
@@ -591,6 +592,58 @@ describe("what the report says about the measurement itself", () => {
     expect(r.columns["prompt over the context length"]).toBe(1);
     expect(r.outcome).toBe("PASS"); // none of those gate
     expect(r.text).toContain("Latency (reported, never gating)");
+  });
+});
+
+describe("what the report says about the reading", () => {
+  it("names the reader and the rubric, and says where the scorer was not reviewed", () => {
+    const trials = run();
+    const r = report(trials);
+    expect(r.text).toContain(
+      `reader: review session   rubric of the verdict file: ${RUBRIC_VERSION}`,
+    );
+    // No-action entries carry no agree/override, so their corrected rate says so.
+    expect(r.text).toMatch(
+      /corrected by the reader: 2\/2 \(100%\) — the reader reviewed the scorer on 0 of 2/,
+    );
+    expect(report(trials, { verdicts: null }).text).toContain("reader: no verdict file");
+  });
+
+  it("prints how the scorer failed each group, and the columns for tool-call parse failures and estimates", () => {
+    const trials = run(20, { answerable: 2 });
+    trials[0] = {
+      ...trials[0],
+      score: { pass: false, failureMode: "DISTRACTOR_WITH_ANSWER", notes: [] },
+    };
+    trials[1] = { ...trials[1], score: { pass: false, failureMode: "MISSING_ANSWER", notes: [] } };
+    trials[5] = {
+      ...trials[5],
+      metrics: { turns: 2, toolCalls: 1, jsonParseFailures: 1 },
+      signals: {
+        ...trials[5].signals,
+        context: { promptTokens: 9000, estimated: true, overContext: true },
+      },
+    };
+    const r = report(trials);
+    expect(r.text).toContain("scorer failures by kind: DISTRACTOR_WITH_ANSWER 1, MISSING_ANSWER 1");
+    expect(r.columns["a tool call the product could not parse"]).toBe(1);
+    expect(r.text).toContain("judged on an estimate");
+  });
+
+  it("a verdict file for another run, or with a null entry, is INCONCLUSIVE and does not crash", () => {
+    const trials = run();
+    const other = report(trials, { verdicts: { ...agreeAll(trials), runId: "some-other-run" } });
+    expect(other.outcome).toBe("INCONCLUSIVE");
+    expect(other.reasons.join("\n")).toMatch(/verdict file is for run/);
+    const parsed = parseVerdictFile(
+      JSON.stringify({
+        ...agreeAll(trials),
+        entries: [null, 7, ...agreeAll(trials).entries.slice(1)],
+      }),
+    );
+    const r = report(trials, { verdicts: parsed });
+    expect(r.outcome).toBe("INCONCLUSIVE");
+    expect(r.reasons.join("\n")).toMatch(/1 trial\(s\) have no usable verdict/);
   });
 });
 

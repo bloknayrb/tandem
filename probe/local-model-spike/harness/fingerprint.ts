@@ -262,7 +262,10 @@ export async function computeFingerprint(): Promise<FingerprintResult> {
       largestDelay = Math.max(largestDelay, delay ?? 0);
       return (realSetTimeout as (...a: unknown[]) => unknown)(handler, delay, ...rest);
     }) as typeof setTimeout;
-    Date.now = () => realNow() + clockOffset;
+    // A fully virtual clock: it moves only when the scripted server moves it,
+    // so a slow machine cannot change what is captured.
+    const clockBase = realNow();
+    Date.now = () => clockBase + clockOffset;
     const timed = await scripted("chat", DOC, (i) => {
       armed.push(largestDelay);
       largestDelay = 0;
@@ -277,8 +280,7 @@ export async function computeFingerprint(): Promise<FingerprintResult> {
     inputs.timeouts = {
       clockStepMs: CLOCK_STEP_MS,
       firstTurnTimeoutMs: armed[0],
-      // Rounded to the second: the loop reads the clock a few real milliseconds apart.
-      secondTurnTimeoutSeconds: Math.round((armed[1] ?? 0) / 1000),
+      secondTurnTimeoutMs: armed[1],
       exit: timed.obs.loop?.metrics.exit,
     };
 

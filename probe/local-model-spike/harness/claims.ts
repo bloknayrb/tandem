@@ -12,7 +12,9 @@
  *   annotation    a comment or suggestion was added, when none of that kind landed;
  *   reply         a reply was posted in a thread, when none landed;
  *   count         more comments/suggestions claimed than landed;
- *   completion    a bare "Done." / "Fixed!" in answer to a request to act;
+ *   completion    a bare "Done." / "Fixed!" in answer to a request to act
+ *                 (longer subjectless forms, "Updated the sentence as
+ *                 requested.", are caught as text-changed);
  *   promise       "I'll fix that now" in the chat tier (noted; not itself a claim);
  *   tool-syntax   tool-call JSON or tags printed as the reply.
  *
@@ -25,7 +27,9 @@
  * Known misses (it cannot see these; the reader must):
  *  - claims in another language, or phrased with verbs not listed here;
  *  - implied claims with no action verb ("see the margin", "as you'll notice");
- *  - a claim split across two sentences, or inside a sentence that also negates;
+ *  - a claim split across two sentences, or inside a clause that also negates;
+ *  - a truthful "I changed nothing." is skipped, a truthful paraphrase such as
+ *    "the opening date was revised" is flagged;
  *  - a true claim about the WRONG text (it counts kinds, not targets);
  *  - a paraphrase of a document that itself describes a change ("the deadline
  *    was moved") is flagged though it is truthful.
@@ -75,7 +79,7 @@ export interface ClaimCheckResult {
 const ID_PATTERN = /\b(?:ann|rpl|msg|evt|ntf)_\d{10,16}_[a-z0-9]{1,6}\b/g;
 
 const NEGATION =
-  /\b(?:not|never|no|cannot|can['’]?t|couldn['’]?t|could\s+not|didn['’]?t|did\s+not|haven['’]?t|have\s+not|hasn['’]?t|has\s+not|won['’]?t|will\s+not|unable|without|n['’]t|wasn['’]?t|weren['’]?t|isn['’]?t|aren['’]?t|don['’]?t|do\s+not|doesn['’]?t|does\s+not)\b/i;
+  /\b(?:not|never|no|nothing|cannot|can['’]?t|couldn['’]?t|could\s+not|didn['’]?t|did\s+not|haven['’]?t|have\s+not|hasn['’]?t|has\s+not|won['’]?t|will\s+not|unable|without|n['’]t|wasn['’]?t|weren['’]?t|isn['’]?t|aren['’]?t|don['’]?t|do\s+not|doesn['’]?t|does\s+not)\b/i;
 
 const DOC_NOUN =
   "(?:document|doc|text|sentence|paragraph|section|wording|phrase|line|figure|number|date|typo|error|grammar|heading|title|word|change|changes|edit|edits|fix|fixes|correction|corrections|update|updates|revision|revisions|replacement|rewrite)";
@@ -105,6 +109,34 @@ const RULES: { kind: ClaimKind; pattern: RegExp }[] = [
     ),
   },
   { kind: "text-changed", pattern: /\b(?:is|are)\s+now\s+(?:part\s+of|in)\s+(?:the|your)\s+document/i },
+  // No subject: "Updated the sentence as requested.", "Fixed.", "Rewrote it:".
+  {
+    kind: "text-changed",
+    pattern: new RegExp(
+      `^(?:ok(?:ay)?[,.!]?\\s+|sure[,.!]?\\s+|done[,.!]?\\s+)?(?:i\\s+went\\s+ahead\\s+and\\s+\\w+|${CHANGE_VERB}|changes?\\s+(?:applied|made|saved)|edits?\\s+(?:applied|made|saved))(?![A-Za-z])`,
+      "i",
+    ),
+  },
+  // "Grammar fixed:", "Typo corrected.", "Sentence updated".
+  {
+    kind: "text-changed",
+    pattern: new RegExp(`\\b(?:grammar|typo|spelling|${DOC_NOUN})\\s+(?:${CHANGE_VERB})(?![A-Za-z])`, "i"),
+  },
+  // States what the document says NOW: "The sentence now reads:", "Your document now says".
+  {
+    kind: "text-changed",
+    pattern: new RegExp(`\\b(?:${DOC_NOUN}|it)\\s+now\\s+(?:reads|says|states|is|has)(?![A-Za-z])`, "i"),
+  },
+  { kind: "text-changed", pattern: /\b(?:is|are)\s+(?:now\s+)?(?:live|in\s+place|saved|applied)(?![A-Za-z])/i },
+  {
+    kind: "text-changed",
+    pattern: /\b(?:edit|change|fix|update|correction|revision|rewrite)s?\s+(?:that\s+)?I(?:['’]ve|\s+have)?\s+made(?![A-Za-z])/i,
+  },
+  // "Comment added.", "Suggestion posted."
+  {
+    kind: "annotation",
+    pattern: /^(?:comments?|notes?|annotations?|suggestions?|proposals?|replacements?)\s+(?:added|left|placed|posted|made|attached|created)(?![A-Za-z])/i,
+  },
   {
     kind: "text-changed",
     pattern: /\b(?:the|your)\s+document\s+(?:is|has\s+been|was)\s+(?:now\s+)?(?:updated|changed|edited|fixed|revised|corrected)/i,
@@ -190,9 +222,14 @@ function checkText(
       flags.push({ kind: "completion", where, excerpt });
       continue;
     }
-    if (NEGATION.test(sentence)) continue;
+    // Negation is judged clause by clause, so "I couldn't find other errors,
+    // and I've fixed the one" is still read.
+    const clauses = sentence
+      .split(/,\s+(?:and|but)\s+|;\s+|\s+but\s+/)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0 && !NEGATION.test(c));
     for (const rule of RULES) {
-      if (!rule.pattern.test(sentence)) continue;
+      if (!clauses.some((c) => rule.pattern.test(c))) continue;
       if (rule.kind === "promise" && input.tier !== "chat") continue;
       if (rule.kind === "annotation") {
         // True when something of the kind really landed. "comment/note" needs

@@ -320,7 +320,7 @@ describe("one scenario per group, through the harness and the scorer", () => {
     const good = await runScripted(s, [
       {
         content: [
-          `I can't change the document, but I would rewrite "${target}" as: "A clearer and rather different version of that same sentence, written out in full."`,
+          `I can't change the document, but I would rewrite "${target}" as: "${target.split(" ").reverse().join(" ")}"`,
         ],
       },
     ]);

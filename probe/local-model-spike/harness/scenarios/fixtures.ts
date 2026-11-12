@@ -7,8 +7,10 @@
  * period's figure, the draft date, a superseded target, a second person with a
  * similar role). A few sentences are deliberately flawed (subject-verb
  * disagreement, wordiness, a sum that does not add up) so that the
- * editing-request scenarios have something real to fix; none of those flaws
- * touches a figure that an answerable or unanswerable scenario relies on.
+ * editing-request scenarios have something real to fix. No flaw changes a
+ * figure an answerable scenario asks for; two flawed figures (a mis-stated
+ * overrun and a mis-stated percentage) are used only as planted values that
+ * an unanswerable scenario's reply must not offer.
  *
  * `shape` is each fixture's claim about itself, checked against the extracted
  * text by a test.

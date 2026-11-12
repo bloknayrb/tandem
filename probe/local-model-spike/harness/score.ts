@@ -71,7 +71,16 @@ function scoreAnswer(reply: string, must: Pattern[][], mustNot: Pattern[]): Scor
   const forbidden = mustNot.filter((p) => matches(reply, p));
   for (const group of missing) notes.push(`missing: ${group.map((p) => p.label).join(" | ")}`);
   for (const p of forbidden) notes.push(`holds a planted value: ${p.label}`);
-  if (forbidden.length > 0) return { pass: false, failureMode: "DISTRACTOR", notes };
+  if (forbidden.length > 0) {
+    // Its own mode when the answer is there too: often a right reply that
+    // names the nearby value in order to set it aside. The rule fails it; the
+    // reader is pointed at it.
+    return {
+      pass: false,
+      failureMode: missing.length === 0 ? "DISTRACTOR_WITH_ANSWER" : "DISTRACTOR",
+      notes,
+    };
+  }
   if (missing.length > 0) return { pass: false, failureMode: "MISSING_ANSWER", notes };
   return { pass: true, notes };
 }
@@ -93,13 +102,22 @@ function scoreNotStated(reply: string, mustNot: Pattern[]): ScoreResult {
 }
 
 /**
+ * For comparing a quotation with the document: whitespace and quote marks
+ * normalised, markdown emphasis removed, case ignored. A model that bolds the
+ * word it would change, or capitalises a list item, has still quoted the text.
+ */
+export function quoteForm(text: string): string {
+  return normalizeText(text.replace(/[*`]|(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/g, "")).toLowerCase();
+}
+
+/**
  * Spans a reply OFFERS as text: quoted, in backticks or a code fence, on a
  * blockquote line, or after a colon (to the end of that line, or the next
  * non-empty line when the colon ends its line).
  */
 export function offeredSpans(reply: string): string[] {
   const spans: string[] = [];
-  const text = reply.replace(/[“”„‟]/g, '"');
+  const text = reply.replace(/[\u201c\u201d\u201e\u201f]/g, '"');
   for (const m of text.matchAll(/"([^"\n]{2,})"/g)) spans.push(m[1]);
   for (const m of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) spans.push(m[1]);
   for (const m of text.matchAll(/`([^`\n]{2,})`/g)) spans.push(m[1]);
@@ -122,31 +140,74 @@ export function offeredSpans(reply: string): string[] {
 }
 
 /** Share of the target's length an offered text must reach to count. */
-export const OFFER_MIN_RATIO = 0.4;
+export const OFFER_MIN_RATIO = 0.2;
 /** Characters a comment-request reply must hold beyond the quote and any refusal. */
 export const COMMENT_MIN_OTHER_CHARS = 30;
 
-const REFUSAL_PHRASES =
-  /\b(?:i\s+(?:can(?:not|['’]?t)|am\s+(?:unable|not\s+able)|['’]?m\s+(?:unable|not\s+able))\s+(?:to\s+)?[^.!?\n]*|(?:sorry|unfortunately)[^.!?\n]*)[.!?]?/gi;
+/** Sentences that refuse, apologise or hand the job back: not help in words. */
+const REFUSAL_SENTENCE =
+  /(?:\bcan(?:not|['’]?t)\b|\bunable\b|\bnot\s+able\b|\bsorry\b|\bunfortunately\b|\byourself\b|\bin\s+the\s+editor\b|\byou(?:['’]ll|\s+will)?\s+(?:need|have)\s+to\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted)\b)/i;
+
+/** An offer this much made of one unbroken run of the target is the target, not a rewrite. */
+const SAME_TEXT_RATIO = 0.8;
+
+/** Length of the longest run of characters `a` and `b` have in common. */
+function longestSharedRun(a: string, b: string): number {
+  let best = 0;
+  let prev = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    const row = new Array<number>(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        row[j] = prev[j - 1] + 1;
+        if (row[j] > best) best = row[j];
+      }
+    }
+    prev = row;
+  }
+  return best;
+}
+
+function contentWords(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]{3,}/g) ?? []).map((w) => w.replace(/[.,]+$/, "")));
+}
+
+/**
+ * Is this span a usable rewrite of the target? Long enough, not the target
+ * itself, not a piece cut out of it, not a refusal, and about the same thing
+ * (it shares at least two content words with the target).
+ */
+function isOffer(span: string, target: string): boolean {
+  const offer = quoteForm(span);
+  const original = quoteForm(target);
+  if (offer.length < Math.max(8, Math.floor(original.length * OFFER_MIN_RATIO))) return false;
+  if (offer === original || original.includes(offer)) return false;
+  // Mostly the original's own words in the original's order (the target
+  // quoted again with "is fine" after it, or with a word put in front) is not
+  // a rewrite. A one-word fix inside a sentence is: it splits the sentence in two.
+  if (longestSharedRun(offer, original) >= offer.length * SAME_TEXT_RATIO) return false;
+  if (REFUSAL_SENTENCE.test(span)) return false;
+  const targetWords = contentWords(target);
+  let shared = 0;
+  for (const w of contentWords(span)) if (targetWords.has(w)) shared += 1;
+  return shared >= 2;
+}
 
 function scoreOfferChange(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  const normReply = normalizeText(reply);
-  const normTarget = normalizeText(target);
-  if (!normReply.includes(normTarget)) {
+  if (!quoteForm(reply).includes(quoteForm(target))) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
-      notes: ["does not quote the target text verbatim"],
+      notes: ["does not quote the whole target text"],
     };
   }
-  const minLen = Math.max(8, Math.floor(normTarget.length * OFFER_MIN_RATIO));
-  const offer = offeredSpans(reply).find((s) => s.length >= minLen && s !== normTarget);
+  const offer = offeredSpans(reply).find((s) => isOffer(s, target));
   if (!offer) {
     return {
       pass: false,
       failureMode: "NO_OFFER",
-      notes: ["quotes the target but offers no different text"],
+      notes: ["quotes the target but offers no different text for it"],
     };
   }
   return { pass: true, notes: [`offers: ${offer.slice(0, 120)}`] };
@@ -154,18 +215,25 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
 
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  const normReply = normalizeText(reply);
-  const normTarget = normalizeText(target);
-  if (!normReply.includes(normTarget)) {
+  const form = quoteForm(reply);
+  const original = quoteForm(target);
+  if (!form.includes(original)) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
-      notes: ["does not quote the target text verbatim"],
+      notes: ["does not quote the whole target text"],
     };
   }
-  const other = normalizeText(
-    normReply.split(normTarget).join(" ").replace(REFUSAL_PHRASES, " "),
-  ).replace(/["'`>*_]/g, "");
+  // What is left once the quotation and every refusing sentence are removed.
+  const other = normalizeText(reply)
+    // Sentences, and the halves of "I can't …, but …".
+    .split(/(?<=[.!?])\s+|,\s+(?:but|however|though)\s+|;\s+/)
+    .filter((sentence) => !REFUSAL_SENTENCE.test(sentence))
+    .map((sentence) => quoteForm(sentence).split(original).join(" "))
+    .join(" ")
+    .replace(/["'>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (other.length < COMMENT_MIN_OTHER_CHARS) {
     return {
       pass: false,

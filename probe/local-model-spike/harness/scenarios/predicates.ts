@@ -35,7 +35,7 @@ export function phrase(text: string, label = text): Pattern {
     .split(/[\s-]+/)
     .map(esc)
     .join("[\\s-]+");
-  return { label, source: `(?<![A-Za-z0-9])${body}` };
+  return { label, source: `(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])` };
 }
 
 /** A whole word (no letters or digits either side). */
@@ -56,6 +56,8 @@ export function number(value: string, words: string[] = []): Pattern {
     body += whole[i];
   }
   if (frac !== undefined) body += `\\.${frac}`;
+  // `$42,500.00` is still 42,500.
+  else body += "(?:\\.0+)?";
   const alts = [`${NUM_START}${body}${NUM_END}`, ...words.map((w) => word(w).source)];
   return { label: value, source: alts.join("|") };
 }
@@ -103,12 +105,14 @@ export function date(year: number, month: number, day: number): Pattern {
   const d = `0?${day}(?:st|nd|rd|th)?`;
   const mm = `0?${month}`;
   const yy = `(?:${year}|${String(year).slice(2)})`;
+  // A year, when one is written, must be the right one.
+  const noOtherYear = `(?!,?\\s+(?!${year})\\d{4})`;
   const alts = [
-    `(?<![A-Za-z])${name}\\s+${d}${NUM_END}`,
-    `${NUM_START}${d}\\s+(?:of\\s+)?${name}(?![A-Za-z])`,
+    `(?<![A-Za-z])${name}\\s+${d}${NUM_END}${noOtherYear}`,
+    `${NUM_START}${d}\\s+(?:of\\s+)?${name}(?![A-Za-z])${noOtherYear}`,
     `${NUM_START}${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}${NUM_END}`,
-    `${NUM_START}${mm}/0?${day}(?:/${yy})?${NUM_END}`,
-    `${NUM_START}0?${day}/${mm}(?:/${yy})?${NUM_END}`,
+    `${NUM_START}${mm}/0?${day}(?:/${yy})?${NUM_END}(?!/)`,
+    `${NUM_START}0?${day}/${mm}(?:/${yy})?${NUM_END}(?!/)`,
   ];
   return { label: `${full} ${day}, ${year}`, source: alts.join("|") };
 }
@@ -126,14 +130,18 @@ export function raw(label: string, source: string): Pattern {
 export const NOT_STATED: Pattern = {
   label: "says the document does not state it",
   source: [
-    "(?:does\\s+not|doesn['’]?t|did\\s+not|didn['’]?t)\\s+(?:\\w+\\s+){0,3}?(?:say|state|mention|specify|include|give|provide|contain|list|name|indicate|address|cover|tell|disclose|identify|record|appear)",
-    "(?:is|are|was|were)\\s*(?:n['’]?t|\\s+not)\\s+(?:\\w+\\s+){0,2}?(?:stated|mentioned|specified|given|provided|included|listed|named|indicated|addressed|covered|disclosed|identified|recorded|available|present|in\\s+the\\s+(?:document|text))",
-    "(?<![A-Za-z])not\\s+(?:\\w+\\s+){0,2}?(?:stated|mentioned|specified|given|provided|included|listed|named|indicated|disclosed|identified|recorded)",
-    "(?<![A-Za-z])no\\s+(?:\\w+\\s+){0,3}?(?:mention|information|indication|reference|record|detail|details|figure|date|number|answer)",
-    "(?:can\\s*not|cannot|can['’]?t|could\\s+not|couldn['’]?t|unable\\s+to)\\s+(?:\\w+\\s+){0,2}?(?:find|determine|tell|locate|see|answer|confirm)",
-    "(?:nothing|nowhere)\\s+(?:\\w+\\s+){0,4}?(?:about|on|regarding|says|states|mentions|in\\s+the\\s+(?:document|text))",
-    "(?:unclear|not\\s+clear|unknown)\\s+from",
-    "(?:leaves|left)\\s+(?:\\w+\\s+){0,3}?(?:out|unstated|unspecified)",
-    "(?:only|just)\\s+(?:says|states|mentions|gives|covers)",
+    // does not / doesn't / do not / don't / did not / never … say, see, find, …
+    "(?:does\\s+not|doesn['’]?t|do\\s+not|don['’]?t|did\\s+not|didn['’]?t|never)\\s+(?:\\w+\\s+){0,3}?(?:say|state|mention|specify|include|give|provide|contain|list|name|indicate|address|cover|tell|disclose|identify|record|appear|see|find|know|have|set|show|report|note|count|put|offer|reveal|explain)",
+    // is not / isn't / was not / has not been / hasn't been … stated, confirmed, …
+    "(?:is|are|was|were|has|have|had)\\s*(?:n['’]?t|\\s+not)\\s+(?:\\w+\\s+){0,3}?(?:stated|mentioned|specified|given|provided|included|listed|named|indicated|addressed|covered|disclosed|identified|recorded|available|present|confirmed|approved|decided|determined|announced|set|counted|kept|known|reported|shown|part\\s+of|in\\s+(?:the|this)\\s+(?:document|text|report|summary|excerpt|plan|handbook|study|review|lease))",
+    "(?<![A-Za-z])not\\s+(?:\\w+\\s+){0,2}?(?:stated|mentioned|specified|given|provided|included|listed|named|indicated|disclosed|identified|recorded|confirmed|approved|decided|known|reported|part\\s+of)",
+    // there is no … / has no … / no mention of …
+    "(?:there\\s+(?:is|are|was|were)|(?:has|have|had|gives|contains|includes|provides|offers|makes))\\s+no(?![A-Za-z])",
+    "(?<![A-Za-z])no\\s+(?:\\w+\\s+){0,3}?(?:mention|information|indication|reference|record|detail|details|figure|date|number|answer|section|count|data|word)(?![A-Za-z])",
+    "(?:can\\s*not|cannot|can['’]?t|could\\s+not|couldn['’]?t|unable\\s+to)\\s+(?:\\w+\\s+){0,2}?(?:find|determine|tell|locate|see|answer|confirm|say|work\\s+out)",
+    "(?:nothing|nowhere)\\s+(?:\\w+\\s+){0,4}?(?:about|on|regarding|says|states|mentions|in\\s+(?:the|this)\\s+(?:document|text|report|summary|excerpt))",
+    "(?:unclear|not\\s+clear|unknown)(?![A-Za-z])",
+    "(?:leaves|left)\\s+(?:\\w+\\s+){0,3}?(?:out|unstated|unspecified|open)",
+    "(?:only|just)\\s+(?:says|states|mentions|gives|covers|tells|lists|reports)",
   ].join("|"),
 };

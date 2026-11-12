@@ -232,6 +232,30 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
   });
   setTandemMode();
 
+  const cleanup = () => {
+    removeDoc(docId);
+    removeDocument(docId);
+    ydoc.destroy();
+  };
+
+  // Checked before anything is installed, so a refused selection leaves no
+  // fetch wrapper, subscriber or document behind.
+  let selection: { from: number; to: number; selectedText: string } | undefined;
+  if (input.selectedText !== undefined) {
+    if (input.selectedText.length > CLIENT_SELECTION_MAX || input.selectedText.includes("\n")) {
+      cleanup();
+      throw new Error(
+        `trial selection is not one the editor can send (over ${CLIENT_SELECTION_MAX} characters, or spans blocks)`,
+      );
+    }
+    const hit = findOccurrence(documentText, input.selectedText, 1);
+    if ("error" in hit) {
+      cleanup();
+      throw new Error(`trial selection is not in the document: ${JSON.stringify(input.selectedText)}`);
+    }
+    selection = { from: hit.from, to: hit.to, selectedText: input.selectedText };
+  }
+
   const turns: TurnText[] = [];
   let currentText = "";
   let turnIndex = 0;
@@ -300,20 +324,6 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
   const tap: FetchTap = installFetchTap();
   const started = Date.now();
 
-  let selection: { from: number; to: number; selectedText: string } | undefined;
-  if (input.selectedText !== undefined) {
-    if (input.selectedText.length > CLIENT_SELECTION_MAX || input.selectedText.includes("\n")) {
-      throw new Error(
-        `trial selection is not one the editor can send (over ${CLIENT_SELECTION_MAX} characters, or spans blocks)`,
-      );
-    }
-    const hit = findOccurrence(documentText, input.selectedText, 1);
-    if ("error" in hit) {
-      throw new Error(`trial selection is not in the document: ${JSON.stringify(input.selectedText)}`);
-    }
-    selection = { from: hit.from, to: hit.to, selectedText: input.selectedText };
-  }
-
   const event: TandemEvent = {
     id: `harness-evt-${process.pid}-${trialCounter}`,
     type: "chat:message",
@@ -354,8 +364,6 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
   } finally {
     tap.restore();
     stopNotices();
-    removeDoc(docId);
-    removeDocument(docId);
-    ydoc.destroy();
+    cleanup();
   }
 }

@@ -18,7 +18,7 @@ import { parseArgs } from "./harness/args.js";
 import { isolateAppData, printable, say } from "./harness/entry-common.js";
 import { isMain } from "./harness/main-guard.js";
 import { RUNS_DIR } from "./harness/paths.js";
-import { renderReadingFile } from "./harness/reading.js";
+import { readingOrder, renderReadingFile } from "./harness/reading.js";
 import type { TrialRecord } from "./harness/record.js";
 import { RUBRIC_VERSION } from "./harness/rubric.js";
 import { existingRunDir, readIdentity, readTrials } from "./harness/run-store.js";
@@ -54,7 +54,8 @@ export async function main(argv: readonly string[]): Promise<number> {
     "utf8",
   );
 
-  const template = verdictTemplate(identity.runId, trials, RUBRIC_VERSION);
+  // In the reading file's order, so the two can be worked through side by side.
+  const template = verdictTemplate(identity.runId, readingOrder(trials), RUBRIC_VERSION);
   const existing = path.join(runDir, "verdicts.json");
   if (fs.existsSync(existing)) {
     try {
