@@ -20,7 +20,12 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
-import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
+import {
+  createStore,
+  getAnnotationsDir,
+  isStoreReadOnly,
+  removeOldName,
+} from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
 import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
@@ -694,6 +699,143 @@ export async function deleteSession(filePath: string): Promise<void> {
         console.error("[Tandem] deleteSession: failed to delete", target, err);
       }
     }
+  }
+}
+
+/**
+ * The stored `readOnly` flag of the session the loader would restore for
+ * `filePath` (the newer of its two file names; the other only if that one
+ * does not parse), read without the loader's side effects (no quarantine, no
+ * notice). `null` when there is no such file or none parses. For a caller that needs only the flag before the real load (#2400).
+ */
+export async function peekSessionReadOnly(filePath: string): Promise<boolean | null> {
+  // The file the loader would restore first. Like the loader, the second is
+  // consulted ONLY when the first is corrupt JSON: a first file that cannot be
+  // read, or that parses to something that is not a record, restores nothing
+  // there, so there is no session whose flag could apply.
+  for (const file of await sessionNamesNewestFirst(filePath)) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(file, "utf-8");
+    } catch {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return (parsed as { readOnly?: unknown }).readOnly === true;
+  }
+  return null;
+}
+
+/**
+ * The session files that exist under `filePath`'s key, in the order
+ * {@link loadSessionWithPath} prefers them: the pre-#1750 name first only when
+ * it is strictly newer by modification time than the current name.
+ */
+async function sessionNamesNewestFirst(filePath: string): Promise<string[]> {
+  const currentPath = sessionPathFor(filePath);
+  const legacyPath = legacySessionPath(filePath);
+  const current = await mtimeOf(currentPath);
+  const legacy = legacyPath === null ? null : await mtimeOf(legacyPath);
+  const names: string[] = [];
+  if (current !== null) names.push(currentPath);
+  if (legacyPath !== null && legacy !== null) {
+    if (current === null || legacy > current) names.unshift(legacyPath);
+    else names.push(legacyPath);
+  }
+  return names;
+}
+
+/** What {@link moveSessionFile} did. */
+export type SessionMoveResult = "moved" | "absent" | "occupied" | "failed";
+
+/**
+ * Move a stored session from one path's key to another's (#2400: a session
+ * saved under a Windows 8.3 short spelling, to the long spelling's key).
+ *
+ * Only into an empty place: when ANY session file exists under `toPath`'s key
+ * (either of its two names) nothing is touched and the answer is `occupied`.
+ * The file under `fromPath`'s key is hard-linked to `toPath`'s current name
+ * and then unlinked. `link` fails if the new name exists, so
+ * the move can never overwrite, and the new name appears whole or not at all.
+ * If the old name then cannot be removed (retried for about a second), both
+ * names are kept and the answer is still `moved`: no record is ever only under
+ * a name the open will not read. After a move the
+ * stored `filePath` is rewritten to `toPath` through the ordinary session
+ * writer (best effort).
+ *
+ * Both paths are the CALLER's own (screened) spellings. Nothing here lists the
+ * directory or reads a stored path. Never throws.
+ */
+export async function moveSessionFile(
+  fromPath: string,
+  toPath: string,
+): Promise<SessionMoveResult> {
+  const to = sessionPathFor(toPath);
+  try {
+    // Occupied when either name of the new key exists. A legacy-encoded name
+    // too long for the filesystem cannot exist, so it reads as absent.
+    for (const target of [to, legacySessionPath(toPath)]) {
+      if (target !== null && (await fileExists(target))) return "occupied";
+    }
+    // The old key's session as the loader would pick it: the newer of its two
+    // names. It goes to the new key's CURRENT name: a legacy-encoded long
+    // path can exceed the filename limit, and the reader accepts the same
+    // JSON under both names. An older second name is left behind.
+    for (const from of await sessionNamesNewestFirst(fromPath)) {
+      if (from === to) continue;
+      await fs.link(from, to);
+      if (!(await removeOldName(from))) {
+        // Both names now hold the same complete session. The open reads the
+        // new one; the old one replays to the same document and ages out.
+        // Undoing instead would leave it under a name the open does not read,
+        // and the first autosave would then take its place.
+        console.error(
+          "[Tandem] moveSessionFile: moved, but the old name could not be removed and was left behind: %s",
+          path.basename(from),
+        );
+      }
+      await restampMovedSession(to, toPath);
+      return "moved";
+    }
+    return "absent";
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return "occupied";
+    console.error("[Tandem] moveSessionFile: the session was left where it is:", err);
+    return "failed";
+  }
+}
+
+/**
+ * Best effort, after a completed move: make the stored `filePath` the new
+ * path. Reads already replace it with the caller's path, but the listing
+ * (startup restore, Recent sessions, "Clear all") reports the stored one, and
+ * `deleteSession` of that stale spelling would compute the old key and remove
+ * nothing. An unparseable file is left for the open's own quarantine.
+ */
+async function restampMovedSession(file: string, filePath: string): Promise<void> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+    await atomicWrite(file, JSON.stringify({ ...parsed, filePath }), SESSION_FILE_WRITE);
+  } catch (err) {
+    console.error("[Tandem] moveSessionFile: the moved session keeps its old stored path:", err);
+  }
+}
+
+async function fileExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENAMETOOLONG") return false;
+    throw err;
   }
 }
 

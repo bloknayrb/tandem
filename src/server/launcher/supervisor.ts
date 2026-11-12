@@ -3675,21 +3675,44 @@ export function resolveSafeCwd(candidate: string): string | null {
  * letter looks entirely ordinary.
  *
  * The two are held equivalent by sharing BOTH pure halves — `rejectedSyntactically`
- * here and `homeConfines` in `resolveRouteCwd` — so only the fs mechanics differ,
- * plus an equivalence test that runs one case table through both. Two resolvers
+ * here and `homeConfines` in `resolveRouteCwd` — and the same realpath FLAVOUR
+ * (`realpathJs` below; the native one disagrees with `realpathSync` on Windows,
+ * #2400), so only sync-versus-async differs, plus an equivalence test that runs
+ * one case table through both. Two resolvers
  * that could disagree about which paths are acceptable is the split-predicate
  * bug this whole area already shipped once.
  */
 export async function resolveSafeCwdAsync(candidate: string): Promise<string | null> {
   if (rejectedSyntactically(candidate)) return null;
   try {
-    const real = await fsp.realpath(candidate);
+    const real = await realpathJs(candidate);
     const stat = await fsp.stat(real);
     if (!stat.isDirectory()) return null;
     return real;
   } catch {
     return null;
   }
+}
+
+/**
+ * Node's JS realpath, without blocking the event loop (#2400).
+ *
+ * `fs.promises.realpath` is the NATIVE implementation, and on Windows it does
+ * not return what `fs.realpathSync` returns: it expands an 8.3 short name,
+ * turns a mapped drive into a UNC string and a `subst` drive into its physical
+ * path. So the async resolvers used to accept, refuse and spell folders
+ * differently from the sync ones the launch path uses — the split predicate
+ * this pair exists to prevent. The callback form `fs.realpath(path, cb)` is the
+ * same JS algorithm as `realpathSync`, so the two halves now agree by
+ * construction, on the behaviour the launch path has always had.
+ *
+ * `fs.realpath` is read at call time, not captured at module load, so a test
+ * spy on it sees every call.
+ */
+function realpathJs(p: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    fs.realpath(p, (err, real) => (err ? reject(err) : resolve(real)));
+  });
 }
 
 /** Pure, I/O-free rejections shared by both resolvers: non-strings, relative
@@ -3784,7 +3807,7 @@ export async function resolveRouteCwdAsync(
   if (safe === null) return null;
   let homeReal: string;
   try {
-    homeReal = await fsp.realpath(opts.homeOverride ?? os.homedir());
+    homeReal = await realpathJs(opts.homeOverride ?? os.homedir());
   } catch {
     return null;
   }

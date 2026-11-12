@@ -668,7 +668,7 @@ bound in full, and the conditions that void the acceptance.
 
 - **[#1609](https://github.com/bloknayrb/tandem/issues/1609) — environment-derived path reads reached by `runDoctor` (three when accepted, two today). ACCEPTED 2026-09-08.** Its full entry is under *Resolved since this list was last reconciled* above rather than repeated here, because that section records the 2026-09-11 reconciliation that moved it out of the open list. Cross-referenced here so the accepted set is enumerable from one place: the bound is the **input** (`PATH` and `homedir()` — process environment a caller cannot steer by triggering diagnostics; the third read, `TANDEM_CLAUDE_CMD`, is now screened before any `stat`), not the sink, and it carries **no** revisit date deliberately.
 
-- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment. ACCEPTED by Bryan 2026-09-16; no revisit date, deliberately.** `resolveAndValidatePath` (`src/server/documents/open.ts:701-774`, measured at `ade78f8f`) screens the UNC / extended-length / device-namespace prefixes on the raw, resolved *and* `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. The file holds **zero** `allowedRoots` and **zero** `assertPathSafe` calls; that is the verified property, re-derived after #1661 relocated the function.
+- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment. ACCEPTED by Bryan 2026-09-16; no revisit date, deliberately.** `resolveAndValidatePath` (`src/server/documents/open.ts:701-774`, measured at `ade78f8f`) screens the UNC / extended-length / device-namespace prefixes on the raw, resolved *and* `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. Since #2400 it also replaces a Windows 8.3 short component of the `realpath`'d string with the long name of the same directory entry (`src/server/file-io/short-names.ts`), after the third screen and before a fourth on the final string; that step calls the native `realpath` on each short-shaped prefix (which opens a handle on it) and `lstat`s that prefix and its long-named twin, creates nothing, never changes the drive prefix, and adds no containment, so the property below is unchanged. The file holds **zero** `allowedRoots` and **zero** `assertPathSafe` calls; that is the verified property, re-derived after #1661 relocated the function.
 
   **The bound.** An MCP client can open, edit and save any *existing* allowlisted file at any absolute path — arbitrary content into an existing `.md` / `.txt` / `.html` / `.docx`. It **cannot create** one: the resolver `fs.stat`s the resolved path (`resolveAndValidatePath`'s `fs.stat(resolved)`) with no existence branch in front of it, so a path that does not exist throws ENOENT. The extension allowlist, the size cap, the prefix screening and that cannot-create property together **are** the intended limit for a local-first editor whose job is opening the files you point it at. What makes it loud is the first step, not every step: `tandem_open` opens a visible tab.
 
@@ -815,20 +815,24 @@ check that the named screen still runs first — not a fresh investigation, and
 not a reflex "it was dismissed before".
 
 - **Paths reaching a file open through `resolveAndValidatePath`.** It is called
-  from exactly one place — unconditionally at the head of `openFromDisk`
-  (`openFromDisk`'s call to `resolveAndValidatePath` in `src/server/documents/open.ts`) — and screens UNC/extended-length
-  prefixes on the raw, resolved *and* `realpath`'d forms, enforces the extension
-  allowlist and the size cap. Since #2358 PR 1c the three prefix screens and the
-  `realpathSync` between them live in `resolveOpenPath`, which
-  `resolveAndValidatePath` calls first; it is exported, and its one other caller
+  from exactly one place — unconditionally at the head of `openValidated`, which
+  `openFromDisk` and `openFromRestore` both enter through
+  (`src/server/documents/open.ts`) — and screens UNC/extended-length
+  prefixes on the raw, resolved *and* `realpath`'d forms, and once more on the
+  string left after the 8.3 short-name expansion (#2400), enforces the extension
+  allowlist and the size cap. Since #2358 PR 1c the prefix screens, the
+  `realpathSync` between them and (since #2400) the short-name expansion live in
+  `resolveOpenPath`, which `resolveAndValidatePath` calls first; it is exported, and its one other caller
   is `tandem_open`'s wrapper (`src/server/mcp/document.ts`), which uses it — with
   ownership on only — to learn which open document a path targets, and makes no
-  filesystem call other than `resolveOpenPath`'s own `realpathSync`. With
+  filesystem call other than `resolveOpenPath`'s own: `realpathSync`, and for a
+  path with an 8.3-shaped component on Windows the expansion's
+  `realpathSync.native` and `lstatSync`. With
   ownership on that call runs more than once per `tandem_open`: once to predict
   the target, once more inside the document's queue to confirm it, and once in
   `openFromDisk`, and all three again for each of up to three attempts when the
   target moved — up to nine times, every one behind the same two pre-screens. The order is unchanged: both pre-screens precede
-  `realpathSync`, the third precedes the extension check and `fs.stat`. **Bound: screened, but NOT confined to any
+  `realpathSync`, the third precedes the expansion, and the fourth precedes the extension check and `fs.stat`. **Bound: screened, but NOT confined to any
   directory** — opening any allowlisted-extension file by absolute path is the
   product's intended behaviour, so a containment-shaped alert here is a policy
   question — tracked as #1666, DECIDED 2026-09-16 and filed under
@@ -847,6 +851,83 @@ not a reflex "it was dismissed before".
   current caller set only**, and that phrasing is deliberate: the safety property
   belongs to the callers, not to the flagged code. A new caller must screen
   before calling, so verify the call site rather than trusting the disposition.
+- **The `js/path-injection` sinks #2400 added (PR #2407). Their alerts stay
+  OPEN and must not be dismissed.** None is a false positive, and they are not
+  all the same class; each is named for what it is below.
+  - *`fs.realpathSync.native(p)` and `fs.lstatSync(p)` in `currentDeps`*
+    (`src/server/file-io/short-names.ts`). Each argument is built from the
+    string `expandShortNames` was given: its drive root copied through
+    unchanged, the components already walked (an alias replaced by its long
+    name), and then either the next alias or a candidate long name taken from
+    the native result's last component, which is refused if it holds a
+    separator or a colon. So no call can leave that drive. The function's
+    FIRST statement is `rejectUnsafeWindowsPrefix` on the whole string, before
+    any filesystem call, and it does nothing for a path `path.win32` does not
+    call absolute. Its callers have screened
+    already: `resolveAndValidatePath` (raw, resolved and `realpath`'d forms)
+    and save-as (`expandedSaveTarget` in `document-service.ts`, after the
+    target's own screens). The native result is never used as a path: only its
+    last component is read, and a candidate containing a separator or a colon
+    is refused. **Which accepted finding it falls under depends on the
+    caller.** On the open path it is the #1666 class: a screened path that is
+    not confined to any directory, which is the resolver's accepted bound. On
+    the save-as path it belongs with #1654 (caller-named write destinations):
+    the expansion runs on the destination the caller named, which that finding
+    already accepts as unconfined.
+  - *`fsp.realpath(p)` in `nativeForm`* (`src/server/launcher/cwd-preview.ts`).
+    Used for comparison and display only. It has four inputs, and what holds
+    for all of them is the screen, not confinement: `nativeForm` runs
+    `rejectUnsafeWindowsPrefix` on the value itself before its one call and
+    returns the string untouched if that refuses it. The inputs:
+    - the candidate folder, after `resolveRouteCwdAsync` accepted it. This is
+      the only one that is home-confined;
+    - the running session's folder, after `resolveSafeCwdAsync` accepted it,
+      which screens and resolves but does not confine;
+    - the home directory, after the same `resolveSafeCwdAsync`;
+    - each bundled document folder (`comparableBundledDir`). These are install
+      and data folders the app itself supplies (`resolveBundledDocDirs`), not
+      caller input. This code does not confine them: they may or may not be
+      inside home (a Windows install under `%LOCALAPPDATA%` and the app-data
+      sample copy are; other installs need not be). The only screen on them
+      is `nativeForm`'s own prefix check.
+
+    So this is neither #1666 nor #1654. For the first three, master made a
+    native realpath call on the same folders: its async resolvers used
+    `fsp.realpath`, on the raw screened string where this code calls it on
+    the JS-realpath result. **For the bundled folders the call is new:** master
+    compared them as strings and resolved nothing.
+  - *`fs.access`, `fs.link` and `fs.unlink` in `moveSessionFile`*
+    (`src/server/session/manager.ts`) *and `moveEnvelopeFile`*
+    (`src/server/annotations/store.ts`). A new caller of the session and
+    annotation path helpers, so it is argued here and not inherited. Every
+    argument is a file name inside Tandem's own sessions or annotations
+    directory, built from a 64-hex hash of the path (or, for a pre-#1750
+    session, `encodeURIComponent` of it, which cannot hold a separator or a
+    colon, so the name stays one component of that directory). The only paths hashed are `resolveAndValidatePath`'s two
+    outputs for one open: the canonical path and `legacyPath`, the string
+    master produced for the same spelling, set after the same screens. No
+    filesystem call is made on `legacyPath` itself. `link` refuses an existing
+    target, a symlink included, so nothing is overwritten or followed, and the
+    link shares the old file's inode and so its mode and ACL. If the old name
+    cannot be removed afterwards, both names are kept. The annotation-file
+    move, and the move of a session that has an annotation file under the old
+    key, run only while this process holds the annotation store lock. A
+    session with no annotation file under the old key moves regardless, so its
+    `link`, `unlink` and stored-path rewrite can run in an instance that does
+    not hold the lock (session files have no lock of their own, on master
+    either). After a session
+    move, `restampMovedSession` reads the new name and rewrites it through
+    the ordinary session writer (`atomicWrite`, private mode) to store the
+    long path; it touches that one name only. Two reads use the same computed
+    names and nothing else: `peekSessionReadOnly` (`session/manager.ts`) reads
+    the session file under the canonical path's key to learn its stored
+    read-only flag, and `rewriteMovedEnvelope`
+    (`documents/short-name-records.ts`) reads the annotation file under that
+    key to check that all of it reached the document before it is rewritten. **Residual,
+    recorded:** if a short alias (`AFOLDE~1`) has come to name a different
+    folder since the records were written, they move to that file's key. Master
+    attributes them to the same file on a short-spelled open; the move makes it
+    permanent.
 - **`js/tainted-format-string` on `sessionPath` interpolations.** The flagged
   argument genuinely *is* the format string (a template literal), so the rule
   reads the shape correctly. The disposition rests on the value: the

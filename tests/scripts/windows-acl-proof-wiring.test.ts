@@ -70,8 +70,21 @@ const workflow = parse(readFileSync(path.join(ROOT, ".github/workflows/ci.yml"),
 const RUNNER_REL = "scripts/ci/windows-acl-proof.mjs";
 const PROOF_COMMAND = `node ${RUNNER_REL}`;
 
-type SpecEntry = { spec: string; suite: string; realAcl?: unknown; realAclReason?: string };
+type SpecEntry = {
+  spec: string;
+  suite: string;
+  realAcl?: unknown;
+  realAclReason?: string;
+  icacls?: unknown;
+};
 const SPECS = WINDOWS_ACL_PROOF_SPECS as SpecEntry[];
+/**
+ * #2400: an entry with `icacls: false` is a Windows-only spec that is not an
+ * icacls proof. It is registered for the runner's 0-skipped rule alone, so the
+ * real-icacls checks below apply to the others.
+ */
+const ICACLS_SPECS = SPECS.filter((s) => s.icacls !== false);
+const OTHER_SPECS = SPECS.filter((s) => s.icacls === false);
 
 /**
  * Locates the job by the COMMAND it runs, never by its id or its prose name. A
@@ -228,7 +241,8 @@ describe("windows-acl-proof spec list", () => {
     // The docblocks of both specs claim real `icacls`. Swapping in a mock while
     // keeping a green `it` would satisfy every count-based check in the runner
     // while proving nothing -- and is the plausible "make CI green" edit.
-    for (const { spec } of SPECS) {
+    expect(ICACLS_SPECS.length).toBeGreaterThan(0);
+    for (const { spec } of ICACLS_SPECS) {
       const source = readFileSync(path.join(ROOT, spec), "utf-8");
       expect(source, `${spec} no longer mentions icacls`).toContain("icacls");
       expect(
@@ -332,8 +346,47 @@ describe("windows-acl-proof spec list", () => {
     };
     walk(path.join(ROOT, "tests"));
 
-    const declared = SPECS.map(({ spec }) => spec).sort();
+    // Only the icacls entries: a spec that spawns icacls but is listed with
+    // `icacls: false` is absent from `declared` and turns this red.
+    const declared = ICACLS_SPECS.map(({ spec }) => spec).sort();
     expect(found.sort()).toEqual(declared);
+  });
+
+  // #2400: the short-name and launcher-flavour specs. They need no ACL; what
+  // they need from this job is that a `ctx.skip()` inside them fails it.
+  it("holds the non-icacls Windows specs to the same rule, one entry per suite", () => {
+    for (const { spec, suite, icacls, realAcl } of SPECS) {
+      // `false` or absent, nothing else: a typo must not move an entry between halves.
+      expect(
+        icacls === undefined || icacls === false,
+        `${spec}: icacls must be false or absent`,
+      ).toBe(true);
+      if (icacls === false) {
+        expect(realAcl, `${spec}: a spec that is not an icacls proof cannot be realAcl`).toBe(
+          false,
+        );
+        const source = readFileSync(path.join(ROOT, spec), "utf-8");
+        // The registered describe must be a real `describe` title, and the file
+        // must still gate tests on Windows; otherwise the entry guards nothing.
+        expect(source, `${spec}: ${JSON.stringify(suite)} is not a describe title`).toMatch(
+          new RegExp(
+            String.raw`describe(?:\.runIf\(WIN\))?\(\s*"` +
+              suite.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+              '"',
+          ),
+        );
+        expect(source, `${spec} no longer gates anything on Windows`).toMatch(/\.runIf\(WIN\)/);
+      }
+    }
+    // No two entries name the same suite of the same file.
+    const keys = SPECS.map(({ spec, suite }) => `${spec} :: ${suite}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(OTHER_SPECS.map(({ spec }) => spec).sort()).toEqual([
+      "tests/server/launcher/resolver-flavour.test.ts",
+      "tests/server/launcher/resolver-flavour.test.ts",
+      "tests/server/launcher/resolver-flavour.test.ts",
+      "tests/server/short-name-documents.win.test.ts",
+    ]);
   });
 });
 

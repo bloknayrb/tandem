@@ -173,6 +173,23 @@ jobs:
   # hazard bites, and this gate must not be able to go red for a line-ending
   # reason unrelated to ACLs.
   #
+  # #2400: the runner also holds specs that are not icacls proofs, the 8.3
+  # short-name document tests and the launcher's resolver-flavour describes.
+  # Their tests call `ctx.skip()` on a host with no short names or no free
+  # drive letter for `subst`; here that skip fails the job. The TEMP step is
+  # the one `vitest-windows` has (see its comment), copied so these specs run
+  # here in the environment they were measured in: 0 skipped on that job, with
+  # a long TEMP. They have not been run on a short TEMP.
+  #
+  # This makes a REQUIRED check depend on three properties of the runner image
+  # that have nothing to do with ACLs: the system volume creates 8.3 short
+  # names, hard links work on it, and a `subst` drive letter is free. If an
+  # image change removes one, this job goes red on every PR (it fails closed,
+  # which is the point of the runner). Recovery, in one PR: remove the entries
+  # with `icacls: false` from `scripts/ci/windows-acl-proof.mjs` and their
+  # rows in `tests/scripts/windows-acl-proof-wiring.test.ts`; the specs keep
+  # running in the advisory `vitest-windows` job, where a skip passes.
+  #
   # Cost, measured against run 32325964215: `check` is 13m02s and every job starts
   # within 1s of the others, so this ~2-3min leg adds no PR wall clock; the repo
   # is public, so GitHub-hosted minutes are unmetered.
@@ -192,7 +209,10 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      - name: Real-icacls proof (#1299 recovery path)
+      - name: Give TEMP its long name
+        run: node -e "const fs=require('node:fs');const t=fs.realpathSync.native(require('node:os').tmpdir());fs.appendFileSync(process.env.GITHUB_ENV,'TEMP='+t+'\nTMP='+t+'\n')"
+
+      - name: Real-icacls proof (#1299 recovery path) and the #2400 short-name specs
         run: node scripts/ci/windows-acl-proof.mjs
         timeout-minutes: 10
 
@@ -235,18 +255,22 @@ jobs:
   #    TEMP at `runner.temp` instead (run 42949488007) made three real-icacls
   #    fixtures fail their own precondition under `D:\a\_temp`, and
   #    platform.test.ts fail because app data was no longer under LOCALAPPDATA.
-  #    **This step also hides a product defect, #2400**: Node's JS
-  #    `fs.realpathSync` keeps an 8.3 short name where `fs.promises.realpath`
-  #    expands it, and the product uses both. Two sites are known. In
-  #    launcher/supervisor.ts `resolveSafeCwd` and `resolveSafeCwdAsync`
-  #    disagree (launcher/cwd-preview.test.ts fails on the bare runner). In
-  #    documents/open.ts a document is keyed on the short spelling
-  #    (adr-034-open-characterization.test.ts fails there).
+  #    The first runs of this job, on the bare runner, also failed on a product
+  #    defect this step hid: Node's JS `fs.realpathSync` keeps an 8.3 short
+  #    name where `fs.promises.realpath` expands it, and the product compared
+  #    the two (the launcher's resolver pairs, the document key, the drift
+  #    preview's bundled-folder list). That is fixed (#2400), so those tests are
+  #    expected to pass with a short TEMP as well (not run that way here: this
+  #    job never has one). The step stays, and more depends on it than before:
+  #    a document is now keyed on its LONG path, so any test that computes an
+  #    expected id or key from the raw temp path fails on a short TEMP.
+  #    tests/server/short-name-documents.win.test.ts builds its own short
+  #    spellings on a root taken from the native realpath, so it does not
+  #    depend on TEMP's.
   #  - the `\tmp` step. tests/server/document-service.test.ts writes under a
   #    literal `/tmp`, which Node resolves to `\tmp` on the working directory's
   #    drive; the runner has none there.
-  # Apart from the #2400 tests (cwd-preview and adr-034-open-characterization),
-  # the tests these two steps turn green depend on the host, not on the code
+  # The tests these two steps turn green depend on the host, not on the code
   # under test. Fixing them is the way to remove a line here; adding a line
   # here is not the way to fix a test.
   #
