@@ -1,8 +1,17 @@
 /**
  * `local-model-announced.json` — what the user last set from Tandem's own
- * window, or was told, about the two things a local-model change can do
- * without their noticing: that local models may comment, and which local model
- * answers chat (#1123, #2404; register entry #2410 in docs/security.md).
+ * window, or was told, about the three things a local-model change can do
+ * without their noticing: that local models may comment, which local model
+ * would answer chat, and that the local model (not Claude) answers chat
+ * (#1123, #2404; register entry #2410 in docs/security.md).
+ *
+ * **What each part means** (since the switch, ADR-039's 2026-11-12
+ * amendment): `editing` — commenting is on, and the user chose it or was told;
+ * `answering` — the fingerprint of the model that answers chat WHEN the local
+ * model is chosen (the model's identity alone, whatever the switch says);
+ * `adopted` — the first lit start's baseline model, not yet named to one of
+ * Tandem's windows; `answererLocal` — the switch is at the local model, and
+ * the user chose it or was told. The switch is never part of the baseline.
  *
  * **Who can change those settings now.** The two routes accept a request only
  * from Tandem's own window (`own-window.ts`), so a web page on another
@@ -10,7 +19,8 @@
  * is the user's: it raises no warning, and the record is updated to match it
  * at once (`recordSetByUser`). What is left that can make the settings on disk
  * differ from this record:
- *  - a process writing `models.json` or `local-model-settings.json` directly;
+ *  - a process writing `models.json`, `local-model-settings.json` or
+ *    `chat-answerer.json` directly;
  *  - data from another build, or a restored copy of Tandem's data;
  *  - a record write that failed after the user's own change;
  *  - a write admitted through the development allowance
@@ -103,7 +113,7 @@ const MAX_BYTES = 4096;
  *  more than is known, and carries no endpoint, path or credential. */
 export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
 export const SETTINGS_CHANGED_NOTICE =
-  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
+  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set your chat to be answered by Claude. This can also appear after an upgrade or after restoring Tandem's data.";
 
 interface Announced {
   /** Did the user switch commenting on themselves, or were they told it is on? */
@@ -114,6 +124,13 @@ interface Announced {
    *  "this model was adopted" notice no window of Tandem's has been sent yet.
    *  Written to the file only while set. */
   adopted: string | null;
+  /** Did the user choose the local model to answer chat in Tandem's own
+   *  window, or were they told it does? (`chat-answerer.ts`.) Written to the
+   *  file only while set, so a record without it is byte-identical to one an
+   *  older build wrote. An older build reads only the fields it knows and
+   *  writes only those, so a downgrade drops it and the next start of this
+   *  build announces a stored "local model" again: accepted. */
+  answererLocal: boolean;
 }
 
 let basePath: string | null = null;
@@ -145,7 +162,7 @@ function markerPath(): string {
 
 function load(): Announced {
   if (announced) return announced;
-  const fresh: Announced = { editing: false, answering: null, adopted: null };
+  const fresh: Announced = { editing: false, answering: null, adopted: null, answererLocal: false };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
     if (parsed && parsed !== "unreadable" && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -157,6 +174,9 @@ function load(): Announced {
         }
         if (Object.hasOwn(r, "adopted") && typeof r.adopted === "string") {
           fresh.adopted = r.adopted;
+        }
+        if (Object.hasOwn(r, "answererLocal") && r.answererLocal === true) {
+          fresh.answererLocal = true;
         }
       }
     }
@@ -174,8 +194,13 @@ function persist(): Promise<boolean> {
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const { adopted, ...rest } = load();
-      const snapshot = { version: VERSION, ...rest, ...(adopted === null ? {} : { adopted }) };
+      const { adopted, answererLocal, ...rest } = load();
+      const snapshot = {
+        version: VERSION,
+        ...rest,
+        ...(adopted === null ? {} : { adopted }),
+        ...(answererLocal ? { answererLocal: true } : {}),
+      };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
       unsaved = false;
       return true;
@@ -345,6 +370,9 @@ export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string
   // Their own On answers "your settings changed … switch commenting off" for
   // the commenting half: that part of a pending start-up notice is withdrawn.
   if (change.editing === true) dropStartupPart("editing");
+  // Their own switch to the local model answers the start-up notice's "set
+  // your chat to be answered by Claude" half: that part is withdrawn.
+  if (change.answererLocal === true) dropStartupPart("answererLocal");
   record(change);
 }
 
@@ -448,6 +476,24 @@ export function recordEditingOff(dedupKey: string): void {
   dropStartupPart("editing");
   if (load().editing) record({ editing: false });
   // A repeated Off: the earlier clearing write may have failed. Try it again.
+  else retryUnsavedRecord();
+}
+
+/** Did the user choose the local model to answer chat, or were they told? */
+export function answererLocalWasAnnounced(): boolean {
+  return load().answererLocal;
+}
+
+/**
+ * Claude answers chat (the user switched to it, or start-up found it). Never
+ * announced, so the pending replay is withdrawn and the record cleared at
+ * once — the next switch to the local model is then compared afresh.
+ */
+export function recordAnswererClaude(dedupKey: string): void {
+  removeStartupNotice(dedupKey);
+  dropStartupPart("answererLocal");
+  if (load().answererLocal) record({ answererLocal: false });
+  // A repeated switch: the earlier clearing write may have failed. Try again.
   else retryUnsavedRecord();
 }
 

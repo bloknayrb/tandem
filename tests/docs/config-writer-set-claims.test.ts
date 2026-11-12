@@ -335,6 +335,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // names no counted idiom. Tandem's OWN app-data root, never a Claude config
   // file, so the accepted #1599 scope is unchanged.
   "src/server/models/local-model-settings.ts": 1,
+  // #1123: `chat-answerer.json` (who answers chat: Claude or the local model),
+  // through `atomicWriteConfigFile`; the switch to Claude is a `fs.rmSync`,
+  // which names no counted idiom. Tandem's OWN app-data root, never a Claude
+  // config file, so the accepted #1599 scope is unchanged.
+  "src/server/models/chat-answerer.ts": 1,
   "src/server/models/store.ts": 1,
   // 4th is `touchSession`, which rewrites one metadata field of a session
   // record in SESSION_DIR; 5th is `restampMovedSession`'s `atomicWrite`, which

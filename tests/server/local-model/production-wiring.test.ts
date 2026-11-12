@@ -7,6 +7,7 @@ import {
   DEFAULT_COLLABORATOR_DEPS,
 } from "../../../src/server/local-model/collaborator.js";
 import { answeringLocalModel } from "../../../src/server/local-model/config-source.js";
+import { chatAnswerer, onChatAnswererChanged } from "../../../src/server/models/chat-answerer.js";
 import {
   answeringWasAnnounced,
   baselineAdoptionPending,
@@ -101,6 +102,47 @@ describe("local-model production wiring (#1123, #2404)", () => {
     const gateAt = src.indexOf("if (BYO_MODELS_ENABLED) {");
     const startAt = src.indexOf("startLocalModelCollaborator()");
     expect(startAt).toBeGreaterThan(gateAt + gated.length);
+  });
+
+  // #1123 R1.4: the dark guard for who answers chat. `chatAnswerer()` reads
+  // Claude until `primeChatAnswerer()` has run, and that call is the only disk
+  // read of `chat-answerer.json` — so it must sit inside the flag's block, and
+  // after the editing prime (which makes the first-lit-start decision before
+  // anything could write the record). Its own `try`, so a failed registry
+  // prime cannot leave the switch unprimed.
+  it("index.ts primes who answers chat INSIDE the BYO_MODELS_ENABLED block, after the editing prime", async () => {
+    const src = stripComments(await read("index.ts"));
+    const gated = blockAfter(src, "if (BYO_MODELS_ENABLED) {");
+    expect(count(gated, "primeChatAnswerer()")).toBe(1);
+    expect(gated).toMatch(
+      /const\s*\{\s*primeChatAnswerer\s*\}\s*=\s*await\s+import\(\s*"\.\/models\/chat-answerer\.js"\s*\)/,
+    );
+    expect(count(src, "primeChatAnswerer()")).toBe(1);
+    expect(count(src, "primeChatAnswerer")).toBe(2);
+    expect(gated.indexOf("primeChatAnswerer()")).toBeGreaterThan(
+      gated.indexOf("primeLocalModelSettings()"),
+    );
+    // Not in the registry prime's `try`: a `catch` lies between the two.
+    const between = gated.slice(
+      gated.indexOf("primeModelStoreCache()"),
+      gated.indexOf("primeChatAnswerer()"),
+    );
+    expect(between).toMatch(/\}\s*catch\s*\(/);
+  });
+
+  it("index.ts hands localModelResolvesNow to startMcpServerHttp, and server.ts to the models routes", async () => {
+    const index = stripComments(await read("index.ts"));
+    expect(index).toMatch(/\{\s*localModelResolvesNow\s*\}\s*,?\s*\)/);
+    expect(index).toMatch(
+      /import\s*\{[^}]*\blocalModelResolvesNow\b[^}]*\}\s*from\s*"\.\/local-model\/collaborator\.js"/,
+    );
+    const server = stripComments(await read("mcp", "server.ts"));
+    expect(server).toMatch(/localModelResolvesNow:\s*modelsWiring\?\.localModelResolvesNow/);
+  });
+
+  it("DEFAULT_COLLABORATOR_DEPS wires who answers chat and its change listener, by identity", () => {
+    expect(DEFAULT_COLLABORATOR_DEPS.chatAnswerer).toBe(chatAnswerer);
+    expect(DEFAULT_COLLABORATOR_DEPS.onChatAnswererChanged).toBe(onChatAnswererChanged);
   });
 
   it("startLocalModelCollaborator builds the collaborator with NO arguments", async () => {

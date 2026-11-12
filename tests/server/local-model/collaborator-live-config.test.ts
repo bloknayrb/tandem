@@ -19,6 +19,7 @@ import {
 import {
   ANSWERING_CHANGED_NOTICE_KEY,
   answeringChangedNotice,
+  CHAT_NOTICE_TEXT,
   type CollaboratorDeps,
   createLocalModelCollaborator,
   UNUSABLE_NOTICE,
@@ -59,6 +60,7 @@ import {
   type ModelsFile,
 } from "../../../src/shared/models/contract.js";
 import { withInternal } from "../../../src/shared/origins.js";
+import type { ChatMessage } from "../../../src/shared/types.js";
 
 /**
  * #1123 R1: a model saved through the REAL `POST /api/models` route reaches the
@@ -195,6 +197,8 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       resolveConfig: resolveLocalModelConfig,
       diagnose: diagnoseLocalModel,
       onModelsChanged: onModelsFileChanged,
+      // The local model is chosen to answer chat (#1123).
+      chatAnswerer: () => "local",
       subscribe: (cb) => {
         registered = cb;
       },
@@ -377,8 +381,16 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
         expect(text).not.toContain("hunter2pw");
         expect(text).not.toContain("someuser");
       }
-      // Not chat: the notice went to the browser's notify stream only.
-      expect(chatMap().size).toBe(0);
+      // The toast went to the browser's notify stream only. The chat got one
+      // fixed notice per message (#1123 R3.2, decision 5), which names no
+      // endpoint or model either.
+      const rows = [...chatMap().values()] as ChatMessage[];
+      expect(rows).toHaveLength(4);
+      for (const row of rows) {
+        expect(row.chatNotice).toBe("no-local-model");
+        expect(row.text).toBe(CHAT_NOTICE_TEXT["no-local-model"]);
+        expect(row.agentIdentity).toBeUndefined();
+      }
     });
   }
 

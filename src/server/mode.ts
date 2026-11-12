@@ -125,6 +125,21 @@ export type ModeProvenance = (
 
 let lastModeWrite: ModeProvenance | null = null;
 
+/**
+ * How many times the mode key has been seen changing to anything but exactly
+ * `"tandem"` (#1123). In memory only. A local-model run captures it at its
+ * start and compares it on every tool call, so a run started in Tandem mode
+ * cannot comment or suggest once the mode has left Tandem — even when it is
+ * back in Tandem before the run's next tool call. Nothing reads it while local
+ * models ship dark.
+ */
+let leftTandem = 0;
+
+/** See {@link leftTandem}. */
+export function leftTandemEpoch(): number {
+  return leftTandem;
+}
+
 /** The last observed write of the mode key, or `null` if none has been seen. */
 export function readModeProvenance(): ModeProvenance | null {
   return lastModeWrite;
@@ -160,6 +175,7 @@ export function installModeProvenanceObserver(ctrlDoc: Y.Doc): () => void {
     if (!event.keysChanged.has(Y_MAP_MODE)) return;
     const at = Date.now();
     const value = readModeState();
+    if (value !== "tandem") leftTandem += 1;
     const origin: unknown = txn.origin;
     // The Hocuspocus `Connection` shape. `DirectConnection` is never opened by
     // Tandem, so a `socketId` here is always a real client socket.

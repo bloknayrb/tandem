@@ -299,6 +299,19 @@ describe("chat read moves behind the acknowledgement", () => {
     ).toBe(true);
     expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_local"]);
   });
+
+  it("a local-model chat notice is not an answer: the message is repeated (#1123 R3.2)", async () => {
+    const b0 = (await poll({ cursor: "start" })).cursor;
+    userChat("msg_noticed");
+    const a = await poll({ cursor: "start" });
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_noticed"]);
+    for (const chatNotice of ["no-document", "no-local-model"] as const) {
+      expect(appendClaudeChatMessage("notice", { replyTo: "msg_noticed", chatNotice }).ok).toBe(
+        true,
+      );
+    }
+    expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_noticed"]);
+  });
 });
 
 describe("the editor's pickup row counts a handed-out message as picked up", () => {

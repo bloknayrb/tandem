@@ -18,7 +18,16 @@
  * #1123 plan doc covers M1.2; #1160's own description is the record):
  *  - ADR-039 "one active agent at a time": a single-flight controller; a new
  *    message SUPERSEDES the prior run (abort + serialize, then start) [D-B].
- *  - "Hold in Solo": the collaborator only acts in Tandem mode [D-D].
+ *  - Who answers chat (#1123, ADR-039 amendment 2026-11-12): one switch,
+ *    Claude or the local model (`models/chat-answerer.ts`). With Claude chosen
+ *    the collaborator runs nothing and posts nothing; a switch to Claude
+ *    aborts a run in flight. With the local model chosen it answers every chat,
+ *    in Tandem mode and in Solo — in Solo in the chat tier only, because Solo
+ *    means the AI holds annotations. (This replaces "hold in Solo" [D-D].)
+ *  - Chat notices (#1123): a chat the local model cannot answer — no document
+ *    open, or no local model resolving — gets one short message in the chat,
+ *    through `appendClaudeChatMessage` (so the licence suppresses it), marked
+ *    `chatNotice` and never counted as an answer.
  *  - Self-wake safety: all chat writes go through `appendClaudeChatMessage` /
  *    `updateClaudeChatMessage` (withMcp + author:"claude") so the ctrl-chat
  *    observer skips them — a streamed delta can never re-trigger this subscriber.
@@ -34,10 +43,18 @@
  */
 
 import { createHash } from "node:crypto";
-import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
+import { BYO_MODELS_ENABLED, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
 import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
-import type { AgentIdentity } from "../../shared/types.js";
+import type { ChatAnswerer } from "../../shared/models/contract.js";
+import { withMcp } from "../../shared/origins.js";
+import type {
+  AgentIdentity,
+  ChatMessage,
+  ChatNoticeKind,
+  LocalRunState,
+  LocalRunStopReason,
+} from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { contentGeneration } from "../documents/content-generation.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
@@ -49,7 +66,8 @@ import {
   updateClaudeChatMessage,
 } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
-import { readLiveMode } from "../mode.js";
+import { leftTandemEpoch, readModeState } from "../mode.js";
+import { chatAnswerer, onChatAnswererChanged } from "../models/chat-answerer.js";
 import {
   announceBaselineAdopted,
   announceLocalModelChange,
@@ -67,9 +85,11 @@ import {
   type LocalModelEditingState,
   localModelEditingState,
 } from "../models/local-model-settings.js";
+import { LOCAL_RUN_GENERATION } from "../models/local-run-generation.js";
 import { type ModelsFileChange, onModelsFileChanged } from "../models/registry.js";
 import { pushNotification } from "../notifications.js";
 import { addStartupNotice } from "../startup-notices.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 import type { LocalModelConfig } from "./config.js";
 import {
   type AnsweringLocalModel,
@@ -176,6 +196,17 @@ export interface CollaboratorDeps {
    *  notice (#2404). Absent means that notice is never raised. */
   answering?: () => AnsweringLocalModel | null;
   /**
+   * Who answers chat (#1123): `"local"` lets this collaborator answer.
+   * **Absent means Claude** — the collaborator then runs nothing and posts
+   * nothing — so a double that forgets it gets a silent collaborator, never a
+   * second answerer. The default is supplied only in `DEFAULT_COLLABORATOR_DEPS`.
+   */
+  chatAnswerer?: () => ChatAnswerer;
+  /** Be told when who answers chat changes; returns the unsubscribe. Shaped
+   *  like `onModelsChanged`. Absent means never told: a run in flight is then
+   *  stopped only by its own start-time check, not at the switch. */
+  onChatAnswererChanged?: (cb: (now: ChatAnswerer) => void) => () => void;
+  /**
    * The record of what the user chose in Tandem's own window, or was told
    * (`local-model-announced.ts`). With it, the model found at start-up raises
    * the start-up notice unless the record names exactly that model — so a file
@@ -223,6 +254,8 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
   editingState: localModelEditingState,
   onModelsChanged: onModelsFileChanged,
   answering: answeringLocalModel,
+  chatAnswerer,
+  onChatAnswererChanged,
   announced: {
     wasAnnounced: answeringWasAnnounced,
     announce: (dedupKey, message, fingerprint) => {
@@ -278,7 +311,7 @@ function quotableName(name: string): string {
  * activity tray and expires by itself. Never the Endpoint or the model id.
  */
 export function answeringSwitchedNotice(now: AnsweringLocalModel): string {
-  return `Your change means the local model ${quotableName(now.displayName)} now answers your chat.`;
+  return `Your change means the local model ${quotableName(now.displayName)} is now the one set up to answer your chat whenever your chat is set to be answered by a local model.`;
 }
 
 /**
@@ -289,7 +322,7 @@ export function answeringSwitchedNotice(now: AnsweringLocalModel): string {
  * one while local models were off. Never the Endpoint or the model id.
  */
 export function baselineAdoptedNotice(now: AnsweringLocalModel): string {
-  return `Local models are now available in Tandem. A local model was already saved, ${quotableName(now.displayName)}, and it was set to answer your chat. If you did not add it, remove it in Settings → Models.`;
+  return `Local models are now available in Tandem. A local model was already saved, ${quotableName(now.displayName)}, and it was set up to answer your chat whenever your chat is set to be answered by a local model. If you did not add it, remove it in Settings → Models.`;
 }
 
 /**
@@ -316,7 +349,7 @@ export function entryTouchedByWrite(change: ModelsFileChange, entryId: string): 
  * because it stays in the activity tray.
  */
 export function answeringChangedNotice(now: AnsweringLocalModel): string {
-  return `The local model that is set up to answer your chat was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
+  return `The local model set up to answer your chat (whenever your chat is set to be answered by a local model) was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
 }
 
 /**
@@ -335,6 +368,52 @@ export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
     "Your local model did not answer, because it had no Endpoint saved. Edit the model in Settings → Models, then send your message again.",
 };
 
+/**
+ * The chat notices (#1123): one short message in the chat, per chat message
+ * the local model could not answer. Fixed strings, never a model name,
+ * endpoint or id. They name "Settings → Models" as the remedy; part B of the
+ * series puts the switch there (or re-words these in the same PR).
+ */
+export const CHAT_NOTICE_TEXT: Record<ChatNoticeKind, string> = {
+  "no-document":
+    "The local model could not answer this message, because its document was not open. Open a document and send your message again.",
+  "no-local-model":
+    "No local model could answer this message. In Settings → Models, mark a local model as Default or fix its Endpoint, or set your chat to be answered by Claude.",
+};
+
+/**
+ * Would a local model answer a chat now? The one sanctioned export across the
+ * dark audit for the chat-answerer GET (#1123): `index.ts` imports it and
+ * hands it to the models routes, so no other `local-model/` module is reached
+ * from outside. Only the boolean: never which model, or where it points.
+ */
+export function localModelResolvesNow(): boolean {
+  return resolveLocalModelConfig() !== null;
+}
+
+/**
+ * Write the run state on the user's chat row (#1123 R3.4), `withMcp`. Only
+ * when the row still exists and is the user's: a chat cleared mid-run gets
+ * nothing. Read-modify-write in one synchronous step, against the live row, so
+ * a concurrent `read`/`delivered` stamp is kept. The ctrl-chat observer emits
+ * only on a user row's `add`, and `mcp` is in its skip set, so this update can
+ * wake nothing.
+ */
+function writeLocalRun(
+  messageId: string | undefined,
+  state: Omit<LocalRunState, "generation">,
+): void {
+  if (!messageId) return;
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const live = chatMap.get(messageId);
+  if (typeof live !== "object" || live === null) return;
+  const row = live as ChatMessage;
+  if (row.author !== "user") return;
+  const localRun: LocalRunState = { ...state, generation: LOCAL_RUN_GENERATION };
+  withMcp(ctrlDoc, () => chatMap.set(messageId, { ...row, localRun }));
+}
+
 interface RunReq {
   /** Resolved at the chat event; the run finishes on it whatever is saved later. */
   config: LocalModelConfig;
@@ -342,6 +421,10 @@ interface RunReq {
   task: string;
   selection?: ChatMessagePayload["selection"];
   replyTo?: string;
+  /** Set once this run wrote "running" (R3.4). */
+  started?: boolean;
+  /** Set when this run, instead of starting, posted a chat notice. */
+  noticed?: boolean;
 }
 
 interface RunSlot {
@@ -385,6 +468,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   /** The broken state the user was last told about, so one state is one notice. */
   let noticedStateKey: string | null = null;
   let stopWatchingModels: (() => void) | null = null;
+  let stopWatchingAnswerer: (() => void) | null = null;
   /** The model that would answer as of the last registry change, or null when
    *  none would. A model answering after "none" is always announced. */
   let lastAnswering: AnsweringLocalModel | null = null;
@@ -393,6 +477,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   /** Which refusal was last logged, so a refused state logs once, not once per chat. */
   let loggedRefusal: AiRefusal["kind"] | null = null;
   const decideRefusal = deps.aiRefusal ?? aiRefusal;
+  /** Who answers chat. No `chatAnswerer` dep at all means Claude. */
+  const answerer = (): ChatAnswerer =>
+    deps.chatAnswerer && deps.chatAnswerer() === "local" ? "local" : "claude";
 
   /**
    * Per-run streaming sink. Owns ONE live chat message + a coalescing buffer +
@@ -514,6 +601,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         }
       },
       flushFinal: () => write(),
+      /** The reply row this run minted, if any (a partial one included). */
+      replyId: () => liveId,
       // Runs in executeRun's `finally` on EVERY exit (clean/budget/timeout/
       // error after their flushFinal; abort/supersede; throw), and `run()`
       // awaits the previous slot's promise before starting the next executeRun
@@ -536,7 +625,16 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // DEFINED, not merely before its first call: the predicate closes over it,
     // and the top-of-run call below would otherwise hit the TDZ.
     const open = requireDocument(req.docName);
-    if (!open) return;
+    if (!open) {
+      // Closed while this run waited for its predecessor: the chat is told,
+      // as one that arrived after the close would be (#1123 R3.2) — unless a
+      // newer chat or a switch to Claude has superseded it.
+      if (current?.token === token && !abort.signal.aborted && req.replyTo) {
+        req.noticed = true;
+        postNotice("no-document", req.replyTo);
+      }
+      return;
+    }
     const ydoc = open.doc;
 
     // Still the owning, non-aborted run on the SAME Y.Doc instance we captured?
@@ -578,7 +676,13 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     const stillOwner = () => current?.token === token && !abort.signal.aborted && docCurrent();
 
     if (!stillOwner()) return;
+    // The switch, re-checked where the run starts (#1123 R2.1): a switch to
+    // Claude between the chat and this point means this run never starts.
+    if (answerer() !== "local") return;
     const config = req.config;
+    // How it ended, set in each terminal branch below and written in the
+    // `finally` once the sink has folded its reply. Unset there means a throw.
+    let ended: { status: "replied" | "stopped"; reason?: LocalRunStopReason } | null = null;
 
     // The editing permission for THIS run (#1123). Captured here, with no await
     // between this line and `runTurn` reading it, so the tier the engine picks
@@ -586,12 +690,25 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // from now on changes the epoch, so the run cannot write again even if
     // editing is switched back on before its next tool call. No `editingState`
     // dep at all means no writes.
+    //
+    // The mode is part of the same permission (#1123 R3.1): Solo means the AI
+    // holds annotations, so a run may comment or suggest only while the mode
+    // is exactly "tandem" — compared at every tool call, as the editing
+    // setting is — and only if the mode has not LEFT Tandem since the run
+    // started (`leftTandemEpoch`), so Tandem → Solo → Tandem between two tool
+    // calls still counts. A run that starts in Solo is a chat-tier run.
     const readEditing = deps.editingState;
     const startEpoch = readEditing ? readEditing().offEpoch : -1;
+    const startLeftTandem = leftTandemEpoch();
     const editingAllowed = (): boolean => {
       if (!readEditing) return false;
       const now = readEditing();
-      return now.enabled === true && now.offEpoch === startEpoch;
+      return (
+        now.enabled === true &&
+        now.offEpoch === startEpoch &&
+        readModeState() === "tandem" &&
+        leftTandemEpoch() === startLeftTandem
+      );
     };
 
     const includeFullText = extractText(ydoc).length <= INLINE_CHAR_LIMIT;
@@ -606,6 +723,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       agentIdentity: config.agentIdentity,
     });
 
+    // The run has started: say so on the user's row, for the editor (R3.4).
+    // Immediately before the `try`, so its `finally` always writes the end.
+    req.started = true;
+    writeLocalRun(req.replyTo, { status: "running" });
     try {
       const result = await deps.runTurn({
         ydoc,
@@ -651,6 +772,13 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         // user who just closed a tab that it "reconnected" names a remedy no
         // retry can satisfy. The ABORT is unchanged on every path; only the
         // message differs.
+        // Closed → aborted; the same instance → its content was replaced; a
+        // new instance → the document reconnected.
+        ended = {
+          status: "stopped",
+          reason:
+            live === null ? "aborted" : live.doc === ydoc ? "content-replaced" : "reconnected",
+        };
         if (live?.doc === ydoc) {
           // #2070: the SAME instance, so the content was replaced under the
           // turn (force-open, a source-view commit, a reload from disk). Unlike
@@ -684,10 +812,26 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             timestamp: Date.now(),
           });
         }
-      } else if (stillOwner()) {
+      } else if (!stillOwner()) {
+        // Dropped silently, as before: superseded, aborted or closed — or its
+        // content replaced after the loop's last check.
+        ended = {
+          status: "stopped",
+          reason:
+            current?.token !== token || abort.signal.aborted || !docUnchanged()
+              ? "aborted"
+              : "content-replaced",
+        };
+      } else {
         const exit = result.metrics.exit;
+        ended = endedFor(exit);
         if (exit === "clean") {
           sink.flushFinal();
+          // Replied only if the flush really left a reply row.
+          ended =
+            sink.replyId() !== null
+              ? { status: "replied" }
+              : { status: "stopped", reason: "no-reply" };
         } else if (exit === "max_turns" || exit === "max_tool_calls") {
           // Budget exhausted mid-task (the model looped on tool calls, or never
           // produced a final no-tool answer turn). Commit any partial content
@@ -759,6 +903,35 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     } finally {
       // Kill any pending flush timer on EVERY exit (clean/error/abort/throw).
       sink.dispose();
+      // After the fold, so the state never says "replied" before the reply
+      // row holds its final text. A successor run awaits this promise before
+      // it starts, so its own "running" can never be overwritten by this.
+      const final = ended ?? { status: "stopped" as const, reason: "error" as const };
+      const replyId = sink.replyId();
+      writeLocalRun(req.replyTo, { ...final, ...(replyId ? { replyId } : {}) });
+    }
+  }
+
+  /** The run state for a loop exit, while this run still owns the slot.
+   *  (`clean` is refined by the caller once it knows whether a reply landed.) */
+  function endedFor(exit: LoopResult["metrics"]["exit"]): {
+    status: "replied" | "stopped";
+    reason?: LocalRunStopReason;
+  } {
+    switch (exit) {
+      case "clean":
+        return { status: "stopped", reason: "no-reply" };
+      case "max_turns":
+      case "max_tool_calls":
+        return { status: "stopped", reason: "step-limit" };
+      case "editing_off":
+        return { status: "stopped", reason: "editing-off" };
+      case "timeout":
+        return { status: "stopped", reason: "timeout" };
+      case "error":
+        return { status: "stopped", reason: "error" };
+      default:
+        return { status: "stopped", reason: "aborted" };
     }
   }
 
@@ -788,6 +961,16 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         // The detached promise must never reject (→ unhandledRejection → exit).
         console.error("[local-model] collaborator run failed", err);
       } finally {
+        // Claimed but never started (superseded, switched to Claude, or its
+        // document changed while it waited): the editor is still told it
+        // ended, and why (R3.4). Not for a run that posted a notice instead.
+        if (!req.started && !req.noticed) {
+          try {
+            writeLocalRun(req.replyTo, { status: "stopped", reason: "aborted" });
+          } catch (err) {
+            console.error("[local-model] could not record the run state", err);
+          }
+        }
         if (current?.token === token) current = null;
       }
     })();
@@ -916,6 +1099,33 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     if (now?.stateKey !== noticedStateKey) noticedStateKey = null;
   }
 
+  /**
+   * Post one chat notice for `messageId` (#1123 R3.2), off the synchronous
+   * emit path. Like any new chat it supersedes a run in flight: the run is
+   * aborted (its exit is the silent `aborted`). A notice for a document that is
+   * not open carries no `documentId`. A licence that lapsed since `onEvent`
+   * checked it refuses the write: logged once, nothing posted.
+   */
+  function postNotice(kind: ChatNoticeKind, messageId: string, documentId?: string): void {
+    queueMicrotask(() => {
+      if (current) current.abort.abort();
+      // The switch may have moved to Claude since the chat arrived.
+      if (answerer() !== "local") return;
+      const appended = appendClaudeChatMessage(CHAT_NOTICE_TEXT[kind], {
+        replyTo: messageId,
+        ...(documentId ? { documentId } : {}),
+        chatNotice: kind,
+      });
+      if (!appended.ok) logRefusal(appended.refusal);
+    });
+  }
+
+  /** The switch moved (#1123 R2.1). To Claude: stop a run in flight, by abort
+   *  — its exit is the silent `aborted`, never `isDocCurrent`'s notice. */
+  function onAnswererChanged(now: ChatAnswerer): void {
+    if (now !== "local" && current) current.abort.abort();
+  }
+
   /** Synchronous queue callback: ZERO Y.Doc writes, cheap, non-throwing. */
   function onEvent(event: TandemEvent): void {
     if (event.type === "document:closed") {
@@ -933,36 +1143,45 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
 
     const task = event.payload.text?.trim();
     if (!task) return;
-    if (readLiveMode() !== "tandem") return; // hold in Solo (D-D): no run, no notice
-    // Resolved per chat event, from the registry cache `POST /api/models`
-    // replaces on every successful write — so a model saved a second ago is
-    // used by this chat, with no restart.
-    const config = deps.resolveConfig();
-    const broken = config ? null : (deps.diagnose?.() ?? null);
-    if (!config && !broken) {
-      // Nothing saved, a disabled default, a cloud default: the ordinary ways of
-      // meaning "Claude is my collaborator". Say nothing.
-      noticedStateKey = null;
-      return;
-    }
-    // Licence admission (#1521), per run: no turn, no chat write, one stderr
-    // line per refused state. It precedes the notice below, so an unlicensed
-    // install is told about the licence (by the editor's AI-off notice), not
-    // about a model it could not use anyway.
+    // Who answers chat (#1123): with Claude chosen the local model runs
+    // nothing and posts nothing — no notice and no unusable toast. In Solo it
+    // answers too (Bryan, 2026-11-12), in the chat tier (`executeRun`).
+    if (answerer() !== "local") return;
+    // Licence admission (#1521), per chat, BEFORE anything else is decided: no
+    // turn, no notice, no chat write, one stderr line per refused state. An
+    // unlicensed install is told about the licence by the editor's AI-off
+    // notice, not about a model it could not use anyway.
     const refusal = decideRefusal();
     if (refusal) {
       logRefusal(refusal);
       return;
     }
     loggedRefusal = null;
+    const messageId = event.payload.messageId;
+    // No document open, or one that is no longer open: the no-document notice.
+    // It wins over "no local model can answer" — opening a document is the
+    // first thing either remedy needs.
+    const docName = event.documentId ?? getActiveDocId();
+    if (!docName || !requireDocument(docName)) {
+      if (messageId) postNotice("no-document", messageId);
+      return;
+    }
+    // Resolved per chat event, from the registry cache `POST /api/models`
+    // replaces on every successful write — so a model saved a second ago is
+    // used by this chat, with no restart.
+    const config = deps.resolveConfig();
     if (!config) {
+      // Nothing resolves: none saved, the chosen default deleted, disabled or
+      // a cloud model, or an unusable state. The switch stays where the user
+      // put it (decision 5), and every chat is told. An unusable state also
+      // keeps its once-per-state toast.
+      const broken = deps.diagnose?.() ?? null;
       if (broken) noticeUnusable(broken);
+      else noticedStateKey = null;
+      if (messageId) postNotice("no-local-model", messageId, docName);
       return;
     }
     noticedStateKey = null;
-    const docName = event.documentId ?? getActiveDocId();
-    if (!docName) return;
-    if (!requireDocument(docName)) return; // never fabricate a phantom room
 
     // Hand off OFF the synchronous emit path (the callback runs inside the
     // originating browser-origin txn; a sync write here would be mis-tagged).
@@ -972,7 +1191,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         docName,
         task,
         selection: event.payload.selection,
-        replyTo: event.payload.messageId,
+        replyTo: messageId,
       }),
     );
   }
@@ -1014,6 +1233,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     }
     deps.announced?.finishStart?.();
     stopWatchingModels = deps.onModelsChanged?.(onModelsChanged) ?? null;
+    stopWatchingAnswerer = deps.onChatAnswererChanged?.(onAnswererChanged) ?? null;
     subscriberCb = onEvent;
     // "internal" is passed EXPLICITLY, not left to the default. Two correctness
     // properties now hang on this subscriber not being external:
@@ -1034,6 +1254,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
   async function stop(): Promise<void> {
     stopWatchingModels?.();
     stopWatchingModels = null;
+    stopWatchingAnswerer?.();
+    stopWatchingAnswerer = null;
     if (subscriberCb) {
       deps.unsubscribe(subscriberCb);
       subscriberCb = null;

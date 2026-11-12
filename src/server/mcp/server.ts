@@ -815,6 +815,13 @@ export async function startMcpServerHttp(
    * passes a directory of its own to exercise the static mount (#2404).
    */
   clientDir: string = CLIENT_DIST,
+  /**
+   * Models-route wiring (#1123). `localModelResolvesNow` is the local-model
+   * collaborator's one sanctioned export across the dark audit, handed in by
+   * `index.ts` so this module never imports `local-model/`. Omitted in tests:
+   * the chat-answerer GET then answers that no local model resolves.
+   */
+  modelsWiring?: { localModelResolvesNow?: () => boolean },
 ): Promise<Server> {
   // ADR-056: `main()` refuses a non-loopback bind before getting here. This is
   // the function that calls `listen`, so the guard also covers a future
@@ -1345,6 +1352,7 @@ export async function startMcpServerHttp(
   registerModelsRoutes(app, largeBody, lanAwareApiMiddleware, {
     keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS }),
     ownWindow: modelsOwnWindow,
+    localModelResolvesNow: modelsWiring?.localModelResolvesNow,
   });
 
   // Serve built client assets when present (populated by `vite build`).
