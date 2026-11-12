@@ -893,13 +893,21 @@ describe("state the inbox work will rely on (Requirement 2)", () => {
   it("R2.1: a document's handover mark outlives a close, an unowned spell and a reopen", async () => {
     setupDoc("d");
     setDocOwner(docId("d"), { ownerId: A, kind: "opened" }, "take");
-    // Written by the test-only setter: PR 2b's handover is the production writer.
-    setHandoverSeqForTests(docId("d"), 41);
+    // Written by a handover since the handover PR: ownership leaving A writes
+    // the sequence source's value. (Until then this used the test-only setter,
+    // and the lapse below left its value alone.)
+    setOwnershipSeqSource(() => 41);
     setDocOwner(docId("d"), null, "lapse");
+    expect(ownershipSnapshotForTests().handoverSeq).toEqual([[docId("d"), 41]]);
+    // The close of an unowned document is no handover, so the source is not read again.
+    setOwnershipSeqSource(() => 99);
     await closeDocumentById(docId("d"));
     setupDoc("d");
     expect(ownershipSnapshotForTests().handoverSeq).toEqual([[docId("d"), 41]]);
     expect(ownershipSnapshotForTests().ownerByDoc).toEqual([]);
+    // The test-only setter still writes it, for tests that need a value with no handover.
+    setHandoverSeqForTests(docId("d"), 7);
+    expect(ownershipSnapshotForTests().handoverSeq).toEqual([[docId("d"), 7]]);
   });
 
   it("R2.2: a write's claim reads the delivery registry's counter when it takes effect; a passed value overrides the source", async () => {

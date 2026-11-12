@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
+import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
 import { SRC_FILES } from "../helpers/src-tree.js";
@@ -80,6 +81,148 @@ describe("an ownership entry's sinceSeq has a real source in a running server (o
     const line = src.split("\n").find((l) => l.includes("setOwnershipSeqSource(() =>")) as string;
     // Two spaces: a statement of `main()` itself, as the mode calls' branch is.
     expect(line).toBe("  setOwnershipSeqSource(() => deliveryRegistry.counter);");
+  });
+});
+
+describe("the handover is wired in a running server, and reachable only through the ownership module (ownership design §6.3)", () => {
+  // `setOwnershipInboxHandover` is a seam that does nothing when unwired, so
+  // every unit test passes without the wiring: an unwired server would run
+  // every handover and re-owe nothing. `main()` cannot be run in a unit test,
+  // so the call is pinned from source. (`ownership-handover.test.ts` wires the
+  // same two expressions against the real inbox.)
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+  const ownership = SRC_FILES.get("src/server/sessions/ownership.ts") as string;
+  const awareness = SRC_FILES.get("src/server/mcp/awareness.ts") as string;
+  const filesNaming = (pattern: RegExp) =>
+    [...SRC_FILES]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort();
+  /** The text of one top-level function in `ownership.ts`, from its declaration to the next. */
+  const functionBody = (declaration: string): string => {
+    const start = ownership.indexOf(declaration);
+    expect(start, declaration).toBeGreaterThan(-1);
+    const next = ownership.indexOf("\n}\n", start);
+    expect(next).toBeGreaterThan(start);
+    return ownership.slice(start, next);
+  };
+
+  it("index.ts wires the inbox's handover once, as a statement of main(), before either transport branch", () => {
+    const call = "  setOwnershipInboxHandover(handOverDocumentInbox);";
+    expect(index.split("\n").filter((line) => line === call)).toHaveLength(1);
+    expect(index.match(/setOwnershipInboxHandover\(/g)).toHaveLength(1);
+    const wired = index.indexOf(call);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+    expect(index).toMatch(
+      /import \{[^}]*\bhandOverDocumentInbox\b[^}]*\} from "\.\/mcp\/awareness\.js";/,
+    );
+  });
+
+  it("nothing else in src wires the seam or names the inbox's handover", () => {
+    expect(filesNaming(/\bsetOwnershipInboxHandover\(/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    expect(ownership.match(/\bsetOwnershipInboxHandover\(/g)).toHaveLength(1);
+    // The inbox side: its definition, and `index.ts`'s import and wiring line.
+    // (Comments in `ownership.ts` and `inbox-cursor.ts` name it in backticks.)
+    expect(filesNaming(/\bhandOverDocumentInbox\b(?!`)/)).toEqual([
+      "src/server/index.ts",
+      "src/server/mcp/awareness.ts",
+    ]);
+    expect(index.match(/\bhandOverDocumentInbox\b/g)).toHaveLength(2);
+    expect(awareness.match(/\bhandOverDocumentInbox\b(?!`)/g)).toHaveLength(1);
+  });
+
+  it("the inbox's handover is synchronous, and reads no flag", () => {
+    // A function returning a promise would run outside the ownership module's
+    // guard, and a rejection there is an unhandled one.
+    expect(awareness).toMatch(
+      /^export function handOverDocumentInbox\(documentId: string\): void \{$/m,
+    );
+    expect(awareness).not.toMatch(/async function handOverDocumentInbox/);
+    expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled/);
+    const start = awareness.indexOf("export function handOverDocumentInbox(");
+    const body = awareness.slice(start, awareness.indexOf("\n}\n", start));
+    expect(body).not.toMatch(/\bawait\b|\.then\(|withMcp|withInternal|withBrowser|transact\(/);
+  });
+
+  it("the registry's bulk retire has one caller, the inbox's handover", () => {
+    expect(filesNaming(/\bretireWhere\(/)).toEqual([
+      "src/server/mcp/awareness.ts",
+      "src/server/mcp/inbox-cursor.ts",
+    ]);
+    expect(awareness.match(/\bretireWhere\(/g)).toHaveLength(1);
+    const start = awareness.indexOf("export function handOverDocumentInbox(");
+    const body = awareness.slice(start, awareness.indexOf("\n}\n", start));
+    expect(body).toMatch(/deliveryRegistry\.retireWhere\(\s*documentId,/);
+    // `inbox-cursor.ts`: the definition only.
+    const cursor = SRC_FILES.get("src/server/mcp/inbox-cursor.ts") as string;
+    expect(cursor.match(/\bretireWhere\(/g)).toHaveLength(1);
+  });
+
+  it("the ownership side runs it from exactly two places, each behind its function's first-line flag return, with no await", () => {
+    // The definition plus two calls.
+    expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(2);
+    expect(ownership.match(/\bhandOver\(/g)).toHaveLength(3);
+    expect(ownership.match(/\binboxHandover\(documentId\)/g)).toHaveLength(1);
+    for (const declaration of [
+      "export function setDocOwner(",
+      "export function onDocumentClosed(",
+    ]) {
+      const body = functionBody(declaration);
+      const open = body.indexOf("): void {\n");
+      expect(open, declaration).toBeGreaterThan(-1);
+      // The first statement of the function is the flag return.
+      expect(body.slice(open).startsWith("): void {\n  if (!ownershipEnabled()) return;\n")).toBe(
+        true,
+      );
+      expect(body.match(/\bhandOver\(documentId\)/g), declaration).toHaveLength(1);
+      // One synchronous step with the ownership change (R1.6).
+      expect(body).not.toMatch(/\bawait\b|\basync\b|\.then\(/);
+    }
+    const handOver = functionBody("function handOver(documentId: string): void {");
+    expect(handOver).toContain("inboxHandover(documentId);");
+    expect(handOver).not.toMatch(/\bawait\b|\basync\b|\.then\(/);
+    // It runs after the entry is written or deleted, never before.
+    const set = functionBody("export function setDocOwner(");
+    expect(set.indexOf("ownerByDoc.set(documentId,")).toBeLessThan(
+      set.indexOf("handOver(documentId)"),
+    );
+    expect(set.indexOf("ownerByDoc.delete(documentId)")).toBeLessThan(
+      set.indexOf("handOver(documentId)"),
+    );
+    const closed = functionBody("export function onDocumentClosed(");
+    expect(closed.indexOf("ownerByDoc.delete(documentId)")).toBeLessThan(
+      closed.indexOf("handOver(documentId)"),
+    );
+  });
+
+  it("only a handover writes handoverSeq (and the test setter)", () => {
+    expect(ownership.match(/\bhandoverSeq\.set\(/g)).toHaveLength(2);
+    expect(functionBody("function handOver(documentId: string): void {")).toContain(
+      "handoverSeq.set(documentId, seqSource());",
+    );
+    expect(functionBody("export function setHandoverSeqForTests(")).toContain("handoverSeq.set(");
+    // Nothing reads it yet: the notice rule that will is the scope PR's.
+    expect(ownership.match(/\bhandoverSeq\.(get|has)\(/g)).toBeNull();
+    expect(filesNaming(/\bhandoverSeq\b/)).toEqual(["src/server/sessions/ownership.ts"]);
+  });
+
+  it("a document id holds no colon, so a ledger key's document prefix is exact", () => {
+    for (const filePath of [
+      "C:\\Users\\me\\notes:draft.md",
+      "upload://scratchpad/123e4567-e89b-12d3-a456-426614174000/Scratchpad.md",
+      "/home/me/a:b/c:d.md",
+      "\\\\server\\share\\x:y.txt",
+    ]) {
+      expect(docIdFromPath(filePath), filePath).toMatch(/^[a-z0-9-]+$/);
+    }
   });
 });
 

@@ -26,10 +26,10 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
-import { getDocumentStore } from "./document-store.js";
+import { getDocumentStore, YDocStore } from "./document-store.js";
 import { isGreetingReply } from "./greeting-reply.js";
 import {
   CHAT_SCOPE,
@@ -231,6 +231,109 @@ export function resetInbox(): void {
   replySurfacedIds.clear();
   deliveryRegistry.reset();
   ledgerGeneration += 1;
+  handoverReadFailureLoggedAt = 0;
+}
+
+/** When the handover's annotation-read failure was last logged (one line a minute). */
+let handoverReadFailureLoggedAt = 0;
+
+/** Fixed text: nothing from the error, the document or its records. */
+const HANDOVER_READ_FAILED =
+  "[Tandem] an ownership handover could not read the document's annotations, so every item on it is owed again, accept and dismiss notices included (they may repeat).";
+
+/**
+ * The keys on `documentId` that are a CURRENT accept/dismiss notice: the key
+ * of a current Claude-authored annotation at its current status, unless it is
+ * also the key of a current user comment. Keys alone cannot tell the two
+ * apart — annotation ids are client-written, so a user comment whose id ends
+ * `#accepted` has the very key of a notice — hence the annotations.
+ *
+ * Null when the annotations cannot be read (the document is not open, its
+ * Y.Doc is gone, or the read throws). Nothing here creates a document or
+ * writes one: the Y.Doc comes from the non-creating getter.
+ */
+function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<string> | null {
+  try {
+    const doc = getCurrentDoc(documentId);
+    if (!doc || !ydoc) return null;
+    const annotations = new YDocStore(ydoc, doc.filePath, doc.id).listAnnotations();
+    const keys = new Set<string>();
+    for (const ann of annotations) {
+      if (ann.author === "claude") keys.add(inboxLedgerKey(documentId, ann));
+    }
+    for (const ann of annotations) {
+      if (ann.author === "user" && ann.type === "comment")
+        keys.delete(ledgerKey(documentId, ann.id));
+    }
+    return keys;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The inbox half of an ownership handover (#2358, ADR-054; ownership design
+ * §6.3's rule): the document's ownership just left a record, so every user
+ * comment and user thread reply any poll was handed there stops counting as
+ * seen, for every reader — a cursor reader whatever its mark, a fresh one, a
+ * cursor-less one. It hands nothing itself: each later hand-out goes through
+ * the collectors and every gate they apply, which is why this applies **no
+ * gate of its own** (a record that is held, private or resolved now and
+ * qualifies later must not be lost because it was skipped here, and
+ * forgetting an item the collectors will never hand out reveals nothing).
+ *
+ * Accept and dismiss notices about Claude's own annotations are left exactly
+ * as they are ({@link currentNoticeKeys}); when in doubt a key is forgotten,
+ * which costs one duplicate.
+ *
+ * **Reached only through the ownership module's seam**, which `index.ts`
+ * wires at boot and which nothing calls while ownership is off; this file
+ * reads no flag (`tests/server/ownership-source-pins.test.ts`). Synchronous,
+ * and it makes no Y.Doc write and emits nothing on any push path.
+ *
+ * The order errs toward a duplicate hand-out if a step fails: the quiet
+ * records go first (so the document is at least read again), then the
+ * registry, then the cursor-less ledgers.
+ */
+export function handOverDocumentInbox(documentId: string): void {
+  const ydoc = getDocument(documentId);
+  let noticeKeys = currentNoticeKeys(documentId, ydoc);
+  if (noticeKeys === null) {
+    noticeKeys = new Set();
+    const now = Date.now();
+    if (now - handoverReadFailureLoggedAt >= 60_000) {
+      handoverReadFailureLoggedAt = now;
+      console.error(HANDOVER_READ_FAILED);
+    }
+  }
+  const notices = noticeKeys;
+
+  // No reader may skip this document on a quiet record made before now
+  // (ownership design R4.5). The state and its transaction listener stay:
+  // deleting the state would attach a second listener when it is next seen.
+  const quiet = ydoc ? quietDocs.get(ydoc) : undefined;
+  if (quiet) {
+    quiet.quiet.legacy = null;
+    quiet.quiet.cursor = null;
+  }
+
+  // Cursor readers: forget the entries, so the item gets a new seq above
+  // every mark the next time the collectors hand it out.
+  deliveryRegistry.retireWhere(
+    documentId,
+    (entry) => entry.kind === "r" || !notices.has(entry.base),
+  );
+
+  // Cursor-less readers. By key prefix, not from the registry's entries: these
+  // ledgers can hold a key whose registry entry `carryHeld` already retired.
+  // A document id holds no colon (`docIdFromPath`), so the prefix is exact.
+  const prefix = ledgerKey(documentId, "");
+  for (const key of [...surfacedIds.keys()]) {
+    if (key.startsWith(prefix) && !notices.has(key)) surfacedIds.delete(key);
+  }
+  for (const key of [...replySurfacedIds]) {
+    if (key.startsWith(prefix)) replySurfacedIds.delete(key);
+  }
 }
 
 /** What `appendClaudeChatMessage` returns: the new message id, or the licence refusal. */
@@ -744,8 +847,10 @@ function logInboxDrop(
  *    remove an item from a pass, never add one. The two contracts say this
  *    differently, so each keeps its own record:
  *    - `legacy` (cursor-less polls): the shared ledger was not reset
- *      (`ledgerGeneration`), and between resets it only ever gains entries —
- *      named polls of this document included. A skipped legacy pass commits
+ *      (`ledgerGeneration`), and between resets a POLL only ever adds entries
+ *      to it — named polls of this document included. (An ownership handover
+ *      removes this document's entries, and clears both of its quiet records
+ *      in the same step: `handOverDocumentInbox`.) A skipped legacy pass commits
  *      nothing, so an item a skip passes over is still owed on the next pass
  *      that is not skipped; an interval in another mode cannot lose anything.
  *    - `cursor` (#2064, #2294): the registry epoch is the same; NO entry has

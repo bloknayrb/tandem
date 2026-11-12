@@ -36,7 +36,7 @@ import {
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
 import { formatLogLine } from "./log-filter.js";
-import { onTandemReply } from "./mcp/awareness.js";
+import { handOverDocumentInbox, onTandemReply } from "./mcp/awareness.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -82,6 +82,7 @@ import {
 } from "./session/manager.js";
 import {
   applyUserOpenDefaultToDocuments,
+  setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
 } from "./sessions/ownership.js";
@@ -786,6 +787,9 @@ async function main() {
   // either transport branch, so both modes have it. Only a flag-on
   // `setDocOwner` ever calls it.
   setOwnershipSeqSource(() => deliveryRegistry.counter);
+  // The inbox half of a handover (ownership design §6.3), wired beside it for
+  // the same reason. Only a flag-on ownership change ever calls it.
+  setOwnershipInboxHandover(handOverDocumentInbox);
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that
