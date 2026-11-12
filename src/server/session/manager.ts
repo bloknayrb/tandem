@@ -703,26 +703,43 @@ export async function deleteSession(filePath: string): Promise<void> {
 }
 
 /**
- * The stored `readOnly` flag of the session under `filePath`'s key (true if
- * either of its two file names says so), read without the loader's side
- * effects (no quarantine, no notice, no arbitration). `null` when there is no
- * such file or none parses. For a caller that needs only the flag before the real load (#2400).
+ * The stored `readOnly` flag of the session the loader would restore for
+ * `filePath` (the newer of its two file names; the other only if that one
+ * does not parse), read without the loader's side effects (no quarantine, no
+ * notice). `null` when there is no such file or none parses. For a caller that needs only the flag before the real load (#2400).
  */
 export async function peekSessionReadOnly(filePath: string): Promise<boolean | null> {
-  // Both names: inside the #1750 migration window the loader may pick either,
-  // and the flag must never read weaker than the session it then restores.
-  let found: boolean | null = null;
-  for (const file of [sessionPathFor(filePath), legacySessionPath(filePath)]) {
-    if (file === null) continue;
+  // The file the loader would restore first, then the other: the loader
+  // promotes the second only when the first does not parse.
+  for (const file of await sessionNamesNewestFirst(filePath)) {
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
-      found = found === true || (parsed as { readOnly?: unknown }).readOnly === true;
+      return (parsed as { readOnly?: unknown }).readOnly === true;
     } catch {
-      // Absent or unreadable under this name.
+      // Unreadable under this name.
     }
   }
-  return found;
+  return null;
+}
+
+/**
+ * The session files that exist under `filePath`'s key, in the order
+ * {@link loadSessionWithPath} prefers them: the pre-#1750 name first only when
+ * it is strictly newer by modification time than the current name.
+ */
+async function sessionNamesNewestFirst(filePath: string): Promise<string[]> {
+  const currentPath = sessionPathFor(filePath);
+  const legacyPath = legacySessionPath(filePath);
+  const current = await mtimeOf(currentPath);
+  const legacy = legacyPath === null ? null : await mtimeOf(legacyPath);
+  const names: string[] = [];
+  if (current !== null) names.push(currentPath);
+  if (legacyPath !== null && legacy !== null) {
+    if (current === null || legacy > current) names.unshift(legacyPath);
+    else names.push(legacyPath);
+  }
+  return names;
 }
 
 /** What {@link moveSessionFile} did. */
@@ -757,11 +774,12 @@ export async function moveSessionFile(
     for (const target of [to, legacySessionPath(toPath)]) {
       if (target !== null && (await fileExists(target))) return "occupied";
     }
-    // The old key's current name, else its pre-#1750 name. Either goes to the
-    // new key's CURRENT name: a legacy-encoded long path can exceed the
-    // filename limit, and the reader accepts the same JSON under both names.
-    for (const from of [sessionPathFor(fromPath), legacySessionPath(fromPath)]) {
-      if (from === null || from === to || !(await fileExists(from))) continue;
+    // The old key's session as the loader would pick it: the newer of its two
+    // names. It goes to the new key's CURRENT name: a legacy-encoded long
+    // path can exceed the filename limit, and the reader accepts the same
+    // JSON under both names. An older second name is left behind.
+    for (const from of await sessionNamesNewestFirst(fromPath)) {
+      if (from === to) continue;
       await fs.link(from, to);
       if (!(await removeOldName(from))) {
         // Both names now hold the same complete session. The open reads the

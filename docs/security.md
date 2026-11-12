@@ -818,10 +818,15 @@ not a reflex "it was dismissed before".
   OPEN and must not be dismissed**, for the reason alert 16 stays open: each
   is the #1666 class (screened, not confined), not a false positive.
   - *`fs.realpathSync.native(p)` and `fs.lstatSync(p)` in `currentDeps`*
-    (`src/server/file-io/short-names.ts`). The argument is a prefix of the
-    string `expandShortNames` was given, and that function's FIRST statement is
-    `rejectUnsafeWindowsPrefix` on the whole string, before any filesystem call;
-    it also refuses a string that is not absolute. Its callers have screened
+    (`src/server/file-io/short-names.ts`). Each argument is built from the
+    string `expandShortNames` was given: its drive root copied through
+    unchanged, the components already walked (an alias replaced by its long
+    name), and then either the next alias or a candidate long name taken from
+    the native result's last component, which is refused if it holds a
+    separator or a colon. So no call can leave that drive. The function's
+    FIRST statement is `rejectUnsafeWindowsPrefix` on the whole string, before
+    any filesystem call, and it does nothing for a path `path.win32` does not
+    call absolute. Its callers have screened
     already: `resolveAndValidatePath` (raw, resolved and `realpath`'d forms)
     and save-as (`expandedSaveTarget` in `document-service.ts`, after the
     target's own screens). The native result is never used as a path: only its
@@ -849,7 +854,12 @@ not a reflex "it was dismissed before".
     while this process holds the annotation store lock. After a session
     move, `restampMovedSession` reads the new name and rewrites it through
     the ordinary session writer (`atomicWrite`, private mode) to store the
-    long path; it touches that one name only. **Residual,
+    long path; it touches that one name only. Two reads use the same computed
+    names and nothing else: `peekSessionReadOnly` (`session/manager.ts`) reads
+    the session file under the canonical path's key to learn its stored
+    read-only flag, and `rewriteMovedEnvelope`
+    (`documents/short-name-records.ts`) reads the annotation file under that
+    key to check that all of it reached the document before it is rewritten. **Residual,
     recorded:** if a short alias (`AFOLDE~1`) has come to name a different
     folder since the records were written, they move to that file's key. Master
     attributes them to the same file on a short-spelled open; the move makes it

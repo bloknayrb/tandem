@@ -858,6 +858,28 @@ describe("records saved under the short spelling are moved, per kind, only into 
     expect(JSON.parse(await fs.readFile(newSession(), "utf-8")).filePath).toBe(fx.longPath);
   });
 
+  // Inside the #1750 migration window a key can have both names. The loader
+  // restores the newer by modification time, so that is the one that moves.
+  it("an old key holding both names: the newer one is the session that moves, whichever name it has", async () => {
+    // A save removes the pre-#1750 name, so that file is written by hand.
+    await storeSession(fx.aliasPath, NEW_TEXT);
+    const legacyBytes = await fs.readFile(oldSession());
+    await storeSession(fx.aliasPath, OLD_TEXT);
+    await fs.writeFile(legacyNamed(fx.aliasPath), legacyBytes);
+    // The pre-#1750 name is the newer file.
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(legacyNamed(fx.aliasPath), later, later);
+    const frozenOlder = await freeze(oldSession());
+
+    const opened = await openFromDisk(fx.aliasPath);
+    expect(opened.kind).toBe("restored");
+    // NEW_TEXT is what the newer (legacy-named) file holds.
+    expect(liveText(opened.documentId)).toContain("from the long spelling");
+    expect(await exists(legacyNamed(fx.aliasPath))).toBe(false);
+    expect(await exists(newSession())).toBe(true);
+    await expectUntouched(oldSession(), frozenOlder);
+  });
+
   // --- 4: both kinds under both keys (M7) -----------------------------------
 
   it("records of both kinds under both keys: nothing moves; after a close the old session moves in once, and the old envelope is never used", async () => {
@@ -1955,6 +1977,27 @@ describe("records saved under the short spelling are moved, per kind, only into 
       const opened = await openFromRestore(entry);
       expect(liveText(opened.documentId)).toContain("from the long spelling");
       expectReadOnly(opened.documentId, true);
+    });
+
+    it("a stale older name stored read-only does not make the document read-only: the flag is the restored session's", async () => {
+      await storeSession(fx.aliasPath, OLD_TEXT);
+      // The long key: an older pre-#1750 file stored read-only, and a newer
+      // current-name session stored writable. The loader restores the newer.
+      // (A save removes the pre-#1750 name, so that file is written by hand.)
+      await storeSession(fx.longPath, NEW_TEXT);
+      await editStoredSession(fx.longPath, setReadOnly);
+      const legacy = path.join(SESSION_DIR, `${legacySessionKey(fx.longPath)}.json`);
+      const readOnlyBytes = await fs.readFile(sessionFile(fx.longPath));
+      await storeSession(fx.longPath, NEW_TEXT);
+      await fs.writeFile(legacy, readOnlyBytes);
+      const earlier = new Date(Date.now() - 60_000);
+      await fs.utimes(legacy, earlier, earlier);
+      const entry = await entryFor(fx.aliasPath);
+      expect(entry.readOnly).toBe(false);
+
+      const opened = await openFromRestore(entry);
+      expect(liveText(opened.documentId)).toContain("from the long spelling");
+      expectReadOnly(opened.documentId, false);
     });
 
     it("a session already at the new key that still names the short path (a move, then a crash) keeps its stored read-only flag", async () => {
