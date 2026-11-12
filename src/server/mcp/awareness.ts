@@ -1436,10 +1436,15 @@ function collectInboxDocuments(
       if (standing === "neither") {
         // Not this caller's to answer: not read, and on a default poll read
         // as empty — its mark moves to the counter with nothing held, so the
-        // cursor never grows with another session's documents (R1.2). Safe:
-        // whatever the mark passes was registered for another owner, and the
-        // handover retires it whenever ownership moves. A named poll leaves
-        // every position where it was.
+        // cursor never grows with another session's documents (R1.2). On a
+        // document another record holds, whatever the mark passes was
+        // registered for that owner, and the handover retires it (notices
+        // apart) whenever ownership moves. On one nobody holds (excluded while
+        // mid-write, under a blocking loss, or for a caller with no record) the
+        // only live entries are notices a handover kept and what a failed
+        // handover's inbox half left behind; the mark passes those without the
+        // retire step a read would take (ADR-054's scope amendment names this
+        // bound). A named poll leaves every position where it was.
         pass.excluded.push(id);
         if (view && requestedId === undefined) pass.readDocuments.set(id, new Set());
         // Still named, its content empty: never "none is active" (R1.10).
@@ -2349,11 +2354,17 @@ export function registerAwarenessTools(server: McpServer): void {
               const before = log.counterBefore.get(id) ?? deliveryRegistry.counter;
               const outcome = scope.claim(id, before, getOpenDocs().has(id));
               if (outcome === "refused") undoPassOn(log, id);
-              // The change ran but left the document with someone else (a
-              // re-entrant lapse): its handover already re-owed the items, so
-              // only this poll's own entries go, and the cursor-less ledger is
-              // left as the handover made it.
-              else if (outcome === "changed") undoPassOn(log, id, { registryOnly: true });
+              else {
+                // The change ran but left the document with someone else (a
+                // re-entrant lapse): its handover already re-owed the items, so
+                // only this poll's own entries go, and the cursor-less ledger is
+                // left as the handover made it.
+                if (outcome === "changed") undoPassOn(log, id, { registryOnly: true });
+                // Once a claim's change ran, a later throw must not put the
+                // ledger back either: a handover inside it (a claim over a
+                // stale entry) deleted keys on purpose, to re-owe them.
+                log.legacyWrites.delete(id);
+              }
             }
             // What the caller holds once every claim is applied: a claim can
             // arm a grace that lapses other records, or this one. Same type as

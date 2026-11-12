@@ -405,6 +405,9 @@ describe("the inbox's door into ownership (the scope PR)", () => {
     for (const hook of [/\bsetInboxClaimCheckForTests\b/, /\bsetInboxScopeReadForTests\b/]) {
       expect(filesNaming(hook)).toEqual(["src/server/sessions/ownership.ts"]);
     }
+    expect(filesNaming(/\bsetInboxResponseCorruptorForTests\b/)).toEqual([
+      "src/server/mcp/awareness.ts",
+    ]);
     expect(filesNaming(/"poll-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
   });
 });

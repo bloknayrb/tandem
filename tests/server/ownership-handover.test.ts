@@ -1228,15 +1228,25 @@ describe("what is not a handover (R1.1)", () => {
     const written = mkDoc("written");
     const defaulted = mkDoc("defaulted");
     annotation(claimed.ydoc, "c1");
+    annotation(defaulted.ydoc, "c2");
     const handed = (inbox: Inbox) => actionIds(inbox);
+    // The user-open default, with Tandem's Claude present so it really assigns.
+    setTandemPresenceSource(() => true);
+    applyUserOpenDefault(defaulted.id);
+    expect(getDocOwner(defaulted.id)).toMatchObject({ ownerId: TANDEM_OWNER_ID });
     // A claim by a poll (the scope PR): A is handed c1 and so claims `claimed`.
     const a = reader(A);
     expect(handed(await a.poll())).toEqual(["c1"]);
     await a.poll();
     expect(getDocOwner(claimed.id)).toMatchObject({ ownerId: A, kind: "claimed" });
-    const b = reader(B);
-    expect(handed(await b.poll())).toEqual([]);
-    expect(deliveryRegistry.counter).toBeGreaterThan(0);
+    const t = reader(TANDEM_OWNER_ID);
+    expect(handed(await t.poll())).toEqual(["c2"]);
+    await t.poll();
+    // A second cursor of each holder, past its item by the holder's acknowledgement.
+    const aPast = reader(A);
+    const tPast = reader(TANDEM_OWNER_ID);
+    expect(handed(await aPast.poll())).toEqual([]);
+    expect(handed(await tPast.poll())).toEqual([]);
 
     // A claim, by a real write on an unowned document.
     const wrote = await as(A, "tandem_comment", {
@@ -1247,23 +1257,66 @@ describe("what is not a handover (R1.1)", () => {
     });
     expect(wrote.error).toBe(false);
     expect(getDocOwner(written.id)).toMatchObject({ ownerId: A, kind: "claimed" });
-    // The user-open default, with Tandem's Claude present so it really assigns.
-    setTandemPresenceSource(() => true);
-    applyUserOpenDefault(defaulted.id);
-    expect(getDocOwner(defaulted.id)).toMatchObject({ ownerId: TANDEM_OWNER_ID });
     // A change that leaves the owner the same.
     setDocOwner(claimed.id, { ownerId: A, kind: "opened" }, "take", A);
 
+    // Nothing was re-owed: the readers past the items are not handed them.
     expect(ownershipSnapshotForTests().handoverSeq).toEqual([]);
-    expect(handed(await b.poll())).toEqual([]);
+    expect(handed(await aPast.poll())).toEqual([]);
+    expect(handed(await tPast.poll())).toEqual([]);
 
     // And the wiring is live in this run: a real handover does both.
-    setTandemPresenceSource(() => false);
     const counter = deliveryRegistry.counter;
     lapseNow(A);
-    expect(new Map(ownershipSnapshotForTests().handoverSeq).get(claimed.id)).toBe(counter);
-    expect(handed(await b.poll())).toEqual(["c1"]);
+    expect(
+      [...ownershipSnapshotForTests().handoverSeq].sort(([x], [y]) => x.localeCompare(y)),
+    ).toEqual([
+      [claimed.id, counter],
+      [written.id, counter],
+    ]);
+    // Tandem's Claude is present, so the lapse gives `claimed` to it by the
+    // default rule; its cursor, past c1 by exclusion, is handed it again.
+    expect(getDocOwner(claimed.id)).toMatchObject({ ownerId: TANDEM_OWNER_ID });
+    expect(handed(await tPast.poll())).toEqual(["c1"]);
   });
+});
+
+describe("the clearing of an entry whose record is gone, by a write's claim (R1.1)", () => {
+  // Moved out of the path table by the scope PR: under scope the first poll
+  // to see such a document claims it over the stale entry (covered in
+  // ownership-inbox-scope.test.ts), so no poll can be handed its items first.
+  // What a poll had registered there is fabricated directly, as an
+  // acknowledged entry, which would hide the item from every fresh reader if
+  // the write's clearing ran no handover.
+  it.each<ItemKind>(["comment", "reply"])(
+    "re-owes a user %s: a fresh cursor of the writer is handed it once",
+    async (kind) => {
+      const doc = mkDoc("d");
+      // Fabricated, as in `ownership-enforcement.test.ts`: no production path
+      // writes an entry for a record that does not exist.
+      setDocOwner(doc.id, { ownerId: "claude:handover-ghost", kind: "claimed" }, "claim");
+      const handed = seedItem(doc, kind);
+      const key = kind === "comment" ? `${doc.id}:c1` : `${doc.id}:r1`;
+      deliveryRegistry.markAcked(
+        deliveryRegistry.assign(kind === "comment" ? "a" : "r", doc.id, key, 0),
+      );
+      const counter = deliveryRegistry.counter;
+
+      const wrote = await as(B, "tandem_comment", {
+        from: 6,
+        to: 11,
+        text: "clears the stale entry",
+        documentId: doc.id,
+      });
+      expect(wrote.error).toBe(false);
+      expect(getDocOwner(doc.id)).toMatchObject({ ownerId: B });
+      expect(markOf(doc.id), "the clearing ran a handover").toBe(counter);
+
+      const b = reader(B);
+      expect(handed(await b.poll()), "a fresh cursor is handed it").toBe(true);
+      expect(handed(await b.poll()), "once").toBe(false);
+    },
+  );
 });
 
 describe("no reader skips the document on a stale quiet record (R1.5)", () => {
