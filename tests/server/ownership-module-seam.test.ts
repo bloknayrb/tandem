@@ -157,6 +157,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-default-rule.test.ts",
     "tests/server/ownership-enforcement.test.ts",
     "tests/server/ownership-flag.test.ts",
+    "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
@@ -174,6 +175,8 @@ describe("tests and the flag", () => {
     // PR 1c's four: each runs the same rows flag-off and flag-on (the
     // precedence pin, the tool-mode table, the `/api` differential), or pins
     // what enforcement must not do while dark.
+    // The handover PR's one (`ownership-handover.test.ts`): it seeds state
+    // flag-on and then turns the flag off, to show no path reaches the inbox.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
@@ -181,6 +184,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-flag.test.ts",
+      "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
@@ -198,6 +202,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-enforcement.test.ts",
       "tests/server/ownership-flag.test.ts",
+      "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",

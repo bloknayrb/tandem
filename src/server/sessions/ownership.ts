@@ -18,9 +18,12 @@
  * the
  * thread answerers (ownership design §5.5). PR 2a: a write's claim takes
  * effect at its operation's outcome (`beginWriteClaim`, `settleWriteClaim`),
- * and the inbox scope read PR 2b will call (`inboxScopeOf`). ("PR 2b" in
- * this file's comments is the document half of the inbox work, the second of
- * the three PRs that replaced the plan's PR 2, not the setup-entry PR.)
+ * and the inbox scope read the scope PR will call (`inboxScopeOf`). The
+ * handover PR: the handover (`handOver`, ownership design §6.3's rule) for
+ * user comments and thread replies, and the writing of `handoverSeq`. Still
+ * to come, named by content as in the plan: the scope PR (inbox scope, scoped
+ * acknowledgement, claims by a poll, the notice rule that reads
+ * `handoverSeq`), and the chat PR.
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -152,7 +155,7 @@ export interface OwnershipEntry {
   readonly ownerId: string;
   readonly kind: OwnershipKind;
   readonly since: number;
-  /** The inbox registry's counter when the entry was made (wired in PR 2). */
+  /** The inbox registry's counter when the entry was made (`setOwnershipSeqSource`). */
   readonly sinceSeq: number;
 }
 
@@ -171,8 +174,10 @@ const ownerByDoc = new Map<string, OwnershipEntry>();
 /**
  * Per-document handover mark (ownership design §6.3 step 2). It outlives
  * ownership entries, an unowned spell and a close and reopen, for the server
- * run: a notice at or below it was handed to an earlier owner. PR 2b's
- * handover writes it; until then only `setHandoverSeqForTests` does.
+ * run: a notice at or below it was handed to an earlier owner. Only a
+ * handover writes it (`handOver`), with the delivery registry's counter at
+ * that moment; nothing reads it until the scope PR's notice rule. One entry
+ * per document that ever had a handover, never pruned.
  */
 const handoverSeq = new Map<string, number>();
 /**
@@ -207,6 +212,7 @@ let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
 let seqSource: () => number = () => 0;
+let inboxHandover: (documentId: string) => void = () => {};
 let compositeObserver: ((step: CompositeStep, documentId: string) => void) | undefined;
 let graceMs = DEFAULT_GRACE_MS;
 const lastLogAt = new Map<string, number>();
@@ -289,7 +295,7 @@ export function isTandemPresent(): boolean {
   return total("isTandemPresent", false, () => presenceSource() === true);
 }
 
-/** "Waiting" seam (ownership design §8.5). Nothing is waiting until PR 2 lands the collector. */
+/** "Waiting" seam (ownership design §8.5). Nothing is waiting until a later PR lands the collector. */
 export function setWaitingProbe(probe: (documentId: string, ownerId: string) => boolean): void {
   waitingProbe = probe;
 }
@@ -299,11 +305,56 @@ export function setWaitingProbe(probe: (documentId: string, ownerId: string) => 
  * `src/server/index.ts` wires it at boot (pinned from source in
  * `tests/server/ownership-source-pins.test.ts`); unwired it answers 0. Read
  * when an entry is written, so for a claim made by a write it is the counter
- * at the moment the claim takes effect. A claim made by an inbox poll (PR 2b)
- * passes its own value to `setDocOwner` instead: the counter before its pass.
+ * at the moment the claim takes effect. A claim made by an inbox poll (the
+ * scope PR) passes its own value to `setDocOwner` instead: the counter before
+ * its pass.
  */
 export function setOwnershipSeqSource(source: () => number): void {
   seqSource = source;
+}
+
+/**
+ * The inbox's half of a handover (ownership design §6.3): what makes the
+ * comments and replies a document's previous owner was shown count as unseen
+ * again. `src/server/index.ts` wires `handOverDocumentInbox` at boot (pinned
+ * from source in `tests/server/ownership-source-pins.test.ts`); unwired it
+ * does nothing, so a handover would re-owe nothing and no unit test would
+ * notice. A seam because this module never imports the inbox. Synchronous:
+ * a function that returned a promise would run outside `handOver`'s guard.
+ */
+export function setOwnershipInboxHandover(handover: (documentId: string) => void): void {
+  inboxHandover = handover;
+}
+
+/**
+ * Fixed text, true of every point the handover can fail at: nothing from the
+ * error, no record and no document.
+ */
+const HANDOVER_FAILED =
+  "[ownership] a document changed hands but its inbox handover did not complete: some of what its previous owner was shown may still count as seen, or the document's handover mark was not moved";
+
+/**
+ * The handover (ownership design §6.3's rule, as the handover PR narrows it):
+ * `documentId`'s ownership just left a record, so the user comments and thread
+ * replies seen on it are owed again to every reader, and its handover mark
+ * becomes the delivery registry's counter. It hands nothing and moves
+ * nothing: no Y.Doc write, no push, no wake.
+ *
+ * **Called from exactly two places, each after its function's first-line
+ * flag return** (`setDocOwner` once the entry is written, `onDocumentClosed`
+ * once it is deleted), with no `await` between the ownership change and this,
+ * so no poll sees one without the other. **It never throws**: the change it
+ * rides on has already happened and must stand. The mark is written last, so
+ * a failure in the inbox half leaves it where it was (the notice rule that
+ * will read it then errs toward a duplicate notice).
+ */
+function handOver(documentId: string): void {
+  try {
+    inboxHandover(documentId);
+    handoverSeq.set(documentId, seqSource());
+  } catch {
+    logLimited("handover-failed", HANDOVER_FAILED);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +637,7 @@ function enforceDetachedCap(): void {
 
 /**
  * The record's client went away (ownership design §3.4): each document it holds
- * goes to the default rule. Its chat follows in PR 2, and each later PR moves
+ * goes to the default rule. Its chat follows in the chat PR, and each later PR moves
  * its own per-record state out here too. A lapse records no blocking loss. A
  * record with no registered transport is then deleted; one whose transport is
  * still registered keeps its label and may claim again like anyone — a grace
@@ -659,14 +710,17 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
  * `doc-op-queue.ts`'s header lists all four.) Of the design's five
  * steps, 1a runs step 2 (the entry; `null` deletes it, so unowned is always
  * the absence of an entry) and step 5's seam; 1c adds step 1's loss record.
- * Step 1's handover is PR 2's, step 3 (change notices) PR 2's, step 4
- * (publishing owner fields through `broadcastOpenDocs`) PR 5's.
+ * Step 1's handover (`handOver`) is decided where the design puts it and
+ * runs as soon as the entry is written, in the same synchronous run, so a
+ * change that fails before its entry hands nothing over. Step 3 (change
+ * notices) is the scope PR's, step 4 (publishing owner fields through
+ * `broadcastOpenDocs`) PR 5's.
  *
  * **A write's claim reaches this only once its outcome is known** (PR 2a,
  * `settleWriteClaim`): a write that is refused on its arguments, or throws,
  * never calls it, so nothing here runs for a claim that does not stand.
  * `sinceSeq` overrides the sequence source, for a claim made by an inbox
- * poll (PR 2b: the counter before that poll's pass).
+ * poll (the scope PR: the counter before that poll's pass).
  *
  * It can run inside the registry's removal path (`closeEntry`) and inside
  * another client's request (a lapse triggered by an eviction in its
@@ -687,10 +741,11 @@ export function setDocOwner(
     // lapse to unowned, the stale-entry backstop) must not depend on it.
     const seq = next === null ? 0 : (sinceSeq ?? seqSource());
     const previousId = ownerByDoc.get(documentId)?.ownerId;
-    if (previousId !== undefined && previousId !== next?.ownerId) {
-      // Step 1, the handover (ownership design §6.3). Its body is PR 2b's.
-      compositeObserver?.("handover", documentId);
-    }
+    // Step 1, the handover (ownership design §6.3): ownership leaves a
+    // record. Not a claim of an unowned document, and not a change that
+    // leaves the owner the same. Decided here, run below once the entry is in.
+    const leavesRecord = previousId !== undefined && previousId !== next?.ownerId;
+    if (leavesRecord) compositeObserver?.("handover", documentId);
     // Step 1, the loss-record half (ownership design §5.3). A loss stands
     // until the document changes owner again, and going to unowned counts.
     if (previousId !== next?.ownerId) {
@@ -714,7 +769,8 @@ export function setDocOwner(
         sinceSeq: seq,
       });
     }
-    // Step 3, change notices (PR 2b), and step 4, publishing (PR 5): no body yet.
+    if (leavesRecord) handOver(documentId);
+    // Step 3, change notices (the scope PR), and step 4, publishing (PR 5): no body yet.
     compositeObserver?.("notices", documentId);
     compositeObserver?.("publish", documentId);
     // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b's.
@@ -767,17 +823,21 @@ export function applyUserOpenDefaultToDocuments(documentIds: Iterable<string>): 
  * during a write gets no entry even if it is reopened before the write
  * returns (reopening starts from the default rule, §6.3). **The handover mark
  * stays** (§6.3 step 2: it survives a close and reopen for the server run).
- * Synchronous, with no await between its caller's check and this write. The
- * handover that precedes it is PR 2b's.
+ * Synchronous, with no await between its caller's check and this write. A
+ * close while a record holds the document is a handover, run here once
+ * the entry is gone; the document is still registered and its annotations
+ * are still readable at this point (`closeDocumentById`).
  */
 export function onDocumentClosed(documentId: string): void {
   if (!ownershipEnabled()) return;
   total("onDocumentClosed", undefined, () => {
+    const held = ownerByDoc.has(documentId);
     ownerByDoc.delete(documentId);
     lossByDoc.delete(documentId);
     for (const pending of [...pendingClaims]) {
       if (pending.documentId === documentId) pendingClaims.delete(pending);
     }
+    if (held) handOver(documentId);
   });
 }
 
@@ -994,7 +1054,7 @@ export type InboxScope = "holds" | "may-claim" | "neither";
 
 /**
  * Where `callerId` stands on an **open** document for an inbox poll
- * (ownership design §6.2; PR 2b calls it, nothing in production does yet).
+ * (ownership design §6.2; the scope PR calls it, nothing in production does yet).
  * **Pure**: a reader never changes ownership, so an entry whose record is
  * gone reads as unowned and is left alone.
  *
@@ -1200,13 +1260,19 @@ export function ownershipSnapshotForTests(): {
   };
 }
 
-/** The steps of the ownership-change composite (ownership design §4.3), as a test may watch them. */
+/**
+ * The steps of the ownership-change composite (ownership design §4.3), as a
+ * test may watch them. `"handover"` is reported where the design puts step 1,
+ * when the change is found to leave a record and BEFORE the entry is
+ * written; the handover's work (`handOver`) runs after the entry, so this
+ * step says a handover was decided, not that it has run.
+ */
 export type CompositeStep = "handover" | "loss" | "entry" | "notices" | "publish" | "wake";
 
 /**
  * Watch the composite: `observer` is told each step `setDocOwner` reaches,
  * whether or not the step has a body yet. For "this call changed no
- * ownership" assertions that stay true once PR 2b and PR 5 fill the steps in.
+ * ownership" assertions that stay true once later PRs fill the steps in.
  */
 export function setCompositeObserverForTests(
   observer: ((step: CompositeStep, documentId: string) => void) | undefined,
@@ -1222,7 +1288,7 @@ export function setLossForTests(documentId: string, ownerId: string, cause: Loss
   lossByDoc.set(documentId, { ownerId, cause });
 }
 
-/** Write a document's handover mark, which only PR 2b's handover will write. */
+/** Write a document's handover mark, which in production only a handover writes. */
 export function setHandoverSeqForTests(documentId: string, seq: number): void {
   handoverSeq.set(documentId, seq);
 }
@@ -1249,5 +1315,6 @@ export function resetOwnershipForTests(): void {
   presenceSource = () => false;
   waitingProbe = () => false;
   seqSource = () => 0;
+  inboxHandover = () => {};
   graceMs = DEFAULT_GRACE_MS;
 }

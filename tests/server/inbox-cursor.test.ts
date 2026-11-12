@@ -1060,6 +1060,96 @@ describe("the cursor codec", () => {
   });
 });
 
+describe("retireWhere: a whole document scope in one pass (the ownership handover's primitive)", () => {
+  function registryWith(scope: string, n: number): DeliveryRegistry {
+    const registry = new DeliveryRegistry();
+    for (let i = 0; i < n; i++) registry.assign("a", scope, `${scope}:ann${i}`, 0);
+    return registry;
+  }
+
+  it("drops the selected entries from every index and keeps the rest live, in seq order", () => {
+    const registry = registryWith("doc", 6);
+    registry.assign("r", "doc", "doc:reply", 0);
+    registry.assign("a", "other", "other:ann", 0);
+    const before = [...registry.entriesIn("doc")];
+    registry.markAcked(before[1] as RegistryEntry);
+
+    const dropped = registry.retireWhere("doc", (e) => e.kind === "r" || e.seq % 2 === 0);
+
+    expect(dropped).toBe(4);
+    expect(registry.entriesIn("doc").map((e) => e.seq)).toEqual([1, 3, 5]);
+    for (const entry of before.filter((e) => e.kind === "a")) {
+      const kept = entry.seq % 2 === 1;
+      expect(registry.isLive("doc", entry.seq)).toBe(kept);
+      expect(registry.lookup("a", entry.base, 0) === entry).toBe(kept);
+      expect(registry.versionsOf("a", entry.base)).toEqual(kept ? [entry] : []);
+    }
+    expect(registry.lookup("r", "doc:reply", 0)).toBeUndefined();
+    expect(registry.isLive("doc", 7)).toBe(false);
+    // A dropped, unacknowledged entry is no longer owed to a fresh reader...
+    const fresh: ScopeView = { mark: null, held: new Set() };
+    expect(
+      registry
+        .unseenIn("doc", fresh)
+        .map((e) => e.seq)
+        .sort((x, y) => x - y),
+    ).toEqual([1, 3, 5]);
+    // ...and a held seq naming one names nothing.
+    expect(registry.unseenIn("doc", { mark: 7, held: new Set([2, 3]) }).map((e) => e.seq)).toEqual([
+      3,
+    ]);
+    expect(registry.maxSeq("doc")).toBe(5);
+    // Another scope is untouched.
+    expect(registry.entriesIn("other")).toHaveLength(1);
+    // The same version gets a new seq above the counter when it is returned again.
+    const counter = registry.counter;
+    expect(registry.assign("a", "doc", "doc:ann1", 0).seq).toBe(counter + 1);
+  });
+
+  it("a scope left with no entry stops being listed", () => {
+    const registry = registryWith("doc", 3);
+    expect(registry.documentScopes()).toEqual(["doc"]);
+    expect(registry.retireWhere("doc", () => true)).toBe(3);
+    expect(registry.documentScopes()).toEqual([]);
+    expect(registry.entriesIn("doc")).toEqual([]);
+    expect(registry.maxSeq("doc")).toBe(0);
+    expect(registry.retireWhere("doc", () => true)).toBe(0);
+  });
+
+  it("a predicate that throws has changed nothing", () => {
+    const registry = registryWith("doc", 4);
+    const before = registry.entriesIn("doc").map((e) => e.seq);
+    let calls = 0;
+    expect(() =>
+      registry.retireWhere("doc", () => {
+        calls++;
+        if (calls === 3) throw new Error("no");
+        return true;
+      }),
+    ).toThrow("no");
+    expect(registry.entriesIn("doc").map((e) => e.seq)).toEqual(before);
+    for (const seq of before) expect(registry.isLive("doc", seq)).toBe(true);
+    expect(registry.lookup("a", "doc:ann0", 0)).toBeDefined();
+  });
+
+  it("visits each entry of the scope once, and never touches chat", () => {
+    const registry = registryWith("doc", 300);
+    let visits = 0;
+    registry.retireWhere("doc", () => {
+      visits++;
+      return true;
+    });
+    expect(visits).toBe(300);
+
+    const chat = registry.assign("c", CHAT_SCOPE, "m1", 0);
+    const token = registry.recordHandOut([chat.seq]);
+    expect(registry.retireWhere(CHAT_SCOPE, () => true)).toBe(0);
+    expect(registry.lookup("c", "m1", 0)).toBe(chat);
+    registry.confirmHandOut(token as number);
+    expect(chat.received).toBe(true);
+  });
+});
+
 describe("no per-client state", () => {
   it("the cursor module and the inbox handler never import transport or session identity", () => {
     for (const file of ["src/server/mcp/inbox-cursor.ts", "src/server/mcp/awareness.ts"]) {
