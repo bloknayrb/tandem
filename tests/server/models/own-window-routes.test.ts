@@ -30,7 +30,10 @@ import {
   getModelsEtag,
 } from "../../../src/server/models/registry.js";
 import { MODELS_FILE_NAME } from "../../../src/server/models/store.js";
-import { resetForTesting as resetNotifications } from "../../../src/server/notifications.js";
+import {
+  ownWindowSubscriberCount,
+  resetForTesting as resetNotifications,
+} from "../../../src/server/notifications.js";
 import { isTauriSidecar, TAURI_SIDECAR_ARGV_FLAG } from "../../../src/server/platform.js";
 import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import {
@@ -287,6 +290,61 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
           expect(JSON.parse(bytes(modelsFile) as string).models).toEqual([localModel]);
         },
       );
+
+      it("ONE server, both own-window tests: the route's policy is fixed at boot, the notify stream's is read per request", async () => {
+        const desktop = `http://${TAURI_HOSTNAME}`;
+        await boot(undefined, { sidecar: true });
+        // `boot` has restored argv: from here on this process no longer LOOKS
+        // like a sidecar, though the server it started was one.
+        expect(isTauriSidecar()).toBe(false);
+
+        // 1. The route policy captured the answer when the server started, so
+        //    a desktop-origin write is still the server's own window.
+        const res = await send(port, API_MODELS, {
+          origin: desktop,
+          contentType: JSON_CT,
+          body: modelsBody(fileWith(localModel)),
+        });
+        expect(res.status, res.text).toBe(200);
+        expect(getCachedModelsFile().models).toEqual([localModel]);
+
+        const openStream = async (): Promise<AbortController> => {
+          const abort = new AbortController();
+          const stream = await fetch(`http://127.0.0.1:${port}/api/notify-stream`, {
+            headers: { Origin: desktop },
+            signal: abort.signal,
+          });
+          expect(stream.status).toBe(200);
+          return abort;
+        };
+        const closed = async (abort: AbortController): Promise<void> => {
+          abort.abort();
+          await vi.waitFor(() => expect(ownWindowSubscriberCount()).toBe(0));
+        };
+
+        // 2. The notify stream asks `isTauriSidecar()` on each request. With
+        //    the flag in argv — as it is for the whole life of a real sidecar
+        //    — a desktop-origin stream counts as Tandem's own window…
+        const argvBefore = [...process.argv];
+        process.argv.push(TAURI_SIDECAR_ARGV_FLAG);
+        try {
+          expect(ownWindowSubscriberCount()).toBe(0);
+          const asSidecar = await openStream();
+          expect(ownWindowSubscriberCount()).toBe(1);
+          await closed(asSidecar);
+        } finally {
+          process.argv.length = 0;
+          process.argv.push(...argvBefore);
+        }
+
+        // 3. …and without it (an npm install's server) the same stream is
+        //    served but not counted: a notice written to it is not "told".
+        const asNpm = await openStream();
+        expect(ownWindowSubscriberCount()).toBe(0);
+        asNpm.abort();
+        // In a real process argv never changes, so the two readings always
+        // agree; this test is what shows both read the same signal.
+      });
 
       it.each(DESKTOP_FORMS)(
         "POST /api/models/local-settings from %s passes the origin test (and is 404 while dark)",

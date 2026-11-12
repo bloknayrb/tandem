@@ -499,6 +499,50 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect((await record())?.answering).toBe(fp(A));
     });
 
+    it("through the allowance with no window open: a model answers, then none, then it is re-enabled, then a restart — the live warning is pending before the restart and the start-up warning is raised after it, because nobody was ever told", async () => {
+      await boot(); // a first lit start with nothing saved: marker written, empty record
+
+      // 1. A model is saved through the allowance. Nobody is listening.
+      await save(file([A]), ALLOWANCE_ORIGIN);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toHaveLength(1);
+
+      // 2. It is switched off the same way: no model answers, so the pending
+      //    notice (which names a model that no longer answers) is withdrawn.
+      await save(file([{ ...A, enabled: false }]), ALLOWANCE_ORIGIN);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect((await record())?.answering ?? null).toBeNull();
+
+      // 3. Re-enabled through the allowance, still with no window: a model
+      //    answering after none did is announced afresh, live, and pending.
+      const before = warnings().length;
+      await save(file([A]), ALLOWANCE_ORIGIN);
+      expect(warnings()).toHaveLength(before + 1);
+      expect(warnings().at(-1)).toMatchObject({
+        dedupKey: ANSWERING_CHANGED_NOTICE_KEY,
+        message: answeringChangedNotice(answeringOf(A)),
+      });
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      // Not told, so not recorded.
+      expect((await record())?.answering ?? null).toBeNull();
+
+      // 4. The server restarts. The live notice died with the process; the
+      //    record does not name the model that answers, so the START-UP
+      //    notice is raised — once, and it is not the adopted-model notice
+      //    (the marker exists: this is not a first lit start).
+      await restart();
+      expect(warnings().map((n) => n.dedupKey)).toEqual([SETTINGS_CHANGED_NOTICE_KEY]);
+      expect(warnings()[0]?.message).toBe(SETTINGS_CHANGED_NOTICE);
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect(adoptedRaised()).toEqual([]);
+
+      // Tandem's own window is sent it: recorded, and the next start is silent.
+      openOwnWindowStream();
+      expect((await record())?.answering).toBe(fp(A));
+      await restart();
+      expectSilent();
+    });
+
     it("switching commenting on: the editing-on warning, registered for replay, not recorded", async () => {
       await boot();
       await setEditing(true, ALLOWANCE_ORIGIN);
@@ -905,7 +949,7 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
   // ── R3.2a: the first start with the flag on ─────────────────────────────────
 
   describe("the first start with the flag on takes what it finds as the baseline (R3.2a)", () => {
-    it("a models.json written while dark, then the first lit start: no warning — only the one neutral notice naming the adopted model", async () => {
+    it("a models.json written while dark, then the first lit start: no settings-changed and no answering-changed notice — exactly one adopted-model notice, neutral in wording and raised at warning severity", async () => {
       // Dark: the route answers (the reconcile posts through it) but nothing
       // is wired, so nothing records the write.
       await save(file([A]), OWN_WINDOW_ORIGIN, { reconcile: true });
@@ -921,6 +965,11 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       // …they are told, once and neutrally, which model was adopted.
       expect(adoptedRaised()).toHaveLength(1);
       expect(adoptedRaised()[0]?.message).toBe(baselineAdoptedNotice(answeringOf(A)));
+      // "Neutral" is the wording. The severity is warning on purpose: an info
+      // notice goes to the activity tray only and expires by itself. So the
+      // only warning-severity notice in the buffer is this one.
+      expect(adoptedRaised()[0]?.severity).toBe("warning");
+      expect(warnings().map((n) => n.dedupKey)).toEqual([BASELINE_ADOPTED_NOTICE_KEY]);
       expect(getStartupNotices().map((n) => n.dedupKey)).toEqual([BASELINE_ADOPTED_NOTICE_KEY]);
       expect(await record()).toEqual({ editing: false, answering: fp(A) });
       expect(fs.existsSync(markerFile)).toBe(true);
@@ -1368,6 +1417,37 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       openOwnWindowStream();
       expect(await record()).toEqual({ editing: false, answering: fp(B) });
       expect(await adoptedOnDisk()).toBeNull();
+    });
+
+    it("delivered, but the write that clears 'not yet told' FAILS: the notice is raised again at the next start", async () => {
+      await firstLitStart(file([A]));
+      expect(await adoptedOnDisk()).toBe(fp(A));
+
+      // Tandem's own window is sent the notice. The record's clearing write is
+      // started and held, then fails: the file still says "not yet told".
+      writeControl.hold = true;
+      openOwnWindowStream();
+      await vi.waitFor(() => expect(writeControl.held).toHaveLength(1));
+      writeControl.hold = false;
+      writeControl.held[0].fail();
+      writeControl.held = [];
+      await __flushLocalModelAnnouncedForTests();
+      expect(await adoptedOnDisk(), "the cleared marker never reached the disk").toBe(fp(A));
+
+      // A new process knows only the file: one repeated notice, never silence,
+      // and no claim that the settings changed.
+      await restart();
+      expect(adoptedRaised()).toHaveLength(1);
+      expect(adoptedRaised()[0]?.message).toBe(baselineAdoptedNotice(answeringOf(A)));
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toHaveLength(1);
+      expect(otherThanAdopted()).toEqual([]);
+
+      // This time the write lands, and that is the end of it.
+      openOwnWindowStream();
+      await __flushLocalModelAnnouncedForTests();
+      expect(await adoptedOnDisk()).toBeNull();
+      await restart();
+      expectSilent();
     });
 
     it("is raised in Solo mode and while the licence refuses AI", async () => {
