@@ -314,7 +314,7 @@ function startReplacingKey() {
     </CollapsibleSection>
 
     {#if error}
-      <div role="alert" data-testid="model-edit-error" class="mem-error">
+      <div role="alert" id="model-edit-error-text" data-testid="model-edit-error" class="mem-error">
         {error}
       </div>
     {/if}
@@ -329,6 +329,7 @@ function startReplacingKey() {
         data-testid="model-edit-save"
         disabled={!canSave}
         aria-disabled={saveUnavailable}
+        aria-describedby={saveUnavailable ? "model-edit-error-text" : undefined}
         style={saveUnavailable ? "opacity: 0.5; cursor: not-allowed;" : undefined}
       >
         {isEditing ? "Save changes" : "Add model"}

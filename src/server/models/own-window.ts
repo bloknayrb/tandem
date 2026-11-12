@@ -15,7 +15,13 @@
  *    really is on `127.0.0.1`. On a `::1` bind another server could hold
  *    `127.0.0.1:<the same port>`, and its pages would otherwise be "own";
  *  - the desktop WebView, with no port: `http://tauri.localhost`,
- *    `https://tauri.localhost`, `tauri://localhost`.
+ *    `https://tauri.localhost`, `tauri://localhost` — and only on a server
+ *    that IS the desktop app's sidecar (`isTauriSidecar`, read from argv, which
+ *    a web page cannot set and a child process does not inherit). An npm
+ *    install's server has no desktop window, so it has no reason to accept
+ *    those origins; accepting them there would let content on port 80 or 443
+ *    of this computer, browsed as `tauri.localhost`, write silently as "the
+ *    user". A missing or wrong signal fails toward refusing.
  *
  * A missing `Origin` is refused. Nothing here reads `Host` (the Host allowlist
  * runs in front, in `apiMiddleware`), and nothing here uses the allowlist's
@@ -42,6 +48,7 @@ import type { Request, Response } from "express";
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 import {
   ERROR_CODE_OWN_WINDOW_ONLY,
+  isLoopbackDevOrigin,
   MODELS_DEV_ORIGIN_ENV,
   OWN_WINDOW_ONLY_MESSAGE,
 } from "../../shared/models/contract.js";
@@ -63,9 +70,18 @@ const TAURI_ORIGINS: readonly string[] = [
   TAURI_LINUX_ORIGIN,
 ];
 
-/** Every origin that is Tandem's own page for a server bound at `bound`. */
-export function ownWindowOrigins(bound: BoundAddress | null): string[] {
-  const origins = [...TAURI_ORIGINS];
+/** Is `origin` one of the desktop WebView's origins? Exact strings only. */
+export function isDesktopWindowOrigin(origin: unknown): boolean {
+  return typeof origin === "string" && TAURI_ORIGINS.includes(origin);
+}
+
+/**
+ * Every origin that is Tandem's own page for a server bound at `bound`.
+ * `desktop` says whether this server is the desktop app's sidecar; only then
+ * are the WebView's origins among them.
+ */
+export function ownWindowOrigins(bound: BoundAddress | null, desktop: boolean): string[] {
+  const origins = desktop ? [...TAURI_ORIGINS] : [];
   if (
     bound !== null &&
     bound.address === "127.0.0.1" &&
@@ -89,6 +105,13 @@ export interface OwnWindowPolicyOptions {
   getBound: () => BoundAddress | null;
   /** The one extra origin from {@link resolveModelsDevOrigin}, or null. */
   allowance?: string | null;
+  /**
+   * Is this server the desktop app's sidecar? Required, with no default: the
+   * WebView's origins are accepted only when it is, and a caller that forgot
+   * to say must not get either answer by accident. Production passes
+   * `isTauriSidecar()`.
+   */
+  desktop: boolean;
 }
 
 export function createOwnWindowPolicy(opts: OwnWindowPolicyOptions): OwnWindowPolicy {
@@ -99,16 +122,13 @@ export function createOwnWindowPolicy(opts: OwnWindowPolicyOptions): OwnWindowPo
       // ", ", which matches nothing below.
       const origin = req.headers?.origin;
       if (typeof origin !== "string" || origin.length === 0) return null;
-      if (ownWindowOrigins(opts.getBound()).includes(origin)) return "own-window";
+      if (ownWindowOrigins(opts.getBound(), opts.desktop === true).includes(origin)) {
+        return "own-window";
+      }
       if (allowance !== null && origin === allowance) return "allowance";
       return null;
     },
   };
-}
-
-/** A policy for a server that is not listening: the WebView origins only. */
-export function webViewOnlyPolicy(): OwnWindowPolicy {
-  return createOwnWindowPolicy({ getBound: () => null });
 }
 
 /** Answer the refusal. Says why in words a person can act on. */
@@ -122,8 +142,9 @@ export function refuseNotOwnWindow(res: Response): void {
 
 /**
  * The same decision as a middleware, for the body pre-parser: it runs before
- * any body is read, so a refused request's body is never parsed. The handlers
- * decide again for themselves — that call is the authoritative one.
+ * any body is read, so a refused request's body is never parsed — this is the
+ * only place that is guaranteed. The handlers decide again for themselves:
+ * that call is what learns how the write got in.
  */
 export function ownWindowGate(policy: OwnWindowPolicy): Handler {
   return (req, res, next) => {
@@ -134,8 +155,6 @@ export function ownWindowGate(policy: OwnWindowPolicy): Handler {
     next();
   };
 }
-
-const LOOPBACK_DEV_ORIGIN = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/;
 
 export interface ModelsDevOrigin {
   /** The one extra origin, or null when the allowance is not active. */
@@ -161,18 +180,14 @@ export function resolveModelsDevOrigin(raw: string | undefined): ModelsDevOrigin
   if (TAURI_ORIGINS.includes(raw)) {
     return {
       origin: raw,
-      log: `[Tandem] ${MODELS_DEV_ORIGIN_ENV}=${shown} names the desktop window, which is already accepted; it has no effect.`,
+      log: `[Tandem] ${MODELS_DEV_ORIGIN_ENV} is set: local-model settings can also be changed from ${raw} (the desktop window's origin; the desktop app's own server accepts it already). This is for development and tests only; any page presenting that origin can change them.`,
     };
   }
-  const match = LOOPBACK_DEV_ORIGIN.exec(raw);
-  if (!match) {
+  if (!isLoopbackDevOrigin(raw)) {
     return refused(
-      "it must be exactly one origin of the form http://127.0.0.1:<port>, with no path, list, range or wildcard",
+      "it must be exactly one origin of the form http://127.0.0.1:<port> (a port from 1 to 65535, not 80), with no path, list, range or wildcard",
     );
   }
-  const port = Number(match[1]);
-  if (port > 65535) return refused("the port is out of range");
-  if (port === 80) return refused("a browser never writes port 80 in an origin");
   return {
     origin: raw,
     log: `[Tandem] ${MODELS_DEV_ORIGIN_ENV} is set: local-model settings can also be changed from ${raw}. This is for development and tests only; any page served there can change them.`,

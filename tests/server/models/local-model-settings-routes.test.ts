@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   _resetModelsReconcileGuardForTests,
   MODELS_RECONCILED_FLAG_KEY,
@@ -32,7 +31,6 @@ import {
   localModelEditingState,
   primeLocalModelSettings,
 } from "../../../src/server/models/local-model-settings.js";
-import { webViewOnlyPolicy } from "../../../src/server/models/own-window.js";
 import {
   __resetModelRegistryForTests,
   getCachedModelsFile,
@@ -58,6 +56,7 @@ import {
 import { readRegistrar } from "../../helpers/api-route-source.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
 import { installLocalStorageStub } from "../../helpers/local-storage-stub.js";
+import { desktopSidecarPolicy } from "../../helpers/own-window-policy.js";
 
 /**
  * `OPTIONS/GET/POST /api/models/local-settings` (#1123) on a real express app,
@@ -87,7 +86,7 @@ const ALLOWED_ORIGIN = `http://${TAURI_HOSTNAME}`;
 const passthrough = (_req: Request, _res: Response, next: NextFunction) => next();
 
 const deps = (over: Partial<ModelsRoutesDeps> = {}): ModelsRoutesDeps => ({
-  ownWindow: webViewOnlyPolicy(),
+  ownWindow: desktopSidecarPolicy(),
   keychain: createKeychain({
     service: KEYCHAIN_SERVICE_MODELS,
     backend: { get: () => null, set: () => {}, delete: () => false },

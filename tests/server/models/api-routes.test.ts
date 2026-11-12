@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   createKeychain,
   KEYCHAIN_SERVICE_MODELS,
@@ -14,7 +13,6 @@ import {
   type ModelsRoutesDeps,
   registerModelsRoutes,
 } from "../../../src/server/models/api-routes.js";
-import { webViewOnlyPolicy } from "../../../src/server/models/own-window.js";
 import {
   __resetModelRegistryForTests,
   getModelsEtag,
@@ -35,6 +33,7 @@ import {
   OWN_WINDOW_ONLY_MESSAGE,
 } from "../../../src/shared/models/contract.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
+import { desktopSidecarPolicy } from "../../helpers/own-window-policy.js";
 
 /**
  * Unit tests for `registerModelsRoutes` (#659).
@@ -134,7 +133,7 @@ describe("models API routes", () => {
   beforeEach(() => {
     backend = memoryBackend();
     deps = {
-      ownWindow: webViewOnlyPolicy(),
+      ownWindow: desktopSidecarPolicy(),
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend }),
     };
   });
@@ -259,7 +258,7 @@ describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-route-"));
     __resetModelRegistryForTests(tmpDir);
     deps = {
-      ownWindow: webViewOnlyPolicy(),
+      ownWindow: desktopSidecarPolicy(),
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
     };
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -411,7 +410,7 @@ describe(`GET ${API_MODELS} (load source, #1123 M2)`, () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-get-"));
     __resetModelRegistryForTests(tmpDir);
     deps = {
-      ownWindow: webViewOnlyPolicy(),
+      ownWindow: desktopSidecarPolicy(),
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
     };
     vi.spyOn(console, "error").mockImplementation(() => {});

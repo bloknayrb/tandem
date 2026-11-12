@@ -247,7 +247,12 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     app.use(express.json());
     registerModelsRoutes(app, passthrough, passthrough, {
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
-      ownWindow: createOwnWindowPolicy({ getBound: () => null, allowance: ALLOWANCE_ORIGIN }),
+      ownWindow: createOwnWindowPolicy({
+        getBound: () => null,
+        allowance: ALLOWANCE_ORIGIN,
+        // The "own window" in this file is the desktop WebView.
+        desktop: true,
+      }),
     });
     await new Promise<void>((resolve, reject) => {
       server = app.listen(0, "127.0.0.1", () => resolve());

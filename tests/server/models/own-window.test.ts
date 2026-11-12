@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   createOwnWindowPolicy,
+  isDesktopWindowOrigin,
   ownWindowOrigins,
   resolveModelsDevOrigin,
-  webViewOnlyPolicy,
 } from "../../../src/server/models/own-window.js";
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../../src/shared/constants.js";
 import { MODELS_DEV_ORIGIN_ENV } from "../../../src/shared/models/contract.js";
+import { desktopSidecarPolicy, npmServerPolicy } from "../../helpers/own-window-policy.js";
 
 /**
  * The own-window origin test (#2404, R1.1, R1.2, R1.5): pure, no server.
@@ -26,67 +27,138 @@ const req = (origin: unknown) =>
   >[0];
 
 describe("ownWindowOrigins", () => {
-  it("is the three WebView forms and nothing else before the server is listening", () => {
-    expect(ownWindowOrigins(null)).toEqual(TAURI_FORMS);
+  describe("a server that is the desktop app's sidecar", () => {
+    it("is the three WebView forms and nothing else before the server is listening", () => {
+      expect(ownWindowOrigins(null, true)).toEqual(TAURI_FORMS);
+    });
+
+    it("adds the served page's origin for a 127.0.0.1 listener", () => {
+      expect(ownWindowOrigins(BOUND, true)).toEqual([...TAURI_FORMS, "http://127.0.0.1:3479"]);
+    });
+
+    it("serialises port 80 the way a browser does: with no port", () => {
+      expect(ownWindowOrigins({ address: "127.0.0.1", port: 80 }, true)).toEqual([
+        ...TAURI_FORMS,
+        "http://127.0.0.1",
+      ]);
+    });
+
+    it.each(["::1", "0.0.0.0", "::", "localhost", "192.168.1.5"])(
+      "a listener bound to %s gets no http origin",
+      (address) => {
+        expect(ownWindowOrigins({ address, port: 3479 }, true)).toEqual(TAURI_FORMS);
+      },
+    );
+
+    it.each([0, -1, 65536, 3479.5, Number.NaN])(
+      "an impossible port (%s) gets no http origin",
+      (port) => {
+        expect(ownWindowOrigins({ address: "127.0.0.1", port }, true)).toEqual(TAURI_FORMS);
+      },
+    );
   });
 
-  it("adds the served page's origin for a 127.0.0.1 listener", () => {
-    expect(ownWindowOrigins(BOUND)).toEqual([...TAURI_FORMS, "http://127.0.0.1:3479"]);
+  // An npm install's server has no desktop window, so the WebView's origins
+  // are not its own: there they would be content on port 80 or 443 of this
+  // computer, browsed as `tauri.localhost` (review of PR #2413, item 1).
+  describe("an npm install's server", () => {
+    it("has no own origin at all before it is listening", () => {
+      expect(ownWindowOrigins(null, false)).toEqual([]);
+    });
+
+    it("has exactly one: the page it serves", () => {
+      expect(ownWindowOrigins(BOUND, false)).toEqual(["http://127.0.0.1:3479"]);
+    });
+
+    it.each(["::1", "0.0.0.0", "localhost"])("bound to %s it has none", (address) => {
+      expect(ownWindowOrigins({ address, port: 3479 }, false)).toEqual([]);
+    });
   });
 
-  it("serialises port 80 the way a browser does: with no port", () => {
-    expect(ownWindowOrigins({ address: "127.0.0.1", port: 80 })).toEqual([
-      ...TAURI_FORMS,
-      "http://127.0.0.1",
-    ]);
+  it("isDesktopWindowOrigin is the three exact strings and nothing near them", () => {
+    for (const origin of TAURI_FORMS) expect(isDesktopWindowOrigin(origin)).toBe(true);
+    for (const origin of [
+      `http://${TAURI_HOSTNAME}:8080`,
+      `http://${TAURI_HOSTNAME}/`,
+      "tauri://localhost:1",
+      "http://127.0.0.1:3479",
+      "null",
+      "",
+      undefined,
+      [`http://${TAURI_HOSTNAME}`],
+    ]) {
+      expect(isDesktopWindowOrigin(origin)).toBe(false);
+    }
   });
-
-  it.each(["::1", "0.0.0.0", "::", "localhost", "192.168.1.5"])(
-    "a listener bound to %s gets no http origin",
-    (address) => {
-      expect(ownWindowOrigins({ address, port: 3479 })).toEqual(TAURI_FORMS);
-    },
-  );
-
-  it.each([0, -1, 65536, 3479.5, Number.NaN])(
-    "an impossible port (%s) gets no http origin",
-    (port) => {
-      expect(ownWindowOrigins({ address: "127.0.0.1", port })).toEqual(TAURI_FORMS);
-    },
-  );
 });
 
 describe("createOwnWindowPolicy.classify", () => {
-  const policy = createOwnWindowPolicy({ getBound: () => BOUND });
+  const policy = createOwnWindowPolicy({ getBound: () => BOUND, desktop: true });
+  const npm = createOwnWindowPolicy({ getBound: () => BOUND, desktop: false });
 
-  it.each(TAURI_FORMS)("accepts the WebView origin %s as own-window", (origin) => {
-    expect(policy.classify(req(origin))).toBe("own-window");
-    // …with no bound address either: the desktop window never depends on it.
-    expect(webViewOnlyPolicy().classify(req(origin))).toBe("own-window");
+  it.each(TAURI_FORMS)(
+    "on the desktop sidecar, accepts the WebView origin %s as own-window",
+    (origin) => {
+      expect(policy.classify(req(origin))).toBe("own-window");
+      // …with no bound address either: the desktop window never depends on it.
+      expect(desktopSidecarPolicy().classify(req(origin))).toBe("own-window");
+    },
+  );
+
+  it.each(TAURI_FORMS)("on an npm server, refuses the WebView origin %s", (origin) => {
+    expect(npm.classify(req(origin))).toBeNull();
+    expect(npmServerPolicy().classify(req(origin))).toBeNull();
   });
 
-  it("accepts the served page's own origin as own-window", () => {
+  it("on an npm server, a WebView origin named by the allowance is an ALLOWANCE write, never own-window", () => {
+    for (const origin of TAURI_FORMS) {
+      const p = npmServerPolicy(BOUND, origin);
+      expect(p.classify(req(origin))).toBe("allowance");
+      // …and only that one form.
+      for (const other of TAURI_FORMS.filter((o) => o !== origin)) {
+        expect(p.classify(req(other))).toBeNull();
+      }
+    }
+  });
+
+  it("a `desktop` that is not the boolean true fails toward refusing", () => {
+    for (const desktop of [undefined, null, 1, "true", {}]) {
+      const p = createOwnWindowPolicy({ getBound: () => BOUND, desktop: desktop as never });
+      expect(p.classify(req(`http://${TAURI_HOSTNAME}`))).toBeNull();
+      expect(p.classify(req("http://127.0.0.1:3479"))).toBe("own-window");
+    }
+  });
+
+  it("accepts the served page's own origin as own-window, sidecar or not", () => {
     expect(policy.classify(req("http://127.0.0.1:3479"))).toBe("own-window");
+    expect(npm.classify(req("http://127.0.0.1:3479"))).toBe("own-window");
   });
 
   it("reads the bound address when the request arrives, not when the policy was built", () => {
     let bound: { address: string; port: number } | null = null;
-    const late = createOwnWindowPolicy({ getBound: () => bound });
+    const late = createOwnWindowPolicy({ getBound: () => bound, desktop: false });
     expect(late.classify(req("http://127.0.0.1:4111"))).toBeNull();
     bound = { address: "127.0.0.1", port: 4111 };
     expect(late.classify(req("http://127.0.0.1:4111"))).toBe("own-window");
   });
 
   it("the served page's origin is not accepted on a ::1 bind", () => {
-    const v6 = createOwnWindowPolicy({ getBound: () => ({ address: "::1", port: 3479 }) });
+    const v6 = createOwnWindowPolicy({
+      getBound: () => ({ address: "::1", port: 3479 }),
+      desktop: true,
+    });
     expect(v6.classify(req("http://127.0.0.1:3479"))).toBeNull();
     expect(v6.classify(req("http://[::1]:3479"))).toBeNull();
     expect(v6.classify(req(`http://${TAURI_HOSTNAME}`))).toBe("own-window");
   });
 
   it("never accepts http://127.0.0.1:0 — not listening, or a reported port of 0", () => {
-    expect(webViewOnlyPolicy().classify(req("http://127.0.0.1:0"))).toBeNull();
-    const zero = createOwnWindowPolicy({ getBound: () => ({ address: "127.0.0.1", port: 0 }) });
+    expect(desktopSidecarPolicy().classify(req("http://127.0.0.1:0"))).toBeNull();
+    expect(npmServerPolicy().classify(req("http://127.0.0.1:0"))).toBeNull();
+    const zero = createOwnWindowPolicy({
+      getBound: () => ({ address: "127.0.0.1", port: 0 }),
+      desktop: true,
+    });
     expect(zero.classify(req("http://127.0.0.1:0"))).toBeNull();
     expect(zero.classify(req("http://127.0.0.1"))).toBeNull();
   });
@@ -113,6 +185,7 @@ describe("createOwnWindowPolicy.classify", () => {
     ["a non-string", 3479],
   ])("refuses %s", (_label, origin) => {
     expect(policy.classify(req(origin))).toBeNull();
+    expect(npm.classify(req(origin))).toBeNull();
   });
 
   it("a request with no headers object at all is refused, not thrown on", () => {
@@ -123,6 +196,7 @@ describe("createOwnWindowPolicy.classify", () => {
     const withAllowance = createOwnWindowPolicy({
       getBound: () => BOUND,
       allowance: "http://127.0.0.1:5173",
+      desktop: true,
     });
 
     it("admits exactly the one origin it names, as 'allowance'", () => {
@@ -150,14 +224,15 @@ describe("createOwnWindowPolicy.classify", () => {
       const same = createOwnWindowPolicy({
         getBound: () => BOUND,
         allowance: "http://127.0.0.1:3479",
+        desktop: false,
       });
       expect(same.classify(req("http://127.0.0.1:3479"))).toBe("own-window");
     });
 
     it("a null or omitted allowance admits nothing extra", () => {
       for (const p of [
-        createOwnWindowPolicy({ getBound: () => BOUND, allowance: null }),
-        createOwnWindowPolicy({ getBound: () => BOUND }),
+        createOwnWindowPolicy({ getBound: () => BOUND, allowance: null, desktop: true }),
+        createOwnWindowPolicy({ getBound: () => BOUND, desktop: true }),
       ]) {
         expect(p.classify(req("http://127.0.0.1:5173"))).toBeNull();
       }
@@ -186,12 +261,16 @@ describe(`resolveModelsDevOrigin (${MODELS_DEV_ORIGIN_ENV})`, () => {
   });
 
   it.each(TAURI_FORMS)(
-    "the WebView form %s is accepted and logged as having no effect",
+    "the WebView form %s is accepted and logged as active: on an npm server it is not otherwise accepted",
     (value) => {
       const r = resolveModelsDevOrigin(value);
       expect(r.origin).toBe(value);
-      expect(r.log).toMatch(/already accepted/);
-      expect(r.log).toMatch(/no effect/);
+      expect(r.log).toContain(MODELS_DEV_ORIGIN_ENV);
+      expect(r.log).toContain(`also be changed from ${value}`);
+      expect(r.log).toMatch(/development and tests only/i);
+      expect(r.log).not.toMatch(/NOT active/);
+      expect(r.log).not.toMatch(/no effect/);
+      expect(r.log?.split("\n")).toHaveLength(1);
     },
   );
 

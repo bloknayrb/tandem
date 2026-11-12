@@ -74,6 +74,36 @@ describe("ownWindowNotice — what the tab says", () => {
   });
 });
 
+describe("ownWindowNotice — never suggests a value the server would refuse", () => {
+  const BASE = "These settings can only be changed in Tandem's own window.";
+
+  it.each([
+    ["port 80, which a browser writes with no port", "http://127.0.0.1"],
+    ["an explicit port 80", "http://127.0.0.1:80"],
+    ["a port out of range", "http://127.0.0.1:65536"],
+    ["a desktop window whose origin string is the opaque 'null'", "null"],
+    ["a desktop window with some other unexpected origin", "tauri://something-else"],
+  ])("%s gets the plain sentence, with no variable and no 'served from'", (_what, origin) => {
+    const text = ownWindowNotice("unknown", origin, OWN);
+    expect(text).toBe(BASE);
+  });
+
+  it("a page the client calls its own, refused all the same, gets the plain sentence", () => {
+    expect(ownWindowNotice("own", OWN, OWN)).toBe(BASE);
+    expect(ownWindowNotice("own", "http://tauri.localhost", OWN)).toBe(BASE);
+  });
+
+  it("no window at all gets the plain sentence", () => {
+    expect(ownWindowNotice("unknown", null, OWN)).toBe(BASE);
+  });
+
+  it("the variable is offered exactly when the origin has the form the server accepts", () => {
+    for (const ok of ["http://127.0.0.1:5173", "http://127.0.0.1:1", "http://127.0.0.1:65535"]) {
+      expect(ownWindowNotice("unknown", ok, OWN)).toContain(`TANDEM_MODELS_DEV_ORIGIN=${ok},`);
+    }
+  });
+});
+
 describe("the shared store", () => {
   beforeEach(() => _resetModelsWriteAccessForTests());
   afterEach(() => _resetModelsWriteAccessForTests());

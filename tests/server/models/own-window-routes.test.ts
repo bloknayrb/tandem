@@ -19,6 +19,7 @@ import {
 } from "../../../src/server/models/local-model-announced.js";
 import {
   __resetLocalModelSettingsForTests,
+  EDITING_ON_NOTICE_KEY,
   isLocalModelEditingEnabled,
   LOCAL_MODEL_SETTINGS_FILE_NAME,
 } from "../../../src/server/models/local-model-settings.js";
@@ -29,6 +30,9 @@ import {
   getModelsEtag,
 } from "../../../src/server/models/registry.js";
 import { MODELS_FILE_NAME } from "../../../src/server/models/store.js";
+import { resetForTesting as resetNotifications } from "../../../src/server/notifications.js";
+import { isTauriSidecar, TAURI_SIDECAR_ARGV_FLAG } from "../../../src/server/platform.js";
+import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import {
   BYO_MODELS_ENABLED,
   TAURI_HOSTNAME,
@@ -188,13 +192,34 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
   let port: number;
   let own: string;
 
-  async function boot(devOrigin?: string): Promise<void> {
+  /**
+   * Boot the real server. `sidecar: true` boots it the way the desktop app
+   * does — with `--tauri-sidecar` in argv, which is what `isTauriSidecar()`
+   * reads, once, as the server starts. Without it the server is an npm
+   * install's: it has no desktop window, so the WebView's origins are not its
+   * own (review of PR #2413, item 1).
+   */
+  async function boot(devOrigin?: string, opts: { sidecar?: boolean } = {}): Promise<void> {
     if (devOrigin === undefined) vi.stubEnv("TANDEM_MODELS_DEV_ORIGIN", undefined as never);
     else vi.stubEnv("TANDEM_MODELS_DEV_ORIGIN", devOrigin);
     port = await allocPort();
-    server = await startMcpServerHttp(port, "127.0.0.1");
+    const argvBefore = [...process.argv];
+    if (opts.sidecar) process.argv.push(TAURI_SIDECAR_ARGV_FLAG);
+    try {
+      expect(isTauriSidecar()).toBe(opts.sidecar === true);
+      server = await startMcpServerHttp(port, "127.0.0.1");
+    } finally {
+      process.argv.length = 0;
+      process.argv.push(...argvBefore);
+    }
     own = `http://127.0.0.1:${port}`;
   }
+
+  const DESKTOP_FORMS: Array<[string, string]> = [
+    ["the desktop WebView on Windows", `http://${TAURI_HOSTNAME}`],
+    ["the desktop WebView over https", `https://${TAURI_HOSTNAME}`],
+    ["the desktop WebView on macOS and Linux", TAURI_LINUX_ORIGIN],
+  ];
 
   beforeEach(async () => {
     dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-own-window-real-"));
@@ -219,15 +244,10 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
   });
 
   describe("accepted", () => {
-    it.each([
-      ["the page this server serves", () => own],
-      ["the desktop WebView on Windows", () => `http://${TAURI_HOSTNAME}`],
-      ["the desktop WebView over https", () => `https://${TAURI_HOSTNAME}`],
-      ["the desktop WebView on macOS and Linux", () => TAURI_LINUX_ORIGIN],
-    ])("POST /api/models from %s is written", async (_label, origin) => {
+    it("POST /api/models from the page this server serves is written (npm-shaped server)", async () => {
       await boot();
       const res = await send(port, API_MODELS, {
-        origin: origin(),
+        origin: own,
         contentType: JSON_CT,
         body: modelsBody(fileWith(localModel)),
       });
@@ -237,25 +257,68 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
       expect(JSON.parse(bytes(modelsFile) as string).models).toEqual([localModel]);
     });
 
-    it.each([
-      ["the page this server serves", () => own],
-      ["the desktop WebView on Windows", () => `http://${TAURI_HOSTNAME}`],
-      ["the desktop WebView over https", () => `https://${TAURI_HOSTNAME}`],
-      ["the desktop WebView on macOS and Linux", () => TAURI_LINUX_ORIGIN],
-    ])(
-      "POST /api/models/local-settings from %s passes the origin test (and is 404 while dark)",
-      async (_label, origin) => {
-        await boot();
-        const res = await send(port, API_MODELS_LOCAL_SETTINGS, {
-          origin: origin(),
-          contentType: JSON_CT,
-          body: JSON.stringify({ editing: true }),
-        });
-        expect(res.status).toBe(404);
-        expect(res.json).toEqual({ error: "NOT_FOUND" });
+    it("POST /api/models/local-settings from the page this server serves passes the origin test (and is 404 while dark)", async () => {
+      await boot();
+      const res = await send(port, API_MODELS_LOCAL_SETTINGS, {
+        origin: own,
+        contentType: JSON_CT,
+        body: JSON.stringify({ editing: true }),
+      });
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "NOT_FOUND" });
+      expect(bytes(settingsFile)).toBeNull();
+    });
+
+    // A server booted as the desktop app's sidecar: the WebView's origins are
+    // its own window, alongside the page it serves.
+    describe("a sidecar-shaped server (--tauri-sidecar in argv at boot)", () => {
+      it.each([["the page this server serves", ""] as [string, string], ...DESKTOP_FORMS])(
+        "POST /api/models from %s is written",
+        async (_label, desktopOrigin) => {
+          await boot(undefined, { sidecar: true });
+          const res = await send(port, API_MODELS, {
+            origin: desktopOrigin || own,
+            contentType: JSON_CT,
+            body: modelsBody(fileWith(localModel)),
+          });
+          expect(res.status, res.text).toBe(200);
+          expect(res.json).toEqual({ etag: getModelsEtag() });
+          expect(getCachedModelsFile().models).toEqual([localModel]);
+          expect(JSON.parse(bytes(modelsFile) as string).models).toEqual([localModel]);
+        },
+      );
+
+      it.each(DESKTOP_FORMS)(
+        "POST /api/models/local-settings from %s passes the origin test (and is 404 while dark)",
+        async (_label, origin) => {
+          await boot(undefined, { sidecar: true });
+          const res = await send(port, API_MODELS_LOCAL_SETTINGS, {
+            origin,
+            contentType: JSON_CT,
+            body: JSON.stringify({ editing: true }),
+          });
+          expect(res.status).toBe(404);
+          expect(res.json).toEqual({ error: "NOT_FOUND" });
+          expect(bytes(settingsFile)).toBeNull();
+        },
+      );
+
+      it("still refuses a desktop origin with a port, and another loopback port", async () => {
+        await boot(undefined, { sidecar: true });
+        for (const origin of [`http://${TAURI_HOSTNAME}:8080`, `http://127.0.0.1:${port + 1}`]) {
+          for (const url of [API_MODELS, API_MODELS_LOCAL_SETTINGS]) {
+            const res = await send(port, url, {
+              origin,
+              contentType: JSON_CT,
+              body: url === API_MODELS ? modelsBody(fileWith(localModel)) : '{"editing":true}',
+            });
+            expectOwnWindowRefusal(res);
+          }
+        }
+        expect(bytes(modelsFile)).toBeNull();
         expect(bytes(settingsFile)).toBeNull();
-      },
-    );
+      });
+    });
 
     it("the reconcile action's request ({ file, ifMatch, reconcile: true }) is written", async () => {
       await boot();
@@ -277,6 +340,12 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
       ["localhost on the bound port", (p) => `http://localhost:${p}`],
       ["tauri.localhost on port 8080", () => `http://${TAURI_HOSTNAME}:8080`],
       ["tauri.localhost on the bound port", (p) => `http://${TAURI_HOSTNAME}:${p}`],
+      // This server is an npm install's (no sidecar argv): it has no desktop
+      // window, so each desktop form is content on port 80 or 443 of this
+      // computer browsed as `tauri.localhost` — refused, on both routes.
+      ["the desktop WebView's origin (http), on an npm server", () => `http://${TAURI_HOSTNAME}`],
+      ["the desktop WebView's origin (https), on an npm server", () => `https://${TAURI_HOSTNAME}`],
+      ["the desktop WebView's origin (tauri://), on an npm server", () => TAURI_LINUX_ORIGIN],
       ["https on the bound port", (p) => `https://127.0.0.1:${p}`],
       ["the opaque origin null", () => "null"],
       ["a missing Origin", () => undefined],
@@ -644,7 +713,9 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
   let own: string;
   let backend: KeychainBackend;
 
-  async function boot(opts: { live?: boolean; allowance?: string } = {}): Promise<void> {
+  async function boot(
+    opts: { live?: boolean; allowance?: string; desktop?: boolean } = {},
+  ): Promise<void> {
     let bound: BoundAddress | null = null;
     const app: Express = express();
     app.use(express.json());
@@ -654,6 +725,7 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
       ownWindow: createOwnWindowPolicy({
         getBound: () => bound,
         allowance: opts.allowance ?? null,
+        desktop: opts.desktop === true,
       }),
       ...(opts.live === false ? {} : { localModelSettingsEnabled: true }),
     });
@@ -692,12 +764,13 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
   });
 
   it.each([
-    ["the page this server serves", () => own],
-    ["the desktop WebView on Windows", () => `http://${TAURI_HOSTNAME}`],
-    ["the desktop WebView over https", () => `https://${TAURI_HOSTNAME}`],
-    ["the desktop WebView on macOS and Linux", () => TAURI_LINUX_ORIGIN],
-  ])("On and then Off from %s are both taken and written", async (_label, origin) => {
-    await boot();
+    ["the page this server serves (npm-shaped)", () => own, false],
+    ["the page this server serves (desktop sidecar)", () => own, true],
+    ["the desktop WebView on Windows", () => `http://${TAURI_HOSTNAME}`, true],
+    ["the desktop WebView over https", () => `https://${TAURI_HOSTNAME}`, true],
+    ["the desktop WebView on macOS and Linux", () => TAURI_LINUX_ORIGIN, true],
+  ])("On and then Off from %s are both taken and written", async (_label, origin, desktop) => {
+    await boot({ desktop });
     const on = await postSetting(origin(), true);
     expect(on.status, on.text).toBe(200);
     expect(on.json).toEqual({ editing: true, persisted: true });
@@ -707,6 +780,59 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
     expect(off.status).toBe(200);
     expect(off.json).toEqual({ editing: false, persisted: true });
     expect(isLocalModelEditingEnabled()).toBe(false);
+  });
+
+  it.each([
+    ["http", `http://${TAURI_HOSTNAME}`],
+    ["https", `https://${TAURI_HOSTNAME}`],
+    ["tauri://", TAURI_LINUX_ORIGIN],
+  ])(
+    "an npm-shaped server refuses the desktop window's origin (%s) for On, Off and a model save: nothing written",
+    async (_label, origin) => {
+      await boot({ desktop: false });
+      // Commenting on and a model saved, from this server's own page.
+      expect((await postSetting(own, true)).status).toBe(200);
+      const seeded = await send(port, API_MODELS, {
+        origin: own,
+        contentType: JSON_CT,
+        body: modelsBody(fileWith(localModel)),
+      });
+      expect(seeded.status).toBe(200);
+      await __flushLocalModelAnnouncedForTests();
+      const settingsBefore = bytes(settingsFile);
+      const modelsBefore = bytes(modelsFile);
+
+      for (const editing of [false, true])
+        expectOwnWindowRefusal(await postSetting(origin, editing));
+      expectOwnWindowRefusal(
+        await send(port, API_MODELS, {
+          origin,
+          contentType: JSON_CT,
+          body: modelsBody(fileWith({ ...localModel, endpoint: "http://127.0.0.1:9999" })),
+        }),
+      );
+
+      expect(bytes(settingsFile)).toBe(settingsBefore);
+      expect(bytes(modelsFile)).toBe(modelsBefore);
+      expect(isLocalModelEditingEnabled()).toBe(true);
+    },
+  );
+
+  it("on an npm-shaped server, the desktop window's origin named by the allowance is admitted as an ALLOWANCE write: announced, not silent", async () => {
+    resetNotifications();
+    clearStartupNotices();
+    await boot({ desktop: false, allowance: `http://${TAURI_HOSTNAME}` });
+    const on = await postSetting(`http://${TAURI_HOSTNAME}`, true);
+    expect(on.status, on.text).toBe(200);
+    await __flushLocalModelAnnouncedForTests();
+    // Not the user's own change: the #2403 warning is raised and held for replay…
+    expect(getStartupNotices().map((n) => n.dedupKey)).toEqual([EDITING_ON_NOTICE_KEY]);
+    // …and nothing is recorded as told, because no own-window stream got it.
+    expect(bytes(path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME))).toBeNull();
+    // The other two forms are still refused.
+    expectOwnWindowRefusal(await postSetting(TAURI_LINUX_ORIGIN, false));
+    resetNotifications();
+    clearStartupNotices();
   });
 
   it.each([

@@ -266,14 +266,34 @@ describe("a page at http://localhost:3479 (the server's answers are unreadable t
     expect(document.querySelector("[data-testid='model-delete-confirm-a']")).toBeNull();
   });
 
-  it("the controls a keyboard user lands on first are described by the message", () => {
-    const { getByTestId } = mount();
+  it("EVERY control that is unavailable for this reason is described by the message, so none is announced as unavailable with no reason", async () => {
+    modelsPose = { models: [A, B], defaultModelId: "a" };
+    const { getByTestId, container } = mount();
     const region = getByTestId("models-own-window-live");
     expect(region.id).toBe("models-own-window-msg");
-    expect(getByTestId("model-add-btn").getAttribute("aria-describedby")).toBe(
-      "models-own-window-msg",
+
+    // Derived from the DOM, not from a list: whatever carries aria-disabled.
+    const unavailable = [...container.querySelectorAll('[aria-disabled="true"]')];
+    const ids = unavailable.map((el) => el.getAttribute("data-testid"));
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "model-default-a",
+        "model-default-b",
+        "model-toggle-a",
+        "model-toggle-b",
+        "model-edit-btn-a",
+        "model-delete-btn-a",
+        "model-add-btn",
+        "local-model-editing-toggle",
+      ]),
     );
-    // The editing toggle keeps its help text and gains the message.
+    for (const el of unavailable) {
+      const refs = (el.getAttribute("aria-describedby") ?? "").split(" ");
+      expect(refs, el.getAttribute("data-testid") ?? el.outerHTML).toContain(
+        "models-own-window-msg",
+      );
+    }
+    // The editing toggle keeps its help text as well.
     expect(getByTestId("local-model-editing-toggle").getAttribute("aria-describedby")).toBe(
       "local-model-editing-help models-own-window-msg",
     );
@@ -367,6 +387,54 @@ describe("a development page on another 127.0.0.1 port, refused by the server", 
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("a refused page can still read the commenting setting: its read error and Retry stay, but neither Switch off is offered", async () => {
+    noteModelsWriteRefused();
+    pose = { ...SETTLED_ON, known: false, loadFailed: true };
+    const failed = mount();
+    load.mockClear(); // the mount itself reads once
+    expect(failed.getByTestId("local-model-editing-load-error")).toBeTruthy();
+    await fireEvent.click(failed.getByTestId("local-model-editing-retry"));
+    expect(load).toHaveBeenCalledTimes(1);
+    // Retry hands focus to the checkbox before its own row can be replaced.
+    expect(document.activeElement).toBe(failed.getByTestId("local-model-editing-toggle"));
+    expect(failed.queryByTestId("local-model-editing-force-off")).toBeNull();
+    failed.unmount();
+
+    pose = { ...SETTLED_ON, known: false, loading: true };
+    const reading = mount();
+    expect(reading.getByTestId("local-model-editing-loading")).toBeTruthy();
+    expect(reading.queryByTestId("local-model-editing-force-off-pending")).toBeNull();
+  });
+
+  it("the Confirm of a pending delete, once unavailable, is described by the message too", async () => {
+    modelsPose = { models: [A] };
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("model-delete-btn-a"));
+    noteModelsWriteRefused();
+    await tick();
+    const confirm = getByTestId("model-delete-confirm-a");
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(confirm.getAttribute("aria-describedby")).toBe("models-own-window-msg");
+  });
+
+  it("a refusal from ANOTHER request while the edit dialog is open: Save is unavailable, the reason is in the dialog, and Save's description resolves", async () => {
+    modelsPose = { models: [A] };
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("model-edit-btn-a"));
+    const save = getByTestId("model-edit-save");
+    expect(save.getAttribute("aria-disabled")).toBe("false");
+
+    noteModelsWriteRefused(); // e.g. a row toggle's POST, or the boot reconcile
+    await tick();
+
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(getByTestId("model-edit-error").textContent?.trim()).toBe(DEV_NOTICE);
+    const ref = save.getAttribute("aria-describedby");
+    expect(ref).toBeTruthy();
+    expect(document.getElementById(ref as string)).toBe(getByTestId("model-edit-error"));
+    expect(modelsApi.updateModel).not.toHaveBeenCalled();
+  });
+
   it("a pending delete: Confirm goes unavailable and does nothing, Cancel still works", async () => {
     modelsPose = { models: [A] };
     const { getByTestId, queryByTestId, getByText } = mount();
@@ -398,6 +466,10 @@ describe("a development page on another 127.0.0.1 port, refused by the server", 
     expect(modelsApi.updateModel).toHaveBeenCalledTimes(1);
     expect(getByTestId("model-edit-error").textContent?.trim()).toBe(DEV_NOTICE);
     expect(save.getAttribute("aria-disabled")).toBe("true");
+    // The unavailable Save points at the reason shown in the dialog.
+    const describedBy = save.getAttribute("aria-describedby");
+    expect(describedBy).toBe(getByTestId("model-edit-error").id);
+    expect(describedBy).toBeTruthy();
     // Click and Enter both end in the form's submit handler: nothing more goes out.
     await fireEvent.submit(form);
     await vi.advanceTimersByTimeAsync(0);

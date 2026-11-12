@@ -104,16 +104,16 @@ describe("answering-changed notice across restarts, production wiring (#2404)", 
     if (!fs.existsSync(file)) return null;
     return (JSON.parse(fs.readFileSync(file, "utf8")) as { answering: string | null }).answering;
   };
-  /**
-   * Either notice that says which model answers was changed: the live one
-   * (a change in this run that did not come from Tandem's own window — the
-   * listener double passes no source) and the start-up one (a start that
-   * finds a model answering which the record does not name).
-   */
-  const aboutAnswering = (n: { dedupKey?: string }) =>
-    n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY || n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY;
-  const answeringNotices = () => getBuffer().filter(aboutAnswering);
-  const pendingReplay = () => getStartupNotices().filter(aboutAnswering);
+  /** The LIVE notice: a change in this run that did not come from Tandem's
+   *  own window (the listener double passes no source). */
+  const live = (n: { dedupKey?: string }) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY;
+  /** The START-UP notice: a start that finds a model answering which the
+   *  record does not name. */
+  const startup = (n: { dedupKey?: string }) => n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY;
+  const liveNotices = () => getBuffer().filter(live);
+  const startupNotices = () => getBuffer().filter(startup);
+  const liveReplay = () => getStartupNotices().filter(live);
+  const startupReplay = () => getStartupNotices().filter(startup);
 
   beforeEach(async () => {
     dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-answering-restart-"));
@@ -142,27 +142,62 @@ describe("answering-changed notice across restarts, production wiring (#2404)", 
     await fs.promises.rm(dir, { recursive: true, force: true });
   });
 
-  it("the default `none` withdraws the pending replay under the production key", async () => {
-    // Announced with no window open: pending, not recorded.
+  it("the default `none` withdraws a pending START-UP answering part (the notice goes when no part is left)", async () => {
+    // A start finds A answering with no record: the start-up notice, pending.
     cell.now = A;
     start();
-    expect(pendingReplay()).toHaveLength(1);
-    const [pending] = pendingReplay();
+    expect(startupReplay()).toHaveLength(1);
+    expect(liveReplay()).toEqual([]);
+    const [pending] = startupReplay();
     expect(await recorded()).toBeNull();
 
-    // The model stops answering. The replay names a model that no longer
-    // answers; left in place, its delivery would record that model as told.
+    // The model stops answering. Left in place, the notice's delivery would
+    // record a model that no longer answers.
     change(null);
-    expect(pendingReplay()).toEqual([]);
+    expect(startupReplay()).toEqual([]);
     markStartupNoticeDelivered(pending); // a window connecting now is sent nothing…
     expect(await recorded()).toBeNull(); // …and nothing is recorded
+  });
+
+  it("the default `none` withdraws a pending LIVE answering notice under the production key", async () => {
+    // Nothing answers at start; then a change that is not from Tandem's own
+    // window makes A answer, with no window open: the live notice, pending.
+    cell.now = null;
+    start();
+    expect(getStartupNotices()).toEqual([]);
+    change({ ...A });
+    expect(liveNotices()).toHaveLength(1);
+    expect(liveReplay()).toHaveLength(1);
+    expect(liveReplay()[0]?.dedupKey).toBe(ANSWERING_CHANGED_NOTICE_KEY);
+    expect(startupReplay()).toEqual([]);
+    const [pending] = liveReplay();
+    expect(await recorded()).toBeNull();
+
+    // Nothing answers any more: the replay names a model that no longer
+    // answers; left in place, its delivery would record that model as told.
+    change(null);
+    expect(liveReplay()).toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
+
+    // A window connecting now is sent nothing, and nothing is recorded — by
+    // the stale notice object or by a real stream.
+    markStartupNoticeDelivered(pending);
+    openWindow();
+    expect(await recorded()).toBeNull();
+
+    // And the same model answering again is announced afresh, and recorded
+    // now that a window is listening.
+    change({ ...A });
+    expect(liveNotices()).toHaveLength(2);
+    expect(await recorded()).toBe(answeringFingerprint(A));
   });
 
   it("told → disabled → re-enabled with no window → restart: announced again", async () => {
     cell.now = A;
     openWindow();
     start();
-    expect(answeringNotices()).toHaveLength(1);
+    expect(startupNotices(), "the start found A with no record").toHaveLength(1);
+    expect(liveNotices()).toEqual([]);
     expect(await recorded()).toBe(answeringFingerprint(A));
 
     change(null); // disabled
@@ -170,19 +205,22 @@ describe("answering-changed notice across restarts, production wiring (#2404)", 
 
     shutWindow();
     change({ ...A }); // re-enabled, nobody watching
-    expect(answeringNotices()).toHaveLength(2);
+    expect(liveNotices(), "a change in this run: the live notice").toHaveLength(1);
+    expect(startupNotices()).toHaveLength(1);
     expect(await recorded(), "a notice nobody was sent is not recorded").toBeNull();
 
     await restart();
-    expect(answeringNotices(), "re-raised at start-up").toHaveLength(1);
-    expect(pendingReplay(), "and held for the first window").toHaveLength(1);
+    expect(startupNotices(), "re-raised at start-up").toHaveLength(1);
+    expect(liveNotices()).toEqual([]);
+    expect(startupReplay(), "and held for the first window").toHaveLength(1);
     expect(await recorded()).toBeNull();
 
     // The window finally connects and is sent the replay: now it is told.
-    markStartupNoticeDelivered(pendingReplay()[0]);
+    markStartupNoticeDelivered(startupReplay()[0]);
     expect(await recorded()).toBe(answeringFingerprint(A));
     await restart();
-    expect(answeringNotices(), "told: a further restart is silent").toEqual([]);
+    expect(getBuffer(), "told: a further restart is silent").toEqual([]);
+    expect(getStartupNotices()).toEqual([]);
   });
 
   it("told → disabled → RESTART → re-enabled with no window → restart: announced again", async () => {
@@ -193,13 +231,15 @@ describe("answering-changed notice across restarts, production wiring (#2404)", 
 
     change(null);
     await restart(); // starts with nothing answering
-    expect(answeringNotices()).toEqual([]);
+    expect(getBuffer()).toEqual([]);
 
     change({ ...A }); // no window
-    expect(answeringNotices()).toHaveLength(1);
+    expect(liveNotices()).toHaveLength(1);
+    expect(startupNotices()).toEqual([]);
     await restart();
-    expect(answeringNotices()).toHaveLength(1);
-    expect(pendingReplay()).toHaveLength(1);
+    expect(startupNotices()).toHaveLength(1);
+    expect(liveNotices()).toEqual([]);
+    expect(startupReplay()).toHaveLength(1);
   });
 
   // The record outlived the model: the clearing write failed, or models.json
@@ -217,10 +257,11 @@ describe("answering-changed notice across restarts, production wiring (#2404)", 
     expect(await recorded(), "cleared at start-up").toBeNull();
 
     change({ ...A }); // re-enabled with no window open
+    expect(liveNotices()).toHaveLength(1);
     expect(await recorded()).toBeNull();
 
     await restart();
-    expect(answeringNotices(), "not the silent baseline").toHaveLength(1);
-    expect(pendingReplay()).toHaveLength(1);
+    expect(startupNotices(), "not the silent baseline").toHaveLength(1);
+    expect(startupReplay()).toHaveLength(1);
   });
 });

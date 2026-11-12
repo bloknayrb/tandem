@@ -351,6 +351,7 @@ function askDelete(id: string) {
                       checked={models.defaultModelId === entry.id}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
+                      aria-describedby="models-own-window-msg"
                       onclick={refuseDefaultWhenBlocked}
                       onchange={() => {
                         if (!access.blocked) void models.setDefault(entry.id);
@@ -368,6 +369,7 @@ function askDelete(id: string) {
                       checked={entry.enabled}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
+                      aria-describedby="models-own-window-msg"
                       onclick={refuseWhenBlocked}
                       onchange={() => {
                         if (!access.blocked) void models.toggleEnabled(entry.id);
@@ -381,6 +383,7 @@ function askDelete(id: string) {
                     data-testid={`model-edit-btn-${entry.id}`}
                     disabled={readOnly}
                     aria-disabled={access.blocked}
+                    aria-describedby="models-own-window-msg"
                     onclick={() => openEdit(entry)}
                     style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); {disabledControlStyle(unavailable)}"
                   >
@@ -392,6 +395,7 @@ function askDelete(id: string) {
                       data-testid={`model-delete-confirm-${entry.id}`}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
+                      aria-describedby="models-own-window-msg"
                       onclick={() => confirmDelete(entry.id)}
                       style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); {disabledControlStyle(unavailable)}"
                     >
@@ -410,6 +414,7 @@ function askDelete(id: string) {
                       data-testid={`model-delete-btn-${entry.id}`}
                       disabled={readOnly}
                       aria-disabled={access.blocked}
+                      aria-describedby="models-own-window-msg"
                       onclick={() => askDelete(entry.id)}
                       style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-error-fg-strong); {disabledControlStyle(unavailable)}"
                     >
@@ -464,10 +469,11 @@ function askDelete(id: string) {
     />
     <span>Let local models comment and suggest changes</span>
   </label>
-  {#if !editingSettled && !access.blocked}
-    <!-- (Not shown when this page cannot change the setting at all, #2404: no
-         Retry that cannot succeed, and no Switch off — Off follows the same
-         rule as On — so nothing focused here can unmount when a read settles.)
+  {#if !editingSettled && !access.foreign}
+    <!-- (Not shown on a page that can read nothing from the server, #2404: a
+         Retry there could never succeed. On a page that was merely refused a
+         write, the read error and its Retry stay — reads still work — but
+         neither Switch off is offered: Off follows the same rule as On.)
          The server's value is not known (still reading, or the read failed), so
          the box above is indeterminate and inert. Switch off is offered in both
          cases: a read that hangs or fails must not be the reason commenting
@@ -490,24 +496,28 @@ function askDelete(id: string) {
         >
           Retry
         </button>
-        <button
-          type="button"
-          data-testid="local-model-editing-force-off"
-          onclick={forceEditingOff}
-          style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
-        >
-          Switch off
-        </button>
+        {#if !access.blocked}
+          <button
+            type="button"
+            data-testid="local-model-editing-force-off"
+            onclick={forceEditingOff}
+            style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+          >
+            Switch off
+          </button>
+        {/if}
       {:else}
         <span role="status" data-testid="local-model-editing-loading">Checking…</span>
-        <button
-          type="button"
-          data-testid="local-model-editing-force-off-pending"
-          onclick={forceEditingOff}
-          style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
-        >
-          Switch off
-        </button>
+        {#if !access.blocked}
+          <button
+            type="button"
+            data-testid="local-model-editing-force-off-pending"
+            onclick={forceEditingOff}
+            style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+          >
+            Switch off
+          </button>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -549,7 +559,7 @@ function askDelete(id: string) {
 {#if editorOpen}
   <ModelEditModal
     entry={editingEntry}
-    error={modalError}
+    error={modalError ?? (access.blocked ? access.notice : null)}
     saveUnavailable={access.blocked}
     onCancel={closeModal}
     onSave={handleSave}

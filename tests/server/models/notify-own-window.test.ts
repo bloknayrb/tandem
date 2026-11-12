@@ -30,6 +30,7 @@ import {
   resetForTesting as resetNotifications,
   subscribe as subscribeNotifications,
 } from "../../../src/server/notifications.js";
+import { isTauriSidecar, TAURI_SIDECAR_ARGV_FLAG } from "../../../src/server/platform.js";
 import { clearStartupNotices } from "../../../src/server/startup-notices.js";
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../../src/shared/constants.js";
 
@@ -78,18 +79,56 @@ function fakeResponse() {
 
 const HOST = "127.0.0.1:3479";
 
+/** Run `fn` as the desktop app's sidecar: `--tauri-sidecar` in argv, which is
+ *  what `isTauriSidecar()` (and so `handleNotifyStream`) reads. */
+function asDesktopSidecar<T>(fn: () => T): T {
+  process.argv.push(TAURI_SIDECAR_ARGV_FLAG);
+  try {
+    return fn();
+  } finally {
+    const at = process.argv.lastIndexOf(TAURI_SIDECAR_ARGV_FLAG);
+    if (at !== -1) process.argv.splice(at, 1);
+  }
+}
+
+const DESKTOP_WINDOW: [string, Headers][] = [
+  ["the desktop WebView (Windows / macOS)", { origin: `http://${TAURI_HOSTNAME}` }],
+  ["the desktop WebView over https", { origin: `https://${TAURI_HOSTNAME}` }],
+  ["the desktop WebView (Linux)", { origin: TAURI_LINUX_ORIGIN }],
+];
+
 describe("isTandemOwnWindow", () => {
+  // The desktop window's origin counts only on a server that IS the desktop
+  // app's sidecar. On an npm install it is content on port 80 or 443 of this
+  // computer browsed as `tauri.localhost` (review of PR #2413, item 1).
+  it.each(DESKTOP_WINDOW)(
+    "%s: true on the desktop sidecar, false on an npm server",
+    (_n, headers) => {
+      expect(isTandemOwnWindow(fakeRequest(headers), true)).toBe(true);
+      expect(isTandemOwnWindow(fakeRequest(headers), false)).toBe(false);
+      // Claiming same-origin as well does not rescue it on an npm server.
+      const claimed = { ...headers, host: HOST, "sec-fetch-site": "same-origin" };
+      expect(isTandemOwnWindow(fakeRequest(claimed), false)).toBe(false);
+    },
+  );
+
+  it("the default follows this process: not a sidecar under the test runner, a sidecar with the argv flag", () => {
+    const req = () => fakeRequest({ origin: `http://${TAURI_HOSTNAME}` });
+    expect(isTauriSidecar()).toBe(false);
+    expect(isTandemOwnWindow(req())).toBe(false);
+    expect(asDesktopSidecar(() => isTandemOwnWindow(req()))).toBe(true);
+    expect(isTandemOwnWindow(req())).toBe(false); // the flag did not leak
+  });
+
   it.each<[string, Headers]>([
-    ["the desktop WebView (Windows / macOS)", { origin: `http://${TAURI_HOSTNAME}` }],
-    ["the desktop WebView over https", { origin: `https://${TAURI_HOSTNAME}` }],
-    ["the desktop WebView (Linux)", { origin: TAURI_LINUX_ORIGIN }],
     ["the served page, no Origin", { host: HOST, "sec-fetch-site": "same-origin" }],
     [
       "the served page, Origin equal to its own host",
       { host: HOST, origin: `http://${HOST}`, "sec-fetch-site": "same-origin" },
     ],
-  ])("true for %s", (_name, headers) => {
-    expect(isTandemOwnWindow(fakeRequest(headers))).toBe(true);
+  ])("true for %s, sidecar or not", (_name, headers) => {
+    expect(isTandemOwnWindow(fakeRequest(headers), true)).toBe(true);
+    expect(isTandemOwnWindow(fakeRequest(headers), false)).toBe(true);
   });
 
   it.each<[string, Headers | undefined]>([
@@ -115,8 +154,9 @@ describe("isTandemOwnWindow", () => {
       "an Origin on the right host but https",
       { host: HOST, origin: `https://${HOST}`, "sec-fetch-site": "same-origin" },
     ],
-  ])("false for %s", (_name, headers) => {
-    expect(isTandemOwnWindow(fakeRequest(headers))).toBe(false);
+  ])("false for %s, sidecar or not", (_name, headers) => {
+    expect(isTandemOwnWindow(fakeRequest(headers), true)).toBe(false);
+    expect(isTandemOwnWindow(fakeRequest(headers), false)).toBe(false);
   });
 });
 
@@ -181,15 +221,18 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
     expect(startupNotices()[0]?.message).toBe(SETTINGS_CHANGED_NOTICE);
   });
 
-  it.each<[string, Headers]>([
-    ["the served page", { host: HOST, "sec-fetch-site": "same-origin" }],
-    ["the desktop WebView", { origin: `http://${TAURI_HOSTNAME}` }],
+  it.each<[string, Headers, boolean]>([
+    ["the served page (npm server)", { host: HOST, "sec-fetch-site": "same-origin" }, false],
+    ["the served page (desktop sidecar)", { host: HOST, "sec-fetch-site": "same-origin" }, true],
+    ["the desktop WebView (desktop sidecar)", { origin: `http://${TAURI_HOSTNAME}` }, true],
   ])(
     "%s opening the stream marks it seen, and the next start is silent",
-    async (_name, headers) => {
+    async (_name, headers, sidecar) => {
       await setLocalModelEditing(true, "unspecified");
       const { res, written } = fakeResponse();
-      handleNotifyStream(fakeRequest(headers), res);
+      const open = () => handleNotifyStream(fakeRequest(headers), res);
+      if (sidecar) asDesktopSidecar(open);
+      else open();
       expect(written.join("")).toContain(EDITING_ON_NOTICE);
       expect(editingOnWasAnnounced()).toBe(true);
       await __flushLocalModelAnnouncedForTests();
@@ -197,6 +240,29 @@ describe("only Tandem's own window marks a change as seen (#2404)", () => {
       restart();
       expect(editingNotices()).toEqual([]);
       expect(startupNotices()).toEqual([]);
+    },
+  );
+
+  it.each(DESKTOP_WINDOW)(
+    "on an npm server, a stream presenting %s receives the notice but is NOT counted as told",
+    async (_name, headers) => {
+      await setLocalModelEditing(true, "unspecified"); // no window open
+      const { res, written } = fakeResponse();
+      handleNotifyStream(fakeRequest(headers), res);
+      expect(written.join("")).toContain(EDITING_ON_NOTICE);
+      await __flushLocalModelAnnouncedForTests();
+      expect(editingOnWasAnnounced()).toBe(false);
+      expect(ownWindowSubscriberCount()).toBe(0);
+
+      // So the start-up notice is raised at the next start, and a second such
+      // stream does not record THAT as told either.
+      restart();
+      expect(startupNotices()).toHaveLength(1);
+      const again = fakeResponse();
+      handleNotifyStream(fakeRequest(headers), again.res);
+      expect(again.written.join("")).toContain(SETTINGS_CHANGED_NOTICE);
+      await __flushLocalModelAnnouncedForTests();
+      expect(editingOnWasAnnounced()).toBe(false);
     },
   );
 

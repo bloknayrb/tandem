@@ -264,7 +264,12 @@ describe("switching editing through the real route reaches a run in flight (#112
     app.use(express.json());
     registerModelsRoutes(app, passthrough, passthrough, {
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
-      ownWindow: createOwnWindowPolicy({ getBound: () => null, allowance: ALLOWANCE_ORIGIN }),
+      ownWindow: createOwnWindowPolicy({
+        getBound: () => null,
+        allowance: ALLOWANCE_ORIGIN,
+        // The "own window" in this file is the desktop WebView.
+        desktop: true,
+      }),
       localModelSettingsEnabled: true,
     });
     await new Promise<void>((resolve, reject) => {

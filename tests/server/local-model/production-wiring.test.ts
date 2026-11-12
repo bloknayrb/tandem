@@ -9,6 +9,7 @@ import {
 import { answeringLocalModel } from "../../../src/server/local-model/config-source.js";
 import {
   answeringWasAnnounced,
+  baselineAdoptionPending,
   finishFirstLitStart,
   isFirstLitStart,
   recordBaselineAnswering,
@@ -186,6 +187,29 @@ describe("local-model production wiring (#1123, #2404)", () => {
     expect(body).toMatch(/firstLitStart:\s*isFirstLitStart\s*,/);
     expect(body).toMatch(/baseline:\s*recordBaselineAnswering\s*,/);
     expect(body).toMatch(/finishStart:\s*finishFirstLitStart\s*,/);
+  });
+
+  // Review of PR #2413, item 2: the first lit start says which model it
+  // adopted, and says it again at a later start until one of Tandem's own
+  // windows was sent it. Both members are optional and fall back to silence.
+  it("the default `announced` wires the adopted-baseline notice to the record", async () => {
+    const a = DEFAULT_COLLABORATOR_DEPS.announced;
+    expect(a?.adoptionPending).toBe(baselineAdoptionPending);
+    expect(typeof a?.adopted).toBe("function");
+
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, "export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {");
+    expect(body).toMatch(/adoptionPending:\s*baselineAdoptionPending\s*,/);
+    expect(body).toMatch(
+      /adopted:\s*\(message\)\s*=>\s*\{\s*announceBaselineAdopted\(\s*message\s*\)\s*;?\s*\}\s*,/,
+    );
+    // And wire() really reaches them: at a first lit start right after the
+    // baseline is recorded, and at a later start while the adoption is pending.
+    const wire = blockAfter(src, "function wire(): void {");
+    expect(wire).toMatch(
+      /deps\.announced\.baseline\?\.\(fingerprint\);\s*deps\.announced\.adopted\?\.\(baselineAdoptedNotice\(lastAnswering\)\)/,
+    );
+    expect(wire).toMatch(/adoptionPending\?\.\(answeringFingerprint\(lastAnswering\)\)/);
   });
 
   // Both #2404 notices describe what was SAVED, so they fire in Solo and while

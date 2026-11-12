@@ -29,8 +29,11 @@
  * `POST /api/models/local-settings` test the browser-set `Origin` against
  * Tandem's own page origins exactly (`own-window.ts`), not against the shared
  * allowlist, which admits any `127.0.0.1` port. The decision is made before
- * the body is read (the pre-parse router runs the same test) and again in the
- * handler, which is the authoritative call and learns how the write got in.
+ * the body is read by the pre-parse router (`api-body-preparse.ts`) — that
+ * router is the ONLY thing that guarantees no body is parsed first; a
+ * registration made without it (a test's bare app) parses, then refuses. The
+ * handler makes the same decision again: it is what learns how the write got
+ * in, and what stands if the router is ever absent.
  * The secrets routes stay on the shared allowlist: a stored key does not change
  * which model answers or where text is sent.
  *

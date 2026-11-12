@@ -51,9 +51,11 @@ import {
 import { extractText } from "../mcp/document.js";
 import { readLiveMode } from "../mode.js";
 import {
+  announceBaselineAdopted,
   announceLocalModelChange,
   announceStartupMismatch,
   answeringWasAnnounced,
+  baselineAdoptionPending,
   finishFirstLitStart,
   isFirstLitStart,
   recordAnsweringNone,
@@ -197,6 +199,10 @@ export interface CollaboratorDeps {
     firstLitStart?: () => boolean;
     /** Take the model found at a first lit start as the baseline. */
     baseline?: (fingerprint: string) => void;
+    /** Was this model adopted as the baseline with nobody yet told which? */
+    adoptionPending?: (fingerprint: string) => boolean;
+    /** Say which model the baseline adopted (held for Tandem's own window). */
+    adopted?: (message: string) => void;
     /** Start-up found a model answering that the record does not name.
      *  Absent: the live notice is raised instead, as before #2404's fix. */
     startupMismatch?: (fingerprint: string) => void;
@@ -229,6 +235,10 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
     retry: retryUnsavedRecord,
     firstLitStart: isFirstLitStart,
     baseline: recordBaselineAnswering,
+    adoptionPending: baselineAdoptionPending,
+    adopted: (message) => {
+      announceBaselineAdopted(message);
+    },
     startupMismatch: (fingerprint) => {
       announceStartupMismatch({ answering: fingerprint });
     },
@@ -269,6 +279,17 @@ function quotableName(name: string): string {
  */
 export function answeringSwitchedNotice(now: AnsweringLocalModel): string {
   return `Your change means the local model ${quotableName(now.displayName)} now answers your chat.`;
+}
+
+/**
+ * What the user is told, once, when the first start with local models on
+ * found a model already saved and took it as their starting point (#2404).
+ * Neutral: for nearly everyone it is their own model. It is said at all
+ * because every release through v0.31.0 let another page on this computer save
+ * one while local models were off. Never the Endpoint or the model id.
+ */
+export function baselineAdoptedNotice(now: AnsweringLocalModel): string {
+  return `Local models are now available in Tandem. A local model was already saved, ${quotableName(now.displayName)}, and it was set to answer your chat. If you did not add it, remove it in Settings → Models.`;
 }
 
 /**
@@ -981,9 +1002,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       !deps.announced.wasAnnounced(answeringFingerprint(lastAnswering))
     ) {
       const fingerprint = answeringFingerprint(lastAnswering);
-      if (deps.announced.firstLitStart?.()) deps.announced.baseline?.(fingerprint);
-      else if (deps.announced.startupMismatch) deps.announced.startupMismatch(fingerprint);
+      if (deps.announced.firstLitStart?.()) {
+        deps.announced.baseline?.(fingerprint);
+        deps.announced.adopted?.(baselineAdoptedNotice(lastAnswering));
+      } else if (deps.announced.startupMismatch) deps.announced.startupMismatch(fingerprint);
       else announceAnswering(lastAnswering);
+    } else if (deps.announced?.adoptionPending?.(answeringFingerprint(lastAnswering))) {
+      // A later start: the baseline's model still answers and no window of
+      // Tandem's was ever sent the notice that names it. Say it again.
+      deps.announced.adopted?.(baselineAdoptedNotice(lastAnswering));
     }
     deps.announced?.finishStart?.();
     stopWatchingModels = deps.onModelsChanged?.(onModelsChanged) ?? null;

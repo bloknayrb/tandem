@@ -14,6 +14,7 @@ import {
   answeringChangedNotice,
   answeringFingerprint,
   answeringSwitchedNotice,
+  baselineAdoptedNotice,
   createLocalModelCollaborator,
   DEFAULT_COLLABORATOR_DEPS,
 } from "../../../src/server/local-model/collaborator.js";
@@ -21,6 +22,7 @@ import { handleNotifyStream } from "../../../src/server/mcp/routes/notify-stream
 import { registerModelsRoutes } from "../../../src/server/models/api-routes.js";
 import {
   __flushLocalModelAnnouncedForTests,
+  BASELINE_ADOPTED_NOTICE_KEY,
   LOCAL_MODEL_ANNOUNCED_FILE_NAME,
   LOCAL_MODEL_BASELINE_FILE_NAME,
   SETTINGS_CHANGED_NOTICE,
@@ -46,6 +48,7 @@ import {
   resetForTesting as resetNotifications,
   subscribe as subscribeNotifications,
 } from "../../../src/server/notifications.js";
+import { TAURI_SIDECAR_ARGV_FLAG } from "../../../src/server/platform.js";
 import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
 import {
@@ -259,6 +262,36 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
         return true;
       },
     } as unknown as Response;
+    // This file's "own window" is the desktop WebView, so the stream is
+    // opened on a server that is the desktop app's sidecar: the WebView's
+    // origin counts as Tandem's own window only there.
+    process.argv.push(TAURI_SIDECAR_ARGV_FLAG);
+    try {
+      handleNotifyStream(req, res);
+    } finally {
+      const at = process.argv.lastIndexOf(TAURI_SIDECAR_ARGV_FLAG);
+      if (at !== -1) process.argv.splice(at, 1);
+    }
+    return written.join("");
+  }
+
+  /** The same request on an npm install's server, which has no desktop window. */
+  function openDesktopOriginStreamOnNpmServer(): string {
+    const written: string[] = [];
+    const req = {
+      headers: { origin: OWN_WINDOW_ORIGIN },
+      on: (event: string, cb: () => void) => {
+        if (event === "close") streamClosers.push(cb);
+      },
+    } as unknown as Request;
+    const res = {
+      writableEnded: false,
+      writeHead: () => res,
+      write: (chunk: string) => {
+        written.push(chunk);
+        return true;
+      },
+    } as unknown as Response;
     handleNotifyStream(req, res);
     return written.join("");
   }
@@ -273,10 +306,23 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
   const warnings = () => getBuffer().filter((n) => n.severity === "warning");
   const infos = () => getBuffer().filter((n) => n.severity === "info");
   const pending = (key: string) => getStartupNotices().filter((n) => n.dedupKey === key);
+  /** The one-time "this model was adopted at the first lit start" notice. */
+  const adoptedRaised = () => getBuffer().filter((n) => n.dedupKey === BASELINE_ADOPTED_NOTICE_KEY);
+  /** Everything raised that is NOT that notice: the warnings about a change. */
+  const otherThanAdopted = () =>
+    getBuffer().filter((n) => n.dedupKey !== BASELINE_ADOPTED_NOTICE_KEY);
   const expectSilent = (why = "nothing was raised") => {
     expect(getBuffer(), why).toEqual([]);
     expect(getStartupNotices(), why).toEqual([]);
   };
+
+  /** The fingerprint of a baseline nobody was yet told about, or null. */
+  async function adoptedOnDisk(): Promise<string | null> {
+    await __flushLocalModelAnnouncedForTests();
+    if (!fs.existsSync(recordFile)) return null;
+    const parsed = JSON.parse(fs.readFileSync(recordFile, "utf8")) as { adopted?: unknown };
+    return typeof parsed.adopted === "string" ? parsed.adopted : null;
+  }
 
   async function record(): Promise<{ editing: boolean; answering: string | null } | null> {
     await __flushLocalModelAnnouncedForTests();
@@ -323,7 +369,12 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
         service: KEYCHAIN_SERVICE_MODELS,
         backend: { get: () => null, set: () => {}, delete: () => false },
       }),
-      ownWindow: createOwnWindowPolicy({ getBound: () => null, allowance: ALLOWANCE_ORIGIN }),
+      ownWindow: createOwnWindowPolicy({
+        getBound: () => null,
+        allowance: ALLOWANCE_ORIGIN,
+        // The "own window" in this file is the desktop WebView.
+        desktop: true,
+      }),
       localModelSettingsEnabled: true,
     });
     await new Promise<void>((resolve, reject) => {
@@ -854,7 +905,7 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
   // ── R3.2a: the first start with the flag on ─────────────────────────────────
 
   describe("the first start with the flag on takes what it finds as the baseline (R3.2a)", () => {
-    it("a models.json written while dark, then the first lit start: nothing is raised", async () => {
+    it("a models.json written while dark, then the first lit start: no warning — only the one neutral notice naming the adopted model", async () => {
       // Dark: the route answers (the reconcile posts through it) but nothing
       // is wired, so nothing records the write.
       await save(file([A]), OWN_WINDOW_ORIGIN, { reconcile: true });
@@ -862,11 +913,21 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
 
       await shutdown();
       await boot();
-      expectSilent("the upgrading cohort is not warned at the flip");
+      // The upgrading cohort is not WARNED at the flip: nothing says their
+      // settings changed…
+      expect(otherThanAdopted(), "no warning about changed settings").toEqual([]);
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect(pending(ANSWERING_CHANGED_NOTICE_KEY)).toEqual([]);
+      // …they are told, once and neutrally, which model was adopted.
+      expect(adoptedRaised()).toHaveLength(1);
+      expect(adoptedRaised()[0]?.message).toBe(baselineAdoptedNotice(answeringOf(A)));
+      expect(getStartupNotices().map((n) => n.dedupKey)).toEqual([BASELINE_ADOPTED_NOTICE_KEY]);
       expect(await record()).toEqual({ editing: false, answering: fp(A) });
       expect(fs.existsSync(markerFile)).toBe(true);
       expect(JSON.parse(fs.readFileSync(markerFile, "utf8"))).toEqual({ version: 1 });
 
+      // Tandem's own window is sent it: from then on every start is silent.
+      openOwnWindowStream();
       await restart();
       expectSilent();
     });
@@ -949,12 +1010,76 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       await save(file([A]));
       await shutdown();
       await boot();
+      openOwnWindowStream(); // the adopted notice is delivered: nothing is owed
       await shutdown();
       fs.rmSync(markerFile);
       await boot();
       expectSilent();
       await __flushLocalModelAnnouncedForTests();
       expect(fs.existsSync(markerFile)).toBe(true);
+    });
+
+    // Review of PR #2413, item 7(a): losing the marker must not turn a record
+    // that cannot be read into "this is the first lit start".
+    it("a lost marker together with an unreadable record is NOT a first lit start: the change is announced", async () => {
+      await save(file([A]));
+      await shutdown();
+      await boot(); // the real first lit start: baseline, marker, record
+      openOwnWindowStream();
+      await shutdown();
+
+      fs.rmSync(markerFile);
+      fs.writeFileSync(recordFile, "\u0000 not json");
+      await boot();
+
+      expect(adoptedRaised(), "no second baseline").toEqual([]);
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      expect(warnings().map((n) => n.message)).toEqual([SETTINGS_CHANGED_NOTICE]);
+    });
+
+    // Item 7(b): only "there is nothing here" is absent. Any other failure to
+    // look counts as present, so it fails toward announcing.
+    it.each([
+      ["the marker", () => markerFile],
+      ["the record", () => recordFile],
+    ])(
+      "an lstat of %s that fails with something other than not-found counts as present: no baseline",
+      async (_what, target) => {
+        await writeModelsUnderneath(file([A]));
+        await shutdown();
+        expect(fs.existsSync(markerFile)).toBe(false);
+        expect(fs.existsSync(recordFile)).toBe(false);
+
+        const realLstat = fs.lstatSync;
+        const denied = target();
+        const spy = vi.spyOn(fs, "lstatSync").mockImplementation(((
+          p: fs.PathLike,
+          ...rest: unknown[]
+        ) => {
+          if (String(p) === denied) {
+            throw Object.assign(new Error("EACCES: permission denied, lstat"), { code: "EACCES" });
+          }
+          return (realLstat as (...args: unknown[]) => unknown)(p, ...rest);
+        }) as typeof fs.lstatSync);
+        try {
+          await boot();
+        } finally {
+          spy.mockRestore();
+        }
+
+        expect(adoptedRaised(), "not taken as the baseline").toEqual([]);
+        expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
+        expect((await record())?.answering ?? null).toBeNull();
+      },
+    );
+
+    it("control for the two cases above: with both really absent the same start IS a baseline", async () => {
+      await writeModelsUnderneath(file([A]));
+      await shutdown();
+      await boot();
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect(adoptedRaised()).toHaveLength(1);
+      expect((await record())?.answering).toBe(fp(A));
     });
 
     describe("anything found at the marker's path counts as present", () => {
@@ -1007,13 +1132,20 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       await shutdown();
       await boot();
 
-      expect(getStartupNotices()).toHaveLength(1);
+      // The warning is about commenting only; the model is adopted, and named
+      // by the neutral notice.
+      expect(
+        getStartupNotices()
+          .map((n) => n.dedupKey)
+          .sort(),
+      ).toEqual([BASELINE_ADOPTED_NOTICE_KEY, SETTINGS_CHANGED_NOTICE_KEY].sort());
       expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
       // The answering model is still taken as the baseline.
       expect(await record()).toEqual({ editing: false, answering: fp(A) });
 
       openOwnWindowStream();
       expect(await record()).toEqual({ editing: true, answering: fp(A) });
+      expect(await adoptedOnDisk()).toBeNull();
       await restart();
       expectSilent();
     });
@@ -1026,7 +1158,12 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
           service: KEYCHAIN_SERVICE_MODELS,
           backend: { get: () => null, set: () => {}, delete: () => false },
         }),
-        ownWindow: createOwnWindowPolicy({ getBound: () => null, allowance: ALLOWANCE_ORIGIN }),
+        ownWindow: createOwnWindowPolicy({
+          getBound: () => null,
+          allowance: ALLOWANCE_ORIGIN,
+          // The "own window" in this file is the desktop WebView.
+          desktop: true,
+        }),
         // `localModelSettingsEnabled` omitted: the dark flag.
       });
       const dark = await new Promise<Server>((resolve) => {
@@ -1059,6 +1196,212 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
           dark.closeAllConnections();
         });
       }
+    });
+  });
+
+  // ── The first lit start says what it adopted (review of PR #2413, item 2) ───
+
+  describe("the first lit start says which model it adopted, once, in Tandem's own window", () => {
+    /** A dark build saved `models`; this is the first start with the flag on. */
+    async function firstLitStart(models: ModelsFile): Promise<void> {
+      await writeModelsUnderneath(models);
+      await shutdown();
+      expect(fs.existsSync(markerFile)).toBe(false);
+      expect(fs.existsSync(recordFile)).toBe(false);
+      await boot();
+    }
+
+    it("raises exactly one notice, neutral, naming the model by its display name and nothing else about it", async () => {
+      await firstLitStart(file([A, CLOUD], A.id));
+
+      expect(adoptedRaised()).toHaveLength(1);
+      const notice = adoptedRaised()[0];
+      expect(notice?.message).toBe(baselineAdoptedNotice(answeringOf(A)));
+      expect(notice?.message).toContain(`"${A.displayName}"`);
+      // Registered for the first of Tandem's own windows to connect.
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toHaveLength(1);
+      expect(otherThanAdopted()).toEqual([]);
+
+      const text = notice?.message ?? "";
+      for (const m of [A, B, CLOUD]) {
+        if (m.endpoint) expect(text).not.toContain(m.endpoint);
+        expect(text).not.toContain(m.modelId);
+        expect(text).not.toContain(m.id);
+        if (m.apiKeyRef) expect(text).not.toContain(m.apiKeyRef);
+      }
+      expect(text).not.toContain(dir);
+      expect(text).not.toMatch(/127\.0\.0\.1|localhost|https?:\/\//);
+      expect(text).not.toContain(".json");
+      expect(text).not.toContain(fp(A));
+      // Neutral: it does not say anything changed, and does not say "warning".
+      expect(text).not.toMatch(/changed|warning|did not change/i);
+    });
+
+    it("the record remembers that nobody was told yet", async () => {
+      await firstLitStart(file([A]));
+      expect(await record()).toEqual({ editing: false, answering: fp(A) });
+      expect(await adoptedOnDisk()).toBe(fp(A));
+    });
+
+    it("delivered to Tandem's own window: recorded as told, and every later start is silent", async () => {
+      await firstLitStart(file([A]));
+      expect(openOwnWindowStream()).toContain(
+        JSON.stringify(baselineAdoptedNotice(answeringOf(A))),
+      );
+      expect(await adoptedOnDisk()).toBeNull();
+      expect(await record()).toEqual({ editing: false, answering: fp(A) });
+
+      await restart();
+      expectSilent();
+      await restart();
+      expectSilent();
+    });
+
+    it("NOT delivered: the next start raises it again, and raises no warning about changed settings", async () => {
+      await firstLitStart(file([A]));
+      await restart(); // marker present, record names the model, nobody told
+
+      expect(adoptedRaised()).toHaveLength(1);
+      expect(adoptedRaised()[0]?.message).toBe(baselineAdoptedNotice(answeringOf(A)));
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toHaveLength(1);
+      expect(otherThanAdopted()).toEqual([]);
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect(await adoptedOnDisk()).toBe(fp(A));
+
+      // And it stops once a window was sent it.
+      openOwnWindowStream();
+      await restart();
+      expectSilent();
+    });
+
+    it("a stream that is not Tandem's own window receives it but does not count", async () => {
+      await firstLitStart(file([A]));
+      // The desktop window's origin on an npm install's server, and a page on
+      // another loopback port: neither is Tandem's own window.
+      expect(openDesktopOriginStreamOnNpmServer()).toContain(
+        JSON.stringify(baselineAdoptedNotice(answeringOf(A))),
+      );
+      expect(await adoptedOnDisk()).toBe(fp(A));
+      await restart();
+      expect(adoptedRaised()).toHaveLength(1);
+    });
+
+    it("a first lit start with nothing answering raises no such notice", async () => {
+      await firstLitStart(file([{ ...A, enabled: false }], A.id));
+      expectSilent();
+      expect(await adoptedOnDisk()).toBeNull();
+      expect(await record()).toEqual({ editing: false, answering: null });
+    });
+
+    it("the user's own change of the answering model before delivery withdraws it: they have chosen", async () => {
+      await firstLitStart(file([A, B], A.id));
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toHaveLength(1);
+
+      await save(file([A, B], B.id)); // own window: B is now the default
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toEqual([]);
+      expect(await adoptedOnDisk()).toBeNull();
+      expect(await record()).toEqual({ editing: false, answering: fp(B) });
+
+      // A window that connects now is told nothing stale, and the next start is silent.
+      expect(openOwnWindowStream()).not.toContain(A.displayName);
+      await restart();
+      expectSilent();
+    });
+
+    it("the user's own delete, leaving no model answering, withdraws it", async () => {
+      await firstLitStart(file([A]));
+      await save(file([])); // own window
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toEqual([]);
+      expect(await adoptedOnDisk()).toBeNull();
+      expect(await record()).toEqual({ editing: false, answering: null });
+      await restart();
+      expectSilent();
+    });
+
+    it("an own-window write that does not touch the adopted model leaves the notice pending", async () => {
+      await firstLitStart(file([A, { ...B, enabled: false }], A.id));
+      await save(file([A, { ...B, enabled: false, displayName: "Renamed B" }], A.id));
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toHaveLength(1);
+      expect(await adoptedOnDisk()).toBe(fp(A));
+    });
+
+    it("the model file changed underneath before the next start: the warning, not the adopted notice", async () => {
+      await firstLitStart(file([A]));
+      await shutdown();
+      await writeModelsUnderneath(file([B]));
+      await boot();
+
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
+      expect(warnings().map((n) => n.message)).toEqual([SETTINGS_CHANGED_NOTICE]);
+      expect(adoptedRaised()).toEqual([]);
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toEqual([]);
+
+      // Delivery records the model that answers now, and the adoption is over.
+      openOwnWindowStream();
+      expect(await record()).toEqual({ editing: false, answering: fp(B) });
+      expect(await adoptedOnDisk()).toBeNull();
+    });
+
+    it("is raised in Solo mode and while the licence refuses AI", async () => {
+      const ctrl = getOrCreateDocument(CTRL_ROOM);
+      withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "solo"));
+      refusing = true;
+      await firstLitStart(file([A]));
+      expect(adoptedRaised()).toHaveLength(1);
+    });
+  });
+
+  // ── Item 7(c): an own-window On while commenting is already on ──────────────
+
+  describe("the user's own On while commenting is already on withdraws the warning and records the choice", () => {
+    it("after an allowance On nobody was sent: the live notice is withdrawn, and the record says they chose it", async () => {
+      await boot();
+      await setEditing(true, ALLOWANCE_ORIGIN);
+      expect(pending(EDITING_ON_NOTICE_KEY)).toHaveLength(1);
+      expect((await record())?.editing ?? false).toBe(false);
+
+      await setEditing(true); // Tandem's own window; already on
+      expect(pending(EDITING_ON_NOTICE_KEY)).toEqual([]);
+      expect(isLocalModelEditingEnabled()).toBe(true);
+      expect(await record()).toEqual({ editing: true, answering: null });
+
+      // No window is told "if you did not switch this on", now or after a restart.
+      expect(openOwnWindowStream()).not.toContain(JSON.stringify(EDITING_ON_NOTICE));
+      await restart();
+      expectSilent();
+    });
+
+    it("after a start-up mismatch for commenting only: the start-up notice is withdrawn", async () => {
+      await boot();
+      await shutdown();
+      writeSettingsUnderneath(true);
+      await boot();
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
+
+      await setEditing(true); // own window; already on
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toEqual([]);
+      expect(await record()).toEqual({ editing: true, answering: null });
+      await restart();
+      expectSilent();
+    });
+
+    it("after a start-up mismatch for commenting AND the model: only the commenting part goes; the notice stays for the model", async () => {
+      await boot();
+      await shutdown();
+      writeSettingsUnderneath(true);
+      await writeModelsUnderneath(file([A]));
+      await boot();
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY)).toHaveLength(1);
+
+      await setEditing(true); // own window; already on
+      expect(pending(SETTINGS_CHANGED_NOTICE_KEY), "the model part is still owed").toHaveLength(1);
+      expect(await record()).toEqual({ editing: true, answering: null });
+
+      // Delivery then records the model part.
+      openOwnWindowStream();
+      expect(await record()).toEqual({ editing: true, answering: fp(A) });
+      await restart();
+      expectSilent();
     });
   });
 

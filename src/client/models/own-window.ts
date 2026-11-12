@@ -25,7 +25,11 @@
  */
 
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants";
-import { MODELS_DEV_ORIGIN_ENV, OWN_WINDOW_ONLY_MESSAGE } from "../../shared/models/contract";
+import {
+  isLoopbackDevOrigin,
+  MODELS_DEV_ORIGIN_ENV,
+  OWN_WINDOW_ONLY_MESSAGE,
+} from "../../shared/models/contract";
 
 export type ModelsWriteAccess = "own" | "unknown" | "foreign";
 
@@ -51,19 +55,35 @@ export function modelsWriteAccess(
   return "foreign";
 }
 
+const BASE_NOTICE = OWN_WINDOW_ONLY_MESSAGE.replace("Local-model settings", "These settings");
+
 /**
  * What the Models tab says when the settings cannot be changed from this page.
- * A page that is plainly somewhere else is told where to go; a page on another
- * `127.0.0.1` port (or an unexpected desktop origin) was refused by the server,
- * which is a development setup, and is told about the variable.
+ *  - A page that is plainly somewhere else is told where to go.
+ *  - A page on another `127.0.0.1` port that the server refused is a
+ *    development setup, and is told about the variable — but ONLY when its
+ *    origin has the exact form the server accepts for that variable. Suggesting
+ *    a value the server would refuse (`http://127.0.0.1` on port 80, or the
+ *    string "null") would send the developer in a circle.
+ *  - Anything else that was refused (a desktop window with an unexpected origin
+ *    string, or Tandem's own address refused all the same) gets the plain
+ *    sentence: there is nothing more specific that is known to be true.
  */
 export function ownWindowNotice(
   access: ModelsWriteAccess,
   pageOrigin: string | null,
   ownAddress: string,
 ): string {
-  if (access === "foreign" || pageOrigin === null) {
-    return `${OWN_WINDOW_ONLY_MESSAGE.replace("Local-model settings", "These settings")} Open Tandem at ${ownAddress}, or use the Tandem desktop app.`;
+  if (access === "foreign") {
+    return `${BASE_NOTICE} Open Tandem at ${ownAddress}, or use the Tandem desktop app.`;
   }
-  return `${OWN_WINDOW_ONLY_MESSAGE.replace("Local-model settings", "These settings")} This page is served from ${pageOrigin}. In a development setup, start Tandem's server with ${MODELS_DEV_ORIGIN_ENV}=${pageOrigin}, then reload this page.`;
+  if (
+    access === "unknown" &&
+    pageOrigin !== null &&
+    pageOrigin !== ownAddress &&
+    isLoopbackDevOrigin(pageOrigin)
+  ) {
+    return `${BASE_NOTICE} This page is served from ${pageOrigin}. In a development setup, start Tandem's server with ${MODELS_DEV_ORIGIN_ENV}=${pageOrigin}, then reload this page.`;
+  }
+  return BASE_NOTICE;
 }

@@ -47,7 +47,7 @@ import {
   resolveModelsDevOrigin,
 } from "../models/own-window.js";
 import { ownershipEnabled } from "../ownership-flag.js";
-import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
+import { isTauriSidecar, resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
 import { sessionIdForLog } from "../sessions/log-id.js";
 import {
@@ -1229,6 +1229,8 @@ export async function startMcpServerHttp(
   const modelsOwnWindow = createOwnWindowPolicy({
     getBound: () => boundAddress,
     allowance: modelsDevOrigin.origin,
+    // The desktop window's origins count only on the desktop app's own server.
+    desktop: isTauriSidecar(),
   });
   app.use(
     createApiBodyPreParser({

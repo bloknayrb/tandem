@@ -47,7 +47,14 @@
  * a directory, a link, an unreadable entry — counts as present, so a lost
  * record or a lost marker fails toward announcing. The baseline covers the
  * answering model only: commenting found switched on at a first lit start is
- * still announced, because no dark build can write that file. The marker is
+ * still announced, because no dark build can write that file. **And the
+ * baseline says what it adopted**: every release through v0.31.0 let a page on
+ * any `127.0.0.1` port save a model while dark, so a silent baseline could
+ * adopt a planted one. When a model is adopted, one neutral notice names it
+ * (`announceBaselineAdopted`), held for the first of Tandem's own windows like
+ * the start-up notice. Until such a window was sent it, the record keeps the
+ * adopted fingerprint (`adopted`), so a later start raises it again; the
+ * user's own choice of a model, or no model answering, ends it. The marker is
  * written at the end of the collaborator's wiring, after the baseline record
  * itself reached the disk; a crash before that repeats the baseline at the
  * next start, which is harmless. It is also written in a lit stdio-mode start,
@@ -103,6 +110,10 @@ interface Announced {
   editing: boolean;
   /** Fingerprint of the answering model the user last chose or was told about. */
   answering: string | null;
+  /** Fingerprint of a model taken as the baseline at the first lit start whose
+   *  "this model was adopted" notice no window of Tandem's has been sent yet.
+   *  Written to the file only while set. */
+  adopted: string | null;
 }
 
 let basePath: string | null = null;
@@ -134,7 +145,7 @@ function markerPath(): string {
 
 function load(): Announced {
   if (announced) return announced;
-  const fresh: Announced = { editing: false, answering: null };
+  const fresh: Announced = { editing: false, answering: null, adopted: null };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
     if (parsed && parsed !== "unreadable" && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -143,6 +154,9 @@ function load(): Announced {
         if (Object.hasOwn(r, "editing") && r.editing === true) fresh.editing = true;
         if (Object.hasOwn(r, "answering") && typeof r.answering === "string") {
           fresh.answering = r.answering;
+        }
+        if (Object.hasOwn(r, "adopted") && typeof r.adopted === "string") {
+          fresh.adopted = r.adopted;
         }
       }
     }
@@ -160,7 +174,8 @@ function persist(): Promise<boolean> {
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const snapshot = { version: VERSION, ...load() };
+      const { adopted, ...rest } = load();
+      const snapshot = { version: VERSION, ...rest, ...(adopted === null ? {} : { adopted }) };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
       unsaved = false;
       return true;
@@ -271,9 +286,36 @@ export function finishFirstLitStart(): void {
   });
 }
 
-/** The first lit start found this model answering: take it as the baseline. */
+/** The first lit start found this model answering: take it as the baseline,
+ *  and remember that the user has not yet been told which model that was. */
 export function recordBaselineAnswering(fingerprint: string): void {
-  record({ answering: fingerprint });
+  record({ answering: fingerprint, adopted: fingerprint });
+}
+
+/** Replay key of the "this model was adopted at the first lit start" notice. */
+export const BASELINE_ADOPTED_NOTICE_KEY = "local-model-baseline-adopted";
+
+/** Is `fingerprint` a baseline whose notice no window of Tandem's was sent? */
+export function baselineAdoptionPending(fingerprint: string): boolean {
+  return load().adopted === fingerprint;
+}
+
+/**
+ * Say which model the baseline adopted. Raised at the first lit start, and
+ * again at any later start while `adopted` still names the answering model;
+ * recorded as told once one of Tandem's own windows was sent it.
+ */
+export function announceBaselineAdopted(message: string): TandemNotification {
+  return raise(BASELINE_ADOPTED_NOTICE_KEY, message, () => {
+    if (load().adopted !== null) record({ adopted: null });
+  });
+}
+
+/** The adopted model is no longer the question: the user chose one, none
+ *  answers, or another writer changed it. In memory; the next write carries it. */
+function forgetAdoption(): void {
+  removeStartupNotice(BASELINE_ADOPTED_NOTICE_KEY);
+  load().adopted = null;
 }
 
 /**
@@ -283,7 +325,13 @@ export function recordBaselineAnswering(fingerprint: string): void {
  */
 export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string): void {
   if (withdrawKey !== undefined) removeStartupNotice(withdrawKey);
-  if (typeof change.answering === "string") refreshStartupAnswering(change.answering);
+  if (typeof change.answering === "string") {
+    refreshStartupAnswering(change.answering);
+    forgetAdoption();
+  }
+  // Their own On answers "your settings changed … switch commenting off" for
+  // the commenting half: that part of a pending start-up notice is withdrawn.
+  if (change.editing === true) dropStartupPart("editing");
   record(change);
 }
 
@@ -331,7 +379,10 @@ export function announceLocalModelChange(
   message: string,
   delivered: Partial<Announced>,
 ): TandemNotification {
-  if (typeof delivered.answering === "string") refreshStartupAnswering(delivered.answering);
+  if (typeof delivered.answering === "string") {
+    refreshStartupAnswering(delivered.answering);
+    forgetAdoption();
+  }
   return raise(dedupKey, message, () => record(delivered));
 }
 
@@ -340,6 +391,7 @@ export function announceLocalModelChange(
  * (commenting on; a model answering) merge into ONE notice.
  */
 export function announceStartupMismatch(part: Partial<Announced>): TandemNotification {
+  if (Object.hasOwn(part, "answering")) forgetAdoption();
   startupParts = { ...(startupParts ?? {}), ...part };
   return raise(SETTINGS_CHANGED_NOTICE_KEY, SETTINGS_CHANGED_NOTICE, () => {
     // The parts as they stand NOW, not as they were when this was raised.
@@ -355,7 +407,9 @@ export function recordAnsweringNone(dedupKey?: string): void {
   // longer answers, and its delivery would record that model as told.
   if (dedupKey !== undefined) removeStartupNotice(dedupKey);
   dropStartupPart("answering");
-  if (load().answering !== null) record({ answering: null });
+  const hadAdoption = load().adopted !== null;
+  forgetAdoption();
+  if (load().answering !== null || hadAdoption) record({ answering: null });
   // Nothing to change in memory, but an earlier clearing write may have failed:
   // the file could still name a model, and this is the next chance to fix it.
   else retryUnsavedRecord();
