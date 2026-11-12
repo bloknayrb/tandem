@@ -14,7 +14,11 @@ import {
   phrase,
 } from "../../../../probe/local-model-spike/harness/scenarios/predicates.js";
 import type { Scenario } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
-import { quoteForm, score } from "../../../../probe/local-model-spike/harness/score.js";
+import {
+  quoteForm,
+  quotesVerbatim,
+  score,
+} from "../../../../probe/local-model-spike/harness/score.js";
 import type { WriteLog } from "../../../../probe/local-model-spike/harness/trial.js";
 import { renderMarkdown } from "../../../../src/client/panels/chat-markdown.js";
 
@@ -170,9 +174,26 @@ describe("cases the diff review found", () => {
     // not with its period dropped inside a longer sentence that runs on.
     const short: Scenario = { ...change, expect: { kind: "offer-change", target: "Ate." } };
     expect(on(short, `I was late, so here it is: "We had eaten."`).failureMode).toBe("NO_QUOTE");
-    expect(
-      on(change, `${target.slice(0, -1)} and then it was fine. Suggested: "${fixed}"`).failureMode,
-    ).toBe("NO_QUOTE");
+    // The period-dropped form is found whatever markup or line break follows it.
+    for (const reply of [
+      `\`${target.slice(0, -1)}\` should read: ${fixed}`,
+      `**${target.slice(0, -1)}** could be: ${fixed}`,
+      `> ${target.slice(0, -1)}\nbecomes: ${fixed}`,
+    ]) {
+      expect(quotesVerbatim(reply, target), reply).toBe(true);
+    }
+    // A final period inside closing quote marks is folded too.
+    expect(quotesVerbatim(`He said 'stop' and left.`, "He said 'stop.'")).toBe(true);
+    // A negation elsewhere on the line does not cancel the offer; one that governs the change does.
+    for (const reply of [
+      `I can't edit the document directly, but you could change "were" to "was".`,
+      `You'll need to change "were" to "was".`,
+      `Sorry for the delay! Change "were" to "was".`,
+      `Not a big deal, but change "were" to "was".`,
+    ]) {
+      expect(on(change, reply).pass, reply).toBe(true);
+    }
+    expect(on(change, `I wouldn't change "were" to "was" here.`).pass).toBe(false);
     // A comment request is not passed by a partial quote: it quotes the whole target or the selection.
     expect(on(comment, `Change "were" to "was": the subject "team" is singular.`).failureMode).toBe(
       "NO_QUOTE",

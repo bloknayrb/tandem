@@ -24,6 +24,7 @@ import {
   appendTrial,
   existingRunDir,
   MAX_CONSECUTIVE_INFRASTRUCTURE,
+  plannedHash,
   storeFixture,
   identityPath,
   readIdentity,
@@ -282,6 +283,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         runId: newRunId as string,
         modelTag: opts.modelTag,
         endpoint: opts.endpoint,
+        plannedHash: plannedHash(planned),
         sessions: [],
       };
     }

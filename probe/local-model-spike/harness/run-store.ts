@@ -52,7 +52,19 @@ export interface RunIdentity extends RunIdentityKey {
   runId: string;
   modelTag: string;
   endpoint: string;
+  /** SHA-256 of planned.json's trial list (`plannedHash`), fixed when the run
+   *  starts: planned.json decides groups and denominators and is otherwise
+   *  outside every hash. */
+  plannedHash?: string;
   sessions: RunSession[];
+}
+
+/** The hash `identity.plannedHash` holds: canonical trial list, sorted keys. */
+export function plannedHash(planned: { trialId: string; scenarioId: string; group: string; repeat: number }[]): string {
+  const canon = planned.map((p) =>
+    JSON.stringify({ group: p.group, repeat: p.repeat, scenarioId: p.scenarioId, trialId: p.trialId }),
+  );
+  return createHash("sha256").update(`[${canon.join(",")}]`, "utf8").digest("hex");
 }
 
 export const UNKNOWN = "unknown";

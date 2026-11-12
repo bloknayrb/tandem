@@ -21,7 +21,10 @@ import {
   SILENT_ERROR_RULE_TEXT,
 } from "../../../../probe/local-model-spike/harness/report-core.js";
 import { RUBRIC_VERSION } from "../../../../probe/local-model-spike/harness/rubric.js";
-import type { RunIdentity } from "../../../../probe/local-model-spike/harness/run-store.js";
+import {
+  plannedHash,
+  type RunIdentity,
+} from "../../../../probe/local-model-spike/harness/run-store.js";
 import type { Group } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
 import {
   parseVerdictFile,
@@ -166,9 +169,10 @@ function agreeAll(
  */
 function report(input: TrialRecord[], over: Partial<ReportInput> = {}) {
   const trials = input.map(reseal);
+  const planned = over.planned ?? plan(over.trials ?? trials);
   return computeReport({
-    identity: identity(),
-    planned: plan(trials),
+    identity: identity({ plannedHash: plannedHash(planned) }),
+    planned,
     trials,
     infra: [],
     verdicts: agreeAll(trials),
@@ -589,6 +593,27 @@ describe("a verdict is bound to the whole record (review M1)", () => {
     expect(r.reasons.join("\n")).toContain("its record and planned.json disagree");
   });
 
+  it("planned.json must be the plan the run started with, with no trial twice (re-review, High)", () => {
+    const trials = run(20, { unanswerable: 5 }).map(reseal);
+    const original = plan(trials);
+    const id = identity({ plannedHash: plannedHash(original) });
+    const padded = [
+      ...original,
+      ...original.filter((p) => p.group === "unanswerable").slice(10, 15),
+    ];
+    const r = report([], { trials, planned: padded, identity: id, verdicts: agreeAll(trials) });
+    expect(r.outcome).toBe("INCONCLUSIVE");
+    expect(r.reasons.join("\n")).toContain("lists a trial more than once");
+    expect(r.reasons.join("\n")).toContain("not the plan the run started with");
+    const noHash = report([], {
+      trials,
+      planned: original,
+      identity: identity(),
+      verdicts: agreeAll(trials),
+    });
+    expect(noHash.reasons.join("\n")).toContain("records no hash of planned.json");
+  });
+
   it("a scorerPass that does not follow from the ending and score is caught even when resealed", () => {
     const trials = run().map(reseal);
     const i = trials.findIndex((t) => t.trialId === "answerable-4#1");
@@ -618,7 +643,7 @@ describe("a verdict is bound to the whole record (review M1)", () => {
 describe("the sessions of a run, and the header (review M2, M4, item 7)", () => {
   it("prints every session, and flags a dirty one", () => {
     const trials = run();
-    const id = identity();
+    const id = identity({ plannedHash: plannedHash(plan(trials)) });
     id.sessions.push({ ...id.sessions[0], startedAt: "2026-11-13T09:00:00.000Z", dirty: true });
     const r = report(trials, { identity: id });
     expect(r.text).toContain("sessions (2):");

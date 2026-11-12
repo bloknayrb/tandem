@@ -158,7 +158,9 @@ function flipFirst(text: string): string {
 export function targetForms(target: string): string[] {
   const base = quoteForm(target);
   const forms = [base];
-  if (/[.!?]$/.test(base)) forms.push(base.slice(0, -1).trimEnd());
+  // The final mark may sit inside closing quotes or brackets: "… 'stop.'"
+  const final = /[.!?](["')\]]*)$/;
+  if (final.test(base)) forms.push(base.replace(final, "$1").trimEnd());
   return [...new Set([...forms, ...forms.map(flipFirst)])].filter((f) => f.length > 0);
 }
 
@@ -168,12 +170,10 @@ export function targetForms(target: string): string[] {
  */
 export function quotedForm(reply: string, target: string): string | null {
   const form = quoteForm(reply);
-  const base = quoteForm(target);
-  const hadFinal = /[.!?]$/.test(base);
   return (
     targetForms(target)
       .sort((a, b) => b.length - a.length)
-      .find((f) => containsAsWords(form, f, hadFinal && !/[.!?]$/.test(f))) ?? null
+      .find((f) => containsAsWords(form, f)) ?? null
   );
 }
 
@@ -181,21 +181,18 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
 
 /**
  * Does `text` hold `part` with no letter or digit running on into it at either
- * end? So a target "Ate." is not "quoted" by "I was late". When `droppedFinal`
- * (the form is the target with its final punctuation taken off), it must also
- * not be followed by a space and a lower-case word: "…last spring and then"
- * is a longer sentence, not the target with its period dropped.
+ * end? So a target "Ate." is not "quoted" by "I was late". Known looseness: the
+ * form with the final period dropped is also found inside a longer sentence
+ * that carries on past it ("… last spring and then"); the reader judges that.
  */
-function containsAsWords(text: string, part: string, droppedFinal: boolean): boolean {
+function containsAsWords(text: string, part: string): boolean {
   let at = text.indexOf(part);
   while (at !== -1) {
     const before = at === 0 ? "" : text.charAt(at - 1);
-    const rest = text.slice(at + part.length);
+    const after = text.charAt(at + part.length);
     const startOk = before === "" || !WORD_CHAR.test(before) || !WORD_CHAR.test(part.charAt(0));
-    const endOk =
-      rest === "" || !WORD_CHAR.test(part.charAt(part.length - 1)) || !WORD_CHAR.test(rest.charAt(0));
-    const runsOn = droppedFinal && /^ \p{Ll}/u.test(rest);
-    if (startOk && endOk && !runsOn) return true;
+    const endOk = after === "" || !WORD_CHAR.test(part.charAt(part.length - 1)) || !WORD_CHAR.test(after);
+    if (startOk && endOk) return true;
     at = text.indexOf(part, at + 1);
   }
   return false;
@@ -245,6 +242,10 @@ function isRunOfTarget(run: string, target: string): boolean {
   return false;
 }
 
+/** "not change", "wouldn't replace", "never alter": a pair after it is not offered. */
+const NEGATED_CHANGE =
+  /\b(?:not|never|no\s+need\s+to)\s+(?:\w+\s+){0,2}?(?:change|replace|swap|alter|edit|touch|rewrite)\b|n['’]t\s+(?:\w+\s+){0,2}?(?:change|replace|swap|alter|edit|touch|rewrite)\b/i;
+
 /** Minimum words in a partial quotation whose replacement need not change every word. */
 export const PARTIAL_RUN_MIN_WORDS = 2;
 
@@ -264,9 +265,11 @@ export function partialQuoteChange(reply: string, target: string): { run: string
   const pair = new RegExp(`(?:${DELIMITED})${RUN_CONNECTOR}(?:${DELIMITED})`, "g");
   for (const line of text.split("\n")) {
     for (const m of line.matchAll(pair)) {
-      // "I would not change 'were' to 'was'" offers nothing; nor does a refusal.
-      const lead = line.slice(0, m.index ?? 0);
-      if (/\b(?:not|never|no need)\b|n['’]t\b/i.test(lead) || refuses(line, target)) continue;
+      // "I would not change 'were' to 'was'" offers nothing. Only a negation
+      // that governs a verb of changing, in the pair's own clause, counts:
+      // "I can't edit it, but you could change 'were' to 'was'" is an offer.
+      const lead = line.slice(0, m.index ?? 0).split(/[.!?;]\s+|,\s+(?:but|however|though|so)\s+|\s[—–]\s/).pop() ?? "";
+      if (NEGATED_CHANGE.test(lead)) continue;
       const run = quoteForm(m[1] ?? m[2] ?? m[3] ?? "");
       const replacement = quoteForm(m[4] ?? m[5] ?? m[6] ?? "");
       if (replacement.length === 0 || replacement === run) continue;

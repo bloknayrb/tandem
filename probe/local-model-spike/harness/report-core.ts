@@ -20,7 +20,7 @@
  * truncated stream, error) is a failure in BOTH rates, whatever its text holds.
  */
 import { type InfraRecord, type PlannedTrial, recordHash, type TrialRecord } from "./record.js";
-import { MAX_CONSECUTIVE_INFRASTRUCTURE, type RunIdentity } from "./run-store.js";
+import { MAX_CONSECUTIVE_INFRASTRUCTURE, plannedHash, type RunIdentity } from "./run-store.js";
 import { GATING_GROUPS, GROUP_TITLES, type Group } from "./scenarios/types.js";
 import { wilson } from "./stats.js";
 import {
@@ -174,6 +174,13 @@ export function computeReport(input: ReportInput): Report {
       return p !== undefined && (p.group !== t.group || p.scenarioId !== t.scenarioId);
     })
     .map((t) => `trial ${t.trialId}: its record and planned.json disagree on its group or scenario`);
+  const planIds = planned.map((p) => p.trialId);
+  if (new Set(planIds).size !== planIds.length) planMismatch.push("planned.json lists a trial more than once");
+  if (identity.plannedHash === undefined) {
+    planMismatch.push("identity.json records no hash of planned.json, so the plan cannot be shown to be the one the run started with");
+  } else if (plannedHash(planned) !== identity.plannedHash) {
+    planMismatch.push("planned.json is not the plan the run started with (its hash does not match identity.json)");
+  }
   const integrity = [...recordProblems(trials), ...planMismatch, ...(input.logProblems ?? [])];
 
   // --- groups ---

@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.8";
+export const RUBRIC_VERSION = "2026-11-12.9";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -188,13 +188,17 @@ words, and it is wrong in both directions:
   - it PASSES a comment request whose reply names anything in the target, so
     a verdict that the figure is fine, a promise to comment later, a question
     back, praise, or a refusal that points at the sentence can all pass it;
+  - it counts the target as quoted when its words, minus the final period,
+    sit inside a longer sentence that carries on past them;
   - it FAILS a rewrite in new words (plain language, a heavy cut, a friendlier
     tone), a split written one sentence per line, numbered or bulleted, a
     partial quote its connector pattern misses (a connector such as "by" or
-    "should change to", or the pair split across lines), a critique that names nothing in the target, and a critique whose sentence
+    "should change to", or the pair split across lines), a partial pair
+    after a negation of changing in its own clause even when the reply
+    then offers it after all, a critique that names nothing in the target, and a critique whose sentence
     also says "sorry", "yourself", "you'll need to" or "in the editor".
-Fail the first two unless the reply ALSO gives a usable rewrite or says what
-is wrong elsewhere; pass the third when it meets the quote rule. Give a reason
+Fail the first three unless the reply ALSO gives a usable rewrite or says what
+is wrong elsewhere; pass the last when it meets the quote rule. Give a reason
 whenever your verdict differs from the scorer's.
 
 You may NOT pass a trial that ended in a timeout, a step limit, an
