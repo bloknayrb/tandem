@@ -201,54 +201,56 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
   } catch (err) {
     return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
   }
-  // A refused NEW run leaves nothing behind; a refused resume touches nothing.
+  // A refused NEW run leaves nothing behind: its directory, lock and all, is
+  // removed while the lock is still held, so no other process can have
+  // claimed it in between. A refused resume only gives its lock back.
   const refuse = (reason: string): RunResult => {
-    release();
     if (stored === undefined) fs.rmSync(runDir, { recursive: true, force: true });
+    else release();
     return { status: "refused", reason, ...none };
   };
 
-  const config = deps.config(opts.modelTag, opts.endpoint);
-  let pre: PreflightResult;
-  let git: ReturnType<RunDeps["commit"]>;
+  // Everything between taking the lock and the trial loop, so that a throw
+  // here gives the lock back too.
+  let config: LocalModelConfig;
   let fingerprint: string;
+  let planned: ReturnType<typeof planTrials>;
+  let session: RunSession;
+  let identity: RunIdentity;
   try {
-    pre = await deps.preflight(config);
+    config = deps.config(opts.modelTag, opts.endpoint);
+    const pre = await deps.preflight(config);
     for (const line of pre.notes) deps.log(line);
     if (!pre.ok) return refuse(pre.stop ?? "the preflight refused");
-    git = deps.commit();
+    const { commit, dirty } = deps.commit();
     fingerprint = await deps.fingerprint();
+    const key = identityKey(opts, pre.facts, commit, fingerprint, scenarioSetHash(scenarios));
+    planned = planTrials(scenarios, opts.repeats);
+    session = {
+      startedAt: deps.now().toISOString(),
+      dirty,
+      hardware: opts.hardware,
+      contextLength: pre.facts.contextLength,
+      serverSettings: pre.facts.serverSettings,
+      toolSupport: pre.facts.toolSupport === true ? "yes" : "unknown",
+      host: os.hostname(),
+    };
+    if (stored !== undefined) {
+      const refusal = resumeRefusal(stored, key);
+      if (refusal) return refuse(`cannot resume ${opts.resume}: ${refusal}`);
+      identity = stored;
+    } else {
+      identity = {
+        ...key,
+        runId: newRunId as string,
+        modelTag: opts.modelTag,
+        endpoint: opts.endpoint,
+        sessions: [],
+      };
+    }
   } catch (err) {
     refuse("");
     throw err;
-  }
-  const setHash = scenarioSetHash(scenarios);
-  const { commit, dirty } = git;
-  const key = identityKey(opts, pre.facts, commit, fingerprint, setHash);
-  const planned = planTrials(scenarios, opts.repeats);
-  const session: RunSession = {
-    startedAt: deps.now().toISOString(),
-    dirty,
-    hardware: opts.hardware,
-    contextLength: pre.facts.contextLength,
-    serverSettings: pre.facts.serverSettings,
-    toolSupport: pre.facts.toolSupport === true ? "yes" : "unknown",
-    host: os.hostname(),
-  };
-
-  let identity: RunIdentity;
-  if (stored !== undefined) {
-    const refusal = resumeRefusal(stored, key);
-    if (refusal) return refuse(`cannot resume ${opts.resume}: ${refusal}`);
-    identity = stored;
-  } else {
-    identity = {
-      ...key,
-      runId: newRunId as string,
-      modelTag: opts.modelTag,
-      endpoint: opts.endpoint,
-      sessions: [],
-    };
   }
 
   let scored = 0;
@@ -318,7 +320,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         repeat: plan.repeat,
         scenario,
         observation,
-        contextLength: pre.facts.contextLength,
+        contextLength: session.contextLength,
       });
       const position = `[${done.size + i + 1}/${planned.length}]`;
 

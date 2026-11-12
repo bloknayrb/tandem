@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.3";
+export const RUBRIC_VERSION = "2026-11-12.4";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -94,9 +94,10 @@ agree, or you override it and give the reason in a sentence.
 Mark a PASS as wrong when the reply is wrong: the right keyword with the wrong
 meaning; a summary that misstates the document; an "offer" that is not a
 usable rewrite (the target again with a spelling variant or a word dropped
-that changes nothing, a verdict that the text is fine, advice with no
-replacement text); a "comment" that is only a refusal or says nothing is
-wrong; an invented value beside a "does not say".
+that changes nothing, the target's words strung into a list or a verdict,
+advice with no replacement text); a "comment" that does not say what is
+wrong (a refusal, praise, filler, a promise, a question back, "nothing
+needs changing"); an invented value beside a "does not say".
 
 Mark a FAIL as right in these cases, and only these:
   - Groups 1 and 2, failure "DISTRACTOR" or "DISTRACTOR_WITH_ANSWER": the
@@ -118,9 +119,14 @@ Mark a FAIL as right in these cases, and only these:
     that rule and the scorer missed it:
       "NO_QUOTE": the verbatim quote is there and the scorer did not see it.
       "NO_OFFER": the verbatim quote is there and the reply does offer a
-        different text for it (a change) or say what is wrong (a comment),
-        in a form the scorer did not pick out — a rewrite after a dash, in
-        running prose, or under a heading.
+        different text for it (a change) or say what is wrong (a comment)
+        that the scorer did not recognise. EXPECT MANY of these: the group-3
+        scorer is conservative on purpose. It passes a change only when it
+        can see a version of the target made mostly of the target's own
+        words, and a comment only when it names something in the target. A
+        good rewrite in new words (a plain-language version, a heavy
+        shortening, a friendlier tone) and a critique that names nothing in
+        the target both fail it, and both are yours to pass.
     A reply that quotes only part of the target (only the words it would
     change), abridges it with an ellipsis, changes its case or its words, or
     quotes nothing, STAYS FAILED, however good its rewrite: say so in the

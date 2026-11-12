@@ -173,8 +173,7 @@ const AFTER_TARGET =
  * target (list, heading and blockquote markers stripped); on a line that does,
  * what follows the quoted target ("'<target>' to <rewrite>", "'<target>' —
  * <rewrite>"); and in either, what follows a lead-in ("I'd change it to …").
- * These are judged by the stricter `isLooseOffer`, because an undelimited
- * line is far more often talk ABOUT the text than a rewrite OF it.
+ * All spans, delimited or not, are judged by the same `isOffer`.
  */
 export function looseSpans(reply: string, target: string): string[] {
   const original = quoteForm(target);
@@ -200,18 +199,20 @@ export const OFFER_MIN_RATIO = 0.2;
 export const COMMENT_MIN_OTHER_CHARS = 30;
 
 /**
- * Words that refuse or hand the job back: "I can't", "I'm unable", "sorry",
- * "you'll need to", "yourself", "in the editor", "read-only", "not allowed
- * to", and the impersonal forms ("comments cannot be added", "is not
- * possible", "isn't available", "won't be able", "apologies"). A critique
- * that merely contains "cannot" or "unfortunately" is not one.
+ * Sentences that refuse or hand the job back, removed before a comment
+ * request's reply is measured: the model speaking about itself ("I can't",
+ * "I'm unable", "I won't be able"), "sorry", "my apologies", or handing over
+ * ("you'll need to", "yourself", "in the editor", "read-only", "not allowed
+ * to"). Kept narrow on purpose: a critique such as "that rate is not
+ * possible" must survive. What a broader refusal leaves behind is still
+ * unlikely to name anything in the target, which `scoreOfferComment` asks for.
  */
 const REFUSAL =
-  /\bI\s+(?:can(?:not|['’]?t)|could\s*n['’]?t|could\s+not|am\s+(?:not\s+able|unable)|['’]m\s+(?:not\s+able|unable)|do\s*n['’]?t\s+have|have\s+no)\b|\bI['’]m\s+(?:not\s+able|unable)\b|\bsorry\b|\bmy\s+apologies\b|\bI\s+apologi[sz]e\b|\byou(?:['’]ll|\s+will)?\s+(?:need|have)\s+to\b|\byourself\b|\bin\s+the\s+editor\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted|able)\s+to\b|\bwo\s*n['’]?t\s+be\s+able\b|\b(?:is|are|isn['’]?t|aren['’]?t)\s+(?:not\s+)?(?:available|possible|supported)\b|\bnot\s+(?:available|possible|supported)\b|\bcan(?:not|['’]?t|\s+not)\s+be\s+(?:added|placed|left|made|done|changed|edited|applied)\b|\bunable\s+to\s+(?:add|place|leave|make|edit|change|comment|apply)\b|\b(?:switched|turned)\s+off\b|\bby\s+hand\b|\bmanually\b/gi;
+  /\bI\s+(?:can(?:not|['’]?t)|could\s*n['’]?t|could\s+not|am\s+(?:not\s+able|unable)|['’]m\s+(?:not\s+able|unable)|do\s*n['’]?t\s+have|have\s+no)\b|\bI['’]m\s+(?:not\s+able|unable)\b|\bI\s+wo\s*n['’]?t\s+be\s+able\b|\bsorry\b|\bmy\s+apologies\b|\bI\s+apologi[sz]e\b|\byou(?:['’]ll|\s+will)?\s+(?:need|have)\s+to\b|\byourself\b|\bin\s+the\s+editor\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted|able)\s+to\b/gi;
 
 /**
  * Does this text refuse or hand the job back? A refusing word the target
- * itself holds does not count: a rewrite of "Staff cannot…" says "cannot" too.
+ * itself holds does not count.
  */
 export function refuses(text: string, target: string): boolean {
   const own = target.toLowerCase();
@@ -247,20 +248,48 @@ const STOPWORDS = new Set(
   ),
 );
 
+/**
+ * Content tokens, crudely stemmed: words of four letters or more that are not
+ * stopwords, and any token holding a digit ("41", "92%", "$275,000"), with a
+ * plural or verb ending taken off so "replaced" meets "replacing".
+ */
 function contentWords(text: string): Set<string> {
-  return new Set(
-    (text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]{3,}/g) ?? [])
-      .map((w) => w.replace(/[.,]+$/, ""))
-      .filter((w) => !STOPWORDS.has(w)),
-  );
+  const out = new Set<string>();
+  for (const raw of text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]*/g) ?? []) {
+    const w = raw.replace(/[.,'-]+$/, "");
+    const hasDigit = /\d/.test(w);
+    if (hasDigit ? w.length < 2 : w.length < 4 || STOPWORDS.has(w)) continue;
+    out.add(hasDigit || w.length <= 5 ? w : w.replace(/(?:ing|ed|es|s|ly)$/, ""));
+  }
+  return out;
+}
+
+/** Dice similarity of two texts' content tokens: 1 the same words, 0 none shared. */
+function similarity(a: string, b: string): number {
+  const x = contentWords(a);
+  const y = contentWords(b);
+  if (x.size + y.size === 0) return 0;
+  let shared = 0;
+  for (const w of x) if (y.has(w)) shared += 1;
+  return (2 * shared) / (x.size + y.size);
 }
 
 /**
- * Is this span a usable rewrite of the target? Long enough, not the target
- * itself, not a piece cut out of it, not a refusal, and about the same thing
- * (it shares at least two content words with the target). Case is folded
- * HERE only, to judge sameness: a rewrite that differs from the target only
- * in case is not a different text.
+ * How much of a span's vocabulary must be the target's for the scorer to
+ * call it a rewrite. Deliberately high: the group-3 scorer is CONSERVATIVE.
+ * It passes a reply only when it can see a version of the target in it — the
+ * target's own words, reworked — and leaves every other reply, including a
+ * good rewrite in new words, to the reader as NO_OFFER (rubric §6). Talk
+ * about the text, verdicts, advice, promises and refusals use the target's
+ * words too, but rarely most of them and rarely nothing else.
+ */
+export const REWRITE_SIMILARITY = 0.6;
+
+/**
+ * Is this span a version of the target that differs from it? Long enough,
+ * not the target itself, not a piece cut out of it, and made mostly of the
+ * target's own content words. Case is folded HERE only, to judge sameness:
+ * a rewrite that differs from the target only in case is not a different text.
  */
 function isOffer(span: string, target: string): boolean {
   const offer = quoteForm(span).toLowerCase();
@@ -271,45 +300,7 @@ function isOffer(span: string, target: string): boolean {
   // quoted again with "is fine" after it, or with a word put in front) is not
   // a rewrite. A one-word fix inside a sentence is: it splits the sentence in two.
   if (longestSharedRun(offer, original) >= offer.length * SAME_TEXT_RATIO) return false;
-  if (refuses(span, target)) return false;
-  const targetWords = contentWords(target);
-  let shared = 0;
-  for (const w of contentWords(span)) if (targetWords.has(w)) shared += 1;
-  return shared >= 2;
-}
-
-/**
- * Words that mark an undelimited line as talk about the text, advice, a
- * verdict or a promise rather than a rewrite: "reads fine", "is correct",
- * "no change", "consider rephrasing", "the verb should agree", "I'll fix",
- * "is outside what chat supports".
- */
-const NOT_A_REWRITE =
-  /\b(?:fine|correct(?:ly)?|as\s+written|no\s+change|unchanged|leave\s+it|reads\s+well|consider|rephras\w*|rewor\w*|rewrit\w*|should|could|would|might|suggest\w*|recommend\w*|cut|remove|drop|delete|replace|change|try|outside|verb|subject|grammar|sentence|paragraph|wording|phrase|I['’]ll|I\s+will|I['’]d|shortly)\b/gi;
-
-/** Share of an undelimited span's content words that must be the target's. */
-const LOOSE_SHARE = 0.5;
-/** Content words an undelimited span must share with the target. */
-const LOOSE_MIN_SHARED = 3;
-
-/**
- * The stricter test for an undelimited span: everything `isOffer` asks, no
- * word of talk-about-the-text, and made mostly of the target's own content
- * words (at least three, and at least half of its own).
- */
-function isLooseOffer(span: string, target: string): boolean {
-  if (!isOffer(span, target)) return false;
-  // As with refusals, a word the target itself holds does not count: a
-  // rewrite of "…any structural change" says "change" too.
-  const own = target.toLowerCase();
-  for (const m of span.matchAll(NOT_A_REWRITE)) {
-    if (!own.includes(m[0].toLowerCase())) return false;
-  }
-  const targetWords = contentWords(target);
-  const words = contentWords(span);
-  let shared = 0;
-  for (const w of words) if (targetWords.has(w)) shared += 1;
-  return shared >= LOOSE_MIN_SHARED && shared >= words.size * LOOSE_SHARE;
+  return similarity(span, target) >= REWRITE_SIMILARITY;
 }
 
 /**
@@ -326,9 +317,9 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
       notes: ["does not quote the whole target text verbatim"],
     };
   }
-  const offer =
-    offeredSpans(reply).find((s) => isOffer(s, target)) ??
-    looseSpans(reply, target).find((s) => isLooseOffer(s, target));
+  const offer = [...offeredSpans(reply), ...looseSpans(reply, target)].find((s) =>
+    isOffer(s, target),
+  );
   if (!offer) {
     return {
       pass: false,
@@ -339,10 +330,14 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
   return { pass: true, notes: [`offers: ${offer.slice(0, 120)}`] };
 }
 
-/** A comment request's reply that finds nothing to say is not a comment. */
-const NOTHING_WRONG =
-  /\b(?:(?:looks|reads|is|seems)\s+(?:fine|good|correct|ok(?:ay)?)|nothing\s+(?:wrong|to\s+(?:fix|change|flag|note))|no\s+(?:issues?|problems?|changes?\s+(?:is\s+)?needed))\b/i;
-
+/**
+ * A comment request passes the scorer when, beyond the quotation and any
+ * refusing sentence, the reply says at least this much AND names something in
+ * the target (one of its content tokens: a word, a figure). Whether what it
+ * says is a sound criticism is the reader's (brief, group 3). Praise, filler,
+ * a promise, a question back or a refusal in other words rarely names
+ * anything in the target, so they fall to the reader as NO_OFFER.
+ */
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
   if (!quotesVerbatim(reply, target)) {
@@ -361,16 +356,18 @@ function scoreOfferComment(reply: string, target: string): ScoreResult {
     .join(" ")
     // Sentences, and the halves of "I can't …, but …".
     .split(/(?<=[.!?])\s+|,\s+(?:but|however|though)\s+|;\s+/)
-    .filter((sentence) => !refuses(sentence, target) && !NOTHING_WRONG.test(sentence))
+    .filter((sentence) => !refuses(sentence, target))
     .join(" ")
     .replace(/["'>]/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (other.length < COMMENT_MIN_OTHER_CHARS) {
+  const targetTokens = contentWords(target);
+  const named = [...contentWords(other)].some((w) => targetTokens.has(w));
+  if (other.length < COMMENT_MIN_OTHER_CHARS || !named) {
     return {
       pass: false,
       failureMode: "NO_OFFER",
-      notes: ["quotes the target but says nothing about it"],
+      notes: ["quotes the target but says nothing the scorer can tie to it"],
     };
   }
   return { pass: true, notes: [] };

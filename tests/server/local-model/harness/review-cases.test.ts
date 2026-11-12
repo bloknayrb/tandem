@@ -196,6 +196,53 @@ describe("cases the diff review found", () => {
     ).toBe(true);
   });
 
+  it("a delimited span is held to the same rule: a verdict, promise or refusal after a colon is no offer", () => {
+    for (const reply of [
+      `"${target}"\n\n**Assessment:** The sentence about the team of dispatchers is grammatically fine.`,
+      `"${target}"\n\nNote: editing the dispatchers sentence is outside what this chat supports.`,
+      `"${target}"\n\nPlan: once editing is enabled I will fix the dispatchers sentence.`,
+      `"${target}"\n\nThe problem: "team" is singular, so the verb after the team of dispatchers must be too.`,
+    ]) {
+      expect(on(change, reply).failureMode, reply).toBe("NO_OFFER");
+    }
+  });
+
+  it("a comment must name something in the target; praise, filler, a promise or a question does not", () => {
+    for (const reply of [
+      `"${target}"\n\nComments are only possible in the editing tier, which is off here.`,
+      `"${target}"\n\nLet me know if you'd like help with anything else in this section.`,
+      `"${target}"\n\nThis is a clear and well-written statement overall.`,
+      `"${target}"\n\nWhat would you like the comment to say about this?`,
+    ]) {
+      expect(on(comment, reply).failureMode, reply).toBe("NO_OFFER");
+    }
+    // A critique keeps a word like "possible" or "correct" and still names the target.
+    const rate = "Last year 41 of 46 employees completed the training on time, a rate of 92%.";
+    const rateComment: Scenario = { ...change, expect: { kind: "offer-comment", target: rate } };
+    expect(
+      score({
+        scenario: rateComment,
+        reply: `"${rate}"\n\nThat rate is not possible. 41 of 46 is 89%, not 92%.`,
+        writes: NOTHING,
+        documentText: rate,
+      }).pass,
+    ).toBe(true);
+  });
+
+  it("a good rewrite in quotes passes even when it says 'not available' or 'turned off'", () => {
+    const t =
+      "In the event that an employee has not completed the training at the point in time when it falls due, their records access will be suspended until such time as it has been completed.";
+    const s: Scenario = { ...change, expect: { kind: "offer-change", target: t } };
+    expect(
+      score({
+        scenario: s,
+        reply: `"${t}"\n\nPlainer: "If an employee has not completed the training when it falls due, their records access is turned off until it has been completed."`,
+        writes: NOTHING,
+        documentText: t,
+      }).pass,
+    ).toBe(true);
+  });
+
   it("an impersonal refusal is not a comment", () => {
     for (const reply of [
       `"${target}"\n\nUnfortunately, adding comments isn't available in this chat mode at the moment.`,

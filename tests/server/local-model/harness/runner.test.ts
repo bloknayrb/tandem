@@ -440,6 +440,24 @@ describe("a run", () => {
     }
   });
 
+  it("a throw after the lock is taken gives the lock back, and a new run leaves nothing", async () => {
+    stubScript([ANSWER]);
+    const first = await runMeasurement(options(), deps());
+    const boom = () => {
+      throw new Error("config failed");
+    };
+    await expect(
+      runMeasurement(options({ resume: first.runId }), deps({ config: boom })),
+    ).rejects.toThrow("config failed");
+    // The resumed run's lock was given back: it can be taken again.
+    acquireLock(existingRunDir(first.runId as string, runsDir))();
+    const before = fs.readdirSync(runsDir);
+    await expect(
+      runMeasurement(options({ runId: "fresh-run" }), deps({ config: boom })),
+    ).rejects.toThrow("config failed");
+    expect(fs.readdirSync(runsDir)).toEqual(before);
+  });
+
   it("refuses to start when the preflight says no, and starts no trial", async () => {
     const calls = stubScript([ANSWER]);
     const result = await runMeasurement(
