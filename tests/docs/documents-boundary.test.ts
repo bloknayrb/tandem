@@ -443,6 +443,9 @@ const FAN_OUT = [
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // The .docx ship-dark flag (ADR-053): open.ts asks it which extensions a build accepts.
   "server/documents/open.ts -> server/file-io/docx-flag.ts (value) x1",
+  // #2400: the 8.3 short-name expansion `resolveAndValidatePath` runs after its
+  // UNC screens. The only filesystem behaviour that change added.
+  "server/documents/open.ts -> server/file-io/short-names.ts (value) x1",
   // Two edges from the seam back into mcp/, both ADR-034 residue: format
   // detection/id derivation, and the welcome-doc tutorial annotations.
   "server/documents/open.ts -> server/mcp/document-model.ts (value) x1",
@@ -494,6 +497,18 @@ const FAN_OUT = [
   "server/documents/reload-remap.ts -> shared/sanitize.ts (value) x1",
   "server/documents/reload-remap.ts -> shared/snapshot.ts (value) x1",
   "server/documents/reload-remap.ts -> shared/types.ts (type) x1",
+  // #2400: moving records stored under a short spelling's key to the long
+  // spelling's. It touches the session and annotation-envelope stores through
+  // one move function each, and nothing else.
+  "server/documents/short-name-records.ts -> server/annotations/doc-hash.ts (value) x1",
+  // The four below serve one check: was the moved annotation file fully loaded
+  // into the document, so that rewriting it cannot drop anything.
+  "server/documents/short-name-records.ts -> server/annotations/schema.ts (value) x1",
+  "server/documents/short-name-records.ts -> server/annotations/store.ts (value) x1",
+  "server/documents/short-name-records.ts -> server/annotations/sync.ts (value) x1",
+  "server/documents/short-name-records.ts -> server/events/queue.ts (value) x1",
+  "server/documents/short-name-records.ts -> server/session/manager.ts (value) x1",
+  "server/documents/short-name-records.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",
