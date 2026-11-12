@@ -29,6 +29,7 @@ import SettingsNotificationsTab from "../../src/client/components/settings-tabs/
 import { loadSettings, type TandemSettings } from "../../src/client/hooks/useTandemSettings";
 import { _resetTandemSettingsSingletonForTests } from "../../src/client/hooks/useTandemSettings.svelte.js";
 import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 // loadSettings() against empty localStorage yields a complete, valid
 // TandemSettings (same approach as useTandemSettings.test.ts) — no
@@ -225,6 +226,10 @@ function resolveControl(container: HTMLElement, c: ControlCase): HTMLElement {
   }
   return el as HTMLElement;
 }
+
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
 
 describe("settings read-only UI — controls disabled and writes blocked", () => {
   for (const c of CASES) {

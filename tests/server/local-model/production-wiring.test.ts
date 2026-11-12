@@ -7,7 +7,14 @@ import {
   DEFAULT_COLLABORATOR_DEPS,
 } from "../../../src/server/local-model/collaborator.js";
 import { answeringLocalModel } from "../../../src/server/local-model/config-source.js";
-import { answeringWasAnnounced } from "../../../src/server/models/local-model-announced.js";
+import {
+  answeringWasAnnounced,
+  baselineAdoptionPending,
+  finishFirstLitStart,
+  isFirstLitStart,
+  recordBaselineAnswering,
+  retryUnsavedRecord,
+} from "../../../src/server/models/local-model-announced.js";
 
 /**
  * Source pins for the local model's production wiring (#1123, #2404), in the
@@ -149,6 +156,60 @@ describe("local-model production wiring (#1123, #2404)", () => {
       /none:\s*\(\)\s*=>\s*recordAnsweringNone\(\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*,/,
     );
     expect(ANSWERING_CHANGED_NOTICE_KEY).toBe("local-model-answering-changed");
+  });
+
+  // #2404's fix: the members that make a change from Tandem's own window the
+  // user's own (recorded, never announced), and the start-up check with its
+  // first-lit-start baseline. Every one of them is OPTIONAL in
+  // `CollaboratorDeps` and falls back to doing nothing (or to the old live
+  // notice), so a dropped or no-op'd line here would change behaviour without
+  // failing a single behavioural test that injects its own doubles.
+  it("the default `announced` wires the own-window, baseline and start-up members to the record", async () => {
+    const a = DEFAULT_COLLABORATOR_DEPS.announced;
+    expect(a?.retry).toBe(retryUnsavedRecord);
+    expect(a?.firstLitStart).toBe(isFirstLitStart);
+    expect(a?.baseline).toBe(recordBaselineAnswering);
+    expect(a?.finishStart).toBe(finishFirstLitStart);
+    expect(typeof a?.setByUser).toBe("function");
+    expect(typeof a?.startupMismatch).toBe("function");
+
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, "export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {");
+    // The user's own change records the fingerprint as the ANSWERING model and
+    // withdraws the pending live notice under the answering notice's own key.
+    expect(body).toMatch(
+      /setByUser:\s*\(fingerprint\)\s*=>\s*\{\s*recordSetByUser\(\s*\{\s*answering:\s*fingerprint\s*\}\s*,\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*;?\s*\}\s*,/,
+    );
+    expect(body).toMatch(
+      /startupMismatch:\s*\(fingerprint\)\s*=>\s*\{\s*announceStartupMismatch\(\s*\{\s*answering:\s*fingerprint\s*\}\s*\)\s*;?\s*\}\s*,/,
+    );
+    expect(body).toMatch(/retry:\s*retryUnsavedRecord\s*,/);
+    expect(body).toMatch(/firstLitStart:\s*isFirstLitStart\s*,/);
+    expect(body).toMatch(/baseline:\s*recordBaselineAnswering\s*,/);
+    expect(body).toMatch(/finishStart:\s*finishFirstLitStart\s*,/);
+  });
+
+  // Review of PR #2413, item 2: the first lit start says which model it
+  // adopted, and says it again at a later start until one of Tandem's own
+  // windows was sent it. Both members are optional and fall back to silence.
+  it("the default `announced` wires the adopted-baseline notice to the record", async () => {
+    const a = DEFAULT_COLLABORATOR_DEPS.announced;
+    expect(a?.adoptionPending).toBe(baselineAdoptionPending);
+    expect(typeof a?.adopted).toBe("function");
+
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, "export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {");
+    expect(body).toMatch(/adoptionPending:\s*baselineAdoptionPending\s*,/);
+    expect(body).toMatch(
+      /adopted:\s*\(message\)\s*=>\s*\{\s*announceBaselineAdopted\(\s*message\s*\)\s*;?\s*\}\s*,/,
+    );
+    // And wire() really reaches them: at a first lit start right after the
+    // baseline is recorded, and at a later start while the adoption is pending.
+    const wire = blockAfter(src, "function wire(): void {");
+    expect(wire).toMatch(
+      /deps\.announced\.baseline\?\.\(fingerprint\);\s*deps\.announced\.adopted\?\.\(baselineAdoptedNotice\(lastAnswering\)\)/,
+    );
+    expect(wire).toMatch(/adoptionPending\?\.\(answeringFingerprint\(lastAnswering\)\)/);
   });
 
   // Both #2404 notices describe what was SAVED, so they fire in Solo and while

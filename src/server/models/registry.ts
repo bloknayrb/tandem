@@ -21,13 +21,38 @@ import { createHash } from "node:crypto";
 
 import type { ModelsFile } from "../../shared/models/contract.js";
 import { resolveAppDataDir } from "../platform.js";
+import type { ModelsWriteSource } from "./own-window.js";
 import { emptyModelsFile } from "./schema.js";
 import { createModelStore, type ModelStore, serializeModelsFile } from "./store.js";
 
 let store: ModelStore | null = null;
 let cache: ModelsFile = emptyModelsFile();
 
-type ModelsChangedListener = () => void;
+/**
+ * How a replacement of the cached registry came about (#2404).
+ *  - `own-window`: `POST /api/models` from Tandem's own window — the user's
+ *    own change;
+ *  - `allowance`: the same route through the development allowance;
+ *  - `prime`: the boot read;
+ *  - `unspecified`: a direct `persistModelsFile` call that said nothing (tests).
+ * Only `own-window` is treated as the user's own change; everything else is
+ * announced.
+ */
+export type ModelsChangeSource = ModelsWriteSource | "prime" | "unspecified";
+
+export interface ModelsWriteMeta {
+  source: ModelsChangeSource;
+  /** The client's one-time localStorage→server reconcile. */
+  reconcile: boolean;
+}
+
+/** What a change listener is told: the file before and after, and how. */
+export interface ModelsFileChange extends ModelsWriteMeta {
+  before: ModelsFile;
+  after: ModelsFile;
+}
+
+type ModelsChangedListener = (change: ModelsFileChange) => void;
 const changeListeners = new Set<ModelsChangedListener>();
 
 /**
@@ -44,18 +69,22 @@ export function onModelsFileChanged(cb: ModelsChangedListener): () => void {
   };
 }
 
-function setCache(next: ModelsFile): void {
+function setCache(next: ModelsFile, meta: ModelsWriteMeta): void {
+  const change: ModelsFileChange = { ...meta, before: cache, after: next };
   cache = next;
   // Isolated: a throwing listener must not turn a write that already reached
   // the disk and the cache into a failed `POST /api/models`.
   for (const cb of changeListeners) {
     try {
-      cb();
+      cb(change);
     } catch (err) {
       console.error("[tandem] model-registry change listener threw:", err);
     }
   }
 }
+
+const PRIME: ModelsWriteMeta = { source: "prime", reconcile: false };
+const UNSPECIFIED: ModelsWriteMeta = { source: "unspecified", reconcile: false };
 
 function getStore(): ModelStore {
   if (!store) store = createModelStore(resolveAppDataDir());
@@ -68,7 +97,7 @@ function getStore(): ModelStore {
  */
 export async function primeModelStoreCache(): Promise<void> {
   try {
-    setCache(await getStore().read());
+    setCache(await getStore().read(), PRIME);
   } catch (err) {
     // read() is contractually non-throwing, so reaching here means a genuine
     // failure (e.g. createModelStore rejecting a bad appData path). Log it —
@@ -79,7 +108,7 @@ export async function primeModelStoreCache(): Promise<void> {
         err instanceof Error ? err.message : String(err)
       }); using an empty registry.`,
     );
-    setCache(emptyModelsFile());
+    setCache(emptyModelsFile(), PRIME);
   }
 }
 
@@ -117,8 +146,11 @@ export function getModelsEtag(): string {
  * Zod-CANONICAL form the store returns (not the caller's object) so the ETag is
  * stable across a write→read cycle (see `store.serializeModelsFile`).
  */
-export async function persistModelsFile(file: ModelsFile): Promise<void> {
-  setCache(await getStore().write(file));
+export async function persistModelsFile(
+  file: ModelsFile,
+  meta: ModelsWriteMeta = UNSPECIFIED,
+): Promise<void> {
+  setCache(await getStore().write(file), meta);
 }
 
 /** Result of an optimistic-concurrency write. */
@@ -145,13 +177,16 @@ let writeInFlight = false;
 export async function persistModelsFileIfMatch(
   file: ModelsFile,
   ifMatch: string,
+  // Required: the route is the only production caller, and how the write got
+  // in decides whether it is announced (#2404). No default to fall into.
+  meta: ModelsWriteMeta,
 ): Promise<IfMatchWriteResult> {
   if (writeInFlight) return { ok: false, reason: "busy" };
   writeInFlight = true;
   try {
     const current = getModelsEtag();
     if (ifMatch !== current) return { ok: false, reason: "stale", currentEtag: current };
-    await persistModelsFile(file);
+    await persistModelsFile(file, meta);
     return { ok: true, etag: getModelsEtag() };
   } finally {
     writeInFlight = false;

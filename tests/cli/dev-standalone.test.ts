@@ -158,6 +158,10 @@ describe("dev standalone runner", () => {
     expect(spawnCalls[0]?.command).toMatch(/^vite(\.cmd)?$/);
     expect(spawnCalls[1]?.command).toMatch(/^tsx(\.cmd)?$/);
     expect(spawnCalls[1]?.args).toEqual(["watch", "src/server/index.ts"]);
+    // #2404: the server child, and only it, is told that Vite's page may change
+    // the local-model settings in this development setup.
+    expect(spawnCalls[1]?.env?.TANDEM_MODELS_DEV_ORIGIN).toBe("http://127.0.0.1:5173");
+    expect(spawnCalls[0]?.env?.TANDEM_MODELS_DEV_ORIGIN).toBeUndefined();
 
     ready.resolve();
     const runtime = await launchPromise;
@@ -168,5 +172,16 @@ describe("dev standalone runner", () => {
     expect(spawnCalls).toHaveLength(2);
     expect(spawnCalls.some((c) => c.args.includes("src/monitor/index.ts"))).toBe(false);
     expect(runtime).not.toHaveProperty("monitor");
+  });
+
+  it("a TANDEM_MODELS_DEV_ORIGIN the developer exported is passed through unchanged (#2404)", async () => {
+    const { withModelsDevOrigin, VITE_DEV_ORIGIN } = await import(
+      "../../scripts/dev-standalone.mjs"
+    );
+    expect(withModelsDevOrigin({}).TANDEM_MODELS_DEV_ORIGIN).toBe(VITE_DEV_ORIGIN);
+    const exported = { TANDEM_MODELS_DEV_ORIGIN: "http://127.0.0.1:6000" };
+    expect(withModelsDevOrigin(exported)).toBe(exported);
+    // Even an empty value is the developer's: the server refuses it and logs.
+    expect(withModelsDevOrigin({ TANDEM_MODELS_DEV_ORIGIN: "" }).TANDEM_MODELS_DEV_ORIGIN).toBe("");
   });
 });

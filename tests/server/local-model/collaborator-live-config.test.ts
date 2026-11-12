@@ -32,6 +32,7 @@ import {
 import type { LoopResult, RunTurnOpts } from "../../../src/server/local-model/index.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
 import { registerModelsRoutes } from "../../../src/server/models/api-routes.js";
+import { createOwnWindowPolicy } from "../../../src/server/models/own-window.js";
 import {
   __resetModelRegistryForTests,
   getModelsEtag,
@@ -124,6 +125,17 @@ function chatMap() {
   return getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
 }
 
+/**
+ * How the writes in this file reach the routes (#2404). The routes accept a
+ * request only from Tandem's own window, or from the one origin the development
+ * allowance names. The DEFAULT here is the allowance origin, because that is
+ * the path on which a change is still announced as it happens; a test of the
+ * user's own change sets `writeOrigin` to `OWN_WINDOW_ORIGIN`.
+ */
+const ALLOWANCE_ORIGIN = "http://127.0.0.1:5173";
+const OWN_WINDOW_ORIGIN = `http://${TAURI_HOSTNAME}`;
+let writeOrigin = ALLOWANCE_ORIGIN;
+
 describe("collaborator — a model saved through POST /api/models reaches the loop (#1123 R1)", () => {
   let tmpDir: string;
   let server: Server;
@@ -139,7 +151,7 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
   async function save(next: ModelsFile): Promise<void> {
     const res = await fetch(`${baseUrl}${API_MODELS}`, {
       method: "POST",
-      headers: { Origin: `http://${TAURI_HOSTNAME}`, "content-type": "application/json" },
+      headers: { Origin: writeOrigin, "content-type": "application/json" },
       body: JSON.stringify({ file: next, ifMatch: getModelsEtag() }),
     });
     const body = (await res.json()) as { etag?: string };
@@ -196,6 +208,7 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
   }
 
   beforeEach(async () => {
+    writeOrigin = ALLOWANCE_ORIGIN;
     resetQueue();
     resetNotifications();
     clearStartupNotices();
@@ -234,6 +247,12 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     app.use(express.json());
     registerModelsRoutes(app, passthrough, passthrough, {
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
+      ownWindow: createOwnWindowPolicy({
+        getBound: () => null,
+        allowance: ALLOWANCE_ORIGIN,
+        // The "own window" in this file is the desktop WebView.
+        desktop: true,
+      }),
     });
     await new Promise<void>((resolve, reject) => {
       server = app.listen(0, "127.0.0.1", () => resolve());
@@ -518,7 +537,7 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     expect(getBuffer()).toEqual([]);
   });
 
-  describe("the answering-changed notice, through the real route (#2404)", () => {
+  describe("the answering-changed notice, through the real route, for a write that is not from Tandem's own window (#2404)", () => {
     const answeringNotes = () =>
       getBuffer().filter((n) => n.dedupKey === ANSWERING_CHANGED_NOTICE_KEY);
 
@@ -547,6 +566,17 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       expect(notes[0].message).toContain('"Local One"');
       expect(notes[0].severity).toBe("warning");
       expect(getStartupNotices()).toEqual([notes[0]]);
+      expect(chatMap().size).toBe(0);
+      expect(runs).toEqual([]);
+    });
+
+    it("the same save from Tandem's own window is the user's own: no warning, nothing registered for replay", async () => {
+      writeOrigin = OWN_WINDOW_ORIGIN;
+      await save(file([entry()], "m-1"));
+
+      expect(answeringNotes()).toEqual([]);
+      expect(getBuffer().filter((n) => n.severity !== "info")).toEqual([]);
+      expect(getStartupNotices()).toEqual([]);
       expect(chatMap().size).toBe(0);
       expect(runs).toEqual([]);
     });

@@ -1,9 +1,11 @@
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import {
   API_MODELS_LOCAL_SETTINGS,
+  ERROR_CODE_OWN_WINDOW_ONLY,
   type LocalModelSettingsPostResponse,
   type LocalModelSettingsResponse,
 } from "../../shared/models/contract.js";
+import { noteModelsWriteRefused } from "../models/write-refusal.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /**
@@ -157,8 +159,27 @@ export function setLocalModelEditing(value: boolean): Promise<void> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ editing: value }),
       });
-      const answer = (await res.json().catch(() => null)) as LocalModelSettingsPostResponse | null;
-      if (answer && typeof answer.editing === "boolean" && typeof answer.persisted === "boolean") {
+      const answer = (await res.json().catch(() => null)) as
+        | (LocalModelSettingsPostResponse & { code?: string })
+        | null;
+      if (res.status === 403 && answer?.code === ERROR_CODE_OWN_WINDOW_ONLY) {
+        // Refused: nothing reached the setting. No per-click message — the
+        // Models tab says why, once, at the top. But the box must show what
+        // the SERVER holds, and no value captured at click time can be
+        // trusted for that (an earlier click's optimistic write may be what
+        // was captured). Reads are still allowed from here, so ask; if that
+        // fails too, the value is unknown, never a guess.
+        noteModelsWriteRefused();
+        try {
+          editing = await fetchEditing();
+        } catch {
+          editing = null;
+        }
+      } else if (
+        answer &&
+        typeof answer.editing === "boolean" &&
+        typeof answer.persisted === "boolean"
+      ) {
         editing = answer.editing;
         notice = noticeFor(value, answer);
       } else {

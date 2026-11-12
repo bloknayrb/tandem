@@ -17,6 +17,7 @@ import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
@@ -165,6 +166,10 @@ async function mountWith(editing: boolean) {
   await (await request(1)).answer(200, { editing });
   return view;
 }
+
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
 
 describe("SettingsModelsTab with the real local-model settings store", () => {
   it("fires exactly one GET on mount; until it answers the box is indeterminate and 'Checking…' shows", async () => {

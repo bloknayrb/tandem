@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type ModelFirstRunInput,
@@ -11,6 +13,7 @@ function base(overrides: Partial<ModelFirstRunInput> = {}): ModelFirstRunInput {
     hasConfiguredDefault: false,
     dismissed: false,
     loading: false,
+    pageCannotChangeModels: false,
     ...overrides,
   };
 }
@@ -49,4 +52,26 @@ describe("resolveModelFirstRunNeeded (#1123 M4 first-run decouple)", () => {
   // The dark gate lives at the call site (`BYO_MODELS_ENABLED && …`), not in this
   // predicate — matching `resolveDefaultModelChip`. So there is no `byoEnabled`
   // input to test here; the App.svelte conjunct is what keeps the picker dark.
+
+  // #2404: a page that is not Tandem's own window cannot save a model, so the
+  // picker never opens there; the Models tab says where to go instead.
+  it("never opens on a page that cannot change the models", () => {
+    expect(resolveModelFirstRunNeeded(base({ pageCannotChangeModels: true }))).toBe(false);
+  });
+});
+
+// Nothing mounts App.svelte in tests, so the wiring of that input is pinned
+// from source: the picker's decision is fed the page's OWN origin verdict, which
+// is fixed for a page load. It must not be fed the refusal latch — that would
+// unmount an open picker in the same flush as the refusal it should explain.
+describe("App.svelte feeds the picker the page's own-window verdict (#2404)", () => {
+  const app = readFileSync(
+    join(import.meta.dirname, "..", "..", "src", "client", "App.svelte"),
+    "utf8",
+  );
+
+  it("pageCannotChangeModels is the page-origin classification, not the latch", () => {
+    expect(app).toMatch(/pageCannotChangeModels:\s*modelsPageAccess\(\)\s*===\s*"foreign"/);
+    expect(app).not.toMatch(/pageCannotChangeModels:[^\n]*blocked/);
+  });
 });

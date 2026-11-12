@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   createKeychain,
   KEYCHAIN_SERVICE_MODELS,
@@ -27,8 +26,14 @@ import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
   TAURI_HOSTNAME,
 } from "../../../src/shared/constants.js";
-import { API_MODELS, type ModelsFile } from "../../../src/shared/models/contract.js";
+import {
+  API_MODELS,
+  ERROR_CODE_OWN_WINDOW_ONLY,
+  type ModelsFile,
+  OWN_WINDOW_ONLY_MESSAGE,
+} from "../../../src/shared/models/contract.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
+import { desktopSidecarPolicy } from "../../helpers/own-window-policy.js";
 
 /**
  * Unit tests for `registerModelsRoutes` (#659).
@@ -128,6 +133,7 @@ describe("models API routes", () => {
   beforeEach(() => {
     backend = memoryBackend();
     deps = {
+      ownWindow: desktopSidecarPolicy(),
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend }),
     };
   });
@@ -252,6 +258,7 @@ describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-route-"));
     __resetModelRegistryForTests(tmpDir);
     deps = {
+      ownWindow: desktopSidecarPolicy(),
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
     };
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -279,8 +286,8 @@ describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
     // optimistic-concurrency model rests on (a dropped flag → double-commit).
     const etag = getModelsEtag(); // empty baseline; matches for both callers
     const [r1, r2] = await Promise.all([
-      persistModelsFileIfMatch(validFile, etag),
-      persistModelsFileIfMatch(validFile, etag),
+      persistModelsFileIfMatch(validFile, etag, { source: "unspecified", reconcile: false }),
+      persistModelsFileIfMatch(validFile, etag, { source: "unspecified", reconcile: false }),
     ]);
     const results = [r1, r2];
     expect(results.filter((r) => r.ok).length).toBe(1); // exactly one committed
@@ -343,13 +350,25 @@ describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
     expect(getModelsEtag()).toBe(afterPost);
   });
 
-  it("rejects a non-allowlisted Origin with 403", async () => {
-    const app = makeApp(deps);
-    const res = await request(app, "POST", API_MODELS, withCurrentEtag(validFile), {
-      Origin: "https://evil.example",
-    });
-    expect(res.status).toBe(403);
-  });
+  // #2404: the test is Tandem's own window, not the shared allowlist — which
+  // admits `127.0.0.1` and `tauri.localhost` on any port.
+  it.each(["https://evil.example", "http://127.0.0.1:8080", "http://tauri.localhost:8080", "null"])(
+    "refuses an Origin that is not Tandem's own window (%s) and writes nothing",
+    async (origin) => {
+      const app = makeApp(deps);
+      const etag = getModelsEtag();
+      const res = await request(app, "POST", API_MODELS, withCurrentEtag(validFile), {
+        Origin: origin,
+      });
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({
+        error: "FORBIDDEN",
+        code: ERROR_CODE_OWN_WINDOW_ONLY,
+        message: OWN_WINDOW_ONLY_MESSAGE,
+      });
+      expect(getModelsEtag()).toBe(etag);
+    },
+  );
 
   it("with TANDEM_ALLOW_UNAUTHENTICATED_LAN=1, non-loopback callers are still rejected", async () => {
     await withEnvOverride(TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, "1", async () => {
@@ -391,6 +410,7 @@ describe(`GET ${API_MODELS} (load source, #1123 M2)`, () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-get-"));
     __resetModelRegistryForTests(tmpDir);
     deps = {
+      ownWindow: desktopSidecarPolicy(),
       keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
     };
     vi.spyOn(console, "error").mockImplementation(() => {});
