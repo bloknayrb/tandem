@@ -198,9 +198,10 @@ export function _resetHomeFailureLatchForTests(): void {
  * refuse. But two JS-flavour strings for one folder can still differ: an 8.3
  * short name on one side, or (off Windows) the typed case against the on-disk
  * case. The native flavour settles both, and it is what this module compared
- * and displayed before the gate changed flavour. Never called on a string that
- * fails the UNC / device-prefix screen. Rejects when the path cannot be
- * resolved; callers decide what that means.
+ * and displayed before the gate changed flavour. A string that fails the UNC /
+ * device-prefix screen is returned as given, with no filesystem call: the
+ * screen is this function's own first statement, so no caller can skip it.
+ * Rejects when the path cannot be resolved; callers decide what that means.
  */
 async function nativeForm(p: string): Promise<string> {
   if (rejectUnsafeWindowsPrefix(p) !== null) return p;

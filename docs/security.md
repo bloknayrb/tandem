@@ -865,7 +865,10 @@ not a reflex "it was dismissed before".
     - the home directory, after the same `resolveSafeCwdAsync`;
     - each bundled document folder (`comparableBundledDir`). These are install
       and data folders the app itself supplies (`resolveBundledDocDirs`), not
-      caller input, and they lie outside home.
+      caller input. This code does not confine them: they may or may not be
+      inside home (a Windows install under `%LOCALAPPDATA%` and the app-data
+      sample copy are; other installs need not be). The only screen on them
+      is `nativeForm`'s own prefix check.
 
     So this is neither #1666 nor #1654. For the first three, master made a
     native realpath call on the same folders: its async resolvers used
