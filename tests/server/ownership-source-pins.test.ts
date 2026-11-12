@@ -149,7 +149,17 @@ describe("the handover is wired in a running server, and reachable only through 
     expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled/);
     const start = awareness.indexOf("export function handOverDocumentInbox(");
     const body = awareness.slice(start, awareness.indexOf("\n}\n", start));
-    expect(body).not.toMatch(/\bawait\b|\.then\(|withMcp|withInternal|withBrowser|transact\(/);
+    const keysStart = awareness.indexOf("function currentNoticeKeys(");
+    expect(keysStart).toBeGreaterThan(-1);
+    const keys = awareness.slice(keysStart, awareness.indexOf("\n}\n", keysStart));
+    for (const text of [body, keys]) {
+      expect(text).not.toMatch(
+        /\bawait\b|\.then\(|withMcp|withInternal|withBrowser|transact\(|Refreshed|refreshAnnotations|getOrCreateDocument/,
+      );
+    }
+    // The annotation read is the plain one, on a Y.Doc from the non-creating getter.
+    expect(keys).toContain(".listAnnotations()");
+    expect(body).toContain("getDocument(documentId)");
   });
 
   it("the registry's bulk retire has one caller, the inbox's handover", () => {
@@ -170,7 +180,11 @@ describe("the handover is wired in a running server, and reachable only through 
     // The definition plus two calls.
     expect(ownership.match(/\bhandOver\(documentId\)/g)).toHaveLength(2);
     expect(ownership.match(/\bhandOver\(/g)).toHaveLength(3);
+    expect(ownership.match(/\binboxHandover\(/g)).toHaveLength(1);
     expect(ownership.match(/\binboxHandover\(documentId\)/g)).toHaveLength(1);
+    // Private: not exported, and no other file names it.
+    expect(ownership).not.toMatch(/export\s+(?:async\s+)?function\s+handOver\b/);
+    expect(filesNaming(/\bhandOver\(/)).toEqual(["src/server/sessions/ownership.ts"]);
     for (const declaration of [
       "export function setDocOwner(",
       "export function onDocumentClosed(",

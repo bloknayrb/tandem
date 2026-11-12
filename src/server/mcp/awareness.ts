@@ -239,7 +239,7 @@ let handoverReadFailureLoggedAt = 0;
 
 /** Fixed text: nothing from the error, the document or its records. */
 const HANDOVER_READ_FAILED =
-  "[Tandem] an ownership handover could not read the document's annotations, so every item on it is owed again, accept and dismiss notices included (they may repeat).";
+  "[Tandem] an ownership handover found the document's annotations unreadable (or the document not open), so every item on it is owed again, accept and dismiss notices included (they may repeat).";
 
 /**
  * The keys on `documentId` that are a CURRENT accept/dismiss notice: the key
@@ -297,24 +297,23 @@ function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<str
  */
 export function handOverDocumentInbox(documentId: string): void {
   const ydoc = getDocument(documentId);
-  let noticeKeys = currentNoticeKeys(documentId, ydoc);
-  if (noticeKeys === null) {
-    noticeKeys = new Set();
+  const read = currentNoticeKeys(documentId, ydoc);
+  const notices = read ?? new Set<string>();
+  if (read === null) {
     const now = Date.now();
     if (now - handoverReadFailureLoggedAt >= 60_000) {
       handoverReadFailureLoggedAt = now;
       console.error(HANDOVER_READ_FAILED);
     }
   }
-  const notices = noticeKeys;
 
   // No reader may skip this document on a quiet record made before now
   // (ownership design R4.5). The state and its transaction listener stay:
   // deleting the state would attach a second listener when it is next seen.
-  const quiet = ydoc ? quietDocs.get(ydoc) : undefined;
-  if (quiet) {
-    quiet.quiet.legacy = null;
-    quiet.quiet.cursor = null;
+  const state = ydoc ? quietDocs.get(ydoc) : undefined;
+  if (state) {
+    state.quiet.legacy = null;
+    state.quiet.cursor = null;
   }
 
   // Cursor readers: forget the entries, so the item gets a new seq above
@@ -872,7 +871,9 @@ function logInboxDrop(
  *      it as delivered for good. An entry RETIRED since (`carryHeld`) only
  *      re-owes: if its item qualifies it is handed again (a duplicate for this
  *      reader, which had seen it), so skipping misses a duplicate, never an
- *      item. A FRESH reader (null mark) is never skipped: what it has seen moves
+ *      item. (An ownership handover retires entries of items that ARE owed
+ *      again to every reader, so there a skip would miss an item: it clears
+ *      this record in the same step, `handOverDocumentInbox`.) A FRESH reader (null mark) is never skipped: what it has seen moves
  *      with other readers' acknowledgements.
  * Everything else the pass reads is in that Y.Doc (annotations, replies), and
  * `admit` is a pure schema check. So the pass would produce nothing again, and

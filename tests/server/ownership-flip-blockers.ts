@@ -31,8 +31,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "Handover gap (a): every poll still reads every document and acknowledgement is not scoped, " +
-      "so after a handover a poll by the previous owner, or any cursor-less poll, is handed the " +
-      "re-owed items and its acknowledgement hides them from a fresh cursor again.",
+      "so after a handover a poll by the previous owner, by any other session, or any cursor-less " +
+      "poll, is handed the re-owed items and its acknowledgement hides them from a fresh cursor again.",
     closedBy:
       "The scope PR (inbox scope and scoped acknowledgement, design §6.2), which must flip the test " +
       "'FLIP-BLOCKER gap (a): the previous owner's poll is handed the item, and its acknowledgement " +
@@ -86,8 +86,11 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "a lapse (a laptop asleep past the grace, a Claude Code restart, the detached-record cap) or " +
       "any other handover hands it again every pending user comment on that document, answered or " +
       "not, every resolved comment that was ever edited, and every user reply on a Claude-facing " +
-      "thread; and a comment edited since it was seen arrives without `edited: true`. On master a " +
-      "close and reopen re-hands nothing.",
+      "thread, resolved long ago or not, so the re-hand grows with the document's history until the " +
+      "handled filter lands; and a comment edited since it was seen arrives without `edited: true`. " +
+      "On master a close and reopen re-hands nothing. (A restart that returns under the same owner " +
+      "id inside the two-minute grace is no handover: its fresh cursor counts what its earlier " +
+      "incarnation acknowledged as seen, as on master, so the outcome turns on the grace.)",
     closedBy: "Bryan's answer to it (PR of the handover, 'Needs Bryan').",
   },
   {

@@ -874,6 +874,13 @@ describe("privacy: a handover reveals nothing (ADR-027)", () => {
 
     const again = await b.poll();
     expect(again.hasNew).toBe(false);
+
+    // A cursor-less poll, whose ledger held none of it, sees the same and no more.
+    const legacy = await legacyPoll();
+    expect(actionIds(legacy)).toEqual(controls.actions);
+    expect(replyIds(legacy)).toEqual(controls.replies);
+    expect(JSON.stringify(legacy)).not.toContain("SECRET");
+    expect(legacy.summary).not.toMatch(/\b[3-9] new\b|note|highlight/);
   });
 });
 
@@ -935,6 +942,8 @@ describe("notices behave exactly as on master (R1.3)", () => {
       const without = await noticeRun(who, false);
       const withHandover = await noticeRun(who, true);
       expect(withHandover.notices).toEqual(without.notices);
+      // Not vacuous: the reader is handed at least the notice no poll had returned.
+      expect(without.notices[0]).toContain("unseen");
       // The handover ran in one run and not in the other.
       expect(withHandover.mark).toBeGreaterThan(0);
       expect(without.mark).toBeUndefined();
@@ -1231,7 +1240,7 @@ describe("a handover cannot fail the change it rides on (R1.9)", () => {
     expect(getDocOwner(doc.id)).toBeUndefined();
     expect(markOf(doc.id)).toBe(counter);
     expect(lines()).toEqual([
-      "[Tandem] an ownership handover could not read the document's annotations, so every item on it is owed again, accept and dismiss notices included (they may repeat).",
+      "[Tandem] an ownership handover found the document's annotations unreadable (or the document not open), so every item on it is owed again, accept and dismiss notices included (they may repeat).",
     ]);
     const after = await b.poll();
     expect(actionIds(after)).toEqual(["c1"]);

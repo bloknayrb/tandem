@@ -67,7 +67,7 @@ import { CTRL_ROOM } from "../../shared/constants.js";
 /** Which kind of item an entry versions: annotation, user reply, or chat message. */
 export type EntryKind = "a" | "r" | "c";
 
-/** One returned item version. Removed only by {@link DeliveryRegistry.retire} or `reset`. */
+/** One returned item version. Removed only by {@link DeliveryRegistry.retire}, `retireWhere` or `reset`. */
 export interface RegistryEntry {
   readonly seq: number;
   readonly kind: EntryKind;
