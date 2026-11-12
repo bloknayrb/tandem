@@ -5,8 +5,7 @@ import type { EffectiveLocalRunState, LocalRunState } from "./types.js";
  * a user's chat row is written by the server that ran it; a server that stops
  * mid-run cannot write its end. So a `running` state stamped by any generation
  * other than the current one reads as stopped, reason `interrupted`. Pure: the
- * editor passes the generation it was given (`GET /api/info`), a test passes
- * its own. `currentGeneration` is the server process's run id
+ * editor passes the id it was given, a test passes its own. `currentGeneration` is the server process's run id
  * (`runGeneration` from `GET /api/models/chat-answerer`), never the Hocuspocus
  * generation token. A null `currentGeneration` (not known yet) leaves the state as
  * written.

@@ -376,9 +376,9 @@ export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
  */
 export const CHAT_NOTICE_TEXT: Record<ChatNoticeKind, string> = {
   "no-document":
-    "The local model could not answer this message, because its document was not open. Open a document and send your message again.",
+    "The local model could not answer this message, because no document was open for it. Open the document you want to ask about and send your message again.",
   "no-local-model":
-    "No local model could answer this message. In Settings → Models, mark a local model as Default or fix its Endpoint, or set your chat to be answered by Claude.",
+    "No local model could answer this message. In Settings → Models, add or enable a local model and mark it as Default (or fix its Endpoint), or set your chat to be answered by Claude.",
 };
 
 /**
@@ -425,6 +425,8 @@ interface RunReq {
   started?: boolean;
   /** Set when this run, instead of starting, posted a chat notice. */
   noticed?: boolean;
+  /** Set when it threw before it started. */
+  threw?: boolean;
 }
 
 interface RunSlot {
@@ -700,12 +702,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     const readEditing = deps.editingState;
     const startEpoch = readEditing ? readEditing().offEpoch : -1;
     const startLeftTandem = leftTandemEpoch();
+    // A run that starts outside Tandem never edits, even once Tandem returns.
+    const startedInTandem = readModeState() === "tandem";
     const editingAllowed = (): boolean => {
       if (!readEditing) return false;
       const now = readEditing();
       return (
         now.enabled === true &&
         now.offEpoch === startEpoch &&
+        startedInTandem &&
         readModeState() === "tandem" &&
         leftTandemEpoch() === startLeftTandem
       );
@@ -960,13 +965,17 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       } catch (err) {
         // The detached promise must never reject (→ unhandledRejection → exit).
         console.error("[local-model] collaborator run failed", err);
+        req.threw = true;
       } finally {
         // Claimed but never started (superseded, switched to Claude, or its
         // document changed while it waited): the editor is still told it
         // ended, and why (R3.4). Not for a run that posted a notice instead.
         if (!req.started && !req.noticed) {
           try {
-            writeLocalRun(req.replyTo, { status: "stopped", reason: "aborted" });
+            writeLocalRun(req.replyTo, {
+              status: "stopped",
+              reason: req.threw ? "error" : "aborted",
+            });
           } catch (err) {
             console.error("[local-model] could not record the run state", err);
           }

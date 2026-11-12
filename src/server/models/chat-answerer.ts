@@ -34,7 +34,10 @@
  * so a switch to the local model that was in flight cannot land after it. A
  * later build's file is deleted too: it holds only this switch. A switch to
  * the local model takes effect only after its own write succeeded, and only
- * if no later request arrived meanwhile.
+ * if no later request arrived meanwhile. If the delete fails (a locked file,
+ * a permission), `{ answerer: "claude" }` is written over it instead; only if
+ * both fail can the disk still read "local", and that is logged and reported
+ * `persisted: false`.
  *
  * **A later build's file is never switched to the local model.** That switch
  * takes effect for this run of the server and is reported `persisted: false`,
@@ -300,9 +303,20 @@ export async function setChatAnswerer(
     setEffective("claude");
     recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
     removeSync(filePath());
-    // And again behind a local write still in flight.
+    // And again behind a local write still in flight. If that delete fails,
+    // write Claude into the file instead, so the disk cannot keep "local".
     await enqueue(async () => {
-      removeSync(filePath());
+      if (removeSync(filePath())) return;
+      if (readDisk(filePath()) === "claude") return;
+      try {
+        await atomicWriteConfigFile(filePath(), serialize(filePath(), "claude"));
+      } catch (err) {
+        console.error(
+          `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be switched to Claude on disk either (${
+            err instanceof Error ? err.message : String(err)
+          }); the local model may answer after a restart.`,
+        );
+      }
     });
     return settled("claude");
   }

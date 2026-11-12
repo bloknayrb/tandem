@@ -331,6 +331,8 @@ describe("the local model chosen: Tandem and Solo (R3.1)", () => {
     collab.onEvent(userChat("u1", "doc-s"));
     const opts = await p.entered;
     expect(opts.editingAllowed()).toBe(false);
+    setMode("tandem");
+    expect(opts.editingAllowed()).toBe(false);
     p.release();
     await drain(collab);
   });
@@ -657,6 +659,20 @@ describe("run state on the user's row (R3.4)", () => {
     });
   }
 
+  it("a throw before the run started (building its prompt): stopped, error", async () => {
+    setupDoc("doc-throw-early");
+    const collab = createLocalModelCollaborator(
+      deps({
+        editingState: () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    collab.onEvent(userChat("u1", "doc-throw-early"));
+    await drain(collab);
+    expect(row("u1")?.localRun).toEqual({ status: "stopped", reason: "error", generation: G });
+  });
+
   it("a throwing runTurn: stopped, error", async () => {
     setupDoc("doc-throw");
     const collab = createLocalModelCollaborator(
@@ -752,7 +768,7 @@ describe("run state on the user's row (R3.4)", () => {
     expect(row("u1")).toBeUndefined();
   });
 
-  it("after a restart mid-run, a 'running' state reads as stopped, interrupted", () => {
+  it("a 'running' state from another server process (one that stopped mid-run) reads as stopped, interrupted", () => {
     const stale = { status: "running" as const, generation: "an-earlier-process" };
     expect(effectiveLocalRun(stale, G)).toEqual({
       status: "stopped",

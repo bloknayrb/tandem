@@ -283,6 +283,34 @@ describe("switching (R1.1, R1.2, R2.1)", () => {
     expect(getStartupNotices()).toEqual([]);
   });
 
+  it("→ Claude when the file cannot be deleted: Claude is written over it, so a restart reads Claude even with the record write failing too", async () => {
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    const rm = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("EPERM");
+    });
+    writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    const result = await setChatAnswerer("claude", "own-window");
+    expect(result).toEqual({ answerer: "claude", persisted: true });
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8")).answerer).toBe("claude");
+    await __flushLocalModelAnnouncedForTests();
+    rm.mockRestore();
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+  });
+
+  it("→ Claude when neither the delete nor the fallback write lands: reported unsaved", async () => {
+    await setChatAnswerer("local", "own-window");
+    vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("EPERM");
+    });
+    writeControl.fail.add(CHAT_ANSWERER_FILE_NAME);
+    const result = await setChatAnswerer("claude", "own-window");
+    expect(result).toEqual({ answerer: "claude", persisted: false });
+    expect(chatAnswerer()).toBe("claude");
+  });
+
   it("a failed local write leaves Claude, and says so", async () => {
     writeControl.fail.add(CHAT_ANSWERER_FILE_NAME);
     const result = await setChatAnswerer("local", "own-window");

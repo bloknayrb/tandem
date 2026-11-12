@@ -21,7 +21,7 @@
  *
  *   GET    /api/models/chat-answerer  — who answers chat, and whether a
  *                                       local model would answer now (#1123).
- *                                       Loopback only.
+ *                                       Loopback, and Tandem's own window only.
  *   POST   /api/models/chat-answerer  — switch who answers chat. Body
  *                                       `{ answerer: "claude" | "local" }`.
  *
