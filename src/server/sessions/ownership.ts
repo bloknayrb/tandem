@@ -5,16 +5,23 @@
  *
  * **Ships dark.** Every exported function that production code calls returns at
  * once while `ownershipEnabled()` is false, so a release build never creates a
- * record, an entry or a timer. The `ownership-flag-on` CI job runs everything
+ * record, an entry or a timer. (The wiring seams — `setTransportView`,
+ * `setOwnershipSeqSource` and their kin — only store a function, which
+ * nothing calls while dark.) The `ownership-flag-on` CI job runs everything
  * flag-on.
  *
  * **What is here.** PR 1a: records, labels, display kinds, attachment and lapse
  * (ownership design §3.4), the ownership map, `setDocOwner`, the default
  * rule's user-side seam, a presence seam that answers "not present" until PR
  * 3b, and a no-op `startOrWake`. PR 1c: the decisions enforcement rests on
- * (`claimForWrite`, `decideTake`, `takeDocument`), loss records (ownership design §5.3) and
+ * (`checkWrite`, `decideTake`, `takeDocument`), loss records (ownership design §5.3) and
  * the
- * thread answerers (ownership design §5.5). **Nothing here answers a tool call**: the MCP tool
+ * thread answerers (ownership design §5.5). PR 2a: a write's claim takes
+ * effect at its operation's outcome (`beginWriteClaim`, `settleWriteClaim`),
+ * and the inbox scope read PR 2b will call (`inboxScopeOf`). ("PR 2b" in
+ * this file's comments is the document half of the inbox work, the second of
+ * the three PRs that replaced the plan's PR 2, not the setup-entry PR.)
+ * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
  *
@@ -34,6 +41,7 @@ import { ownershipEnabled } from "../ownership-flag.js";
 import { runOutsideMcpContext } from "./context.js";
 import {
   docOpQueueSizeForTests,
+  isDocOpQueueBusy,
   resetDocOpQueuesForTests,
   runWhenDocIdle,
 } from "./doc-op-queue.js";
@@ -49,19 +57,12 @@ export type OwnershipKind = "default" | "claimed" | "opened" | "assigned";
 
 /**
  * Why an ownership entry changed. Later PRs add their causes. `claim` is a
- * write to an unowned document, `take` a `tandem_open` (ownership design §4.2),
- * `claim-reversed` a claim undone because its operation was refused on its
- * arguments (§5.1: such a refusal never claims), `stale` an entry whose record
- * was gone.
+ * write to an unowned document, applied once the write's outcome is known
+ * (a refusal that never claims, §5.1, and a throw apply nothing, so there is
+ * no cause for undoing one); `take` a `tandem_open` (ownership design §4.2);
+ * `stale` an entry whose record was gone.
  */
-export type OwnershipChangeCause =
-  | "user-open"
-  | "lapse"
-  | "take-back"
-  | "claim"
-  | "take"
-  | "claim-reversed"
-  | "stale";
+export type OwnershipChangeCause = "user-open" | "lapse" | "take-back" | "claim" | "take" | "stale";
 
 /**
  * Why a record lost a document, for the causes that block it from claiming
@@ -167,8 +168,23 @@ export interface TransportViewEntry {
 
 const records = new Map<string, OwnerRecord>();
 const ownerByDoc = new Map<string, OwnershipEntry>();
-/** Per-document handover mark (ownership design §6.3). Written by PR 2; only cleared here. */
+/**
+ * Per-document handover mark (ownership design §6.3 step 2). It outlives
+ * ownership entries, an unowned spell and a close and reopen, for the server
+ * run: a notice at or below it was handed to an earlier owner. PR 2b's
+ * handover writes it; until then only `setHandoverSeqForTests` does.
+ */
 const handoverSeq = new Map<string, number>();
+/**
+ * Claims by writes whose outcome is not known yet (PR 2a). **Nothing reads
+ * this to decide who holds or may claim a document**: no reader, no check, no
+ * take, `recordHoldsState` and no scope predicate. Only the settle of the
+ * same write looks its own token up. It exists so the tab-close point can
+ * cancel a claim
+ * (a document closed during the write gets no entry, even if it is reopened
+ * before the write returns), and so tests can count it.
+ */
+const pendingClaims = new Set<PendingClaim>();
 /**
  * The document's loss record (ownership design §5.3): which record lost it
  * and why. **At most one per document**, because a loss stands only until the
@@ -191,6 +207,7 @@ let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
 let seqSource: () => number = () => 0;
+let compositeObserver: ((step: CompositeStep, documentId: string) => void) | undefined;
 let graceMs = DEFAULT_GRACE_MS;
 const lastLogAt = new Map<string, number>();
 
@@ -277,7 +294,14 @@ export function setWaitingProbe(probe: (documentId: string, ownerId: string) => 
   waitingProbe = probe;
 }
 
-/** Source of `sinceSeq` (ownership design §2). The inbox registry's counter, from PR 2. */
+/**
+ * Source of `sinceSeq` (ownership design §2): the delivery registry's counter.
+ * `src/server/index.ts` wires it at boot (pinned from source in
+ * `tests/server/ownership-source-pins.test.ts`); unwired it answers 0. Read
+ * when an entry is written, so for a claim made by a write it is the counter
+ * at the moment the claim takes effect. A claim made by an inbox poll (PR 2b)
+ * passes its own value to `setDocOwner` instead: the counter before its pass.
+ */
 export function setOwnershipSeqSource(source: () => number): void {
   seqSource = source;
 }
@@ -590,8 +614,9 @@ function lapse(record: OwnerRecord): void {
           record.lapsed === true &&
           !isAttached(record.ownerId);
         if (stillThis) setDocOwner(documentId, defaultRuleOwner(), "lapse");
-        // On every exit: a move that was no longer needed (the tab closed, the
-        // claim was reversed) must still let a record with nothing left go.
+        // On every exit: a move that was no longer needed (the tab closed,
+        // another record took the document) must still let a record with
+        // nothing left go.
         deleteIfGone(record);
       },
       (err) => logLimited("throw:lapse", `[ownership] lapse failed: ${errorText(err)}`),
@@ -637,6 +662,12 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
  * Step 1's handover is PR 2's, step 3 (change notices) PR 2's, step 4
  * (publishing owner fields through `broadcastOpenDocs`) PR 5's.
  *
+ * **A write's claim reaches this only once its outcome is known** (PR 2a,
+ * `settleWriteClaim`): a write that is refused on its arguments, or throws,
+ * never calls it, so nothing here runs for a claim that does not stand.
+ * `sinceSeq` overrides the sequence source, for a claim made by an inbox
+ * poll (PR 2b: the counter before that poll's pass).
+ *
  * It can run inside the registry's removal path (`closeEntry`) and inside
  * another client's request (a lapse triggered by an eviction in its
  * `initialize`), so whatever a later PR adds to it must not assume a caller's
@@ -647,32 +678,49 @@ export function setDocOwner(
   next: { ownerId: string; kind: OwnershipKind } | null,
   cause: OwnershipChangeCause,
   caller?: string,
+  sinceSeq?: number,
 ): void {
   if (!ownershipEnabled()) return;
   total("setDocOwner", undefined, () => {
+    // Read before anything is changed, so a source that throws leaves every
+    // map as it was. Only for an entry about to be written: removing one (a
+    // lapse to unowned, the stale-entry backstop) must not depend on it.
+    const seq = next === null ? 0 : (sinceSeq ?? seqSource());
+    const previousId = ownerByDoc.get(documentId)?.ownerId;
+    if (previousId !== undefined && previousId !== next?.ownerId) {
+      // Step 1, the handover (ownership design §6.3). Its body is PR 2b's.
+      compositeObserver?.("handover", documentId);
+    }
     // Step 1, the loss-record half (ownership design §5.3). A loss stands
     // until the document changes owner again, and going to unowned counts.
-    const previousId = ownerByDoc.get(documentId)?.ownerId;
     if (previousId !== next?.ownerId) {
+      compositeObserver?.("loss", documentId);
       lossByDoc.delete(documentId);
       const lost = next === null ? undefined : lossCauseOf(cause, next.ownerId);
       if (previousId !== undefined && lost !== undefined) {
         lossByDoc.set(documentId, { ownerId: previousId, cause: lost });
       }
     }
+    // Step 2, the entry.
+    compositeObserver?.("entry", documentId);
     if (next === null) {
       ownerByDoc.delete(documentId);
-      return;
+    } else {
+      if (next.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
+      ownerByDoc.set(documentId, {
+        ownerId: next.ownerId,
+        kind: next.kind,
+        since: Date.now(),
+        sinceSeq: seq,
+      });
     }
-    if (next.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
-    ownerByDoc.set(documentId, {
-      ownerId: next.ownerId,
-      kind: next.kind,
-      since: Date.now(),
-      sinceSeq: seqSource(),
-    });
+    // Step 3, change notices (PR 2b), and step 4, publishing (PR 5): no body yet.
+    compositeObserver?.("notices", documentId);
+    compositeObserver?.("publish", documentId);
     // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b's.
+    compositeObserver?.("wake", documentId);
     if (
+      next !== null &&
       next.ownerId === TANDEM_OWNER_ID &&
       caller !== TANDEM_OWNER_ID &&
       cause !== "take-back" &&
@@ -714,16 +762,22 @@ export function applyUserOpenDefaultToDocuments(documentIds: Iterable<string>): 
 }
 
 /**
- * The tab-close point (ownership design §4.2): the entry and its handover mark
- * go. Synchronous, with no await between its caller's check and this write.
- * The handover that precedes it is PR 2's.
+ * The tab-close point (ownership design §4.2): the entry and the loss record
+ * go, and a claim still pending on a write is cancelled, so a document closed
+ * during a write gets no entry even if it is reopened before the write
+ * returns (reopening starts from the default rule, §6.3). **The handover mark
+ * stays** (§6.3 step 2: it survives a close and reopen for the server run).
+ * Synchronous, with no await between its caller's check and this write. The
+ * handover that precedes it is PR 2b's.
  */
 export function onDocumentClosed(documentId: string): void {
   if (!ownershipEnabled()) return;
   total("onDocumentClosed", undefined, () => {
     ownerByDoc.delete(documentId);
-    handoverSeq.delete(documentId);
     lossByDoc.delete(documentId);
+    for (const pending of [...pendingClaims]) {
+      if (pending.documentId === documentId) pendingClaims.delete(pending);
+    }
   });
 }
 
@@ -744,7 +798,8 @@ function lossCauseOf(cause: OwnershipChangeCause, nextOwnerId: string): LossCaus
 }
 
 /**
- * The document's entry, after clearing one whose record no longer exists. An
+ * The document's entry, after clearing one whose record no longer exists
+ * (**inside the document's queue only**; a reader uses `readEntry`). An
  * entry is never written for a record that does not exist, and a lapse moves a
  * record's documents before deleting it, so this is a backstop: without it
  * such an entry would refuse every session until the tab closed.
@@ -756,6 +811,18 @@ function liveEntry(documentId: string): OwnershipEntry | undefined {
     return undefined;
   }
   return entry;
+}
+
+/**
+ * The document's entry as a **reader** sees it: one whose record no longer
+ * exists reads as unowned, and nothing is written. Clearing such an entry is
+ * an ownership change (it runs the composite), so only the two decisions made
+ * inside the document's queue do it (`checkWrite`, `decideTake`, through
+ * `liveEntry`); every read outside the queue comes through here.
+ */
+function readEntry(documentId: string): OwnershipEntry | undefined {
+  const entry = ownerByDoc.get(documentId);
+  return entry && records.has(entry.ownerId) ? entry : undefined;
 }
 
 function viewOf(ownerId: string): HolderView | null {
@@ -772,7 +839,11 @@ function refusalFor(
   if (entry?.ownerId === callerId) return undefined;
   const holder = entry ? viewOf(entry.ownerId) : null;
   // "The first row wins" (ownership design §5.3): a caller that lost this document is told so
-  // before it is told who holds it now.
+  // before it is told who holds it now. With no entry this row is unreachable
+  // today: `setDocOwner` deletes the loss record on every change of owner,
+  // going to unowned included, so a loss never stands on an unowned document.
+  // It is kept for PR 5's `released` cause (design §5.3: Release lasts while
+  // Tandem's Claude is not present), and `setLossForTests` reaches it.
   const loss = lossByDoc.get(documentId);
   if (loss?.ownerId === callerId) return { ok: false, reason: "lost", cause: loss.cause, holder };
   if (!entry) return undefined;
@@ -781,51 +852,172 @@ function refusalFor(
   return { ok: false, reason: "held", holder };
 }
 
-/** What a claim wrote, so that exactly that claim can be reversed. */
-export interface ClaimToken {
-  readonly entry: OwnershipEntry;
-  readonly clearedLoss?: { ownerId: string; cause: LossCause };
-}
+/** Where `callerId` stands on a document for a write, given the document's entry. */
+type WriteStanding =
+  /** The caller holds it. */
+  | { ok: true; holds: true }
+  /**
+   * Nobody holds it and the caller may write. `claim` is the kind the caller
+   * would hold it as, or null for a caller that never holds a document (one
+   * with no record: an entry for a record that does not exist could never
+   * lapse).
+   */
+  | { ok: true; holds: false; claim: OwnershipKind | null }
+  | OwnershipRefusal;
 
 /**
- * The ownership check for a write, and the claim of an unowned document
- * (ownership design §4.2, §5.1): **the first thing inside the queued
- * operation**, synchronous. Refused when another record holds the document or
- * the caller lost it; otherwise allowed, and an unowned document is claimed —
- * `default` for a present Tandem's Claude, `claimed` for anyone else. A
- * Tandem's Claude that is not present never claims (`not-present`).
- *
- * A caller with no record (a wiring fault, or a client whose record was
- * deleted while its call waited) may write to an unowned document but never
- * holds one: an entry for a record that does not exist could never lapse.
+ * The one rule for who may write and who may claim (ownership design §4.2,
+ * §5.1), **pure**: it reads the maps and writes nothing. The check at the top
+ * of a write, the re-decision when the write's claim takes effect and the
+ * inbox scope read all answer from it, so they cannot drift apart.
  */
-export function claimForWrite(
+function standingOf(
   documentId: string,
   callerId: string,
-): { ok: true; claimed: ClaimToken | null } | OwnershipRefusal {
-  const entry = liveEntry(documentId);
-  if (entry?.ownerId === callerId) return { ok: true, claimed: null };
+  entry: OwnershipEntry | undefined,
+): WriteStanding {
+  if (entry?.ownerId === callerId) return { ok: true, holds: true };
   const refusal = refusalFor(documentId, callerId, entry);
   if (refusal) return refusal;
   const isTandem = callerId === TANDEM_OWNER_ID;
   if (isTandem && !isTandemPresent()) return { ok: false, reason: "not-present", holder: null };
-  if (!isTandem && !records.has(callerId)) return { ok: true, claimed: null };
-  const clearedLoss = lossByDoc.get(documentId);
-  const written = writeEntry(documentId, callerId, isTandem ? "default" : "claimed", "claim");
-  return { ok: true, claimed: { entry: written, ...(clearedLoss ? { clearedLoss } : {}) } };
+  if (!isTandem && !records.has(callerId)) return { ok: true, holds: false, claim: null };
+  return { ok: true, holds: false, claim: isTandem ? "default" : "claimed" };
 }
 
 /**
- * Undo a claim whose operation was then refused on its arguments or on a fact
- * fixed at open (ownership design §5.1: such a refusal never claims). Only
- * the exact entry the claim wrote is removed — never one the caller held
- * before the operation, nor a later one — and a loss record the claim cleared
- * is put back, so a refused call changes nothing.
+ * The ownership check for a write (ownership design §4.2, §5.1): **the first
+ * thing inside the queued operation**, synchronous. Refused when another
+ * record holds the document or the caller lost it; otherwise allowed.
+ * **It claims nothing** (PR 2a): `claim` is the kind an unowned document
+ * would be claimed as — `default` for a present Tandem's Claude, `claimed`
+ * for anyone else — and the caller applies it with `settleWriteClaim` once
+ * the write's outcome is known. A Tandem's Claude that is not present never
+ * claims (`not-present`).
+ *
+ * A caller with no record (a wiring fault, or a client whose record was
+ * deleted while its call waited) may write to an unowned document but never
+ * holds one (`claim: null`).
+ *
+ * The one thing it may write: an entry whose record is gone is cleared here
+ * (`liveEntry`), as before.
  */
-export function reverseClaim(documentId: string, token: ClaimToken): void {
-  if (ownerByDoc.get(documentId) !== token.entry) return;
-  setDocOwner(documentId, null, "claim-reversed", token.entry.ownerId);
-  if (token.clearedLoss) lossByDoc.set(documentId, token.clearedLoss);
+export function checkWrite(
+  documentId: string,
+  callerId: string,
+): { ok: true; claim: OwnershipKind | null } | OwnershipRefusal {
+  const standing = standingOf(documentId, callerId, liveEntry(documentId));
+  if (!standing.ok) return standing;
+  return { ok: true, claim: standing.holds ? null : standing.claim };
+}
+
+/** Names no record: an owner id can be a bearer session id. */
+const CLAIM_NOT_APPLIED =
+  "[ownership] a write landed but its claim of the document could not be applied; the document stays unowned";
+
+/** A write's claim of an unowned document, until the write's outcome is known. */
+export interface PendingClaim {
+  readonly documentId: string;
+  readonly callerId: string;
+}
+
+/**
+ * Note that a write which may claim `documentId` has started. The token is
+ * invisible: until `settleWriteClaim` applies it the document reads as
+ * unowned to everything. Inert (an unregistered token) while ownership is off.
+ */
+export function beginWriteClaim(documentId: string, callerId: string): PendingClaim {
+  const pending: PendingClaim = { documentId, callerId };
+  if (ownershipEnabled()) pendingClaims.add(pending);
+  return pending;
+}
+
+/** Forget a pending claim whose write was refused without claiming, or threw. Changes nothing else. */
+export function dropWriteClaim(pending: PendingClaim): void {
+  pendingClaims.delete(pending);
+}
+
+/**
+ * The write behind `pending` kept its claim: make the caller the document's
+ * owner, **if the claim still stands now**. Called inside the queued
+ * operation, synchronously, before it returns, so the next operation in the
+ * document's queue finds the claim in effect. Everything is decided again at
+ * this moment, by the same rule as the check:
+ *
+ * - the document was not closed during the write (`onDocumentClosed` cancels
+ *   the token, so a close followed by a reopen counts) and is open now
+ *   (`stillOpen`, which the caller reads from the document registry). The
+ *   second is kept beside the first on purpose: the cancellation holds only
+ *   while every untrack goes through the tab-close point, and one registry
+ *   read covers a later path that forgets it;
+ * - it has no entry at all (an unqueued change that gave it an owner during
+ *   the write stands);
+ * - the caller's record still exists (a record that lapsed but still exists
+ *   gets the entry, and `rejudge` arms its grace again; one that was deleted
+ *   gets none), it holds no blocking loss for the document, and a Tandem's
+ *   Claude caller is still present.
+ *
+ * **It never throws.** The write has already happened: a failure here must
+ * not turn it into an error the client would retry. A claim that could not be
+ * applied is logged and the document stays unowned. Returns whether the
+ * caller now holds the document.
+ */
+export function settleWriteClaim(pending: PendingClaim, stillOpen: boolean): boolean {
+  try {
+    // Before the flag is read, so the token goes whatever happens next.
+    const registered = pendingClaims.delete(pending);
+    if (!ownershipEnabled() || !registered || !stillOpen) return false;
+    const { documentId, callerId } = pending;
+    const standing = standingOf(documentId, callerId, ownerByDoc.get(documentId));
+    if (!standing.ok || standing.holds || standing.claim === null) return false;
+    const kind = standing.claim;
+    setDocOwner(documentId, { ownerId: callerId, kind }, "claim", callerId);
+    const entry = ownerByDoc.get(documentId);
+    if (entry?.ownerId !== callerId || entry.kind !== kind) {
+      // `setDocOwner` is total and has logged why.
+      logLimited("claim-not-applied", CLAIM_NOT_APPLIED);
+      return false;
+    }
+    // A holder that is detached must have a grace running, or it would keep
+    // the document until its transport is reaped.
+    const record = records.get(callerId);
+    if (record) rejudge(record);
+    return true;
+  } catch {
+    logLimited("claim-not-applied", CLAIM_NOT_APPLIED);
+    return false;
+  }
+}
+
+/** What an inbox poll may do with a document (ownership design §6.2). */
+export type InboxScope = "holds" | "may-claim" | "neither";
+
+/**
+ * Where `callerId` stands on an **open** document for an inbox poll
+ * (ownership design §6.2; PR 2b calls it, nothing in production does yet).
+ * **Pure**: a reader never changes ownership, so an entry whose record is
+ * gone reads as unowned and is left alone.
+ *
+ * - `"holds"`: the caller's record holds it.
+ * - `"may-claim"`: nobody holds it and a poll by the caller may claim it now —
+ *   the caller has a record, holds no blocking loss for it, is not a
+ *   Tandem's Claude that is not present, **and the document's operation queue
+ *   is idle**. A write whose outcome is not known yet keeps the queue busy, so
+ *   a poll cannot claim a document in the middle of one.
+ * - `"neither"`: anything else, including a caller with no owner id or no
+ *   record (design §6.2 gives no answer for one; this is provisional, and
+ *   listed for Bryan on PR 2a), and every caller while ownership is off.
+ *
+ * It cannot see whether the document is open (this module never imports the
+ * registry): pass open documents only. Chat is PR 2c's.
+ */
+export function inboxScopeOf(documentId: string, callerId: string | undefined): InboxScope {
+  if (!ownershipEnabled() || callerId === undefined) return "neither";
+  const standing = standingOf(documentId, callerId, readEntry(documentId));
+  if (!standing.ok) return "neither";
+  if (standing.holds) return "holds";
+  if (standing.claim === null) return "neither";
+  return isDocOpQueueBusy(documentId) ? "neither" : "may-claim";
 }
 
 /**
@@ -869,9 +1061,10 @@ export function takeDocument(
 }
 
 /**
- * Write an entry through `setDocOwner` and confirm it landed. `setDocOwner`
- * is total (it logs and swallows), so a failed write would otherwise read as
- * "claimed" to the operation about to run on the strength of it.
+ * Write a take's entry through `setDocOwner` and confirm it landed.
+ * `setDocOwner` is total (it logs and swallows), so a failed write would
+ * otherwise read as "taken". (A write's claim is applied by
+ * `settleWriteClaim`, which must not throw.)
  */
 function writeEntry(
   documentId: string,
@@ -895,20 +1088,26 @@ function writeEntry(
  * The record holding `documentId` when it is not `callerId`, as a view; null
  * when the caller holds it or nobody does. For the two owner-only reads
  * (`tandem_switchDocument`, a write-mode `tandem_status` focus), which never
- * claim.
+ * claim. A reader: an entry whose record is gone reads as nobody's and is
+ * left as it is.
  */
 export function otherHolderOf(
   documentId: string,
   callerId: string,
 ): { holder: HolderView | null } | null {
-  const entry = liveEntry(documentId);
+  const entry = readEntry(documentId);
   if (!entry || entry.ownerId === callerId) return null;
   return { holder: viewOf(entry.ownerId) };
 }
 
-/** The ids of the documents `ownerId` holds. */
+/**
+ * The ids of the documents `ownerId` holds. A reader: an entry whose record is
+ * gone holds nothing (`readEntry`'s rule), so an id with no record is told it
+ * holds nothing.
+ */
 export function heldDocumentIds(ownerId: string): string[] {
   const held: string[] = [];
+  if (!records.has(ownerId)) return held;
   for (const [documentId, entry] of ownerByDoc)
     if (entry.ownerId === ownerId) held.push(documentId);
   return held;
@@ -986,6 +1185,7 @@ export function ownershipSnapshotForTests(): {
   losses: Array<[string, { ownerId: string; cause: LossCause }]>;
   answerers: number;
   queuedDocuments: number;
+  pendingClaims: number;
 } {
   return {
     transportMode,
@@ -996,7 +1196,35 @@ export function ownershipSnapshotForTests(): {
     losses: [...lossByDoc],
     answerers: answererByItem.size,
     queuedDocuments: docOpQueueSizeForTests(),
+    pendingClaims: pendingClaims.size,
   };
+}
+
+/** The steps of the ownership-change composite (ownership design §4.3), as a test may watch them. */
+export type CompositeStep = "handover" | "loss" | "entry" | "notices" | "publish" | "wake";
+
+/**
+ * Watch the composite: `observer` is told each step `setDocOwner` reaches,
+ * whether or not the step has a body yet. For "this call changed no
+ * ownership" assertions that stay true once PR 2b and PR 5 fill the steps in.
+ */
+export function setCompositeObserverForTests(
+  observer: ((step: CompositeStep, documentId: string) => void) | undefined,
+): void {
+  compositeObserver = observer;
+}
+
+/**
+ * Put a loss record on a document whatever its entry, which no production
+ * path can do for an unowned one before PR 5's `released` (see `refusalFor`).
+ */
+export function setLossForTests(documentId: string, ownerId: string, cause: LossCause): void {
+  lossByDoc.set(documentId, { ownerId, cause });
+}
+
+/** Write a document's handover mark, which only PR 2b's handover will write. */
+export function setHandoverSeqForTests(documentId: string, seq: number): void {
+  handoverSeq.set(documentId, seq);
 }
 
 /** Shorten the grace for a test. */
@@ -1012,6 +1240,8 @@ export function resetOwnershipForTests(): void {
   handoverSeq.clear();
   lossByDoc.clear();
   answererByItem.clear();
+  pendingClaims.clear();
+  compositeObserver = undefined;
   resetDocOpQueuesForTests();
   lastLogAt.clear();
   transportMode = undefined;

@@ -380,6 +380,7 @@ describe("reset", () => {
       losses: [],
       answerers: 0,
       queuedDocuments: 0,
+      pendingClaims: 0,
     });
   });
 });
@@ -403,6 +404,7 @@ describe("flag off: nothing is ever created", () => {
       losses: [],
       answerers: 0,
       queuedDocuments: 0,
+      pendingClaims: 0,
     });
   });
 });

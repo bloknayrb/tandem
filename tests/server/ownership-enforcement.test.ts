@@ -24,6 +24,7 @@ import type * as Y from "yjs";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import {
@@ -218,9 +219,12 @@ afterEach(async () => {
   }
   await close?.();
   close = undefined;
+  // Close the watches the real opens started before removing their files
+  // (an open handle keeps the directory busy on Windows).
+  for (const d of getOpenDocs().values()) if (d.source === "file") unwatchFile(d.filePath);
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   resetOwnershipForTests();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
@@ -880,12 +884,16 @@ describe("tandem_open: the take rule (§4.2, §5.4)", () => {
           resolve: () => ({ open: true, documentId: docId("d"), defaulted: false }),
         },
         async () => {
-          expect(holds(A, "d")).toBe(true);
+          // Until PR 2a this pinned the opposite: 1c claimed at the check and
+          // reversed afterwards. The claim now takes effect only at a kept
+          // outcome, so the document is unowned while the body runs.
+          expect(getDocOwner(docId("d"))).toBeUndefined();
           throw new Error("boom");
         },
       ),
     ).rejects.toThrow("boom");
     expect(getDocOwner(docId("d"))).toBeUndefined();
+    expect(ownershipSnapshotForTests().pendingClaims).toBe(0);
   });
 
   it("tandem_scratchpad makes the caller the new document's owner", async () => {
