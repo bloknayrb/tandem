@@ -45,14 +45,16 @@
  * takes effect for this run of the server and is reported `persisted: false`.
  * A file of this build's own version carries its unknown keys through a write.
  *
- * **Switching on is announced** (#2404): the origin and loopback gates on the
- * route do not prove the user made the request, so every transition to on
- * raises an in-app notice — for any caller, the user's own click included,
- * because the server cannot tell them apart — and registers it for replay to a
- * browser that connects later in this run. Switching off withdraws the replay.
- * `local-model-announced.ts` records whether a browser was actually sent it, so
- * a start-up that finds commenting on with no browser ever told says so then:
- * restarting the server cannot turn an unseen switch into the baseline.
+ * **Who switched it on decides whether it is announced** (#2404). The route
+ * accepts a request only from Tandem's own window (`own-window.ts`). A switch
+ * made there is the user's own: no notice, and `local-model-announced.ts`
+ * records it at once. A switch admitted through the development allowance is
+ * not an own-window change and is announced exactly as #2403 built it: a
+ * notice now, replayed to a browser that connects later in this run, recorded
+ * as told once one of Tandem's own windows was sent it. Switching off
+ * withdraws the replay. At start-up, commenting found on with no record of
+ * the user choosing or being told it raises the start-up notice: a file
+ * changed underneath, or restored, cannot become the silent baseline.
  *
  * Nothing here touches the disk at import. A dark build never calls
  * `primeLocalModelSettings` (the call sits inside the `BYO_MODELS_ENABLED`
@@ -68,9 +70,13 @@ import { resolveAppDataDir } from "../platform.js";
 import {
   __resetLocalModelAnnouncedForTests,
   announceLocalModelChange,
+  announceStartupMismatch,
   editingOnWasAnnounced,
+  isFirstLitStart,
   recordEditingOff,
+  recordSetByUser,
 } from "./local-model-announced.js";
+import type { ModelsWriteSource } from "./own-window.js";
 
 export const LOCAL_MODEL_SETTINGS_FILE_NAME = "local-model-settings.json";
 const LOCAL_MODEL_SETTINGS_VERSION = 1;
@@ -137,8 +143,9 @@ export const EDITING_ON_NOTICE =
   "Local models were allowed to comment on and suggest changes to your documents. If you did not switch this on, switch it off in Settings → Models.";
 
 function announceEditingOn(): void {
-  // Live for a browser that is connected now, registered for one that connects
-  // later in this run, and recorded as "told" only once a browser was sent it —
+  // For a switch that did not come from Tandem's own window. Live for a browser
+  // that is connected now, registered for one that connects later in this run,
+  // and recorded as "told" only once one of Tandem's own windows was sent it —
   // so a switch nobody saw is announced again after a restart.
   announceLocalModelChange(EDITING_ON_NOTICE_KEY, EDITING_ON_NOTICE, { editing: true });
 }
@@ -219,6 +226,9 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
  * can never overrule an Off.
  */
 export function primeLocalModelSettings(): void {
+  // Decide "is this the first start with the flag on?" before anything in
+  // this run could create either file it looks for (see the announced module).
+  isFirstLitStart();
   let read = false;
   try {
     read = readEditing(filePath());
@@ -231,10 +241,12 @@ export function primeLocalModelSettings(): void {
   }
   if (seq !== 0) return;
   effective = read;
-  // Commenting is on at start-up and no browser was ever told: it was switched
-  // on by a request nobody saw (or its notice died with the last run). Say so
-  // now; the first browser to connect is sent it.
-  if (read && !editingOnWasAnnounced()) announceEditingOn();
+  // Commenting is on at start-up and the record does not say the user chose it
+  // or was told: the file changed underneath, came from another build or a
+  // restore, or the record of the user's own switch was lost. Say so now; the
+  // first of Tandem's own windows to connect is sent it. Not part of the
+  // first-lit-start baseline: no dark build can write this file.
+  if (read && !editingOnWasAnnounced()) announceStartupMismatch({ editing: true });
   // Off at start-up, whatever the record says: clear a stale "told", so the
   // next On is announced (the record can outlive a failed write on Off, or a
   // settings file that fell back to off).
@@ -265,8 +277,16 @@ async function settled(requested: boolean): Promise<SetEditingResult> {
   return { editing: effective, persisted: agrees && (effective || !requested) };
 }
 
-/** Switch the setting. See the module header for the ordering guarantees. */
-export async function setLocalModelEditing(value: boolean): Promise<SetEditingResult> {
+/**
+ * Switch the setting. See the module header for the ordering guarantees.
+ * `source` is how the request got in: `own-window` is the user's own change
+ * (recorded, not announced); anything else is announced. Required, so a new
+ * caller cannot default into either.
+ */
+export async function setLocalModelEditing(
+  value: boolean,
+  source: ModelsWriteSource | "unspecified",
+): Promise<SetEditingResult> {
   const mine = ++seq;
   if (!value) {
     // Before any await: a run in flight stops writing at once.
@@ -283,9 +303,16 @@ export async function setLocalModelEditing(value: boolean): Promise<SetEditingRe
     // Only if the On itself was written, and nothing later arrived: an Off
     // issued while this write was in flight has already set `effective` and
     // queued its own write behind us.
-    if (outcome.written && seq === mine && !effective) {
+    if (outcome.written && seq === mine) {
+      const wasOn = effective;
       effective = true;
-      announceEditingOn();
+      // The user's own switch: the record says so at once, even when it was
+      // already on (they have now chosen it themselves). Anything else is
+      // announced on the transition.
+      // The live notice is withdrawn: "if you did not switch this on" is no
+      // longer a question once they have switched it on themselves.
+      if (source === "own-window") recordSetByUser({ editing: true }, EDITING_ON_NOTICE_KEY);
+      else if (!wasOn) announceEditingOn();
     }
   });
   return settled(true);

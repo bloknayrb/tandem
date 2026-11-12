@@ -176,7 +176,8 @@ export interface AnsweringLocalModel {
  * The local model that would answer the next chat, or null when none would.
  * The collaborator watches this across registry writes to tell the user when
  * it changes (#2404): since a saved model takes effect with no restart, a
- * write the user did not make must not be silent.
+ * write that did not come from Tandem's own window must not be silent, and the
+ * user's own change making a different model answer is worth a word.
  */
 export function answeringLocalModel(): AnsweringLocalModel | null {
   const r = resolveLocalModel();

@@ -137,6 +137,13 @@ export interface ModelsGetResponse {
 export interface ModelsPostBody {
   file: ModelsFile;
   ifMatch: string;
+  /**
+   * Set by the one-time localStorage→server reconcile, and by nothing else. It
+   * only tells the server not to raise the "a different model now answers"
+   * info notice for this write (#2404); it grants nothing, and a write that is
+   * not from Tandem's own window is announced whatever it says.
+   */
+  reconcile?: boolean;
 }
 
 /** `POST /api/models` success response — the new ETag after the write. */
@@ -145,6 +152,35 @@ export interface ModelsPostResponse {
 }
 
 // --- HTTP error codes --------------------------------------------------------
+
+/**
+ * Returned (403) by `POST /api/models` and `POST /api/models/local-settings`
+ * when the request does not come from Tandem's own window (#2404): the
+ * browser-set `Origin` is not exactly one of Tandem's own page origins.
+ */
+export const ERROR_CODE_OWN_WINDOW_ONLY = "OWN_WINDOW_ONLY";
+/** The plain reason that goes with {@link ERROR_CODE_OWN_WINDOW_ONLY}. */
+export const OWN_WINDOW_ONLY_MESSAGE =
+  "Local-model settings can only be changed in Tandem's own window.";
+/** The environment variable that names the one extra origin a development or
+ *  test setup may change these settings from. Read by the server at start. */
+export const MODELS_DEV_ORIGIN_ENV = "TANDEM_MODELS_DEV_ORIGIN";
+
+const LOOPBACK_DEV_ORIGIN = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/;
+/**
+ * Is `origin` a loopback page origin the server accepts as the value of
+ * {@link MODELS_DEV_ORIGIN_ENV}: `http://127.0.0.1:<port>`, an explicit port
+ * from 1 to 65535 other than 80 (a browser never writes port 80)? ONE
+ * definition, shared: the server validates the variable with it and the
+ * client uses it to decide whether to suggest the variable at all, so the
+ * client can never suggest a value the server would refuse.
+ */
+export function isLoopbackDevOrigin(origin: string): boolean {
+  const match = LOOPBACK_DEV_ORIGIN.exec(origin);
+  if (!match) return false;
+  const port = Number(match[1]);
+  return port <= 65535 && port !== 80;
+}
 
 /** Returned when a POST /api/models body fails Zod validation. */
 export const ERROR_CODE_INVALID_MODELS_FILE = "INVALID_MODELS_FILE";

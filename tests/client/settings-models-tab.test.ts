@@ -19,6 +19,7 @@ import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const reload = vi.fn(async () => {});
 
@@ -91,6 +92,10 @@ afterEach(() => {
   reload.mockClear();
   cleanup();
 });
+
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
 
 describe("SettingsModelsTab — load / error / empty states", () => {
   it("shows a skeleton (not the empty state) while loading", () => {

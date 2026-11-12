@@ -22,6 +22,13 @@ export interface ModelFirstRunInput {
   dismissed: boolean;
   /** A registry load is in flight — wait rather than flash the picker. */
   loading: boolean;
+  /**
+   * This page is not Tandem's own window, by its own origin (#2404): the
+   * server refuses every model write from it, so a picker would only collect
+   * a form it cannot save. The Models tab says where to go instead. Static for
+   * a page load, so it only decides whether the picker OPENS.
+   */
+  pageCannotChangeModels: boolean;
 }
 
 export function resolveModelFirstRunNeeded({
@@ -29,7 +36,9 @@ export function resolveModelFirstRunNeeded({
   hasConfiguredDefault,
   dismissed,
   loading,
+  pageCannotChangeModels,
 }: ModelFirstRunInput): boolean {
+  if (pageCannotChangeModels) return false;
   if (wizardShowing) return false;
   if (loading) return false;
   if (hasConfiguredDefault) return false;

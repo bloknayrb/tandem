@@ -12,6 +12,7 @@
 import { untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
 import { createModels } from "../hooks/useModels.svelte.js";
+import { createModelsWriteAccess } from "../hooks/useModelsWriteAccess.svelte";
 import type { ModelProvider } from "../hooks/useTandemSettings.svelte.js";
 import { trapTab } from "../utils/focus-trap.js";
 
@@ -23,6 +24,10 @@ interface Props {
 const { onComplete }: Props = $props();
 
 const models = createModels();
+// Once the server has refused a save from this page (#2404: only Tandem's own
+// window can change these settings), Save stays focusable but does nothing;
+// the refusal's own sentence is already in `saveError`. Skip stays live.
+const access = createModelsWriteAccess();
 
 interface ProviderOption {
   value: ModelProvider;
@@ -53,6 +58,12 @@ let apiKey = $state("");
 let endpoint = $state("http://localhost:11434");
 let saving = $state(false);
 let saveError = $state<string | null>(null);
+// Save can be unavailable before anything was tried here: the one-time
+// reconcile at boot may already have been refused (a development page with
+// models in browser storage and no allowance). An inert Save with no words is
+// the thing to avoid, so the reason is shown whenever the page is blocked and
+// no other error is on screen.
+const shownError = $derived(saveError ?? (access.blocked ? access.notice : null));
 // Set once the add COMMITS. A retry after a setDefault failure re-attempts only
 // setDefault against this id — never a second addModel (which would duplicate the
 // entry). Lives for the modal's lifetime.
@@ -117,7 +128,7 @@ function selectProvider(next: ModelProvider) {
 
 async function handleSave(e: SubmitEvent) {
   e.preventDefault();
-  if (!canSave || saving) return;
+  if (!canSave || saving || access.blocked) return;
   saving = true;
   saveError = null;
   try {
@@ -138,7 +149,11 @@ async function handleSave(e: SubmitEvent) {
       // reconciled away) — do NOT finish onboarding with a phantom default, keep
       // the modal open and surface the store's error.
       if (id === null) {
-        saveError = models.saveError ?? "Failed to save model changes.";
+        // Refused as not Tandem's own window: one sentence for that state,
+        // the same one this dialog shows when it opens already blocked.
+        saveError = access.blocked
+          ? access.notice
+          : (models.saveError ?? "Failed to save model changes.");
         return;
       }
       addedId = id;
@@ -274,8 +289,10 @@ function handleSkip() {
         </label>
       {/if}
 
-      {#if saveError}
-        <div role="alert" class="frm-error" data-testid="first-run-error">{saveError}</div>
+      {#if shownError}
+        <div role="alert" id="first-run-error-text" class="frm-error" data-testid="first-run-error">
+          {shownError}
+        </div>
       {/if}
 
       <div class="frm-actions">
@@ -290,6 +307,9 @@ function handleSkip() {
         <button
           type="submit"
           disabled={!canSave || saving}
+          aria-disabled={access.blocked}
+          aria-describedby={access.blocked ? "first-run-error-text" : undefined}
+          style={access.blocked ? "opacity: 0.5; cursor: not-allowed;" : undefined}
           data-testid="first-run-save"
           class="frm-btn frm-btn-primary"
         >

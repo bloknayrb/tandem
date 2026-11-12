@@ -20,6 +20,7 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 const setDefault = vi.fn<(...args: unknown[]) => Promise<boolean>>();
@@ -62,6 +63,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
 });
+
+// The ordinary tab: these suites run as Tandem's own window (#2404). The
+// blocked state has its own file, settings-models-tab-own-window.test.ts.
+asTandemOwnWindow();
 
 describe("FirstRunModelPickerModal — local-first default", () => {
   it("defaults to Ollama and shows the endpoint field, not an API key", () => {
@@ -175,5 +180,78 @@ describe("FirstRunModelPickerModal — rolled-back-add guard", () => {
     expect(setDefault).toHaveBeenCalledTimes(2);
     expect(setDefault).toHaveBeenLastCalledWith("new-id");
     expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #2404: a save refused because this page is not Tandem's own window. The
+// picker stays (the refusal must be explained where the user is looking), shows
+// the server's plain reason, and Save does nothing more; Skip still works.
+describe("FirstRunModelPickerModal — a save the server refused as not Tandem's own window", () => {
+  const REASON = "Local-model settings can only be changed in Tandem's own window.";
+
+  it("keeps the picker open with the reason, makes Save unavailable and inert, and leaves Skip live", async () => {
+    const { noteModelsWriteRefused } = await import("../../src/client/models/write-refusal");
+    addModel.mockImplementationOnce(async () => {
+      noteModelsWriteRefused(); // what the store does on 403 OWN_WINDOW_ONLY
+      storeSaveError = REASON;
+      return null;
+    });
+    const onComplete = vi.fn();
+    const { getByTestId, findByTestId } = render(FirstRunModelPickerModal, {
+      props: { onComplete },
+    });
+    const save = getByTestId("first-run-save") as HTMLButtonElement;
+    expect(save.getAttribute("aria-disabled")).toBe("false");
+
+    await fireEvent.click(save);
+
+    // One sentence for this state: the same notice the picker shows when it
+    // opens already blocked (here the page is Tandem's own address, refused
+    // all the same, so it is the plain sentence).
+    expect((await findByTestId("first-run-error")).textContent?.trim()).toBe(
+      REASON.replace("Local-model settings", "These settings"),
+    );
+    expect(getByTestId("first-run-model-modal")).toBeTruthy();
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.disabled).toBe(false); // still focusable
+    // Click and Enter both end in the form's submit handler.
+    await fireEvent.click(save);
+    await fireEvent.submit(save.closest("form") as HTMLFormElement);
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await fireEvent.click(getByTestId("first-run-skip"));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("already refused before the picker opened (the boot reconcile): Save is unavailable AND the reason is on screen, described to the button", async () => {
+    const { noteModelsWriteRefused } = await import("../../src/client/models/write-refusal");
+    const { _setPageOriginForTests } = await import(
+      "../../src/client/hooks/useModelsWriteAccess.svelte"
+    );
+    _setPageOriginForTests("http://127.0.0.1:5173");
+    noteModelsWriteRefused();
+    const { getByTestId } = render(FirstRunModelPickerModal, { props: { onComplete: vi.fn() } });
+
+    const save = getByTestId("first-run-save");
+    const reason = getByTestId("first-run-error");
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(reason.textContent?.trim()).toContain(
+      "These settings can only be changed in Tandem's own window.",
+    );
+    expect(reason.textContent).toContain("TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173");
+    expect(save.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(reason.id).toBeTruthy();
+
+    await fireEvent.click(save);
+    expect(addModel).not.toHaveBeenCalled();
+  });
+
+  it("on Tandem's own window there is no message and Save is not described by one", () => {
+    const { getByTestId, queryByTestId } = render(FirstRunModelPickerModal, {
+      props: { onComplete: vi.fn() },
+    });
+    expect(queryByTestId("first-run-error")).toBeNull();
+    expect(getByTestId("first-run-save").getAttribute("aria-describedby")).toBeNull();
   });
 });

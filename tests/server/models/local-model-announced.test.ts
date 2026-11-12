@@ -309,9 +309,12 @@ describe("local-model announced record (#2404)", () => {
       expect(editingOnWasAnnounced()).toBe(true);
 
       await flush();
-      // Written in the order they were recorded; the file ends on the last.
+      // One write per recording. Each publishes the record as it stands when
+      // the write RUNS, not when it was queued (so a retry can never publish an
+      // older state): both recordings happened before either write ran, so both
+      // carry the final record.
       expect(writtenRecords()).toEqual([
-        { version: 1, editing: false, answering: "fp-a" },
+        { version: 1, editing: true, answering: "fp-a" },
         { version: 1, editing: true, answering: "fp-a" },
       ]);
       expect(onDisk()).toEqual({ version: 1, editing: true, answering: "fp-a" });
