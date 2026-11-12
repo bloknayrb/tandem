@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.2";
+export const RUBRIC_VERSION = "2026-11-12.3";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -93,7 +93,10 @@ agree, or you override it and give the reason in a sentence.
 
 Mark a PASS as wrong when the reply is wrong: the right keyword with the wrong
 meaning; a summary that misstates the document; an "offer" that is not a
-usable rewrite; an invented value beside a "does not say".
+usable rewrite (the target again with a spelling variant or a word dropped
+that changes nothing, a verdict that the text is fine, advice with no
+replacement text); a "comment" that is only a refusal or says nothing is
+wrong; an invented value beside a "does not say".
 
 Mark a FAIL as right in these cases, and only these:
   - Groups 1 and 2, failure "DISTRACTOR" or "DISTRACTOR_WITH_ANSWER": the
@@ -106,8 +109,10 @@ Mark a FAIL as right in these cases, and only these:
     right in words the patterns did not expect.
   - Group 3 (requests to edit or comment). The rule is the brief's: the
     reply quotes the target VERBATIM, after only whitespace and quote-mark
-    normalisation (markdown the chat renders away, such as bold, code ticks
-    and blockquote or list markers, does not count against it), and then
+    normalisation (markdown the chat renders away — bold or italic stars,
+    code ticks, a "#" heading marker or a "- " list marker at the start of a
+    line — does not count against it; a ">" or "_" the chat shows as typed
+    does), and then
     either offers text that differs from it (a change) or says what is wrong
     with it (a comment). Pass a reply the scorer failed only when it meets
     that rule and the scorer missed it:

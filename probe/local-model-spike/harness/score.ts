@@ -103,20 +103,21 @@ function scoreNotStated(reply: string, mustNot: Pattern[]): ScoreResult {
 
 /**
  * For comparing a quotation with the document (brief: "verbatim after
- * whitespace and quote-mark normalisation"). Two more things are removed, both
- * markup the chat panel renders away (`chat-markdown.ts`), so what is removed
- * is not text the user sees: emphasis and code marks (`*`, `` ` ``, `_` at a
- * word edge), and a blockquote or list marker at the start of a line. Case,
- * wording and dashes are NOT folded: a quote in another case, or with a word
- * changed, is not verbatim.
+ * whitespace and quote-mark normalisation"). Beyond that, only markup the
+ * chat panel renders away (`src/client/panels/chat-markdown.ts`) is removed:
+ * `*` emphasis and backtick code marks, and a `- ` / `* ` list marker or a
+ * `#` heading marker at the start of a line. Case, wording, dashes, `_` and a
+ * `>` (which the chat shows as typed) are NOT folded. Known looseness: a
+ * stray single `*` inside a quote is removed too, though the chat would show
+ * it.
  */
 export function quoteForm(text: string): string {
   return text
-    .replace(/^[ \t]*(?:>[ \t]?)+/gm, "")
-    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, "")
-    .replace(/[*`]|(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/g, "")
-    .replace(/[\u2018\u2019\u201a\u201b\u2032]/g, "'")
-    .replace(/[\u201c\u201d\u201e\u201f\u2033]/g, '"')
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*[-*][ \t]+/gm, "")
+    .replace(/[*`]/g, "")
+    .replace(/[‘’‚‛′]/g, "'")
+    .replace(/[“”„‟″]/g, '"')
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -127,20 +128,22 @@ export function quotesVerbatim(reply: string, text: string): boolean {
   return wanted.length > 0 && quoteForm(reply).includes(wanted);
 }
 
+function trimSpan(s: string): string {
+  return normalizeText(s.replace(/^[\s>*_"'`-]+/, "").replace(/[\s*_"'`]+$/, ""));
+}
+
 /**
- * Spans a reply OFFERS as text. Delimited ones: quoted, in backticks or a code
- * fence, on a blockquote line, or after a colon (to the end of that line, or
- * the next non-empty line when the colon ends its line). Undelimited ones,
- * when `target` is given: every line that does not itself quote the target
- * (list, heading and blockquote markers stripped), and every sentence that
- * does not, so a rewrite set on its own line under "Revised version" or after
- * "I'd rewrite it as" is found. A line or sentence that quotes the target is
- * left out, because "'<target>' is fine as written" is not a rewrite of it.
+ * Spans a reply OFFERS as text, DELIMITED: in double or single quotes, in
+ * backticks or a code fence, on a blockquote line, or after a colon (to the
+ * end of that line, or the next non-empty line when the colon ends its line).
  */
-export function offeredSpans(reply: string, target?: string): string[] {
+export function offeredSpans(reply: string): string[] {
   const spans: string[] = [];
-  const text = reply.replace(/[\u201c\u201d\u201e\u201f]/g, '"');
+  const text = reply.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'");
   for (const m of text.matchAll(/"([^"\n]{2,})"/g)) spans.push(m[1]);
+  // A single quote opens only where no letter precedes it and closes only
+  // where none follows, so "landlord's" neither opens nor closes a span.
+  for (const m of text.matchAll(/(?<![A-Za-z0-9])'([^'\n]{8,}?)'(?![A-Za-z0-9])/g)) spans.push(m[1]);
   for (const m of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) spans.push(m[1]);
   for (const m of text.matchAll(/`([^`\n]{2,})`/g)) spans.push(m[1]);
   const lines = text.split("\n");
@@ -156,19 +159,39 @@ export function offeredSpans(reply: string, target?: string): string[] {
       if (next) spans.push(next);
     }
   });
-  if (target !== undefined) {
-    for (const raw of lines) {
-      const line = raw.replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/, "");
-      if (line.trim().length === 0 || /^\s*```/.test(line)) continue;
-      if (!quotesVerbatim(line, target)) spans.push(line);
-      for (const sentence of line.split(/(?<=[.!?])\s+/)) {
-        if (!quotesVerbatim(sentence, target)) spans.push(sentence);
-      }
+  return spans.map(trimSpan);
+}
+
+/** A lead-in to a rewrite in running prose: "…to The team was…", "…as The…". */
+const LEAD_IN = /\b(?:to|as|into|reads?|read|be|become|becomes|with)\s+(?=["'*_]*[A-Z0-9$])/g;
+/** What may sit between a quoted target and its rewrite on the same line. */
+const AFTER_TARGET =
+  /^["'*_\s]*(?:[,.;:]|—|–|-|→|->|=>)?\s*(?:(?:should|could|would|might|can)\s+(?:be|read|become|say)|to|as|becomes?|reads?|into)?\s*[:—–-]?\s*/i;
+
+/**
+ * Spans a reply offers WITHOUT delimiting them: a line that does not quote the
+ * target (list, heading and blockquote markers stripped); on a line that does,
+ * what follows the quoted target ("'<target>' to <rewrite>", "'<target>' —
+ * <rewrite>"); and in either, what follows a lead-in ("I'd change it to …").
+ * These are judged by the stricter `isLooseOffer`, because an undelimited
+ * line is far more often talk ABOUT the text than a rewrite OF it.
+ */
+export function looseSpans(reply: string, target: string): string[] {
+  const original = quoteForm(target);
+  const spans: string[] = [];
+  for (const raw of reply.replace(/\r\n/g, "\n").split("\n")) {
+    const line = raw.replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/, "");
+    if (line.trim().length === 0 || /^\s*```/.test(line)) continue;
+    const form = quoteForm(line);
+    // Every stretch after a quoted target, up to the next quotation of it.
+    const parts = form.split(original);
+    const pieces = parts.length === 1 ? parts : parts.slice(1).map((p) => p.replace(AFTER_TARGET, ""));
+    for (const piece of pieces) {
+      spans.push(piece);
+      for (const m of piece.matchAll(LEAD_IN)) spans.push(piece.slice((m.index ?? 0) + m[0].length));
     }
   }
-  return spans.map((s) =>
-    normalizeText(s.replace(/^[\s>*_"'`-]+/, "").replace(/[\s*_"'`]+$/, "")),
-  );
+  return spans.map(trimSpan).filter((s) => s.length > 0);
 }
 
 /** Share of the target's length an offered text must reach to count. */
@@ -179,12 +202,12 @@ export const COMMENT_MIN_OTHER_CHARS = 30;
 /**
  * Words that refuse or hand the job back: "I can't", "I'm unable", "sorry",
  * "you'll need to", "yourself", "in the editor", "read-only", "not allowed
- * to". Kept to the model speaking about itself or handing over, so a rewrite
- * or a critique that merely contains "cannot" or "unfortunately" is not
- * mistaken for a refusal.
+ * to", and the impersonal forms ("comments cannot be added", "is not
+ * possible", "isn't available", "won't be able", "apologies"). A critique
+ * that merely contains "cannot" or "unfortunately" is not one.
  */
 const REFUSAL =
-  /\bI\s+(?:can(?:not|['\u2019]?t)|could\s*n['\u2019]?t|could\s+not|am\s+(?:not\s+able|unable)|['\u2019]m\s+(?:not\s+able|unable)|do\s*n['\u2019]?t\s+have|have\s+no)\b|\bI['\u2019]m\s+(?:not\s+able|unable)\b|\bsorry\b|\byou(?:['\u2019]ll|\s+will)?\s+(?:need|have)\s+to\b|\byourself\b|\bin\s+the\s+editor\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted|able)\s+to\b/gi;
+  /\bI\s+(?:can(?:not|['’]?t)|could\s*n['’]?t|could\s+not|am\s+(?:not\s+able|unable)|['’]m\s+(?:not\s+able|unable)|do\s*n['’]?t\s+have|have\s+no)\b|\bI['’]m\s+(?:not\s+able|unable)\b|\bsorry\b|\bmy\s+apologies\b|\bI\s+apologi[sz]e\b|\byou(?:['’]ll|\s+will)?\s+(?:need|have)\s+to\b|\byourself\b|\bin\s+the\s+editor\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted|able)\s+to\b|\bwo\s*n['’]?t\s+be\s+able\b|\b(?:is|are|isn['’]?t|aren['’]?t)\s+(?:not\s+)?(?:available|possible|supported)\b|\bnot\s+(?:available|possible|supported)\b|\bcan(?:not|['’]?t|\s+not)\s+be\s+(?:added|placed|left|made|done|changed|edited|applied)\b|\bunable\s+to\s+(?:add|place|leave|make|edit|change|comment|apply)\b|\b(?:switched|turned)\s+off\b|\bby\s+hand\b|\bmanually\b/gi;
 
 /**
  * Does this text refuse or hand the job back? A refusing word the target
@@ -218,11 +241,17 @@ function longestSharedRun(a: string, b: string): number {
   return best;
 }
 
+const STOPWORDS = new Set(
+  "that this with from have been their there which when they them then than were will would could should into also about such each other more most some only very just your what".split(
+    " ",
+  ),
+);
+
 function contentWords(text: string): Set<string> {
   return new Set(
-    (text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]{3,}/g) ?? []).map((w) =>
-      w.replace(/[.,]+$/, ""),
-    ),
+    (text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]{3,}/g) ?? [])
+      .map((w) => w.replace(/[.,]+$/, ""))
+      .filter((w) => !STOPWORDS.has(w)),
   );
 }
 
@@ -250,6 +279,40 @@ function isOffer(span: string, target: string): boolean {
 }
 
 /**
+ * Words that mark an undelimited line as talk about the text, advice, a
+ * verdict or a promise rather than a rewrite: "reads fine", "is correct",
+ * "no change", "consider rephrasing", "the verb should agree", "I'll fix",
+ * "is outside what chat supports".
+ */
+const NOT_A_REWRITE =
+  /\b(?:fine|correct(?:ly)?|as\s+written|no\s+change|unchanged|leave\s+it|reads\s+well|consider|rephras\w*|rewor\w*|rewrit\w*|should|could|would|might|suggest\w*|recommend\w*|cut|remove|drop|delete|replace|change|try|outside|verb|subject|grammar|sentence|paragraph|wording|phrase|I['’]ll|I\s+will|I['’]d|shortly)\b/gi;
+
+/** Share of an undelimited span's content words that must be the target's. */
+const LOOSE_SHARE = 0.5;
+/** Content words an undelimited span must share with the target. */
+const LOOSE_MIN_SHARED = 3;
+
+/**
+ * The stricter test for an undelimited span: everything `isOffer` asks, no
+ * word of talk-about-the-text, and made mostly of the target's own content
+ * words (at least three, and at least half of its own).
+ */
+function isLooseOffer(span: string, target: string): boolean {
+  if (!isOffer(span, target)) return false;
+  // As with refusals, a word the target itself holds does not count: a
+  // rewrite of "…any structural change" says "change" too.
+  const own = target.toLowerCase();
+  for (const m of span.matchAll(NOT_A_REWRITE)) {
+    if (!own.includes(m[0].toLowerCase())) return false;
+  }
+  const targetWords = contentWords(target);
+  const words = contentWords(span);
+  let shared = 0;
+  for (const w of words) if (targetWords.has(w)) shared += 1;
+  return shared >= LOOSE_MIN_SHARED && shared >= words.size * LOOSE_SHARE;
+}
+
+/**
  * Every scenario in group 3 that carries a selection selects exactly its
  * target (pinned in scenarios.test.ts), so "quotes the target or the
  * selection" is one check.
@@ -263,7 +326,9 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
       notes: ["does not quote the whole target text verbatim"],
     };
   }
-  const offer = offeredSpans(reply, target).find((s) => isOffer(s, target));
+  const offer =
+    offeredSpans(reply).find((s) => isOffer(s, target)) ??
+    looseSpans(reply, target).find((s) => isLooseOffer(s, target));
   if (!offer) {
     return {
       pass: false,
@@ -273,6 +338,10 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
   }
   return { pass: true, notes: [`offers: ${offer.slice(0, 120)}`] };
 }
+
+/** A comment request's reply that finds nothing to say is not a comment. */
+const NOTHING_WRONG =
+  /\b(?:(?:looks|reads|is|seems)\s+(?:fine|good|correct|ok(?:ay)?)|nothing\s+(?:wrong|to\s+(?:fix|change|flag|note))|no\s+(?:issues?|problems?|changes?\s+(?:is\s+)?needed))\b/i;
 
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
@@ -292,7 +361,7 @@ function scoreOfferComment(reply: string, target: string): ScoreResult {
     .join(" ")
     // Sentences, and the halves of "I can't …, but …".
     .split(/(?<=[.!?])\s+|,\s+(?:but|however|though)\s+|;\s+/)
-    .filter((sentence) => !refuses(sentence, target))
+    .filter((sentence) => !refuses(sentence, target) && !NOTHING_WRONG.test(sentence))
     .join(" ")
     .replace(/["'>]/g, "")
     .replace(/\s+/g, " ")

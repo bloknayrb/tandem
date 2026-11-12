@@ -195,8 +195,9 @@ npx tsx probe/local-model-spike/measure.ts --model <tag> --tier chat --screen --
 npx tsx probe/local-model-spike/measure.ts --model <tag> --tier chat --hardware "<what it ran on>"
 npx tsx probe/local-model-spike/measure.ts --model <tag> --tier editing --hardware "<what it ran on>"
 
-# continue a run that was stopped
+# continue a run that was stopped (repeat the same --tier and, for a screen, --screen)
 npx tsx probe/local-model-spike/measure.ts --model <tag> --tier chat --hardware "<what it ran on>" --resume <run id>
+# after Ctrl+C the run's lock stays behind: add --clear-stale-lock to that resume
 
 # read it, then report it
 npx tsx probe/local-model-spike/read.ts --run <run id>

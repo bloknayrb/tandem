@@ -370,32 +370,35 @@ describe("a run", () => {
     const resume = (over: Partial<RunDeps>, opts: Partial<RunOptions> = {}) =>
       runMeasurement(options({ resume: first.runId, ...opts }), deps(over));
 
-    const changes: [string, Promise<{ status: string; reason?: string }>][] = [
-      ["fingerprint", resume({ fingerprint: async () => "fp-2" })],
-      ["commit", resume({ commit: () => ({ commit: "b".repeat(40), dirty: false }) })],
+    // One at a time: each resume holds the run's lock from before its preflight.
+    const changes: [string, () => Promise<{ status: string; reason?: string }>][] = [
+      ["fingerprint", () => resume({ fingerprint: async () => "fp-2" })],
+      ["commit", () => resume({ commit: () => ({ commit: "b".repeat(40), dirty: false }) })],
       [
         "modelDigest",
-        resume({
-          preflight: async () => ({
-            ...OK_PREFLIGHT,
-            facts: { ...OK_PREFLIGHT.facts, digest: "sha256:other" },
+        () =>
+          resume({
+            preflight: async () => ({
+              ...OK_PREFLIGHT,
+              facts: { ...OK_PREFLIGHT.facts, digest: "sha256:other" },
+            }),
           }),
-        }),
       ],
       [
         "ollamaVersion",
-        resume({
-          preflight: async () => ({
-            ...OK_PREFLIGHT,
-            facts: { ...OK_PREFLIGHT.facts, ollamaVersion: "9.9.9" },
+        () =>
+          resume({
+            preflight: async () => ({
+              ...OK_PREFLIGHT,
+              facts: { ...OK_PREFLIGHT.facts, ollamaVersion: "9.9.9" },
+            }),
           }),
-        }),
       ],
-      ["repeats", resume({}, { repeats: 2 })],
-      ["mode", resume({}, { mode: "full" })],
+      ["repeats", () => resume({}, { repeats: 2 })],
+      ["mode", () => resume({}, { mode: "full" })],
     ];
     for (const [field, pending] of changes) {
-      const r = await pending;
+      const r = await pending();
       expect(r.status, field).toBe("refused");
       expect(r.reason, field).toContain(field);
     }
@@ -412,6 +415,29 @@ describe("a run", () => {
     const again = await resume({ commit: () => ({ commit: "a".repeat(40), dirty: true }) });
     expect(again.status).toBe("complete");
     expect(again.scoredThisSession).toBe(0);
+  });
+
+  it("a resume of a locked run is refused before its preflight sends anything", async () => {
+    stubScript([ANSWER]);
+    const first = await runMeasurement(options(), deps());
+    const release = acquireLock(existingRunDir(first.runId as string, runsDir));
+    try {
+      let preflights = 0;
+      const r = await runMeasurement(
+        options({ resume: first.runId }),
+        deps({
+          preflight: async () => {
+            preflights += 1;
+            return OK_PREFLIGHT;
+          },
+        }),
+      );
+      expect(r).toMatchObject({ status: "refused" });
+      expect(r.reason).toMatch(/locked/);
+      expect(preflights).toBe(0);
+    } finally {
+      release();
+    }
   });
 
   it("refuses to start when the preflight says no, and starts no trial", async () => {

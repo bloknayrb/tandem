@@ -170,14 +170,60 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
     };
   }
 
-  const config = deps.config(opts.modelTag, opts.endpoint);
-  const pre = await deps.preflight(config);
-  for (const line of pre.notes) deps.log(line);
-  if (!pre.ok) return { status: "refused", reason: pre.stop, ...none };
+  // The run directory and its lock come BEFORE the preflight: the warm-up is a
+  // real chat call to the same server, and a second process that sent one
+  // into a live run would slow that run's trials into timeouts before the
+  // lock turned it away.
+  let runDir: string;
+  let stored: RunIdentity | undefined;
+  let newRunId: string | undefined;
+  if (opts.resume !== undefined) {
+    try {
+      runDir = existingRunDir(opts.resume, opts.runsDir);
+      stored = readIdentity(runDir);
+    } catch (err) {
+      return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
+    }
+  } else {
+    newRunId =
+      opts.runId ??
+      makeRunId({ date: deps.now(), tier: opts.tier, mode: opts.mode, modelTag: opts.modelTag });
+    runDir = runDirFor(newRunId, opts.runsDir);
+    if (fs.existsSync(identityPath(runDir))) {
+      return { status: "refused", reason: `run already exists: ${newRunId}`, ...none };
+    }
+    fs.mkdirSync(runDir, { recursive: true });
+  }
 
-  const { commit, dirty } = deps.commit();
-  const fingerprint = await deps.fingerprint();
+  let release: () => void;
+  try {
+    release = acquireLock(runDir, { clearStale: opts.clearStaleLock });
+  } catch (err) {
+    return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
+  }
+  // A refused NEW run leaves nothing behind; a refused resume touches nothing.
+  const refuse = (reason: string): RunResult => {
+    release();
+    if (stored === undefined) fs.rmSync(runDir, { recursive: true, force: true });
+    return { status: "refused", reason, ...none };
+  };
+
+  const config = deps.config(opts.modelTag, opts.endpoint);
+  let pre: PreflightResult;
+  let git: ReturnType<RunDeps["commit"]>;
+  let fingerprint: string;
+  try {
+    pre = await deps.preflight(config);
+    for (const line of pre.notes) deps.log(line);
+    if (!pre.ok) return refuse(pre.stop ?? "the preflight refused");
+    git = deps.commit();
+    fingerprint = await deps.fingerprint();
+  } catch (err) {
+    refuse("");
+    throw err;
+  }
   const setHash = scenarioSetHash(scenarios);
+  const { commit, dirty } = git;
   const key = identityKey(opts, pre.facts, commit, fingerprint, setHash);
   const planned = planTrials(scenarios, opts.repeats);
   const session: RunSession = {
@@ -190,34 +236,19 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
     host: os.hostname(),
   };
 
-  let runDir: string;
   let identity: RunIdentity;
-  if (opts.resume !== undefined) {
-    try {
-      runDir = existingRunDir(opts.resume, opts.runsDir);
-      identity = readIdentity(runDir);
-    } catch (err) {
-      return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
-    }
-    const refusal = resumeRefusal(identity, key);
-    if (refusal) return { status: "refused", reason: `cannot resume ${opts.resume}: ${refusal}`, ...none };
+  if (stored !== undefined) {
+    const refusal = resumeRefusal(stored, key);
+    if (refusal) return refuse(`cannot resume ${opts.resume}: ${refusal}`);
+    identity = stored;
   } else {
-    const runId =
-      opts.runId ??
-      makeRunId({ date: deps.now(), tier: opts.tier, mode: opts.mode, modelTag: opts.modelTag });
-    runDir = runDirFor(runId, opts.runsDir);
-    if (fs.existsSync(identityPath(runDir))) {
-      return { status: "refused", reason: `run already exists: ${runId}`, ...none };
-    }
-    fs.mkdirSync(runDir, { recursive: true });
-    identity = { ...key, runId, modelTag: opts.modelTag, endpoint: opts.endpoint, sessions: [] };
-  }
-
-  let release: () => void;
-  try {
-    release = acquireLock(runDir, { clearStale: opts.clearStaleLock });
-  } catch (err) {
-    return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
+    identity = {
+      ...key,
+      runId: newRunId as string,
+      modelTag: opts.modelTag,
+      endpoint: opts.endpoint,
+      sessions: [],
+    };
   }
 
   let scored = 0;

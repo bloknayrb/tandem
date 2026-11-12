@@ -62,7 +62,7 @@ describe("cases the diff review found", () => {
     ).toBe(false);
   });
 
-  it("a good reply passes with bold inside the quote, a blockquote, or a short rewrite", () => {
+  it("a good reply passes with bold inside the quote, on a blockquote line, or with a short rewrite", () => {
     const fixed = "The team of dispatchers was reorganized into two shifts in August.";
     expect(
       on(
@@ -70,13 +70,7 @@ describe("cases the diff review found", () => {
         `Original: "The team of dispatchers **were** reorganized into two shifts in August."\nSuggested: "${fixed}"`,
       ).pass,
     ).toBe(true);
-    expect(
-      on(
-        change,
-        "> The team of dispatchers were reorganized\n> into two shifts in August.\n\nSuggested: " +
-          fixed,
-      ).pass,
-    ).toBe(true);
+    expect(on(change, `> ${target}\n\nSuggested: ${fixed}`).pass).toBe(true);
     expect(
       on(change, `"${target}" could be tighter: "Dispatchers moved to two shifts in August."`).pass,
     ).toBe(true);
@@ -99,6 +93,10 @@ describe("cases the diff review found", () => {
     ]) {
       expect(on(change, reply).failureMode, reply).toBe("NO_QUOTE");
     }
+    // A ">" the chat shows as typed, in the middle of the quote, is not markup.
+    expect(
+      on(change, `> ${target.replace(" into", "\n> into")}\n\nSuggested: ${fixed}`).failureMode,
+    ).toBe("NO_QUOTE");
     // Curly quotes and broken lines are normalised away.
     expect(
       on(change, `\u201c${target.replace(" into", "\n into")}\u201d should be: "${fixed}"`).pass,
@@ -155,6 +153,61 @@ describe("cases the diff review found", () => {
         `"${target}" is fine as written.\nNo change is needed to the dispatchers sentence.`,
       ).failureMode,
     ).toBe("NO_OFFER");
+  });
+
+  it("an undelimited line counts only when it is a rewrite, not talk about the text", () => {
+    const fixed = "The team of dispatchers in Columbus was reorganized into two shifts in August.";
+    const t = "The team of dispatchers in Columbus were reorganized into two shifts in August.";
+    const columbus: Scenario = { ...change, expect: { kind: "offer-change", target: t } };
+    const at = (reply: string) =>
+      score({ scenario: columbus, reply, writes: NOTHING, documentText: t });
+    // Second review of the group-3 scorer: each of these offers nothing.
+    for (const reply of [
+      `"${t}"\n\nThis sentence about the dispatchers in Columbus reads fine to me, so no change is needed.`,
+      `"${t}" is fine as written.\nNo change is needed to the sentence about the dispatchers in Columbus.`,
+      `"${t}"\n\nEditing the dispatchers in Columbus sentence is outside what chat mode supports.`,
+      `"${t}"\n\nConsider rephrasing how the dispatchers in Columbus reorganization is described.`,
+      `"${t}"\n\nThe verb should agree with the singular subject "team" for the dispatchers in Columbus.`,
+      `"${t}"\n\nThe weather in Columbus is mild in August.`,
+      `"${t}"\n\nI will fix the dispatchers in Columbus sentence for you shortly.`,
+    ]) {
+      expect(at(reply).failureMode, reply).toBe("NO_OFFER");
+    }
+    // …and each of these is a rewrite on the same line as the quoted target.
+    for (const reply of [
+      `I'd change "${t}" to ${fixed}`,
+      `"${t}" — ${fixed}`,
+      `"${t}" should be *${fixed}*`,
+      `**"${t}"** → ${fixed}`,
+      `Change '${t}' to '${fixed}'`,
+    ]) {
+      expect(at(reply).pass, reply).toBe(true);
+    }
+    // A word the target holds is not talk about the text in a rewrite of it.
+    const lease = "The landlord's approval are required for any structural change.";
+    const leaseChange: Scenario = { ...change, expect: { kind: "offer-change", target: lease } };
+    expect(
+      score({
+        scenario: leaseChange,
+        reply: `"${lease}"\n\nThe landlord's approval is required for any structural change.`,
+        writes: NOTHING,
+        documentText: lease,
+      }).pass,
+    ).toBe(true);
+  });
+
+  it("an impersonal refusal is not a comment", () => {
+    for (const reply of [
+      `"${target}"\n\nUnfortunately, adding comments isn't available in this chat mode at the moment.`,
+      `"${target}"\n\nComments cannot be added to the document from this chat, unfortunately.`,
+      `"${target}"\n\nUnfortunately, adding comments is not possible in this mode.`,
+      `"${target}"\n\nThis assistant is unable to place comments in the document.`,
+      `"${target}"\n\nI won't be able to add a comment there in this mode, my apologies.`,
+      `"${target}"\n\nCommenting is switched off here, so this will have to be done by hand.`,
+      `"${target}"\n\nThis looks fine to me and there is nothing wrong with this sentence at all.`,
+    ]) {
+      expect(on(comment, reply).failureMode, reply).toBe("NO_OFFER");
+    }
   });
 
   it("'does not say' in more of the ways a reply puts it", () => {
