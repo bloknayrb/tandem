@@ -594,12 +594,15 @@ function editListEarlyRefusal(documentId: string | undefined): McpToolResult | n
   return null;
 }
 
-/** `renameDocument` refusals decided before it touches the disk. */
+/**
+ * `renameDocument` refusals decided before it touches the disk. Not
+ * `PATH_REJECTED`: `assertPathSafe` walks the disk to decide it, so, like
+ * every refusal the disk decides, it keeps a claim (ADR-054).
+ */
 const RENAME_NEVER_CLAIMS: ReadonlySet<string> = new Set([
   "NOT_FOUND",
   "NOT_RENAMABLE",
   "EXTENSION_MISMATCH",
-  "PATH_REJECTED",
   "INVALID_NAME",
   "INVALID_PATH",
   "READ_ONLY",

@@ -39,6 +39,50 @@ describe("each transport branch tells the ownership module its mode before servi
   });
 });
 
+describe("an ownership entry's sinceSeq has a real source in a running server (ownership design §2; PR 2a)", () => {
+  // `setOwnershipSeqSource` is a seam that answers 0 when nothing wires it, so
+  // every unit test passes without the wiring: an unwired server would stamp
+  // `sinceSeq: 0` on every entry and nothing would notice until PR 2b's
+  // handed-or-not test read it. `main()` cannot be run in a unit test, so the
+  // call is pinned from source. (`ownership-claim-at-outcome.test.ts` drives
+  // the same source expression against the real registry.)
+  const src = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("index.ts wires the delivery registry's counter, once, before either transport branch", () => {
+    const call = "setOwnershipSeqSource(() => deliveryRegistry.counter);";
+    expect(src.split(call)).toHaveLength(2);
+    expect(src.match(/setOwnershipSeqSource\(/g)).toHaveLength(1);
+    const wired = src.indexOf(call);
+    const http = src.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = src.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+    // The registry the inbox itself assigns from, not a second instance.
+    expect(src).toMatch(/import \{ deliveryRegistry \} from "\.\/mcp\/inbox-cursor\.js";/);
+    const awareness = SRC_FILES.get("src/server/mcp/awareness.ts") as string;
+    expect(awareness).toMatch(/\bdeliveryRegistry,\s[^;]*from "\.\/inbox-cursor\.js";/);
+  });
+
+  it("nothing else in src calls the seam: a second call would wire a different source", () => {
+    const callers = [...SRC_FILES]
+      .filter(([, text]) => /\bsetOwnershipSeqSource\(/.test(text))
+      .map(([file]) => file)
+      .sort();
+    // `ownership.ts` is the definition (`export function setOwnershipSeqSource(`).
+    expect(callers).toEqual(["src/server/index.ts", "src/server/sessions/ownership.ts"]);
+    const ownership = SRC_FILES.get("src/server/sessions/ownership.ts") as string;
+    expect(ownership.match(/\bsetOwnershipSeqSource\(/g)).toHaveLength(1);
+  });
+
+  it("the wiring is not inside a function or a branch that may not run", () => {
+    const line = src.split("\n").find((l) => l.includes("setOwnershipSeqSource(() =>")) as string;
+    // Two spaces: a statement of `main()` itself, as the mode calls' branch is.
+    expect(line).toBe("  setOwnershipSeqSource(() => deliveryRegistry.counter);");
+  });
+});
+
 describe("no server log line prints a raw session id", () => {
   /**
    * Under the flag every `Mcp-Session-Id` and Claude session id a server log
