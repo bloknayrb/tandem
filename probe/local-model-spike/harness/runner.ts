@@ -202,11 +202,21 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
     return { status: "refused", reason: err instanceof Error ? err.message : String(err), ...none };
   }
   // A refused NEW run leaves nothing behind: its directory, lock and all, is
-  // removed while the lock is still held, so no other process can have
-  // claimed it in between. A refused resume only gives its lock back.
+  // removed rather than unlocked first. (The recursive removal is not atomic;
+  // two processes given the same explicit run id at the same moment could
+  // still race. A run id from the clock is claimed exclusively by measure.ts.)
+  // A refused resume only gives its lock back. Called at most once.
+  let refused = false;
   const refuse = (reason: string): RunResult => {
-    if (stored === undefined) fs.rmSync(runDir, { recursive: true, force: true });
-    else release();
+    if (!refused) {
+      refused = true;
+      try {
+        if (stored === undefined) fs.rmSync(runDir, { recursive: true, force: true });
+        else release();
+      } catch {
+        // Best effort: the refusal, or the error that caused it, is what matters.
+      }
+    }
     return { status: "refused", reason, ...none };
   };
 

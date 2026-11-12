@@ -276,12 +276,20 @@ function similarity(a: string, b: string): number {
 
 /**
  * How much of a span's vocabulary must be the target's for the scorer to
- * call it a rewrite. Deliberately high: the group-3 scorer is CONSERVATIVE.
- * It passes a reply only when it can see a version of the target in it — the
- * target's own words, reworked — and leaves every other reply, including a
- * good rewrite in new words, to the reader as NO_OFFER (rubric §6). Talk
- * about the text, verdicts, advice, promises and refusals use the target's
- * words too, but rarely most of them and rarely nothing else.
+ * call it a rewrite.
+ *
+ * The group-3 scorer is a WORD-OVERLAP PRE-SORT, and it is wrong in both
+ * directions. Whether a reply offers a usable rewrite, or says what is wrong,
+ * is a question of meaning that no rule over words settles; the reader reads
+ * every reply and the gate uses the reader-corrected rate (brief R2.4), so
+ * the scorer's job is only to give a provisional verdict and a printed rate.
+ * Known false passes: the target restated and wrapped in a verdict, a
+ * refusal, a promise or a question ("…is already fine", "editing is off, so
+ * … stays as is"); the target's words strung into a list. Known false fails:
+ * a rewrite in new words (plain language, a heavy cut, a friendlier tone);
+ * a split given one sentence per line, numbered or bulleted, since each line
+ * is judged alone against the whole target. All are pinned in
+ * `tests/server/local-model/harness/review-cases.test.ts` and named in rubric §6.
  */
 export const REWRITE_SIMILARITY = 0.6;
 
@@ -332,11 +340,13 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
 
 /**
  * A comment request passes the scorer when, beyond the quotation and any
- * refusing sentence, the reply says at least this much AND names something in
- * the target (one of its content tokens: a word, a figure). Whether what it
- * says is a sound criticism is the reader's (brief, group 3). Praise, filler,
- * a promise, a question back or a refusal in other words rarely names
- * anything in the target, so they fall to the reader as NO_OFFER.
+ * first-person refusing sentence, the reply says at least this much AND names
+ * something in the target (one of its content tokens: a word, a figure). That
+ * is all it can see. Whether the reply says what is wrong — and whether that
+ * is sound — is the reader's (brief, group 3). It fails a reply that names
+ * nothing in the target, and it PASSES a topical non-answer: a verdict that
+ * the figure is fine, a promise to comment later, a question back, praise,
+ * or a refusal that points at the sentence. See `REWRITE_SIMILARITY`.
  */
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };

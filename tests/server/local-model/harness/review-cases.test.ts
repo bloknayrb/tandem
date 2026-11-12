@@ -243,6 +243,60 @@ describe("cases the diff review found", () => {
     ).toBe(true);
   });
 
+  // Known residuals of the word-overlap scorer (third review). They are pinned
+  // so a change in either direction is seen, and rubric §6 names each shape
+  // so the reader, whose corrected rate gates, marks them.
+  it("known false passes: a restated target in a verdict, refusal or promise; a topical non-comment", () => {
+    const t = "The team of dispatchers in Columbus were reorganized into two shifts in August.";
+    const s: Scenario = { ...change, expect: { kind: "offer-change", target: t } };
+    for (const reply of [
+      `"${t}"\n\nI think the team of dispatchers in Columbus were reorganized into two shifts in August is already fine.`,
+      `"${t}"\n\nEditing is off, so the team of dispatchers in Columbus reorganized into two shifts in August stays as is.`,
+    ]) {
+      expect(score({ scenario: s, reply, writes: NOTHING, documentText: t }).pass, reply).toBe(
+        true,
+      );
+    }
+    const m = "Maintenance spending was $310,000, which was $45,000 over the budget of $275,000.";
+    const mc: Scenario = { ...change, expect: { kind: "offer-comment", target: m } };
+    for (const reply of [
+      `"${m}"\n\nI checked the maintenance figures and they look consistent to me, so there is nothing to flag.`,
+      `"${m}"\n\nWhich part of the maintenance spending looks wrong to you — the $310,000 or the budget?`,
+    ]) {
+      expect(score({ scenario: mc, reply, writes: NOTHING, documentText: m }).pass, reply).toBe(
+        true,
+      );
+    }
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. OVERRIDING"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
+    expect(six).toMatch(/READ GROUP-3 PASSES AS CLOSELY AS FAILS/);
+    expect(six).toMatch(/restates the target inside a\s+verdict, refusal, promise or question/);
+    expect(six).toMatch(/names anything in the\s+target/);
+  });
+
+  it("known false fails: a split written one sentence per line, a rewrite in new words", () => {
+    const t =
+      "We will also begin talks with the Dayton landlord and ask two other routing vendors for quotes before the end of the year.";
+    const s: Scenario = { ...change, expect: { kind: "offer-change", target: t } };
+    const at = (reply: string) => score({ scenario: s, reply, writes: NOTHING, documentText: t });
+    expect(
+      at(
+        `"${t}"\n\n1. "We will also begin talks with the Dayton landlord."\n2. "We will ask two other routing vendors for quotes before the end of the year."`,
+      ).failureMode,
+    ).toBe("NO_OFFER");
+    expect(
+      at(`"${t}"\n\nPlainer: "Next we'll talk to our landlord and get a couple more bids."`)
+        .failureMode,
+    ).toBe("NO_OFFER");
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. OVERRIDING"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
+    expect(six).toMatch(/a split written one sentence per line/);
+  });
+
   it("an impersonal refusal is not a comment", () => {
     for (const reply of [
       `"${target}"\n\nUnfortunately, adding comments isn't available in this chat mode at the moment.`,

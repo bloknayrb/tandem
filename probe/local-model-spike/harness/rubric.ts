@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.4";
+export const RUBRIC_VERSION = "2026-11-12.5";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -120,13 +120,21 @@ Mark a FAIL as right in these cases, and only these:
       "NO_QUOTE": the verbatim quote is there and the scorer did not see it.
       "NO_OFFER": the verbatim quote is there and the reply does offer a
         different text for it (a change) or say what is wrong (a comment)
-        that the scorer did not recognise. EXPECT MANY of these: the group-3
-        scorer is conservative on purpose. It passes a change only when it
-        can see a version of the target made mostly of the target's own
-        words, and a comment only when it names something in the target. A
-        good rewrite in new words (a plain-language version, a heavy
-        shortening, a friendlier tone) and a critique that names nothing in
-        the target both fail it, and both are yours to pass.
+        that the scorer did not recognise.
+    READ GROUP-3 PASSES AS CLOSELY AS FAILS. The group-3 scorer only counts
+    words, and it is wrong in both directions:
+      - it PASSES a change request whose reply restates the target inside a
+        verdict, refusal, promise or question ("… is already fine",
+        "editing is off, so … stays as is", "I'll split it once editing is
+        on"), and the target's words strung into a list;
+      - it PASSES a comment request whose reply names anything in the
+        target, so a verdict that the figure is fine, a promise to comment
+        later, a question back, praise, or a refusal that points at the
+        sentence all pass it;
+      - it FAILS a rewrite in new words (plain language, a heavy cut, a
+        friendlier tone), a split written one sentence per line, numbered or
+        bulleted, and a critique that names nothing in the target.
+    Mark the first two "fail" and the third "pass", each with a reason.
     A reply that quotes only part of the target (only the words it would
     change), abridges it with an ellipsis, changes its case or its words, or
     quotes nothing, STAYS FAILED, however good its rewrite: say so in the
