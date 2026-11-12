@@ -65,7 +65,9 @@ server itself serves on `:3479` (#2404). The dev client on `:5173` is neither, s
 to be told that this one page may: `TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173`.
 `npm run dev:standalone` sets it for the server it starts. `npm run dev:server` on its own and
 `npm run dev:tauri` do not — export it in the shell first. A debug `dev:tauri` window also adopts a
-server already running on `:3479`, with whatever environment that server was started with. Without
+server already running on `:3479`, with whatever environment that server was started with; a
+debug-built desktop binary attached that way presents the desktop window's origin to a server
+that is not the desktop sidecar, which refuses it unless the variable names that origin. Without
 the variable the Models tab says these settings can only be changed in Tandem's own window, and the
 one-time model reconcile logs a refusal to the console and tries again at the next load. See
 [docs/configuration.md](docs/configuration.md).

@@ -1325,6 +1325,34 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
       expect(await adoptedOnDisk()).toBe(fp(A));
     });
 
+    it("a change that is NOT from Tandem's own window does not end the adoption: the adopted model coming back undelivered is still announced", async () => {
+      // The review's sequence. The baseline adopted A and nobody was told yet.
+      await firstLitStart(file([A, { ...B, enabled: false }], A.id));
+      expect(await adoptedOnDisk()).toBe(fp(A));
+
+      // 1. Another writer (the development allowance) makes B answer, with no
+      //    window open: its warning is pending, and the adopted notice — which
+      //    names a model that no longer answers — is withdrawn from the replay.
+      await save(file([{ ...A, enabled: false }, B], B.id), ALLOWANCE_ORIGIN);
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toEqual([]);
+
+      // 2. An unrelated own-window write persists the record. It must still say
+      //    that A's adoption was never told.
+      await setEditing(true);
+      expect(await adoptedOnDisk()).toBe(fp(A));
+
+      // 3. The same writer puts A back, still with no window, and the server
+      //    restarts. The record names A as the answering model; without the
+      //    "not yet told" marker this start would be silent.
+      await save(file([A, { ...B, enabled: false }], A.id), ALLOWANCE_ORIGIN);
+      await restart();
+
+      const raised = adoptedRaised();
+      expect(raised).toHaveLength(1);
+      expect(raised[0].message).toBe(baselineAdoptedNotice(answeringOf(A)));
+      expect(pending(BASELINE_ADOPTED_NOTICE_KEY)).toHaveLength(1);
+    });
+
     it("the model file changed underneath before the next start: the warning, not the adopted notice", async () => {
       await firstLitStart(file([A]));
       await shutdown();

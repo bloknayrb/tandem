@@ -311,11 +311,24 @@ export function announceBaselineAdopted(message: string): TandemNotification {
   });
 }
 
-/** The adopted model is no longer the question: the user chose one, none
- *  answers, or another writer changed it. In memory; the next write carries it. */
+/** The adopted model is no longer the question because the USER settled it:
+ *  they chose a model in Tandem's own window, or none answers any more. In
+ *  memory; the caller's own write carries it to the file. */
 function forgetAdoption(): void {
   removeStartupNotice(BASELINE_ADOPTED_NOTICE_KEY);
   load().adopted = null;
+}
+
+/**
+ * Another writer changed which model answers (the development allowance, or
+ * the files underneath). The adopted notice names a model that may no longer
+ * answer, so its replay is withdrawn — but `adopted` STAYS in the record until
+ * the user is actually told about the new state. Dropping it here would let an
+ * unrelated write persist "answering: X" with no "not yet told", and X coming
+ * back undelivered would then start silently.
+ */
+function withdrawAdoptionNotice(): void {
+  removeStartupNotice(BASELINE_ADOPTED_NOTICE_KEY);
 }
 
 /**
@@ -379,11 +392,15 @@ export function announceLocalModelChange(
   message: string,
   delivered: Partial<Announced>,
 ): TandemNotification {
-  if (typeof delivered.answering === "string") {
-    refreshStartupAnswering(delivered.answering);
-    forgetAdoption();
+  const aboutAnswering = typeof delivered.answering === "string";
+  if (aboutAnswering) {
+    refreshStartupAnswering(delivered.answering as string);
+    withdrawAdoptionNotice();
   }
-  return raise(dedupKey, message, () => record(delivered));
+  // Told about a model: whatever was adopted earlier is no longer pending.
+  return raise(dedupKey, message, () =>
+    record(aboutAnswering ? { ...delivered, adopted: null } : delivered),
+  );
 }
 
 /**
@@ -391,11 +408,17 @@ export function announceLocalModelChange(
  * (commenting on; a model answering) merge into ONE notice.
  */
 export function announceStartupMismatch(part: Partial<Announced>): TandemNotification {
-  if (Object.hasOwn(part, "answering")) forgetAdoption();
+  if (Object.hasOwn(part, "answering")) withdrawAdoptionNotice();
   startupParts = { ...(startupParts ?? {}), ...part };
   return raise(SETTINGS_CHANGED_NOTICE_KEY, SETTINGS_CHANGED_NOTICE, () => {
-    // The parts as they stand NOW, not as they were when this was raised.
-    if (startupParts) record({ ...startupParts });
+    // The parts as they stand NOW, not as they were when this was raised. Once
+    // told which model answers, an earlier adoption is no longer pending.
+    if (!startupParts) return;
+    record(
+      Object.hasOwn(startupParts, "answering")
+        ? { ...startupParts, adopted: null }
+        : { ...startupParts },
+    );
   });
 }
 
