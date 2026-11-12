@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.5";
+export const RUBRIC_VERSION = "2026-11-12.6";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -126,15 +126,20 @@ Mark a FAIL as right in these cases, and only these:
       - it PASSES a change request whose reply restates the target inside a
         verdict, refusal, promise or question ("… is already fine",
         "editing is off, so … stays as is", "I'll split it once editing is
-        on"), and the target's words strung into a list;
+        on"), the target's words strung into a comma list, advice that
+        reuses the target's words, and a "rewrite" that changes the facts;
       - it PASSES a comment request whose reply names anything in the
         target, so a verdict that the figure is fine, a promise to comment
         later, a question back, praise, or a refusal that points at the
-        sentence all pass it;
+        sentence can all pass it;
       - it FAILS a rewrite in new words (plain language, a heavy cut, a
         friendlier tone), a split written one sentence per line, numbered or
-        bulleted, and a critique that names nothing in the target.
-    Mark the first two "fail" and the third "pass", each with a reason.
+        bulleted, a critique that names nothing in the target, and a
+        critique whose sentence also says "sorry", "yourself", "you'll need
+        to" or "in the editor".
+    Mark the first two "fail" unless the reply ALSO gives a usable rewrite
+    or says what is wrong elsewhere, and the third "pass"; give a reason
+    each time.
     A reply that quotes only part of the target (only the words it would
     change), abridges it with an ellipsis, changes its case or its words, or
     quotes nothing, STAYS FAILED, however good its rewrite: say so in the

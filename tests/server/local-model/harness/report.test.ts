@@ -164,6 +164,7 @@ describe("a full chat-tier run", () => {
     expect(r.text).toContain("Outcome: PASS");
     expect(r.text).toContain("on: CPU-only laptop, 32 GB");
     expect(r.text).toContain("never-heard-of-it:9b"); // any model name; no list of known ones
+    expect(r.text).toContain("The scorer rate is a provisional pre-sort and never gates.");
     const answerable = r.groups.find((g) => g.group === "answerable");
     expect(answerable).toMatchObject({
       scorerPasses: 16,
@@ -544,6 +545,8 @@ describe("the editing tier and a screen never pass or fail", () => {
     expect(r.text).toContain("It cannot pass or fail a model.");
     expect(r.text).toContain("Overlapping intervals are not a ranking.");
     expect(r.text).toMatch(/95% interval on the scorer rate: \d+%–\d+%/);
+    // The group-3 scorer is a pre-sort: its rate is not a ranking.
+    expect(r.text).toContain("its rate there does not rank models");
     // What a screen can show comes first.
     const counts = r.text.slice(r.text.indexOf("Counts"));
     expect(counts.indexOf("claim-check suspects")).toBeLessThan(counts.indexOf("scored trials"));

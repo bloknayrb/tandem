@@ -203,9 +203,9 @@ export const COMMENT_MIN_OTHER_CHARS = 30;
  * request's reply is measured: the model speaking about itself ("I can't",
  * "I'm unable", "I won't be able"), "sorry", "my apologies", or handing over
  * ("you'll need to", "yourself", "in the editor", "read-only", "not allowed
- * to"). Kept narrow on purpose: a critique such as "that rate is not
- * possible" must survive. What a broader refusal leaves behind is still
- * unlikely to name anything in the target, which `scoreOfferComment` asks for.
+ * to"). Kept narrow so that a critique such as "that rate is not possible"
+ * survives; a critique that itself says "sorry", "yourself" or "you'll need
+ * to" is still dropped, and is one of the scorer's known false fails.
  */
 const REFUSAL =
   /\bI\s+(?:can(?:not|['’]?t)|could\s*n['’]?t|could\s+not|am\s+(?:not\s+able|unable)|['’]m\s+(?:not\s+able|unable)|do\s*n['’]?t\s+have|have\s+no)\b|\bI['’]m\s+(?:not\s+able|unable)\b|\bI\s+wo\s*n['’]?t\s+be\s+able\b|\bsorry\b|\bmy\s+apologies\b|\bI\s+apologi[sz]e\b|\byou(?:['’]ll|\s+will)?\s+(?:need|have)\s+to\b|\byourself\b|\bin\s+the\s+editor\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted|able)\s+to\b/gi;

@@ -284,7 +284,7 @@ export function computeReport(input: ReportInput): Report {
     lines.push("This is a SCREEN: a fixed subset of the chat tier. It cannot pass or fail a model.");
     lines.push("Intervals below are 95% Wilson intervals on few trials. Overlapping intervals are not a ranking.");
     lines.push(
-      "The rates are the UNREAD scorer's. Its patterns fail some right replies, above all one that names the nearby value while giving the right answer, so a model that explains more can score lower. Read the replies before preferring one model to another.",
+      "The rates are the UNREAD scorer's. Its patterns fail some right replies, above all one that names the nearby value while giving the right answer, so a model that explains more can score lower. For requests to edit or comment it is a word-overlap pre-sort, wrong in both directions: it passes a refusal or verdict that restates the target and fails a good rewrite in new words, so its rate there does not rank models. Read the replies before preferring one model to another.",
     );
   }
   if (outcome === "REPORTED") {
@@ -338,6 +338,9 @@ export function computeReport(input: ReportInput): Report {
 
   lines.push("");
   lines.push("Groups:");
+  lines.push(
+    "  (The scorer rate is a provisional pre-sort and never gates. PASS and FAIL use the rate corrected by the reader.)",
+  );
   for (const g of groups) {
     const scorer = `${g.scorerPasses}/${g.scored} (${pct(g.scorerPasses, g.scored)})`;
     const corrected =
