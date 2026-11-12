@@ -83,7 +83,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "The lone-session re-hand. With one session attached, a close and reopen of a tab it holds, " +
-      "a lapse (a laptop asleep past the grace, a Claude Code restart, the detached-record cap) or " +
+      "a lapse (a laptop asleep past the grace, a Claude Code restart, the detached-record cap, or " +
+      "a session whose stream dropped while it keeps making requests: it is detached, each request " +
+      "re-arms the two-minute grace, an idle spell past it lapses it, its next write claims the " +
+      "document again with no handover, and the next idle lapse hands over again, so it is " +
+      "re-handed on every write-then-idle cycle; how often a dropped stream with live requests " +
+      "happens is unverified) or " +
       "any other handover hands it again every pending user comment on that document, answered or " +
       "not, every resolved comment that was ever edited, and every user reply on a Claude-facing " +
       "thread, resolved long ago or not, so the re-hand grows with the document's history until the " +

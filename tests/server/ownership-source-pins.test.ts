@@ -157,6 +157,15 @@ describe("the handover is wired in a running server, and reachable only through 
         /\bawait\b|\.then\(|withMcp|withInternal|withBrowser|transact\(|Refreshed|refreshAnnotations|getOrCreateDocument/,
       );
     }
+    // Nothing in either half writes, pushes, wakes or touches a delivery round
+    // (R1.8), on any path: the tab close runs the same functions.
+    const handOverFrom = ownership.indexOf("function handOver(documentId: string): void {");
+    const handOverBody = ownership.slice(handOverFrom, ownership.indexOf("\n}\n", handOverFrom));
+    for (const text of [body, keys, handOverBody]) {
+      expect(text).not.toMatch(
+        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
+      );
+    }
     // The annotation read is the plain one, on a Y.Doc from the non-creating getter.
     expect(keys).toContain(".listAnnotations()");
     expect(body).toContain("getDocument(documentId)");

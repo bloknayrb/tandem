@@ -326,9 +326,12 @@ export function setOwnershipInboxHandover(handover: (documentId: string) => void
   inboxHandover = handover;
 }
 
-/** Fixed text: nothing from the error, no record and no document. */
+/**
+ * Fixed text, true of every point the handover can fail at: nothing from the
+ * error, no record and no document.
+ */
 const HANDOVER_FAILED =
-  "[ownership] a document changed hands but its inbox handover did not complete; items its previous owner was shown may not be shown to the next reader";
+  "[ownership] a document changed hands but its inbox handover did not complete: some of what its previous owner was shown may still count as seen, or the document's handover mark was not moved";
 
 /**
  * The handover (ownership design §6.3's rule, as the handover PR narrows it):
@@ -634,7 +637,7 @@ function enforceDetachedCap(): void {
 
 /**
  * The record's client went away (ownership design §3.4): each document it holds
- * goes to the default rule. Its chat follows in PR 2, and each later PR moves
+ * goes to the default rule. Its chat follows in the chat PR, and each later PR moves
  * its own per-record state out here too. A lapse records no blocking loss. A
  * record with no registered transport is then deleted; one whose transport is
  * still registered keeps its label and may claim again like anyone — a grace
@@ -1257,7 +1260,13 @@ export function ownershipSnapshotForTests(): {
   };
 }
 
-/** The steps of the ownership-change composite (ownership design §4.3), as a test may watch them. */
+/**
+ * The steps of the ownership-change composite (ownership design §4.3), as a
+ * test may watch them. `"handover"` is reported where the design puts step 1,
+ * when the change is found to leave a record and BEFORE the entry is
+ * written; the handover's work (`handOver`) runs after the entry, so this
+ * step says a handover was decided, not that it has run.
+ */
 export type CompositeStep = "handover" | "loss" | "entry" | "notices" | "publish" | "wake";
 
 /**

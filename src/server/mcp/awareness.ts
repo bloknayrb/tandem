@@ -1,7 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
-import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_CHAT,
+  Y_MAP_CHAT_STREAM,
+} from "../../shared/constants.js";
 import { crossBasename } from "../../shared/cross-basename.js";
 import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
@@ -243,10 +248,15 @@ const HANDOVER_READ_FAILED =
 
 /**
  * The keys on `documentId` that are a CURRENT accept/dismiss notice: the key
- * of a current Claude-authored annotation at its current status, unless it is
- * also the key of a current user comment. Keys alone cannot tell the two
- * apart — annotation ids are client-written, so a user comment whose id ends
- * `#accepted` has the very key of a notice — hence the annotations.
+ * of a current Claude-authored annotation at its current status, **unless any
+ * other current record on the document has that key** — whatever that
+ * record's type, audience or author, a malformed one included. Keys alone
+ * cannot tell a notice from a comment: annotation ids are client-written, so
+ * a user comment whose id ends `#accepted` has the very key of a notice. And
+ * the colliding record need not be a comment now to be one later (a note, a
+ * highlight, a private comment), so any record with the key gives it up: when
+ * in doubt the key is forgotten, which costs one duplicate notice. (A
+ * colliding record that is DELETED at the handover cannot be seen here.)
  *
  * Null when the annotations cannot be read (the document is not open, its
  * Y.Doc is gone, or the read throws). Nothing here creates a document or
@@ -257,14 +267,25 @@ function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<str
     const doc = getCurrentDoc(documentId);
     if (!doc || !ydoc) return null;
     const annotations = new YDocStore(ydoc, doc.filePath, doc.id).listAnnotations();
+    // How many current Claude records have each notice key: two with one key
+    // (the same id under two map keys) are each other's "other record".
+    const claimed = new Map<string, number>();
+    for (const ann of annotations) {
+      if (ann.author !== "claude") continue;
+      const key = inboxLedgerKey(documentId, ann);
+      claimed.set(key, (claimed.get(key) ?? 0) + 1);
+    }
     const keys = new Set<string>();
-    for (const ann of annotations) {
-      if (ann.author === "claude") keys.add(inboxLedgerKey(documentId, ann));
-    }
-    for (const ann of annotations) {
-      if (ann.author === "user" && ann.type === "comment")
-        keys.delete(ledgerKey(documentId, ann.id));
-    }
+    for (const [key, count] of claimed) if (count === 1) keys.add(key);
+    // Every record's bare-id key, read from the map itself so that a record
+    // the sanitising read skips as malformed still counts. A Claude record's
+    // own bare key is never its notice key (that one carries the status).
+    for (const ann of annotations) keys.delete(ledgerKey(documentId, ann.id));
+    ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((value, mapKey) => {
+      keys.delete(ledgerKey(documentId, mapKey));
+      const id = (value as { id?: unknown } | null)?.id;
+      if (typeof id === "string") keys.delete(ledgerKey(documentId, id));
+    });
     return keys;
   } catch {
     return null;
@@ -291,9 +312,10 @@ function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<str
  * reads no flag (`tests/server/ownership-source-pins.test.ts`). Synchronous,
  * and it makes no Y.Doc write and emits nothing on any push path.
  *
- * The order errs toward a duplicate hand-out if a step fails: the quiet
- * records go first (so the document is at least read again), then the
- * registry, then the cursor-less ledgers.
+ * The order errs toward a duplicate hand-out if a step fails: after the
+ * annotation read (and its log line, if it failed), the quiet records go
+ * first (so the document is at least read again), then the registry, then
+ * the cursor-less ledgers.
  */
 export function handOverDocumentInbox(documentId: string): void {
   const ydoc = getDocument(documentId);

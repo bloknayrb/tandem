@@ -58,6 +58,7 @@ import {
   getDocOwner,
   noteTransportChanged,
   noteTransportRegistered,
+  onDocumentClosed,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
   setDocOwner,
@@ -481,6 +482,49 @@ const PATHS: HandoverPath[] = [
   },
 ];
 
+/**
+ * The tab-close paths again, with the kinds of holder a real session has: one
+ * that got the document through a real `tandem_open` (`opened`), and Tandem's
+ * Claude holding it by the default rule. The handover at the tab-close point
+ * must not depend on the entry's kind.
+ */
+for (const via of ["POST /api/close", "tandem_close"] as const) {
+  const closeIt = async (doc: Doc, holder: string): Promise<Doc> => {
+    const records = snapshotRecords(doc.ydoc);
+    if (via === "POST /api/close") await closeByRoute(doc.id);
+    else expect((await as(holder, "tandem_close", { documentId: doc.id })).error).toBe(false);
+    expect(getOpenDocs().has(doc.id)).toBe(false);
+    expect(getDocOwner(doc.id)).toBeUndefined();
+    return reopen(doc, records);
+  };
+  PATHS.push(
+    {
+      name: `a tab close through ${via} while its holder has it as opened (a real tandem_open), then a reopen`,
+      open: async () => {
+        const filePath = path.join(tmpDir, "opened.md");
+        fs.writeFileSync(filePath, "Hello world, this is a test document.\n");
+        const opened = await as(A, "tandem_open", { filePath });
+        expect(opened.error).toBe(false);
+        const id = opened.data?.documentId as string;
+        return { id, ydoc: getOrCreateDocument(id), filePath };
+      },
+      own: (doc) => {
+        expect(getDocOwner(doc.id)).toMatchObject({ ownerId: A, kind: "opened" });
+      },
+      leave: (doc) => closeIt(doc, A),
+    },
+    {
+      name: `a tab close through ${via} while Tandem's Claude holds it by default, then a reopen`,
+      own: (doc) => {
+        setTandemPresenceSource(() => true);
+        applyUserOpenDefault(doc.id);
+        expect(getDocOwner(doc.id)).toMatchObject({ ownerId: TANDEM_OWNER_ID, kind: "default" });
+      },
+      leave: (doc) => closeIt(doc, TANDEM_OWNER_ID),
+    },
+  );
+}
+
 type ItemKind = "comment" | "reply";
 
 /** Seed one item of `kind` and return how to tell whether a poll handed it. */
@@ -557,8 +601,10 @@ describe.each(NOTICE_PATHS)(
   "comments are owed again and notices are not: $name (R1.2, R1.3, R1.7)",
   (handoverPath) => {
     it("cursor-less, a reader past the mark and the previous owner are each handed the comment, never the notice", async () => {
-      const doc = mkDoc("d");
-      claim(doc.id);
+      // Each path's own document and holder: `claimed`, `opened` by a real
+      // `tandem_open`, or Tandem's Claude by default.
+      const doc = await (handoverPath.open?.() ?? Promise.resolve(mkDoc("d")));
+      await (handoverPath.own ?? ((d: Doc) => claim(d.id)))(doc);
       annotation(doc.ydoc, "c1");
       annotation(doc.ydoc, "n1", { author: "claude", status: "accepted" });
 
@@ -770,6 +816,32 @@ describe("an item that does not qualify at the handover is not lost (R1.2: no ga
     expect(handed(await legacyPoll())).toBe(false);
   });
 
+  it("a cursor-less reader's REPLY whose registry entry was already retired before the handover", async () => {
+    const doc = mkDoc("d");
+    claim(doc.id);
+    const handed = (inbox: Inbox) => replyIds(inbox).includes("r1");
+    const early = reader(B);
+    await early.poll();
+    await early.poll();
+    annotation(doc.ydoc, "parent", { author: "claude" });
+    reply(doc.ydoc, "parent", "r1");
+
+    expect(handed(await legacyPoll())).toBe(true);
+    // The thread stops being Claude-facing, so the reply no longer qualifies:
+    // the early reader's mark is below its entry, which is retired.
+    patch(doc.ydoc, "parent", { audience: "private" });
+    expect(handed(await early.poll())).toBe(false);
+    expect(deliveryRegistry.entriesIn(doc.id)).toEqual([]);
+
+    lapseNow(A);
+    patch(doc.ydoc, "parent", { audience: "outbound" });
+
+    // Its key was still in the cursor-less reply ledger, with no registry
+    // entry to derive it from.
+    expect(handed(await legacyPoll()), "handed once after it qualifies again").toBe(true);
+    expect(handed(await legacyPoll())).toBe(false);
+  });
+
   it.each([
     { handover: true, expected: true },
     { handover: false, expected: false },
@@ -884,8 +956,50 @@ describe("privacy: a handover reveals nothing (ADR-027)", () => {
   });
 });
 
+describe("an item already in a reader's held list (Solo)", () => {
+  it("leaves the held list at the handover, is not handed in Solo, and is handed once when Solo lifts", async () => {
+    const doc = mkDoc("d");
+    claim(doc.id);
+    // B has a numeric mark from before the comment existed.
+    const b = reader(B);
+    await b.poll();
+    await b.poll();
+    annotation(doc.ydoc, "c1");
+    annotation(doc.ydoc, "a-note", { type: "note", audience: "private", content: "SECRET-note" });
+    const handed = (inbox: Inbox) => actionIds(inbox).includes("c1");
+    const a = reader(A);
+    expect(handed(await a.poll())).toBe(true);
+    await a.poll();
+    const heldIn = (cursor: string) => [
+      ...(decodeCursor(cursor).cursor.docs.get(doc.id)?.held ?? new Set<number>()),
+    ];
+
+    setCtrlMode("solo");
+    // B's mark passes the comment while Solo withholds it: held in its cursor.
+    expect(handed(await b.poll())).toBe(false);
+    expect(heldIn(b.cursor)).toHaveLength(1);
+
+    lapseNow(A);
+
+    // The entry the held seq named is gone, so the list is empty; nothing
+    // private ever had an entry to put there.
+    const inSolo = await b.poll();
+    expect(handed(inSolo)).toBe(false);
+    expect(inSolo.hasNew).toBe(false);
+    expect(heldIn(b.cursor)).toEqual([]);
+    expect(JSON.stringify(inSolo)).not.toContain("SECRET");
+
+    setCtrlMode("tandem");
+    const lifted = await b.poll();
+    expect(handed(lifted), "handed once Solo lifts").toBe(true);
+    expect(JSON.stringify(lifted)).not.toContain("SECRET");
+    expect(heldIn(b.cursor)).toEqual([]);
+    expect(handed(await b.poll())).toBe(false);
+  });
+});
+
 describe("notices behave exactly as on master (R1.3)", () => {
-  type Who = "below" | "above" | "fresh" | "legacy";
+  type Who = "below" | "above" | "aboveUnacked" | "fresh" | "legacy";
 
   /**
    * One sequence, run with and without a handover, for one reader. Three
@@ -912,6 +1026,12 @@ describe("notices behave exactly as on master (R1.3)", () => {
 
     annotation(doc.ydoc, "unacked", { author: "claude", status: "dismissed" });
     expect(responseIds(await a.poll())).toEqual(["unacked"]);
+    // A reader that was handed the unacknowledged notice and has not passed
+    // its cursor back: its mark is above the notice, which nobody acknowledged.
+    const aboveUnacked = reader(B);
+    if (who === "aboveUnacked") {
+      expect(responseIds(await aboveUnacked.poll())).toContain("unacked");
+    }
     annotation(doc.ydoc, "unseen", { author: "claude", status: "accepted" });
 
     if (handover) lapseNow(A);
@@ -926,7 +1046,9 @@ describe("notices behave exactly as on master (R1.3)", () => {
             })()
           : who === "below"
             ? () => below.poll()
-            : () => above.poll();
+            : who === "aboveUnacked"
+              ? () => aboveUnacked.poll()
+              : () => above.poll();
     const first = await poll();
     const second = await poll();
     return {
@@ -936,7 +1058,7 @@ describe("notices behave exactly as on master (R1.3)", () => {
     };
   }
 
-  it.each<Who>(["below", "above", "fresh", "legacy"])(
+  it.each<Who>(["below", "above", "aboveUnacked", "fresh", "legacy"])(
     "a reader %s the notices is handed the same notices with and without a handover",
     async (who) => {
       const without = await noticeRun(who, false);
@@ -950,6 +1072,8 @@ describe("notices behave exactly as on master (R1.3)", () => {
       // The handover ran: the comment is owed again wherever it had been seen.
       expect(withHandover.comments[0]).toEqual(["u1"]);
       if (who === "above" || who === "fresh") expect(without.comments[0]).toEqual([]);
+      // Retiring an unacknowledged notice would hand it to this reader twice.
+      if (who === "aboveUnacked") expect(withHandover.notices[0]).toEqual(["unseen"]);
     },
   );
 
@@ -964,9 +1088,63 @@ describe("notices behave exactly as on master (R1.3)", () => {
 
     lapseNow(A);
 
-    expect(handed(await b.poll())).toBe(true);
-    expect(handed(await b.poll())).toBe(false);
+    const after = await b.poll();
+    expect(handed(after)).toBe(true);
+    // The cost, on record: the two share one key, so giving it up also hands
+    // `x`'s own accept notice once more.
+    expect(responseIds(after)).toEqual(["x"]);
+    const again = await b.poll();
+    expect(handed(again)).toBe(false);
+    expect(responseIds(again)).toEqual([]);
   });
+
+  /**
+   * The rule as the review of this PR widened it: a key is a notice's only if
+   * no OTHER current record on the document has it, whatever that record is
+   * at the handover. A user comment with a notice's key that is a note, a
+   * highlight, a private comment or a malformed record at that moment, and a
+   * comment again later, must still be owed again.
+   */
+  it.each<{ name: string; disguise: (doc: Doc) => void }>([
+    {
+      name: "a note",
+      disguise: (doc) => patch(doc.ydoc, "x#accepted", { type: "note", audience: "private" }),
+    },
+    {
+      name: "a highlight",
+      disguise: (doc) => patch(doc.ydoc, "x#accepted", { type: "highlight" }),
+    },
+    {
+      name: "a private comment",
+      disguise: (doc) => patch(doc.ydoc, "x#accepted", { audience: "private" }),
+    },
+    {
+      name: "a malformed record",
+      disguise: (doc) =>
+        withInternal(doc.ydoc, () =>
+          doc.ydoc.getMap(Y_MAP_ANNOTATIONS).set("x#accepted", "garbage"),
+        ),
+    },
+  ])(
+    "a user comment with a notice's key that is $name at the handover is still owed again",
+    async ({ disguise }) => {
+      const doc = mkDoc("d");
+      claim(doc.id);
+      annotation(doc.ydoc, "x#accepted");
+      annotation(doc.ydoc, "x", { author: "claude" });
+      const handed = (inbox: Inbox) => actionIds(inbox).includes("x#accepted");
+      const { b } = await seenByAll(doc, handed);
+      const original = doc.ydoc.getMap(Y_MAP_ANNOTATIONS).get("x#accepted");
+
+      disguise(doc);
+      patch(doc.ydoc, "x", { status: "accepted" });
+      lapseNow(A);
+      withInternal(doc.ydoc, () => doc.ydoc.getMap(Y_MAP_ANNOTATIONS).set("x#accepted", original));
+
+      expect(handed(await b.poll())).toBe(true);
+      expect(handed(await b.poll())).toBe(false);
+    },
+  );
 
   it("a Claude annotation at an unrecognised stored status has its notice left alone; a key no current annotation has is forgotten", async () => {
     const doc = mkDoc("d");
@@ -1321,6 +1499,49 @@ describe("the handover moves nothing and pushes nothing (R1.8)", () => {
     expect(JSON.stringify(getDeliveryState(now, 1))).toBe(roundBefore);
 
     // The positive: in this same run the handover re-owed the items.
+    expect(handed(await b.poll())).toBe(true);
+  });
+});
+
+describe("the handover at the tab-close point moves nothing and pushes nothing either (R1.8)", () => {
+  it("onDocumentClosed, bracketed: no Y.Doc transaction, no event, no change to the delivery round; and the item is re-owed", async () => {
+    const doc = mkDoc("d");
+    claim(doc.id);
+    annotation(doc.ydoc, "c1");
+    const handed = (inbox: Inbox) => actionIds(inbox).includes("c1");
+    const { b } = await seenByAll(doc, handed);
+
+    const events: unknown[] = [];
+    const onEvent = (event: unknown) => {
+      events.push(event);
+    };
+    subscribe(onEvent, "internal");
+    subscribe(onEvent, "external");
+    let transactions = 0;
+    const count = () => {
+      transactions++;
+    };
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    doc.ydoc.on("afterTransaction", count);
+    ctrl.on("afterTransaction", count);
+    const now = Date.now();
+    const roundBefore = JSON.stringify(getDeliveryState(now, 1));
+    const counter = deliveryRegistry.counter;
+
+    // The tab-close point itself, which `closeDocumentById` calls between its
+    // own teardown and the untrack: the close's own writes are outside it.
+    onDocumentClosed(doc.id);
+
+    doc.ydoc.off("afterTransaction", count);
+    ctrl.off("afterTransaction", count);
+    unsubscribe(onEvent);
+    expect(getDocOwner(doc.id)).toBeUndefined();
+    expect(markOf(doc.id)).toBe(counter);
+    expect(transactions).toBe(0);
+    expect(events).toEqual([]);
+    expect(JSON.stringify(getDeliveryState(now, 1))).toBe(roundBefore);
+
+    // The document is still open here (the untrack never ran): B is handed it.
     expect(handed(await b.poll())).toBe(true);
   });
 });
