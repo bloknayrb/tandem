@@ -147,7 +147,7 @@ describe("useModels — a refused write", () => {
 });
 
 describe("useLocalModelSettings — a refused switch", () => {
-  it("from a known value: the box goes back to what the server holds, with no per-click message and no second read", async () => {
+  it("the box goes back to what the SERVER holds (re-read), with no per-click message", async () => {
     const s = createLocalModelSettings();
     await s.load();
     expect(s.editing).toBe(true);
@@ -159,11 +159,47 @@ describe("useLocalModelSettings — a refused switch", () => {
     expect(s.editing).toBe(true); // never shown as switched off
     expect(s.saveNotice).toBeNull(); // the tab's one notice is the reason
     expect(s.loadFailed).toBe(false);
-    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+    expect(calls.map((c) => c.method)).toEqual(["POST", "GET"]);
     expect(createModelsWriteAccess().blocked).toBe(true);
   });
 
-  it("from an unknown value (Switch off while the read had failed): it ends unknown, never unticked", async () => {
+  it("two clicks before the first refusal returns (Off, then On) still end on the server's value, not on a click", async () => {
+    const s = createLocalModelSettings();
+    await s.load();
+    editingOnServer = true;
+
+    const first = s.setEditing(false);
+    const second = s.setEditing(true);
+    // While both are outstanding the display belongs to the last click.
+    await Promise.all([first, second]);
+
+    expect(s.known).toBe(true);
+    expect(s.editing).toBe(true);
+
+    // And the mirror: the server holds Off, the clicks were On then Off.
+    _resetLocalModelSettingsForTests();
+    editingOnServer = false;
+    const t = createLocalModelSettings();
+    await t.load();
+    await Promise.all([t.setEditing(true), t.setEditing(false)]);
+    expect(t.known).toBe(true);
+    expect(t.editing).toBe(false);
+  });
+
+  it("the server holds On, the user clicked Off then On: a value captured at click time would say Off", async () => {
+    const s = createLocalModelSettings();
+    await s.load(); // server: on
+    await Promise.all([s.setEditing(false), s.setEditing(true)]);
+    expect(s.editing).toBe(true);
+    // Now make the capture wrong on purpose: server on, clicks On→Off→On is
+    // covered above; here Off→On with the server flipped to off in between.
+    editingOnServer = false;
+    await s.setEditing(true);
+    expect(s.editing).toBe(false);
+    expect(s.known).toBe(true);
+  });
+
+  it("refused and the re-read fails too (Switch off while the read had failed): it ends unknown, never unticked", async () => {
     editingOnServer = null;
     const s = createLocalModelSettings();
     await s.load();
@@ -175,7 +211,7 @@ describe("useLocalModelSettings — a refused switch", () => {
     expect(s.known).toBe(false);
     expect(s.loadFailed).toBe(true);
     expect(s.saveNotice).toBeNull();
-    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+    expect(calls.map((c) => c.method)).toEqual(["POST", "GET"]);
     expect(createModelsWriteAccess().blocked).toBe(true);
   });
 });

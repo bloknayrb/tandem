@@ -69,7 +69,7 @@ describe("ownWindowNotice — what the tab says", () => {
   it("a refused page on another loopback port is told about the development variable, with its own address", () => {
     const text = ownWindowNotice("unknown", "http://127.0.0.1:5173", OWN);
     expect(text).toBe(
-      "These settings can only be changed in Tandem's own window. This page is served from http://127.0.0.1:5173. In a development setup, start Tandem's server with TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173.",
+      "These settings can only be changed in Tandem's own window. This page is served from http://127.0.0.1:5173. In a development setup, start Tandem's server with TANDEM_MODELS_DEV_ORIGIN=http://127.0.0.1:5173, then reload this page.",
     );
   });
 });

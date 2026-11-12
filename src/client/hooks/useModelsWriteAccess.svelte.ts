@@ -52,6 +52,9 @@ export function modelsPageAccess(): ModelsWriteAccess {
 export interface ModelsWriteAccessState {
   /** These settings cannot be changed from this page. */
   readonly blocked: boolean;
+  /** The page's own origin is one the server never answers readably or
+   *  accepts (not merely a refused write): its reads cannot succeed either. */
+  readonly foreign: boolean;
   /** The one sentence that says so, and what to do. */
   readonly notice: string;
 }
@@ -60,6 +63,9 @@ export function createModelsWriteAccess(): ModelsWriteAccessState {
   return {
     get blocked() {
       return _refused || modelsPageAccess() === "foreign";
+    },
+    get foreign() {
+      return modelsPageAccess() === "foreign";
     },
     get notice() {
       return ownWindowNotice(modelsPageAccess(), pageOrigin(), MCP_BASE_URL);

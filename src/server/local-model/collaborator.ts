@@ -857,7 +857,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       }
       return;
     }
-    if (!identityChanged) return;
+    if (!identityChanged) {
+      deps.announced?.retry?.();
+      return;
+    }
     announceAnswering(now);
   }
 

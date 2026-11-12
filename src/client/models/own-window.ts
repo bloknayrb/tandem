@@ -65,5 +65,5 @@ export function ownWindowNotice(
   if (access === "foreign" || pageOrigin === null) {
     return `${OWN_WINDOW_ONLY_MESSAGE.replace("Local-model settings", "These settings")} Open Tandem at ${ownAddress}, or use the Tandem desktop app.`;
   }
-  return `${OWN_WINDOW_ONLY_MESSAGE.replace("Local-model settings", "These settings")} This page is served from ${pageOrigin}. In a development setup, start Tandem's server with ${MODELS_DEV_ORIGIN_ENV}=${pageOrigin}.`;
+  return `${OWN_WINDOW_ONLY_MESSAGE.replace("Local-model settings", "These settings")} This page is served from ${pageOrigin}. In a development setup, start Tandem's server with ${MODELS_DEV_ORIGIN_ENV}=${pageOrigin}, then reload this page.`;
 }

@@ -309,7 +309,9 @@ export async function setLocalModelEditing(
       // The user's own switch: the record says so at once, even when it was
       // already on (they have now chosen it themselves). Anything else is
       // announced on the transition.
-      if (source === "own-window") recordSetByUser({ editing: true });
+      // The live notice is withdrawn: "if you did not switch this on" is no
+      // longer a question once they have switched it on themselves.
+      if (source === "own-window") recordSetByUser({ editing: true }, EDITING_ON_NOTICE_KEY);
       else if (!wasOn) announceEditingOn();
     }
   });

@@ -55,11 +55,14 @@
  *
  * The read fails toward announcing: a missing, unreadable, linked, oversized,
  * malformed or newer-version file reads as "nothing was ever recorded". A
- * failed write is remembered (`unsaved`) and tried again by the next change or
- * announcement — including one that arrives while the failing write is still
- * in flight — and start-up clears the record again whenever commenting is off
- * or no local model answers. What is left is a disk that refuses every one of
- * those writes, which is logged and costs a repeated notice.
+ * failed write is remembered (`unsaved`) and tried again by the next change,
+ * Off, "no model answers" or announcement — including one that arrives while
+ * the failing write is still in flight — and start-up clears the record again
+ * whenever commenting is off or no local model answers. What is left is a disk
+ * that refuses every one of those writes. That is logged; it costs a repeated
+ * notice, and (because the marker is written only after the record) it also
+ * makes every start a "first lit start" for the answering model, which only
+ * matters if something else is writing the model file meanwhile.
  *
  * It lives in `models/` so that both the settings module and the collaborator
  * can use it (a file outside `local-model/` may not import the engine). A dark
@@ -173,7 +176,8 @@ function persist(): Promise<boolean> {
       return false;
     })
     .finally(() => {
-      inFlight -= 1;
+      // Never below zero: a test reset may have zeroed it under this write.
+      inFlight = Math.max(0, inFlight - 1);
     });
   writeQueue = run.then(() => undefined);
   return run;
@@ -352,6 +356,9 @@ export function recordAnsweringNone(dedupKey?: string): void {
   if (dedupKey !== undefined) removeStartupNotice(dedupKey);
   dropStartupPart("answering");
   if (load().answering !== null) record({ answering: null });
+  // Nothing to change in memory, but an earlier clearing write may have failed:
+  // the file could still name a model, and this is the next chance to fix it.
+  else retryUnsavedRecord();
 }
 
 /**
@@ -363,6 +370,8 @@ export function recordEditingOff(dedupKey: string): void {
   removeStartupNotice(dedupKey);
   dropStartupPart("editing");
   if (load().editing) record({ editing: false });
+  // A repeated Off: the earlier clearing write may have failed. Try it again.
+  else retryUnsavedRecord();
 }
 
 /** Wait for queued writes, the marker included. Tests only. */

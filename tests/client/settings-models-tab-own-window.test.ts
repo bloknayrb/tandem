@@ -306,7 +306,7 @@ describe("Tandem's own window", () => {
 
 describe("a development page on another 127.0.0.1 port, refused by the server", () => {
   const DEV = "http://127.0.0.1:5173";
-  const DEV_NOTICE = `These settings can only be changed in Tandem's own window. This page is served from ${DEV}. In a development setup, start Tandem's server with TANDEM_MODELS_DEV_ORIGIN=${DEV}.`;
+  const DEV_NOTICE = `These settings can only be changed in Tandem's own window. This page is served from ${DEV}. In a development setup, start Tandem's server with TANDEM_MODELS_DEV_ORIGIN=${DEV}, then reload this page.`;
   beforeEach(() => _setPageOriginForTests(DEV));
 
   it("is live until a write is refused; the refusal then shows and announces the message at once", async () => {
@@ -338,6 +338,33 @@ describe("a development page on another 127.0.0.1 port, refused by the server", 
     await vi.advanceTimersByTimeAsync(300);
     await tick();
     expect(region.textContent?.trim()).toBe(DEV_NOTICE);
+  });
+
+  it("a refused page can still read: a failed list load keeps its alert and a working Retry", async () => {
+    modelsPose = { loadFailed: true };
+    noteModelsWriteRefused();
+    const { getByTestId } = mount();
+    expect(getByTestId("models-own-window-notice")).toBeTruthy();
+    expect(getByTestId("models-load-error")).toBeTruthy();
+    await fireEvent.click(getByTestId("models-reload-btn"));
+    expect(modelsApi.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("a delete refused on Confirm keeps the pair on screen, so the focused button does not unmount", async () => {
+    modelsPose = { models: [A] };
+    modelsApi.deleteModel.mockImplementationOnce(async () => {
+      noteModelsWriteRefused(); // the hook, on 403 OWN_WINDOW_ONLY
+    });
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("model-delete-btn-a"));
+    const confirm = getByTestId("model-delete-confirm-a");
+    confirm.focus();
+    await fireEvent.click(confirm);
+    await vi.advanceTimersByTimeAsync(0);
+    await tick();
+    expect(getByTestId("model-delete-confirm-a")).toBe(confirm);
+    expect(document.activeElement).toBe(confirm);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("a pending delete: Confirm goes unavailable and does nothing, Cancel still works", async () => {

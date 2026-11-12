@@ -226,6 +226,10 @@ function closeModal() {
 async function confirmDelete(id: string) {
   if (access.blocked) return;
   await models.deleteModel(id);
+  // Refused because this is not Tandem's own window: keep the pair on screen
+  // (Confirm now unavailable, Cancel live) so the focused button does not
+  // unmount under the keyboard.
+  if (access.blocked) return;
   pendingDeleteId = null;
 }
 
@@ -265,11 +269,12 @@ function askDelete(id: string) {
         ></div>
       {/each}
     </div>
-  {:else if models.loadFailed && access.blocked}
-    <!-- Not Tandem's own window AND the read failed (a page at
-         `http://localhost:<port>` can read nothing from the server): the notice
-         above is the whole explanation. No alert and no Retry — a Retry here
-         could never succeed. This branch is still TAKEN, so the list never
+  {:else if models.loadFailed && access.foreign}
+    <!-- A page that is plainly not Tandem's own (`http://localhost:<port>` can
+         read nothing from the server) AND the read failed: the notice above is
+         the whole explanation. No alert and no Retry — a Retry here could never
+         succeed. (A development page that was merely refused a write can still
+         read, so it keeps the ordinary load error and its Retry below.) This branch is still TAKEN, so the list never
          falls through to "No models configured". -->
   {:else if models.loadFailed}
     <!-- Load threw: distinct from the empty state so we never claim "no models"
@@ -347,7 +352,9 @@ function askDelete(id: string) {
                       disabled={readOnly}
                       aria-disabled={access.blocked}
                       onclick={refuseDefaultWhenBlocked}
-                      onchange={() => models.setDefault(entry.id)}
+                      onchange={() => {
+                        if (!access.blocked) void models.setDefault(entry.id);
+                      }}
                       style="accent-color: var(--tandem-accent); {disabledControlStyle(unavailable)}"
                     />
                     <span>Default</span>
@@ -362,7 +369,9 @@ function askDelete(id: string) {
                       disabled={readOnly}
                       aria-disabled={access.blocked}
                       onclick={refuseWhenBlocked}
-                      onchange={() => models.toggleEnabled(entry.id)}
+                      onchange={() => {
+                        if (!access.blocked) void models.toggleEnabled(entry.id);
+                      }}
                       style="accent-color: var(--tandem-accent); {disabledControlStyle(unavailable)}"
                     />
                     <span>{entry.enabled ? "On" : "Off"}</span>

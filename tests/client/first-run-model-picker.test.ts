@@ -182,3 +182,40 @@ describe("FirstRunModelPickerModal — rolled-back-add guard", () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 });
+
+// #2404: a save refused because this page is not Tandem's own window. The
+// picker stays (the refusal must be explained where the user is looking), shows
+// the server's plain reason, and Save does nothing more; Skip still works.
+describe("FirstRunModelPickerModal — a save the server refused as not Tandem's own window", () => {
+  const REASON = "Local-model settings can only be changed in Tandem's own window.";
+
+  it("keeps the picker open with the reason, makes Save unavailable and inert, and leaves Skip live", async () => {
+    const { noteModelsWriteRefused } = await import("../../src/client/models/write-refusal");
+    addModel.mockImplementationOnce(async () => {
+      noteModelsWriteRefused(); // what the store does on 403 OWN_WINDOW_ONLY
+      storeSaveError = REASON;
+      return null;
+    });
+    const onComplete = vi.fn();
+    const { getByTestId, findByTestId } = render(FirstRunModelPickerModal, {
+      props: { onComplete },
+    });
+    const save = getByTestId("first-run-save") as HTMLButtonElement;
+    expect(save.getAttribute("aria-disabled")).toBe("false");
+
+    await fireEvent.click(save);
+
+    expect((await findByTestId("first-run-error")).textContent).toBe(REASON);
+    expect(getByTestId("first-run-model-modal")).toBeTruthy();
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(save.disabled).toBe(false); // still focusable
+    // Click and Enter both end in the form's submit handler.
+    await fireEvent.click(save);
+    await fireEvent.submit(save.closest("form") as HTMLFormElement);
+    expect(addModel).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await fireEvent.click(getByTestId("first-run-skip"));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+});
