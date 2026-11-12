@@ -198,6 +198,11 @@ const ROUTE_GATES: RouteGate[] = [
     why: "BYO-model config (ADR-039), itself dark behind BYO_MODELS_ENABLED; the local model is refused per run in `local-model/collaborator.ts`",
   },
   { constant: "API_MODELS_SECRET", gate: "open", why: "provider API key, not document content" },
+  {
+    constant: "API_MODELS_LOCAL_SETTINGS",
+    gate: "open",
+    why: "whether a local model may comment and suggest (#1123, ADR-039), itself dark behind BYO_MODELS_ENABLED; it starts nothing and reaches no model — the setting only narrows or widens what an already-admitted run may write, the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching editing off must never be refused",
+  },
 ];
 
 /** A handler that answers the licence refusal in its own body. */

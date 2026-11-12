@@ -45,8 +45,21 @@ export interface LoopMetrics {
    * reasoned about — a Hocuspocus swap, the document being untracked, or (since
    * #2070) its content replaced in place by a reload; the collaborator
    * distinguishes the three before notifying.
+   *
+   * `editing_off` means a writing tool was refused because the run may not
+   * write, the model was then given one turn with no tools to answer in text,
+   * and that turn produced nothing. A run whose text-only turn did produce an
+   * answer exits `clean`.
    */
-  exit: "clean" | "max_turns" | "max_tool_calls" | "timeout" | "aborted" | "error" | "doc-swapped";
+  exit:
+    | "clean"
+    | "max_turns"
+    | "max_tool_calls"
+    | "timeout"
+    | "aborted"
+    | "error"
+    | "doc-swapped"
+    | "editing_off";
   errorMessage?: string;
 }
 
@@ -140,6 +153,12 @@ export interface RunLoopOpts {
    *  that does not thread it is unchanged. Checked at each turn boundary and
    *  forwarded to every tool dispatch. */
   isDocCurrent?: () => boolean;
+  /** May this run write? Forwarded to every tool dispatch and read there each
+   *  time (#1123). Fail-closed: `dispatch` refuses every writing tool unless
+   *  this is a function returning exactly `true`, so a caller that leaves it
+   *  out gets a run that can read and chat and nothing else. The caller is also
+   *  responsible for passing a matching `tools` list and prompts. */
+  canEdit: () => boolean;
 }
 
 export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
@@ -167,6 +186,12 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
   const steps: LoopStep[] = [];
   let finalContent = "";
   const started = Date.now();
+  // Set once a writing tool has been refused because this run may not write
+  // (#1123). The model has been told, in that call's result, to answer in plain
+  // text; the next turn is its one chance to, and it is offered NO tools for
+  // it — so a model that ignores the refusal cannot spend the rest of its tool
+  // budget on refused calls and leave the user with "reached its step limit".
+  let answerInTextOnly = false;
 
   try {
     while (metrics.turns < maxTurns) {
@@ -187,7 +212,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
       const res = await chat({
         config,
         messages,
-        tools,
+        tools: answerInTextOnly ? [] : tools,
         temperature: opts.temperature,
         // Clamp the per-turn timeout to what is left of the run budget, so the
         // deadline can't be overshot by a whole turn. Checking only at the top
@@ -226,6 +251,23 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         break;
       }
 
+      if (answerInTextOnly) {
+        // The text-only turn after a refusal. Whatever it holds is the reply;
+        // any tool call it still carries was never offered and is not
+        // dispatched. Empty text is its own exit, so the collaborator can say
+        // what happened instead of leaving a silent run.
+        finalContent = res.content;
+        steps.push({
+          turn: metrics.turns,
+          assistantContent: res.content,
+          toolCalls: [],
+          latencyMs: res.latencyMs,
+        });
+        metrics.exit = res.content.trim().length > 0 ? "clean" : "editing_off";
+        opts.onTurnEnd?.({ hadToolCalls: false });
+        break;
+      }
+
       if (res.toolCalls.length === 0) {
         finalContent = res.content;
         steps.push({
@@ -259,6 +301,9 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
           // land before these writes. It is here so a future await inside the
           // loop cannot reopen the hole silently.
           isDocCurrent: opts.isDocCurrent,
+          // #1123: the editing permission, read live on every dispatch so
+          // switching it off stops this run's next write.
+          canEdit: opts.canEdit,
         });
         const eff = outcome.effect;
         if ((eff.kind === "comment" || eff.kind === "replacement") && !eff.ok) {
@@ -273,6 +318,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
           metrics.flatOnlyAnchors += 1;
         }
         if (eff.kind === "reply" && !eff.ok) metrics.replyFailures += 1;
+        if (eff.kind === "refused" && eff.errorCode === "EDITING_OFF") answerInTextOnly = true;
 
         stepCalls.push({
           name: tc.name,
@@ -299,7 +345,10 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         latencyMs: res.latencyMs,
       });
 
-      if (metrics.toolCalls >= maxToolCalls) {
+      // A refusal outranks the tool budget: the next turn uses no tools, so
+      // the budget no longer matters, and "step limit" would misstate why the
+      // run is ending.
+      if (!answerInTextOnly && metrics.toolCalls >= maxToolCalls) {
         metrics.exit = "max_tool_calls";
         break;
       }
@@ -309,7 +358,9 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
       metrics.exit === "clean" &&
       steps[steps.length - 1]?.toolCalls.length
     ) {
-      metrics.exit = "max_turns";
+      // Out of turns before the text-only turn could run: the cause is the
+      // refusal, not the step limit.
+      metrics.exit = answerInTextOnly ? "editing_off" : "max_turns";
     }
   } catch (err) {
     // An abort surfaces as a fetch AbortError, but TWO different things abort a

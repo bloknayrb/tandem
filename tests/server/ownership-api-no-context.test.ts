@@ -132,6 +132,7 @@ const EXCLUDED: Record<string, string> = {
   "post API_LAUNCHER_CWD_PREVIEW": "launcher; takes no document",
   "post API_LAUNCHER_SETTINGS": "launcher; takes no document",
   "post API_MODELS": "local-model settings; takes no document",
+  "post API_MODELS_LOCAL_SETTINGS": "the local-model commenting opt-in; takes no document",
   "post API_MODELS_SECRET": "keychain; takes no document",
   "delete API_MODELS_SECRET": "keychain; takes no document",
 };
