@@ -102,20 +102,42 @@ function scoreNotStated(reply: string, mustNot: Pattern[]): ScoreResult {
 }
 
 /**
- * For comparing a quotation with the document: whitespace and quote marks
- * normalised, markdown emphasis removed, case ignored. A model that bolds the
- * word it would change, or capitalises a list item, has still quoted the text.
+ * For comparing a quotation with the document (brief: "verbatim after
+ * whitespace and quote-mark normalisation"). Two more things are removed, both
+ * markup the chat panel renders away (`chat-markdown.ts`), so what is removed
+ * is not text the user sees: emphasis and code marks (`*`, `` ` ``, `_` at a
+ * word edge), and a blockquote or list marker at the start of a line. Case,
+ * wording and dashes are NOT folded: a quote in another case, or with a word
+ * changed, is not verbatim.
  */
 export function quoteForm(text: string): string {
-  return normalizeText(text.replace(/[*`]|(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/g, "")).toLowerCase();
+  return text
+    .replace(/^[ \t]*(?:>[ \t]?)+/gm, "")
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, "")
+    .replace(/[*`]|(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/g, "")
+    .replace(/[\u2018\u2019\u201a\u201b\u2032]/g, "'")
+    .replace(/[\u201c\u201d\u201e\u201f\u2033]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Does the reply quote this text verbatim (in the sense of `quoteForm`)? */
+export function quotesVerbatim(reply: string, text: string): boolean {
+  const wanted = quoteForm(text);
+  return wanted.length > 0 && quoteForm(reply).includes(wanted);
 }
 
 /**
- * Spans a reply OFFERS as text: quoted, in backticks or a code fence, on a
- * blockquote line, or after a colon (to the end of that line, or the next
- * non-empty line when the colon ends its line).
+ * Spans a reply OFFERS as text. Delimited ones: quoted, in backticks or a code
+ * fence, on a blockquote line, or after a colon (to the end of that line, or
+ * the next non-empty line when the colon ends its line). Undelimited ones,
+ * when `target` is given: every line that does not itself quote the target
+ * (list, heading and blockquote markers stripped), and every sentence that
+ * does not, so a rewrite set on its own line under "Revised version" or after
+ * "I'd rewrite it as" is found. A line or sentence that quotes the target is
+ * left out, because "'<target>' is fine as written" is not a rewrite of it.
  */
-export function offeredSpans(reply: string): string[] {
+export function offeredSpans(reply: string, target?: string): string[] {
   const spans: string[] = [];
   const text = reply.replace(/[\u201c\u201d\u201e\u201f]/g, '"');
   for (const m of text.matchAll(/"([^"\n]{2,})"/g)) spans.push(m[1]);
@@ -134,6 +156,16 @@ export function offeredSpans(reply: string): string[] {
       if (next) spans.push(next);
     }
   });
+  if (target !== undefined) {
+    for (const raw of lines) {
+      const line = raw.replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/, "");
+      if (line.trim().length === 0 || /^\s*```/.test(line)) continue;
+      if (!quotesVerbatim(line, target)) spans.push(line);
+      for (const sentence of line.split(/(?<=[.!?])\s+/)) {
+        if (!quotesVerbatim(sentence, target)) spans.push(sentence);
+      }
+    }
+  }
   return spans.map((s) =>
     normalizeText(s.replace(/^[\s>*_"'`-]+/, "").replace(/[\s*_"'`]+$/, "")),
   );
@@ -144,9 +176,27 @@ export const OFFER_MIN_RATIO = 0.2;
 /** Characters a comment-request reply must hold beyond the quote and any refusal. */
 export const COMMENT_MIN_OTHER_CHARS = 30;
 
-/** Sentences that refuse, apologise or hand the job back: not help in words. */
-const REFUSAL_SENTENCE =
-  /(?:\bcan(?:not|['’]?t)\b|\bunable\b|\bnot\s+able\b|\bsorry\b|\bunfortunately\b|\byourself\b|\bin\s+the\s+editor\b|\byou(?:['’]ll|\s+will)?\s+(?:need|have)\s+to\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted)\b)/i;
+/**
+ * Words that refuse or hand the job back: "I can't", "I'm unable", "sorry",
+ * "you'll need to", "yourself", "in the editor", "read-only", "not allowed
+ * to". Kept to the model speaking about itself or handing over, so a rewrite
+ * or a critique that merely contains "cannot" or "unfortunately" is not
+ * mistaken for a refusal.
+ */
+const REFUSAL =
+  /\bI\s+(?:can(?:not|['\u2019]?t)|could\s*n['\u2019]?t|could\s+not|am\s+(?:not\s+able|unable)|['\u2019]m\s+(?:not\s+able|unable)|do\s*n['\u2019]?t\s+have|have\s+no)\b|\bI['\u2019]m\s+(?:not\s+able|unable)\b|\bsorry\b|\byou(?:['\u2019]ll|\s+will)?\s+(?:need|have)\s+to\b|\byourself\b|\bin\s+the\s+editor\b|\bread[- ]only\b|\bnot\s+(?:allowed|permitted|able)\s+to\b/gi;
+
+/**
+ * Does this text refuse or hand the job back? A refusing word the target
+ * itself holds does not count: a rewrite of "Staff cannot…" says "cannot" too.
+ */
+export function refuses(text: string, target: string): boolean {
+  const own = target.toLowerCase();
+  for (const m of text.matchAll(REFUSAL)) {
+    if (!own.includes(m[0].toLowerCase())) return true;
+  }
+  return false;
+}
 
 /** An offer this much made of one unbroken run of the target is the target, not a rewrite. */
 const SAME_TEXT_RATIO = 0.8;
@@ -169,40 +219,51 @@ function longestSharedRun(a: string, b: string): number {
 }
 
 function contentWords(text: string): Set<string> {
-  return new Set((text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]{3,}/g) ?? []).map((w) => w.replace(/[.,]+$/, "")));
+  return new Set(
+    (text.toLowerCase().match(/[a-z0-9$%][a-z0-9$%.,'-]{3,}/g) ?? []).map((w) =>
+      w.replace(/[.,]+$/, ""),
+    ),
+  );
 }
 
 /**
  * Is this span a usable rewrite of the target? Long enough, not the target
  * itself, not a piece cut out of it, not a refusal, and about the same thing
- * (it shares at least two content words with the target).
+ * (it shares at least two content words with the target). Case is folded
+ * HERE only, to judge sameness: a rewrite that differs from the target only
+ * in case is not a different text.
  */
 function isOffer(span: string, target: string): boolean {
-  const offer = quoteForm(span);
-  const original = quoteForm(target);
+  const offer = quoteForm(span).toLowerCase();
+  const original = quoteForm(target).toLowerCase();
   if (offer.length < Math.max(8, Math.floor(original.length * OFFER_MIN_RATIO))) return false;
   if (offer === original || original.includes(offer)) return false;
   // Mostly the original's own words in the original's order (the target
   // quoted again with "is fine" after it, or with a word put in front) is not
   // a rewrite. A one-word fix inside a sentence is: it splits the sentence in two.
   if (longestSharedRun(offer, original) >= offer.length * SAME_TEXT_RATIO) return false;
-  if (REFUSAL_SENTENCE.test(span)) return false;
+  if (refuses(span, target)) return false;
   const targetWords = contentWords(target);
   let shared = 0;
   for (const w of contentWords(span)) if (targetWords.has(w)) shared += 1;
   return shared >= 2;
 }
 
+/**
+ * Every scenario in group 3 that carries a selection selects exactly its
+ * target (pinned in scenarios.test.ts), so "quotes the target or the
+ * selection" is one check.
+ */
 function scoreOfferChange(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  if (!quoteForm(reply).includes(quoteForm(target))) {
+  if (!quotesVerbatim(reply, target)) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
-      notes: ["does not quote the whole target text"],
+      notes: ["does not quote the whole target text verbatim"],
     };
   }
-  const offer = offeredSpans(reply).find((s) => isOffer(s, target));
+  const offer = offeredSpans(reply, target).find((s) => isOffer(s, target));
   if (!offer) {
     return {
       pass: false,
@@ -215,21 +276,23 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
 
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  const form = quoteForm(reply);
-  const original = quoteForm(target);
-  if (!form.includes(original)) {
+  if (!quotesVerbatim(reply, target)) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
-      notes: ["does not quote the whole target text"],
+      notes: ["does not quote the whole target text verbatim"],
     };
   }
+  const original = quoteForm(target);
   // What is left once the quotation and every refusing sentence are removed.
-  const other = normalizeText(reply)
+  // The quotation goes first, so a refusing word inside the target cannot
+  // take the sentence that quotes it down with it.
+  const other = quoteForm(reply)
+    .split(original)
+    .join(" ")
     // Sentences, and the halves of "I can't …, but …".
     .split(/(?<=[.!?])\s+|,\s+(?:but|however|though)\s+|;\s+/)
-    .filter((sentence) => !REFUSAL_SENTENCE.test(sentence))
-    .map((sentence) => quoteForm(sentence).split(original).join(" "))
+    .filter((sentence) => !refuses(sentence, target))
     .join(" ")
     .replace(/["'>]/g, "")
     .replace(/\s+/g, " ")

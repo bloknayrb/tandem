@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { claimCheck } from "../../../../probe/local-model-spike/harness/claims.js";
+import { RUBRIC_TEXT } from "../../../../probe/local-model-spike/harness/rubric.js";
 import {
   date,
   matches,
@@ -61,7 +62,7 @@ describe("cases the diff review found", () => {
     ).toBe(false);
   });
 
-  it("a good reply passes with bold inside the quote, another capitalisation, or a short rewrite", () => {
+  it("a good reply passes with bold inside the quote, a blockquote, or a short rewrite", () => {
     const fixed = "The team of dispatchers was reorganized into two shifts in August.";
     expect(
       on(
@@ -69,7 +70,13 @@ describe("cases the diff review found", () => {
         `Original: "The team of dispatchers **were** reorganized into two shifts in August."\nSuggested: "${fixed}"`,
       ).pass,
     ).toBe(true);
-    expect(on(change, `- "${target.toUpperCase()}" should be: "${fixed}"`).pass).toBe(true);
+    expect(
+      on(
+        change,
+        "> The team of dispatchers were reorganized\n> into two shifts in August.\n\nSuggested: " +
+          fixed,
+      ).pass,
+    ).toBe(true);
     expect(
       on(change, `"${target}" could be tighter: "Dispatchers moved to two shifts in August."`).pass,
     ).toBe(true);
@@ -81,13 +88,73 @@ describe("cases the diff review found", () => {
     ).toBe(true);
   });
 
-  it("quoting only the changed words fails the scorer (the rubric lets the reader pass it)", () => {
+  it("the quote must be verbatim after whitespace and quote marks only (brief, group 3)", () => {
+    const fixed = "The team of dispatchers was reorganized into two shifts in August.";
+    // Only the changed words, an ellipsis, another case, another dash: not verbatim.
+    for (const reply of [
+      `Change "were" to "was": "${fixed}"`,
+      `"The team of dispatchers were reorganized … in August." should be: "${fixed}"`,
+      `- "${target.toUpperCase()}" should be: "${fixed}"`,
+      `"${target.toLowerCase()}" should be: "${fixed}"`,
+    ]) {
+      expect(on(change, reply).failureMode, reply).toBe("NO_QUOTE");
+    }
+    // Curly quotes and broken lines are normalised away.
+    expect(
+      on(change, `\u201c${target.replace(" into", "\n into")}\u201d should be: "${fixed}"`).pass,
+    ).toBe(true);
+  });
+
+  it("the rubric lets the reader pass only what meets the verbatim rule", () => {
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. OVERRIDING"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
+    expect(six).toMatch(/VERBATIM/);
+    expect(six).toMatch(/only part of the target[\s\S]*ellipsis[\s\S]*case[\s\S]*STAYS FAILED/);
+    expect(six).toMatch(/"NO_OFFER": the verbatim quote is there/);
+    expect(six).not.toMatch(/Pass a reply it failed when it\s+quotes, exactly, the words WITHIN/);
+  });
+
+  it("a rewrite that quotes the target is found wherever it is set, and a refusing word in the target is not a refusal", () => {
+    const fixed = "The team of dispatchers was reorganized into two shifts in August.";
+    for (const reply of [
+      // Under a heading, on its own line.
+      `You selected "${target}".\n\n### Corrected version\n\n${fixed}`,
+      // After a dash.
+      `"${target}" — here is a corrected version —\n\n${fixed}`,
+      // In running prose.
+      `The verb in "${target}" should agree with "team". I'd rewrite it as ${fixed} That keeps the meaning.`,
+      // A refusal first, then the rewrite on its own paragraph.
+      `I can't edit the document myself, but for "${target}" I'd suggest this instead.\n\n${fixed}`,
+    ]) {
+      expect(on(change, reply).pass, reply).toBe(true);
+    }
+    const strict = "Staff cannot use personal email, unfortunately, for any patient records.";
+    const strictChange: Scenario = { ...change, expect: { kind: "offer-change", target: strict } };
+    expect(
+      on(
+        strictChange,
+        `"${strict}" reads better as: "Staff cannot use personal email for any patient records."`,
+      ).pass,
+    ).toBe(true);
+    const strictComment: Scenario = {
+      ...change,
+      expect: { kind: "offer-comment", target: strict },
+    };
+    expect(
+      on(
+        strictComment,
+        `"${strict}" — the word unfortunately sounds like an apology in a rule, and it should name the policy it comes from.`,
+      ).pass,
+    ).toBe(true);
+    // A line that quotes the target and calls it fine is still no offer.
     expect(
       on(
         change,
-        `Change "were" to "was": "The team of dispatchers was reorganized into two shifts in August."`,
+        `"${target}" is fine as written.\nNo change is needed to the dispatchers sentence.`,
       ).failureMode,
-    ).toBe("NO_QUOTE");
+    ).toBe("NO_OFFER");
   });
 
   it("'does not say' in more of the ways a reply puts it", () => {

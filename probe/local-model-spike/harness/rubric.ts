@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.1";
+export const RUBRIC_VERSION = "2026-11-12.2";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -104,14 +104,22 @@ Mark a FAIL as right in these cases, and only these:
     which is which, stays failed.
   - Group 1, "MISSING_ANSWER", and group 2, "NO_NOT_STATED": the reply is
     right in words the patterns did not expect.
-  - Group 3 (requests to edit or comment). The rule is that the reply quotes
-    the document's words it is talking about and offers something for them.
-    The scorer needs the whole target quoted. Pass a reply it failed when it
-    quotes, exactly, the words WITHIN the target that it would change and gives
-    the replacement ("change 'were' to 'was'"), or when it quotes the target
-    with an ellipsis in the middle, or when its fix is to delete words and it
-    shows the result. A rewrite with NO quotation of the original stays failed:
-    the user cannot tell which text it replaces.
+  - Group 3 (requests to edit or comment). The rule is the brief's: the
+    reply quotes the target VERBATIM, after only whitespace and quote-mark
+    normalisation (markdown the chat renders away, such as bold, code ticks
+    and blockquote or list markers, does not count against it), and then
+    either offers text that differs from it (a change) or says what is wrong
+    with it (a comment). Pass a reply the scorer failed only when it meets
+    that rule and the scorer missed it:
+      "NO_QUOTE": the verbatim quote is there and the scorer did not see it.
+      "NO_OFFER": the verbatim quote is there and the reply does offer a
+        different text for it (a change) or say what is wrong (a comment),
+        in a form the scorer did not pick out — a rewrite after a dash, in
+        running prose, or under a heading.
+    A reply that quotes only part of the target (only the words it would
+    change), abridges it with an ellipsis, changes its case or its words, or
+    quotes nothing, STAYS FAILED, however good its rewrite: say so in the
+    reason if you think the rule is wrong, and the owner decides.
 
 You may NOT override to "pass" a trial that ended in a timeout, a step limit,
 an editing-off stop, a truncated stream or an error: the user got a notice or
