@@ -694,10 +694,10 @@ async function main() {
   // Attach event queue observers to CTRL_ROOM for channel push notifications
   attachCtrlObservers();
 
-  // Warm the model-registry cache from disk BEFORE the collaborator resolves
-  // its config (#1123 M1a). The collaborator resolves once, synchronously, at
-  // start; without this a fresh boot with a valid models.json would read a cold
-  // cache and resolve null. Gated on the SAME flag as the collaborator: while
+  // Warm the model-registry cache from disk BEFORE the collaborator is wired
+  // (#1123 M1a). The collaborator resolves from this cache, synchronously, on
+  // every chat event; without this a fresh boot with a valid models.json would
+  // read a cold cache and resolve nothing until the next write. Gated on the SAME flag as the collaborator: while
   // dark, `start()` early-returns before `wire()` (collaborator.ts) so nothing
   // reads the cache — priming would be wasted boot-time disk I/O and would break
   // byte-identical-when-dark. At M4 both light up together, preserving the
@@ -706,6 +706,10 @@ async function main() {
     try {
       const { primeModelStoreCache } = await import("./models/registry.js");
       await primeModelStoreCache();
+      // The editing opt-in (#1123) lives beside the registry and is read under
+      // the same gate: a dark build never opens `local-model-settings.json`.
+      const { primeLocalModelSettings } = await import("./models/local-model-settings.js");
+      primeLocalModelSettings();
     } catch (err) {
       console.error(
         `[Tandem] Failed to prime model-registry cache: ${err instanceof Error ? err.message : err}`,

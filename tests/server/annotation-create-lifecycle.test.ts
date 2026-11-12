@@ -495,6 +495,9 @@ describe("local-model create path", () => {
     const ctx = (ydoc: Y.Doc) => ({
       ydoc,
       agentIdentity: undefined,
+      // #1123: the editing permission. This describe pins the WRITE path, so it
+      // runs with editing on; the refusals are pinned in local-model/tools.test.ts.
+      canEdit: () => true,
     });
 
     const outA = dispatch("comment_on_quote", { quoted_text: "quick", comment: "a" }, ctx(docA));
@@ -520,6 +523,7 @@ describe("local-model create path", () => {
       {
         ydoc: modelDoc,
         agentIdentity: { provider: "local-ollama", displayName: "Test Model" },
+        canEdit: () => true,
       },
     );
 
@@ -550,7 +554,7 @@ describe("local-model create path", () => {
     const outcome = dispatch(
       "propose_replacement",
       { quoted_text: "lazy dog", suggested_text: "sleeping hound", rationale: "clearer" },
-      { ydoc: modelDoc },
+      { ydoc: modelDoc, canEdit: () => true },
     );
 
     expect(outcome.effect).toMatchObject({ kind: "replacement", ok: true });

@@ -1,19 +1,53 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
-import { dispatch, TOOLS } from "../../../src/server/local-model/tools.js";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_AUTHORSHIP } from "../../../src/shared/constants.js";
+import {
+  type DispatchCtx,
+  dispatch,
+  EDITING_OFF_MESSAGE,
+  READ_TOOL_NAMES,
+  READ_TOOLS,
+  TOOLS,
+} from "../../../src/server/local-model/tools.js";
+import {
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AUTHORSHIP,
+} from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../../src/shared/snapshot.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
 /**
- * The tools that may write, derived: every registered tool except the named
- * reads. A NEW tool therefore counts as mutating until someone lists it as a
- * read, so the authorship tripwire below covers it by default.
+ * The tools that may write, derived: every registered tool that is not in the
+ * source's own reading list. A NEW tool therefore counts as mutating until the
+ * source lists it as a read, so the authorship tripwire and the editing-off
+ * refusals below cover it by default.
  */
-const READ_TOOLS = new Set(["get_outline", "read_section"]);
-const MUTATING_TOOLS = TOOLS.map((t) => t.name).filter((n) => !READ_TOOLS.has(n));
+const MUTATING_TOOLS = TOOLS.filter((t) => !READ_TOOLS.includes(t)).map((t) => t.name);
+
+/** The editing permission (#1123). Every pre-existing write-path test runs with
+ *  it ON; the "editing off" blocks at the bottom are the ones that turn it off. */
+const ON = (): boolean => true;
+const OFF = (): boolean => false;
+
+/**
+ * Valid args per mutating tool, so each dispatch actually reaches its write
+ * path. A NEW tool throws here until it gets real args: `MUTATING_TOOLS` is
+ * derived, and a `{}` fallback would let it pass without ever writing.
+ */
+function argsFor(name: string, annotationId: string): Record<string, unknown> {
+  switch (name) {
+    case "comment_on_quote":
+      return { quoted_text: "the first phase", comment: "note" };
+    case "propose_replacement":
+      return { quoted_text: "We proceeded carefully", suggested_text: "x", rationale: "y" };
+    case "reply_to_annotation":
+      return { annotation_id: annotationId, text: "reply body" };
+    default:
+      throw new Error(`argsFor: no args for mutating tool "${name}" — add a case`);
+  }
+}
 
 const FIXTURE = `# Cost Summary
 
@@ -66,34 +100,18 @@ describe("local-model tool registry (ADR-027 lock)", () => {
 // body-editing tool that stamps authorship is dispatched here and breaks the
 // assertion, pointing straight back at the exclusion decision.
 describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripwire)", () => {
-  // Valid args per mutating tool, so each dispatch actually reaches its write
-  // path. A NEW tool throws here until it gets real args: `MUTATING_TOOLS` is
-  // derived, and a `{}` fallback would let it pass without ever writing.
-  function argsFor(name: string, annotationId: string): Record<string, unknown> {
-    switch (name) {
-      case "comment_on_quote":
-        return { quoted_text: "the first phase", comment: "note" };
-      case "propose_replacement":
-        return { quoted_text: "We proceeded carefully", suggested_text: "x", rationale: "y" };
-      case "reply_to_annotation":
-        return { annotation_id: annotationId, text: "reply body" };
-      default:
-        throw new Error(`argsFor: no args for mutating tool "${name}" — add a case`);
-    }
-  }
-
   it("every tool in MUTATING_TOOLS leaves the authorship map empty", () => {
     doc = makeMarkdownDoc(FIXTURE);
     // Seed one real annotation so reply_to_annotation has a valid target.
     const seed = dispatch(
       "comment_on_quote",
       { quoted_text: "The team agreed", comment: "seed" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const annotationId = (seed.result as { annotation_id?: string }).annotation_id ?? "";
     expect(MUTATING_TOOLS.length).toBeGreaterThan(0);
     for (const name of MUTATING_TOOLS) {
-      const out = dispatch(name, argsFor(name, annotationId), { ydoc: doc });
+      const out = dispatch(name, argsFor(name, annotationId), { ydoc: doc, canEdit: ON });
       // Each really reached its write path: an ok effect, not an error result.
       expect(out.effect, name).toMatchObject({ ok: true });
     }
@@ -108,7 +126,7 @@ describe("dispatch — annotation writes", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "tighten this" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect(out.effect.kind).toBe("comment");
     expect((out.result as { ok?: boolean }).ok).toBe(true);
@@ -129,7 +147,7 @@ describe("dispatch — annotation writes", () => {
     const out = dispatch(
       "propose_replacement",
       { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { ok?: boolean }).ok).toBe(true);
     const id = (out.result as { annotation_id: string }).annotation_id;
@@ -150,7 +168,7 @@ describe("dispatch — annotation writes", () => {
     const out = dispatch(
       "propose_replacement",
       { quoted_text: quoted, suggested_text: "X", rationale: "why" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { error?: string }).error).toBe("HEADING_OVERLAP");
     expect(getAnnotationsMap(doc).size).toBe(0);
@@ -166,7 +184,7 @@ describe("dispatch — annotation writes", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "para\n## Section", comment: "on the whole section" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { ok?: boolean }).ok).toBe(true);
     expect(getAnnotationsMap(doc).size).toBe(1);
@@ -177,7 +195,7 @@ describe("dispatch — annotation writes", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "this phrase does not exist", comment: "x" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { error?: string }).error).toBe("ANCHOR_NOT_FOUND");
     expect(getAnnotationsMap(doc).size).toBe(0);
@@ -188,7 +206,7 @@ describe("dispatch — annotation writes", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "# Cost Summary", comment: "x" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { error?: string }).error).toBe("HEADING_OVERLAP");
     expect(getAnnotationsMap(doc).size).toBe(0);
@@ -201,7 +219,7 @@ describe("dispatch — M0 anchor hardening", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", occurrence_index: 3, comment: "x" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { ok?: boolean }).ok).toBe(true);
     // occurrence_index was clamped 3 -> 1 because the quote occurs exactly once.
@@ -215,12 +233,12 @@ describe("dispatch — M0 anchor hardening", () => {
     const first = dispatch(
       "comment_on_quote",
       { quoted_text: "The team agreed", occurrence_index: 1, comment: "a" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const second = dispatch(
       "comment_on_quote",
       { quoted_text: "The team agreed", occurrence_index: 2, comment: "b" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((first.result as { ok?: boolean }).ok).toBe(true);
     expect((second.result as { ok?: boolean }).ok).toBe(true);
@@ -234,7 +252,7 @@ describe("dispatch — M0 anchor hardening", () => {
     const over = dispatch(
       "comment_on_quote",
       { quoted_text: "The team agreed", occurrence_index: 5, comment: "c" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((over.result as { error?: string }).error).toBe("ANCHOR_NOT_FOUND");
     if (over.effect.kind === "comment") expect(over.effect.anchor.occurrence_index).toBe(5);
@@ -245,7 +263,7 @@ describe("dispatch — M0 anchor hardening", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "\\$500", comment: "pricing" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { ok?: boolean }).ok).toBe(true);
   });
@@ -259,7 +277,7 @@ describe("dispatch — M0 anchor hardening", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "", occurrence_index: 1.5, comment: "x" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { error?: string }).error).toBe("ANCHOR_NOT_FOUND");
     expect(getAnnotationsMap(doc).size).toBe(0);
@@ -269,14 +287,18 @@ describe("dispatch — M0 anchor hardening", () => {
 describe("dispatch — reads", () => {
   it("reads a section by heading text", () => {
     doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch("read_section", { heading: "Cost Summary" }, { ydoc: doc });
+    const out = dispatch("read_section", { heading: "Cost Summary" }, { ydoc: doc, canEdit: ON });
     expect(out.effect.kind).toBe("read");
     expect((out.result as { text?: string }).text).toContain("The budget is $500");
   });
 
   it("returns SECTION_NOT_FOUND for an unknown heading", () => {
     doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch("read_section", { heading: "No Such Heading" }, { ydoc: doc });
+    const out = dispatch(
+      "read_section",
+      { heading: "No Such Heading" },
+      { ydoc: doc, canEdit: ON },
+    );
     expect(out.effect.kind).toBe("read");
     expect((out.result as { error?: string }).error).toBe("SECTION_NOT_FOUND");
   });
@@ -288,7 +310,7 @@ describe("dispatch — replies", () => {
     const created = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "needs detail" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const annotationId = (created.result as { annotation_id: string }).annotation_id;
 
@@ -296,7 +318,7 @@ describe("dispatch — replies", () => {
     const out = dispatch(
       "reply_to_annotation",
       { annotation_id: annotationId, text: "here is the detail" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect(out.effect.kind).toBe("reply");
     expect((out.result as { ok?: boolean }).ok).toBe(true);
@@ -309,7 +331,7 @@ describe("dispatch — replies", () => {
     const out = dispatch(
       "reply_to_annotation",
       { annotation_id: "does-not-exist", text: "hi" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect(out.effect.kind).toBe("reply");
     expect((out.result as { ok?: boolean }).ok).toBeUndefined();
@@ -337,7 +359,7 @@ describe("dispatch — replies", () => {
     const created = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "needs detail" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const annotationId = (created.result as { annotation_id: string }).annotation_id;
     map.set(annotationId, { ...(map.get(annotationId) as Annotation), type: "note" });
@@ -345,10 +367,102 @@ describe("dispatch — replies", () => {
     const out = dispatch(
       "reply_to_annotation",
       { annotation_id: annotationId, text: "into a private thread" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     expect((out.result as { error?: string }).error).toBe("INVALID_ARGUMENT");
     expect(doc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
+  });
+});
+
+describe("dispatch — replies aimed at a record the model must not reach (ADR-027, round 2)", () => {
+  // The editing tier, with the permission ON: the ADR-027 guard is the only
+  // thing between the model and these threads. Both records are the user's.
+  const NOTE = { type: "note", author: "user", audience: "private" } as const;
+  const PRIVATE_COMMENT = { type: "comment", author: "user", audience: "private" } as const;
+
+  function docWithRecord(overrides: Partial<Annotation>): { ydoc: Y.Doc; id: string } {
+    doc = makeMarkdownDoc(FIXTURE);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "the user's own words" },
+      { ydoc: doc, canEdit: ON },
+    );
+    const id = (created.result as { annotation_id: string }).annotation_id;
+    const map = getAnnotationsMap(doc);
+    const { agentIdentity: _dropped, ...rest } = map.get(id) as Annotation;
+    map.set(id, { ...rest, ...overrides });
+    return { ydoc: doc, id };
+  }
+
+  function snapshot(ydoc: Y.Doc): { annotations: unknown; replies: unknown } {
+    return {
+      annotations: ydoc.getMap(Y_MAP_ANNOTATIONS).toJSON(),
+      replies: ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).toJSON(),
+    };
+  }
+
+  for (const [label, overrides] of [
+    ["a personal note (type: note)", NOTE],
+    ["a private comment (type: comment, audience: private)", PRIVATE_COMMENT],
+  ] as const) {
+    it(`${label}: refused, nothing written, and the refusal does not say what the record is`, () => {
+      const { ydoc, id } = docWithRecord(overrides);
+      const before = snapshot(ydoc);
+      let transactions = 0;
+      ydoc.on("afterTransaction", () => transactions++);
+
+      const out = dispatch(
+        "reply_to_annotation",
+        { annotation_id: id, text: "into a thread that is not mine" },
+        { ydoc, canEdit: ON, agentIdentity: { provider: "local-ollama", displayName: "Qwen" } },
+      );
+
+      expect(out.effect).toEqual({
+        kind: "reply",
+        ok: false,
+        annotationId: id,
+        errorCode: "INVALID_ARGUMENT",
+      });
+      expect(transactions, "no Y.Doc transaction at all").toBe(0);
+      expect(snapshot(ydoc)).toEqual(before);
+      expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
+
+      // What the model is handed back. It names neither kind of record, and
+      // carries nothing of the record itself.
+      const text = JSON.stringify(out.result);
+      expect(text).not.toMatch(/\bnotes?\b/i);
+      expect(text).not.toMatch(/private/i);
+      expect(text).not.toMatch(/audience|personal|hidden|withheld/i);
+      expect(text).not.toContain("the user's own words");
+      expect(text).not.toContain("the first phase");
+      expect(text).not.toContain(id);
+      expect(Object.keys(out.result as object).sort()).toEqual(["error", "message"]);
+    });
+  }
+
+  it("the two kinds of record are answered identically, so the refusal does not tell them apart", () => {
+    const answers = [NOTE, PRIVATE_COMMENT].map((overrides) => {
+      const { ydoc, id } = docWithRecord(overrides);
+      const out = dispatch(
+        "reply_to_annotation",
+        { annotation_id: id, text: "t" },
+        { ydoc, canEdit: ON },
+      );
+      ydoc.destroy();
+      return out.result;
+    });
+    expect(answers[0]).toEqual(answers[1]);
+  });
+
+  it("control: the same reply into the same record while it is still the model's own comment lands", () => {
+    const { ydoc, id } = docWithRecord({});
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: id, text: "t" },
+      { ydoc, canEdit: ON },
+    );
+    expect(out.effect).toMatchObject({ kind: "reply", ok: true });
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
   });
 });
 
@@ -359,7 +473,7 @@ describe("dispatch — replies to a user-authored comment (#2216)", () => {
     const created = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "needs detail" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const annotationId = (created.result as { annotation_id: string }).annotation_id;
     map.set(annotationId, { ...(map.get(annotationId) as Annotation), author: "user" });
@@ -367,7 +481,7 @@ describe("dispatch — replies to a user-authored comment (#2216)", () => {
     const out = dispatch(
       "reply_to_annotation",
       { annotation_id: annotationId, text: "answering the user" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const result = out.result as { error?: string; message?: string };
     expect(result.error).toBe("NOT_OWNED");
@@ -389,7 +503,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "x" },
-      { ydoc: doc, agentIdentity: identity },
+      { ydoc: doc, agentIdentity: identity, canEdit: ON },
     );
     const id = (out.result as { annotation_id: string }).annotation_id;
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
@@ -401,7 +515,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const out = dispatch(
       "propose_replacement",
       { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
-      { ydoc: doc, agentIdentity: identity },
+      { ydoc: doc, agentIdentity: identity, canEdit: ON },
     );
     const id = (out.result as { annotation_id: string }).annotation_id;
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
@@ -419,7 +533,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const out = dispatch(
       "propose_replacement",
       { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const id = (out.result as { annotation_id: string }).annotation_id;
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
@@ -434,7 +548,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const out = dispatch(
       "propose_replacement",
       { quoted_text: long, suggested_text: "shorter", rationale: "trim" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const id = (out.result as { annotation_id: string }).annotation_id;
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
@@ -447,13 +561,13 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const created = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "needs detail" },
-      { ydoc: doc, agentIdentity: identity },
+      { ydoc: doc, agentIdentity: identity, canEdit: ON },
     );
     const annotationId = (created.result as { annotation_id: string }).annotation_id;
     const out = dispatch(
       "reply_to_annotation",
       { annotation_id: annotationId, text: "detail here" },
-      { ydoc: doc, agentIdentity: identity },
+      { ydoc: doc, agentIdentity: identity, canEdit: ON },
     );
     const replyId = (out.result as { reply_id: string }).reply_id;
     const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -466,7 +580,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const out = dispatch(
       "comment_on_quote",
       { quoted_text: "the first phase", comment: "x" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const id = (out.result as { annotation_id: string }).annotation_id;
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
@@ -478,7 +592,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const repl = dispatch(
       "propose_replacement",
       { quoted_text: "the first phase", suggested_text: "phase one", rationale: "r" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const replId = (repl.result as { annotation_id: string }).annotation_id;
     expect((getAnnotationsMap(doc).get(replId) as Annotation).agentIdentity).toBeUndefined();
@@ -486,7 +600,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const reply = dispatch(
       "reply_to_annotation",
       { annotation_id: replId, text: "t" },
-      { ydoc: doc },
+      { ydoc: doc, canEdit: ON },
     );
     const replyId = (reply.result as { reply_id: string }).reply_id;
     const stored = doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replyId) as { agentIdentity?: unknown };
@@ -497,7 +611,7 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
 describe("dispatch — malformed input", () => {
   it("reports MALFORMED_ARGS when tool args failed to parse (null)", () => {
     doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch("comment_on_quote", null, { ydoc: doc });
+    const out = dispatch("comment_on_quote", null, { ydoc: doc, canEdit: ON });
     expect((out.result as { error?: string }).error).toBe("MALFORMED_ARGS");
   });
 });
@@ -523,7 +637,7 @@ describe("dispatch — the document changed under the run (#2070)", () => {
       doc = makeMarkdownDoc(FIXTURE);
       let writes = 0;
       doc.on("afterTransaction", () => writes++);
-      const out = dispatch(name, ARGS[name], { ydoc: doc, isDocCurrent: () => false });
+      const out = dispatch(name, ARGS[name], { ydoc: doc, isDocCurrent: () => false, canEdit: ON });
       expect((out.result as { error?: string }).error).toBe("DOCUMENT_CHANGED");
       expect(out.effect).toMatchObject({ ok: false, errorCode: "DOCUMENT_CHANGED" });
       expect(writes, "no Y.Doc transaction at all").toBe(0);
@@ -536,14 +650,375 @@ describe("dispatch — the document changed under the run (#2070)", () => {
     const out = dispatch("comment_on_quote", ARGS.comment_on_quote, {
       ydoc: doc,
       isDocCurrent: () => true,
+      canEdit: ON,
     });
     expect(out.effect).toMatchObject({ kind: "comment", ok: true });
   });
 
   it("leaves the read tools open — they read the live document by construction", () => {
     doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch("get_outline", {}, { ydoc: doc, isDocCurrent: () => false });
+    const out = dispatch("get_outline", {}, { ydoc: doc, isDocCurrent: () => false, canEdit: ON });
     expect(out.effect).toEqual({ kind: "read" });
     expect((out.result as { error?: string }).error).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1123 R2: chat-only by default. `dispatch` is the one route by which model
+// output reaches a document, so these drive it directly with forged calls.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A document holding one real annotation with one real reply, both written
+ *  with editing on — so "nothing was created" is measured against a non-empty
+ *  store, and a forged reply has a thread it could really land in. */
+function seededDoc(): { ydoc: Y.Doc; annotationId: string } {
+  doc = makeMarkdownDoc(FIXTURE);
+  const seed = dispatch(
+    "comment_on_quote",
+    { quoted_text: "The team agreed", comment: "seed" },
+    { ydoc: doc, canEdit: ON },
+  );
+  const annotationId = (seed.result as { annotation_id: string }).annotation_id;
+  const reply = dispatch(
+    "reply_to_annotation",
+    { annotation_id: annotationId, text: "seed reply" },
+    { ydoc: doc, canEdit: ON },
+  );
+  expect(reply.effect).toMatchObject({ kind: "reply", ok: true });
+  return { ydoc: doc, annotationId };
+}
+
+/** Everything a writing tool could touch, by value. The annotations key comes
+ *  from the shared constants (Critical Rule 1); replies live in their own map. */
+function stored(ydoc: Y.Doc): { annotations: unknown; replies: unknown; authorship: unknown } {
+  return {
+    annotations: ydoc.getMap(Y_MAP_ANNOTATIONS).toJSON(),
+    replies: ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).toJSON(),
+    authorship: ydoc.getMap(Y_MAP_AUTHORSHIP).toJSON(),
+  };
+}
+
+function countTransactions(ydoc: Y.Doc): () => number {
+  let n = 0;
+  ydoc.on("afterTransaction", () => n++);
+  return () => n;
+}
+
+/** Collapse a writing-tool mention to a yes/no, for the "names no writing tool"
+ *  checks. Derived, so a writing tool added later is looked for too. */
+function namedWritingTools(text: string): string[] {
+  return MUTATING_TOOLS.filter((n) => text.includes(n));
+}
+
+describe("READ_TOOLS — the chat-tier allowlist (#1123 R2.2)", () => {
+  it("is exactly the tools named in READ_TOOL_NAMES", () => {
+    expect(READ_TOOLS.map((t) => t.name).sort()).toEqual([...READ_TOOL_NAMES].sort());
+    // Every entry is the registered schema itself, not a look-alike.
+    for (const t of READ_TOOLS) expect(TOOLS, t.name).toContain(t);
+    // No name on the allowlist that is not a registered tool.
+    for (const n of READ_TOOL_NAMES) {
+      expect(
+        TOOLS.some((t) => t.name === n),
+        n,
+      ).toBe(true);
+    }
+  });
+
+  it("is a STRICT subset of TOOLS — there is something left to refuse", () => {
+    expect(READ_TOOLS.length).toBeGreaterThan(0);
+    expect(READ_TOOLS.length).toBeLessThan(TOOLS.length);
+    expect(MUTATING_TOOLS.length).toBe(TOOLS.length - READ_TOOLS.length);
+    expect(MUTATING_TOOLS.length).toBeGreaterThan(0);
+  });
+
+  it("names only the two reading tools — widening it is a permission change", () => {
+    // Hand-written on purpose, unlike the refused set: a writing tool added to
+    // the allowlist would pass every derived test in this file.
+    expect([...READ_TOOL_NAMES].sort()).toEqual(["get_outline", "read_section"]);
+  });
+});
+
+describe("dispatch — editing off refuses every writing tool (#1123 R2.2)", () => {
+  for (const name of MUTATING_TOOLS) {
+    it(`${name}: a forged, well-formed call is refused EDITING_OFF and creates nothing`, () => {
+      const { ydoc, annotationId } = seededDoc();
+      const before = stored(ydoc);
+      const transactions = countTransactions(ydoc);
+
+      const out = dispatch(name, argsFor(name, annotationId), { ydoc, canEdit: OFF });
+
+      expect(out.effect).toEqual({ kind: "refused", tool: name, errorCode: "EDITING_OFF" });
+      expect(out.result).toEqual({ error: "EDITING_OFF", message: EDITING_OFF_MESSAGE });
+      expect(transactions(), "no Y.Doc transaction at all").toBe(0);
+      // Deep-unchanged: no new annotation, no change to the existing one, and no
+      // reply added to its thread.
+      expect(stored(ydoc)).toEqual(before);
+
+      // Control: the very same call is a real write once editing is on, so the
+      // refusal above was the permission and not a malformed forgery.
+      const allowed = dispatch(name, argsFor(name, annotationId), { ydoc, canEdit: ON });
+      expect(allowed.effect, "same args with editing on").toMatchObject({ ok: true });
+      expect(stored(ydoc)).not.toEqual(before);
+    });
+  }
+
+  it("the refusal tells the model editing is off, to call no more tools, and that its next message is the reply", () => {
+    expect(EDITING_OFF_MESSAGE).toMatch(/switched off/i);
+    expect(EDITING_OFF_MESSAGE).toMatch(/nothing was written/i);
+    // Round 2: was "do not call this tool again". The loop now gives the model
+    // exactly one more turn, with no tools, so the message says so — a model
+    // told only to avoid THIS tool would try another and waste that turn.
+    expect(EDITING_OFF_MESSAGE).toMatch(/call no more tools/i);
+    expect(EDITING_OFF_MESSAGE).not.toMatch(/this tool again/i);
+    // Round 3: it no longer says the reading tools "are available" — the turn
+    // that follows a refusal offers no tools at all, so naming any would send
+    // the model after one that is not there.
+    expect(EDITING_OFF_MESSAGE).not.toMatch(/are available/i);
+    for (const tool of READ_TOOL_NAMES) expect(EDITING_OFF_MESSAGE).not.toContain(tool);
+    expect(EDITING_OFF_MESSAGE).toMatch(/your next message is your reply/i);
+    expect(EDITING_OFF_MESSAGE).toMatch(/answer the user in plain text/i);
+  });
+
+  it("the refusal, whole", () => {
+    expect(EDITING_OFF_MESSAGE).toBe(
+      "Commenting on and suggesting changes to the document are switched off for this reply, so nothing was written. Call no more tools: your next message is your reply, so answer the user in plain text.",
+    );
+  });
+
+  it("is read on every dispatch — off, then on, then off again", () => {
+    const { ydoc, annotationId } = seededDoc();
+    let editing = false;
+    const ctx: DispatchCtx = { ydoc, canEdit: () => editing };
+    const name = "comment_on_quote";
+
+    expect(dispatch(name, argsFor(name, annotationId), ctx).effect.kind).toBe("refused");
+    editing = true;
+    expect(dispatch(name, argsFor(name, annotationId), ctx).effect).toMatchObject({ ok: true });
+    editing = false;
+    const before = stored(ydoc);
+    expect(dispatch(name, argsFor(name, annotationId), ctx).effect.kind).toBe("refused");
+    expect(stored(ydoc)).toEqual(before);
+  });
+
+  it("refuses before the arguments are looked at (null args are EDITING_OFF, not MALFORMED_ARGS)", () => {
+    const { ydoc } = seededDoc();
+    for (const name of MUTATING_TOOLS) {
+      const out = dispatch(name, null, { ydoc, canEdit: OFF });
+      expect(out.effect, name).toEqual({ kind: "refused", tool: name, errorCode: "EDITING_OFF" });
+    }
+  });
+});
+
+describe("dispatch — a name that is not a tool (#1123 R2.2)", () => {
+  const NOT_A_TOOL = "append_paragraph";
+  // Shaped like a write on purpose: a quote that exists, a real thread id.
+  const forged = (annotationId: string): Record<string, unknown> => ({
+    quoted_text: "the first phase",
+    comment: "forged",
+    suggested_text: "forged",
+    annotation_id: annotationId,
+    text: "forged",
+  });
+
+  it("is really not in TOOLS", () => {
+    expect(TOOLS.some((t) => t.name === NOT_A_TOOL)).toBe(false);
+  });
+
+  it("creates nothing with editing off, and is UNKNOWN_TOOL", () => {
+    const { ydoc, annotationId } = seededDoc();
+    const before = stored(ydoc);
+    const transactions = countTransactions(ydoc);
+
+    const out = dispatch(NOT_A_TOOL, forged(annotationId), { ydoc, canEdit: OFF });
+
+    expect(out.effect).toEqual({ kind: "refused", tool: NOT_A_TOOL, errorCode: "UNKNOWN_TOOL" });
+    expect((out.result as { error?: string }).error).toBe("UNKNOWN_TOOL");
+    expect(transactions()).toBe(0);
+    expect(stored(ydoc)).toEqual(before);
+  });
+
+  it("still creates nothing with editing on", () => {
+    const { ydoc, annotationId } = seededDoc();
+    const before = stored(ydoc);
+    const transactions = countTransactions(ydoc);
+
+    const out = dispatch(NOT_A_TOOL, forged(annotationId), { ydoc, canEdit: ON });
+
+    expect((out.result as { error?: string }).error).toBe("UNKNOWN_TOOL");
+    expect((out.result as { ok?: boolean }).ok).toBeUndefined();
+    expect(transactions()).toBe(0);
+    expect(stored(ydoc)).toEqual(before);
+  });
+});
+
+describe("dispatch — the editing permission fails closed (#1123 R2.3)", () => {
+  // Each of these is what a forgetful or non-TypeScript caller could hand over.
+  // Only a FUNCTION returning exactly `true` may write.
+  const BROKEN: [label: string, patch: Record<string, unknown>][] = [
+    ["canEdit omitted", {}],
+    ["canEdit: undefined", { canEdit: undefined }],
+    ["canEdit: null", { canEdit: null }],
+    ["canEdit: true (a boolean, not a function)", { canEdit: true }],
+    ['canEdit: "yes" (a string)', { canEdit: "yes" }],
+    ["canEdit returning 1", { canEdit: () => 1 }],
+    ['canEdit returning "yes"', { canEdit: () => "yes" }],
+    ["canEdit returning {}", { canEdit: () => ({}) }],
+    ["canEdit returning undefined", { canEdit: () => undefined }],
+  ];
+
+  for (const [label, patch] of BROKEN) {
+    it(`${label}: no writing tool writes`, () => {
+      const { ydoc, annotationId } = seededDoc();
+      const before = stored(ydoc);
+      const transactions = countTransactions(ydoc);
+      const ctx = { ydoc, ...patch } as unknown as DispatchCtx;
+
+      for (const name of MUTATING_TOOLS) {
+        const out = dispatch(name, argsFor(name, annotationId), ctx);
+        expect(out.effect, name).toEqual({
+          kind: "refused",
+          tool: name,
+          errorCode: "EDITING_OFF",
+        });
+      }
+      expect(transactions()).toBe(0);
+      expect(stored(ydoc)).toEqual(before);
+    });
+  }
+
+  it("the reading tools still work for a caller that omitted the permission", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("get_outline", {}, { ydoc: doc } as unknown as DispatchCtx);
+    expect(out.effect).toEqual({ kind: "read" });
+    expect((out.result as { error?: string }).error).toBeUndefined();
+  });
+});
+
+describe("dispatch — the reading tools work with editing off (#1123 R2.2)", () => {
+  it("covers every reading tool", () => {
+    // A reading tool added later must get a case below.
+    expect([...READ_TOOL_NAMES].sort()).toEqual(["get_outline", "read_section"]);
+  });
+
+  it("get_outline lists the headings", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("get_outline", {}, { ydoc: doc, canEdit: OFF });
+    expect(out.effect).toEqual({ kind: "read" });
+    expect((out.result as { error?: string }).error).toBeUndefined();
+    expect(JSON.stringify((out.result as { outline: unknown }).outline)).toContain("Cost Summary");
+  });
+
+  it("read_section returns the section text", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("read_section", { heading: "Cost Summary" }, { ydoc: doc, canEdit: OFF });
+    expect(out.effect).toEqual({ kind: "read" });
+    expect((out.result as { text?: string }).text).toContain("The budget is $500");
+  });
+});
+
+describe("dispatch — refusal text names no writing tool (#1123 R2.6)", () => {
+  it("EDITING_OFF_MESSAGE names none", () => {
+    expect(namedWritingTools(EDITING_OFF_MESSAGE)).toEqual([]);
+  });
+
+  it("the unknown-tool message names none, with editing off or on", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    for (const canEdit of [OFF, ON]) {
+      const out = dispatch("append_paragraph", {}, { ydoc: doc, canEdit });
+      const message = (out.result as { message: string }).message;
+      expect(message).toContain("append_paragraph");
+      expect(namedWritingTools(message)).toEqual([]);
+    }
+  });
+
+  it("a chat-tier model that calls a writing tool by name is not told the others exist", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    for (const name of MUTATING_TOOLS) {
+      const out = dispatch(name, {}, { ydoc: doc, canEdit: OFF });
+      expect(namedWritingTools(JSON.stringify(out.result)), name).toEqual([]);
+    }
+  });
+});
+
+describe("dispatch — a write result says it proposed, not that it changed the document (#1123 R3)", () => {
+  it("propose_replacement: a suggestion awaiting the user's accept or reject; text unchanged", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "propose_replacement",
+      { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
+      { ydoc: doc, canEdit: ON },
+    );
+    const result = out.result as {
+      ok: boolean;
+      annotation_id: string;
+      status: string;
+      note: string;
+    };
+    expect(Object.keys(result).sort()).toEqual(["annotation_id", "note", "ok", "status"]);
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("proposed");
+    expect(result.note).toMatch(/suggestion/i);
+    expect(result.note).toMatch(/waiting for the user/i);
+    expect(result.note).toMatch(/accept/i);
+    expect(result.note).toMatch(/reject/i);
+    expect(result.note).toMatch(/document text has not been changed/i);
+    // R3.3: the id is still there, and it is the stored record's.
+    expect(getAnnotationsMap(doc).has(result.annotation_id)).toBe(true);
+  });
+
+  it("comment_on_quote: says the document was not changed, and carries the id", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "tighten" },
+      { ydoc: doc, canEdit: ON },
+    );
+    const result = out.result as { ok: boolean; annotation_id: string; note: string };
+    expect(Object.keys(result).sort()).toEqual(["annotation_id", "note", "ok"]);
+    expect(result.ok).toBe(true);
+    expect(result.note).toMatch(/document text has not been changed/i);
+    expect(getAnnotationsMap(doc).has(result.annotation_id)).toBe(true);
+  });
+
+  it("reply_to_annotation: a reply using the id a create returned succeeds, and says the document was not changed", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    for (const [create, args] of [
+      ["comment_on_quote", { quoted_text: "the first phase", comment: "c" }],
+      ["propose_replacement", { quoted_text: "We proceeded carefully", suggested_text: "s" }],
+    ] as const) {
+      const created = dispatch(create, args, { ydoc: doc, canEdit: ON });
+      const annotationId = (created.result as { annotation_id: string }).annotation_id;
+
+      const out = dispatch(
+        "reply_to_annotation",
+        { annotation_id: annotationId, text: "more detail" },
+        { ydoc: doc, canEdit: ON },
+      );
+      const result = out.result as { ok: boolean; reply_id: string; note: string };
+      expect(Object.keys(result).sort(), create).toEqual(["note", "ok", "reply_id"]);
+      expect(result.ok).toBe(true);
+      expect(result.note).toMatch(/document text has not been changed/i);
+      const reply = doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.reply_id) as {
+        annotationId?: string;
+      };
+      expect(reply.annotationId, create).toBe(annotationId);
+    }
+  });
+
+  it("no success note claims a change was made", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "The team agreed", comment: "seed" },
+      { ydoc: doc, canEdit: ON },
+    );
+    const annotationId = (created.result as { annotation_id: string }).annotation_id;
+    for (const name of MUTATING_TOOLS) {
+      const out = dispatch(name, argsFor(name, annotationId), { ydoc: doc, canEdit: ON });
+      const note = (out.result as { note?: string }).note;
+      expect(note, name).toEqual(expect.any(String));
+      expect(note, name).toMatch(/not been changed/i);
+      expect(note, name).not.toMatch(/has been (made|applied|replaced)|is now (in|part of)/i);
+    }
   });
 });

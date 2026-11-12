@@ -20,6 +20,31 @@
 /** Whole-file replace of the server-side models registry (#1123 M1a). */
 export const API_MODELS = "/api/models";
 
+/**
+ * Whether local models may comment on and suggest changes to the document
+ * (#1123, ADR-039's opt-in tier). Its own route and its own file
+ * (`local-model-settings.json`), never a field of the registry: `POST
+ * /api/models` replaces the whole registry from a client projection, so a
+ * field there would be erased by any Models write.
+ */
+export const API_MODELS_LOCAL_SETTINGS = "/api/models/local-settings";
+
+/** `GET /api/models/local-settings`. */
+export interface LocalModelSettingsResponse {
+  editing: boolean;
+}
+
+/**
+ * `POST /api/models/local-settings` answer, on success (200) and on a failed
+ * write (500) alike. `editing` is what the server is acting on now; `persisted`
+ * says whether the disk agrees, i.e. whether it will still hold after a restart.
+ */
+export interface LocalModelSettingsPostResponse {
+  editing: boolean;
+  persisted: boolean;
+  code?: string;
+}
+
 // --- Schema version ----------------------------------------------------------
 
 /** On-disk `models.json` schema version. Net-new at M1a; no migrations yet. */
@@ -129,3 +154,7 @@ export const ERROR_CODE_MODELS_WRITE_FAILED = "MODELS_WRITE_FAILED";
 export const ERROR_CODE_MODELS_STALE = "MODELS_STALE";
 /** 429 — a concurrent write is in flight; retry. */
 export const ERROR_CODE_MODELS_BUSY = "MODELS_BUSY";
+/** 400 — a POST /api/models/local-settings body was not `{ editing: boolean }`. */
+export const ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS = "INVALID_LOCAL_MODEL_SETTINGS";
+/** 500 — the setting could not be saved; the answer still carries the effective value. */
+export const ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED = "LOCAL_MODEL_SETTINGS_WRITE_FAILED";
