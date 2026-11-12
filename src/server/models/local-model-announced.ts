@@ -99,6 +99,7 @@ import { ownWindowSubscriberCount, pushNotification } from "../notifications.js"
 import { resolveAppDataDir } from "../platform.js";
 import {
   addStartupNotice,
+  getStartupNotices,
   onStartupNoticeDelivered,
   removeStartupNotice,
 } from "../startup-notices.js";
@@ -113,7 +114,17 @@ const MAX_BYTES = 4096;
  *  more than is known, and carries no endpoint, path or credential. */
 export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
 export const SETTINGS_CHANGED_NOTICE =
-  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set your chat to be answered by Claude. This can also appear after an upgrade or after restoring Tandem's data.";
+  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set who answers your chat back to Claude. This can also appear after an upgrade or after restoring Tandem's data.";
+/** The same notice when its parts include the switch: it says first that chat
+ *  is now answered by a local model (#1123), which is what the user most needs
+ *  to know. One replay key, so the parts still merge into one notice. */
+export const SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE =
+  "Your chat is now answered by a local model, and your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: set who answers your chat back to Claude, remove any model you do not recognise, and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
+
+/** Replay key of the notice that chat is answered by Claude again although the
+ *  user's recorded choice was the local model, by anything but their own
+ *  choice in Tandem's own window (#1123, Bryan's decision 2026-11-12). */
+export const ANSWERER_CLAUDE_NOTICE_KEY = "local-model-answerer-claude";
 
 interface Announced {
   /** Did the user switch commenting on themselves, or were they told it is on? */
@@ -247,7 +258,18 @@ function dropStartupPart(part: keyof Announced): void {
   if (Object.keys(startupParts).length === 0) {
     startupParts = null;
     removeStartupNotice(SETTINGS_CHANGED_NOTICE_KEY);
+    return;
   }
+  // The waiting notice's text follows its parts: without the switch part it
+  // must no longer say chat is answered by a local model.
+  const waiting = getStartupNotices().find((n) => n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY);
+  if (waiting) addStartupNotice({ ...waiting, message: startupMessage() });
+}
+
+function startupMessage(): string {
+  return startupParts && Object.hasOwn(startupParts, "answererLocal")
+    ? SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE
+    : SETTINGS_CHANGED_NOTICE;
 }
 
 /** Was commenting switched on by the user, or were they told it is on? */
@@ -371,8 +393,12 @@ export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string
   // the commenting half: that part of a pending start-up notice is withdrawn.
   if (change.editing === true) dropStartupPart("editing");
   // Their own switch to the local model answers the start-up notice's "set
-  // your chat to be answered by Claude" half: that part is withdrawn.
-  if (change.answererLocal === true) dropStartupPart("answererLocal");
+  // who answers your chat back to Claude" half: that part is withdrawn, and so
+  // is a waiting "your chat is answered by Claude again" notice.
+  if (change.answererLocal === true) {
+    dropStartupPart("answererLocal");
+    removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  }
   record(change);
 }
 
@@ -438,7 +464,7 @@ export function announceLocalModelChange(
 export function announceStartupMismatch(part: Partial<Announced>): TandemNotification {
   if (Object.hasOwn(part, "answering")) withdrawAdoptionNotice();
   startupParts = { ...(startupParts ?? {}), ...part };
-  return raise(SETTINGS_CHANGED_NOTICE_KEY, SETTINGS_CHANGED_NOTICE, () => {
+  return raise(SETTINGS_CHANGED_NOTICE_KEY, startupMessage(), () => {
     // The parts as they stand NOW, not as they were when this was raised. Once
     // told which model answers, an earlier adoption is no longer pending.
     if (!startupParts) return;
@@ -491,10 +517,32 @@ export function answererLocalWasAnnounced(): boolean {
  */
 export function recordAnswererClaude(dedupKey: string): void {
   removeStartupNotice(dedupKey);
+  removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
   dropStartupPart("answererLocal");
   if (load().answererLocal) record({ answererLocal: false });
   // A repeated switch: the earlier clearing write may have failed. Try again.
   else retryUnsavedRecord();
+}
+
+/**
+ * Chat is answered by Claude again although the record says the user chose
+ * the local model, and the user did not choose Claude in Tandem's own window
+ * (Bryan, 2026-11-12: "Announce it"). A warning of the existing kind, live and
+ * for replay. When one of Tandem's own windows was sent it, the record's
+ * `answererLocal` is cleared — unless `keepRecord` (a read that failed at
+ * start-up, which may be transient: the next clean start that reads "local"
+ * then restores the user's choice with no false "settings changed" warning).
+ * Until it is delivered the record keeps the choice, so a restart before any
+ * window connected announces it again.
+ */
+export function announceAnswererClaude(
+  message: string,
+  opts: { keepRecord: boolean },
+): TandemNotification {
+  dropStartupPart("answererLocal");
+  return raise(ANSWERER_CLAUDE_NOTICE_KEY, message, () => {
+    if (!opts.keepRecord && load().answererLocal) record({ answererLocal: false });
+  });
 }
 
 /** Wait for queued writes, the marker included. Tests only. */

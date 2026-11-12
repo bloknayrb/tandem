@@ -769,7 +769,7 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
 
     it("the copy is the decided wording", () => {
       expect(SETTINGS_CHANGED_NOTICE).toBe(
-        "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set your chat to be answered by Claude. This can also appear after an upgrade or after restoring Tandem's data.",
+        "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set who answers your chat back to Claude. This can also appear after an upgrade or after restoring Tandem's data.",
       );
     });
 

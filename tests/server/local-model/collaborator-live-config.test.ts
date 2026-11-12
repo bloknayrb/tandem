@@ -19,7 +19,7 @@ import {
 import {
   ANSWERING_CHANGED_NOTICE_KEY,
   answeringChangedNotice,
-  CHAT_NOTICE_TEXT,
+  CHAT_NOTICE_UNUSABLE_TEXT,
   type CollaboratorDeps,
   createLocalModelCollaborator,
   UNUSABLE_NOTICE,
@@ -388,7 +388,8 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       expect(rows).toHaveLength(4);
       for (const row of rows) {
         expect(row.chatNotice).toBe("no-local-model");
-        expect(row.text).toBe(CHAT_NOTICE_TEXT["no-local-model"]);
+        // The same remedy as the toast's (#1123 review: one remedy per state).
+        expect(row.text).toBe(CHAT_NOTICE_UNUSABLE_TEXT["endpoint-rejected"]);
         expect(row.agentIdentity).toBeUndefined();
       }
     });

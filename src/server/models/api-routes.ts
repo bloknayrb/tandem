@@ -61,6 +61,7 @@ import {
   API_MODELS_LOCAL_SETTINGS,
   type ChatAnswererPostResponse,
   type ChatAnswererResponse,
+  ERROR_CODE_CHAT_ANSWERER_SUPERSEDED,
   ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
   ERROR_CODE_INVALID_CHAT_ANSWERER,
   ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS,
@@ -211,7 +212,7 @@ function makeGetChatAnswererHandler(
     } catch (err) {
       console.error(
         `[tandem] GET ${API_MODELS_CHAT_ANSWERER}: could not tell whether a local model resolves (${
-          err instanceof Error ? err.message : String(err)
+          err instanceof Error ? err.name : "error"
         }).`,
       );
     }
@@ -260,9 +261,24 @@ function makePostChatAnswererHandler(live: boolean, ownWindow: OwnWindowPolicy):
       return;
     }
     const result = await setChatAnswerer(answerer, source);
+    if (result.superseded) {
+      // A later request won before this one settled: nothing failed. 409 with
+      // the state the server is in now, so the page can show it.
+      const body: ChatAnswererPostResponse = {
+        answerer: result.answerer,
+        persisted: result.persisted,
+        code: ERROR_CODE_CHAT_ANSWERER_SUPERSEDED,
+      };
+      res.status(409).json(body);
+      return;
+    }
     const body: ChatAnswererPostResponse = result.persisted
-      ? result
-      : { ...result, code: ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED };
+      ? { answerer: result.answerer, persisted: true }
+      : {
+          answerer: result.answerer,
+          persisted: false,
+          code: ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
+        };
     res.status(result.persisted ? 200 : 500).json(body);
   };
 }

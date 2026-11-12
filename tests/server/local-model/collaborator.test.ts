@@ -2709,7 +2709,7 @@ describe("answeringChangedNotice — what it may carry (#2404)", () => {
   // was told about, so it says "set or changed" and no longer asserts an edit.
   it("the notice, whole", () => {
     expect(answeringChangedNotice(base)).toBe(
-      'The local model set up to answer your chat (whenever your chat is set to be answered by a local model) was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
+      'The local model used when your chat is answered by a local model was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
     );
   });
 

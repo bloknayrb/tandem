@@ -130,6 +130,39 @@ describe("local-model production wiring (#1123, #2404)", () => {
     expect(between).toMatch(/\}\s*catch\s*\(/);
   });
 
+  // Repo-wide: the prime is the switch's only disk read, so a call anywhere
+  // else in src/ — even one that looks harmless — would read the file in a
+  // dark build. The definition is the one other mention.
+  it("primeChatAnswerer is called nowhere in src/ but index.ts's flag block", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const root = path.join(SRC, "..");
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(path.join(dir, e.name))
+          : /\.(ts|svelte)$/.test(e.name)
+            ? [path.join(dir, e.name)]
+            : [],
+      );
+    const callers = walk(root)
+      .filter((f) => /\bprimeChatAnswerer\s*\(/.test(stripComments(readFileSync(f, "utf8"))))
+      .map((f) => path.relative(root, f).replace(/\\/g, "/"))
+      .sort();
+    expect(callers).toEqual(["server/index.ts", "server/models/chat-answerer.ts"]);
+    const own = stripComments(await read("models", "chat-answerer.ts"));
+    expect(count(own, "primeChatAnswerer(")).toBe(1); // the definition only
+  });
+
+  // Critical Rule 2: the run state is written on the user's row with the
+  // `mcp` origin, so the ctrl-chat observer skips it and it can wake nothing.
+  it("writeLocalRun writes through withMcp, and only through it", async () => {
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, '"generation">,\n): void {');
+    expect(body).toMatch(/withMcp\(ctrlDoc,\s*\(\)\s*=>\s*chatMap\.set\(/);
+    expect(count(body, "chatMap.set(")).toBe(1);
+    expect(body).not.toMatch(/\.transact\(/);
+  });
+
   it("index.ts hands localModelResolvesNow to startMcpServerHttp, and server.ts to the models routes", async () => {
     const index = stripComments(await read("index.ts"));
     expect(index).toMatch(/\{\s*localModelResolvesNow\s*\}\s*,?\s*\)/);

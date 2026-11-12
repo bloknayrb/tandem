@@ -226,3 +226,6 @@ export const ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED = "LOCAL_MODEL_SETTING
 export const ERROR_CODE_INVALID_CHAT_ANSWERER = "INVALID_CHAT_ANSWERER";
 /** `POST /api/models/chat-answerer`: the switch took effect but did not reach the disk. */
 export const ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED = "CHAT_ANSWERER_WRITE_FAILED";
+/** `POST /api/models/chat-answerer`: a later request won before this one
+ *  settled (409). Nothing failed; the body carries the state now. */
+export const ERROR_CODE_CHAT_ANSWERER_SUPERSEDED = "CHAT_ANSWERER_SUPERSEDED";

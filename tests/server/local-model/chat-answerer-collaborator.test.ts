@@ -15,6 +15,7 @@ import {
 } from "../../../src/server/events/queue.js";
 import {
   CHAT_NOTICE_TEXT,
+  CHAT_NOTICE_UNUSABLE_TEXT,
   type CollaboratorDeps,
   createLocalModelCollaborator,
   DEFAULT_COLLABORATOR_DEPS,
@@ -515,6 +516,24 @@ describe("chat notices (R3.2, R3.3)", () => {
     expect(getBuffer()).toEqual([]);
   });
 
+  it("an unusable state: each chat's notice carries the same remedy as the toast", async () => {
+    setupDoc("doc-rem");
+    for (const reason of ["no-default-chosen", "no-endpoint", "endpoint-rejected"] as const) {
+      resetNotifications();
+      const collab = createLocalModelCollaborator(
+        deps({
+          resolveConfig: () => null,
+          diagnose: () => ({ reason, stateKey: reason, detail: "d" }),
+        }),
+      );
+      collab.onEvent(userChat(`rem-${reason}`, "doc-rem"));
+      await drain(collab);
+      const notice = noticeRows().find((m) => m.replyTo === `rem-${reason}`);
+      expect(notice?.text).toBe(CHAT_NOTICE_UNUSABLE_TEXT[reason]);
+      expect(getBuffer().map((n) => n.message)).toEqual([UNUSABLE_NOTICE[reason]]);
+    }
+  });
+
   it("an unusable state: the chat notice every chat, and the toast once", async () => {
     setupDoc("doc-u");
     const collab = createLocalModelCollaborator(
@@ -671,6 +690,47 @@ describe("run state on the user's row (R3.4)", () => {
     collab.onEvent(userChat("u1", "doc-throw-early"));
     await drain(collab);
     expect(row("u1")?.localRun).toEqual({ status: "stopped", reason: "error", generation: G });
+  });
+
+  it("editing_off whose cause was Solo (the setting allowed it): stopped, solo, and the toast names Solo", async () => {
+    setupDoc("doc-solo-stop");
+    attachCtrlObservers();
+    const collab = createLocalModelCollaborator(
+      deps({
+        editingState: () => ({ enabled: true, offEpoch: 0 }),
+        runTurn: async (o) => {
+          expect(o.editingAllowed()).toBe(true);
+          setMode("solo");
+          expect(o.editingAllowed()).toBe(false);
+          return result("editing_off");
+        },
+      }),
+    );
+    collab.onEvent(userChat("u1", "doc-solo-stop"));
+    await drain(collab);
+    expect(row("u1")?.localRun).toEqual({ status: "stopped", reason: "solo", generation: G });
+    expect(getBuffer().map((n) => n.message)).toEqual([
+      "The local model stopped without replying: it tried to comment on or change the document, which local models do not do in Solo mode. Ask again for an answer in chat.",
+    ]);
+  });
+
+  it("editing_off whose cause was the setting: stopped, editing-off, and the toast does not name Solo", async () => {
+    setupDoc("doc-off-stop");
+    const editing = { enabled: true, offEpoch: 0 };
+    const collab = createLocalModelCollaborator(
+      deps({
+        editingState: () => ({ ...editing }),
+        runTurn: async (o) => {
+          editing.enabled = false;
+          expect(o.editingAllowed()).toBe(false);
+          return result("editing_off");
+        },
+      }),
+    );
+    collab.onEvent(userChat("u1", "doc-off-stop"));
+    await drain(collab);
+    expect(row("u1")?.localRun?.reason).toBe("editing-off");
+    expect(getBuffer()[0]?.message).not.toMatch(/Solo/);
   });
 
   it("a throwing runTurn: stopped, error", async () => {

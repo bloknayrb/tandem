@@ -713,6 +713,8 @@ export type LocalRunStopReason =
   | "step-limit"
   /** It tried to comment or suggest in a run that may not, then said nothing. */
   | "editing-off"
+  /** The same, where the cause was Solo mode (the editing setting allowed it). */
+  | "solo"
   /** The document was reloaded or edited in source view mid-run. */
   | "content-replaced"
   /** The document reconnected mid-run (its live instance was swapped). */

@@ -49,7 +49,13 @@
  * switch to the local model made there is the user's own: no notice, and
  * `local-model-announced.ts` records it at once (withdrawing any pending
  * start-up part for it). One admitted through the development allowance is
- * announced. A switch to Claude is never announced: it sends nothing anywhere.
+ * announced. A switch to Claude made in Tandem's own window is silent. Any
+ * other way chat comes to be answered by Claude while the record says the user
+ * chose the local model — the file removed, unreadable, changed or written by
+ * a newer build, or a switch through the development allowance — raises one
+ * notice saying so and why (Bryan, 2026-11-12: "Announce it"); a read that
+ * failed keeps the record, so a later clean read of "local" restores the
+ * choice silently.
  * At start-up, a stored "local model" the record does not show as the user's
  * raises the start-up notice; a stored Claude clears the record silently. The
  * switch is never part of the first-lit-start baseline: no dark build can
@@ -78,6 +84,7 @@ import type { ChatAnswerer } from "../../shared/models/contract.js";
 import { atomicWriteConfigFile, readBoundedJsonFileSync } from "../integrations/storage.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
+  announceAnswererClaude,
   announceLocalModelChange,
   announceStartupMismatch,
   answererLocalWasAnnounced,
@@ -99,13 +106,16 @@ const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
  *  not come from Tandem's own window (the development allowance). */
 export const ANSWERER_LOCAL_NOTICE_KEY = "local-model-answerer-local";
 export const ANSWERER_LOCAL_NOTICE =
-  "Your chat was set to be answered by a local model instead of Claude. If you did not do this, switch it back to Claude in Settings → Models.";
+  "Your chat was set to be answered by a local model. If you did not do this, set who answers your chat back to Claude in Settings → Models.";
 
 export interface SetChatAnswererResult {
   /** The effective value once this request settled. */
   answerer: ChatAnswerer;
-  /** Did the disk end up agreeing with `answerer`? */
+  /** Is the disk known to agree with what this request asked for? */
   persisted: boolean;
+  /** A later request arrived before this one settled; `answerer` is that
+   *  request's result, and nothing failed. */
+  superseded?: true;
 }
 
 let basePath: string | null = null;
@@ -134,26 +144,62 @@ function newerVersion(obj: Record<string, unknown> | null): number | null {
   return typeof v === "number" && Number.isFinite(v) && v > CHAT_ANSWERER_VERSION ? v : null;
 }
 
-/** What the file says, failing toward Claude. Never throws. */
-function readDisk(file: string): ChatAnswerer {
+/**
+ * What is on disk. Only `local` makes the local model answer; every other
+ * state reads Claude. The states are kept apart because they mean different
+ * things when deciding whether a write landed (only `missing` and `claude`
+ * are Claude on disk — `unreadable` is not known to be anything) and what the
+ * user is told when their recorded choice of the local model is lost.
+ */
+type DiskState = "missing" | "unreadable" | "newer" | "invalid" | "claude" | "local";
+
+/** Never throws. */
+function readState(file: string): DiskState {
   try {
-    const obj = readObject(file);
-    return obj !== null &&
-      Object.hasOwn(obj, "version") &&
-      obj.version === CHAT_ANSWERER_VERSION &&
-      Object.hasOwn(obj, "answerer") &&
-      obj.answerer === "local"
-      ? "local"
-      : "claude";
+    // Not `readBoundedJsonFileSync`, which folds a failed read and bad
+    // content into one answer: here a failed read may be transient (a scanner
+    // holding the file) and keeps the user's recorded choice, while content
+    // that is not this file's — a link, a directory, oversized, not JSON — is
+    // a change.
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(file);
+    } catch (err) {
+      return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "unreadable";
+    }
+    if (!st.isFile() || st.size > MAX_BYTES) return "invalid";
+    let raw: string;
+    try {
+      raw = fs.readFileSync(file, "utf8");
+    } catch (err) {
+      return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "unreadable";
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return "invalid";
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "invalid";
+    const obj = parsed as Record<string, unknown>;
+    if (newerVersion(obj) !== null) return "newer";
+    if (!Object.hasOwn(obj, "version") || obj.version !== CHAT_ANSWERER_VERSION) return "invalid";
+    if (!Object.hasOwn(obj, "answerer")) return "invalid";
+    if (obj.answerer === "local") return "local";
+    if (obj.answerer === "claude") return "claude";
+    return "invalid";
   } catch (err) {
     console.error(
       `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be read (${
-        err instanceof Error ? err.message : String(err)
+        err instanceof Error ? err.name : "error"
       }); Claude answers chat.`,
     );
-    return "claude";
+    return "unreadable";
   }
 }
+
+/** Is Claude what the disk says, as far as a write is concerned? */
+const isClaudeOnDisk = (state: DiskState): boolean => state === "missing" || state === "claude";
 
 function serialize(file: string, answerer: ChatAnswerer): string {
   const existing = readObject(file);
@@ -200,7 +246,7 @@ function removeSync(file: string): boolean {
  *  failure, if Claude is now effective, remove the file. Never throws. */
 async function writeLocal(): Promise<DiskOutcome> {
   const file = filePath();
-  if (newerVersion(readObject(file)) !== null) {
+  if (readState(file) === "newer") {
     // Never stamped into a later build's file; `settled` reports it unsaved.
     return { written: true, saved: false };
   }
@@ -216,6 +262,40 @@ async function writeLocal(): Promise<DiskOutcome> {
   }
   if (effective !== "local") removeSync(file);
   return { written: false, saved: false };
+}
+
+/** Make the disk read Claude: delete the file, and if that fails and the file
+ *  is not known to say Claude, write Claude over it. Never throws. */
+async function makeDiskClaude(): Promise<void> {
+  const file = filePath();
+  if (removeSync(file)) return;
+  if (isClaudeOnDisk(readState(file))) return;
+  try {
+    await atomicWriteConfigFile(file, serialize(file, "claude"));
+  } catch (err) {
+    console.error(
+      `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be switched to Claude on disk either (${
+        err instanceof Error ? err.message : String(err)
+      }); the local model may answer after a restart.`,
+    );
+  }
+}
+
+/** Why chat is answered by Claude again, in words for the notice. */
+const CLAUDE_AGAIN_BECAUSE: Record<Exclude<DiskState, "local"> | "allowance", string> = {
+  missing: "the file that held that choice was removed",
+  claude: "the file that held that choice was changed",
+  invalid: "the file that held that choice was changed",
+  newer: "the file that holds that choice was written by a newer version of Tandem",
+  unreadable:
+    "the file that holds that choice could not be read (Tandem will read it again at the next start)",
+  allowance: "a change was made outside Tandem's own window",
+};
+
+/** The notice that chat is answered by Claude again (#1123, Bryan's decision
+ *  2026-11-12). Fixed strings: never a path. */
+export function answererClaudeNotice(cause: keyof typeof CLAUDE_AGAIN_BECAUSE): string {
+  return `Your chat is now answered by Claude, not by a local model as you chose, because ${CLAUDE_AGAIN_BECAUSE[cause]}. To have a local model answer it again, set who answers your chat in Settings → Models.`;
 }
 
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -247,18 +327,28 @@ function setEffective(now: ChatAnswerer): void {
  */
 export function primeChatAnswerer(): void {
   primed = true;
-  const read = readDisk(filePath());
+  const state = readState(filePath());
   if (seq !== 0) return;
-  effective = read;
-  // The local model answers at start-up and the record does not say the user
-  // chose it or was told: the file changed underneath, came from another
-  // build or a restore, or the record of the user's own switch was lost.
-  if (read === "local" && !answererLocalWasAnnounced()) {
-    announceStartupMismatch({ answererLocal: true });
+  effective = state === "local" ? "local" : "claude";
+  if (state === "local") {
+    // The local model answers at start-up and the record does not say the
+    // user chose it or was told: the file changed underneath, came from
+    // another build or a restore, or the record of the user's own switch was
+    // lost. The one start-up notice says chat is now answered by a local model.
+    if (!answererLocalWasAnnounced()) announceStartupMismatch({ answererLocal: true });
+    return;
   }
-  // Claude at start-up, whatever the record says: clear a stale "told", so
-  // the next switch to the local model is compared afresh. Silent.
-  if (read === "claude") recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+  if (answererLocalWasAnnounced()) {
+    // The user's recorded choice was the local model and Claude answers now,
+    // not by their own choice: say so (Bryan, 2026-11-12). A read that failed
+    // may be transient (a Windows scanner holding the file), so the record is
+    // kept and the next clean start that reads "local" restores the choice
+    // with no "settings changed" warning.
+    announceAnswererClaude(answererClaudeNotice(state), { keepRecord: state === "unreadable" });
+    return;
+  }
+  // Claude at start-up and nothing recorded: clear a stale pending notice.
+  recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
 }
 
 /** Who answers chat now. Claude until primed (the dark guard). Synchronous. */
@@ -274,15 +364,18 @@ export function onChatAnswererChanged(cb: (now: ChatAnswerer) => void): () => vo
   };
 }
 
-/** What a request reports, taken after every queued write has finished. */
-async function settled(requested: ChatAnswerer): Promise<SetChatAnswererResult> {
+/** What a request reports, taken after every queued write has finished.
+ *  `persisted` only when the disk is KNOWN to agree: an unreadable file is
+ *  not Claude for this purpose. */
+async function settled(
+  requested: ChatAnswerer,
+  superseded: boolean,
+): Promise<SetChatAnswererResult> {
   await diskQueue;
-  const onDisk = readDisk(filePath());
-  const agrees = onDisk === effective;
-  return {
-    answerer: effective,
-    persisted: agrees && (requested === "claude" || effective === "local"),
-  };
+  const state = readState(filePath());
+  const persisted =
+    effective === requested && (requested === "claude" ? isClaudeOnDisk(state) : state === "local");
+  return { answerer: effective, persisted, ...(superseded ? { superseded: true } : {}) };
 }
 
 /**
@@ -301,24 +394,18 @@ export async function setChatAnswerer(
     // Before any await: a local-model run in flight is stopped at once, and
     // the disk reads Claude before the route answers.
     setEffective("claude");
-    recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+    if (source !== "own-window" && answererLocalWasAnnounced()) {
+      // Not the user's own choice, and theirs was the local model: say so
+      // (Bryan, 2026-11-12). The record is cleared once a window was told.
+      announceAnswererClaude(answererClaudeNotice("allowance"), { keepRecord: false });
+    } else {
+      recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+    }
     removeSync(filePath());
-    // And again behind a local write still in flight. If that delete fails,
-    // write Claude into the file instead, so the disk cannot keep "local".
-    await enqueue(async () => {
-      if (removeSync(filePath())) return;
-      if (readDisk(filePath()) === "claude") return;
-      try {
-        await atomicWriteConfigFile(filePath(), serialize(filePath(), "claude"));
-      } catch (err) {
-        console.error(
-          `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be switched to Claude on disk either (${
-            err instanceof Error ? err.message : String(err)
-          }); the local model may answer after a restart.`,
-        );
-      }
-    });
-    return settled("claude");
+    // And again behind a local write still in flight; if the delete fails,
+    // Claude is written over the file instead.
+    await enqueue(makeDiskClaude);
+    return settled("claude", seq !== mine);
   }
   await enqueue(async () => {
     const outcome = await writeLocal();
@@ -338,7 +425,7 @@ export async function setChatAnswerer(
       }
     }
   });
-  return settled("local");
+  return settled("local", seq !== mine);
 }
 
 /** Test seam: point the module at a temp dir (or reset it) and forget all

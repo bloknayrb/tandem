@@ -311,7 +311,7 @@ function quotableName(name: string): string {
  * activity tray and expires by itself. Never the Endpoint or the model id.
  */
 export function answeringSwitchedNotice(now: AnsweringLocalModel): string {
-  return `Your change means the local model ${quotableName(now.displayName)} is now the one set up to answer your chat whenever your chat is set to be answered by a local model.`;
+  return `Your change means the local model ${quotableName(now.displayName)} is now the one used when your chat is answered by a local model.`;
 }
 
 /**
@@ -322,7 +322,7 @@ export function answeringSwitchedNotice(now: AnsweringLocalModel): string {
  * one while local models were off. Never the Endpoint or the model id.
  */
 export function baselineAdoptedNotice(now: AnsweringLocalModel): string {
-  return `Local models are now available in Tandem. A local model was already saved, ${quotableName(now.displayName)}, and it was set up to answer your chat whenever your chat is set to be answered by a local model. If you did not add it, remove it in Settings → Models.`;
+  return `Local models are now available in Tandem. A local model was already saved, ${quotableName(now.displayName)}, and it is the one used when your chat is answered by a local model. If you did not add it, remove it in Settings → Models.`;
 }
 
 /**
@@ -349,7 +349,7 @@ export function entryTouchedByWrite(change: ModelsFileChange, entryId: string): 
  * because it stays in the activity tray.
  */
 export function answeringChangedNotice(now: AnsweringLocalModel): string {
-  return `The local model set up to answer your chat (whenever your chat is set to be answered by a local model) was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
+  return `The local model used when your chat is answered by a local model was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to ${quotableName(now.displayName)}. If you did not do this, check Settings → Models.`;
 }
 
 /**
@@ -378,7 +378,21 @@ export const CHAT_NOTICE_TEXT: Record<ChatNoticeKind, string> = {
   "no-document":
     "The local model could not answer this message, because no document was open for it. Open the document you want to ask about and send your message again.",
   "no-local-model":
-    "No local model could answer this message. In Settings → Models, add or enable a local model and mark it as Default (or fix its Endpoint), or set your chat to be answered by Claude.",
+    "No local model could answer this message. Add or enable a local model in Settings → Models, or set who answers your chat back to Claude there.",
+};
+
+/**
+ * The no-local-model chat notice for an unusable state: the same remedy as
+ * that state's toast ({@link UNUSABLE_NOTICE}), so the first chat in a broken
+ * state is never told two different things.
+ */
+export const CHAT_NOTICE_UNUSABLE_TEXT: Record<LocalModelUnusableReason, string> = {
+  "no-default-chosen":
+    "No local model could answer this message, because none of your saved local models was marked Default. Mark one as Default in Settings → Models, or set who answers your chat back to Claude there.",
+  "endpoint-rejected":
+    "No local model could answer this message, because its Endpoint was not accepted. Edit the model in Settings → Models, or set who answers your chat back to Claude there.",
+  "no-endpoint":
+    "No local model could answer this message, because it had no Endpoint saved. Edit the model in Settings → Models, or set who answers your chat back to Claude there.",
 };
 
 /**
@@ -704,16 +718,18 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     const startLeftTandem = leftTandemEpoch();
     // A run that starts outside Tandem never edits, even once Tandem returns.
     const startedInTandem = readModeState() === "tandem";
+    // Why the run was first refused a write, for the stop reason and toast:
+    // Solo (the setting allowed it) or the editing setting itself.
+    let refusedBy: "solo" | "editing-off" | null = null;
     const editingAllowed = (): boolean => {
       if (!readEditing) return false;
       const now = readEditing();
-      return (
-        now.enabled === true &&
-        now.offEpoch === startEpoch &&
-        startedInTandem &&
-        readModeState() === "tandem" &&
-        leftTandemEpoch() === startLeftTandem
-      );
+      const settingAllows = now.enabled === true && now.offEpoch === startEpoch;
+      const modeAllows =
+        startedInTandem && readModeState() === "tandem" && leftTandemEpoch() === startLeftTandem;
+      if (settingAllows && modeAllows) return true;
+      refusedBy ??= settingAllows ? "solo" : "editing-off";
+      return false;
     };
 
     const includeFullText = extractText(ydoc).length <= INLINE_CHAR_LIMIT;
@@ -832,11 +848,14 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         ended = endedFor(exit);
         if (exit === "clean") {
           sink.flushFinal();
-          // Replied only if the flush really left a reply row.
+          // Replied only if the flush really left a reply row. A flush the
+          // licence refused aborted the run instead (`makeSink`): "aborted".
           ended =
             sink.replyId() !== null
               ? { status: "replied" }
-              : { status: "stopped", reason: "no-reply" };
+              : abort.signal.aborted
+                ? { status: "stopped", reason: "aborted" }
+                : { status: "stopped", reason: "no-reply" };
         } else if (exit === "max_turns" || exit === "max_tool_calls") {
           // Budget exhausted mid-task (the model looped on tool calls, or never
           // produced a final no-tool answer turn). Commit any partial content
@@ -857,13 +876,18 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
           // told so, and then had one turn with no tools to answer in text —
           // and said nothing. Not a step limit: say what actually happened.
           // (When it did answer, the exit is `clean`.) `info`, so it expires.
+          // Solo is named when Solo was the cause (#1123): the setting alone
+          // would have allowed it.
           sink.flushFinal();
+          if (refusedBy === "solo") ended = { status: "stopped", reason: "solo" };
           pushNotification({
             id: generateMessageId(),
             type: "general-error",
             severity: "info",
             message:
-              "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.",
+              refusedBy === "solo"
+                ? "The local model stopped without replying: it tried to comment on or change the document, which local models do not do in Solo mode. Ask again for an answer in chat."
+                : "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.",
             documentId: req.docName,
             timestamp: Date.now(),
           });
@@ -1115,12 +1139,17 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
    * not open carries no `documentId`. A licence that lapsed since `onEvent`
    * checked it refuses the write: logged once, nothing posted.
    */
-  function postNotice(kind: ChatNoticeKind, messageId: string, documentId?: string): void {
+  function postNotice(
+    kind: ChatNoticeKind,
+    messageId: string,
+    documentId?: string,
+    text: string = CHAT_NOTICE_TEXT[kind],
+  ): void {
     queueMicrotask(() => {
       if (current) current.abort.abort();
       // The switch may have moved to Claude since the chat arrived.
       if (answerer() !== "local") return;
-      const appended = appendClaudeChatMessage(CHAT_NOTICE_TEXT[kind], {
+      const appended = appendClaudeChatMessage(text, {
         replyTo: messageId,
         ...(documentId ? { documentId } : {}),
         chatNotice: kind,
@@ -1187,7 +1216,14 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       const broken = deps.diagnose?.() ?? null;
       if (broken) noticeUnusable(broken);
       else noticedStateKey = null;
-      if (messageId) postNotice("no-local-model", messageId, docName);
+      if (messageId) {
+        postNotice(
+          "no-local-model",
+          messageId,
+          docName,
+          broken ? CHAT_NOTICE_UNUSABLE_TEXT[broken.reason] : undefined,
+        );
+      }
       return;
     }
     noticedStateKey = null;
