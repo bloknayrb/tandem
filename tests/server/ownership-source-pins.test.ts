@@ -65,6 +65,17 @@ describe("an ownership entry's sinceSeq has a real source in a running server (o
     expect(awareness).toMatch(/\bdeliveryRegistry,\s[^;]*from "\.\/inbox-cursor\.js";/);
   });
 
+  it("nothing else in src calls the seam: a second call would wire a different source", () => {
+    const callers = [...SRC_FILES]
+      .filter(([, text]) => /\bsetOwnershipSeqSource\(/.test(text))
+      .map(([file]) => file)
+      .sort();
+    // `ownership.ts` is the definition (`export function setOwnershipSeqSource(`).
+    expect(callers).toEqual(["src/server/index.ts", "src/server/sessions/ownership.ts"]);
+    const ownership = SRC_FILES.get("src/server/sessions/ownership.ts") as string;
+    expect(ownership.match(/\bsetOwnershipSeqSource\(/g)).toHaveLength(1);
+  });
+
   it("the wiring is not inside a function or a branch that may not run", () => {
     const line = src.split("\n").find((l) => l.includes("setOwnershipSeqSource(() =>")) as string;
     // Two spaces: a statement of `main()` itself, as the mode calls' branch is.

@@ -839,7 +839,11 @@ function refusalFor(
   if (entry?.ownerId === callerId) return undefined;
   const holder = entry ? viewOf(entry.ownerId) : null;
   // "The first row wins" (ownership design §5.3): a caller that lost this document is told so
-  // before it is told who holds it now.
+  // before it is told who holds it now. With no entry this row is unreachable
+  // today: `setDocOwner` deletes the loss record on every change of owner,
+  // going to unowned included, so a loss never stands on an unowned document.
+  // It is kept for PR 5's `released` cause (design §5.3: Release lasts while
+  // Tandem's Claude is not present), and `setLossForTests` reaches it.
   const loss = lossByDoc.get(documentId);
   if (loss?.ownerId === callerId) return { ok: false, reason: "lost", cause: loss.cause, holder };
   if (!entry) return undefined;
@@ -942,7 +946,10 @@ export function dropWriteClaim(pending: PendingClaim): void {
  *
  * - the document was not closed during the write (`onDocumentClosed` cancels
  *   the token, so a close followed by a reopen counts) and is open now
- *   (`stillOpen`, which the caller reads from the document registry);
+ *   (`stillOpen`, which the caller reads from the document registry). The
+ *   second is kept beside the first on purpose: the cancellation holds only
+ *   while every untrack goes through the tab-close point, and one registry
+ *   read covers a later path that forgets it;
  * - it has no entry at all (an unqueued change that gave it an owner during
  *   the write stands);
  * - the caller's record still exists (a record that lapsed but still exists
@@ -1205,6 +1212,14 @@ export function setCompositeObserverForTests(
   observer: ((step: CompositeStep, documentId: string) => void) | undefined,
 ): void {
   compositeObserver = observer;
+}
+
+/**
+ * Put a loss record on a document whatever its entry, which no production
+ * path can do for an unowned one before PR 5's `released` (see `refusalFor`).
+ */
+export function setLossForTests(documentId: string, ownerId: string, cause: LossCause): void {
+  lossByDoc.set(documentId, { ownerId, cause });
 }
 
 /** Write a document's handover mark, which only PR 2b's handover will write. */

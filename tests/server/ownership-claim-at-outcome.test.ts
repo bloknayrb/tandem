@@ -41,11 +41,16 @@ import {
   switchRefusal,
 } from "../../src/server/mcp/owned-op.js";
 import { type McpToolResult, mcpError, mcpSuccess } from "../../src/server/mcp/response.js";
-import { isDocOpQueueBusy, runDocOp } from "../../src/server/sessions/doc-op-queue.js";
+import {
+  docOpWaitTimersForTests,
+  isDocOpQueueBusy,
+  runDocOp,
+} from "../../src/server/sessions/doc-op-queue.js";
 import {
   type CompositeStep,
   getDocOwner,
   getOwnerRecord,
+  heldDocumentIds,
   inboxScopeOf,
   noteTransportChanged,
   noteTransportRegistered,
@@ -57,6 +62,7 @@ import {
   setDocOwner,
   setGraceMsForTests,
   setHandoverSeqForTests,
+  setLossForTests,
   setOwnershipSeqSource,
   setTandemPresenceSource,
   setTransportView,
@@ -158,6 +164,23 @@ async function as(owner: string, tool: string, args: Record<string, unknown> = {
 }
 
 const OK = () => mcpSuccess({ done: true });
+
+/**
+ * Wait until exactly `n` calls are waiting for their turn in a document's
+ * queue, and fail if that does not happen. `callTool` sends asynchronously,
+ * so a fixed sleep can end before the call is queued on a loaded runner: a
+ * call that arrives after the write ahead of it settled proves nothing about
+ * what a QUEUED call finds. Each waiting entrant holds one wait timer.
+ */
+async function queued(n: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (docOpWaitTimersForTests() !== n) {
+    if (Date.now() > deadline) {
+      throw new Error(`expected ${n} queued call(s), found ${docOpWaitTimersForTests()}`);
+    }
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
 
 /**
  * A write by `owner` on `name` through the real wrapper, whose body stays
@@ -446,14 +469,16 @@ describe("inside the queue only the outcome is seen (R1.2, R1.4)", () => {
       text: "a",
       documentId: docId("d"),
     });
-    await new Promise((r) => setTimeout(r, 15));
+    await queued(1);
     const otherSecond = as(B, "tandem_comment", {
       from: 0,
       to: 5,
       text: "b",
       documentId: docId("d"),
     });
-    await new Promise((r) => setTimeout(r, 15));
+    // Both are in the queue, behind a first write that has not settled.
+    await queued(2);
+    expect(first.entered()).toBe(true);
     expect(getDocOwner(docId("d"))).toBeUndefined();
     const entryBefore = () => getDocOwner(docId("d"));
 
@@ -481,8 +506,11 @@ describe("inside the queue only the outcome is seen (R1.2, R1.4)", () => {
     const blocker = runDocOp(docId("d"), () => new Promise<void>((r) => (unblock = r)));
     const first = heldWrite(A, "d");
     expect(first.entered()).toBe(false);
+    await queued(1);
     const behind = as(B, "tandem_comment", { from: 0, to: 5, text: "b", documentId: docId("d") });
-    await new Promise((r) => setTimeout(r, 15));
+    // The claiming write and the write behind it are both waiting.
+    await queued(2);
+    expect(first.entered()).toBe(false);
     first.release();
     unblock();
     await blocker;
@@ -497,7 +525,7 @@ describe("inside the queue only the outcome is seen (R1.2, R1.4)", () => {
     setupDoc("d");
     const first = heldWrite(A, "d", () => noClaim(mcpError("INVALID_ARGUMENT", "no")));
     const second = as(B, "tandem_comment", { from: 0, to: 5, text: "b", documentId: docId("d") });
-    await new Promise((r) => setTimeout(r, 15));
+    await queued(1);
     first.release();
     await first.answer;
     expect((await second).error).toBe(false);
@@ -636,6 +664,22 @@ describe("a write that keeps its claim: what is true at the outcome decides (R1.
     // cancelled the claim. A rule that only asked "is it open now?" fails here.
     expect(getOpenDocs().has(docId("d"))).toBe(true);
     expect(getDocOwner(docId("d"))).toBeUndefined();
+  });
+
+  it("the document is gone at the outcome without having passed the tab-close point: no entry", async () => {
+    // `stillOpen`, on its own. Every production close cancels the token
+    // first, so this untracks the document the way only a test can (the
+    // registry's unsafe remove, which skips the tab-close point): the token
+    // is still registered, and only the open check stands between the write
+    // and an entry for a document that is not open.
+    setupDoc("d");
+    const write = heldWrite(A, "d");
+    removeDoc(docId("d"));
+    expect(ownershipSnapshotForTests().pendingClaims).toBe(1);
+    write.release();
+    await write.answer;
+    expect(getDocOwner(docId("d"))).toBeUndefined();
+    expect(ownershipSnapshotForTests().pendingClaims).toBe(0);
   });
 
   it("a body that throws after its document closed leaves nothing behind", async () => {
@@ -885,8 +929,12 @@ describe("state the inbox work will rely on (Requirement 2)", () => {
     expect(switchRefusal({ ownerId: B }, "tandem_switchDocument", docId("d"))).toBeNull();
     expect(focusHeldByAnother({ ownerId: B }, docId("d"))).toBe(false);
     expect(inboxScopeOf(docId("d"), B)).toBe("may-claim");
-    // A caller whose own id is on a stale entry (it has no record) holds nothing.
+    // A caller whose own id is on a stale entry (it has no record) holds nothing,
+    // by every read of what it holds.
     expect(inboxScopeOf(docId("d"), "claude:ghost")).toBe("neither");
+    expect(heldDocumentIds("claude:ghost")).toEqual([]);
+    expect(heldAmong({ ownerId: "claude:ghost" }, [docId("d")])).toBeUndefined();
+    expect(callerOwnerInfo({ ownerId: "claude:ghost" })).toBeUndefined();
 
     expect(getDocOwner(docId("d"))).toBe(stale);
     expect(steps).toEqual([]);
@@ -933,6 +981,28 @@ describe("state the inbox work will rely on (Requirement 2)", () => {
       ]);
       expect(inboxScopeOf(docId("d"), A)).toBe("neither");
       expect(inboxScopeOf(docId("d"), B)).toBe("holds");
+    });
+
+    it("a blocking loss record on an UNOWNED document: the loser may not claim it by polling or by writing", async () => {
+      // Above, the loser is answered "neither" by the holder's entry whether
+      // or not the loss is read. With no entry only the loss decides. No
+      // production path leaves a loss on an unowned document before PR 5's
+      // `released` (`setDocOwner` deletes it on every change of owner), so
+      // it is placed by a test-only setter.
+      setupDoc("d");
+      setLossForTests(docId("d"), A, "taken back");
+      expect(getDocOwner(docId("d"))).toBeUndefined();
+      expect(inboxScopeOf(docId("d"), A)).toBe("neither");
+      expect(inboxScopeOf(docId("d"), B)).toBe("may-claim");
+      const refused = await as(A, "tandem_comment", {
+        from: 0,
+        to: 5,
+        text: "c",
+        documentId: docId("d"),
+      });
+      expect(refused.code).toBe("NOT_DOC_OWNER");
+      expect(refused.details?.reason).toBe("lost");
+      expect(getDocOwner(docId("d"))).toBeUndefined();
     });
 
     it("Tandem's Claude: nothing while not present, a claim while present (both branches of the presence seam)", () => {

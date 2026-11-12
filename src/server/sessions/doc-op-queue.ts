@@ -126,7 +126,7 @@ export function runDocOp<T>(
   if (!existing) {
     // An idle document starts its operation in this very tick, as a handler
     // with no queue would: the synchronous head of the body (and so the
-    // ownership check and claim) runs before the caller's next line.
+    // ownership check) runs before the caller's next line.
     const result = startNow(fn);
     const done = () => {
       settle(documentId, mine);
