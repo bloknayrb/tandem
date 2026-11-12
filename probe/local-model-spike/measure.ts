@@ -67,6 +67,21 @@ export async function main(argv: readonly string[]): Promise<number> {
     // A resumed run must be a real directory directly inside the runs
     // directory BEFORE anything is written into it.
     runDir = resume !== undefined ? existingRunDir(resume, runsDir) : runDirFor(runId, runsDir);
+    if (resume === undefined) {
+      // Claim a NEW run's directory exclusively: two starts in the same second
+      // with the same tag, tier and mode get the same run id, and the one that
+      // loses must neither share the directory nor delete it on refusal.
+      fs.mkdirSync(path.dirname(runDir), { recursive: true });
+      try {
+        fs.mkdirSync(runDir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+          say(`Run ${runId} already exists (another start in the same second?); try again.`);
+          return 2;
+        }
+        throw err;
+      }
+    }
   } catch (err) {
     say(printable(err instanceof Error ? err.message : String(err)));
     return 2;
@@ -111,7 +126,8 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   if (result.status === "refused") {
     say(`Not started: ${printable(result.reason ?? "", 4000)}`);
-    // A refused NEW run leaves nothing behind.
+    // A refused NEW run leaves nothing behind. This process created the
+    // directory itself (above), so it deletes only its own.
     if (resume === undefined && !fs.existsSync(path.join(runDir, "identity.json"))) {
       fs.rmSync(runDir, { recursive: true, force: true });
     }
