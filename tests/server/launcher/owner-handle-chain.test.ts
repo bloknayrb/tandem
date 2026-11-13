@@ -149,8 +149,9 @@ afterEach(async () => {
   await new Promise<void>((r) => httpServer.close(() => r()));
   resetOwnershipForTests();
   // The supervisor's invariant (owner-handle-bind.ts, `startOverlaps`): no
-  // spawn became current while an earlier spawn's state was still alive.
-  expect(ownerHandleBindSnapshotForTests().startOverlaps).toBe(0);
+  // spawn became current while an earlier spawn's state was still alive. Read
+  // now, asserted last, so one failure does not leave state for the next test.
+  const startOverlaps = ownerHandleBindSnapshotForTests().startOverlaps;
   resetOwnerHandleBindForTests();
   Object.assign(console, realConsole);
   vi.unstubAllEnvs();
@@ -165,6 +166,7 @@ afterEach(async () => {
       // Windows can hold a just-exited child's cwd briefly; the dir is unique.
     }
   }
+  expect(startOverlaps).toBe(0);
 });
 
 function start(extra: { leak?: string } = {}) {

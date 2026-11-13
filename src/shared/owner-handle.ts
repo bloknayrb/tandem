@@ -74,47 +74,34 @@ export function isLoopbackHandleDestination(baseUrl: string): boolean {
 
 /**
  * Whether Node's own environment proxy could carry a request from this
- * process to `baseUrl` (#2358 PR 3a review, item 3). With `NODE_USE_ENV_PROXY=1`
- * (or `--use-env-proxy` in `NODE_OPTIONS` or the process's own flags) and an
- * `HTTP_PROXY`, Node sends a request for `http://127.0.0.1:<port>` to the proxy
- * as a `CONNECT`, and the tunnel is plain HTTP, so the proxy can read every
- * header. Measured on Node 22.23.4 (the sidecar pins 22.23.5): the variable
- * counts only as `1`; `HTTP_PROXY` and `http_proxy` both apply; `HTTPS_PROXY`
- * alone does not touch an `http:` URL; `NO_PROXY` exempts the host for `*`,
- * the exact host, or `host:port`, but not for `localhost` or a CIDR range.
+ * process (#2358 PR 3a review rounds 1 and 2). With the environment proxy on
+ * and an `HTTP_PROXY`, Node sends a request for `http://127.0.0.1:<port>`
+ * through the proxy as a plain-HTTP `CONNECT` tunnel, where every header is
+ * readable.
  *
- * Conservative: anything not clearly exempt counts as "may carry", which fails
- * toward sending no handle (not bound), never toward a leak.
+ * **A plain rule, deliberately not a model of Node's `NO_PROXY` handling**
+ * (Bryan's ruling, review round 2): a copy of undici's parsing drifted from it
+ * at once (`[::1]` with `NO_PROXY=::1`, lower- against upper-case precedence,
+ * `*` inside a list, a quoted flag). So `NO_PROXY` is ignored, and the handle is
+ * withheld whenever the proxy COULD be on and any HTTP proxy variable is set:
+ *  - could be on: `NODE_USE_ENV_PROXY` is set to anything non-empty, or the text
+ *    `use-env-proxy` appears anywhere in `NODE_OPTIONS` or the process's flags;
+ *  - any HTTP proxy variable: `HTTP_PROXY` or `http_proxy` with a non-blank value.
+ * That errs toward "not bound" for a user with a proxy and the flag set. When
+ * #2422 lands (the bridge's own fetch never uses an environment proxy for
+ * loopback), this guard can go.
  */
 export function envProxyMayCarry(
-  baseUrl: string,
   env: NodeJS.ProcessEnv,
   execArgv: readonly string[] = [],
 ): boolean {
   const flagOn =
-    env.NODE_USE_ENV_PROXY === "1" ||
-    /(?:^|\s)--use-env-proxy(?:\s|=|$)/.test(env.NODE_OPTIONS ?? "") ||
-    execArgv.some((a) => a === "--use-env-proxy" || a.startsWith("--use-env-proxy="));
+    (env.NODE_USE_ENV_PROXY ?? "") !== "" ||
+    (env.NODE_OPTIONS ?? "").includes("use-env-proxy") ||
+    execArgv.some((a) => a.includes("use-env-proxy"));
   if (!flagOn) return false;
-  const proxy = (env.HTTP_PROXY ?? env.http_proxy ?? "").trim();
-  if (proxy === "") return false;
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return true;
-  }
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  const noProxy = `${env.NO_PROXY ?? ""},${env.no_proxy ?? ""}`
-    .split(/[,\s]+/)
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  for (const entry of noProxy) {
-    if (entry === "*") return false;
-    const bare = entry.replace(/^\[|\](?=:|$)/g, "");
-    if (bare === host || bare === `${host}:${url.port}`) return false;
-  }
-  return true;
+  const nonBlank = (v: string | undefined) => v !== undefined && v.trim() !== "";
+  return nonBlank(env.HTTP_PROXY) || nonBlank(env.http_proxy);
 }
 
 /**
@@ -146,6 +133,6 @@ export function ownerHandleForUpstream(
   if (!isLoopbackHandleDestination(target)) return undefined;
   // Node's environment proxy would carry the header to the proxy (review
   // item 3): withhold it rather than send it anywhere but the named server.
-  if (envProxyMayCarry(target, env, execArgv)) return undefined;
+  if (envProxyMayCarry(env, execArgv)) return undefined;
   return handle;
 }

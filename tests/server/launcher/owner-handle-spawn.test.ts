@@ -186,8 +186,9 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const sup of supervisors.splice(0)) await sup.stop().catch(() => {});
   // The supervisor's invariant (owner-handle-bind.ts, `startOverlaps`): no
-  // spawn became current while an earlier spawn's state was still alive.
-  expect(ownerHandleBindSnapshotForTests().startOverlaps).toBe(0);
+  // spawn became current while an earlier spawn's state was still alive. Read
+  // now, asserted last, so one failure does not leave state for the next test.
+  const startOverlaps = ownerHandleBindSnapshotForTests().startOverlaps;
   resetOwnerHandleBindForTests();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -202,6 +203,7 @@ afterEach(async () => {
       // A just-exited child can hold its cwd briefly on Windows; the dir is unique.
     }
   }
+  expect(startOverlaps).toBe(0);
 });
 
 describe("each spawn gets a handle and its run files (R1)", () => {

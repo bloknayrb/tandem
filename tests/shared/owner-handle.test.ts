@@ -76,70 +76,59 @@ describe("ownerHandleForUpstream", () => {
   });
 });
 
-describe("envProxyMayCarry (review item 3; measured on Node 22.23.4)", () => {
-  const URL_ = "http://127.0.0.1:4000";
+describe("envProxyMayCarry: the plain rule (review round 2, Bryan's ruling)", () => {
   const P = "http://127.0.0.1:9";
   it.each([
-    ["no proxy flag", { HTTP_PROXY: P }, [], false],
+    ["no flag, proxy set", { HTTP_PROXY: P }, [], false],
+    ["flag set, no proxy variable", { NODE_USE_ENV_PROXY: "1" }, [], false],
+    ["flag set, only HTTPS_PROXY", { NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: P }, [], false],
+    ["flag set, blank HTTP_PROXY", { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: "  " }, [], false],
     ["NODE_USE_ENV_PROXY=1 + HTTP_PROXY", { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P }, [], true],
+    [
+      "NODE_USE_ENV_PROXY=true (any non-empty value)",
+      { NODE_USE_ENV_PROXY: "true", HTTP_PROXY: P },
+      [],
+      true,
+    ],
     ["lower-case http_proxy", { NODE_USE_ENV_PROXY: "1", http_proxy: P }, [], true],
+    [
+      "blank HTTP_PROXY with http_proxy set",
+      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: "", http_proxy: P },
+      [],
+      true,
+    ],
     [
       "--use-env-proxy in NODE_OPTIONS",
       { NODE_OPTIONS: "--x --use-env-proxy", HTTP_PROXY: P },
       [],
       true,
     ],
+    [
+      "a quoted flag in NODE_OPTIONS",
+      { NODE_OPTIONS: '"--use-env-proxy"', HTTP_PROXY: P },
+      [],
+      true,
+    ],
     ["--use-env-proxy in execArgv", { HTTP_PROXY: P }, ["--use-env-proxy"], true],
+    ["NO_PROXY=* is ignored", { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "*" }, [], true],
     [
-      "NODE_USE_ENV_PROXY=true (not honoured by Node)",
-      { NODE_USE_ENV_PROXY: "true", HTTP_PROXY: P },
-      [],
-      false,
-    ],
-    ["only HTTPS_PROXY", { NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: P }, [], false],
-    ["NO_PROXY=*", { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "*" }, [], false],
-    [
-      "NO_PROXY=127.0.0.1",
-      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "a.b,127.0.0.1" },
-      [],
-      false,
-    ],
-    [
-      "no_proxy=127.0.0.1:4000",
-      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, no_proxy: "127.0.0.1:4000" },
-      [],
-      false,
-    ],
-    [
-      "NO_PROXY=localhost (does not exempt 127.0.0.1)",
-      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "localhost" },
+      "NO_PROXY=127.0.0.1 is ignored",
+      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "127.0.0.1" },
       [],
       true,
     ],
     [
-      "NO_PROXY=127.0.0.0/8 (no CIDR in Node)",
-      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "127.0.0.0/8" },
-      [],
-      true,
-    ],
-    [
-      "NO_PROXY for another port",
-      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "127.0.0.1:1" },
+      "NO_PROXY=::1 is ignored",
+      { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P, NO_PROXY: "::1" },
       [],
       true,
     ],
   ] as const)("%s → %s", (_n, env, argv, expected) => {
-    expect(envProxyMayCarry(URL_, env as NodeJS.ProcessEnv, argv)).toBe(expected);
+    expect(envProxyMayCarry(env as NodeJS.ProcessEnv, argv)).toBe(expected);
   });
 
-  it("an IPv6 base URL is exempted by ::1 or [::1]", () => {
-    const env = { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P };
-    expect(envProxyMayCarry("http://[::1]:4000", { ...env, NO_PROXY: "::1" })).toBe(false);
-    expect(envProxyMayCarry("http://[::1]:4000", { ...env, NO_PROXY: "[::1]" })).toBe(false);
-    expect(envProxyMayCarry("http://[::1]:4000", env)).toBe(true);
-  });
-
-  it("ownerHandleForUpstream withholds the handle when the proxy may carry it", () => {
+  it("ownerHandleForUpstream withholds the handle when the proxy could carry it, [::1] included", () => {
+    const URL_ = "http://127.0.0.1:4000";
     const base = { [OWNER_HANDLE_ENV]: HANDLE, [OWNER_HANDLE_URL_ENV]: URL_ };
     expect(ownerHandleForUpstream(URL_, base)).toBe(HANDLE);
     expect(ownerHandleForUpstream(URL_, { ...base, NODE_USE_ENV_PROXY: "1", HTTP_PROXY: P })).toBe(
@@ -149,5 +138,16 @@ describe("envProxyMayCarry (review item 3; measured on Node 22.23.4)", () => {
     expect(ownerHandleForUpstream(URL_, { ...base, HTTP_PROXY: P }, ["--use-env-proxy"])).toBe(
       undefined,
     );
+    const V6 = "http://[::1]:4000";
+    const v6 = { [OWNER_HANDLE_ENV]: HANDLE, [OWNER_HANDLE_URL_ENV]: V6 };
+    expect(ownerHandleForUpstream(V6, v6)).toBe(HANDLE);
+    expect(
+      ownerHandleForUpstream(V6, {
+        ...v6,
+        NODE_USE_ENV_PROXY: "1",
+        HTTP_PROXY: P,
+        NO_PROXY: "::1",
+      }),
+    ).toBeUndefined();
   });
 });

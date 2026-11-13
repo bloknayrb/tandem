@@ -136,6 +136,9 @@ export function buildRunMcpConfig(opts: {
           // environment Claude Code passes is unmeasured; if it does not, this
           // clears nothing (a residual, docs/security.md).
           NODE_OPTIONS: "",
+          // Node's environment proxy, off for the bridge if this wins the merge
+          // (the bridge withholds the handle when it could be on, review round 2).
+          NODE_USE_ENV_PROXY: "",
           // `NODE_DEBUG=http,fetch,…` would print request headers, the handle's
           // among them, to the bridge's stderr, which Claude Code captures.
           NODE_DEBUG: "",
@@ -385,7 +388,17 @@ export async function writeRunFile(
     created = true;
     // Windows: re-read the new file's ACL while it is still EMPTY, so a broad
     // inherited grant refuses the step before the handle is ever in it.
-    if (process.platform === "win32") await acl.verifyNoBroadAce(file);
+    if (process.platform === "win32") {
+      try {
+        await acl.verifyNoBroadAce(file);
+      } catch {
+        // A broad ACE reached the directory after it was verified (review round
+        // 2, item 2): forget the verification so the next spawn checks and
+        // locks the directory again, which heals it.
+        verifiedWindowsDirs.delete(dir);
+        throw new RunFileError(`${kind}-acl`);
+      }
+    }
     await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
     await handle.close();
     handle = undefined;

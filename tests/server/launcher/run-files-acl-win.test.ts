@@ -131,7 +131,11 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
     // S-1-5-32-544 is BUILTIN\Administrators: the owner an elevated process's
     // new directories get. Only an elevated process may assign it; the CI
     // runner is elevated, so the job always proves this half.
-    if (await setOwner(dir, "S-1-5-32-544")) {
+    const assigned = await setOwner(dir, "S-1-5-32-544");
+    // CI's runner is elevated, so there the Administrators half must run:
+    // `windows-acl-proof` cannot go green with this refusal unproven (round 2).
+    if (process.env.CI) expect(assigned).toBe(true);
+    if (assigned) {
       await expect(
         ensureLauncherDir(dir, { create: true, acl: realRunFileAcl }),
       ).rejects.toMatchObject({
@@ -184,6 +188,34 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
     fs.rmSync(dir, { recursive: true, force: true });
     await ownLauncherDir();
     await ensureLauncherDir(dir, { create: true, acl: counting });
+    expect(calls).toEqual(["owner", "lock", "verify", "owner", "lock", "verify"]);
+  }, 120_000);
+
+  it("a file whose ACL check refuses forgets the directory's verification, so the next spawn re-locks it (round 2)", async () => {
+    resetVerifiedLauncherDirsForTests();
+    const calls: string[] = [];
+    let refuseFiles = true;
+    const acl: RunFileAcl = {
+      assertOwned: async (p) => {
+        calls.push("owner");
+        await realRunFileAcl.assertOwned(p);
+      },
+      lockDir: async (p) => {
+        calls.push("lock");
+        await realRunFileAcl.lockDir(p);
+      },
+      verifyNoBroadAce: async (p) => {
+        if (p.endsWith(".json") && refuseFiles) throw new Error("broad ACE");
+        calls.push("verify");
+        await realRunFileAcl.verifyNoBroadAce(p);
+      },
+    };
+    const dir = await ownLauncherDir();
+    await ensureLauncherDir(dir, { create: true, acl });
+    await expect(writeRunFile(dir, "mcp", {}, acl)).rejects.toMatchObject({ step: "mcp-acl" });
+    expect(fs.readdirSync(dir)).toEqual([]);
+    refuseFiles = false;
+    await ensureLauncherDir(dir, { create: true, acl });
     expect(calls).toEqual(["owner", "lock", "verify", "owner", "lock", "verify"]);
   }, 120_000);
 

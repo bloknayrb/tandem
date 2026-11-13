@@ -369,6 +369,9 @@ interface SpawnRun {
   discard(): void;
 }
 
+/** How long `stop()` waits for the run files' deletion (#2358 PR 3a). */
+const RUN_FILE_DELETE_WAIT_MS = 1_000;
+
 /** Mint an owner handle: `th_` + 32 base64url characters from 24 random bytes. */
 function mintOwnerHandle(): string {
   return `th_${randomBytes(24).toString("base64url")}`;
@@ -3684,7 +3687,20 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       await stopInternal();
       // The stopped spawn's run files (#2358 PR 3a): flag off there are none,
       // and nothing here is awaited.
-      if (pendingRunFileDeletes.size > 0) await Promise.allSettled([...pendingRunFileDeletes]);
+      // Bounded (review round 2, item 3): shutdown awaits this before the
+      // store lock is released, and the desktop shell allows 5 s; a stuck
+      // delete is left to the boot sweep.
+      if (pendingRunFileDeletes.size > 0) {
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          Promise.allSettled([...pendingRunFileDeletes]),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, RUN_FILE_DELETE_WAIT_MS);
+            timer.unref?.();
+          }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
     });
   }
 

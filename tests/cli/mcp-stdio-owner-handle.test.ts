@@ -48,7 +48,7 @@ afterEach(async () => {
 });
 
 /** A fake Tandem that records every request's headers and can expire the session. */
-async function makeUpstream() {
+async function makeUpstream(host = "127.0.0.1") {
   const seen: Seen[] = [];
   let live: string | undefined;
   let minted = 0;
@@ -123,7 +123,10 @@ async function makeUpstream() {
     });
   });
   servers.push(server);
-  await new Promise<void>((r) => server?.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r, reject) => {
+    server?.once("error", reject);
+    server?.listen(0, host, () => r());
+  });
   const addr = server.address();
   if (!addr || typeof addr === "string") throw new Error("address");
   return {
@@ -311,27 +314,34 @@ describe("the bridge's owner handle (R2)", () => {
   }, 30_000);
 });
 
-describe("Node's environment proxy (review item 3)", () => {
+/** A CONNECT tunnel that records what it was asked to reach, then pipes. */
+async function makeTunnel() {
+  const connects: string[] = [];
+  const proxy = createServer();
+  proxy.on("connect", (req, client) => {
+    const target = String(req.url);
+    connects.push(target);
+    const cut = target.lastIndexOf(":");
+    const host = target.slice(0, cut).replace(/^\[|\]$/g, "");
+    const upstream = netConnect(Number(target.slice(cut + 1)), host, () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      upstream.pipe(client);
+      client.pipe(upstream);
+    });
+    upstream.on("error", () => client.destroy());
+    client.on("error", () => upstream.destroy());
+  });
+  servers.push(proxy);
+  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+  const addr = proxy.address();
+  if (!addr || typeof addr === "string") throw new Error("address");
+  return { connects, url: `http://127.0.0.1:${addr.port}` };
+}
+
+describe("Node's environment proxy (review rounds 1 and 2)", () => {
   it("withholds the handle when NODE_USE_ENV_PROXY routes the request through an HTTP proxy", async () => {
     const up = await makeUpstream();
-    // A CONNECT tunnel that records what it was asked to reach, then pipes.
-    const connects: string[] = [];
-    const proxy = createServer();
-    proxy.on("connect", (req, client) => {
-      connects.push(String(req.url));
-      const [host, port] = String(req.url).split(":");
-      const upstream = netConnect(Number(port), host, () => {
-        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        upstream.pipe(client);
-        client.pipe(upstream);
-      });
-      upstream.on("error", () => client.destroy());
-      client.on("error", () => upstream.destroy());
-    });
-    servers.push(proxy);
-    await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
-    const proxyAddr = proxy.address();
-    if (!proxyAddr || typeof proxyAddr === "string") throw new Error("address");
+    const tunnel = await makeTunnel();
     const url = `http://127.0.0.1:${up.port}`;
     const { init } = await initializeThrough(
       {
@@ -339,7 +349,7 @@ describe("Node's environment proxy (review item 3)", () => {
         [OWNER_HANDLE_URL_ENV]: url,
         [OWNER_HANDLE_ENV]: HANDLE,
         NODE_USE_ENV_PROXY: "1",
-        HTTP_PROXY: `http://127.0.0.1:${proxyAddr.port}`,
+        HTTP_PROXY: tunnel.url,
         http_proxy: undefined,
         NO_PROXY: undefined,
         no_proxy: undefined,
@@ -347,8 +357,36 @@ describe("Node's environment proxy (review item 3)", () => {
       up,
     );
     // Not vacuous: the request really went through the proxy.
-    expect(connects).toContain(`127.0.0.1:${up.port}`);
+    expect(tunnel.connects).toContain(`127.0.0.1:${up.port}`);
     expect(init).toBeDefined();
+    for (const seen of up.seen) expect(seen.headers[HEADER]).toBeUndefined();
+  }, 30_000);
+
+  it("withholds it for [::1] with NO_PROXY=::1, which Node still proxies (round 2); skipped where the host has no IPv6", async (ctx) => {
+    let up: Awaited<ReturnType<typeof makeUpstream>>;
+    try {
+      up = await makeUpstream("::1");
+    } catch {
+      ctx.skip();
+      return;
+    }
+    const tunnel = await makeTunnel();
+    const url = `http://[::1]:${up.port}`;
+    await initializeThrough(
+      {
+        TANDEM_URL: url,
+        [OWNER_HANDLE_URL_ENV]: url,
+        [OWNER_HANDLE_ENV]: HANDLE,
+        NODE_USE_ENV_PROXY: "1",
+        HTTP_PROXY: tunnel.url,
+        http_proxy: undefined,
+        NO_PROXY: "::1",
+        no_proxy: undefined,
+      },
+      up,
+    );
+    // Whether or not Node routed it through the tunnel, the handle never left.
+    expect(up.seen.length).toBeGreaterThan(0);
     for (const seen of up.seen) expect(seen.headers[HEADER]).toBeUndefined();
   }, 30_000);
 });
