@@ -12,6 +12,7 @@ import {
   isNoteworthyRefusal,
   narrowForChannel,
 } from "../../annotations/projection.js";
+import { isLocalModelRecord, markWithheldForLocalPeriod } from "../../models/local-period.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
@@ -159,17 +160,17 @@ export function makeAnnotationsObserver(deps: {
         // No `type` check here any more: the narrow already refused notes, and
         // it refused them against the SANITIZED value rather than the raw one,
         // which is strictly stronger than the guard this replaces.
+        let flip: TandemEvent | undefined;
         if (ann.status === "accepted") {
-          return {
+          flip = {
             id: generateEventId(),
             type: "annotation:accepted",
             timestamp: Date.now(),
             documentId: docName,
             payload: acceptedPayload(ann),
           };
-        }
-        if (ann.status === "dismissed") {
-          return {
+        } else if (ann.status === "dismissed") {
+          flip = {
             id: generateEventId(),
             type: "annotation:dismissed",
             timestamp: Date.now(),
@@ -177,6 +178,12 @@ export function makeAnnotationsObserver(deps: {
             payload: dismissedPayload(ann),
           };
         }
+        // The user's accept or dismiss on the local model's own annotation is
+        // local-model activity: never pushed, replayed or a round, during the
+        // local period or after it (#1123 A2, R3.4). Its `agentIdentity` stamp
+        // is the only mark (`sanitizeAnnotation` keeps it).
+        if (flip && isLocalModelRecord(ann)) markWithheldForLocalPeriod(flip);
+        return flip;
       }
 
       return undefined;

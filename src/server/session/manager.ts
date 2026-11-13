@@ -29,6 +29,11 @@ import {
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
 import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
+import {
+  forgetChatRows,
+  loadLocalPeriodRecord,
+  localPeriodRecordFor,
+} from "../models/local-period.js";
 import { pushNotification } from "../notifications.js";
 import { SESSION_DIR } from "../platform.js";
 
@@ -953,7 +958,17 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
 
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
-  const data = { ydocState, lastAccessed: Date.now() };
+  // #1123 A2: the local period's server-written record (chat classes, the
+  // owed-at-switch set, whether a period is open), captured HERE — inside the
+  // queued step, against the rows this snapshot keeps — so a row and its
+  // class are saved and lost together. Undefined with the flag off, so a dark
+  // build writes exactly what master writes.
+  const localPeriod = localPeriodRecordFor(new Set(chatMap.keys()));
+  const data = {
+    ydocState,
+    lastAccessed: Date.now(),
+    ...(localPeriod ? { localPeriod } : {}),
+  };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
   await atomicWrite(sessionPath, JSON.stringify(data), SESSION_FILE_WRITE);
 }
@@ -995,6 +1010,9 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
       }
     });
     await persistCtrlSnapshot(snapshot);
+    // The cleared rows' classes go with them (#1123 A2): a same-key re-add
+    // after Clear chat is a new row.
+    forgetChatRows(capturedIds);
     const liveStream = doc.getMap(Y_MAP_CHAT_STREAM);
     withInternal(doc, () => {
       for (const id of capturedIds) {
@@ -1019,6 +1037,10 @@ export async function loadCtrlSession(): Promise<string | null> {
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content);
+    // #1123 A2: the local period's record is loaded BEFORE the caller restores
+    // the rows, so a restored row is never classed afresh. Ignored with the
+    // flag off (a dark build rewrites the file without it, R2.5).
+    loadLocalPeriodRecord(data?.localPeriod);
     return data.ydocState ?? null;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;

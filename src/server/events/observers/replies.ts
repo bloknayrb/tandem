@@ -10,6 +10,7 @@ import {
   narrowReplyForChannel,
   replyPayload,
 } from "../../annotations/projection.js";
+import { isLocalModelRecord, markWithheldForLocalPeriod } from "../../models/local-period.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
@@ -66,13 +67,21 @@ export function makeRepliesObserver(deps: {
       });
       if (!eligible) return undefined;
 
-      return {
+      const event: TandemEvent = {
         id: generateEventId(),
         type: "annotation:reply",
         timestamp: Date.now(),
         documentId: docName,
         payload: replyPayload(eligible, parent, key),
       };
+      // A reply on the local model's own annotation, or the local model's own
+      // reply, is local-model activity (#1123 A2, R3.4): never pushed,
+      // replayed, start-worthy or a round. A user reply on Claude's own
+      // annotation never is, even where the local model also replied.
+      if (isLocalModelRecord(parent) || isLocalModelRecord(reply)) {
+        markWithheldForLocalPeriod(event);
+      }
+      return event;
     },
   });
 }

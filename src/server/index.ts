@@ -161,6 +161,7 @@ async function startLauncherSupervisor(): Promise<void> {
   launcherStartInflight = true;
   try {
     const { createSupervisor } = await import("./launcher/supervisor.js");
+    const { inLocalPeriod, subscribeLocalPeriod } = await import("./models/local-period.js");
     const { resolveAppDataDir } = await import("./platform.js");
     // Assigned before `start()` so a supervisor that spawned a reaper and then
     // threw is still reachable by `shutdown()`. Once a supervisor exists, the
@@ -190,6 +191,10 @@ async function startLauncherSupervisor(): Promise<void> {
       // The v1.0 setup walkthrough holds the boot start until it is done
       // (#2198; Bryan, 2026-10-14) — the same predicate the wizard opens on.
       walkthroughPending: () => isWalkthroughPending(appData, APP_VERSION),
+      // Who answers chat (#1123 A2): no automatic start and no wake while a
+      // local model answers it. Never held while dark (guard 1 reads Claude
+      // until primed, and priming happens only under the flag).
+      localPeriod: { held: inLocalPeriod, subscribe: subscribeLocalPeriod },
     });
     await launcherSupervisor.start();
   } catch (err) {
@@ -731,6 +736,19 @@ async function main() {
     } catch (err) {
       console.error(
         `[Tandem] Failed to prime who answers chat: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+    // The local period (#1123 A2): Claude is handed nothing while a local
+    // model answers chat. Its own `try`, OUTSIDE the prime's, so a failed
+    // prime still installs it and still records the selection hold. After the
+    // CTRL and document restores, before Hocuspocus binds and before the
+    // supervisor starts.
+    try {
+      const { wireLocalPeriod } = await import("./local-period-wiring.js");
+      wireLocalPeriod();
+    } catch (err) {
+      console.error(
+        `[Tandem] Failed to wire the local period: ${err instanceof Error ? err.message : err}`,
       );
     }
   }

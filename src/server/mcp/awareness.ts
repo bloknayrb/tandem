@@ -32,6 +32,14 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
+import {
+  honourLocalPeriodRecords,
+  inLocalPeriod,
+  isLocalModelRecord,
+  isLocalPeriodChat,
+  selectionMayBeHanded,
+  wasOwedAtSwitch,
+} from "../models/local-period.js";
 import { inboxOwnership } from "../sessions/ownership.js";
 import {
   inboxExcludedAllNote,
@@ -57,6 +65,7 @@ import {
 } from "./inbox-cursor.js";
 import { describeIssues, printableId } from "./inbox-log-format.js";
 import {
+  checkInboxLocalPeriodShape,
   checkInboxOutputShape,
   checkInboxOwnershipShape,
   inboxChatMessageSchema,
@@ -1341,7 +1350,11 @@ function readActivity(store: DocumentStore, fullText: string): InboxActivity {
     span !== null &&
     typeof selection?.textFingerprint === "string" &&
     selection.textFingerprint === selectionFingerprint(span.text);
-  const selectedText = holds ? safeSlice(fullText, span.from, span.to) : null;
+  // #1123 A2 (decision 11): with the flag on, a selection whose stamp is the
+  // one recorded at the switch back or at boot is held, exactly as #1997's
+  // check withholds — until the user makes a new one.
+  const handable = holds && selectionMayBeHanded(store.documentId, selection?.timestamp);
+  const selectedText = handable ? safeSlice(fullText, span.from, span.to) : null;
   // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
   // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
   // halves of `activity` read as one snapshot while having independent
@@ -1349,7 +1362,7 @@ function readActivity(store: DocumentStore, fullText: string): InboxActivity {
   // check withholds it — but NOT only then: a record with no numeric
   // `timestamp` yields a real `selectedText` beside a null `selectionAt`, so
   // a null here must never be read as "no selection".
-  const selectionAt = holds ? finiteOrNull(selection?.timestamp) : null;
+  const selectionAt = handable ? finiteOrNull(selection?.timestamp) : null;
 
   return {
     documentId: store.documentId,
@@ -1784,6 +1797,9 @@ function collectUnreadChat(): UnreadChat {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || msg.read) return;
+    // Local-period chat is never handed to Claude (#1123 A2, R2.1): skipped
+    // before `admit`, so it is neither returned, stamped nor counted.
+    if (isLocalPeriodChat(key)) return;
     const item = admitChatItem(msg);
     if (!item) {
       dropped += 1;
@@ -1910,6 +1926,25 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
 }
 
 /**
+ * The user chat rows owed to Claude right now, for the owed-at-switch set
+ * (#1123 A2's ruling): every user row that is not local-period chat and that
+ * no Claude row answers (`answeredChatIds`). Synchronous; read in the switch's
+ * own listener.
+ */
+export function unansweredUserChatKeys(): string[] {
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const answered = answeredChatIds(chatMap);
+  const keys: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    if ((value as Partial<ChatMessage>).author !== "user") return;
+    if (answered.has(key) || isLocalPeriodChat(key)) return;
+    keys.push(key);
+  });
+  return keys;
+}
+
+/**
  * A cursor poll's chat (#2064, #2294): every user message this reader is owed
  * and nobody has answered yet — whether or not it is stamped read.
  *
@@ -1932,6 +1967,7 @@ function collectCursorChat(view: ScopeView): UnreadChat {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || answered.has(key)) return;
+    if (isLocalPeriodChat(key)) return; // #1123 A2, R2.1 — see `collectUnreadChat`
     const entry = deliveryRegistry.lookup("c", key, 0);
     const owed = entry
       ? view.mark === null
@@ -2044,6 +2080,46 @@ function documentLabels(
   );
 }
 
+/**
+ * The local period's status line (#1123 A2, R1.2): one constant sentence-set,
+ * with no model name, endpoint, time or count. It says why the inbox is
+ * empty, that Claude finishes its step and takes no new work from Tandem, and
+ * that a wake watch already running stays running. It never tells any Claude
+ * to arm a watch or where to reply (pinned by a test).
+ */
+export const LOCAL_PERIOD_STATUS_LINE =
+  "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem's inbox. If you already have a Tandem wake watch running, leave it running.";
+
+/** The R2.4 sentence: chat owed to Claude at the switch, handed after it. */
+export const OWED_AT_SWITCH_SENTENCE =
+  "Some of the chat messages in this poll were sent before Tandem chat was switched to a local model.";
+
+/**
+ * The poll during the local period (R1.1): no chat, comments, replies,
+ * notices or activity, `hasNew: false`, the other required fields as master
+ * fills them, and the cursor exactly as passed when it is one this server can
+ * read (otherwise the start cursor, master's answer). The ownership field is
+ * left out: no scope was computed (R1.3).
+ */
+function localPeriodInbox(cursor: string | undefined, withField: boolean) {
+  const decoded = cursor ? decodeCursor(cursor) : null;
+  const response = {
+    summary: LOCAL_PERIOD_STATUS_LINE,
+    hasNew: false,
+    mode: reportedMode(readModeState()),
+    modeProvenance: readModeProvenance(),
+    storeReadOnly: isStoreReadOnly(),
+    userActions: [],
+    userResponses: [],
+    userReplies: [],
+    chatMessages: [],
+    activity: emptyActivity(),
+    cursor: cursor && decoded?.recognised ? cursor : START_CURSOR,
+    ...(withField ? { localModelAnswersChat: true as const } : {}),
+  };
+  return mcpStructured(response);
+}
+
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     "tandem_getActivity",
@@ -2111,9 +2187,20 @@ export function registerAwarenessTools(server: McpServer): void {
   // `ownership` field, decided once here and kept for every call, so the
   // response and the backstop schema always match what `tools/list` said.
   const ownershipField = inboxOwnership.responseField();
-  const inboxBackstopSchema = ownershipField
-    ? checkInboxOwnershipOutputSchema
-    : checkInboxOutputSchema;
+  // The local period's field (#1123 A2, R1.2), decided the same way: once,
+  // here, by the flag (guard 2), so a dark server's `tools/list` is unchanged.
+  const localPeriodField = honourLocalPeriodRecords();
+  const inboxOutputShape = {
+    ...checkInboxOutputShape,
+    ...(ownershipField ? checkInboxOwnershipShape : {}),
+    ...(localPeriodField ? checkInboxLocalPeriodShape : {}),
+  };
+  const inboxBackstopSchema =
+    ownershipField && !localPeriodField
+      ? checkInboxOwnershipOutputSchema
+      : localPeriodField
+        ? z.object(inboxOutputShape)
+        : checkInboxOutputSchema;
   server.registerTool(
     "tandem_checkInbox",
     {
@@ -2133,9 +2220,7 @@ export function registerAwarenessTools(server: McpServer): void {
             'The `cursor` your previous tandem_checkInbox returned, passed back unchanged; "start" on your first poll. It acknowledges what that poll returned. Omitted, each item is returned once, shared by every caller that omits it',
           ),
       },
-      outputSchema: ownershipField
-        ? { ...checkInboxOutputShape, ...checkInboxOwnershipShape }
-        : checkInboxOutputShape,
+      outputSchema: inboxOutputShape,
       // #2294: with a cursor, a repeat writes nothing the first call did not
       // (every write follows from the cursor passed in) and returns what that
       // cursor is still owed. Without one the call is not idempotent, but a
@@ -2152,6 +2237,12 @@ export function registerAwarenessTools(server: McpServer): void {
         // below the guard would make the pull path look dead during exactly the
         // window a user is most likely to be told it is.
         recordInboxPoll();
+        // #1123 A2 (R1.1, R1.3): while a local model answers Tandem chat,
+        // Claude is handed nothing. Before the scope, the acknowledgement and
+        // every collector: nothing is stamped, acknowledged, assigned a
+        // sequence, scoped or claimed, and no delivery round is resolved, so
+        // everything owed before this poll is still owed after it.
+        if (inLocalPeriod()) return localPeriodInbox(cursor, localPeriodField);
         // `""` is treated as omitted: `getCurrentDoc("")` would otherwise
         // resolve to no document even with one active.
         const requestedId = documentId || undefined;
@@ -2265,6 +2356,11 @@ export function registerAwarenessTools(server: McpServer): void {
               `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
             );
             parts.push(CHAT_ACK_DIRECTIVE);
+            // #1123 A2, R2.4: chat owed to Claude when a local period began,
+            // handed after it, is marked old — the set, never time, decides.
+            if (chatMessages.some((m) => typeof m.id === "string" && wasOwedAtSwitch(m.id))) {
+              parts.push(OWED_AT_SWITCH_SENTENCE);
+            }
           }
           let actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
           // #2187: items from a background document are exactly the ones a
@@ -2734,7 +2830,10 @@ function processUnsurfacedInboxAnnotations(
       // #1770: Claude's own resolves are not the user's decisions. This bucket is
       // documented as "the USER's accept/dismiss decisions", and before the stamp
       // a Claude dismiss was indistinguishable from one.
-      ann.resolvedBy !== "claude"
+      ann.resolvedBy !== "claude" &&
+      // The user's accept or dismiss on the local model's own annotation is
+      // local-model activity, never handed to Claude (#1123 A2, decision 7).
+      !isLocalModelRecord(ann)
     ) {
       const item: InboxUserResponse = { ...ann, textSnippet: snippet, documentId: ctx.documentId };
       if (!ctx.admit("userResponses", item)) continue; // see the userActions arm
@@ -2865,6 +2964,10 @@ export function collectInboxUserReplies(
 ): InboxUserReply[] {
   const out: InboxUserReply[] = [];
   for (const ann of allAnnotations) {
+    // A reply on the local model's own annotation is local-model activity,
+    // never handed to Claude (#1123 A2, decision 7); a user reply on Claude's
+    // own annotation always is, even where the local model also replied.
+    if (isLocalModelRecord(ann)) continue;
     const visible = channelVisibleReplies(ann, loadReplies);
     if (visible.length === 0) continue;
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);

@@ -306,6 +306,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
           ...(raw.standby ? { standby: raw.standby } : {}),
           ...(raw.startsOnMessage ? { startsOnMessage: true as const } : {}),
           ...(raw.greetingLate ? { greetingLate: true as const } : {}),
+          ...(raw.heldForLocalModel ? { heldForLocalModel: true as const } : {}),
         };
     if (raw.running) {
       if (!loopback) {
@@ -333,6 +334,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         busy: raw.busy,
         attached,
         ...(raw.greetingLate ? { greetingLate: true as const } : {}),
+        ...(raw.heldForLocalModel ? { heldForLocalModel: true as const } : {}),
         ...ignored,
         skillRefresh,
       };
