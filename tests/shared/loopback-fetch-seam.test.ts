@@ -11,6 +11,15 @@ import { describe, expect, it } from "vitest";
  */
 const ROOT = resolve(__dirname, "../..");
 const DIRS = ["src/cli", "src/channel", "src/monitor", "src/shared"];
+// A call, and `fetch` used as a value (`= fetch`, `?? fetch`, `|| fetch`, an
+// argument), which a default-parameter or injection seam would use; plus the
+// global spelled out. `fetch:` as an object key and `typeof fetch` pass.
+const BARE_FETCH = [
+  /(^|[^\w.$])fetch\s*\(/m,
+  /(?:=|\?\?|\|\||[(,])\s*fetch\b(?!\s*:)/m,
+  /globalThis\.fetch\b/m,
+  /window\.fetch\b/m,
+];
 const ALLOWED = new Set(["src/shared/loopback-fetch.ts"]);
 
 function walk(dir: string): string[] {
@@ -35,7 +44,7 @@ describe("no bare fetch() in the programs that carry the token (#2422)", () => {
       const code = readFileSync(f, "utf8")
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/^\s*\/\/.*$/gm, "");
-      if (/(^|[^\w.$])fetch\s*\(/m.test(code)) offenders.push(rel);
+      if (BARE_FETCH.some((re) => re.test(code))) offenders.push(rel);
     }
     expect(offenders).toEqual([]);
   });

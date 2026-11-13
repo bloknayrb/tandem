@@ -59,16 +59,34 @@ function proxyFreeAgent(): Agent {
 /**
  * Drop-in `fetch`. Loopback targets use undici with a proxy-free agent; every
  * other target uses the global `fetch`, looked up at call time.
+ *
+ * undici's `fetch` is a different implementation from the global one, and its
+ * `Request` is a different class, so a global `Request` handed to it would
+ * throw. A loopback `Request` is therefore unpacked into its URL and the init
+ * it carries (an explicit `init` still wins, as it does in `fetch`).
  */
-export const loopbackFetch: typeof fetch = (input, init) => {
-  if (isLoopbackTarget(input)) {
-    // undici's `fetch` takes its own dispatcher option, which the DOM
-    // `RequestInit` type does not declare, and returns undici's own `Response`
-    // (same shape, different declaration). Both casts stop here.
-    return undiciFetch(input as Parameters<typeof undiciFetch>[0], {
-      ...(init as Parameters<typeof undiciFetch>[1]),
-      dispatcher: proxyFreeAgent(),
-    }) as unknown as Promise<Response>;
+export const loopbackFetch: typeof fetch = async (input, init) => {
+  if (!isLoopbackTarget(input)) return globalThis.fetch(input, init);
+  let target: string | URL = input as string | URL;
+  let merged = init;
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    target = input.url;
+    merged = {
+      method: input.method,
+      headers: input.headers,
+      body: input.body === null ? undefined : await input.arrayBuffer(),
+      redirect: input.redirect,
+      signal: input.signal,
+      ...init,
+    };
   }
-  return globalThis.fetch(input, init);
+  // undici's `fetch` takes its own dispatcher option, which the DOM
+  // `RequestInit` type does not declare, and returns undici's own `Response`
+  // (same shape, different declaration). Both casts stop here.
+  return undiciFetch(target as Parameters<typeof undiciFetch>[0], {
+    ...(merged as Parameters<typeof undiciFetch>[1]),
+    // The point of the module. undici's `fetch` with no dispatcher shares
+    // Node's global one, and so follows an environment proxy.
+    dispatcher: proxyFreeAgent(),
+  }) as unknown as Promise<Response>;
 };

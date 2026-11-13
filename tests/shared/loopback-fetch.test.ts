@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher, fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isLoopbackTarget, loopbackFetch } from "../../src/shared/loopback-fetch.js";
 
@@ -164,5 +165,49 @@ describe("loopbackFetch", () => {
     }
     const res = await loopbackFetch(`http://[::1]:${port}/`);
     expect(await res.text()).toBe("v6");
+  });
+
+  it("accepts a global Request for a loopback URL, with its method, headers and body", async () => {
+    const seen: { method?: string; x?: string; body: string }[] = [];
+    const port = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        seen.push({
+          method: req.method,
+          x: req.headers["x-req"] as string | undefined,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+        res.end("ok");
+      });
+    });
+    const request = new Request(`http://127.0.0.1:${port}/r`, {
+      method: "POST",
+      headers: { "x-req": "1" },
+      body: "from-request",
+    });
+    const res = await loopbackFetch(request);
+    expect(await res.text()).toBe("ok");
+    expect(seen).toEqual([{ method: "POST", x: "1", body: "from-request" }]);
+  });
+
+  it("passes undici a private dispatcher: with the shared global dispatcher unusable, a loopback request still arrives (fails if the dispatcher line is deleted)", async () => {
+    const port = await listen((_req, res) => res.end("direct"));
+    const url = `http://127.0.0.1:${port}/`;
+    const previous = getGlobalDispatcher();
+    // Stand-in for an environment-proxy dispatcher: whatever undici's `fetch`
+    // sends through the shared global dispatcher goes nowhere.
+    const blocked = new MockAgent();
+    blocked.disableNetConnect();
+    setGlobalDispatcher(blocked);
+    try {
+      // Control: undici's own fetch with no dispatcher DOES use the global one.
+      await expect(undiciFetch(url)).rejects.toThrow();
+      const res = await loopbackFetch(url);
+      expect(await res.text()).toBe("direct");
+    } finally {
+      setGlobalDispatcher(previous);
+      await blocked.close();
+    }
   });
 });

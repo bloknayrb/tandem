@@ -1,7 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { connect as netConnect } from "node:net";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 /**
@@ -317,5 +319,35 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
     const result = await run("bridge", "env-var", "::1");
     expect(result.tunnel.connects).toEqual([]);
     expect(result.up.seen.find((s) => s.url === "/mcp")?.authorization).toBe(`Bearer ${TOKEN}`);
+  }, 60_000);
+
+  it("tandem deactivate (the licence POST) goes direct as well", async () => {
+    // Its app-data root is a scratch directory: if the POST were not answered
+    // the command falls back to removing a licence from the local store.
+    const scratch = mkdtempSync(join(tmpdir(), "tandem-2422-"));
+    try {
+      const up = await makeUpstream();
+      const tunnel = await makeTunnel();
+      const env = childEnv({
+        TANDEM_URL: up.base,
+        HTTP_PROXY: tunnel.url,
+        NODE_USE_ENV_PROXY: "1",
+        HOME: scratch,
+        USERPROFILE: scratch,
+        APPDATA: scratch,
+        LOCALAPPDATA: scratch,
+        XDG_DATA_HOME: scratch,
+        XDG_CONFIG_HOME: scratch,
+        TANDEM_APP_DATA_DIR: scratch,
+      });
+      const p = start(["src/cli/index.ts", "deactivate"], env);
+      await new Promise<void>((r) => p.c.once("exit", () => r()));
+      expect(tunnel.connects).toEqual([]);
+      expect(up.seen.some((s) => s.method === "POST" && s.url === "/api/license/deactivate")).toBe(
+        true,
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }, 60_000);
 });

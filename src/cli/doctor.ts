@@ -25,7 +25,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { request } from "node:http";
+import { Agent, request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -2986,9 +2986,16 @@ interface HttpGetResult {
  */
 const HTTP_MAX_BYTES = 256 * 1024;
 
+/**
+ * The doctor's two local probes use a private agent, not `http.globalAgent`, so
+ * an environment proxy cannot sit between the doctor and the server it is
+ * diagnosing and misreport a healthy one (#2422). They carry no token.
+ */
+const PROBE_AGENT = new Agent();
+
 function httpGet(url: string, timeoutMs = 3000): Promise<HttpGetResult | null> {
   return new Promise((resolve) => {
-    const req = request(url, { timeout: timeoutMs }, (res) => {
+    const req = request(url, { timeout: timeoutMs, agent: PROBE_AGENT }, (res) => {
       let body = "";
       let bytes = 0;
       let truncated = false;
@@ -3433,17 +3440,21 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
 
 function checkSseEndpoint(r: Recorder, mcpPort: number): Promise<void> {
   return new Promise((resolve) => {
-    const req = request(`http://127.0.0.1:${mcpPort}/api/events`, { timeout: 2000 }, (res) => {
-      // SSE endpoint responds with 200 and text/event-stream
-      req.destroy(); // don't hold the connection open
-      const ct = res.headers["content-type"] || "";
-      if (res.statusCode === 200 && ct.includes("text/event-stream")) {
-        r.pass("SSE event stream reachable (/api/events)");
-      } else {
-        r.warn(`/api/events responded with status ${res.statusCode}, content-type: ${ct}`);
-      }
-      resolve();
-    });
+    const req = request(
+      `http://127.0.0.1:${mcpPort}/api/events`,
+      { timeout: 2000, agent: PROBE_AGENT },
+      (res) => {
+        // SSE endpoint responds with 200 and text/event-stream
+        req.destroy(); // don't hold the connection open
+        const ct = res.headers["content-type"] || "";
+        if (res.statusCode === 200 && ct.includes("text/event-stream")) {
+          r.pass("SSE event stream reachable (/api/events)");
+        } else {
+          r.warn(`/api/events responded with status ${res.statusCode}, content-type: ${ct}`);
+        }
+        resolve();
+      },
+    );
     req.on("error", (err: Error) => {
       r.warn(`/api/events not reachable: ${err.message}`);
       resolve();
