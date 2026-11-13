@@ -519,7 +519,7 @@ const CLAUDE_FILE_OWN = { version: 1, answerer: "claude", setBy: "own-window" };
 const failSyncWrite = (code = "EPERM") => {
   const real = fs.openSync;
   return vi.spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
-    if (String(p).includes(CHAT_ANSWERER_FILE_NAME)) {
+    if (String(p).includes(CHAT_ANSWERER_FILE_NAME) && String(p).endsWith(".tmp")) {
       throw Object.assign(new Error(code), { code });
     }
     return (real as (...a: unknown[]) => number)(p, ...rest);
@@ -1068,6 +1068,79 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     prime();
     expect(chatAnswerer()).toBe("claude");
     expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round 5 review: PB with a failed start-up read and a record still saying 'chosen' still restores the mark", async () => {
+    await chosenLocalThen(() => {});
+    prime();
+    // The user's own Claude lands its mark; its record-clearing write fails.
+    writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await setChatAnswerer("claude", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    writeControl.fail.clear();
+    vi.restoreAllMocks();
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    // On disk the record still says "chosen" (its clearing write failed).
+    expect(
+      JSON.parse(fs.readFileSync(path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME), "utf8"))
+        .answererChosen,
+    ).toBe(true);
+    restart();
+    const real = fs.readFileSync;
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      p: fs.PathOrFileDescriptor,
+      o?: unknown,
+    ) => {
+      if (String(p).endsWith(CHAT_ANSWERER_FILE_NAME)) throw new Error("EBUSY");
+      return (real as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
+    }) as typeof fs.readFileSync);
+    prime(); // the read fails once: claudeIsOwn is not seeded
+    read.mockRestore();
+    deliver();
+    await __flushLocalModelAnnouncedForTests();
+    const { release, started } = await holdThenFailLocalWrites();
+    const la = setChatAnswerer("local", "own-window");
+    while (!started()) await new Promise((r) => setImmediate(r));
+    const lb = setChatAnswerer("local", "own-window");
+    release();
+    await Promise.all([la, lb]);
+    vi.restoreAllMocks();
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    await __flushLocalModelAnnouncedForTests();
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round 5 review: a failed rename with a working delete still leaves the marker; a directory at the marker path is no marker", async () => {
+    await chosenLocalThen(() => {});
+    prime();
+    failSyncWrite("ENOSPC");
+    const realRename = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to).endsWith(".removed-by-tandem")) throw new Error("EPERM");
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+    await setChatAnswerer("claude", "allowance");
+    vi.restoreAllMocks();
+    expect(fs.existsSync(switchFile())).toBe(false);
+    await __flushLocalModelAnnouncedForTests();
+    restart();
+    prime();
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
+
+    // A directory where the marker would be: not a marker, so a removal by
+    // something else is still named.
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    const marker = path.join(dir, `.${CHAT_ANSWERER_FILE_NAME}.removed-by-tandem`);
+    fs.mkdirSync(path.join(marker, "x"), { recursive: true });
+    restart();
+    fs.rmSync(switchFile());
+    prime();
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("missing")]);
   });
 
   it("round 5 PD: the user's own switch to the local model whose record write fails is reported unsaved", async () => {

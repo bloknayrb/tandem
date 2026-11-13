@@ -152,6 +152,11 @@ let supersededLocalOnDisk = false;
 /** The `seq` of the latest Claude request, so a local write can tell whether
  *  a Claude request is among those that superseded it (round 5 PA). */
 let lastClaudeSeq = 0;
+/** The superseded local write now on disk replaced the user's own marked
+ *  Claude file, with no Claude request since: a re-assertion puts the mark
+ *  back even when the start-up read failed and `claudeIsOwn` was not seeded
+ *  (round 5 review). */
+let supersededOverOwn = false;
 /** Set at start-up: the file was missing and Tandem had removed it itself (its
  *  fallback when a Claude write failed), so "was removed" is not said (round 5). */
 let removedByTandem = false;
@@ -295,8 +300,9 @@ function removedMarkerPath(): string {
  *  applies. Best effort; never throws. */
 function markerExists(): boolean {
   try {
-    fs.lstatSync(removedMarkerPath());
-    return true;
+    // Only a plain file counts: anything else at that path (a directory a
+    // delete cannot remove, say) would otherwise hide a real removal.
+    return fs.lstatSync(removedMarkerPath()).isFile();
   } catch {
     return false;
   }
@@ -322,6 +328,13 @@ function removeSync(file: string): boolean {
   }
   try {
     fs.rmSync(file, { force: true });
+    // The rename failed but the delete worked: leave an empty marker, which
+    // needs almost no space, so the next start still knows (round 5 review).
+    try {
+      fs.closeSync(fs.openSync(removedMarkerPath(), "w", 0o600));
+    } catch {
+      // Without it the next start may say "was removed": true, just not whose.
+    }
     return true;
   } catch (err) {
     console.error(
@@ -678,6 +691,7 @@ export async function setChatAnswerer(
     if (outcome.saved) {
       supersededLocalOnDisk =
         seq !== mine && (lastClaudeSeq > mine || (before !== "local" && before !== "unreadable"));
+      supersededOverOwn = supersededLocalOnDisk && lastClaudeSeq < mine && before === "claude-own";
     }
     // A failed local write while Claude is in effect, over such a "local":
     // Claude is put back on disk, with the mark if the Claude in effect was
@@ -689,7 +703,8 @@ export async function setChatAnswerer(
       effective !== "local" &&
       readState(filePath()) === "local"
     ) {
-      if (makeDiskClaudeSync(claudeIsOwn) === "failed") await writeClaudeAsync(claudeIsOwn);
+      const own = claudeIsOwn || supersededOverOwn;
+      if (makeDiskClaudeSync(own) === "failed") await writeClaudeAsync(own);
       if (readState(filePath()) !== "local") supersededLocalOnDisk = false;
     }
     if (outcome.written && seq === mine) {
@@ -734,6 +749,7 @@ export function __resetChatAnswererForTests(base?: string): void {
   diskQueue = Promise.resolve();
   claudeIsOwn = false;
   supersededLocalOnDisk = false;
+  supersededOverOwn = false;
   lastClaudeSeq = 0;
   removedByTandem = false;
   listeners.clear();
