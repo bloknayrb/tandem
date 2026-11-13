@@ -180,20 +180,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Two notice-rule duplicates outside the brief's list of exceptions (the notice-rule PR): " +
-      "(a) a notice whose key collides with another record (a client-written id) only after the " +
-      "handover is not settled while the collision lasts, so a holder may be handed it once more " +
-      "(the handover's own colliding-key rule covers only a collision present at the handover); " +
-      "(b) a notice that only a cursor reader of the holder was handed, whose registry entry a " +
-      "pass of an older cursor of that holder retired before the handover (its status moved away " +
-      "and back, or its record was deleted and restored, in between), has no entry to settle, so " +
-      "the next holder is handed it once. Each is one duplicate notice, never a loss.",
-    closedBy:
-      "Bryan's answer (the notice-rule PR, 'Needs Bryan'): accept each as a duplicate, or ask " +
-      "for a mechanism.",
-  },
-  {
-    gap:
       "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
       "answered-link, and the switch lands immediately before the flip, in the same release).",
     closedBy: "#2360's switch PR merged.",

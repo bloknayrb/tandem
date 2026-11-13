@@ -362,7 +362,12 @@ interface NoticeSettlement {
  * a later return to that state is a new notice. A status that moves away and
  * back with no such poll in between is the same settled notice (accepted).
  * A record that is gone stays settled (its entry is kept), so an Undo of the
- * delete restores a settled notice. An entry under any current record's
+ * delete restores a settled notice. That holds for a delete made after the
+ * handover. For one made before it, the handover finds no current record
+ * for the key and forgets it (`handOverDocumentInbox` keeps only current
+ * notice keys), so an Undo restores a notice that is not settled, and the
+ * new holder is handed it once: an accepted duplicate (ADR-054's
+ * notice-rule amendment, as the change-notice PR records it). An entry under any current record's
  * bare-id key (a client-written id that collides) is not settled while the
  * collision lasts, and is kept. The walk itself writes nothing and logs
  * nothing; `carryHeld` never retires an annotation entry at or below the
