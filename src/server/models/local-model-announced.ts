@@ -10,7 +10,9 @@
  * `answering` — the fingerprint of the model that answers chat WHEN the local
  * model is chosen (the model's identity alone, whatever the switch says);
  * `adopted` — the first lit start's baseline model, not yet named to one of
- * Tandem's windows; `answererLocal` — the switch is at the local model, and
+ * Tandem's windows; `answererChosen` — the user chose the local model in
+ * Tandem's own window (the only state the "answered by Claude again" notice
+ * is raised for); `answererLocal` — the switch is at the local model, and
  * the user chose it or was told. The switch is never part of the baseline.
  *
  * **Who can change those settings now.** The two routes accept a request only
@@ -119,7 +121,7 @@ export const SETTINGS_CHANGED_NOTICE =
  *  is now answered by a local model (#1123), which is what the user most needs
  *  to know. One replay key, so the parts still merge into one notice. */
 export const SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE =
-  "Your chat is now answered by a local model, and your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: set who answers your chat back to Claude, remove any model you do not recognise, and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
+  "Your chat is now set to be answered by a local model, and your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: set who answers your chat back to Claude, remove any model you do not recognise, and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
 
 /** Replay key of the notice that chat is answered by Claude again although the
  *  user's recorded choice was the local model, by anything but their own
@@ -142,6 +144,10 @@ interface Announced {
    *  writes only those, so a downgrade drops it and the next start of this
    *  build announces a stored "local model" again: accepted. */
   answererLocal: boolean;
+  /** Narrower: the user CHOSE the local model in Tandem's own window (not
+   *  merely told). Only this makes "chat is answered by Claude again, not as
+   *  you chose" true (#1123 review round 2). Written only while set. */
+  answererChosen: boolean;
 }
 
 let basePath: string | null = null;
@@ -173,7 +179,13 @@ function markerPath(): string {
 
 function load(): Announced {
   if (announced) return announced;
-  const fresh: Announced = { editing: false, answering: null, adopted: null, answererLocal: false };
+  const fresh: Announced = {
+    editing: false,
+    answering: null,
+    adopted: null,
+    answererLocal: false,
+    answererChosen: false,
+  };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
     if (parsed && parsed !== "unreadable" && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -188,6 +200,9 @@ function load(): Announced {
         }
         if (Object.hasOwn(r, "answererLocal") && r.answererLocal === true) {
           fresh.answererLocal = true;
+        }
+        if (Object.hasOwn(r, "answererChosen") && r.answererChosen === true) {
+          fresh.answererChosen = true;
         }
       }
     }
@@ -205,12 +220,13 @@ function persist(): Promise<boolean> {
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const { adopted, answererLocal, ...rest } = load();
+      const { adopted, answererLocal, answererChosen, ...rest } = load();
       const snapshot = {
         version: VERSION,
         ...rest,
         ...(adopted === null ? {} : { adopted }),
         ...(answererLocal ? { answererLocal: true } : {}),
+        ...(answererChosen ? { answererChosen: true } : {}),
       };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
       unsaved = false;
@@ -510,6 +526,17 @@ export function answererLocalWasAnnounced(): boolean {
   return load().answererLocal;
 }
 
+/** Did the user CHOOSE the local model in Tandem's own window? */
+export function answererLocalWasChosen(): boolean {
+  return load().answererChosen;
+}
+
+/** Withdraw a waiting "answered by Claude again" notice: the local model
+ *  answers again, however that came about. */
+export function withdrawAnswererClaudeNotice(): void {
+  removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+}
+
 /**
  * Claude answers chat (the user switched to it, or start-up found it). Never
  * announced, so the pending replay is withdrawn and the record cleared at
@@ -519,7 +546,8 @@ export function recordAnswererClaude(dedupKey: string): void {
   removeStartupNotice(dedupKey);
   removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
   dropStartupPart("answererLocal");
-  if (load().answererLocal) record({ answererLocal: false });
+  const r = load();
+  if (r.answererLocal || r.answererChosen) record({ answererLocal: false, answererChosen: false });
   // A repeated switch: the earlier clearing write may have failed. Try again.
   else retryUnsavedRecord();
 }
@@ -541,7 +569,10 @@ export function announceAnswererClaude(
 ): TandemNotification {
   dropStartupPart("answererLocal");
   return raise(ANSWERER_CLAUDE_NOTICE_KEY, message, () => {
-    if (!opts.keepRecord && load().answererLocal) record({ answererLocal: false });
+    const r = load();
+    if (!opts.keepRecord && (r.answererLocal || r.answererChosen)) {
+      record({ answererLocal: false, answererChosen: false });
+    }
   });
 }
 

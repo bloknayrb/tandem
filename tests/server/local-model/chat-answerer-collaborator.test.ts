@@ -714,6 +714,31 @@ describe("run state on the user's row (R3.4)", () => {
     ]);
   });
 
+  it("editing_off with the mode key absent: refused (privacy) but not blamed on Solo — stopped, mode-unknown", async () => {
+    setupDoc("doc-indet-stop");
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
+    const collab = createLocalModelCollaborator(
+      deps({
+        editingState: () => ({ enabled: true, offEpoch: 0 }),
+        runTurn: async (o) => {
+          expect(o.editingAllowed()).toBe(false);
+          return result("editing_off");
+        },
+      }),
+    );
+    collab.onEvent(userChat("u1", "doc-indet-stop"));
+    await drain(collab);
+    expect(row("u1")?.localRun).toEqual({
+      status: "stopped",
+      reason: "mode-unknown",
+      generation: G,
+    });
+    const toast = getBuffer()[0]?.message ?? "";
+    expect(toast).not.toMatch(/Solo mode\./);
+    expect(toast).toContain("cannot tell whether it is in Solo or Tandem mode");
+  });
+
   it("editing_off whose cause was the setting: stopped, editing-off, and the toast does not name Solo", async () => {
     setupDoc("doc-off-stop");
     const editing = { enabled: true, offEpoch: 0 };

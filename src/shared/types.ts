@@ -715,6 +715,9 @@ export type LocalRunStopReason =
   | "editing-off"
   /** The same, where the cause was Solo mode (the editing setting allowed it). */
   | "solo"
+  /** The same, where the mode could not be read (an absent mode key); the
+   *  write is refused for privacy, but the mode is not called Solo. */
+  | "mode-unknown"
   /** The document was reloaded or edited in source view mid-run. */
   | "content-replaced"
   /** The document reconnected mid-run (its live instance was swapped). */

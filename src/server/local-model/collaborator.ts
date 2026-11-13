@@ -720,7 +720,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     const startedInTandem = readModeState() === "tandem";
     // Why the run was first refused a write, for the stop reason and toast:
     // Solo (the setting allowed it) or the editing setting itself.
-    let refusedBy: "solo" | "editing-off" | null = null;
+    let refusedBy: "solo" | "mode-unknown" | "editing-off" | null = null;
     const editingAllowed = (): boolean => {
       if (!readEditing) return false;
       const now = readEditing();
@@ -728,7 +728,13 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       const modeAllows =
         startedInTandem && readModeState() === "tandem" && leftTandemEpoch() === startLeftTandem;
       if (settingAllows && modeAllows) return true;
-      refusedBy ??= settingAllows ? "solo" : "editing-off";
+      // An absent mode key (`indeterminate`) is refused too — it fails closed
+      // for privacy — but it is not Solo, so it is not called Solo.
+      refusedBy ??= !settingAllows
+        ? "editing-off"
+        : readModeState() === "indeterminate"
+          ? "mode-unknown"
+          : "solo";
       return false;
     };
 
@@ -879,7 +885,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
           // Solo is named when Solo was the cause (#1123): the setting alone
           // would have allowed it.
           sink.flushFinal();
-          if (refusedBy === "solo") ended = { status: "stopped", reason: "solo" };
+          if (refusedBy === "solo" || refusedBy === "mode-unknown") {
+            ended = { status: "stopped", reason: refusedBy };
+          }
           pushNotification({
             id: generateMessageId(),
             type: "general-error",
@@ -887,7 +895,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             message:
               refusedBy === "solo"
                 ? "The local model stopped without replying: it tried to comment on or change the document, which local models do not do in Solo mode. Ask again for an answer in chat."
-                : "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.",
+                : refusedBy === "mode-unknown"
+                  ? "The local model stopped without replying: it tried to comment on or change the document, which local models do not do while Tandem cannot tell whether it is in Solo or Tandem mode. Ask again for an answer in chat."
+                  : "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.",
             documentId: req.docName,
             timestamp: Date.now(),
           });

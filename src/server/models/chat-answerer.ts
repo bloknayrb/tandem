@@ -24,20 +24,21 @@
  * failure to read: Claude.
  *
  * **Claude is immediate and durable; the local model takes effect only once
- * saved.** Claude is stored as NO file (a missing file reads as Claude, in
- * this build and — a rule every later version must keep — in any later one).
- * A switch to Claude changes the effective value and tells the listeners
- * synchronously, so a local-model run in flight is stopped by the
- * collaborator's abort, and deletes the file synchronously, before the route
- * answers — so a quit or a crash straight after cannot bring the local model
- * back at the next start. It deletes it again behind any write still queued,
- * so a switch to the local model that was in flight cannot land after it. A
- * later build's file is deleted too: it holds only this switch. A switch to
- * the local model takes effect only after its own write succeeded, and only
- * if no later request arrived meanwhile. If the delete fails (a locked file,
- * a permission), `{ answerer: "claude" }` is written over it instead; only if
- * both fail can the disk still read "local", and that is logged and reported
- * `persisted: false`.
+ * saved.** A switch to Claude changes the effective value and tells the
+ * listeners synchronously, so a local-model run in flight is stopped by the
+ * collaborator's abort, and writes `{ answerer: "claude" }` synchronously
+ * (temp file, then rename) before the route answers — so a quit or a crash
+ * straight after cannot bring the local model back. It is a file, not no
+ * file, so that the next start can tell the user's own choice of Claude
+ * (silent) from the file having been removed (announced). If that write
+ * fails the file is deleted, and failing that written asynchronously; it is
+ * done again behind any write still queued, so a switch to the local model
+ * that was in flight cannot land after it. Only a missing file or a parsed
+ * Claude counts as Claude on disk; an unreadable file is reported
+ * `persisted: false`. A switch to the local model takes effect only after its
+ * own write succeeded, and only if no later request arrived meanwhile. A
+ * missing file reads as Claude, in this build and — a rule every later
+ * version must keep — in any later one.
  *
  * **A later build's file is never switched to the local model.** That switch
  * takes effect for this run of the server and is reported `persisted: false`,
@@ -49,13 +50,15 @@
  * switch to the local model made there is the user's own: no notice, and
  * `local-model-announced.ts` records it at once (withdrawing any pending
  * start-up part for it). One admitted through the development allowance is
- * announced. A switch to Claude made in Tandem's own window is silent. Any
- * other way chat comes to be answered by Claude while the record says the user
- * chose the local model — the file removed, unreadable, changed or written by
- * a newer build, or a switch through the development allowance — raises one
- * notice saying so and why (Bryan, 2026-11-12: "Announce it"); a read that
- * failed keeps the record, so a later clean read of "local" restores the
- * choice silently.
+ * announced. A switch to Claude made in Tandem's own window is silent, and so
+ * is a file that says Claude at start-up. When the user CHOSE the local model
+ * in Tandem's own window (`answererChosen` in the record — not merely told),
+ * any other way chat comes to be answered by Claude — the file removed,
+ * unreadable, invalid or written by a newer build, or a switch through the
+ * development allowance — raises one notice saying so and why (Bryan,
+ * 2026-11-12: "Announce it"); a read that failed keeps the record, so a later
+ * clean read of "local" restores the choice silently. Any switch back to the
+ * local model withdraws a waiting notice.
  * At start-up, a stored "local model" the record does not show as the user's
  * raises the start-up notice; a stored Claude clears the record silently. The
  * switch is never part of the first-lit-start baseline: no dark build can
@@ -77,6 +80,7 @@
  * touches the disk at import.
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -88,8 +92,10 @@ import {
   announceLocalModelChange,
   announceStartupMismatch,
   answererLocalWasAnnounced,
+  answererLocalWasChosen,
   recordAnswererClaude,
   recordSetByUser,
+  withdrawAnswererClaudeNotice,
 } from "./local-model-announced.js";
 import type { ModelsWriteSource } from "./own-window.js";
 
@@ -264,10 +270,50 @@ async function writeLocal(): Promise<DiskOutcome> {
   return { written: false, saved: false };
 }
 
-/** Make the disk read Claude: delete the file, and if that fails and the file
- *  is not known to say Claude, write Claude over it. Never throws. */
+/**
+ * Write `{ answerer: "claude" }` synchronously: a temp file, then a rename
+ * (which replaces a link at the path rather than following it). Synchronous
+ * so the disk says Claude before the route answers — a quit straight after
+ * cannot bring the local model back — and a FILE rather than no file, so the
+ * next start can tell the user's own choice of Claude (silent) from the file
+ * having been removed (announced, when the user had chosen the local model).
+ * Never throws; false when it did not land.
+ */
+function writeClaudeSync(file: string): boolean {
+  const tmp = path.join(path.dirname(file), `.${CHAT_ANSWERER_FILE_NAME}.${randomUUID()}.tmp`);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      tmp,
+      `${JSON.stringify({ version: CHAT_ANSWERER_VERSION, answerer: "claude" }, null, 2)}\n`,
+      {
+        mode: 0o600,
+        flag: "wx",
+      },
+    );
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (err) {
+    console.error(
+      `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be set to Claude (${
+        err instanceof Error ? err.name : "error"
+      }).`,
+    );
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // Best effort: an orphaned temp file reads as nothing.
+    }
+    return false;
+  }
+}
+
+/** Make the disk read Claude: Claude written over the file; failing that the
+ *  file deleted; failing that an async write. Never throws. */
 async function makeDiskClaude(): Promise<void> {
   const file = filePath();
+  if (readState(file) === "claude") return;
+  if (writeClaudeSync(file)) return;
   if (removeSync(file)) return;
   if (isClaudeOnDisk(readState(file))) return;
   try {
@@ -282,9 +328,8 @@ async function makeDiskClaude(): Promise<void> {
 }
 
 /** Why chat is answered by Claude again, in words for the notice. */
-const CLAUDE_AGAIN_BECAUSE: Record<Exclude<DiskState, "local"> | "allowance", string> = {
+const CLAUDE_AGAIN_BECAUSE: Record<Exclude<DiskState, "local" | "claude"> | "allowance", string> = {
   missing: "the file that held that choice was removed",
-  claude: "the file that held that choice was changed",
   invalid: "the file that held that choice was changed",
   newer: "the file that holds that choice was written by a newer version of Tandem",
   unreadable:
@@ -310,6 +355,9 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 function setEffective(now: ChatAnswerer): void {
   if (effective === now) return;
   effective = now;
+  // The local model answers again, however that came about: a waiting
+  // "answered by Claude again" notice is no longer true.
+  if (now === "local") withdrawAnswererClaudeNotice();
   for (const cb of [...listeners]) {
     try {
       cb(now);
@@ -338,16 +386,21 @@ export function primeChatAnswerer(): void {
     if (!answererLocalWasAnnounced()) announceStartupMismatch({ answererLocal: true });
     return;
   }
-  if (answererLocalWasAnnounced()) {
-    // The user's recorded choice was the local model and Claude answers now,
-    // not by their own choice: say so (Bryan, 2026-11-12). A read that failed
-    // may be transient (a Windows scanner holding the file), so the record is
-    // kept and the next clean start that reads "local" restores the choice
-    // with no "settings changed" warning.
+  // A file that says Claude is the user's own choice in Tandem's own window
+  // (written synchronously before that route answered) or a write in the
+  // safe direction: silent, whatever the record says — even a record whose
+  // clearing write was lost (#1123 review round 2: the user's own switch to
+  // Claude must fail silent).
+  if (state !== "claude" && answererLocalWasChosen()) {
+    // The user CHOSE the local model in Tandem's own window, and Claude
+    // answers now by something else: say so (Bryan, 2026-11-12). A read that
+    // failed may be transient (a Windows scanner holding the file), so the
+    // record is kept and the next clean start that reads "local" restores the
+    // choice with no "settings changed" warning.
     announceAnswererClaude(answererClaudeNotice(state), { keepRecord: state === "unreadable" });
     return;
   }
-  // Claude at start-up and nothing recorded: clear a stale pending notice.
+  // Claude at start-up otherwise: clear the record and any pending notice.
   recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
 }
 
@@ -394,16 +447,16 @@ export async function setChatAnswerer(
     // Before any await: a local-model run in flight is stopped at once, and
     // the disk reads Claude before the route answers.
     setEffective("claude");
-    if (source !== "own-window" && answererLocalWasAnnounced()) {
+    if (source !== "own-window" && answererLocalWasChosen()) {
       // Not the user's own choice, and theirs was the local model: say so
       // (Bryan, 2026-11-12). The record is cleared once a window was told.
       announceAnswererClaude(answererClaudeNotice("allowance"), { keepRecord: false });
     } else {
       recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
     }
-    removeSync(filePath());
-    // And again behind a local write still in flight; if the delete fails,
-    // Claude is written over the file instead.
+    // Synchronously, before the route answers; and again behind a local write
+    // still in flight.
+    void makeDiskClaude();
     await enqueue(makeDiskClaude);
     return settled("claude", seq !== mine);
   }
@@ -417,7 +470,9 @@ export async function setChatAnswerer(
       // a record saying "chosen" would let a "local" written meanwhile by
       // something else start silently.
       if (source === "own-window") {
-        if (outcome.saved) recordSetByUser({ answererLocal: true }, ANSWERER_LOCAL_NOTICE_KEY);
+        if (outcome.saved) {
+          recordSetByUser({ answererLocal: true, answererChosen: true }, ANSWERER_LOCAL_NOTICE_KEY);
+        }
       } else if (!wasLocal) {
         announceLocalModelChange(ANSWERER_LOCAL_NOTICE_KEY, ANSWERER_LOCAL_NOTICE, {
           answererLocal: true,

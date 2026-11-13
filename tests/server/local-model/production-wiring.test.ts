@@ -153,6 +153,49 @@ describe("local-model production wiring (#1123, #2404)", () => {
     expect(count(own, "primeChatAnswerer(")).toBe(1); // the definition only
   });
 
+  // An aliased import (`import { primeChatAnswerer as p }`) or a namespace
+  // import of the module would call it under another name, which the call
+  // pin above cannot see. So: the name appears in no src/ file but its
+  // definition and index.ts, and no src/ file but index.ts loads the module
+  // in any way that could reach it.
+  it("no src/ file but index.ts imports primeChatAnswerer, under any name", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const root = path.join(SRC, "..");
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(path.join(dir, e.name))
+          : /\.(ts|svelte)$/.test(e.name)
+            ? [path.join(dir, e.name)]
+            : [],
+      );
+    const files = walk(root).map((f) => ({
+      rel: path.relative(root, f).replace(/\\/g, "/"),
+      src: stripComments(readFileSync(f, "utf8")),
+    }));
+    const naming = files
+      .filter((f) => /\bprimeChatAnswerer\b/.test(f.src))
+      .map((f) => f.rel)
+      .sort();
+    expect(naming).toEqual(["server/index.ts", "server/models/chat-answerer.ts"]);
+    // Namespace or default-style imports of the module, which would reach the
+    // export without naming it, are refused everywhere.
+    const namespaced = files
+      .filter((f) =>
+        /import\s*\*\s*as\s+\w+\s+from\s*["'][^"']*chat-answerer(\.js)?["']/.test(f.src),
+      )
+      .map((f) => f.rel);
+    expect(namespaced).toEqual([]);
+    const dynamicWhole = files
+      .filter((f) =>
+        /(?:const|let|var)\s+\w+\s*=\s*await\s+import\(\s*["'][^"']*chat-answerer\.js["']\s*\)/.test(
+          f.src,
+        ),
+      )
+      .map((f) => f.rel);
+    expect(dynamicWhole).toEqual([]);
+  });
+
   // Critical Rule 2: the run state is written on the user's row with the
   // `mcp` origin, so the ctrl-chat observer skips it and it can wake nothing.
   it("writeLocalRun writes through withMcp, and only through it", async () => {
