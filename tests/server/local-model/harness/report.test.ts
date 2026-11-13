@@ -725,6 +725,11 @@ describe("the sessions of a run, and the header (review M2, M4, item 7)", () => 
     expect(KNOWN_LIMITS.join(" ")).toMatch(/record hash is unkeyed/);
     expect(KNOWN_LIMITS.join(" ")).toMatch(/within 2 seconds of the product finishing/);
     expect(KNOWN_LIMITS.join(" ")).toMatch(/reversed order or with a connector it does not know/);
+    // Final pass, item 4.
+    expect(KNOWN_LIMITS.join(" ")).toMatch(
+      /scored run-deadline trial .* scores the trials held before it/,
+    );
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/A slow model can still be held/);
   });
 });
 

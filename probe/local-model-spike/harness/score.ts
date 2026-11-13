@@ -577,7 +577,7 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
  * not sure … is wrong", "I do not think "…" is wrong", "It's hard to say "…"
  * is wrong") is refused by NEGATED_WRONG, which steps over a quoted run
  * between the negation and the word. "No doubt", "no question", "no denying",
- * "no wonder" and "not only" are not negations there. Also, said of the quotation itself (WRONG_BEFORE_QUOTE,
+ * "no wonder", "not only" and "not just" are not negations there. Also, said of the quotation itself (WRONG_BEFORE_QUOTE,
  * WRONG_AFTER_QUOTE): "the issue with" or "not" just before it ('$35,000,
  * not "$45,000"'), "is off" or a "?" just after it. It is a vocabulary, so it misses wordings and passes
  * some that mean the opposite ("Nobody would say … is wrong", "could be
@@ -585,13 +585,13 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
  * both (rubric §6).
  */
 const SAYS_WRONG =
-  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error(?![-\w])|typo|miscalculat\w*|should\s+(?:be|read|say)\b(?=\s*:?\s*(?:["'`]|[*_~(—–-]{0,3}\s*(?:(?:about|approximately|roughly|around|nearly)\s+)?(?:[$£€]|USD\s*)?\d|\*\*))|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:isn['’]?t|aren['’]?t|(?:is|are)\s+not|not)\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
+  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error(?![-\w])|typo|miscalculat\w*|should\s+(?:be|read|say)\b(?=\s*:?\s*(?:["'`]|[*_~(—–-]{0,3}\s*(?:(?:about|approximately|roughly|around|nearly)\s+)?(?:[$£€]|USD\s*)?\d))|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:isn['’]?t|aren['’]?t|(?:is|are)\s+not|not)\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
 /** Said of the quotation itself, right before it: 'the issue with "…"', '$35,000, not "…"'. */
 const WRONG_BEFORE_QUOTE = /(?:\bthe\s+(?:issue|problem)\s+with|\bnot)\s*[*_]{0,3}$/i;
 /** Said of the quotation itself, right after it: '"…" is off', '"…" looks a bit off', '"…"?'. */
 const WRONG_AFTER_QUOTE = /^[*_]{0,3}(?:\?|\s*(?:is|are|looks?|seems?)\s+(?:a\s+(?:bit|little)\s+|slightly\s+)?off\b(?!\s+(?:by|the)\b))/i;
 const NEGATED_WRONG =
-  /\b(?:not(?!\s+only\b)|no(?!\s+(?:doubt|question|denying|wonder)\b)|never|isn['’]?t|aren['’]?t|nothing|don['’]?t|can['’]?t|cannot|couldn['’]?t|didn['’]?t|hard\s+to\s+(?:say|tell))\s+(?:(?:\w+|"[^"\n]*"|(?<![A-Za-z0-9])'[^'\n]*'(?![A-Za-z0-9])|\x60[^\x60\n]*\x60|\*{2,3}[^*\n]+\*{2,3})\s+){0,3}(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|inconsistent)\b|\bnot\s+sure\b/i;
+  /\b(?:not(?!\s+(?:only|just)\b)|no(?!\s+(?:doubt|question|denying|wonder)\b)|never|isn['’]?t|aren['’]?t|nothing|don['’]?t|can['’]?t|cannot|couldn['’]?t|didn['’]?t|hard\s+to\s+(?:say|tell))\s+(?:(?:\w+|"[^"\n]*"|(?<![A-Za-z0-9])'[^'\n]*'(?![A-Za-z0-9])|\x60[^\x60\n]*\x60|\*{2,3}[^*\n]+\*{2,3})\s+){0,3}(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|inconsistent)\b|\bnot\s+sure\b/i;
 
 /**
  * A token that can be named as wrong on its own: a figure or a date's number

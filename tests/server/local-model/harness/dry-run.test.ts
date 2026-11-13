@@ -13,7 +13,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { classifyTrial } from "../../../../probe/local-model-spike/harness/classify.js";
+import {
+  classifyTrial,
+  RUN_DEADLINE_DETAIL,
+} from "../../../../probe/local-model-spike/harness/classify.js";
 import { evaluateTrial } from "../../../../probe/local-model-spike/harness/evaluate.js";
 import { installFetchTap } from "../../../../probe/local-model-spike/harness/fetch-tap.js";
 import { fixtureFor } from "../../../../probe/local-model-spike/harness/scenarios/index.js";
@@ -538,6 +541,25 @@ describe("what is scored is what the chat row holds", () => {
     expect(obs.loop?.metrics.exit).toBe("timeout");
     expect(obs.reply).toBe("");
     expect(classifyTrial(obs).ending).toBe("timeout");
+  });
+
+  it("a timeout within the slack of the run deadline is run-deadline; one well before it, after a tool call, is the per-turn timeout", async () => {
+    // Pins RUN_DEADLINE_SLACK_MS: without the slack, 299.5 s would read as a
+    // per-turn timeout, and the runner would hold a trial the deadline ended.
+    const s = scenario("ans-ops-review-q3-revenue");
+    const { obs } = await runScripted(s, [
+      { content: ["Let me look."], toolCalls: [{ id: "c1", name: "get_outline", args: {} }] },
+      { content: ["partial"] },
+    ]);
+    const loop = obs.loop;
+    if (loop === null) throw new Error("no loop");
+    expect(loop.metrics.toolCalls).toBe(1);
+    const at = (wallMs: number): TrialObservation => ({
+      ...obs,
+      loop: { ...loop, metrics: { ...loop.metrics, exit: "timeout", wallMs } },
+    });
+    expect(classifyTrial(at(299_500))).toEqual({ ending: "timeout", detail: RUN_DEADLINE_DETAIL });
+    expect(classifyTrial(at(180_000))).toEqual({ ending: "timeout", detail: "timeout" });
   });
 
   /** A run that never stops calling tools; each turn streams a preamble first. */

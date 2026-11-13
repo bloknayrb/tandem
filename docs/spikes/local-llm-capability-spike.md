@@ -187,13 +187,24 @@ These are determined by the harness design + first principles, independent of th
 
 One model per invocation. Results go to `probe/local-model-spike/runs/<run id>/`, which is gitignored.
 
-Before the first screen against an Ollama server, record whether its `/v1` endpoint sends any frame before the first token (a chunk with an empty or role-only `delta` and no `content`; a chunk carrying a `reasoning` field is not empty). The harness counts raw bytes, so on a server that does, a request that then wedges is scored rather than held (Known limits in `harness/report-core.ts`). In git-bash, with the model already loaded, look at the first `data:` line this prints:
+Before the first screen against an Ollama server, record whether its `/v1` endpoint sends any frame before the first token (a chunk with an empty or role-only `delta` and no `content`; a chunk carrying a `reasoning` field is not empty). The harness counts raw bytes, so on a server that does, a request that then wedges is scored rather than held (Known limits in `harness/report-core.ts`). The question is *when* the first `data:` line arrives, not what it holds: a role-only first chunk is normal either way, and only its timing says whether it was sent on accepting the request or with the first token. So send a long prompt (roughly 1,500 tokens, depending on the tokenizer: on a CPU that takes seconds to process, and it stays inside Ollama's default context) and time every line. Ollama reuses a prompt it has just processed, so to run it a second time change a word of the prompt first. With the model already loaded, in git-bash:
 
 ```
-curl -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"<tag>","stream":true,"messages":[{"role":"user","content":"Say hello."}]}' | head -n 3
+P=$(printf 'Tandem keeps notes beside the text. %.0s' $(seq 1 200))
+t0=$(date +%s%N)
+curl -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"<tag>\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"$P Say in one sentence what the text above repeats.\"}]}" | while IFS= read -r line; do [ -n "$line" ] && echo "$(( ($(date +%s%N) - t0) / 1000000 )) ms  ${line:0:120}"; done | head -n 3
 ```
 
-Write down what it showed beside the run id when the results are published.
+Or in PowerShell 7 (the body goes through standard input, so PowerShell's argument quoting cannot mangle the JSON):
+
+```
+$p = 'Tandem keeps notes beside the text. ' * 200
+$body = @{ model = '<tag>'; stream = $true; messages = @(@{ role = 'user'; content = "$p Say in one sentence what the text above repeats." }) } | ConvertTo-Json -Depth 4 -Compress
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$body | curl.exe -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" --data-binary '@-' | Where-Object { $_ } | ForEach-Object { '{0,8:N0} ms  {1}' -f $sw.Elapsed.TotalMilliseconds, $_.Substring(0, [Math]::Min(120, $_.Length)) } | Select-Object -First 3
+```
+
+Read the first line's time against the first line that carries `content` (or `reasoning`). If the first line arrived well before it — by about the prompt-processing time — the server sends a frame on accepting the request, and a wedge after that frame is scored against the model. If they arrived together, it does not. Write down both times and what the first line held, beside the run id, when the results are published.
 
 ```
 # a screen of one candidate (20 trials)

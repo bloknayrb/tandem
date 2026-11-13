@@ -418,6 +418,8 @@ describe("cases the diff review found", () => {
       `There is no denying "$45,000" is wrong.`,
       `No wonder "$45,000" is wrong.`,
       `Not only is "$45,000" wrong, the total is off too.`,
+      // Final pass, item 5.
+      `Not just "$45,000" is wrong, the total is off too.`,
     ]) {
       expect(onMaint(reply).pass, reply).toBe(true);
     }
@@ -429,6 +431,25 @@ describe("cases the diff review found", () => {
     // A known false fail of the step-over, named in rubric §6; the reader passes it.
     expect(onMaint(`I don't doubt "$45,000" is wrong.`).failureMode).toBe("NO_QUOTE");
     expect(six).toMatch(/I don't doubt/);
+    // Final pass, item 6: the remaining misses, named in rubric §6 and left in
+    // the scorer (no regex change for them). False passes:
+    for (const [reply, named] of [
+      [`"$45,000" should be 100% correct.`, /should be 100% correct/],
+      [`"$45,000" should be **fine**.`, /should be \*\*fine\*\*/],
+      [`Your summary should say "$45,000" too; that figure is right.`, /that figure is right/],
+    ] as const) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+      expect(six, reply).toMatch(named);
+    }
+    // False fails:
+    for (const [reply, named] of [
+      [`I can't believe "$45,000" is wrong.`, /I can't believe\s+'\$45,000' is wrong/],
+      [`"$45,000" should be... $35,000`, /should be\.\.\. \$35,000/],
+      [`"$45,000" should be US$35,000`, /should be US\$35,000/],
+    ] as const) {
+      expect(onMaint(reply).failureMode, reply).toBe("NO_QUOTE");
+      expect(six, reply).toMatch(named);
+    }
   });
 
   it("round 4, item 8: emphasis around a pair, and the apostrophe miss", () => {
