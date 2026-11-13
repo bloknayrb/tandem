@@ -235,6 +235,31 @@ describe("the handover is wired in a running server, and reachable only through 
     );
   });
 
+  /**
+   * Each line of `ownership.ts` on which the identifier `handoverSeq` is used
+   * as the map (not as a property name, such as the snapshot's key), trimmed.
+   */
+  function handoverSeqUses(): string[] {
+    const file = ts.createSourceFile("ownership.ts", ownership, ts.ScriptTarget.Latest, true);
+    const lines = ownership.split("\n");
+    const uses: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "handoverSeq") {
+        const parent = node.parent;
+        const isKey =
+          (ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) &&
+          parent.name === node;
+        if (!isKey) {
+          const { line } = file.getLineAndCharacterOfPosition(node.getStart());
+          uses.push(lines[line].trim());
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    return uses;
+  }
+
   it("only a handover writes handoverSeq (and the test setter)", () => {
     expect(ownership.match(/\bhandoverSeq\.set\(/g)).toHaveLength(2);
     expect(functionBody("function handOver(documentId: string): void {")).toContain(
@@ -245,6 +270,18 @@ describe("the handover is wired in a running server, and reachable only through 
     // this module, and nothing else in it or anywhere.
     expect(ownership.match(/\bhandoverSeq\.(get|has|forEach|keys|values|entries)\(/g)).toEqual([
       "handoverSeq.get(",
+    ]);
+    // Every use of the map, by the AST (comments are not identifiers), with
+    // the line it sits on (#2420 review, R9.7): a spread, `new Map(...)`, a
+    // `.size`, passing it along, or any other read than `settledThrough`'s,
+    // the snapshot's spread and the reset's `clear()` adds a line here.
+    expect(handoverSeqUses()).toEqual([
+      "const handoverSeq = new Map<string, number>();",
+      "handoverSeq.set(documentId, seqSource());",
+      "settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,",
+      "handoverSeq: [...handoverSeq],",
+      "handoverSeq.set(documentId, seq);",
+      "handoverSeq.clear();",
     ]);
     expect(ownership).toContain(
       "settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,",
