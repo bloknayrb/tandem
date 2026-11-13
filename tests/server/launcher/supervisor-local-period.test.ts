@@ -383,6 +383,36 @@ describe("#1123 A2 — no automatic start during the local period (R4.1)", () =>
   });
 });
 
+describe("#1123 A2 — diff review B1/B2", () => {
+  it("B1: a switch back immediately undone keeps the held start for the next switch back", async () => {
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("auto") });
+    await sup.start();
+    await settle();
+    lp.toClaude(true);
+    lp.toLocal(); // before the switch back's locked body runs
+    await settle(10);
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toMatchObject({ running: false, heldForLocalModel: true });
+    lp.toClaude(true);
+    await nthChild(1);
+  });
+
+  it("B2: a held start is not reported, and does not run, once the user turns Claude off", async () => {
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("auto") });
+    await sup.start();
+    await settle();
+    await sup.updateSettings({ startMode: "off" });
+    const status = sup.status() as { heldForLocalModel?: true; standby?: string };
+    expect(status.standby).toBe("off");
+    expect(status.heldForLocalModel).toBeUndefined();
+    lp.toClaude(true);
+    await settle(10);
+    expect(children).toHaveLength(0);
+  });
+});
+
 describe("#1123 A2 — a running Claude (R4.2, R5.1)", () => {
   it("a wake owed at the switch is cleared; nothing wakes it during the period; the user's switch back's wake is its one wake", async () => {
     const lp = localPeriodSeam(false);

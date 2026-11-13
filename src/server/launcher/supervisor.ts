@@ -1958,10 +1958,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (isAlive()) return;
     if (!userStopped && standby !== "off") wakeOwedAcrossSpawns = true;
     if (!change.asked || held.size === 0) return;
+    /** The user switched back to the local model before this ran: the held
+     *  starts are still held, for the next switch back (review B1). */
+    const reHold = (): void => {
+      for (const kind of held) heldStarts.add(kind);
+      if (standby === "awaiting-start" && !userStopped) standbyByLocalPeriod = true;
+    };
     withLock(async () => {
-      if (shuttingDown || userStopped || isAlive() || breakerTripped || localHeld()) return;
+      if (localHeld()) return reHold();
+      if (shuttingDown || userStopped || isAlive() || breakerTripped) return;
       const settings = await readSettingsNow();
-      if (settings.startMode === "off" || userStopped || isAlive() || localHeld()) return;
+      if (localHeld()) return reHold();
+      if (settings.startMode === "off" || userStopped || isAlive()) return;
       wakeOwedAcrossSpawns = true;
       const automatic =
         held.has("crash") ||
@@ -3314,6 +3322,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       recordCliUnusable("Starting Claude");
       return { spawned: false, why: "cli-unusable" };
     }
+    // A message start is automatic (#1123 A2, R4.1): held while a local model
+    // answers chat, and run at the user's switch back. Before the Off
+    // write below, so a held message start never saves a mode (review N1). The user's own Start,
+    // Relaunch and Start fresh, and a setup Apply, are honoured (R4.4).
+    if (byMessage && localHeld()) {
+      holdForLocalPeriod("message");
+      return { spawned: false, why: "held-by-local-model" };
+    }
     // A user start while the mode is `off` turns it back on as `on-click`
     // (#2195; Bryan's #2196 answer, applied to every user start). After the
     // plan, so a start that finds no integration changes nothing, and after
@@ -3327,14 +3343,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // "off" while Settings says "on click".
       if (standby === "off") setStandby("awaiting-start");
     }
-    // A message start is automatic (#1123 A2, R4.1): held while a local model
-    // answers chat, and run at the user's switch back. The user's own Start,
-    // Relaunch and Start fresh, and a setup Apply, are honoured (R4.4).
+    await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
+    // Again after that await, the last before the spawn (review N2).
     if (byMessage && localHeld()) {
       holdForLocalPeriod("message");
       return { spawned: false, why: "held-by-local-model" };
     }
-    await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
     armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin));
     return { spawned: true };
   }
@@ -3459,6 +3473,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
+      // Turned off: nothing the local period held is owed a start (R5.1).
+      heldStarts.clear();
       releaseTurnDelivery();
       disarmGapWatch();
     } else {
@@ -3529,6 +3545,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
+      heldStarts.clear();
       // A crash may have armed the watch; a user stop carries nothing (#2181).
       disarmGapWatch();
       // Shutdown: no message may start Claude after this (#2196); see
@@ -3615,7 +3632,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
     }
     // A held automatic start is held by the local period alone (R4.5).
-    if (localHeld() && heldStarts.size > 0) stopped.heldForLocalModel = true;
+    // Never for a Claude the user stopped or turned off (R4.5).
+    if (localHeld() && heldStarts.size > 0 && !userStopped && standby !== "off") {
+      stopped.heldForLocalModel = true;
+    }
     return stopped;
   }
 

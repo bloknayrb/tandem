@@ -336,7 +336,9 @@ function removeSync(file: string): boolean {
   // missing, so the next start cannot say "was removed" of Tandem's own
   // removal (#1123 A2, R7.3). Only a regular file: a link is never followed.
   try {
-    if (fs.lstatSync(file).isFile()) {
+    const st = fs.lstatSync(file);
+    // Never a hard-linked file: emptying it would empty every name it has.
+    if (st.isFile() && st.nlink <= 1) {
       // O_NOFOLLOW where the platform has it, so a link swapped in after the
       // check is not followed (#2410's residual where it does not).
       const fd = fs.openSync(file, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0));
@@ -355,7 +357,18 @@ function removeSync(file: string): boolean {
     // The rename failed but the delete worked: leave an empty marker, which
     // needs almost no space, so the next start still knows (round 5 review).
     try {
-      fs.closeSync(fs.openSync(removedMarkerPath(), "w", 0o600));
+      // Never through a link planted at the marker path (where the platform
+      // has O_NOFOLLOW; #2410 states the rest).
+      fs.closeSync(
+        fs.openSync(
+          removedMarkerPath(),
+          fs.constants.O_WRONLY |
+            fs.constants.O_CREAT |
+            fs.constants.O_TRUNC |
+            (fs.constants.O_NOFOLLOW ?? 0),
+          0o600,
+        ),
+      );
     } catch {
       // Without it the next start may say "was removed": true, just not whose.
     }

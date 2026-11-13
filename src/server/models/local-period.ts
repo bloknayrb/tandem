@@ -251,26 +251,39 @@ function beginPeriod(h: LocalPeriodHooks): void {
   owedAtSwitch = new Set(h.unansweredUserChat());
 }
 
+/** Run one switch step on its own, so a step that throws (a document closing
+ *  mid-read, say) never skips the steps after it. */
+function step(label: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    console.error(`[Tandem] The local period's ${label} step failed:`, err);
+  }
+}
+
 function onSwitch(now: "claude" | "local", source: ChatAnswererSwitchSource): void {
   const h = hooks;
   if (!h) return;
   if (now === "local") {
-    beginPeriod(h);
-    h.suspendDeliveryRound();
-    tellSupervisor({ to: "local" });
-    h.persist();
+    open = true;
+    step("owed-at-switch", () => beginPeriod(h));
+    step("round", () => h.suspendDeliveryRound());
+    step("supervisor", () => tellSupervisor({ to: "local" }));
+    step("persist", () => h.persist());
     return;
   }
   open = false;
   // The user's switch back is a switch to Claude made in Tandem's own window;
   // every other is unasked (the brief's Terms).
   const asked = source === "own-window";
-  recordAllSelections(h);
-  h.clearBufferedSelections();
-  h.discardSuspendedRound();
-  tellSupervisor({ to: "claude", asked });
-  if (asked) h.emitReturnWake();
-  h.persist();
+  // The buffer first: a selection made during the period must never ride a
+  // later push, even if recording the stamps below fails.
+  step("selection buffer", () => h.clearBufferedSelections());
+  step("selection hold", () => recordAllSelections(h));
+  step("round", () => h.discardSuspendedRound());
+  step("supervisor", () => tellSupervisor({ to: "claude", asked }));
+  if (asked) step("wake", () => h.emitReturnWake());
+  step("persist", () => h.persist());
 }
 
 /**
