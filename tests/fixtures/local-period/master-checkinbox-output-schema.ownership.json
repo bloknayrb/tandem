@@ -623,11 +623,51 @@
             "type": "string"
           },
           "description": "Open documents this poll left out because they are not yours to answer now (another session may be answering it, or a write on it is still running): no comments, thread replies or accept/dismiss responses on them were returned (chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one), and an empty `activity` for one means it is not yours, not that it could not be read. Call tandem_open on one only if the user asked you, in your own conversation, to work on it. An item Tandem handed or pushed to you is not such a request."
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "documentId": {
+                "type": "string",
+                "description": "The document's id"
+              },
+              "change": {
+                "type": "string",
+                "enum": [
+                  "gained",
+                  "lost"
+                ],
+                "description": "\"gained\": this session held the document after the change and not before; \"lost\": it held it before and not after"
+              },
+              "cause": {
+                "type": "string",
+                "enum": [
+                  "your write claimed it",
+                  "a poll of yours claimed it",
+                  "you opened or created it",
+                  "another session took it",
+                  "its tab was closed",
+                  "Tandem stopped counting this session as attached"
+                ],
+                "description": "What happened, as a past-tense fact. \"your write claimed it\": a write of yours claimed it; \"a poll of yours claimed it\": a tandem_checkInbox poll of yours claimed it; \"you opened or created it\": an open or create of yours (tandem_open, tandem_scratchpad) made it yours; \"another session took it\": another session opened or created it and took it; \"its tab was closed\": its tab was closed; \"Tandem stopped counting this session as attached\": Tandem stopped counting this session as attached, and this session stopped holding it"
+              }
+            },
+            "required": [
+              "documentId",
+              "change",
+              "cause"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Changes, oldest first, to which documents this session held, since the last poll that returned them. `holding` is the truth: when `changed` and `holding` disagree, `holding` is right. `changed` only explains past changes to `holding`, and may be incomplete: after Tandem restarts; after a poll's response did not arrive once its entries were taken from the list (an error in Tandem after the poll ran, rejection by the server or by the client, or loss in transit); past the most recent 100 entries; when recording a change failed; and when Tandem forgot this session and later counted it again under the same identity. Everything that polls as this session (several connections, or agents sharing one) shares one list, so whichever polls first gets the explanation. A poll that names a documentId reports changes on every document, so an entry may name a document that neither `holding` nor `notYours` mentions. It does not change what this session may do; `notYours`, the summary's other sentences and refusals say what it may do."
         }
       },
       "required": [
         "holding",
-        "notYours"
+        "notYours",
+        "changed"
       ],
       "additionalProperties": false
     }

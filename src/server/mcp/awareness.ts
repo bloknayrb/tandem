@@ -45,6 +45,7 @@ import {
   inboxExcludedAllNote,
   inboxExcludedNamedNote,
   inboxExcludedSomeNote,
+  inboxLostNote,
 } from "../sessions/ownership-refusal.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
@@ -371,7 +372,13 @@ interface NoticeSettlement {
  * a later return to that state is a new notice. A status that moves away and
  * back with no such poll in between is the same settled notice (accepted).
  * A record that is gone stays settled (its entry is kept), so an Undo of the
- * delete restores a settled notice. An entry under any current record's
+ * delete restores a settled notice. That holds for a delete made after the
+ * handover. For one made before it, the handover finds no current record
+ * for the key and forgets it (`handOverDocumentInbox` keeps only current
+ * notice keys), so an Undo restores a notice that is not settled, and
+ * whoever next reads the document (its holder, or a poll that may claim it)
+ * is handed it once: an accepted duplicate (ADR-054's
+ * notice-rule amendment, as the change-notice PR records it). An entry under any current record's
  * bare-id key (a client-written id that collides) is not settled while the
  * collision lasts, and is kept. The walk itself writes nothing and logs
  * nothing; `carryHeld` never retires an annotation entry at or below the
@@ -2318,11 +2325,16 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
 function documentLabels(
   ids: Iterable<string>,
   activityDocumentId: string | null,
+  closedNames?: ReadonlyMap<string, string>,
 ): Map<string, string> {
+  documentLabelCalls++;
   const openDocs = getOpenDocs();
+  // An open document's own name first; a closed one by the name its close
+  // notice stored (the change-notice PR, R8.3), else its id.
   const basename = (id: string): string => {
     const doc = openDocs.get(id);
-    return (doc && crossBasename(doc.filePath)) || id;
+    if (doc) return crossBasename(doc.filePath) || id;
+    return closedNames?.get(id) ?? id;
   };
   const named = new Set(ids);
   const counts = new Map<string, number>();
@@ -2331,10 +2343,20 @@ function documentLabels(
     const name = basename(id);
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
+  // A closed document named by its stored name is told apart from any open
+  // document of the same name, in play or not.
+  const openNames =
+    closedNames && closedNames.size > 0
+      ? new Set([...openDocs.values()].map((doc) => crossBasename(doc.filePath)))
+      : undefined;
   return new Map(
     [...named].map((id): [string, string] => {
       const name = basename(id);
-      return [id, (counts.get(name) ?? 0) > 1 ? `${name} (${id})` : name];
+      const closedCollides =
+        openNames !== undefined && !openDocs.has(id) && closedNames?.get(id) === name
+          ? openNames.has(name)
+          : false;
+      return [id, (counts.get(name) ?? 0) > 1 || closedCollides ? `${name} (${id})` : name];
     }),
   );
 }
@@ -2396,6 +2418,40 @@ function localPeriodInbox(cursor: string | undefined, withField: boolean) {
     ...(withField ? { localModelAnswersChat: true as const } : {}),
   };
   return mcpStructured(response);
+}
+
+/** How many times `documentLabels` ran (R8.4 pins one call per poll). */
+let documentLabelCalls = 0;
+
+/** The count of `documentLabels` calls since the process started, for a test. */
+export function documentLabelCallsForTests(): number {
+  return documentLabelCalls;
+}
+
+/** A queued change notice as `ownership.changed` returns it: exactly its three keys (R1.1). */
+type ChangedEntry = Pick<
+  ReturnType<PollScope["changes"]>[number],
+  "documentId" | "change" | "cause"
+>;
+
+function changedEntry(notice: ChangedEntry): ChangedEntry {
+  return { documentId: notice.documentId, change: notice.change, cause: notice.cause };
+}
+
+/** The two loss causes the summary names (R8.1); a lapse is not named. */
+type NamedLoss = "another session took it" | "its tab was closed";
+
+function isNamedLoss(cause: string): cause is NamedLoss {
+  return cause === "another session took it" || cause === "its tab was closed";
+}
+
+/** Each document's last `lost` notice, in the order the documents were first lost. */
+function lastLosses<T extends { documentId: string; change: string }>(
+  notices: readonly T[],
+): Map<string, T> {
+  const last = new Map<string, T>();
+  for (const notice of notices) if (notice.change === "lost") last.set(notice.documentId, notice);
+  return last;
 }
 
 export function registerAwarenessTools(server: McpServer): void {
@@ -2585,6 +2641,9 @@ export function registerAwarenessTools(server: McpServer): void {
         // commit would leave this poll's registry entries behind, hiding
         // their items from the next reader (R1.7): undo them, then let the
         // error reach the boundary as before.
+        // What this poll drained (the change-notice PR), so a throw after the
+        // drain point can give it back (R4.2).
+        let drained: ReturnType<PollScope["drainChanges"]> | undefined;
         try {
           const docs = collectInboxDocuments(requestedId, modeState, reader, scope, log);
           const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
@@ -2655,11 +2714,37 @@ export function registerAwarenessTools(server: McpServer): void {
               .map((item) => item.documentId)
               .filter((id) => id !== activityDocumentId),
           );
+          // Ownership (the change-notice PR): what this record's queue holds
+          // now, and what it holds. Read only where the response carries the
+          // `ownership` field, so a queue is never drained into a response
+          // without it.
+          const ownershipActive = ownershipField && scope.scoped;
+          const pendingChanges = ownershipActive ? scope.changes() : [];
+          const provisionalHolding = ownershipActive ? scope.holding() : [];
+          // The documents the summary's loss sentence may name (R8.4): a
+          // take or a close as the last loss, and not held now. A closed one
+          // keeps the name its close notice stored, only when that close is
+          // its last loss. The claims below can only shrink this set.
+          const lossCandidates = new Map<string, string | undefined>();
+          for (const [id, notice] of lastLosses(pendingChanges)) {
+            if (isNamedLoss(notice.cause) && !provisionalHolding.includes(id)) {
+              lossCandidates.set(id, notice.closedName);
+            }
+          }
+          const closedNames = new Map<string, string>();
+          for (const [id, name] of lossCandidates)
+            if (name !== undefined) closedNames.set(id, name);
           // One labelling over every document the summary names, so two files that
           // share a basename are told apart across its sentences.
           const labels = documentLabels(
-            [...elsewhere, ...docs.dropped.keys(), ...docs.excluded],
+            [
+              ...elsewhere,
+              ...docs.dropped.keys(),
+              ...docs.excluded,
+              ...(ownershipActive ? lossCandidates.keys() : []),
+            ],
             activityDocumentId,
+            ownershipActive ? closedNames : undefined,
           );
           if (elsewhere.size > 0) {
             const names = [...elsewhere].map((id) => labels.get(id) ?? id);
@@ -2717,16 +2802,18 @@ export function registerAwarenessTools(server: McpServer): void {
                     ? inboxExcludedNamedNote(requestedId)
                     : inboxExcludedAllNote(activityExcluded)
               } ${actions}`;
-          const ownership =
-            ownershipField && scope.scoped
-              ? {
-                  // Provisional: replaced once the claims are applied.
-                  holding: scope.holding(),
-                  // Every open document this poll left out: the named one, or
-                  // on a default poll each excluded one.
-                  notYours: [...docs.excluded],
-                }
-              : undefined;
+          const ownership = ownershipActive
+            ? {
+                // Provisional: replaced once the claims are applied.
+                holding: provisionalHolding,
+                // Every open document this poll left out: the named one, or
+                // on a default poll each excluded one.
+                notYours: [...docs.excluded],
+                // Provisional too (R5.4): what the queue holds now. Nothing
+                // is drained unless the response validates.
+                changed: pendingChanges.map(changedEntry),
+              }
+            : undefined;
 
           const hasNew =
             userActions.length > 0 ||
@@ -2802,11 +2889,28 @@ export function registerAwarenessTools(server: McpServer): void {
                 log.ackedExisting.delete(id);
               }
             }
-            // What the caller holds once every claim is applied: a claim can
-            // arm a grace that lapses other records, or this one. Same type as
-            // the value validated above; not validated again, since a failure
-            // now, with the ledgers and claims applied, would lose items.
-            if (ownership) ownership.holding = scope.holding();
+          }
+          if (ownership) {
+            // The drain point (the change-notice PR, R3.2, R4.1): the queue
+            // and `holding` read together, once every claim is applied (a
+            // claim can arm a grace that lapses other records, or this one),
+            // with no ownership change between them. Same types as the
+            // values validated above; not validated again, since a failure
+            // now, with the ledgers and claims applied, would lose items. A
+            // throw from here on gives the drained notices back (the catch).
+            drained = scope.drainChanges();
+            ownership.holding = scope.holding();
+            ownership.changed = drained.notices.map(changedEntry);
+            // One sentence of facts, appended after everything the summary
+            // already says (R8): each document lost to a take or a close as
+            // its last loss and not held now, named from the one labelling.
+            const named: Array<{ name: string; cause: NamedLoss }> = [];
+            for (const [id, notice] of lastLosses(drained.notices)) {
+              if (isNamedLoss(notice.cause) && !ownership.holding.includes(id)) {
+                named.push({ name: labels.get(id) ?? id, cause: notice.cause });
+              }
+            }
+            if (named.length > 0) response.summary += inboxLostNote(named);
           }
           // The join closes only now, once what was returned is committed — a
           // claim about the USER's message, kept apart from the poll stamp above.
@@ -2834,6 +2938,9 @@ export function registerAwarenessTools(server: McpServer): void {
 
           return mcpStructured(response);
         } catch (err) {
+          // First, so a throw in the undo cannot lose what was drained;
+          // `giveBack` never throws, so it cannot skip the undo either.
+          if (drained) scope.giveBack(drained);
           if (scope.scoped) undoPass(log);
           throw err;
         }

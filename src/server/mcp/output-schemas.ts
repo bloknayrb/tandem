@@ -27,7 +27,13 @@ import {
   HighlightColorSchema,
   TandemModeSchema,
 } from "../../shared/types.js";
-import { NOT_YOURS_FIELD_DESCRIPTION } from "../sessions/ownership-refusal.js";
+import {
+  CAUSE_FIELD_DESCRIPTION,
+  CHANGE_CAUSE_FACTS,
+  CHANGE_FIELD_DESCRIPTION,
+  CHANGED_FIELD_DESCRIPTION,
+  NOT_YOURS_FIELD_DESCRIPTION,
+} from "../sessions/ownership-refusal.js";
 
 // ---------------------------------------------------------------------------
 // Shared fragments
@@ -404,10 +410,16 @@ export const checkInboxOutputShape = {
   }),
 };
 
+/** The cause words, from the facts table (so the enum and the facts cannot drift apart). */
+const CHANGE_CAUSE_WORDS = Object.keys(CHANGE_CAUSE_FACTS) as [
+  keyof typeof CHANGE_CAUSE_FACTS,
+  ...Array<keyof typeof CHANGE_CAUSE_FACTS>,
+];
+
 /**
  * What `tandem_checkInbox` adds on a server with ownership on (#2358 scope
- * PR; ownership design §6.6, `holding` and `notYours` only — `changed` is
- * the change-notice PR's). Spread into the inbox schema only when the tool is
+ * PR and change-notice PR; ownership design §6.6: `holding`, `notYours` and
+ * `changed`, each always present inside it). Spread into the inbox schema only when the tool is
  * registered flag-on, so a dark server's `tools/list` carries no ownership
  * field. Optional, so a server registered flag-on and polled after a test
  * turns the flag off still answers within its schema.
@@ -421,6 +433,15 @@ export const checkInboxOwnershipShape = {
           "Ids of the documents this session holds after this poll. A poll that returns you items on a document nobody holds makes it yours",
         ),
       notYours: z.array(z.string()).describe(NOT_YOURS_FIELD_DESCRIPTION),
+      changed: z
+        .array(
+          z.object({
+            documentId: z.string().describe("The document's id"),
+            change: z.enum(["gained", "lost"]).describe(CHANGE_FIELD_DESCRIPTION),
+            cause: z.enum(CHANGE_CAUSE_WORDS).describe(CAUSE_FIELD_DESCRIPTION),
+          }),
+        )
+        .describe(CHANGED_FIELD_DESCRIPTION),
     })
     .optional()
     .describe("Which open documents are yours to answer"),

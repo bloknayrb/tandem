@@ -1047,7 +1047,7 @@ describe("the dark guard", () => {
       const schema = inbox?.outputSchema as { properties?: Record<string, unknown> };
       expect(Object.keys(schema.properties ?? {})).not.toContain("localModelAnswersChat");
       // Master's bytes, frozen (round-2 item 11): the schema origin/master
-      // served at eea6728, dumped once with ownership off and once on. Which
+      // served at ed035a8 (master after #2423), dumped once with ownership off and once on. Which
       // one applies is read from the schema itself, never from the flag (only
       // ownership-anchor.test.ts may key on it).
       const frozen = Object.hasOwn(schema.properties ?? {}, "ownership")

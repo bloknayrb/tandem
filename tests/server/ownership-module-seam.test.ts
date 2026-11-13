@@ -159,6 +159,8 @@ describe("tests and the flag", () => {
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
     "tests/server/ownership-api-no-context.test.ts",
+    "tests/server/ownership-change-notices-http.test.ts",
+    "tests/server/ownership-change-notices.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
     "tests/server/ownership-claims-table.test.ts",
     "tests/server/ownership-dark-enforcement.test.ts",
@@ -194,6 +196,8 @@ describe("tests and the flag", () => {
     // with ownership off and on (the brief's "ownership off and on").
     // The notice-rule PR's one (`ownership-notice-rule.test.ts`): its lone-
     // session script and its dark test run flag-off to compare with master.
+    // The change-notice PR's one (`ownership-change-notices.test.ts`): its
+    // dark tests build their server flag-off (no `changed`, no sentence).
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
       "tests/server/launcher/owner-handle-spawn.test.ts",
@@ -201,6 +205,7 @@ describe("tests and the flag", () => {
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
+      "tests/server/ownership-change-notices.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-flag.test.ts",
@@ -222,6 +227,8 @@ describe("tests and the flag", () => {
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
+      "tests/server/ownership-change-notices-http.test.ts",
+      "tests/server/ownership-change-notices.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
       "tests/server/ownership-claims-table.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
