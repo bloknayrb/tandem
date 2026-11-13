@@ -535,6 +535,11 @@ describe("a full chat-tier run", () => {
       const r = report(scored, { planned: plan(all), infra, verdicts: agreeAll(scored) });
       expect(r.outcome).toBe("INCONCLUSIVE");
       expect(r.reasons.join("\n")).toMatch(/2 held trial\(s\) owe a resume/);
+      // A held trial is owed a resume, not counted as lost to infrastructure.
+      expect(r.groups.find((g) => g.group === "answerable")).toMatchObject({
+        held: 2,
+        unscored: 0,
+      });
       // A hold followed by a plain endpoint error on resume is no longer a hold.
       const later: InfraRecord[] = [
         ...infra,
@@ -705,7 +710,7 @@ describe("the sessions of a run, and the header (review M2, M4, item 7)", () => 
     expect(r.text).toContain(SILENT_ERROR_RULE_TEXT);
     expect(SILENT_ERROR_RULE_TEXT).toMatch(/streak still open at the run's end is held/);
     expect(SILENT_ERROR_RULE_TEXT).toMatch(
-      /an error or a timeout before the model produced any text/,
+      /an error or a timeout whose failing request — the trial.s last — streamed nothing/,
     );
     expect(SILENT_ERROR_RULE_TEXT).toMatch(/make the report INCONCLUSIVE/);
     expect(SILENT_ERROR_RULE_TEXT).toMatch(/same ending with the same detail is scored/);

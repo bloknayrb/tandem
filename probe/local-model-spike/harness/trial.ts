@@ -176,7 +176,8 @@ function readWrites(ydoc: Y.Doc, documentText: string): WriteLog {
   return { annotations, replies };
 }
 
-function chatRowsFor(messageId: string): string[] {
+/** The model's reply rows for this message (exported for its test). */
+export function chatRowsFor(messageId: string): string[] {
   const rows = [...getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).values()] as {
     author?: string;
     replyTo?: string;

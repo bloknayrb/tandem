@@ -25,6 +25,10 @@ export interface ScriptedTurn {
   status?: number;
   /** Reject the request as a connection failure would. */
   connectionError?: string;
+  /** Answer 200, send these chunks (none when empty), then send nothing more
+   *  and never close: a server that accepted the request and went quiet. The
+   *  body errors only when the request's own signal aborts, as a real one does. */
+  hang?: string[];
   /** Called when the request arrives, before any frame is sent. */
   onRequest?: (body: Record<string, unknown>) => void;
 }
@@ -86,6 +90,23 @@ export function streamOf(chunks: string[]): Response {
   );
 }
 
+/** A 200 streaming Response that sends `chunks` and then hangs until `signal` aborts. */
+function hangingStream(chunks: string[], signal: AbortSignal | undefined): Response {
+  const enc = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(c));
+        const fail = () =>
+          controller.error(signal?.reason ?? new DOMException("This operation was aborted", "AbortError"));
+        if (signal?.aborted) fail();
+        else signal?.addEventListener("abort", fail, { once: true });
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 /**
  * A `fetch` that answers chat requests from `script`: an array used in order
  * (the last entry repeats), or a function of the request's index.
@@ -119,6 +140,7 @@ export function scriptedFetch(
     if (turn.status !== undefined && turn.status !== 200) {
       return new Response("scripted error body", { status: turn.status });
     }
+    if (turn.hang !== undefined) return hangingStream(turn.hang, init?.signal ?? undefined);
     return streamOf(framesFor(turn));
   };
   return { fetch: impl as typeof fetch, calls };

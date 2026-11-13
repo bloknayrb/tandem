@@ -51,16 +51,20 @@ import { validateScenarios } from "./validate.js";
 export { MAX_CONSECUTIVE_INFRASTRUCTURE };
 
 /**
- * THE SILENT-ERROR RULE. A trial that ended before the model produced any text
- * at all, in an error (an HTTP 500, an unreadable response) or in a timeout,
- * and with no tool call and no streamed reasoning either, is, alone, the model's failure and is scored (brief R2.6). Several in a row
- * usually mean a server that is down, out of memory, or accepting connections
- * and never answering, and a run that scored them would print FAIL for an
- * endpoint fault. One rule decides:
+ * THE SILENT-ERROR RULE. A trial that ended in an error (an HTTP 500, an
+ * unreadable response) or in a timeout, where the FAILING request (the last
+ * chat request of the trial) streamed nothing at all — no byte of a response
+ * body, no text, no reasoning — is, alone, the model's failure and is scored
+ * (brief R2.6). What earlier requests in the same trial did does not decide it
+ * (a server that answered a first request and then fell over is still a server
+ * that fell over); this is the request `classify.ts` judges an error by.
+ * Several in a row usually mean a server that is down, out of memory, or
+ * accepting connections and never answering, and a run that scored them would
+ * print FAIL for an endpoint fault. One rule decides:
  *
- *  1. A silent trial (an error or a timeout with no text) is HELD, not scored,
- *     while its streak is open. A streak is consecutive trials that produced
- *     nothing scorable: held silent trials and plain endpoint errors.
+ *  1. A silent trial is HELD, not scored, while its streak is open. A streak
+ *     is consecutive trials that produced nothing scorable: held silent trials
+ *     and plain endpoint errors.
  *  2. A trial that ends any other way closes the streak: the server answered,
  *     so what was held is the model's own failure and is scored as it stands.
  *  3. A streak that reaches MAX_CONSECUTIVE_INFRASTRUCTURE stops the run. A
@@ -74,15 +78,14 @@ export { MAX_CONSECUTIVE_INFRASTRUCTURE };
  *     neither extends nor closes the streak around it. With a different detail
  *     it is held again under rule 1.
  */
-function isSilentError(record: TrialRecord): boolean {
-  return (
-    (record.ending === "error" || record.ending === "timeout") &&
-    record.turns.every((t) => t.text.length === 0) &&
-    // A model that called a tool or streamed reasoning was answered by the
-    // server, whatever it failed to say (rule 2's own reason).
-    record.metrics.toolCalls === 0 &&
-    record.signals.reasoning === "none"
-  );
+export function isSilentError(record: TrialRecord, obs: TrialObservation): boolean {
+  if (record.ending !== "error" && record.ending !== "timeout") return false;
+  // The failing request's own text: a turn cut before its end is recorded
+  // with `hadToolCalls: null`, and only when it streamed text (`trial.ts`).
+  const cut = obs.turns[obs.turns.length - 1];
+  if (cut !== undefined && cut.hadToolCalls === null && cut.text.length > 0) return false;
+  const failing = obs.fetches[obs.fetches.length - 1];
+  return failing === undefined || (failing.responseBytes === 0 && failing.separateReasoningChars === 0);
 }
 
 export { HELD_SILENT_ERROR };
@@ -405,20 +408,20 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
       }
 
       const r = evaluated.record;
-      if (isSilentError(r)) {
+      if (isSilentError(r, observation)) {
         if (heldBefore.get(r.trialId) === r.detail) {
           // Rule 4: the same silent error again, after a resume.
           scoreNow(r, observation.documentText);
-          deps.log(`${position} ${plan.trialId}  ${r.ending.toUpperCase()} before any text (${r.detail}) again, as when it was held — scored`);
+          deps.log(`${position} ${plan.trialId}  ${r.ending.toUpperCase()} with nothing from the failing request (${r.detail}) again, as when it was held — scored`);
           continue;
         }
         held.push(r);
         heldTexts.set(r.trialId, observation.documentText);
         streak += 1;
-        deps.log(`${position} ${plan.trialId}  ${r.ending.toUpperCase()} before any text (${r.detail}) — held`);
+        deps.log(`${position} ${plan.trialId}  ${r.ending.toUpperCase()} with nothing from the failing request (${r.detail}) — held`);
         if (streak >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
           return stop(
-            `${streak} trials in a row ended before the model produced any text (the last: ${r.detail}): that looks like the server, not the model.`,
+            `${streak} trials in a row ended in an error or timeout whose failing request streamed nothing (the last: ${r.detail}): that looks like the server, not the model.`,
           );
         }
         continue;
@@ -448,7 +451,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
       logHeld();
       return {
         status: "stopped",
-        reason: `the run reached its end with ${n} trial(s) held: they ended before any text, and no later trial showed the server answering. They are not scored. Check the endpoint, then resume with --resume ${identity.runId} to run them again`,
+        reason: `the run reached its end with ${n} trial(s) held: their failing request streamed nothing, and no later trial showed the server answering. They are not scored. Check the endpoint, then resume with --resume ${identity.runId} to run them again`,
         runId: identity.runId,
         runDir,
         scoredThisSession: scored,

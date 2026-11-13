@@ -20,6 +20,7 @@ import { fixtureFor } from "../../../../probe/local-model-spike/harness/scenario
 import type { Scenario } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
 import type { ScriptedTurn } from "../../../../probe/local-model-spike/harness/scripted-model.js";
 import {
+  chatRowsFor,
   runTrial,
   type TrialObservation,
   trialDeps,
@@ -473,6 +474,28 @@ describe("one scenario per group, through the harness and the scorer", () => {
 });
 
 describe("what is scored is what the chat row holds", () => {
+  it("a row carrying chatNotice is a notice about the turn, never the model's reply", () => {
+    const chat = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const id = "harness-msg-chatnotice-test";
+    withInternal(getOrCreateDocument(CTRL_ROOM), () => {
+      chat.set("row-notice", {
+        author: "claude",
+        replyTo: id,
+        text: "a notice",
+        chatNotice: "stopped",
+      });
+      chat.set("row-reply", { author: "claude", replyTo: id, text: "the reply" });
+      chat.set("row-user", { author: "user", replyTo: id, text: "not claude" });
+    });
+    try {
+      expect(chatRowsFor(id)).toEqual(["the reply"]);
+    } finally {
+      withInternal(getOrCreateDocument(CTRL_ROOM), () => {
+        for (const k of ["row-notice", "row-reply", "row-user"]) chat.delete(k);
+      });
+    }
+  });
+
   it("on a timeout the scored reply is the partial text, with the product's notice", async () => {
     vi.useFakeTimers();
     const s = scenario("ans-ops-review-q3-revenue");

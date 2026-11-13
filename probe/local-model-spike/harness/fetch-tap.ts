@@ -46,6 +46,9 @@ export interface TapRecord {
   promptTokens: number | null;
   /** The clone could not be read to its end (aborted, errored, or over the tap's cap). */
   readIncomplete: boolean;
+  /** Bytes of a successful response's body the tap read (0 for an error status,
+   *  which the product does not stream, and for a body that never sent a byte). */
+  responseBytes: number;
 }
 
 export interface FetchTap {
@@ -130,6 +133,7 @@ async function readClone(
       if (done) break;
       if (!value) continue;
       total += value.byteLength;
+      rec.responseBytes += value.byteLength;
       if (total > TAP_READ_CAP_BYTES) {
         rec.readIncomplete = true;
         await reader.cancel().catch(() => {});
@@ -191,6 +195,7 @@ export function installFetchTap(): FetchTap {
       errorFrame: false,
       promptTokens: null,
       readIncomplete: false,
+      responseBytes: 0,
     };
     records.push(rec);
 

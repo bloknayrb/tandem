@@ -10,6 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TapRecord } from "../../../../probe/local-model-spike/harness/fetch-tap.js";
 import { harnessConfig } from "../../../../probe/local-model-spike/harness/model-config.js";
 import {
   isSafeRunId,
@@ -41,6 +42,7 @@ import {
   trialsPath,
 } from "../../../../probe/local-model-spike/harness/run-store.js";
 import {
+  isSilentError,
   MAX_CONSECUTIVE_INFRASTRUCTURE,
   machineRefusal,
   type RunDeps,
@@ -49,7 +51,10 @@ import {
 } from "../../../../probe/local-model-spike/harness/runner.js";
 import { selectScenarios } from "../../../../probe/local-model-spike/harness/scenarios/index.js";
 import type { ScriptedTurn } from "../../../../probe/local-model-spike/harness/scripted-model.js";
-import { runTrial } from "../../../../probe/local-model-spike/harness/trial.js";
+import {
+  runTrial,
+  type TrialObservation,
+} from "../../../../probe/local-model-spike/harness/trial.js";
 import { stubScript } from "./helpers.js";
 
 const TAG = "hf.co/some-org/Model-GGUF:Q4_K_M";
@@ -355,7 +360,11 @@ describe("a run", () => {
         "held-silent-error:timeout",
         "held-silent-error:timeout",
       ]);
-      expect(d.lines.some((l) => /TIMEOUT before any text \(timeout\) — held$/.test(l))).toBe(true);
+      expect(
+        d.lines.some((l) =>
+          /TIMEOUT with nothing from the failing request \(timeout\) — held$/.test(l),
+        ),
+      ).toBe(true);
     });
 
     it("joins one streak with endpoint errors and silent errors, in either order", async () => {
@@ -457,6 +466,171 @@ describe("a run", () => {
     });
   });
 
+  describe("the failing request, not the trial's history, decides silence (round 4, item 1)", () => {
+    const TOOL_CALL: ScriptedTurn = {
+      toolCalls: [{ id: "call_1", name: "get_outline", args: {} }],
+    };
+    /** True for a request that follows a tool result: the trial's second request. */
+    const afterTool = (body: Record<string, unknown>) =>
+      (body.messages as { role?: string }[] | undefined)?.some((m) => m.role === "tool") === true;
+
+    it("a tool call then a 500, trial after trial, is held and stops the run: nothing is scored", async () => {
+      stubScript((_i, body) => (afterTool(body) ? { status: 500 } : TOOL_CALL));
+      const result = await runMeasurement(options(), deps());
+      expect(result.status).toBe("stopped");
+      expect(result.reason).toMatch(/Nothing was scored for them/);
+      expect(result.scoredThisSession).toBe(0);
+      expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
+      expect(readInfra<InfraRecord>(result.runDir as string).map((i) => i.detail)).toEqual([
+        "held-silent-error:http-500",
+        "held-silent-error:http-500",
+        "held-silent-error:http-500",
+      ]);
+    });
+
+    it("a held trial, then tool call then 500, does not close the streak or score what was held", async () => {
+      let trial = 0;
+      stubScript((_i, body) => {
+        if (!afterTool(body)) trial += 1;
+        // Trial 1 fails on its first request; the others call a tool first.
+        if (trial === 1) return { status: 500 };
+        return afterTool(body) ? { status: 500 } : TOOL_CALL;
+      });
+      const result = await runMeasurement(options(), deps());
+      expect(result.status).toBe("stopped");
+      expect(result.scoredThisSession).toBe(0);
+      expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
+      expect(readInfra<InfraRecord>(result.runDir as string)).toHaveLength(3);
+    });
+
+    it("isSilentError reads only the failing request", () => {
+      const rec = (ending: TrialRecord["ending"]) => ({ ending }) as TrialRecord;
+      const fetch = (over: Partial<TapRecord> = {}): TapRecord => ({
+        path: "/v1/chat/completions",
+        requestBody: null,
+        requestChars: 0,
+        status: 200,
+        thrown: null,
+        separateReasoningChars: 0,
+        errorFrame: false,
+        promptTokens: null,
+        readIncomplete: false,
+        responseBytes: 0,
+        ...over,
+      });
+      const obs = (turns: TrialObservation["turns"], fetches: TapRecord[]) =>
+        ({ turns, fetches }) as unknown as TrialObservation;
+      const answered = fetch({ responseBytes: 900 });
+      const toolTurn = { turn: 1, text: "Let me look.", hadToolCalls: true };
+      // Tool call (with a preamble) then a 500: silent.
+      expect(isSilentError(rec("error"), obs([toolTurn], [answered, fetch({ status: 500 })]))).toBe(
+        true,
+      );
+      // The failing request sent bytes, or reasoning, or text: not silent.
+      expect(
+        isSilentError(rec("timeout"), obs([toolTurn], [answered, fetch({ responseBytes: 12 })])),
+      ).toBe(false);
+      expect(
+        isSilentError(
+          rec("timeout"),
+          obs([], [fetch({ separateReasoningChars: 40, responseBytes: 0 })]),
+        ),
+      ).toBe(false);
+      expect(
+        isSilentError(
+          rec("error"),
+          obs(
+            [toolTurn, { turn: 2, text: "The answer is", hadToolCalls: null }],
+            [answered, fetch()],
+          ),
+        ),
+      ).toBe(false);
+      // Only errors and timeouts can be silent.
+      expect(isSilentError(rec("completed"), obs([], [fetch()]))).toBe(false);
+      expect(isSilentError(rec("budget"), obs([], [fetch()]))).toBe(false);
+    });
+
+    describe("a real hang: the server sends headers and then nothing (fake clock)", () => {
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+      /** Drive the fake clock until the run settles. */
+      async function settle<T>(p: Promise<T>): Promise<T> {
+        let done = false;
+        void p.finally(() => {
+          done = true;
+        });
+        for (let i = 0; i < 2000 && !done; i++) await vi.advanceTimersByTimeAsync(5_000);
+        return p;
+      }
+
+      it("a tool call, then a request that hangs until the client's own timeout, is held", async () => {
+        stubScript((_i, body) => (afterTool(body) ? { hang: [] } : TOOL_CALL));
+        const d = deps();
+        const result = await settle(runMeasurement(options(), d));
+        expect(result.status).toBe("stopped");
+        expect(result.scoredThisSession).toBe(0);
+        expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
+        // The product's own timeout fired: the loop exited "timeout", not an error.
+        expect(readInfra<InfraRecord>(result.runDir as string).map((i) => i.detail)).toEqual([
+          "held-silent-error:timeout",
+          "held-silent-error:timeout",
+          "held-silent-error:timeout",
+        ]);
+        expect(
+          d.lines.some((l) =>
+            /TIMEOUT with nothing from the failing request \(timeout\) — held$/.test(l),
+          ),
+        ).toBe(true);
+      });
+
+      it("a failing request that streamed bytes before it hung is the model's: scored, and the streak closes", async () => {
+        // The failing request streams a frame with no text, then goes quiet.
+        const someBytes = [
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "" } }] })}\n\n`,
+        ];
+        let n = 0;
+        stubScript((_i, body) => {
+          if (!afterTool(body)) n += 1;
+          if (n === 1) return afterTool(body) ? { hang: someBytes } : TOOL_CALL;
+          return ANSWER;
+        });
+        const d = deps();
+        const result = await settle(runMeasurement(options(), d));
+        expect(result.status).toBe("complete");
+        const trials = readTrials<TrialRecord>(result.runDir as string);
+        expect(trials).toHaveLength(20);
+        expect(trials.filter((t) => t.ending === "timeout")).toHaveLength(1);
+        // Scored at once, never held (a hold would be scored too, by rule 2).
+        expect(d.lines.some((l) => /— held$/.test(l))).toBe(false);
+        expect(readInfra<InfraRecord>(result.runDir as string)).toEqual([]);
+      });
+    });
+  });
+
+  it("a hold followed by a plain endpoint error is no longer a hold on the next resume (rule 4 reads the latest record)", async () => {
+    stubScript([{ status: 500 }]);
+    const first = await runMeasurement(options(), deps());
+    expect(first.status).toBe("stopped");
+    // Resume: the same three trials now fail as plain endpoint errors.
+    stubScript([{ connectionError: "ECONNREFUSED" }]);
+    const second = await runMeasurement(options({ resume: first.runId }), deps());
+    expect(second.status).toBe("stopped");
+    // Resume again: the same 500 as when they were first held. Their latest
+    // record is not a hold, so rule 4 does not score them at once: they are
+    // held again, and three in a row stop the run.
+    let n = 0;
+    stubScript(() => (++n <= 3 ? { status: 500 } : ANSWER));
+    const d = deps();
+    const third = await runMeasurement(options({ resume: first.runId }), d);
+    expect(third.status).toBe("stopped");
+    expect(d.lines.some((l) => /again, as when it was held/.test(l))).toBe(false);
+    expect(readTrials<TrialRecord>(first.runDir as string)).toEqual([]);
+  });
+
   it("holds a streak still open at the run's end, and a resume runs those trials again", async () => {
     let n = 0;
     stubScript(() => {
@@ -497,7 +671,11 @@ describe("a run", () => {
     expect(second.status).toBe("complete");
     // Held (a different error from the one it was held for), then scored when
     // the next trial showed the server answering.
-    expect(d.lines.some((l) => /ERROR before any text \(http-400\) — held$/.test(l))).toBe(true);
+    expect(
+      d.lines.some((l) =>
+        /ERROR with nothing from the failing request \(http-400\) — held$/.test(l),
+      ),
+    ).toBe(true);
     expect(d.lines.some((l) => /again, as when it was held/.test(l))).toBe(false);
     const trials = readTrials<TrialRecord>(runDir);
     expect(trials).toHaveLength(20);

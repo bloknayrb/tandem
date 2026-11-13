@@ -37,7 +37,7 @@ import {
 } from "./verdicts.js";
 
 /** Stated in every report header; the rule itself is in `runner.ts` (THE SILENT-ERROR RULE). */
-export const SILENT_ERROR_RULE_TEXT = `Silent trials (an error or a timeout before the model produced any text): held while a streak of them or of endpoint errors is open; a trial that ends any other way scores what was held; a streak of ${MAX_CONSECUTIVE_INFRASTRUCTURE} stops the run, and a streak still open at the run's end is held; held trials are unscored, make the report INCONCLUSIVE, and are run again on resume, where the same ending with the same detail is scored.`;
+export const SILENT_ERROR_RULE_TEXT = `Silent trials (an error or a timeout whose failing request — the trial's last — streamed nothing: no response bytes, no text, no reasoning; earlier requests in the trial do not count): held while a streak of them or of endpoint errors is open; a trial that ends any other way scores what was held; a streak of ${MAX_CONSECUTIVE_INFRASTRUCTURE} stops the run, and a streak still open at the run's end is held; held trials are unscored, make the report INCONCLUSIVE, and are run again on resume, where the same ending with the same detail is scored.`;
 
 /** Known limits of the instrument, printed in every report header. */
 export const KNOWN_LIMITS: readonly string[] = [
@@ -47,7 +47,11 @@ export const KNOWN_LIMITS: readonly string[] = [
   "Ollama's runtime settings (context length, parallel requests, GPU offload) are not captured; two runs of one model under different server settings look the same here.",
   "The record hash is unkeyed: it catches a record changed by accident, not one changed on purpose (anyone can recompute it).",
   "The tap assumes its copy of each response is read to the end within 2 seconds of the product finishing with it (`settle` in fetch-tap.ts); a copy still being read then is cancelled and marked unread, so on a slow machine a clean trial can be logged as an infrastructure error (tap-read-incomplete) rather than scored.",
-  "The group-3 scorer misses a partial quote written in reversed order or with a connector it does not know (\"Use 'was' instead of 'were'\", \"Swap 'were' for 'was'\"); the reader passes those.",
+  "The group-3 scorer misses a partial quote written in reversed order or with a connector it does not know (\"Use 'was' instead of 'were'\", \"Swap 'were' for 'was'\"), and a single-quoted run that holds an apostrophe ('landlord's approval are'); the reader passes those.",
+  "Quotes are compared with what the chat panel SHOWS, through the shipped chat renderer (src/client/panels/chat-markdown.ts). The run fingerprint does not cover the renderer: a change to it changes how replies are scored, so two runs on different commits can differ in scoring with the same fingerprint.",
+  "Rule 4 of the silent-error rule cannot tell one timeout from another: a held trial that times out again on resume is scored, whether the server was still stuck or the model was slow (the owner's trade-off).",
+  "A request cut short by the run's 5-minute deadline (the client clamps the last request to what is left of it) is a timeout like any other: a slow but working model that spends most of a trial on tool calls, and then gets no byte back before the deadline, has that trial held as silent, and three in a row stop the run as if the server had failed.",
+  "A model whose prompt processing alone outruns the client's per-turn timeout produces nothing before every timeout, so its trials are held and the run stops every three trials, until a resume scores them under rule 4 (the owner's trade-off).",
 ];
 
 /** Observed rate every gating group must reach. No statistical lower bound. */
@@ -312,7 +316,7 @@ export function computeReport(input: ReportInput): Report {
     if (totalUnrun > 0) reasons.push(`${totalUnrun} planned trial(s) have not been run`);
     if (heldTrials > 0) {
       reasons.push(
-        `${heldTrials} held trial(s) owe a resume: they ended before any text while a streak was open, and are not scored`,
+        `${heldTrials} held trial(s) owe a resume: their failing request streamed nothing while a streak was open, and are not scored`,
       );
     }
     if (totalPlanned > 0 && totalUnscored / totalPlanned > MAX_INFRASTRUCTURE_SHARE) {

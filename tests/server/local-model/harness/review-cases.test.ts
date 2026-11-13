@@ -15,6 +15,8 @@ import {
 } from "../../../../probe/local-model-spike/harness/scenarios/predicates.js";
 import type { Scenario } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
 import {
+  chatVisibleText,
+  htmlToVisibleText,
   isRunOfTarget,
   quoteForm,
   quotesVerbatim,
@@ -31,39 +33,6 @@ function scenarioById(id: string): Scenario {
   const s = ALL_SCENARIOS.find((x) => x.id === id);
   if (!s) throw new Error(`no scenario ${id}`);
   return s;
-}
-
-/**
- * The text a user sees once the chat renderer has turned markdown into HTML.
- * The tag strip runs alone to a fixpoint before any entity is decoded, and
- * `&amp;` is decoded last (as `tests/helpers/css-source.ts` does), so no
- * decode can make a tag. The output is compared, never rendered.
- */
-function renderedText(markdown: string): string {
-  let html = renderMarkdown(markdown).replace(
-    /<br>|<\/?(?:p|li|h[1-6]|pre|ul)(?:\s[^>]*)?>/g,
-    "\n",
-  );
-  let previous: string;
-  do {
-    previous = html;
-    html = html.replace(/<[^<>]*>/g, "");
-  } while (html !== previous);
-  return html
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
-/** The non-markup folds `quoteForm` adds: whitespace runs, and curly quote marks to straight ones. */
-function shownForm(text: string): string {
-  return text
-    .replace(/[‘’‚‛′]/g, "'")
-    .replace(/[“”„‟″]/g, '"')
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function check(reply: string) {
@@ -291,6 +260,128 @@ describe("cases the diff review found", () => {
     expect(on(lease, `Change "approval are" to "approval is".`).pass).toBe(true);
   });
 
+  it("round 4: for a comment request, a partial quote is the pointer", () => {
+    const maint = scenarioById("req-ops-review-maintenance-flag");
+    const flood = scenarioById("req-lease-summary-flood-comment");
+    if (maint.expect.kind !== "offer-comment" || flood.expect.kind !== "offer-comment") {
+      throw new Error("expected offer-comment scenarios");
+    }
+    const onMaint = (reply: string) =>
+      score({ scenario: maint, reply, writes: NOTHING, documentText: DOC });
+    const onFlood = (reply: string) =>
+      score({ scenario: flood, reply, writes: NOTHING, documentText: DOC });
+    // Item 2: the owner's pins. A partial run the reply calls wrong passes,
+    // with or without a correction, whatever else it says or does not say.
+    for (const reply of [
+      `The figure "$45,000" looks wrong: the difference is $35,000.`,
+      `The figure "$45,000" looks wrong: it should be $35,000.`,
+      `The figure "$45,000" is incorrect. It should be $35,000.`,
+      `- "$45,000" — wrong; should be $35,000.`,
+      `**$45,000** is wrong: the difference is $35,000.`,
+    ]) {
+      const r = onMaint(reply);
+      expect(r.pass, reply).toBe(true);
+      expect(r.notes.join(" "), reply).toMatch(/partial quote/);
+    }
+    // A two-word run with a comment that names nothing else in the target.
+    expect(
+      onFlood(`Comment on "flood cover": we should get a quote before the board discusses it.`)
+        .pass,
+    ).toBe(true);
+    // Still not enough: a two-word run with no comment.
+    expect(onMaint(`"$45,000 over" — noted.`).pass).toBe(false);
+
+    // Item 3: vocabulary said of the quotation itself.
+    for (const reply of [
+      `"$45,000" is off: $310,000 against $275,000 is $35,000.`,
+      `"$45,000" looks a bit off.`,
+      `The issue with "$45,000": the difference is $35,000.`,
+      `The overrun is $35,000, not "$45,000".`,
+      `"$45,000"? The difference is $35,000.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
+    // ...and not elsewhere in the sentence, or negated.
+    for (const reply of [
+      `"$275,000" is correct: maintenance spending was $310,000 versus budget, so the overrun is off.`,
+      `There is no issue with "$45,000".`,
+      `Is "$45,000" wrong? I'm not sure.`,
+    ]) {
+      expect(onMaint(reply).failureMode, reply).toBe("NO_QUOTE");
+    }
+
+    // Item 4: a comma or point inside a token is not a word boundary.
+    const m = "Maintenance spending was $310,000, which was $45,000 over the budget of $275,000.";
+    expect(isRunOfTarget("$45", m)).toBe(false);
+    expect(isRunOfTarget("$45,000", m)).toBe(true);
+    expect(isRunOfTarget("$310,000", m)).toBe(true); // followed by ", " in the target
+    expect(isRunOfTarget("3", "It rose 3.5 points.")).toBe(false);
+    expect(onMaint(`"$45" is wrong: the difference is $35,000.`).failureMode).toBe("NO_QUOTE");
+
+    // Item 5: known scorer false passes (rubric §6); the reader fails them.
+    for (const reply of [
+      `Nobody would say "$45,000" is wrong.`,
+      `"$45,000" could be wrong, but I can't tell.`,
+      `"$45,000" is wrong — just kidding.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
+    // Negated in ways the vocabulary does refuse (re-review of round 4, L1).
+    for (const reply of [
+      `"$45,000" — I don't see an error.`,
+      `I can't find anything wrong with "$45,000".`,
+      `I'm not sure "$45,000" is wrong.`,
+      `"$45,000" is off the table.`,
+    ]) {
+      expect(onMaint(reply).failureMode, reply).toBe("NO_QUOTE");
+    }
+    // ...and not by a "no problem" said after the verdict (L2).
+    expect(onMaint(`"$45,000" is wrong, no problem though.`).pass).toBe(true);
+    // Known false passes of the "?" and "not" rules, named in §6.
+    for (const reply of [
+      `"$45,000"? Looks right to me.`,
+      `The overrun is "$45,000", not "$275,000".`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
+    expect(six).toMatch(/Looks right to me/);
+    expect(six).toMatch(/Nobody would say/);
+    expect(six).toMatch(/could be wrong, but I can't tell/);
+    expect(six).toMatch(/just kidding/);
+    expect(six).toMatch(/misses\s+wordings/);
+  });
+
+  it("round 4, item 8: emphasis around a pair, and the apostrophe miss", () => {
+    for (const reply of [
+      `Change "were" **to** "was".`,
+      `Change *"were"* to *"was"*.`,
+      `Change "were" *to* "was".`,
+    ]) {
+      expect(on(change, reply).pass, reply).toBe(true);
+    }
+    // A single-quoted run holding an apostrophe is a known miss (rubric §6, Known limits).
+    const lease: Scenario = {
+      ...change,
+      expect: {
+        kind: "offer-change",
+        target: "The landlord's approval are required for any structural change.",
+      },
+    };
+    expect(on(lease, `Change 'landlord's approval are' to 'landlord's approval is'.`).pass).toBe(
+      false,
+    );
+    expect(on(lease, `Change "landlord's approval are" to "landlord's approval is".`).pass).toBe(
+      true,
+    );
+    expect(RUBRIC_TEXT).toMatch(/single-quoted run that holds an apostrophe/);
+    // An underscore is shown as typed, so it does not wrap a connector.
+    expect(on(change, `Change "were" _to_ "was".`).pass).toBe(false);
+  });
+
   it("known scorer false passes on partial pairs (round 3 ruling: the quote rule is necessary, not sufficient)", () => {
     // Each of these passes the scorer and fails the rule's second half; the
     // reader fails them (rubric §6, READ [editing-request] PASSES AS CLOSELY AS FAILS).
@@ -365,36 +456,89 @@ describe("cases the diff review found", () => {
     ).toBe("NO_QUOTE");
   });
 
-  it("the markup fold is exactly what the chat renderer renders away", () => {
-    const samples = [
-      "# One",
-      "## Two words",
-      "### Three",
-      "#### four is shown",
-      "#no space is shown",
-      "- a list item",
-      "* a star item",
-      " - an indented dash is shown",
-      "**bold** and *italic* and ***both***",
-      "`inline code` here",
-      "```\nfenced code\n```",
-      "[a label](https://example.com/x)",
-      "[a label](not-a-link)",
-      "> a single quoted line is shown",
-      "_underscores_ are shown",
-      "a line\nanother line",
-      // Round 3, L4: what the renderer SHOWS stays.
-      "a lone ` backtick is shown",
-      "2 * 3 is six, a lone star is shown",
-      "```\n# not a heading\n* not a list\n**not bold**\n```",
-      "```text\nfenced with a language tag\n```",
-      "a <b>tag</b> typed by the model & an &amp; entity are shown as typed",
-      "a [label](javascript:x) is its label",
+  it("the markup fold is exactly what the chat renderer renders away (round 4, item 6: fixed renderer outputs)", () => {
+    // Each row: markdown, the renderer's output for it as recorded, and the
+    // text the chat shows. Literal on every side: nothing here re-derives the
+    // conversion, so a change to the renderer or to chatVisibleText fails a row.
+    const RENDERED: [markdown: string, html: string, shown: string][] = [
+      ["# One", "<h1>One</h1>", "\nOne\n"],
+      ["## Two words", "<h2>Two words</h2>", "\nTwo words\n"],
+      ["### Three", "<h3>Three</h3>", "\nThree\n"],
+      ["#### four is shown", "<p>#### four is shown</p>", "\n#### four is shown\n"],
+      ["#no space is shown", "<p>#no space is shown</p>", "\n#no space is shown\n"],
+      ["- a list item", "<ul><li>a list item</li></ul>", "\n\na list item\n\n"],
+      ["* a star item", "<ul><li>a star item</li></ul>", "\n\na star item\n\n"],
+      [
+        " - an indented dash is shown",
+        "<p> - an indented dash is shown</p>",
+        "\n - an indented dash is shown\n",
+      ],
+      [
+        "**bold** and *italic* and ***both***",
+        "<p><strong>bold</strong> and <em>italic</em> and <strong><em>both</em></strong></p>",
+        "\nbold and italic and both\n",
+      ],
+      ["`inline code` here", "<p><code>inline code</code> here</p>", "\ninline code here\n"],
+      ["```\nfenced code\n```", "<pre><code>fenced code</code></pre>", "\nfenced code\n"],
+      [
+        "[a label](https://example.com/x)",
+        '<p><a href="https://example.com/x" target="_blank" rel="noopener noreferrer">a label</a></p>',
+        "\na label\n",
+      ],
+      ["[a label](not-a-link)", "<p>a label</p>", "\na label\n"],
+      [
+        "> a single quoted line is shown",
+        "<p>&gt; a single quoted line is shown</p>",
+        "\n> a single quoted line is shown\n",
+      ],
+      ["_underscores_ are shown", "<p>_underscores_ are shown</p>", "\n_underscores_ are shown\n"],
+      ["a line\nanother line", "<p>a line<br>another line</p>", "\na line\nanother line\n"],
+      [
+        "a lone ` backtick is shown",
+        "<p>a lone ` backtick is shown</p>",
+        "\na lone ` backtick is shown\n",
+      ],
+      [
+        "2 * 3 is six, a lone star is shown",
+        "<p>2 * 3 is six, a lone star is shown</p>",
+        "\n2 * 3 is six, a lone star is shown\n",
+      ],
+      [
+        "```\n# not a heading\n* not a list\n**not bold**\n```",
+        "<pre><code># not a heading\n* not a list\n**not bold**</code></pre>",
+        "\n# not a heading\n* not a list\n**not bold**\n",
+      ],
+      [
+        "```text\nfenced with a language tag\n```",
+        '<pre><code class="language-text">fenced with a language tag</code></pre>',
+        "\nfenced with a language tag\n",
+      ],
+      [
+        "a <b>tag</b> typed by the model & an &amp; entity are shown as typed",
+        "<p>a &lt;b&gt;tag&lt;/b&gt; typed by the model &amp; an &amp;amp; entity are shown as typed</p>",
+        "\na <b>tag</b> typed by the model & an &amp; entity are shown as typed\n",
+      ],
+      [
+        "a [label](javascript:x) is its label",
+        "<p>a label is its label</p>",
+        "\na label is its label\n",
+      ],
     ];
-    for (const sample of samples) {
-      // Against the renderer's own output, never quoteForm on both sides.
-      expect(quoteForm(sample), sample).toBe(shownForm(renderedText(sample)));
+    for (const [markdown, html, shown] of RENDERED) {
+      // The renderer still produces the recorded output (a renderer change
+      // changes scoring: see the report header's known limits).
+      expect(renderMarkdown(markdown), markdown).toBe(html);
+      expect(htmlToVisibleText(html), html).toBe(shown);
+      expect(chatVisibleText(markdown), markdown).toBe(shown);
+      expect(quoteForm(markdown), markdown).toBe(shown.replace(/\s+/g, " ").trim());
     }
+    // HTML the decoder must not turn into a tag or a second decode.
+    expect(htmlToVisibleText("<p>&amp;lt;b&amp;gt; stays escaped</p>")).toBe(
+      "\n&lt;b&gt; stays escaped\n",
+    );
+    expect(htmlToVisibleText("<p>&lt;<b>x</b>&gt;</p>")).toBe("\n<x>\n");
+    expect(htmlToVisibleText("<ul><li>one</li><li>two</li></ul>")).toBe("\n\none\n\ntwo\n\n");
+    expect(htmlToVisibleText("<p>a<br>b &quot;c&quot; &#39;d&#39;</p>")).toBe("\na\nb \"c\" 'd'\n");
     // Spelled out, so the pin does not rest on the renderer alone.
     expect(quoteForm("a lone ` backtick")).toBe("a lone ` backtick");
     expect(quoteForm("2 * 3")).toBe("2 * 3");

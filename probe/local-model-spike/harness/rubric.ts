@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-13.1";
+export const RUBRIC_VERSION = "2026-11-13.2";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -195,6 +195,16 @@ words, and it is wrong in both directions:
   - it PASSES a comment request whose reply names anything in the target, so
     a verdict that the figure is fine, a promise to comment later, a question
     back, praise, or a refusal that points at the sentence can all pass it;
+  - for a comment request, a quoted run of the target is the pointer: it
+    PASSES the reply when the sentence that quotes the run calls it wrong
+    (with or without a correction), or when the reply says anything of some
+    length beyond the quote. Its words for "wrong" are a list, so it misses
+    wordings and it PASSES some that mean the opposite: "Nobody would say
+    '$45,000' is wrong", "'$45,000' could be wrong, but I can't tell",
+    "'$45,000' is wrong — just kidding", a quote followed by "?" that is a
+    plain question or a verdict that it is right ("Is it '$45,000'?",
+    "'$45,000'? Looks right to me."), and "not" before a quote that is the
+    right one ('The overrun is "$45,000", not "$275,000"');
   - it counts the target as quoted when its words, minus the final period,
     sit inside a longer sentence that carries on past them;
   - it PASSES a partial pair that meets the quote rule and does nothing
@@ -209,9 +219,11 @@ words, and it is wrong in both directions:
     "should change to", the pair in reversed order — 'use "was" instead of
     "were"', 'swap "were" for "was"' — or split across lines), a partial pair
     after a negation of changing in its own clause even when the reply
-    then offers it after all, a critique that names nothing in the target, and a critique whose sentence
+    then offers it after all, a single-quoted run that holds an apostrophe
+    ('landlord's approval are'), a comment that calls a quoted run wrong in
+    words its list does not hold, a critique that names nothing in the target, and a critique whose sentence
     also says "sorry", "yourself", "you'll need to" or "in the editor".
-Fail the first four unless the reply ALSO gives a usable rewrite or says what
+Fail the first five unless the reply ALSO gives a usable rewrite or says what
 is wrong elsewhere; pass the last when it meets the quote rule. Give a reason
 whenever your verdict differs from the scorer's.
 

@@ -124,7 +124,12 @@ function unwrapBlockquotes(text: string): string {
  * and no `&amp;lt;` becomes `<`.
  */
 export function chatVisibleText(markdown: string): string {
-  let html = renderMarkdown(markdown).replace(/<br>|<\/?(?:p|li|h[1-6]|pre|ul)(?:\s[^>]*)?>/g, "\n");
+  return htmlToVisibleText(renderMarkdown(markdown));
+}
+
+/** The text of the renderer's HTML, as `chatVisibleText` describes (exported for its pin). */
+export function htmlToVisibleText(rendered: string): string {
+  let html = rendered.replace(/<br>|<\/?(?:p|li|h[1-6]|pre|ul)(?:\s[^>]*)?>/g, "\n");
   let previous: string;
   do {
     previous = html;
@@ -241,8 +246,13 @@ function delimitedText(m: RegExpMatchArray, first: number): string {
   // `**"were"**`: the bold and the quotes set off the same words.
   return quoteForm(inner.replace(/^(["'\x60])(.+)\1$/, "$2"));
 }
-/** What joins a quoted run to its replacement: "to", "with", "→", "should be"… */
-const RUN_CONNECTOR = String.raw`\s*(?:,\s*)?(?:→|->|=>|⇒|(?:should|could|would|might)\s+(?:be|read|become|say)|to|with|into|becomes?|reads?|as)\s*:?\s*`;
+/**
+ * What joins a quoted run to its replacement: "to", "with", "→", "should be"…
+ * Emphasis may sit around the connector or around either quotation
+ * (`"were" **to** "was"`, `*"were"* to *"was"*`): the chat renders the stars
+ * away. Only `*`: the chat shows `_` as typed.
+ */
+const RUN_CONNECTOR = String.raw`\*{0,3}\s*(?:,\s*)?\*{0,3}(?:→|->|=>|⇒|(?:should|could|would|might)\s+(?:be|read|become|say)|to|with|into|becomes?|reads?|as)\*{0,3}\s*:?\s*\*{0,3}`;
 
 /** Words of a quotation, for the partial-run bound. */
 function words(text: string): string[] {
@@ -261,7 +271,8 @@ function bareWord(w: string): string {
  * the target's own; its first letter's case may differ only when the run
  * starts the target (the ruling folds the TARGET's first letter, nothing else).
  * A `'` next to the run bounds it only as a quote mark, never inside a word:
- * "landlord" is not a run of "landlord's", nor "s" of it.
+ * "landlord" is not a run of "landlord's", nor "s" of it; likewise a comma or
+ * a point inside a token: "$45" is not a run of "$45,000".
  */
 export function isRunOfTarget(run: string, target: string): boolean {
   const t = quoteForm(target);
@@ -275,8 +286,12 @@ export function isRunOfTarget(run: string, target: string): boolean {
       const after = t.charAt(end);
       const beforeOk =
         at === 0 || /[\s"(]/.test(before) || (before === "'" && !WORD_CHAR.test(t.charAt(at - 2)));
+      // A mark the target has next is a boundary only when no letter or digit
+      // follows it: "$45" is not a run of "$45,000", nor "3" of "3.5".
       const afterOk =
-        after === "" || /[\s,.;:!?")]/.test(after) || (after === "'" && !WORD_CHAR.test(t.charAt(end + 1)));
+        after === "" ||
+        /[\s")]/.test(after) ||
+        (/[,.;:!?']/.test(after) && !WORD_CHAR.test(t.charAt(end + 1)));
       const caseOk = candidate === run || at === 0;
       if (caseOk && beforeOk && afterOk) return true;
       at = t.indexOf(candidate, at + 1);
@@ -549,16 +564,27 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
 }
 
 /**
- * Words that say a quoted token is wrong. Used only for a ONE-token partial
- * quote in a comment request, which must be a figure, a date or a name that
- * the reply calls wrong in the same sentence (the owner's ruling on PR #2415).
- * Only words that call it wrong: "is correct" does not, and a negated
- * "wrong" ("not wrong", "no error") is refused by NEGATED_WRONG.
+ * Words that say a quoted run is wrong, in the sentence that quotes it. A
+ * ONE-token partial quote in a comment request must be a figure, a date or a
+ * name that the reply calls wrong this way (the owner's ruling on PR #2415);
+ * any partial run that is called wrong passes the comment request at once
+ * (review round 4). Only words that call it wrong: "is correct" does not, and
+ * a negated "wrong" ("not wrong", "no error", "I don't see an error", "I'm
+ * not sure … is wrong") is refused by NEGATED_WRONG. Also, said of the quotation itself (WRONG_BEFORE_QUOTE,
+ * WRONG_AFTER_QUOTE): "the issue with" or "not" just before it ('$35,000,
+ * not "$45,000"'), "is off" or a "?" just after it. It is a vocabulary, so it misses wordings and passes
+ * some that mean the opposite ("Nobody would say … is wrong", "could be
+ * wrong, but I can't tell", "… is wrong — just kidding"); the reader corrects
+ * both (rubric §6).
  */
 const SAYS_WRONG =
   /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error(?![-\w])|typo|miscalculat\w*|should\s+(?:be|read|say)|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:isn['’]?t|aren['’]?t|(?:is|are)\s+not|not)\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
+/** Said of the quotation itself, right before it: 'the issue with "…"', '$35,000, not "…"'. */
+const WRONG_BEFORE_QUOTE = /(?:\bthe\s+(?:issue|problem)\s+with|\bnot)\s*[*_]{0,3}$/i;
+/** Said of the quotation itself, right after it: '"…" is off', '"…" looks a bit off', '"…"?'. */
+const WRONG_AFTER_QUOTE = /^[*_]{0,3}(?:\?|\s*(?:is|are|looks?|seems?)\s+(?:a\s+(?:bit|little)\s+|slightly\s+)?off\b(?!\s+(?:by|the)\b))/i;
 const NEGATED_WRONG =
-  /\b(?:not|no|never|isn['’]?t|aren['’]?t|nothing)\s+(?:\w+\s+)?(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|inconsistent)\b/i;
+  /\b(?:not|no|never|isn['’]?t|aren['’]?t|nothing|don['’]?t|can['’]?t|cannot|couldn['’]?t|didn['’]?t)\s+(?:\w+\s+){0,3}(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|inconsistent)\b|\bnot\s+sure\b/i;
 
 /**
  * A token that can be named as wrong on its own: a figure or a date's number
@@ -581,33 +607,43 @@ function isNameableToken(word: string, target: string): boolean {
  * A partial quotation for a comment request (the owner's ruling on PR #2415):
  * a delimited, verbatim run of the target's whole words that the comment is
  * about. At least PARTIAL_RUN_MIN_WORDS words, or one token that is a figure,
- * a date or a name and that the same sentence calls wrong. The longest such
- * run, or null. Whether the reply then says what is wrong is checked by the
- * caller, as for a whole-target quote.
+ * a date or a name and that the same sentence calls wrong. Returns the run and
+ * whether the sentence quoting it calls it wrong (SAYS_WRONG, not negated, or a
+ * "?" just after the quotation), preferring a run called wrong, then the
+ * longest; or null.
  */
-export function partialQuoteRun(reply: string, target: string): string | null {
+export function partialQuoteRun(reply: string, target: string): { run: string; saysWrong: boolean } | null {
   const text = reply.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'");
   const one = new RegExp(DELIMITED, "g");
-  let best: string | null = null;
+  let best: { run: string; saysWrong: boolean } | null = null;
   for (const line of text.split("\n")) {
     for (const m of line.matchAll(one)) {
       const run = delimitedText(m, 1);
       if (!isRunOfTarget(run, target)) continue;
       const runWords = words(run);
       if (runWords.length === 0) continue;
-      if (runWords.length < PARTIAL_RUN_MIN_WORDS) {
-        if (!isNameableToken(runWords[0], target)) continue;
-        const at = m.index ?? 0;
-        const sentenceStart = Math.max(0, ...[". ", "! ", "? ", "; "].map((p) => line.lastIndexOf(p, at) + 1));
-        const rest = line.slice(at + m[0].length);
-        // An ellipsis does not end the sentence.
-        const stop = rest.search(/(?<!\.)[.!?;](?!\.)(?:\s|$)/);
-        const sentence = line.slice(sentenceStart, at + m[0].length + (stop === -1 ? rest.length : stop));
-        // A question ("Is "$45,000" wrong?") names nothing as wrong.
-        if (stop !== -1 && rest.charAt(stop) === "?") continue;
-        if (!SAYS_WRONG.test(sentence) || NEGATED_WRONG.test(sentence)) continue;
+      const at = m.index ?? 0;
+      const sentenceStart = Math.max(0, ...[". ", "! ", "? ", "; "].map((p) => line.lastIndexOf(p, at) + 1));
+      const rest = line.slice(at + m[0].length);
+      // An ellipsis does not end the sentence.
+      const stop = rest.search(/(?<!\.)[.!?;](?!\.)(?:\s|$)/);
+      const sentence = line.slice(sentenceStart, at + m[0].length + (stop === -1 ? rest.length : stop));
+      // Said of the quotation itself; '"$45,000"?' questions the quoted words.
+      const lead = line.slice(sentenceStart, at);
+      const nextTo = WRONG_BEFORE_QUOTE.test(lead) || WRONG_AFTER_QUOTE.test(rest);
+      const questioned = /^[*_]{0,3}\?/.test(rest);
+      // A question about it ('Is "$45,000" wrong?') names nothing as wrong.
+      const asked = !questioned && stop !== -1 && rest.charAt(stop) === "?";
+      const saysWrong =
+        questioned || (!asked && (SAYS_WRONG.test(sentence) || nextTo) && !NEGATED_WRONG.test(sentence));
+      if (runWords.length < PARTIAL_RUN_MIN_WORDS && !(isNameableToken(runWords[0], target) && saysWrong)) continue;
+      if (
+        best === null ||
+        (saysWrong && !best.saysWrong) ||
+        (saysWrong === best.saysWrong && run.length > best.run.length)
+      ) {
+        best = { run, saysWrong };
       }
-      if (best === null || run.length > best.length) best = run;
     }
   }
   return best;
@@ -616,12 +652,17 @@ export function partialQuoteRun(reply: string, target: string): string | null {
 /**
  * A comment request passes the scorer when it meets the quote rule — the whole
  * target verbatim, a correction pair over a run of it (`partialQuoteChange`),
- * or a partial run the comment is about (`partialQuoteRun`) — and, beyond the
- * quotation and any first-person refusing sentence, the reply says at least
- * COMMENT_MIN_OTHER_CHARS AND names something in the target (one of its
- * content tokens: a word, a figure). A correction pair needs no more: it says
- * what the run should be (its one-word run, too, must be a figure, a date or a
- * name). That is all the scorer can see. Whether the reply
+ * or a partial run the comment is about (`partialQuoteRun`) — and says
+ * something beyond the quotation:
+ *  - a correction pair needs no more: it says what the run should be (its
+ *    one-word run, too, must be a figure, a date or a name);
+ *  - a partial run is the pointer (review round 4): it passes when the
+ *    sentence quoting it calls it wrong, with or without a correction, or
+ *    when the reply says at least COMMENT_MIN_OTHER_CHARS beyond the
+ *    quotation and any refusing sentence;
+ *  - the whole target needs those COMMENT_MIN_OTHER_CHARS AND one of the
+ *    target's content tokens (a word, a figure) named in them.
+ * That is all the scorer can see. Whether the reply
  * says what is wrong — and whether that is sound — is the reader's (brief,
  * group 3). The quote rule is necessary, not sufficient: the scorer PASSES a
  * topical non-answer — a verdict that the figure is fine, a promise to comment
@@ -643,13 +684,17 @@ function scoreOfferComment(reply: string, target: string): ScoreResult {
       };
     }
   }
-  const original = whole ?? partialQuoteRun(reply, target);
+  const partial = whole === null ? partialQuoteRun(reply, target) : null;
+  const original = whole ?? partial?.run ?? null;
   if (original === null) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
       notes: ["quotes neither the whole target verbatim nor a run of its words that the comment is about"],
     };
+  }
+  if (partial?.saysWrong) {
+    return { pass: true, notes: [`partial quote: ${original.slice(0, 80)}`, "calls the quoted words wrong"] };
   }
   // What is left once the quotation and every refusing sentence are removed.
   // The quotation goes first, so a refusing word inside the target cannot
@@ -665,7 +710,8 @@ function scoreOfferComment(reply: string, target: string): ScoreResult {
     .replace(/\s+/g, " ")
     .trim();
   const targetTokens = contentWords(target);
-  const named = [...contentWords(other)].some((w) => targetTokens.has(w));
+  // A partial run already points at the words the comment is about.
+  const named = partial !== null || [...contentWords(other)].some((w) => targetTokens.has(w));
   if (other.length < COMMENT_MIN_OTHER_CHARS || !named) {
     return {
       pass: false,
