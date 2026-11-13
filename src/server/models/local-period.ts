@@ -278,8 +278,9 @@ function step(label: string, fn: () => void): void {
 function onSwitch(now: "claude" | "local", source: ChatAnswererSwitchSource): void {
   const h = hooks;
   if (!h) {
-    // Unwired (the wiring failed at boot): only the supervisor is told.
-    open = now === "local";
+    // Unwired (the wiring failed at boot): only the supervisor is told. The
+    // period's own state is left as loaded, so a later wired boot begins a
+    // period afresh rather than reusing a stale owed set (re-review).
     step("supervisor", () =>
       tellSupervisor(
         now === "local" ? { to: "local" } : { to: "claude", asked: source === "own-window" },

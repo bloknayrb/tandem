@@ -359,7 +359,9 @@ export function noteExternalConsumerAttached(): void {
 }
 
 export type DeliveryJoinState =
-  /** Nothing has been forwarded this run. No claim is made. */
+  /** Nothing has been forwarded this run — or, since #1123 A2, nothing since a
+   *  round was suspended or discarded at a switch of who answers chat. No
+   *  claim is made. */
   | "idle"
   /** A poll followed the last forward. `latencyMs` is that interval. */
   | "polled"

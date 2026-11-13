@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { formatEventContent, formatEventMeta } from "../../src/server/events/types.js";
+import { isModeReleaseWake } from "../../src/shared/sse-consumer.js";
 
 function makeEvent(
   type: TandemEvent["type"],
@@ -240,5 +241,18 @@ describe("a client-written comment whose id starts wake_ is still the user's com
     } as TandemEvent;
     expect(formatEventContent(spoof)).toMatch(/^User created comment/);
     expect(formatEventMeta(spoof).annotation_id).toBe("wake_x");
+  });
+});
+
+describe("the SSE consumer's wake exemption follows the same rule (#1123 A2 re-review)", () => {
+  it("a wake_ id with no document is a synthetic wake; with a document it is a comment", () => {
+    const base = {
+      id: "e",
+      type: "annotation:created",
+      timestamp: 1,
+      payload: { annotationId: "wake_q", annotationType: "comment", content: "x", textSnippet: "" },
+    } as TandemEvent;
+    expect(isModeReleaseWake(base)).toBe(true);
+    expect(isModeReleaseWake({ ...base, documentId: "d" } as TandemEvent)).toBe(false);
   });
 });

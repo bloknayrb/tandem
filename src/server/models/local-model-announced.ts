@@ -475,6 +475,19 @@ export async function recordAnswererLocalChosen(withdrawKey: string): Promise<bo
   return true;
 }
 
+/**
+ * Take back a choice of the local model that one request recorded and that
+ * never took effect (a later request superseded it): `answererLocal` and
+ * `answererChosen` only. An owed "answered by Claude again" notice and its
+ * replay are left alone — they belong to whatever switched to Claude
+ * (round-1 re-review B1-R).
+ */
+export function withdrawAnswererLocalChoice(): Promise<boolean> {
+  const r = load();
+  if (!r.answererLocal && !r.answererChosen) return Promise.resolve(true);
+  return record({ answererLocal: false, answererChosen: false });
+}
+
 /** Tandem removed the switch file and could leave no marker (R7.3). */
 export function noteAnswererFileRemovedByTandem(): void {
   if (!load().removedByTandem) void record({ removedByTandem: true });

@@ -882,6 +882,8 @@ describe("#1123 A2 — the switch-back start paths (tests review)", () => {
     lp.toClaude(true); // the user's own, again
     releaseRead();
     await nthChild(1);
+    await quiet();
+    expect(children).toHaveLength(1);
   });
 
   it("R4.5: in on-click with no held start, a standby a chat would start reports the field and no startsOnMessage", async () => {

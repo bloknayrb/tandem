@@ -27,6 +27,7 @@ import {
   answererLocalWasChosen,
   LOCAL_MODEL_ANNOUNCED_FILE_NAME,
   retryUnsavedRecord,
+  SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE,
 } from "../../../src/server/models/local-model-announced.js";
 import {
   __resetLocalModelSettingsForTests,
@@ -217,6 +218,26 @@ describe("R7.1: a failed record write fails the user's own switch to the local m
     prime();
     expect(chatAnswerer()).toBe("claude");
     expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("re-review B1-R: an allowance switch to Claude during the user's RE-choice of an already chosen local model is still announced", async () => {
+    markNotFirstLitStart();
+    prime();
+    expect((await setChatAnswerer("local", "own-window")).persisted).toBe(true);
+    await __flushLocalModelAnnouncedForTests();
+    let claude: Promise<SetChatAnswererResult> | null = null;
+    writeControl.before = (file) => {
+      if (isRecord(file) && claude === null) claude = setChatAnswerer("claude", "allowance");
+    };
+    await setChatAnswerer("local", "own-window"); // the re-choice, superseded
+    await (claude as unknown as Promise<SetChatAnswererResult>);
+    writeControl.before = null;
+    await __flushLocalModelAnnouncedForTests();
+    expect(chatAnswerer()).toBe("claude");
+    // No window of Tandem's was connected: the notice must still be owed.
+    restart();
+    prime();
+    expect(JSON.stringify(getStartupNotices())).toContain("now answered by Claude");
   });
 
   for (const source of ["allowance", "own-window"] as const) {
@@ -637,7 +658,9 @@ async function checkOutcome(r: Outcome, label: string): Promise<void> {
   // leaves "local" on disk with Claude in effect. R7.1 keeps Claude in effect;
   // the flip is then never silent — the next start announces it.
   const announcedFlip =
-    last.persisted === false && r.disk === "local" && getStartupNotices().length > 0;
+    last.persisted === false &&
+    r.disk === "local" &&
+    getStartupNotices().some((n) => n.message === SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE);
   expect(agrees || fallback || announcedFlip, `${label}: ${JSON.stringify(r)}`).toBe(true);
   if (agrees) {
     expect(chatAnswerer(), `${label}: the restart reads what was in effect`).toBe(r.after);

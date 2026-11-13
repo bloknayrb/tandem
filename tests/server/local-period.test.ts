@@ -993,6 +993,8 @@ describe("the dark guard", () => {
     await setChatAnswerer("claude", "own-window");
     await __flushLocalModelAnnouncedForTests();
     expect(told).toEqual([{ to: "local" }, { to: "claude", asked: true }]);
+    // The period's own state is left as loaded: nothing opened it.
+    expect(__localPeriodOpenForTests()).toBe(false);
   });
 
   it("guard 2 reads the literal flag when no test overrides it", () => {

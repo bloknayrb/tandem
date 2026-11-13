@@ -113,6 +113,7 @@ import {
   recordAnswererClaude,
   recordAnswererLocalChosen,
   withdrawAnswererClaudeNotice,
+  withdrawAnswererLocalChoice,
 } from "./local-model-announced.js";
 import type { ModelsWriteSource } from "./own-window.js";
 
@@ -768,6 +769,10 @@ export async function setChatAnswerer(
   let savedButUnreadable = false;
   await enqueue(async () => {
     if (seq !== mine) return;
+    // Was "chosen" already on record before this request? Then a choice this
+    // request records only restates it, and superseding it must not take it
+    // back (round-1 re-review B1-R).
+    const chosenBefore = answererLocalWasChosen();
     // The user's own marked Claude is on disk and in effect: what a failed
     // switch puts back must carry the mark, even when the start-up read failed
     // and did not seed it (#1123 A2 review, item 25).
@@ -799,8 +804,8 @@ export async function setChatAnswerer(
         // re-review B1). A Claude request that arrived meanwhile read the
         // record before this write landed; a later local request queues
         // behind this clear and records its own choice again.
-        if (recorded && effective !== "local" && answererLocalWasChosen()) {
-          await recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+        if (recorded && !chosenBefore && effective !== "local" && answererLocalWasChosen()) {
+          await withdrawAnswererLocalChoice();
         }
         return;
       }
