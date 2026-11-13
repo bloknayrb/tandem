@@ -1208,7 +1208,17 @@ describe("no per-client state", () => {
     expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled|owned-op/);
     // Nothing else reaches the ownership module from awareness.ts (no
     // namespace import, no re-export, no dynamic import).
-    expect(awareness.match(/sessions\/ownership/g)).toHaveLength(1);
+    expect(awareness.match(/sessions\/ownership\.js/g)).toHaveLength(1);
+    // The exclusion texts come from the refusal copy, whose module imports
+    // only types from the ownership module (review round 1: the inbox texts
+    // carry the refusals' take guard). Those three builders and nothing else.
+    const fromCopy = [
+      ...awareness.matchAll(/import \{([^}]*)\} from "\.\.\/sessions\/ownership-refusal\.js";/g),
+    ];
+    expect(fromCopy.map((m) => m[1]?.replace(/\s+/g, " ").trim())).toEqual([
+      "inboxExcludedAllNote, inboxExcludedNamedNote, inboxExcludedSomeNote,",
+    ]);
+    expect(awareness.match(/sessions\/ownership-/g)).toHaveLength(1);
     const cursorModule = readFileSync("src/server/mcp/inbox-cursor.ts", "utf8");
     expect(cursorModule).not.toMatch(/sessions\/ownership|owned-op|ownership-flag/);
   });

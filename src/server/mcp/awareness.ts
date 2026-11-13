@@ -32,6 +32,11 @@ import {
   reportedMode,
 } from "../mode.js";
 import { inboxOwnership } from "../sessions/ownership.js";
+import {
+  inboxExcludedAllNote,
+  inboxExcludedNamedNote,
+  inboxExcludedSomeNote,
+} from "../sessions/ownership-refusal.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
@@ -619,21 +624,6 @@ function noDocumentInboxNote(requestedId: string | undefined): string {
     : "No document is open.";
 }
 
-/**
- * Flag on (the scope PR, R1.10): leads the summary when the poll read no
- * document because every one it covered is not this caller's to answer —
- * held by another session, mid-write, or the caller has no record. One
- * sentence for every reason, so "busy" is not told apart from "held". Never
- * "not open": a model told that may open the document, and an open takes it.
- * Like {@link noDocumentInboxNote}, it never advises an open the user did not
- * ask for.
- */
-function excludedInboxNote(requestedId: string | undefined): string {
-  return requestedId !== undefined
-    ? `Document ${requestedId} is open but is not yours to answer right now (another session may be answering it), so only chat is shown. Do not call tandem_open on it unless the user asks you to work on it: opening it may take it from that session.`
-    : "Nothing on the open documents is yours to answer right now; other sessions may be answering them. Do not open one unless the user asks.";
-}
-
 /** Identity unless a test installed a corruptor (see `setInboxResponseCorruptorForTests`). */
 let responseCorruptorForTests: <T>(response: T) => unknown = (response) => response;
 
@@ -773,13 +763,16 @@ function teeLegacyCommit(
   documentId: string,
   surfaced: StagedInboxLedger,
   replySurfaced: StagedReplyLedger,
+  /** Told of each entry that existed unacknowledged before this commit acknowledged it. */
+  ackedExisting: (entry: RegistryEntry) => void = () => {},
 ): void {
-  for (const [base, editedAt] of surfaced.staged()) {
-    deliveryRegistry.markAcked(deliveryRegistry.assign("a", documentId, base, editedAt));
-  }
-  for (const base of replySurfaced.staged()) {
-    deliveryRegistry.markAcked(deliveryRegistry.assign("r", documentId, base, 0));
-  }
+  const ack = (kind: "a" | "r", base: string, editedAt: number) => {
+    const known = deliveryRegistry.lookup(kind, base, editedAt);
+    if (known && !known.acked) ackedExisting(known);
+    deliveryRegistry.markAcked(deliveryRegistry.assign(kind, documentId, base, editedAt));
+  };
+  for (const [base, editedAt] of surfaced.staged()) ack("a", base, editedAt);
+  for (const base of replySurfaced.staged()) ack("r", base, 0);
 }
 
 /**
@@ -884,6 +877,12 @@ interface PassLog {
       replies: Array<[string, boolean]>;
     }
   >;
+  /**
+   * Per document, entries that existed and were unacknowledged before this
+   * cursor-less poll's commit acknowledged them (`teeLegacyCommit`), so a
+   * refused claim can take the acknowledgement back.
+   */
+  ackedExisting: Map<string, RegistryEntry[]>;
 }
 
 /**
@@ -895,13 +894,19 @@ interface PassLog {
 function undoPassOn(
   log: PassLog,
   documentId: string,
-  options: { registryOnly?: boolean } = {},
+  options: { keepLedgers?: boolean } = {},
 ): void {
   const before = log.counterBefore.get(documentId);
   if (before !== undefined) {
     deliveryRegistry.retireWhere(documentId, (entry) => entry.seq > before);
   }
-  if (options.registryOnly) return;
+  // Acknowledgements this cursor-less poll made of entries that predated it
+  // (only re-owes).
+  for (const entry of log.ackedExisting.get(documentId) ?? []) {
+    deliveryRegistry.unacknowledge(entry);
+  }
+  log.ackedExisting.delete(documentId);
+  if (options.keepLedgers) return;
   const writes = log.legacyWrites.get(documentId);
   if (!writes) return;
   for (const [key, prior] of writes.surfaced) {
@@ -914,7 +919,11 @@ function undoPassOn(
 
 /** {@link undoPassOn} for every document this poll touched. */
 function undoPass(log: PassLog): void {
-  for (const id of new Set([...log.counterBefore.keys(), ...log.legacyWrites.keys()])) {
+  for (const id of new Set([
+    ...log.counterBefore.keys(),
+    ...log.legacyWrites.keys(),
+    ...log.ackedExisting.keys(),
+  ])) {
     undoPassOn(log, id);
   }
 }
@@ -1100,7 +1109,12 @@ function legacyLedgers(documentId: string, log: PassLog | null): DocumentLedgers
       }
       surfaced.commit();
       replySurfaced.commit();
-      teeLegacyCommit(documentId, surfaced, replySurfaced);
+      teeLegacyCommit(documentId, surfaced, replySurfaced, (entry) => {
+        if (!log) return;
+        const list = log.ackedExisting.get(documentId) ?? [];
+        list.push(entry);
+        log.ackedExisting.set(documentId, list);
+      });
     },
   };
 }
@@ -2157,8 +2171,12 @@ export function registerAwarenessTools(server: McpServer): void {
         // scope over the open documents is decided ONCE, here, with the
         // poll's one clock reading, and serves the acknowledgement, the pass
         // and the commit's claims alike. The caller is passed along unread.
-        const scope = inboxOwnership.begin(caller, getOpenDocs().keys(), Date.now());
-        const log: PassLog = { counterBefore: new Map(), legacyWrites: new Map() };
+        const scope = inboxOwnership.begin(caller, getOpenDocs().keys(), performance.now());
+        const log: PassLog = {
+          counterBefore: new Map(),
+          legacyWrites: new Map(),
+          ackedExisting: new Map(),
+        };
 
         if (reader) acknowledgeCursor(reader, scope);
 
@@ -2282,18 +2300,36 @@ export function registerAwarenessTools(server: McpServer): void {
           // Flag on, a document left out because it is not this caller's is
           // never called "not open": a model told that may open it, and an
           // open takes it from the session answering it (R1.10).
+          // A default poll that read some documents and left others out says
+          // so too, or a session could report "no new comments" while one
+          // waits on a document another session holds (the scope PR, R1.10).
+          // The texts carry the refusals' take guard (`ownership-refusal.ts`).
+          const activityExcluded =
+            activityDocumentId !== null && docs.excluded.includes(activityDocumentId);
+          if (docs.readAnyDocument && docs.excluded.length > 0) {
+            const excludedLabels = documentLabels(docs.excluded, activityDocumentId);
+            actions += inboxExcludedSomeNote(
+              docs.excluded.map((id) => excludedLabels.get(id) ?? id),
+              activityExcluded,
+            );
+          }
           const summary = docs.readAnyDocument
             ? actions
-            : `${docs.excluded.length > 0 ? excludedInboxNote(requestedId) : noDocumentInboxNote(requestedId)} ${actions}`;
+            : `${
+                docs.excluded.length === 0
+                  ? noDocumentInboxNote(requestedId)
+                  : requestedId !== undefined
+                    ? inboxExcludedNamedNote(requestedId)
+                    : inboxExcludedAllNote(activityExcluded)
+              } ${actions}`;
           const ownership =
             ownershipField && scope.scoped
               ? {
                   // Provisional: replaced once the claims are applied.
                   holding: scope.holding(),
-                  notYours:
-                    requestedId !== undefined && docs.excluded.includes(requestedId)
-                      ? [requestedId]
-                      : [],
+                  // Every open document this poll left out: the named one, or
+                  // on a default poll each excluded one.
+                  notYours: [...docs.excluded],
                 }
               : undefined;
 
@@ -2359,11 +2395,12 @@ export function registerAwarenessTools(server: McpServer): void {
                 // re-entrant lapse): its handover already re-owed the items, so
                 // only this poll's own entries go, and the cursor-less ledger is
                 // left as the handover made it.
-                if (outcome === "changed") undoPassOn(log, id, { registryOnly: true });
+                if (outcome === "changed") undoPassOn(log, id, { keepLedgers: true });
                 // Once a claim's change ran, a later throw must not put the
                 // ledger back either: a handover inside it (a claim over a
                 // stale entry) deleted keys on purpose, to re-owe them.
                 log.legacyWrites.delete(id);
+                log.ackedExisting.delete(id);
               }
             }
             // What the caller holds once every claim is applied: a claim can

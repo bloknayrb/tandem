@@ -27,6 +27,7 @@ import {
   HighlightColorSchema,
   TandemModeSchema,
 } from "../../shared/types.js";
+import { NOT_YOURS_FIELD_DESCRIPTION } from "../sessions/ownership-refusal.js";
 
 // ---------------------------------------------------------------------------
 // Shared fragments
@@ -419,11 +420,7 @@ export const checkInboxOwnershipShape = {
         .describe(
           "Ids of the documents this session holds after this poll. A poll that returns you items on a document nobody holds makes it yours",
         ),
-      notYours: z
-        .array(z.string())
-        .describe(
-          "The document this poll named, when it is not yours to answer now: nothing on it was returned. Do not open it unless the user asks you to work on it",
-        ),
+      notYours: z.array(z.string()).describe(NOT_YOURS_FIELD_DESCRIPTION),
     })
     .optional()
     .describe("Which open documents are yours to answer"),

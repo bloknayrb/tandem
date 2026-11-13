@@ -95,7 +95,7 @@ interface Chain {
   tail: Promise<void>;
   pending: number;
   /**
-   * When the operation running now started, by `Date.now()`; undefined
+   * When the operation running now started, on the monotonic clock (`performance.now()`, so a wall-clock jump neither releases a healthy write nor holds a stuck one); undefined
    * between operations. Set where an operation actually starts and cleared
    * only by that same operation's settle (the token), so a skipped entrant
    * never sets it and a healthy run of short operations restarts the clock at
@@ -212,7 +212,7 @@ export function runDocOp<T>(
 
 /** Record that an operation of `chain` starts now; returns its token. Set before the body runs, so its synchronous head already reads as running. */
 function markRunning(chain: Chain): { since: number } {
-  const run = { since: Date.now() };
+  const run = { since: performance.now() };
   chain.running = run;
   return run;
 }
@@ -237,7 +237,7 @@ export function isDocOpQueueBusy(documentId: string): boolean {
 
 /**
  * For the inbox scope's stuck-write release (#2358 scope PR, ADR-054; Bryan,
- * 2026-11-12): `undefined` when the queue is idle; the `Date.now()` at which
+ * 2026-11-12): `undefined` when the queue is idle; the `performance.now()` (monotonic) at which
  * the operation running now started; or `null` when the queue is busy but no
  * operation has started yet (the microtask between one operation settling and
  * the next one's turn). **Read only by `sessions/ownership.ts`** (pinned in

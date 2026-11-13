@@ -75,6 +75,56 @@ const ONLY_THE_USER =
   "Only the user can reassign it, from the owner badge on its tab. You can still read it. Do not retry on this document.";
 const IF_ASKED = "only if the user asked you, in your own conversation, to work on it";
 const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a request.";
+/**
+ * What `tandem_checkInbox` says, flag on, about open documents a poll left
+ * out because they are not the caller's to answer now (the scope PR, R1.10).
+ * One wording for every reason — held by another session, a write on it still
+ * running (the caller's own included), a blocking loss, no record — so a busy
+ * document is not told apart from a held one, and the sentence is true for
+ * each. It carries the take guard the refusals carry ({@link IF_ASKED},
+ * {@link NOT_A_REQUEST}): chat is not scoped, so a session can be handed
+ * "please fix d3" for a document another session holds, and `tandem_open`
+ * would take a `claimed` one. Never "not open": a model told that may open it.
+ */
+const NOT_YOURS_WHY = "another session may be answering it, or a write on it is still running";
+const EMPTY_ACTIVITY =
+  "its `activity` is empty because it is not yours to answer now, not because it could not be read";
+
+/** A named poll of a document left out (a named poll's `activity` always describes that document). */
+export function inboxExcludedNamedNote(documentId: string): string {
+  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so nothing on it was returned and only chat is shown; ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}`;
+}
+
+/** A default poll that read no document because every open one was left out. */
+export function inboxExcludedAllNote(activityExcluded: boolean): string {
+  return (
+    "Nothing on the open documents is yours to answer right now (another session may be answering them, or a write on one is still running)" +
+    `${activityExcluded ? "; the active document's `activity` is empty because it is not yours to answer now, not because it could not be read" : ""}. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
+  );
+}
+
+/** How many left-out documents a summary names before it counts the rest. */
+export const INBOX_EXCLUDED_NAMES_SHOWN = 5;
+
+/**
+ * A default poll that read some documents and left others out: one sentence,
+ * naming up to {@link INBOX_EXCLUDED_NAMES_SHOWN} of them and counting the rest.
+ */
+export function inboxExcludedSomeNote(names: readonly string[], activityExcluded: boolean): string {
+  const shown = names.slice(0, INBOX_EXCLUDED_NAMES_SHOWN);
+  const more = names.length - shown.length;
+  const list = `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+  const one = names.length === 1;
+  return (
+    ` ${one ? "One open document is" : `${names.length} open documents are`} not yours to answer right now (another session may be answering ${one ? "it" : "them"}, or a write on ${one ? "it" : "one"} is still running), so nothing on ${one ? "it" : "them"} was returned: ${list}.` +
+    `${activityExcluded ? " The active document is one of them: its `activity` is empty because it is not yours to answer now, not because it could not be read." : ""}` +
+    ` Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
+  );
+}
+
+/** The flag-on `ownership.notYours` field's description. */
+export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): nothing on them was returned, and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`;
+
 const RESTART = " If Tandem was updated while this terminal was open, restart this terminal.";
 const DEFAULTED =
   " This call named no documentId, so it targeted the active document. If you meant a document you hold, pass its documentId; offsets read from this document do not apply to another.";

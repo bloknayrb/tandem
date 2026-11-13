@@ -1092,7 +1092,7 @@ export type InboxScope = "holds" | "may-claim" | "neither";
 export function inboxScopeOf(
   documentId: string,
   callerId: string | undefined,
-  now: number = Date.now(),
+  now: number = performance.now(),
 ): InboxScope {
   if (!ownershipEnabled() || callerId === undefined) return "neither";
   const standing = standingOf(documentId, callerId, readEntry(documentId));
@@ -1174,10 +1174,12 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
   for (const id of openIds) {
     try {
       snapshot.set(id, (scopeReadForTests ?? inboxScopeOf)(id, callerId, now));
-    } catch {
-      logLimited(
-        "inbox-scope",
-        "[ownership] an inbox scope read failed; the document was not read",
+    } catch (err) {
+      // Every failure, with the document id and the error's class (never
+      // its message, never an owner id): the summary tells the model the
+      // error is in Tandem's log.
+      console.error(
+        `[ownership] an inbox scope read failed for document ${id} (${err instanceof Error ? err.name : typeof err}); the document was not read this poll`,
       );
       snapshot.set(id, "unread");
     }
@@ -1197,7 +1199,13 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           passes("claimable", documentId, () => snapshot.get(documentId) === "may-claim") &&
           passes("open", documentId, () => stillOpen) &&
           passes("unowned", documentId, () => readEntry(documentId) === undefined) &&
-          passes("record", documentId, () => records.has(callerId)) &&
+          // Tandem's Claude needs no record to claim (`standingOf`; the
+          // ownership change creates it), every other caller does.
+          passes(
+            "record",
+            documentId,
+            () => callerId === TANDEM_OWNER_ID || records.has(callerId),
+          ) &&
           passes(
             "scope",
             documentId,
@@ -1250,7 +1258,7 @@ export const inboxOwnership = Object.freeze({
   },
   /**
    * Begin a poll: the caller's scope over `openIds`, decided once, at `now`
-   * (the poll's one clock reading, reused for acknowledgement, the pass and
+   * (the poll's one reading of the monotonic clock, `performance.now()`, reused for acknowledgement, the pass and
    * the commit). Flag off: the unscoped answer, whoever the caller is.
    */
   begin(
