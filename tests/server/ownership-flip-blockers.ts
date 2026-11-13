@@ -73,7 +73,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "was not recognised ... returns everything not yet acknowledged' (only what is in scope). " +
       "The `documentId` input: 'Omit it to poll every open document'. skills/tandem/SKILL.md: " +
       "'polls every open document', and its contract that a summary with no document read means " +
-      "nothing is open (flag-on, it can mean nothing open is yours to answer).",
+      "nothing is open (flag-on, it can mean nothing open is yours to answer). docs/mcp-tools.md's " +
+      "tandem_checkInbox section says the same things; it carries a 'ships dark' paragraph listing " +
+      "what changes flag-on, and the flip PR rewrites the section.",
     closedBy:
       "The flip PR: the flag-off text cannot change while dark, and the skill ships live, so it " +
       "changes at the flip together with the plugin ref bump.",
@@ -122,7 +124,11 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "Chat stays unscoped until the chat PR: every session is handed every user chat message, " +
-      "whatever document it is about (#2358's own symptom, for chat).",
+      "whatever document it is about (#2358's own symptom, for chat). Besides duplicate answers, " +
+      "a session handed 'please fix the intro in d3' for a document another session holds may " +
+      "tandem_open it, and the take rule lets an open take a `claimed` document; the inbox's " +
+      "exclusion texts carry the refusals' guard (an item Tandem handed you is not a request), " +
+      "which only lowers that risk.",
     closedBy: "The chat PR (design §7: per-message owners).",
   },
   {
@@ -131,6 +137,18 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "it, and no other session is handed its items until a lapse, a close or a take moves it " +
       "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does).",
     closedBy: "PR 3b (waiting, startOrWake) for Tandem's Claude, or Bryan's answer for terminals.",
+  },
+  {
+    gap:
+      "Output schemas across the flip: an MCP client caches tool output schemas from tools/list, " +
+      "and the stdio bridge's re-initialize after a 404 never lists again, so a session (Claude " +
+      "Desktop through the bridge, say) that lives across the upgrade from a dark build to the " +
+      "flipped one keeps tandem_checkInbox's and tandem_status's dark schemas, which have no " +
+      "`ownership` / `owner` field, and its SDK rejects every response that carries one " +
+      "(additionalProperties: false).",
+    closedBy:
+      "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
+      "the bridge's replay, or a documented restart), decided there.",
   },
   {
     gap:
