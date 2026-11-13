@@ -27,13 +27,16 @@
  * saved.** A switch to Claude changes the effective value and tells the
  * listeners synchronously, so a local-model run in flight is stopped by the
  * collaborator's abort, and writes `{ answerer: "claude" }` synchronously
- * (temp file, then rename) before the route answers — so a quit or a crash
- * straight after cannot bring the local model back. It is a file, not no
- * file, so that the next start can tell the user's own choice of Claude
- * (silent) from the file having been removed (announced). If that write
- * fails the file is deleted, and failing that written asynchronously; it is
- * done again behind any write still queued, so a switch to the local model
- * that was in flight cannot land after it. Only a missing file or a parsed
+ * (temp file, fsynced, then renamed) before the route answers — so a quit or
+ * a crash straight after cannot bring the local model back. The user's own
+ * switch adds `setBy: "own-window"`, which no other path writes, so the next
+ * start can tell their choice of Claude (silent) from any other change
+ * (announced). If that write fails the file is deleted — and then the
+ * route's success waits for the record write, because a missing file with a
+ * record still saying "chosen" would read as removed — and failing that it is
+ * written asynchronously, inside the disk queue, so it can never overtake a
+ * later request. It is done again inside the queue, behind any write still in
+ * flight. Only a missing file or a parsed
  * Claude counts as Claude on disk; an unreadable file is reported
  * `persisted: false`. A switch to the local model takes effect only after its
  * own write succeeded, and only if no later request arrived meanwhile. A
@@ -51,14 +54,17 @@
  * `local-model-announced.ts` records it at once (withdrawing any pending
  * start-up part for it). One admitted through the development allowance is
  * announced. A switch to Claude made in Tandem's own window is silent, and so
- * is a file that says Claude at start-up. When the user CHOSE the local model
+ * is a Claude file carrying its mark at start-up; an unmarked Claude file is
+ * a change like any other (a writer that copies the mark is #2410's accepted
+ * residual of a process running as the user). When the user CHOSE the local model
  * in Tandem's own window (`answererChosen` in the record — not merely told),
  * any other way chat comes to be answered by Claude — the file removed,
  * unreadable, invalid or written by a newer build, or a switch through the
  * development allowance — raises one notice saying so and why (Bryan,
  * 2026-11-12: "Announce it"); a read that failed keeps the record, so a later
- * clean read of "local" restores the choice silently. Any switch back to the
- * local model withdraws a waiting notice.
+ * clean read of "local" restores the choice silently. The notice, once owed,
+ * is kept in the record until one of Tandem's own windows was sent it, so a
+ * restart cannot spend it. Any switch back to the local model withdraws it.
  * At start-up, a stored "local model" the record does not show as the user's
  * raises the start-up notice; a stored Claude clears the record silently. The
  * switch is never part of the first-lit-start baseline: no dark build can
@@ -91,6 +97,7 @@ import {
   announceAnswererClaude,
   announceLocalModelChange,
   announceStartupMismatch,
+  answererClaudeOwed,
   answererLocalWasAnnounced,
   answererLocalWasChosen,
   recordAnswererClaude,
@@ -157,7 +164,24 @@ function newerVersion(obj: Record<string, unknown> | null): number | null {
  * are Claude on disk — `unreadable` is not known to be anything) and what the
  * user is told when their recorded choice of the local model is lost.
  */
-type DiskState = "missing" | "unreadable" | "newer" | "invalid" | "claude" | "local";
+type DiskState =
+  | "missing"
+  | "unreadable"
+  | "newer"
+  | "invalid"
+  /** Claude, written by something other than Tandem's own-window route. */
+  | "claude"
+  /** Claude, carrying the marker only the own-window route writes. */
+  | "claude-own"
+  | "local";
+
+/**
+ * The marker the own-window route writes into a Claude file, so a later start
+ * can tell the user's own choice (silent) from any other writer's (announced
+ * when the local model was the user's choice). It is not a secret: a process
+ * running as the user can copy it, which is #2410's accepted residual.
+ */
+const OWN_WINDOW_MARKER = { setBy: "own-window" } as const;
 
 /** Never throws. */
 function readState(file: string): DiskState {
@@ -192,7 +216,11 @@ function readState(file: string): DiskState {
     if (!Object.hasOwn(obj, "version") || obj.version !== CHAT_ANSWERER_VERSION) return "invalid";
     if (!Object.hasOwn(obj, "answerer")) return "invalid";
     if (obj.answerer === "local") return "local";
-    if (obj.answerer === "claude") return "claude";
+    if (obj.answerer === "claude") {
+      return Object.hasOwn(obj, "setBy") && obj.setBy === OWN_WINDOW_MARKER.setBy
+        ? "claude-own"
+        : "claude";
+    }
     return "invalid";
   } catch (err) {
     console.error(
@@ -205,7 +233,8 @@ function readState(file: string): DiskState {
 }
 
 /** Is Claude what the disk says, as far as a write is concerned? */
-const isClaudeOnDisk = (state: DiskState): boolean => state === "missing" || state === "claude";
+const isClaudeOnDisk = (state: DiskState): boolean =>
+  state === "missing" || state === "claude" || state === "claude-own";
 
 function serialize(file: string, answerer: ChatAnswerer): string {
   const existing = readObject(file);
@@ -249,7 +278,8 @@ function removeSync(file: string): boolean {
 }
 
 /** Write "local" (only ever into this build's own version or no file). On
- *  failure, if Claude is now effective, remove the file. Never throws. */
+ *  failure the file is left as it was: an atomic write that failed changed
+ *  nothing, and a Claude file must stay Claude. Never throws. */
 async function writeLocal(): Promise<DiskOutcome> {
   const file = filePath();
   if (readState(file) === "newer") {
@@ -266,31 +296,34 @@ async function writeLocal(): Promise<DiskOutcome> {
       }).`,
     );
   }
-  if (effective !== "local") removeSync(file);
   return { written: false, saved: false };
 }
 
 /**
- * Write `{ answerer: "claude" }` synchronously: a temp file, then a rename
- * (which replaces a link at the path rather than following it). Synchronous
- * so the disk says Claude before the route answers — a quit straight after
- * cannot bring the local model back — and a FILE rather than no file, so the
- * next start can tell the user's own choice of Claude (silent) from the file
- * having been removed (announced, when the user had chosen the local model).
- * Never throws; false when it did not land.
+ * Write `{ answerer: "claude" }` synchronously, with the own-window marker
+ * when `own`: a temp file, fsynced, then a rename (which replaces a link at
+ * the path rather than following it). Synchronous so the disk says Claude
+ * before the route answers — a quit straight after cannot bring the local
+ * model back — and a FILE rather than no file, so the next start can tell the
+ * user's own choice of Claude (silent) from any other change (announced, when
+ * the user had chosen the local model). Never throws; false when it did not
+ * land.
  */
-function writeClaudeSync(file: string): boolean {
+function writeClaudeSync(file: string, own: boolean): boolean {
   const tmp = path.join(path.dirname(file), `.${CHAT_ANSWERER_FILE_NAME}.${randomUUID()}.tmp`);
+  const body = `${JSON.stringify(
+    { version: CHAT_ANSWERER_VERSION, answerer: "claude", ...(own ? OWN_WINDOW_MARKER : {}) },
+    null,
+    2,
+  )}\n`;
+  let fd: number | null = null;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      tmp,
-      `${JSON.stringify({ version: CHAT_ANSWERER_VERSION, answerer: "claude" }, null, 2)}\n`,
-      {
-        mode: 0o600,
-        flag: "wx",
-      },
-    );
+    fd = fs.openSync(tmp, "wx", 0o600);
+    fs.writeSync(fd, body);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
     fs.renameSync(tmp, file);
     return true;
   } catch (err) {
@@ -300,6 +333,11 @@ function writeClaudeSync(file: string): boolean {
       }).`,
     );
     try {
+      if (fd !== null) fs.closeSync(fd);
+    } catch {
+      // Already failing; the temp file is removed below.
+    }
+    try {
       fs.rmSync(tmp, { force: true });
     } catch {
       // Best effort: an orphaned temp file reads as nothing.
@@ -308,16 +346,28 @@ function writeClaudeSync(file: string): boolean {
   }
 }
 
-/** Make the disk read Claude: Claude written over the file; failing that the
- *  file deleted; failing that an async write. Never throws. */
-async function makeDiskClaude(): Promise<void> {
+/** How the synchronous step made the disk read Claude, if it did. */
+type ClaudeOnDisk = "already" | "written" | "deleted" | "failed";
+
+/** Make the disk read Claude now, synchronously: Claude (with the marker when
+ *  `own`) written over the file; failing that the file deleted. */
+function makeDiskClaudeSync(own: boolean): ClaudeOnDisk {
   const file = filePath();
-  if (readState(file) === "claude") return;
-  if (writeClaudeSync(file)) return;
-  if (removeSync(file)) return;
-  if (isClaudeOnDisk(readState(file))) return;
+  const state = readState(file);
+  if (state === (own ? "claude-own" : "claude")) return "already";
+  if (writeClaudeSync(file, own)) return "written";
+  if (removeSync(file)) return "deleted";
+  return isClaudeOnDisk(readState(file)) ? "already" : "failed";
+}
+
+/** The last resort, inside the disk queue: an async write of Claude. */
+async function writeClaudeAsync(own: boolean): Promise<void> {
+  const file = filePath();
   try {
-    await atomicWriteConfigFile(file, serialize(file, "claude"));
+    await atomicWriteConfigFile(
+      file,
+      `${JSON.stringify({ version: CHAT_ANSWERER_VERSION, answerer: "claude", ...(own ? OWN_WINDOW_MARKER : {}) }, null, 2)}\n`,
+    );
   } catch (err) {
     console.error(
       `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be switched to Claude on disk either (${
@@ -328,8 +378,12 @@ async function makeDiskClaude(): Promise<void> {
 }
 
 /** Why chat is answered by Claude again, in words for the notice. */
-const CLAUDE_AGAIN_BECAUSE: Record<Exclude<DiskState, "local" | "claude"> | "allowance", string> = {
+const CLAUDE_AGAIN_BECAUSE: Record<
+  Exclude<DiskState, "local" | "claude-own"> | "allowance",
+  string
+> = {
   missing: "the file that held that choice was removed",
+  claude: "the file that held that choice was changed",
   invalid: "the file that held that choice was changed",
   newer: "the file that holds that choice was written by a newer version of Tandem",
   unreadable:
@@ -379,29 +433,52 @@ export function primeChatAnswerer(): void {
   if (seq !== 0) return;
   effective = state === "local" ? "local" : "claude";
   if (state === "local") {
+    // The local model answers again: an owed "answered by Claude again"
+    // notice is no longer true.
+    withdrawAnswererClaudeNotice();
     // The local model answers at start-up and the record does not say the
     // user chose it or was told: the file changed underneath, came from
     // another build or a restore, or the record of the user's own switch was
-    // lost. The one start-up notice says chat is now answered by a local model.
+    // lost. The one start-up notice says chat is set to be answered by a
+    // local model.
     if (!answererLocalWasAnnounced()) announceStartupMismatch({ answererLocal: true });
     return;
   }
-  // A file that says Claude is the user's own choice in Tandem's own window
-  // (written synchronously before that route answered) or a write in the
-  // safe direction: silent, whatever the record says — even a record whose
-  // clearing write was lost (#1123 review round 2: the user's own switch to
-  // Claude must fail silent).
-  if (state !== "claude" && answererLocalWasChosen()) {
-    // The user CHOSE the local model in Tandem's own window, and Claude
-    // answers now by something else: say so (Bryan, 2026-11-12). A read that
-    // failed may be transient (a Windows scanner holding the file), so the
-    // record is kept and the next clean start that reads "local" restores the
-    // choice with no "settings changed" warning.
-    announceAnswererClaude(answererClaudeNotice(state), { keepRecord: state === "unreadable" });
+  // A notice owed from an earlier run that no window was sent: raise it again
+  // (#1123 review round 3: a restart must not spend it).
+  const owed = answererClaudeOwed();
+  if (owed !== null && Object.hasOwn(CLAUDE_AGAIN_BECAUSE, owed)) {
+    const cause = owed as keyof typeof CLAUDE_AGAIN_BECAUSE;
+    announceAnswererClaude(answererClaudeNotice(cause), {
+      keepRecord: state === "unreadable",
+      cause,
+    });
     return;
   }
+  // The user's own choice of Claude (the marked file) is silent whatever the
+  // record says, even one whose clearing write was lost.
+  if (state === "claude-own") {
+    void recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+    return;
+  }
+  if (answererLocalWasChosen()) {
+    // The user CHOSE the local model in Tandem's own window, and Claude
+    // answers now by something else — the file removed, changed (an unmarked
+    // Claude file included), invalid, from a newer build, or unreadable: say
+    // so (Bryan, 2026-11-12). A read that failed may be transient (a Windows
+    // scanner holding the file), so the record is kept and the next clean
+    // start that reads "local" restores the choice with no warning.
+    announceAnswererClaude(answererClaudeNotice(state), {
+      keepRecord: state === "unreadable",
+      cause: state,
+    });
+    return;
+  }
+  // A read that failed keeps whatever the record says (told or chosen), so a
+  // next clean start that reads "local" gives no false "settings changed".
+  if (state === "unreadable") return;
   // Claude at start-up otherwise: clear the record and any pending notice.
-  recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+  void recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
 }
 
 /** Who answers chat now. Claude until primed (the dark guard). Synchronous. */
@@ -447,18 +524,37 @@ export async function setChatAnswerer(
     // Before any await: a local-model run in flight is stopped at once, and
     // the disk reads Claude before the route answers.
     setEffective("claude");
-    if (source !== "own-window" && answererLocalWasChosen()) {
+    const own = source === "own-window";
+    let recorded: Promise<boolean> = Promise.resolve(true);
+    if (!own && answererLocalWasChosen()) {
       // Not the user's own choice, and theirs was the local model: say so
-      // (Bryan, 2026-11-12). The record is cleared once a window was told.
-      announceAnswererClaude(answererClaudeNotice("allowance"), { keepRecord: false });
+      // (Bryan, 2026-11-12). Owed durably; the record is cleared once a
+      // window of Tandem's was told.
+      announceAnswererClaude(answererClaudeNotice("allowance"), {
+        keepRecord: false,
+        cause: "allowance",
+      });
     } else {
-      recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+      recorded = recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
     }
-    // Synchronously, before the route answers; and again behind a local write
-    // still in flight.
-    void makeDiskClaude();
-    await enqueue(makeDiskClaude);
-    return settled("claude", seq !== mine);
+    // Synchronously, before the route answers; and again inside the queue,
+    // behind a local write still in flight, where the async last resort runs
+    // too — so it can never overtake a later request.
+    let how = makeDiskClaudeSync(own);
+    await enqueue(async () => {
+      if (seq !== mine) return;
+      how = makeDiskClaudeSync(own);
+      if (how === "failed") await writeClaudeAsync(own);
+    });
+    const result = await settled("claude", seq !== mine);
+    // The user's own switch that could only DELETE the file is silent at the
+    // next start only if the record was cleared too (a missing file with a
+    // record still saying "chosen" would be announced as removed). So its
+    // success waits for that write (#1123 review round 3).
+    if (own && how === "deleted" && result.persisted && !(await recorded)) {
+      return { ...result, persisted: false };
+    }
+    return result;
   }
   await enqueue(async () => {
     const outcome = await writeLocal();

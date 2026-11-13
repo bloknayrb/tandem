@@ -286,18 +286,10 @@ describe("switching (R1.1, R1.2, R2.1)", () => {
   /** The file as JSON, or null when it is missing. */
   const onDisk = (): unknown =>
     fs.existsSync(switchFile()) ? JSON.parse(fs.readFileSync(switchFile(), "utf8")) : null;
-  const CLAUDE_FILE = { version: 1, answerer: "claude" };
-  /** Make the synchronous Claude write fail (its temp file names this file). */
-  const failSyncWrite = () => {
-    const real = fs.writeFileSync;
-    return vi.spyOn(fs, "writeFileSync").mockImplementation(((
-      p: fs.PathOrFileDescriptor,
-      ...rest: unknown[]
-    ) => {
-      if (String(p).includes(CHAT_ANSWERER_FILE_NAME)) throw new Error("EPERM");
-      return (real as (...a: unknown[]) => unknown)(p, ...rest);
-    }) as typeof fs.writeFileSync);
-  };
+  /** Claude as the user's own window writes it (with the marker). */
+  const CLAUDE_FILE = { version: 1, answerer: "claude", setBy: "own-window" };
+  /** Claude as anything else writes it (the allowance: no marker). */
+  const FOREIGN_CLAUDE_FILE = { version: 1, answerer: "claude" };
 
   it("→ Claude: immediate (listeners told before any await), Claude on disk before the answer", async () => {
     await setChatAnswerer("local", "allowance");
@@ -308,7 +300,7 @@ describe("switching (R1.1, R1.2, R2.1)", () => {
     // Synchronously, before the request settles:
     expect(chatAnswerer()).toBe("claude");
     expect(seen).toEqual(["claude"]);
-    expect(onDisk()).toEqual(CLAUDE_FILE);
+    expect(onDisk()).toEqual(FOREIGN_CLAUDE_FILE);
     // …and the allowance's pending replay is withdrawn. The local model was
     // never the user's choice here, so nothing is announced.
     expect(getStartupNotices()).toEqual([]);
@@ -513,6 +505,18 @@ describe("start-up (R1.2)", () => {
   });
 });
 
+const CLAUDE_FILE_OWN = { version: 1, answerer: "claude", setBy: "own-window" };
+/** Make the synchronous Claude write fail (its temp file names this file). */
+const failSyncWrite = (code = "EPERM") => {
+  const real = fs.openSync;
+  return vi.spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+    if (String(p).includes(CHAT_ANSWERER_FILE_NAME)) {
+      throw Object.assign(new Error(code), { code });
+    }
+    return (real as (...a: unknown[]) => number)(p, ...rest);
+  }) as typeof fs.openSync);
+};
+
 describe("chat answered by Claude again, not by the user's own choice (Bryan, 2026-11-12: announce it)", () => {
   /** The user chose the local model in Tandem's own window; then a restart. */
   async function chosenLocalThen(before: () => void): Promise<void> {
@@ -550,13 +554,30 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     });
   }
 
-  it("a file that says Claude (the user's own choice, or a write in the safe direction) is silent and clears the record", async () => {
+  it("a Claude file WITHOUT the own-window marker (a process, a restore, the allowance) is announced as a change the user did not make", async () => {
     await chosenLocalThen(() => writeSwitch({ version: 1, answerer: "claude" }));
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("claude")]);
+  });
+
+  it("a Claude file WITH the own-window marker is silent and clears the record", async () => {
+    await chosenLocalThen(() => writeSwitch(CLAUDE_FILE_OWN));
     prime();
     expect(chatAnswerer()).toBe("claude");
     expect(getStartupNotices()).toEqual([]);
     await __flushLocalModelAnnouncedForTests();
     expect(answererLocalWasAnnounced()).toBe(false);
+  });
+
+  it("RESIDUAL (#2410, a process running as the user): a foreign writer that copies the marker on purpose is silent", async () => {
+    // Accepted, not a defect: the marker is not a secret, and such a process
+    // can also rewrite the record. Pinned so a change here is deliberate.
+    await chosenLocalThen(() =>
+      writeSwitch({ version: 1, answerer: "claude", setBy: "own-window", forged: true }),
+    );
+    prime();
+    expect(getStartupNotices()).toEqual([]);
   });
 
   it("told, not chosen (the allowance switched to local, then to Claude): no 'as you chose' notice", async () => {
@@ -601,6 +622,106 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     expect(claudeAgain()).toEqual([]);
     // What a late window would be replayed: no "answered by Claude again".
     expect(getStartupNotices().some((n) => n.message.includes("answered by Claude"))).toBe(false);
+  });
+
+  it("measured (round 3 #2): chosen local, then the allowance switches to Claude with no window connected, then a restart — the notice is raised again", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    await setChatAnswerer("claude", "allowance");
+    await __flushLocalModelAnnouncedForTests();
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("allowance")]);
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("allowance")]);
+    // Delivered to a window: then, and only then, it is spent.
+    deliver();
+    await __flushLocalModelAnnouncedForTests();
+    restart();
+    prime();
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("measured (round 3 #3): the user's own → Claude with ENOSPC on the write, the delete working and the record write failing — reported unsaved", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    failSyncWrite("ENOSPC");
+    writeControl.fail.add(CHAT_ANSWERER_FILE_NAME); // the async last resort too
+    writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    const result = await setChatAnswerer("claude", "own-window");
+    expect(chatAnswerer()).toBe("claude");
+    expect(fs.existsSync(switchFile())).toBe(false);
+    expect(result).toEqual({ answerer: "claude", persisted: false });
+    // Through a restart: the record still says "chosen" and the file is gone,
+    // which reads as removed. The route said it was not saved; that is the
+    // honest answer it can give.
+    await __flushLocalModelAnnouncedForTests();
+    vi.restoreAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    writeControl.fail.clear();
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("missing")]);
+  });
+
+  it("the same with the record write working: saved, and silent at the next start", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    failSyncWrite("ENOSPC");
+    const result = await setChatAnswerer("claude", "own-window");
+    expect(result).toEqual({ answerer: "claude", persisted: true });
+    expect(fs.existsSync(switchFile())).toBe(false);
+    await __flushLocalModelAnnouncedForTests();
+    vi.restoreAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    restart();
+    prime();
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("a failed local write leaves a Claude file where it was (round 3 L2)", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("claude", "own-window");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    writeControl.fail.add(CHAT_ANSWERER_FILE_NAME);
+    await setChatAnswerer("local", "own-window");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+  });
+
+  it("told, not chosen, then a read that fails at start-up: the record is KEPT, so the next clean 'local' start is silent (round 3 L3)", async () => {
+    markNotFirstLitStart();
+    writeSwitch({ version: 1, answerer: "local" });
+    prime();
+    for (const n of getStartupNotices()) markStartupNoticeDelivered(n);
+    await __flushLocalModelAnnouncedForTests();
+    expect(answererLocalWasAnnounced()).toBe(true); // told
+    restart();
+    const real = fs.readFileSync;
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      p: fs.PathOrFileDescriptor,
+      o?: unknown,
+    ) => {
+      if (String(p).endsWith(CHAT_ANSWERER_FILE_NAME)) throw new Error("EBUSY");
+      return (real as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
+    }) as typeof fs.readFileSync);
+    prime();
+    read.mockRestore();
+    expect(chatAnswerer()).toBe("claude");
+    expect(getStartupNotices()).toEqual([]); // told only: nothing to say
+    await __flushLocalModelAnnouncedForTests();
+    expect(answererLocalWasAnnounced()).toBe(true);
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("local");
+    expect(getStartupNotices()).toEqual([]);
   });
 
   it("not yet told when Tandem stops: announced again at the next start", async () => {

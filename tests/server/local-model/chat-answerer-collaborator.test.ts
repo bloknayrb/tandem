@@ -739,6 +739,65 @@ describe("run state on the user's row (R3.4)", () => {
     expect(toast).toContain("cannot tell whether it is in Solo or Tandem mode");
   });
 
+  describe("the stop reason is judged from the start state AND the mode at refusal (round 3 L4)", () => {
+    const deleteMode = () => {
+      const ctrl = getOrCreateDocument(CTRL_ROOM);
+      withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
+    };
+    async function stopReason(setup: () => void, during: () => void, id: string) {
+      setupDoc(`doc-${id}`);
+      attachCtrlObservers();
+      setup();
+      const collab = createLocalModelCollaborator(
+        deps({
+          editingState: () => ({ enabled: true, offEpoch: 0 }),
+          runTurn: async (o) => {
+            during();
+            expect(o.editingAllowed()).toBe(false);
+            return result("editing_off");
+          },
+        }),
+      );
+      collab.onEvent(userChat(id, `doc-${id}`));
+      await drain(collab);
+      return row(id)?.localRun?.reason;
+    }
+
+    it("started with the mode key absent, refused once the mode reads Tandem: mode-unknown, not Solo", async () => {
+      expect(await stopReason(deleteMode, () => setMode("tandem"), "x1")).toBe("mode-unknown");
+    });
+
+    it("started in Solo, refused once the mode key is absent: solo", async () => {
+      expect(await stopReason(() => setMode("solo"), deleteMode, "x2")).toBe("solo");
+    });
+
+    it("started in Tandem, the mode key went away and came back as Tandem: mode-unknown", async () => {
+      expect(
+        await stopReason(
+          () => setMode("tandem"),
+          () => {
+            deleteMode();
+            setMode("tandem");
+          },
+          "x3",
+        ),
+      ).toBe("mode-unknown");
+    });
+
+    it("started in Tandem, went to Solo and back to Tandem: solo", async () => {
+      expect(
+        await stopReason(
+          () => setMode("tandem"),
+          () => {
+            setMode("solo");
+            setMode("tandem");
+          },
+          "x4",
+        ),
+      ).toBe("solo");
+    });
+  });
+
   it("editing_off whose cause was the setting: stopped, editing-off, and the toast does not name Solo", async () => {
     setupDoc("doc-off-stop");
     const editing = { enabled: true, offEpoch: 0 };

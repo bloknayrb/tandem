@@ -148,6 +148,10 @@ interface Announced {
    *  merely told). Only this makes "chat is answered by Claude again, not as
    *  you chose" true (#1123 review round 2). Written only while set. */
   answererChosen: boolean;
+  /** An "answered by Claude again" notice is owed and no window of Tandem's
+   *  has been sent it yet: its cause, kept so a restart cannot spend it
+   *  (#1123 review round 3). Written only while set. */
+  claudeAgainOwed: string | null;
 }
 
 let basePath: string | null = null;
@@ -185,6 +189,7 @@ function load(): Announced {
     adopted: null,
     answererLocal: false,
     answererChosen: false,
+    claudeAgainOwed: null,
   };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
@@ -204,6 +209,13 @@ function load(): Announced {
         if (Object.hasOwn(r, "answererChosen") && r.answererChosen === true) {
           fresh.answererChosen = true;
         }
+        if (
+          Object.hasOwn(r, "claudeAgainOwed") &&
+          typeof r.claudeAgainOwed === "string" &&
+          r.claudeAgainOwed.length <= 32
+        ) {
+          fresh.claudeAgainOwed = r.claudeAgainOwed;
+        }
       }
     }
   } catch (err) {
@@ -220,13 +232,14 @@ function persist(): Promise<boolean> {
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const { adopted, answererLocal, answererChosen, ...rest } = load();
+      const { adopted, answererLocal, answererChosen, claudeAgainOwed, ...rest } = load();
       const snapshot = {
         version: VERSION,
         ...rest,
         ...(adopted === null ? {} : { adopted }),
         ...(answererLocal ? { answererLocal: true } : {}),
         ...(answererChosen ? { answererChosen: true } : {}),
+        ...(claudeAgainOwed !== null ? { claudeAgainOwed } : {}),
       };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
       unsaved = false;
@@ -256,9 +269,10 @@ function needsRetry(): boolean {
   return unsaved || inFlight > 0;
 }
 
-function record(change: Partial<Announced>): void {
+/** Change the record and queue its write; resolves to whether it landed. */
+function record(change: Partial<Announced>): Promise<boolean> {
   Object.assign(load(), change);
-  void persist();
+  return persist();
 }
 
 /** Keep the pending start-up notice's answering part current (module header). */
@@ -352,7 +366,7 @@ export function finishFirstLitStart(): void {
 /** The first lit start found this model answering: take it as the baseline,
  *  and remember that the user has not yet been told which model that was. */
 export function recordBaselineAnswering(fingerprint: string): void {
-  record({ answering: fingerprint, adopted: fingerprint });
+  void record({ answering: fingerprint, adopted: fingerprint });
 }
 
 /** Replay key of the "this model was adopted at the first lit start" notice. */
@@ -370,7 +384,7 @@ export function baselineAdoptionPending(fingerprint: string): boolean {
  */
 export function announceBaselineAdopted(message: string): TandemNotification {
   return raise(BASELINE_ADOPTED_NOTICE_KEY, message, () => {
-    if (load().adopted !== null) record({ adopted: null });
+    if (load().adopted !== null) void record({ adopted: null });
   });
 }
 
@@ -415,7 +429,7 @@ export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string
     dropStartupPart("answererLocal");
     removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
   }
-  record(change);
+  void record(change);
 }
 
 /** An own-window write that changed nothing recorded here: nothing to record,
@@ -502,7 +516,7 @@ export function recordAnsweringNone(dedupKey?: string): void {
   dropStartupPart("answering");
   const hadAdoption = load().adopted !== null;
   forgetAdoption();
-  if (load().answering !== null || hadAdoption) record({ answering: null });
+  if (load().answering !== null || hadAdoption) void record({ answering: null });
   // Nothing to change in memory, but an earlier clearing write may have failed:
   // the file could still name a model, and this is the next chance to fix it.
   else retryUnsavedRecord();
@@ -516,7 +530,7 @@ export function recordAnsweringNone(dedupKey?: string): void {
 export function recordEditingOff(dedupKey: string): void {
   removeStartupNotice(dedupKey);
   dropStartupPart("editing");
-  if (load().editing) record({ editing: false });
+  if (load().editing) void record({ editing: false });
   // A repeated Off: the earlier clearing write may have failed. Try it again.
   else retryUnsavedRecord();
 }
@@ -531,25 +545,29 @@ export function answererLocalWasChosen(): boolean {
   return load().answererChosen;
 }
 
-/** Withdraw a waiting "answered by Claude again" notice: the local model
- *  answers again, however that came about. */
+/** Withdraw a waiting "answered by Claude again" notice, and forget that it
+ *  is owed: the local model answers again, however that came about. */
 export function withdrawAnswererClaudeNotice(): void {
   removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  if (load().claudeAgainOwed !== null) void record({ claudeAgainOwed: null });
 }
 
-/**
- * Claude answers chat (the user switched to it, or start-up found it). Never
- * announced, so the pending replay is withdrawn and the record cleared at
- * once — the next switch to the local model is then compared afresh.
- */
-export function recordAnswererClaude(dedupKey: string): void {
+/** The cause of an "answered by Claude again" notice still owed, or null. */
+export function answererClaudeOwed(): string | null {
+  return load().claudeAgainOwed;
+}
+
+export function recordAnswererClaude(dedupKey: string): Promise<boolean> {
   removeStartupNotice(dedupKey);
   removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
   dropStartupPart("answererLocal");
   const r = load();
-  if (r.answererLocal || r.answererChosen) record({ answererLocal: false, answererChosen: false });
+  if (r.answererLocal || r.answererChosen || r.claudeAgainOwed !== null) {
+    return record({ answererLocal: false, answererChosen: false, claudeAgainOwed: null });
+  }
   // A repeated switch: the earlier clearing write may have failed. Try again.
-  else retryUnsavedRecord();
+  if (needsRetry()) return persist();
+  return Promise.resolve(true);
 }
 
 /**
@@ -565,14 +583,18 @@ export function recordAnswererClaude(dedupKey: string): void {
  */
 export function announceAnswererClaude(
   message: string,
-  opts: { keepRecord: boolean },
+  opts: { keepRecord: boolean; cause: string },
 ): TandemNotification {
   dropStartupPart("answererLocal");
+  // Owed durably until one of Tandem's own windows was sent it: a restart in
+  // between raises it again from the record (#1123 review round 3).
+  if (load().claudeAgainOwed !== opts.cause) void record({ claudeAgainOwed: opts.cause });
   return raise(ANSWERER_CLAUDE_NOTICE_KEY, message, () => {
-    const r = load();
-    if (!opts.keepRecord && (r.answererLocal || r.answererChosen)) {
-      record({ answererLocal: false, answererChosen: false });
-    }
+    void record(
+      opts.keepRecord
+        ? { claudeAgainOwed: null }
+        : { answererLocal: false, answererChosen: false, claudeAgainOwed: null },
+    );
   });
 }
 

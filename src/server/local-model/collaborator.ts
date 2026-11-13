@@ -66,7 +66,7 @@ import {
   updateClaudeChatMessage,
 } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
-import { leftTandemEpoch, readModeState } from "../mode.js";
+import { lastLeftTandemTo, leftTandemEpoch, readModeState } from "../mode.js";
 import { chatAnswerer, onChatAnswererChanged } from "../models/chat-answerer.js";
 import {
   announceBaselineAdopted,
@@ -717,7 +717,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     const startEpoch = readEditing ? readEditing().offEpoch : -1;
     const startLeftTandem = leftTandemEpoch();
     // A run that starts outside Tandem never edits, even once Tandem returns.
-    const startedInTandem = readModeState() === "tandem";
+    const startMode = readModeState();
+    const startedInTandem = startMode === "tandem";
     // Why the run was first refused a write, for the stop reason and toast:
     // Solo (the setting allowed it) or the editing setting itself.
     let refusedBy: "solo" | "mode-unknown" | "editing-off" | null = null;
@@ -728,13 +729,23 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       const modeAllows =
         startedInTandem && readModeState() === "tandem" && leftTandemEpoch() === startLeftTandem;
       if (settingAllows && modeAllows) return true;
-      // An absent mode key (`indeterminate`) is refused too — it fails closed
-      // for privacy — but it is not Solo, so it is not called Solo.
-      refusedBy ??= !settingAllows
-        ? "editing-off"
-        : readModeState() === "indeterminate"
-          ? "mode-unknown"
-          : "solo";
+      // What refused it, judged from the mode the run started in AND the mode
+      // now: a run that started outside Tandem was refused by that start
+      // state; one that started in Tandem by what the mode is (or went
+      // through) since. An absent mode key (`indeterminate`) is refused too —
+      // it fails closed for privacy — but it is not Solo, so it is not called
+      // Solo.
+      if (refusedBy === null) {
+        const now = readModeState();
+        // Back in Tandem by the time it was refused: it was the trip out
+        // (the epoch moved), so blame where the mode went.
+        const blame = !startedInTandem ? startMode : now === "tandem" ? lastLeftTandemTo() : now;
+        refusedBy = !settingAllows
+          ? "editing-off"
+          : blame === "indeterminate"
+            ? "mode-unknown"
+            : "solo";
+      }
       return false;
     };
 

@@ -134,10 +134,17 @@ let lastModeWrite: ModeProvenance | null = null;
  * models ship dark.
  */
 let leftTandem = 0;
+/** What the mode last left Tandem FOR, so a refusal can name it. */
+let lastLeftTo: "solo" | "indeterminate" = "solo";
 
 /** See {@link leftTandem}. */
 export function leftTandemEpoch(): number {
   return leftTandem;
+}
+
+/** The state the mode most recently left Tandem for. In memory only. */
+export function lastLeftTandemTo(): "solo" | "indeterminate" {
+  return lastLeftTo;
 }
 
 /** The last observed write of the mode key, or `null` if none has been seen. */
@@ -175,7 +182,10 @@ export function installModeProvenanceObserver(ctrlDoc: Y.Doc): () => void {
     if (!event.keysChanged.has(Y_MAP_MODE)) return;
     const at = Date.now();
     const value = readModeState();
-    if (value !== "tandem") leftTandem += 1;
+    if (value !== "tandem") {
+      leftTandem += 1;
+      lastLeftTo = value;
+    }
     const origin: unknown = txn.origin;
     // The Hocuspocus `Connection` shape. `DirectConnection` is never opened by
     // Tandem, so a `socketId` here is always a real client socket.
