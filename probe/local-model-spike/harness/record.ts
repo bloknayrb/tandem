@@ -142,3 +142,6 @@ export function documentHash(text: string): string {
 }
 
 export type { Classification };
+
+/** The `detail` prefix of an `infra.jsonl` record for a held silent trial (THE SILENT-ERROR RULE, `runner.ts`). */
+export const HELD_SILENT_ERROR = "held-silent-error:";

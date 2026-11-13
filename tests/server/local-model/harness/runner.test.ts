@@ -319,6 +319,112 @@ describe("a run", () => {
     }
   });
 
+  describe("a timeout before any text is silent (round 3, M2)", () => {
+    /** A trial that answers 500 before any text, reported as the loop timing out instead. */
+    const TIMED_OUT: ScriptedTurn = { status: 500 };
+    /** Runs the real trial, then turns a no-text error into a no-text timeout. */
+    const timingOut =
+      (when: (n: number) => boolean): RunDeps["runTrial"] =>
+      async (input) => {
+        const obs = await runTrial(input);
+        timingOut.calls += 1;
+        if (!when(timingOut.calls) || obs.loop === null) return obs;
+        return {
+          ...obs,
+          loop: {
+            ...obs.loop,
+            metrics: { ...obs.loop.metrics, exit: "timeout", errorMessage: undefined },
+          },
+        };
+      };
+    timingOut.calls = 0;
+    beforeEach(() => {
+      timingOut.calls = 0;
+    });
+
+    it("a server that accepts connections and never answers stops the run as infrastructure, not FAIL", async () => {
+      stubScript([TIMED_OUT]);
+      const d = deps({ runTrial: timingOut(() => true) });
+      const result = await runMeasurement(options(), d);
+      expect(result.status).toBe("stopped");
+      expect(result.reason).toMatch(/that looks like the server, not the model/);
+      expect(result.scoredThisSession).toBe(0);
+      expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
+      expect(readInfra<InfraRecord>(result.runDir as string).map((i) => i.detail)).toEqual([
+        "held-silent-error:timeout",
+        "held-silent-error:timeout",
+        "held-silent-error:timeout",
+      ]);
+      expect(d.lines.some((l) => /TIMEOUT before any text \(timeout\) — held$/.test(l))).toBe(true);
+    });
+
+    it("joins one streak with endpoint errors and silent errors, in either order", async () => {
+      // n is the trial's number in the run; the stub's answer for it, and whether it times out.
+      for (const order of [
+        // timeout, timeout, endpoint error
+        [
+          { turn: TIMED_OUT, timeout: true },
+          { turn: TIMED_OUT, timeout: true },
+          { turn: { connectionError: "ECONNREFUSED" }, timeout: false },
+        ],
+        // endpoint error, silent error, timeout
+        [
+          { turn: { connectionError: "ECONNREFUSED" }, timeout: false },
+          { turn: { status: 500 }, timeout: false },
+          { turn: TIMED_OUT, timeout: true },
+        ],
+      ] as { turn: ScriptedTurn; timeout: boolean }[][]) {
+        timingOut.calls = 0;
+        let n = 0;
+        stubScript(() => order[Math.min(n++, order.length - 1)].turn);
+        const result = await runMeasurement(
+          options(),
+          deps({
+            runTrial: timingOut((k) => order[Math.min(k - 1, order.length - 1)].timeout),
+            now: () => new Date(Date.UTC(2026, 10, 12, 11, 0, n)),
+          }),
+        );
+        expect(result.status).toBe("stopped");
+        expect(readTrials<TrialRecord>(result.runDir as string)).toEqual([]);
+        expect(readInfra<InfraRecord>(result.runDir as string)).toHaveLength(3);
+        fs.rmSync(result.runDir as string, { recursive: true, force: true });
+      }
+    });
+
+    it("is held at the run's end, not scored as a FAIL; a timeout the server then answers after is scored", async () => {
+      let n = 0;
+      stubScript(() => {
+        n += 1;
+        return n >= 19 ? TIMED_OUT : ANSWER;
+      });
+      const first = await runMeasurement(options(), deps({ runTrial: timingOut((k) => k >= 19) }));
+      expect(first.status).toBe("stopped");
+      expect(first.reason).toMatch(/reached its end with 2 trial\(s\) held/);
+      expect(readTrials<TrialRecord>(first.runDir as string)).toHaveLength(18);
+      expect(readInfra<InfraRecord>(first.runDir as string).map((i) => i.detail)).toEqual([
+        "held-silent-error:timeout",
+        "held-silent-error:timeout",
+      ]);
+      fs.rmSync(first.runDir as string, { recursive: true, force: true });
+
+      // One timeout, then the server answers: the streak closes and the timeout is scored.
+      timingOut.calls = 0;
+      n = 0;
+      stubScript(() => {
+        n += 1;
+        return n === 1 ? TIMED_OUT : ANSWER;
+      });
+      const second = await runMeasurement(
+        options(),
+        deps({ runTrial: timingOut((k) => k === 1), now: () => new Date("2026-11-12T12:00:00Z") }),
+      );
+      expect(second.status).toBe("complete");
+      const trials = readTrials<TrialRecord>(second.runDir as string);
+      expect(trials).toHaveLength(20);
+      expect(trials.filter((t) => t.ending === "timeout")).toHaveLength(1);
+    });
+  });
+
   it("holds a streak still open at the run's end, and a resume runs those trials again", async () => {
     let n = 0;
     stubScript(() => {

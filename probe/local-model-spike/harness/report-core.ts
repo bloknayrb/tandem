@@ -19,7 +19,13 @@
  * A trial that did not end `completed` (timeout, step limit, editing-off stop,
  * truncated stream, error) is a failure in BOTH rates, whatever its text holds.
  */
-import { type InfraRecord, type PlannedTrial, recordHash, type TrialRecord } from "./record.js";
+import {
+  HELD_SILENT_ERROR,
+  type InfraRecord,
+  type PlannedTrial,
+  recordHash,
+  type TrialRecord,
+} from "./record.js";
 import { MAX_CONSECUTIVE_INFRASTRUCTURE, plannedHash, type RunIdentity } from "./run-store.js";
 import { GATING_GROUPS, GROUP_TITLES, type Group } from "./scenarios/types.js";
 import { wilson } from "./stats.js";
@@ -31,13 +37,17 @@ import {
 } from "./verdicts.js";
 
 /** Stated in every report header; the rule itself is in `runner.ts` (THE SILENT-ERROR RULE). */
-export const SILENT_ERROR_RULE_TEXT = `Silent errors (an error before the model produced any text): held while a streak of them or of endpoint errors is open; a trial that ends any other way scores what was held; a streak of ${MAX_CONSECUTIVE_INFRASTRUCTURE} stops the run, and a streak still open at the run's end is held; held trials are unscored and run again on resume, where the same error with the same detail is scored.`;
+export const SILENT_ERROR_RULE_TEXT = `Silent trials (an error or a timeout before the model produced any text): held while a streak of them or of endpoint errors is open; a trial that ends any other way scores what was held; a streak of ${MAX_CONSECUTIVE_INFRASTRUCTURE} stops the run, and a streak still open at the run's end is held; held trials are unscored, make the report INCONCLUSIVE, and are run again on resume, where the same ending with the same detail is scored.`;
 
 /** Known limits of the instrument, printed in every report header. */
 export const KNOWN_LIMITS: readonly string[] = [
   "A resume writes into the run directory (and points app data there) before it takes the run's lock; a second process resuming the same run at the same moment can touch the directory before one of them is refused.",
   "Node's fetch has a default 300-second headers timeout of its own; if the server sends no headers until a model has loaded, a load longer than that may fail the warm-up before its 10-minute limit (unverified).",
   "A trial that timed out may leave the server still generating; on a CPU laptop that can slow the next trial.",
+  "Ollama's runtime settings (context length, parallel requests, GPU offload) are not captured; two runs of one model under different server settings look the same here.",
+  "The record hash is unkeyed: it catches a record changed by accident, not one changed on purpose (anyone can recompute it).",
+  "The tap assumes its copy of each response is read to the end within 2 seconds of the product finishing with it (`settle` in fetch-tap.ts); a copy still being read then is cancelled and marked unread, so on a slow machine a clean trial can be logged as an infrastructure error (tap-read-incomplete) rather than scored.",
+  "The group-3 scorer misses a partial quote written in reversed order or with a connector it does not know (\"Use 'was' instead of 'were'\", \"Swap 'were' for 'was'\"); the reader passes those.",
 ];
 
 /** Observed rate every gating group must reach. No statistical lower bound. */
@@ -163,6 +173,14 @@ export function computeReport(input: ReportInput): Report {
   const plannedIds = new Set(planned.map((p) => p.trialId));
   const unplanned = trials.filter((t) => !plannedIds.has(t.trialId)).length;
   const infraTrials = new Set(infra.map((i) => i.trialId));
+  // A planned trial with no record whose LATEST infrastructure record is a
+  // hold (THE SILENT-ERROR RULE, runner.ts) is owed a resume: it is not an
+  // endpoint error to be left out of the rate.
+  const latestInfra = new Map<string, string>();
+  for (const i of infra) latestInfra.set(i.trialId, i.detail);
+  const heldTrials = planned.filter(
+    (p) => !byTrial.has(p.trialId) && (latestInfra.get(p.trialId) ?? "").startsWith(HELD_SILENT_ERROR),
+  ).length;
 
   const checked = checkVerdicts(input.verdicts, identity.runId, [...byTrial.values()], input.rubricVersion);
   // planned.json is outside every hash, and the groups, gating and
@@ -286,6 +304,11 @@ export function computeReport(input: ReportInput): Report {
       reasons.push(`${checked.missing.length} trial(s) have no usable verdict`);
     }
     if (totalUnrun > 0) reasons.push(`${totalUnrun} planned trial(s) have not been run`);
+    if (heldTrials > 0) {
+      reasons.push(
+        `${heldTrials} held trial(s) owe a resume: they ended before any text while a streak was open, and are not scored`,
+      );
+    }
     if (totalPlanned > 0 && totalUnscored / totalPlanned > MAX_INFRASTRUCTURE_SHARE) {
       reasons.push(
         `${totalUnscored} of ${totalPlanned} planned trials ended only in infrastructure errors (over ${MAX_INFRASTRUCTURE_SHARE * 100}%)`,

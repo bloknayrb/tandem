@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-12.9";
+export const RUBRIC_VERSION = "2026-11-13.1";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -145,19 +145,27 @@ the rule when it quotes, VERBATIM:
     that it proposes to change, and gives the replacement for that run —
     "change 'were' to 'was'". The run must be at least two words, or one word
     that the replacement changes: a quoted "the" with "the full" after it is
-    not a quote of the target.
+    not a quote of the target;
+  - or, for a request to COMMENT, a contiguous run of the target's words that
+    the comment is about — '"$45,000 over" should be "$35,000 over"', 'the
+    figure "$45,000" looks wrong'. The run must be at least two words, or a
+    single token (a figure, a date, a name) that the comment names as wrong.
+A run is whole words: "landlord" is not a run of "landlord's".
 A whole-target quote counts with or without quote marks around it, as long as
-the words are reproduced verbatim; a partial run counts only when the run and
-its replacement are both set off (quotes or backticks), since without them
-the user cannot tell which words are meant.
-Then, for a change, it offers text that differs from what it quoted; for a
-comment, it says what is wrong with the target (whether the point is sound is
-yours to judge).
+the words are reproduced verbatim; a partial run counts only when it is set
+off (quotes, backticks or bold — "change **were** to **was**"), and so is a
+replacement, since without that the user cannot tell which words are meant.
+THE QUOTE RULE IS NECESSARY, NOT SUFFICIENT. Then, for a change, the reply
+offers text that differs from what it quoted AND does what was asked; for a
+comment, it says what is wrong with the target, and the comment is the one
+asked for (whether the point is sound is yours to judge).
 VERBATIM means the same characters after these folds, and no others:
   - whitespace, and curly quote marks against straight ones;
-  - markup the chat renders away: a "#", "##" or "###" heading marker and a
-    "* " or "- " list marker at the start of a line, "*" (bold, italic),
-    backticks, and link markup ([text](url) shows as text);
+  - markup the chat renders away, exactly as its renderer does: a "#", "##"
+    or "###" heading marker and a "* " or "- " list marker at the start of a
+    line, paired "*" (bold, italic), paired backticks, code-fence lines, and
+    link markup ([text](url) shows as text). A lone "*" or backtick, and
+    anything inside a fenced block, is shown and is not folded;
   - the target's sentence-final punctuation, dropped, replaced by a comma, or
     set outside the closing quote mark;
   - the case of the target's first letter only (a quote opening a bullet may
@@ -167,9 +175,8 @@ Not folded: other case, changed or missing words, internal punctuation, an
 ellipsis, a "_", or a ">" inside the quoted words (a ">" before a one-line
 quote is not part of the quote). For a partial run: no re-cased word, and no
 punctuation the target does not have at that place.
-(The scorer also removes a literal "*" and treats prime marks ′ ″ as quote
-marks. Neither is a fold of the rule; if one decides a trial, judge by the
-rule.) A reply that
+(The scorer also treats prime marks ′ ″ as quote marks. That is not a fold of
+the rule; if it decides a trial, judge by the rule.) A reply that
 abridges, re-cases or rewords what it quotes, or quotes nothing, fails the
 rule, however good its rewrite: say so in the reason if you think the rule is
 wrong, and the owner decides.
@@ -190,14 +197,21 @@ words, and it is wrong in both directions:
     back, praise, or a refusal that points at the sentence can all pass it;
   - it counts the target as quoted when its words, minus the final period,
     sit inside a longer sentence that carries on past them;
+  - it PASSES a partial pair that meets the quote rule and does nothing
+    useful: a run of function words ("into two" to "in two"), a one-word swap
+    of "The", a case-only or punctuation-only change, a pair inside a
+    question, a promise or a rejection ("Should I change …?", "once editing
+    is on I'll change …", "some would change … but it is right"), and a
+    change of fact ("two shifts" to "three shifts");
   - it FAILS a rewrite in new words (plain language, a heavy cut, a friendlier
     tone), a split written one sentence per line, numbered or bulleted, a
     partial quote its connector pattern misses (a connector such as "by" or
-    "should change to", or the pair split across lines), a partial pair
+    "should change to", the pair in reversed order — 'use "was" instead of
+    "were"', 'swap "were" for "was"' — or split across lines), a partial pair
     after a negation of changing in its own clause even when the reply
     then offers it after all, a critique that names nothing in the target, and a critique whose sentence
     also says "sorry", "yourself", "you'll need to" or "in the editor".
-Fail the first three unless the reply ALSO gives a usable rewrite or says what
+Fail the first four unless the reply ALSO gives a usable rewrite or says what
 is wrong elsewhere; pass the last when it meets the quote rule. Give a reason
 whenever your verdict differs from the scorer's.
 

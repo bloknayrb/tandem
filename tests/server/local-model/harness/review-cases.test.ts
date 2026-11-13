@@ -15,6 +15,7 @@ import {
 } from "../../../../probe/local-model-spike/harness/scenarios/predicates.js";
 import type { Scenario } from "../../../../probe/local-model-spike/harness/scenarios/types.js";
 import {
+  isRunOfTarget,
   quoteForm,
   quotesVerbatim,
   score,
@@ -32,16 +33,37 @@ function scenarioById(id: string): Scenario {
   return s;
 }
 
-/** The text a user sees once the chat renderer has turned markdown into HTML. */
+/**
+ * The text a user sees once the chat renderer has turned markdown into HTML.
+ * The tag strip runs alone to a fixpoint before any entity is decoded, and
+ * `&amp;` is decoded last (as `tests/helpers/css-source.ts` does), so no
+ * decode can make a tag. The output is compared, never rendered.
+ */
 function renderedText(markdown: string): string {
-  return renderMarkdown(markdown)
-    .replace(/<br>|<\/(?:p|li|h[1-6]|pre|ul)>/g, "\n")
-    .replace(/<[^>]+>/g, "")
+  let html = renderMarkdown(markdown).replace(
+    /<br>|<\/?(?:p|li|h[1-6]|pre|ul)(?:\s[^>]*)?>/g,
+    "\n",
+  );
+  let previous: string;
+  do {
+    previous = html;
+    html = html.replace(/<[^<>]*>/g, "");
+  } while (html !== previous);
+  return html
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, "&");
+}
+
+/** The non-markup folds `quoteForm` adds: whitespace runs, and curly quote marks to straight ones. */
+function shownForm(text: string): string {
+  return text
+    .replace(/[‘’‚‛′]/g, "'")
+    .replace(/[“”„‟″]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function check(reply: string) {
@@ -194,10 +216,96 @@ describe("cases the diff review found", () => {
       expect(on(change, reply).pass, reply).toBe(true);
     }
     expect(on(change, `I wouldn't change "were" to "was" here.`).pass).toBe(false);
-    // A comment request is not passed by a partial quote: it quotes the whole target or the selection.
+    // A comment request's one-word run must be a figure, a date or a name.
     expect(on(comment, `Change "were" to "was": the subject "team" is singular.`).failureMode).toBe(
       "NO_QUOTE",
     );
+  });
+
+  it("round 3 rulings: partial quotes for comments, bold as a delimiter, whole-word runs", () => {
+    const maint = scenarioById("req-ops-review-maintenance-flag");
+    if (maint.expect.kind !== "offer-comment") throw new Error("expected an offer-comment");
+    const onMaint = (reply: string) =>
+      score({ scenario: maint, reply, writes: NOTHING, documentText: DOC });
+    // The owner's two pins.
+    for (const reply of [
+      `"$45,000 over" should be "$35,000 over"`,
+      `The figure "$45,000" looks wrong: $310,000 against a $275,000 budget is $35,000.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
+    // A one-token run the reply does not call wrong, or that is no figure,
+    // date or name, is not a quote of the target.
+    expect(
+      onMaint(`The figure "$45,000" is the overrun against the $275,000 budget, as stated.`)
+        .failureMode,
+    ).toBe("NO_QUOTE");
+    expect(
+      onMaint(`The word "over" is wrong: $310,000 against a $275,000 budget is $35,000 over.`)
+        .failureMode,
+    ).toBe("NO_QUOTE");
+    // A two-word run still has to say something tied to the target.
+    expect(onMaint(`"$45,000 over" — noted.`).pass).toBe(false);
+
+    // Bold sets a run off as quotes do.
+    for (const reply of [
+      `Change **were** to **was**.`,
+      `Change **were reorganized** to "was reorganized".`,
+    ]) {
+      expect(on(change, reply).pass, reply).toBe(true);
+    }
+    // Runs are whole words: not part of a word before or after an apostrophe.
+    const lease: Scenario = {
+      ...change,
+      expect: {
+        kind: "offer-change",
+        target: "The landlord's approval are required for any structural change.",
+      },
+    };
+    expect(isRunOfTarget("landlord's approval", "The landlord's approval are required.")).toBe(
+      true,
+    );
+    expect(isRunOfTarget("landlord", "The landlord's approval are required.")).toBe(false);
+    expect(isRunOfTarget("s approval", "The landlord's approval are required.")).toBe(false);
+    expect(isRunOfTarget("stop", "He said 'stop' twice.")).toBe(true);
+    expect(on(lease, `Change "landlord" to "lessor".`).pass).toBe(false);
+    expect(on(lease, `Change "approval are" to "approval is".`).pass).toBe(true);
+  });
+
+  it("known scorer false passes on partial pairs (round 3 ruling: the quote rule is necessary, not sufficient)", () => {
+    // Each of these passes the scorer and fails the rule's second half; the
+    // reader fails them (rubric §6, READ [editing-request] PASSES AS CLOSELY AS FAILS).
+    for (const reply of [
+      // a one-word swap of "The"
+      `Change "The" to "A".`,
+      // a case-only change
+      `Change "two shifts" to "Two Shifts".`,
+      // a pair inside a question
+      `Should I change "were" to "was"?`,
+      // a change of fact
+      `Change "two shifts" to "three shifts".`,
+      // a function-word run
+      `Change "into two" to "in two".`,
+    ]) {
+      expect(on(change, reply).pass, reply).toBe(true);
+    }
+    // And known false fails, written down in "Known limits": reversed order, an unknown connector.
+    for (const reply of [`Use "was" instead of "were".`, `Swap "were" for "was".`]) {
+      expect(on(change, reply).pass, reply).toBe(false);
+    }
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
+    expect(six).toMatch(/THE QUOTE RULE IS NECESSARY, NOT SUFFICIENT/);
+    expect(six).toMatch(/for a request to COMMENT, a contiguous run/);
+    expect(six).toMatch(
+      /single\s+token \(a figure, a date, a name\) that the comment names as wrong/,
+    );
+    expect(six).toMatch(/quotes, backticks or bold/);
+    expect(six).toMatch(/a one-word swap\s+of "The", a case-only or punctuation-only change/);
+    expect(six).toMatch(/change of fact/);
+    expect(six).toMatch(/reversed order/);
   });
 
   it("the reviewer's probes: final punctuation and a capitalised bullet", () => {
@@ -256,10 +364,23 @@ describe("cases the diff review found", () => {
       "> a single quoted line is shown",
       "_underscores_ are shown",
       "a line\nanother line",
+      // Round 3, L4: what the renderer SHOWS stays.
+      "a lone ` backtick is shown",
+      "2 * 3 is six, a lone star is shown",
+      "```\n# not a heading\n* not a list\n**not bold**\n```",
+      "```text\nfenced with a language tag\n```",
+      "a <b>tag</b> typed by the model & an &amp; entity are shown as typed",
+      "a [label](javascript:x) is its label",
     ];
     for (const sample of samples) {
-      expect(quoteForm(sample), sample).toBe(quoteForm(renderedText(sample)));
+      // Against the renderer's own output, never quoteForm on both sides.
+      expect(quoteForm(sample), sample).toBe(shownForm(renderedText(sample)));
     }
+    // Spelled out, so the pin does not rest on the renderer alone.
+    expect(quoteForm("a lone ` backtick")).toBe("a lone ` backtick");
+    expect(quoteForm("2 * 3")).toBe("2 * 3");
+    expect(quoteForm("```\n# h\n* li\n```")).toBe("# h * li");
+    expect(quoteForm("**bold** `code` # x")).toBe("bold code # x");
   });
 
   it("the rubric states the quote rule, the folds and the partial-quote bound", () => {

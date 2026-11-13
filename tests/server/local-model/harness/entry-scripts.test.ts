@@ -208,6 +208,38 @@ describe("entry scripts as child processes", () => {
       }
       fs.writeFileSync(fixturesFile, storedFixtures);
 
+      // A trial record changed after the run (its hash left as it was) refuses
+      // the reading file too (round 3, L6).
+      const trialsFile = path.join(runDir, "trials.jsonl");
+      const storedTrials = fs.readFileSync(trialsFile, "utf8");
+      const lines = storedTrials.split("\n");
+      const edited = JSON.parse(lines[0]) as { reply: string };
+      edited.reply += " (edited)";
+      lines[0] = JSON.stringify(edited);
+      fs.writeFileSync(trialsFile, lines.join("\n"));
+      const refusedRead = await run("read.ts", ["--run", runId, "--runs-dir", runsDir]);
+      expect(refusedRead.code).toBe(2);
+      expect(refusedRead.out).toMatch(/Refusing to write a reading file/);
+      expect(refusedRead.out).toMatch(/the record does not match its own hash/);
+      fs.writeFileSync(trialsFile, storedTrials);
+
+      // A blank hardware description describes no machine (round 3, L5).
+      const blank = await run("measure.ts", [
+        "--model",
+        TAG,
+        "--tier",
+        "chat",
+        "--screen",
+        "--hardware",
+        "   ",
+        "--endpoint",
+        endpoint,
+        "--runs-dir",
+        runsDir,
+      ]);
+      expect(blank.code).toBe(2);
+      expect(blank.out).toMatch(/usage: measure\.ts/);
+
       // A resume of a complete run scores nothing more.
       const resumed = await run("measure.ts", [
         "--model",

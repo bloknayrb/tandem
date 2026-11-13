@@ -17,7 +17,13 @@ import { evaluateTrial } from "./evaluate.js";
 import type { ModelFacts } from "./ollama-meta.js";
 import { makeRunId, runDirFor, sha256Hex } from "./paths.js";
 import type { PreflightResult } from "./preflight.js";
-import { canonicalJson, type InfraRecord, type PlannedTrial, type TrialRecord } from "./record.js";
+import {
+  canonicalJson,
+  HELD_SILENT_ERROR,
+  type InfraRecord,
+  type PlannedTrial,
+  type TrialRecord,
+} from "./record.js";
 import {
   acquireLock,
   appendInfra,
@@ -45,32 +51,37 @@ import { validateScenarios } from "./validate.js";
 export { MAX_CONSECUTIVE_INFRASTRUCTURE };
 
 /**
- * THE SILENT-ERROR RULE. A trial that ended in an error before the model
- * produced any text at all (an HTTP 500, an unreadable response) is, alone, the
- * model's failure and is scored (brief R2.6). Several in a row usually mean a
- * server that is down or out of memory, and a run that scored them would print
- * FAIL for an endpoint fault. One rule decides:
+ * THE SILENT-ERROR RULE. A trial that ended before the model produced any text
+ * at all, in an error (an HTTP 500, an unreadable response) or in a timeout,
+ * is, alone, the model's failure and is scored (brief R2.6). Several in a row
+ * usually mean a server that is down, out of memory, or accepting connections
+ * and never answering, and a run that scored them would print FAIL for an
+ * endpoint fault. One rule decides:
  *
- *  1. A silent-error trial is HELD, not scored, while its streak is open. A
- *     streak is consecutive trials that produced nothing scorable: held silent
- *     errors and plain endpoint errors.
+ *  1. A silent trial (an error or a timeout with no text) is HELD, not scored,
+ *     while its streak is open. A streak is consecutive trials that produced
+ *     nothing scorable: held silent trials and plain endpoint errors.
  *  2. A trial that ends any other way closes the streak: the server answered,
  *     so what was held is the model's own failure and is scored as it stands.
  *  3. A streak that reaches MAX_CONSECUTIVE_INFRASTRUCTURE stops the run. A
  *     streak still open when the run reaches its last trial is NOT closed by
  *     the end: both are logged in `infra.jsonl` as `held-silent-error:<detail>`,
- *     not scored, reported as unscored, and run again on resume.
- *  4. On a resume, a trial with such a record is scored at once when it errors
+ *     not scored, reported as unscored, and run again on resume. A report on a
+ *     run with any planned trial still held is INCONCLUSIVE (`report-core.ts`).
+ *  4. On a resume, a trial with such a record is scored at once when it ends
  *     silently AGAIN WITH THE SAME DETAIL (the person who resumed has looked at
- *     the endpoint; the same error twice is the model's). That scored trial
+ *     the endpoint; the same failure twice is the model's). That scored trial
  *     neither extends nor closes the streak around it. With a different detail
  *     it is held again under rule 1.
  */
 function isSilentError(record: TrialRecord): boolean {
-  return record.ending === "error" && record.turns.every((t) => t.text.length === 0);
+  return (
+    (record.ending === "error" || record.ending === "timeout") &&
+    record.turns.every((t) => t.text.length === 0)
+  );
 }
 
-export const HELD_SILENT_ERROR = "held-silent-error:";
+export { HELD_SILENT_ERROR };
 
 /** The rule above is stated in every report header (`SILENT_ERROR_RULE_TEXT` in `report-core.ts`). */
 
@@ -391,16 +402,16 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
         if (heldBefore.get(r.trialId) === r.detail) {
           // Rule 4: the same silent error again, after a resume.
           scoreNow(r, observation.documentText);
-          deps.log(`${position} ${plan.trialId}  ERROR before any text (${r.detail}) again, as when it was held — scored`);
+          deps.log(`${position} ${plan.trialId}  ${r.ending.toUpperCase()} before any text (${r.detail}) again, as when it was held — scored`);
           continue;
         }
         held.push(r);
         heldTexts.set(r.trialId, observation.documentText);
         streak += 1;
-        deps.log(`${position} ${plan.trialId}  ERROR before any text (${r.detail}) — held`);
+        deps.log(`${position} ${plan.trialId}  ${r.ending.toUpperCase()} before any text (${r.detail}) — held`);
         if (streak >= MAX_CONSECUTIVE_INFRASTRUCTURE) {
           return stop(
-            `${streak} trials in a row failed before the model produced any text (${r.detail}): that looks like the server, not the model.`,
+            `${streak} trials in a row ended before the model produced any text (the last: ${r.detail}): that looks like the server, not the model.`,
           );
         }
         continue;
@@ -430,7 +441,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
       logHeld();
       return {
         status: "stopped",
-        reason: `the run reached its end with ${n} trial(s) held: they failed before any text, and no later trial showed the server answering. They are not scored. Check the endpoint, then resume with --resume ${identity.runId} to run them again`,
+        reason: `the run reached its end with ${n} trial(s) held: they ended before any text, and no later trial showed the server answering. They are not scored. Check the endpoint, then resume with --resume ${identity.runId} to run them again`,
         runId: identity.runId,
         runDir,
         scoredThisSession: scored,

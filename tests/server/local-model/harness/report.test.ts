@@ -518,6 +518,40 @@ describe("a full chat-tier run", () => {
       });
     });
 
+    it("held trials make the report INCONCLUSIVE, not a smaller denominator (round 3, M1)", () => {
+      // The reviewer's probe: two trials of a group of 20 held at the run's
+      // end (one under the 10% share) and the rest passing printed PASS.
+      const all = run(20);
+      const heldIds = ["answerable-0#1", "answerable-1#1"];
+      const scored = all.filter((t) => !heldIds.includes(t.trialId));
+      const infra: InfraRecord[] = heldIds.map((id) => ({
+        runId: RUN,
+        trialId: id,
+        scenarioId: id.replace("#1", ""),
+        group: "answerable",
+        detail: "held-silent-error:http-500",
+        at: "t",
+      }));
+      const r = report(scored, { planned: plan(all), infra, verdicts: agreeAll(scored) });
+      expect(r.outcome).toBe("INCONCLUSIVE");
+      expect(r.reasons.join("\n")).toMatch(/2 held trial\(s\) owe a resume/);
+      // A hold followed by a plain endpoint error on resume is no longer a hold.
+      const later: InfraRecord[] = [
+        ...infra,
+        ...heldIds.map((id) => ({
+          ...infra[0],
+          trialId: id,
+          scenarioId: id.replace("#1", ""),
+          detail: "http-503",
+        })),
+      ];
+      const r2 = report(scored, { planned: plan(all), infra: later, verdicts: agreeAll(scored) });
+      expect(r2.reasons.join("\n")).not.toMatch(/owe a resume/);
+      // A held trial that a resume then scored owes nothing.
+      const r3 = report(all, { planned: plan(all), infra, verdicts: agreeAll(all) });
+      expect(r3.outcome).toBe("PASS");
+    });
+
     it("too many trials lost to infrastructure across the run", () => {
       const all = run(22);
       const lost = new Set(all.filter((_, i) => i % 7 === 0).map((t) => t.trialId));
@@ -670,11 +704,22 @@ describe("the sessions of a run, and the header (review M2, M4, item 7)", () => 
     const r = report(run());
     expect(r.text).toContain(SILENT_ERROR_RULE_TEXT);
     expect(SILENT_ERROR_RULE_TEXT).toMatch(/streak still open at the run's end is held/);
-    expect(SILENT_ERROR_RULE_TEXT).toMatch(/same error with the same detail is scored/);
+    expect(SILENT_ERROR_RULE_TEXT).toMatch(
+      /an error or a timeout before the model produced any text/,
+    );
+    expect(SILENT_ERROR_RULE_TEXT).toMatch(/make the report INCONCLUSIVE/);
+    expect(SILENT_ERROR_RULE_TEXT).toMatch(/same ending with the same detail is scored/);
     for (const k of KNOWN_LIMITS) expect(r.text).toContain(k);
     expect(KNOWN_LIMITS.join(" ")).toMatch(/before it takes the run's lock/);
     expect(KNOWN_LIMITS.join(" ")).toMatch(/300-second headers timeout/);
     expect(KNOWN_LIMITS.join(" ")).toMatch(/slow the next trial/);
+    // Round 3, item 8.
+    expect(KNOWN_LIMITS.join(" ")).toMatch(
+      /context length, parallel requests, GPU offload\) are not captured/,
+    );
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/record hash is unkeyed/);
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/within 2 seconds of the product finishing/);
+    expect(KNOWN_LIMITS.join(" ")).toMatch(/reversed order or with a connector it does not know/);
   });
 });
 

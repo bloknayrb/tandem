@@ -42,7 +42,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   const { values, flags } = parseArgs(argv);
   const modelTag = values.get("model");
   const tier = tierArg(values.get("tier"));
-  const hardware = values.get("hardware");
+  // A blank description describes no machine (the report's one-machine check reads it).
+  const hardware = values.get("hardware")?.trim();
   const runsDir = values.get("runs-dir") ?? RUNS_DIR;
   const resume = values.get("resume");
   const mode = flags.has("screen") ? "screen" : "full";

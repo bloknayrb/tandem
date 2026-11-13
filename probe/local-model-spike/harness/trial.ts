@@ -181,9 +181,12 @@ function chatRowsFor(messageId: string): string[] {
     author?: string;
     replyTo?: string;
     text?: string;
+    chatNotice?: unknown;
   }[];
+  // A row carrying `chatNotice` is a notice the product posts about the turn,
+  // not the model's reply (PR #2417 adds them; today the field is absent).
   return rows
-    .filter((r) => r.author === "claude" && r.replyTo === messageId)
+    .filter((r) => r.author === "claude" && r.replyTo === messageId && r.chatNotice === undefined)
     .map((r) => r.text ?? "");
 }
 

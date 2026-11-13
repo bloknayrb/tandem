@@ -13,6 +13,7 @@
  * shipped dispatch resolves a model's quote with, so a miss cannot be an
  * offset-arithmetic artefact.
  */
+import { renderMarkdown } from "../../../src/client/panels/chat-markdown.js";
 import { findOccurrence } from "../../../src/server/mcp/navigation.js";
 import { matches, NOT_STATED, type Pattern } from "./scenarios/predicates.js";
 import type {
@@ -114,29 +115,46 @@ function unwrapBlockquotes(text: string): string {
 }
 
 /**
+ * The text the chat panel shows for this markdown: the shipped renderer's own
+ * output (`src/client/panels/chat-markdown.ts`), with its block boundaries
+ * turned into line breaks, every tag removed and its entities decoded. The
+ * renderer escapes all input before it builds a tag, so every `<` in its
+ * output is one of its own tags. The tag strip runs to a fixpoint before any
+ * entity is decoded, and `&amp;` is decoded last, so no decode can make a tag
+ * and no `&amp;lt;` becomes `<`.
+ */
+export function chatVisibleText(markdown: string): string {
+  let html = renderMarkdown(markdown).replace(/<br>|<\/?(?:p|li|h[1-6]|pre|ul)(?:\s[^>]*)?>/g, "\n");
+  let previous: string;
+  do {
+    previous = html;
+    html = html.replace(/<[^<>]*>/g, "");
+  } while (html !== previous);
+  return html
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
  * For comparing a quotation with the document (brief: "verbatim after
  * whitespace and quote-mark normalisation", with the folds the owner's review
  * of PR #2415 added). Folded, and nothing else:
  *  - whitespace runs, and curly quote marks to straight ones;
- *  - exactly the markup the chat panel renders away
- *    (`src/client/panels/chat-markdown.ts`): a `#`, `##` or `###` heading
- *    marker followed by a space at the start of a line; a `* ` or `- ` list
- *    marker at the start of a line (column 0); every `*` and every backtick;
- *    link markup `[text](url)` to `text`. Pinned against the renderer by
- *    `review-cases.test.ts`;
+ *  - exactly the markup the chat panel renders away: the text is put through
+ *    the shipped renderer (`chatVisibleText`), so a lone `*` or backtick it
+ *    shows stays, and a fenced block's contents stay as written. Pinned
+ *    against the renderer by `review-cases.test.ts`;
  *  - a quotation wrapped across consecutive `>` lines.
  * Case, wording, dashes, `_`, internal punctuation and a single `>` line's
- * marker (the chat shows it as typed) are NOT folded. Known looseness: a stray
- * single `*` inside a quote is removed too, though the chat would show it.
- * The target's sentence-final punctuation and first-letter case are folded in
+ * marker (the chat shows it as typed) are NOT folded. The target's
+ * sentence-final punctuation and first-letter case are folded in
  * `targetForms`, not here.
  */
 export function quoteForm(text: string): string {
-  return unwrapBlockquotes(text.replace(/\r\n/g, "\n"))
-    .replace(/^#{1,3} /gm, "")
-    .replace(/^[*-] /gm, "")
-    .replace(/\[([^\]\n]{1,500})\]\(([^)\n]{1,2000})\)/g, "$1")
-    .replace(/[*`]/g, "")
+  return chatVisibleText(unwrapBlockquotes(text.replace(/\r\n/g, "\n")))
     .replace(/[‘’‚‛′]/g, "'")
     .replace(/[“”„‟″]/g, '"')
     .replace(/\s+/g, " ")
@@ -203,8 +221,26 @@ export function quotesVerbatim(reply: string, text: string): boolean {
   return quotedForm(reply, text) !== null;
 }
 
-/** Delimited quotations on one line: double or single quotes, or backticks. */
-const DELIMITED = String.raw`"([^"\n]{1,400}?)"|(?<![A-Za-z0-9])'([^'\n]{1,400}?)'(?![A-Za-z0-9])|\x60([^\x60\n]{1,400}?)\x60`;
+/**
+ * Delimited quotations on one line: double or single quotes, backticks, or
+ * bold (`**were**`), since the user sees the bold set the words off. Four
+ * capture groups; `delimitedText` takes whichever matched.
+ */
+const DELIMITED = String.raw`"([^"\n]{1,400}?)"|(?<![A-Za-z0-9])'([^'\n]{1,400}?)'(?![A-Za-z0-9])|\x60([^\x60\n]{1,400}?)\x60|\*\*([^*\n]{1,400}?)\*\*`;
+const DELIMITED_GROUPS = 4;
+
+/** The quoted text of a DELIMITED match whose groups start at `first`, in `quoteForm`, one layer of inner quotes removed. */
+function delimitedText(m: RegExpMatchArray, first: number): string {
+  let inner = "";
+  for (let g = first; g < first + DELIMITED_GROUPS; g++) {
+    if (m[g] !== undefined) {
+      inner = m[g];
+      break;
+    }
+  }
+  // `**"were"**`: the bold and the quotes set off the same words.
+  return quoteForm(inner.replace(/^(["'\x60])(.+)\1$/, "$2"));
+}
 /** What joins a quoted run to its replacement: "to", "with", "→", "should be"… */
 const RUN_CONNECTOR = String.raw`\s*(?:,\s*)?(?:→|->|=>|⇒|(?:should|could|would|might)\s+(?:be|read|become|say)|to|with|into|becomes?|reads?|as)\s*:?\s*`;
 
@@ -224,18 +260,25 @@ function bareWord(w: string): string {
  * follows its last word in the target, but any punctuation it carries must be
  * the target's own; its first letter's case may differ only when the run
  * starts the target (the ruling folds the TARGET's first letter, nothing else).
+ * A `'` next to the run bounds it only as a quote mark, never inside a word:
+ * "landlord" is not a run of "landlord's", nor "s" of it.
  */
-function isRunOfTarget(run: string, target: string): boolean {
+export function isRunOfTarget(run: string, target: string): boolean {
   const t = quoteForm(target);
   if (run.length === 0) return false;
   const candidates = t.startsWith(flipFirst(run)) ? [run, flipFirst(run)] : [run];
   for (const candidate of new Set(candidates)) {
     let at = t.indexOf(candidate);
     while (at !== -1) {
-      const before = at === 0 ? " " : t.charAt(at - 1);
-      const after = t.charAt(at + candidate.length);
+      const end = at + candidate.length;
+      const before = t.charAt(at - 1);
+      const after = t.charAt(end);
+      const beforeOk =
+        at === 0 || /[\s"(]/.test(before) || (before === "'" && !WORD_CHAR.test(t.charAt(at - 2)));
+      const afterOk =
+        after === "" || /[\s,.;:!?")]/.test(after) || (after === "'" && !WORD_CHAR.test(t.charAt(end + 1)));
       const caseOk = candidate === run || at === 0;
-      if (caseOk && /[\s"'(]/.test(before) && (after === "" || /[\s,.;:!?"')]/.test(after))) return true;
+      if (caseOk && beforeOk && afterOk) return true;
       at = t.indexOf(candidate, at + 1);
     }
   }
@@ -257,8 +300,9 @@ export const PARTIAL_RUN_MIN_WORDS = 2;
  * reorganized'". The run must be at least PARTIAL_RUN_MIN_WORDS words, or one
  * word that the replacement changes (the replacement does not hold that word
  * again), so a quoted "the" with "the full" after it is not a quote of the
- * target. The replacement must differ from the run. Change requests only: a
- * comment request quotes the whole target or the selection.
+ * target. The replacement must differ from the run. Either side may be set
+ * off by quotes, backticks or bold. A comment request may also pass with one
+ * (`scoreOfferComment`): a correction pair says what is wrong.
  */
 export function partialQuoteChange(reply: string, target: string): { run: string; replacement: string } | null {
   const text = reply.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'");
@@ -270,8 +314,8 @@ export function partialQuoteChange(reply: string, target: string): { run: string
       // "I can't edit it, but you could change 'were' to 'was'" is an offer.
       const lead = line.slice(0, m.index ?? 0).split(/[.!?;]\s+|,\s+(?:but|however|though|so)\s+|\s[—–]\s/).pop() ?? "";
       if (NEGATED_CHANGE.test(lead)) continue;
-      const run = quoteForm(m[1] ?? m[2] ?? m[3] ?? "");
-      const replacement = quoteForm(m[4] ?? m[5] ?? m[6] ?? "");
+      const run = delimitedText(m, 1);
+      const replacement = delimitedText(m, 1 + DELIMITED_GROUPS);
       if (replacement.length === 0 || replacement === run) continue;
       if (!isRunOfTarget(run, target)) continue;
       const runWords = words(run);
@@ -505,23 +549,87 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
 }
 
 /**
- * A comment request passes the scorer when, beyond the quotation and any
- * first-person refusing sentence, the reply says at least this much AND names
- * something in the target (one of its content tokens: a word, a figure). That
- * is all it can see. Whether the reply says what is wrong — and whether that
- * is sound — is the reader's (brief, group 3). It fails a reply that names
- * nothing in the target, and it PASSES a topical non-answer: a verdict that
- * the figure is fine, a promise to comment later, a question back, praise,
- * or a refusal that points at the sentence. See `REWRITE_SIMILARITY`.
+ * Words that say a quoted token is wrong. Used only for a ONE-token partial
+ * quote in a comment request, which must be a figure, a date or a name that
+ * the reply calls wrong in the same sentence (the owner's ruling on PR #2415).
+ */
+const SAYS_WRONG =
+  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|should\s+(?:be|read|say)|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:is|isn['’]?t|are|aren['’]?t)\s+(?:not\s+)?(?:right|correct|accurate)|not\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
+
+/** A token that can be named as wrong on its own: a figure, a date's number, or a name (capitalised). */
+function isNameableToken(word: string): boolean {
+  return /\d/.test(word) || /^[^\p{L}\p{N}]*\p{Lu}/u.test(word);
+}
+
+/**
+ * A partial quotation for a comment request (the owner's ruling on PR #2415):
+ * a delimited, verbatim run of the target's whole words that the comment is
+ * about. At least PARTIAL_RUN_MIN_WORDS words, or one token that is a figure,
+ * a date or a name and that the same sentence calls wrong. The longest such
+ * run, or null. Whether the reply then says what is wrong is checked by the
+ * caller, as for a whole-target quote.
+ */
+export function partialQuoteRun(reply: string, target: string): string | null {
+  const text = reply.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'");
+  const one = new RegExp(DELIMITED, "g");
+  let best: string | null = null;
+  for (const line of text.split("\n")) {
+    for (const m of line.matchAll(one)) {
+      const run = delimitedText(m, 1);
+      if (!isRunOfTarget(run, target)) continue;
+      const runWords = words(run);
+      if (runWords.length === 0) continue;
+      if (runWords.length < PARTIAL_RUN_MIN_WORDS) {
+        if (!isNameableToken(runWords[0])) continue;
+        const at = m.index ?? 0;
+        const sentenceStart = Math.max(0, ...[". ", "! ", "? ", "; "].map((p) => line.lastIndexOf(p, at) + 1));
+        const rest = line.slice(at + m[0].length);
+        const stop = rest.search(/[.!?;](?:\s|$)/);
+        const sentence = line.slice(sentenceStart, at + m[0].length + (stop === -1 ? rest.length : stop));
+        if (!SAYS_WRONG.test(sentence)) continue;
+      }
+      if (best === null || run.length > best.length) best = run;
+    }
+  }
+  return best;
+}
+
+/**
+ * A comment request passes the scorer when it meets the quote rule — the whole
+ * target verbatim, a correction pair over a run of it (`partialQuoteChange`),
+ * or a partial run the comment is about (`partialQuoteRun`) — and, beyond the
+ * quotation and any first-person refusing sentence, the reply says at least
+ * COMMENT_MIN_OTHER_CHARS AND names something in the target (one of its
+ * content tokens: a word, a figure). A correction pair needs no more: it says
+ * what the run should be (its one-word run, too, must be a figure, a date or a
+ * name). That is all the scorer can see. Whether the reply
+ * says what is wrong — and whether that is sound — is the reader's (brief,
+ * group 3). The quote rule is necessary, not sufficient: the scorer PASSES a
+ * topical non-answer — a verdict that the figure is fine, a promise to comment
+ * later, a question back, praise, or a refusal that points at the sentence.
+ * See `REWRITE_SIMILARITY`.
  */
 function scoreOfferComment(reply: string, target: string): ScoreResult {
   if (reply.trim().length === 0) return { pass: false, failureMode: "NO_REPLY", notes: [] };
-  const original = quotedForm(reply, target);
+  const whole = quotedForm(reply, target);
+  if (whole === null) {
+    const pair = partialQuoteChange(reply, target);
+    // A one-word run must be a figure, a date or a name here too; the pair's
+    // replacement is what says it is wrong.
+    const runWords = pair ? words(pair.run) : [];
+    if (pair && (runWords.length >= PARTIAL_RUN_MIN_WORDS || isNameableToken(runWords[0] ?? ""))) {
+      return {
+        pass: true,
+        notes: [`partial quote: ${pair.run.slice(0, 80)} → ${pair.replacement.slice(0, 80)}`],
+      };
+    }
+  }
+  const original = whole ?? partialQuoteRun(reply, target);
   if (original === null) {
     return {
       pass: false,
       failureMode: "NO_QUOTE",
-      notes: ["does not quote the whole target text verbatim"],
+      notes: ["quotes neither the whole target verbatim nor a run of its words that the comment is about"],
     };
   }
   // What is left once the quotation and every refusing sentence are removed.
@@ -546,7 +654,7 @@ function scoreOfferComment(reply: string, target: string): ScoreResult {
       notes: ["quotes the target but says nothing the scorer can tie to it"],
     };
   }
-  return { pass: true, notes: [] };
+  return { pass: true, notes: whole === null ? [`partial quote: ${original.slice(0, 80)}`] : [] };
 }
 
 // --- editing-tier predicates (the June scorer, on the shipped write log) -----
