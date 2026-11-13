@@ -343,6 +343,24 @@ process.stdin.on("data", (chunk) => {
       setInterval(() => writeRecord(`alive-${process.pid}.json`, { devNullFd, at: Date.now() }), 250)
         .unref?.();
     }
+    // #2358 PR 3a (opt-in): the FIRST stub process in this record dir answers
+    // its first turn with Claude Code's not-signed-in refusal, so the
+    // supervisor's sign-in trip kills it; later processes answer normally.
+    if (process.env.TANDEM_STUB_CLAUDE_NOT_SIGNED_IN_ONCE === "1" && seq === 0 && recordDir) {
+      const marker = path.join(recordDir, "not-signed-in-used");
+      let first = false;
+      try {
+        fs.writeFileSync(marker, String(process.pid), { flag: "wx" });
+        first = true;
+      } catch {}
+      if (first) {
+        writeRecord(`not-signed-in-${process.pid}.json`, { at: Date.now() });
+        process.stdout.write(
+          `${JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login" })}\n`,
+        );
+        continue;
+      }
+    }
     // Real ordering: the turn arrives, THEN `init`, then the result.
     emitInit();
     setTimeout(() => {

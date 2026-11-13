@@ -97,7 +97,8 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
   /**
    * The bind fact (#2358 PR 3a, R3.5): the serial of the spawn of Tandem's
    * own Claude this transport bound to at `initialize`, never the handle.
-   * Counts only while that spawn is live (`isSpawnLive`); a dark server never
+   * Counts only while that spawn is live (`isSpawnLive`): teardown does not
+   * clear it, so every reader (3b's rule 0 first) must apply that mask. A dark server never
    * sets it. Nothing reads it in 3a except tests.
    */
   boundSpawn?: number;

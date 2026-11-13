@@ -115,15 +115,28 @@ const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
 // unconditionally — a secret filter does not switch off with a flag. The
 // installer also covers `console.debug`, `console.trace` and `console.dir`.
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
+/** One log line to stderr. Never throws: a log line is not worth a crash. */
+function writeLogLine(line: string): void {
+  try {
+    originalStderrWrite(line + "\n");
+  } catch {
+    // A synchronously failing stderr: the line is lost, as Node's console loses it.
+  }
+}
 if (isProduction) {
   // `formatLogLine`, not `args.map(String).join(" ")`: the old shape printed
   // every `%s`/`%d` placeholder literally and truncated Errors to
   // `name: message`, dropping the stack (#1823 item 1).
-  installLogRedaction(console, (line) => originalStderrWrite(line + "\n"), formatLogLine);
+  installLogRedaction(console, writeLogLine, formatLogLine);
 } else {
   // The plain shape: what Node's own `console.error` prints (colours where it
-  // would use them), with `log`, `warn` and `info` going the same way.
-  installLogRedaction(console, (line) => originalStderrWrite(line + "\n"));
+  // would use them), with `log`, `warn` and `info` going the same way. Node's
+  // console ignores errors on the stream it writes to (`ignoreErrors`); this
+  // shape used to keep it, so a closed stderr (Claude Code gone in stdio
+  // mode, a pager that quit) must stay a lost line, never an uncaught EPIPE.
+  // The sidecar shape has `installSidecarPipeGuard` for the same reason.
+  process.stderr.on("error", () => {});
+  installLogRedaction(console, writeLogLine);
 }
 
 const transportMode = (process.env.TANDEM_TRANSPORT || "http").toLowerCase();

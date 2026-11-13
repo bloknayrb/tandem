@@ -99,6 +99,17 @@ async function waitFor<T>(probe: () => T | null | undefined | false, label: stri
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Every console.error line from here on, passed through to the real console. */
+function captureErrors(): () => string[] {
+  const lines: string[] = [];
+  const real = console.error.bind(console);
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+    real(...args);
+  });
+  return () => lines;
+}
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {
@@ -370,6 +381,7 @@ describe("the write's re-checks (R1.8, Ruling M)", () => {
   it("planAndSpawn: a shutdown (stop()) during a locked start(): no child, no file", async () => {
     const h = holdWrite(1);
     const sup = makeSupervisor({ runFileWriteHold: h.hold });
+    const logs = captureErrors();
     const started = sup.start();
     await h.reached.promise;
     const stopped = sup.stop();
@@ -377,6 +389,10 @@ describe("the write's re-checks (R1.8, Ruling M)", () => {
     await started;
     await stopped;
     await sleep(100);
+    // Not vacuous: without the re-check the stub is spawned and then killed
+    // by the stop before it can record itself, so the log line is the proof.
+    expect(logs().filter((l) => l.includes("Spawning Claude via reaper"))).toEqual([]);
+    expect(logs().some((l) => l.includes("Not spawning: Tandem is shutting down"))).toBe(true);
     expect(records("spawn-")).toEqual([]);
     expect(runFilesOnDisk()).toEqual([]);
     expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
@@ -385,6 +401,7 @@ describe("the write's re-checks (R1.8, Ruling M)", () => {
   it("planAndSpawn: a crash restart whose write is held while a locked start() spawns finds a child, spawns nothing, deletes its files", async () => {
     const h = holdWrite(2);
     const sup = makeSupervisor({ runFileWriteHold: h.hold });
+    const logs = captureErrors();
     await sup.startFresh(spawnDir); // write 1
     const first = await waitFor(() => records<SpawnRecord>("spawn-")[0], "spawn 1");
     process.kill(first.pid, "SIGKILL");
@@ -400,6 +417,9 @@ describe("the write's re-checks (R1.8, Ruling M)", () => {
     );
     h.gate.resolve();
     await sleep(300);
+    // The re-check, not spawnOnce's "already running" guard, refused it.
+    expect(logs().some((l) => l.includes("Not spawning: a Claude started meanwhile"))).toBe(true);
+    expect(logs().filter((l) => l.includes("Spawn failed"))).toEqual([]);
     expect(records("spawn-")).toHaveLength(2);
     // Only the started spawn's files remain (spawn 2 has not bound).
     expect(runFilesOnDisk().sort()).toEqual(
@@ -419,6 +439,7 @@ describe("the write's re-checks (R1.8, Ruling M)", () => {
   it("planAndSpawn: the other order — a locked start() held while a crash restart spawns", async () => {
     const h = holdWrite(2);
     const sup = makeSupervisor({ runFileWriteHold: h.hold, restartBackoffsMs: [400] });
+    const logs = captureErrors();
     await sup.startFresh(spawnDir); // write 1
     const first = await waitFor(() => records<SpawnRecord>("spawn-")[0], "spawn 1");
     process.kill(first.pid, "SIGKILL");
@@ -434,6 +455,8 @@ describe("the write's re-checks (R1.8, Ruling M)", () => {
     h.gate.resolve();
     await started;
     await sleep(200);
+    expect(logs().some((l) => l.includes("Not spawning: a Claude started meanwhile"))).toBe(true);
+    expect(logs().filter((l) => l.includes("Spawn failed"))).toEqual([]);
     expect(records("spawn-")).toHaveLength(2);
     const snap = ownerHandleBindSnapshotForTests();
     expect(snap.spawns).toHaveLength(1);
@@ -598,6 +621,31 @@ describe("teardown on every exit path (R4)", () => {
   });
 });
 
+describe("the remaining R4.4 exit paths", () => {
+  it("reaperPath() throwing (no reaper anywhere): no run file, no spawn state", async () => {
+    process.env.TANDEM_REAPER_PATH = path.join(recordDir, "no-such-reaper");
+    const sup = makeSupervisor();
+    await expect(sup.startFresh(spawnDir)).rejects.toThrow();
+    await sleep(100);
+    expect(runFilesOnDisk()).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+  });
+
+  it.runIf(POSIX)(
+    "an early 'error' before 'spawn' (an unrunnable reaper, EACCES): no run file, no spawn state (POSIX)",
+    async () => {
+      const unrunnable = path.join(recordDir, "reaper-not-executable");
+      fs.writeFileSync(unrunnable, "", { mode: 0o644 });
+      process.env.TANDEM_REAPER_PATH = unrunnable;
+      const sup = makeSupervisor();
+      await expect(sup.startFresh(spawnDir)).rejects.toThrow();
+      await sleep(200);
+      expect(runFilesOnDisk()).toEqual([]);
+      expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+    },
+  );
+});
+
 describe("the boot sweep (R1.9)", () => {
   function plantOld(name: string) {
     fs.mkdirSync(launcherDir(), { recursive: true, mode: 0o700 });
@@ -626,8 +674,12 @@ describe("the boot sweep (R1.9)", () => {
 describe("flag off: master's spawn exactly (Ruling I, the dark requirement)", () => {
   it("no new argument, no launcher/ directory, no handle, no sweep", async () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
-    const old = path.join(tmpDir, "keep");
-    fs.writeFileSync(old, "");
+    // A matching run file two hours old: a flag-on boot would sweep it.
+    fs.mkdirSync(launcherDir(), { mode: 0o700 });
+    const old = path.join(launcherDir(), `tandem-run-mcp-${"7".repeat(32)}.json`);
+    fs.writeFileSync(old, "{}");
+    const twoHoursAgo = (Date.now() - 2 * RUN_FILE_SWEEP_AGE_MS) / 1000;
+    fs.utimesSync(old, twoHoursAgo, twoHoursAgo);
     const sup = makeSupervisor();
     await sup.start();
     const [rec] = await waitFor(() => {
@@ -639,7 +691,8 @@ describe("flag off: master's spawn exactly (Ruling I, the dark requirement)", ()
     expect(buildClaudeArgs({ sessionId: tail[1], resuming: tail[0] === "--resume" })).toEqual(
       rec.claudeArgs,
     );
-    expect(fs.existsSync(launcherDir())).toBe(false);
+    // Nothing swept, nothing written.
+    expect(fs.readdirSync(launcherDir())).toEqual([path.basename(old)]);
     expect(records("runfiles-")).toEqual([]);
     expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
   });

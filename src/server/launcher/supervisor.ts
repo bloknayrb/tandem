@@ -1326,9 +1326,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * `start()`. While up, no message starts Claude, whatever lands on the lock
    * after it — including an Off that re-arms the standby watch (#2196). */
   let shuttingDown = false;
-  /** Bumped with `shuttingDown` by every `stop()` (#2358 PR 3a, R1.8): the
-   * run-file write re-checks "a shutdown began DURING the write" by comparing
-   * it across the await, so a start after an earlier `stop()` is unchanged. */
+  /** Bumped with `shuttingDown` by every `stop()` (#2358 PR 3a, Ruling M):
+   * the relaunch path re-checks "a shutdown began during this relaunch" by
+   * comparing it with its value at `stopAndSpawn`'s entry, so a relaunch after
+   * an earlier `stop()` is unchanged. */
   let shutdownCount = 0;
   /** The boot found the v1.0 walkthrough owed (#2198), whatever the start
    * mode: an `awaiting-start` standby is then the walkthrough's to release, if
@@ -3201,7 +3202,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // a failed write awaited too, and a stop can have landed during it.
     let run: SpawnRun | null = null;
     if (ownershipEnabled()) {
-      const shutdownsBefore = shutdownCount;
       run = await prepareRun(plan);
       const why =
         child !== null
@@ -3210,7 +3210,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             ? "a stop or relaunch was requested"
             : breakerTripped
               ? "the breaker tripped"
-              : shuttingDown && shutdownCount !== shutdownsBefore
+              : // Raw: every caller that reaches here after a `stop()` either
+                // lowered it first (a locked `start()`) or is caught by the
+                // epoch above (a crash restart).
+                shuttingDown
                 ? "Tandem is shutting down"
                 : null;
       const lateRefusal = why === null ? decideRefusal() : null;
@@ -3381,6 +3384,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     clearSession: boolean,
     byMessage: boolean,
   ): Promise<RespawnResult> {
+    // A shutdown that begins anywhere in this relaunch (the stop's exit wait,
+    // the plan read, the run-file write) is caught after the write (#2358 PR
+    // 3a, Ruling M). Counted from here rather than read raw: `stop()` leaves
+    // `shuttingDown` raised, and a relaunch after an earlier `stop()` spawns,
+    // as before.
+    const shutdownsAtEntry = shutdownCount;
     await stopInternal();
     // Resolved before the session is dropped (#2199 review): a Start fresh
     // that finds no Claude Code must not have deleted the conversation on its
@@ -3449,7 +3458,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // the lock) and the licence can move. Flag off, nothing here runs.
     let run: SpawnRun | null = null;
     if (ownershipEnabled()) {
-      const shutdownsBefore = shutdownCount;
       run = await prepareRun(plan);
       const refusal = decideRefusal();
       if (refusal) {
@@ -3459,7 +3467,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         if (child === null) recordLicenceRefusal(refusal);
         throw new LicenseRefusedError(refusal);
       }
-      if (shuttingDown && shutdownCount !== shutdownsBefore) {
+      if (shuttingDown && shutdownCount !== shutdownsAtEntry) {
         run?.discard();
         console.error("[Launcher] Not spawning: Tandem is shutting down");
         return { spawned: false, why: "shutting-down" };

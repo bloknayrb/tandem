@@ -116,12 +116,13 @@ describe("installLogRedaction (R5.3)", () => {
 describe("index.ts installs it on both console shapes (source pin)", () => {
   const src = readFileSync(path.resolve(__dirname, "../../src/server/index.ts"), "utf8");
   it("the production shape and the plain shape both call the installer", () => {
+    expect(src).toMatch(/installLogRedaction\(console, writeLogLine, formatLogLine\);/);
+    expect(src).toMatch(/installLogRedaction\(console, writeLogLine\);/);
+    // A closed stderr stays a lost line, as under Node's own console (no EPIPE crash).
     expect(src).toMatch(
-      /installLogRedaction\(console, \(line\) => originalStderrWrite\(line \+ "\\n"\), formatLogLine\);/,
+      /process\.stderr\.on\("error", \(\) => \{\}\);\s*installLogRedaction\(console, writeLogLine\);/,
     );
-    expect(src).toMatch(
-      /installLogRedaction\(console, \(line\) => originalStderrWrite\(line \+ "\\n"\)\);/,
-    );
+    expect(src).toMatch(/function writeLogLine\(line: string\): void \{\s*try \{/);
     expect(src).not.toMatch(/console\.log = console\.error/);
   });
 

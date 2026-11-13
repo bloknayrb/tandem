@@ -68,6 +68,8 @@ const ENV_KEYS = [
   "TANDEM_STUB_CLAUDE_RECORD_DIR",
   "TANDEM_STUB_CLAUDE_START_BRIDGE",
   "TANDEM_STUB_CLAUDE_LEAK",
+  "TANDEM_STUB_CLAUDE_NOT_SIGNED_IN_ONCE",
+  "TANDEM_STUB_CLAUDE_EXIT_DELAY_MS",
 ] as const;
 const saved: Record<string, string | undefined> = {};
 
@@ -211,11 +213,83 @@ describe("the chain: launcher → child → real bridge → real server (R1–R3
     // R5: no log line, bridge stderr or record a test could snapshot carries
     // a handle. Not vacuous: the transport bound above.
     for (const l of lines) expect(l).not.toMatch(HANDLE_RE);
+    // Nothing even handed the handle to the console: the sink had nothing to
+    // redact (the lines above were captured after redaction).
+    for (const l of lines) expect(l).not.toContain("th_[redacted]");
     for (const r of records<{ text: string }>("bridge-stderr-")) {
       expect(r.text).not.toMatch(HANDLE_RE);
     }
     const health = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.text());
     expect(health).not.toMatch(HANDLE_RE);
+  }, 60_000);
+
+  it("the superseded spawn's late teardown leaves the newer spawn bound; its handle still binds a new transport (R4.3, design §17)", async () => {
+    // Spawn 1 is tripped by the sign-in check (its run state ends then, R4.4)
+    // and lingers 6 s before exiting, so its exit — and the second, late run
+    // of its teardown — lands after spawn 2 has started and bound.
+    process.env.TANDEM_STUB_CLAUDE_NOT_SIGNED_IN_ONCE = "1";
+    process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "6000";
+    const s = start();
+    await s.startFresh(spawnDir);
+    const first = await waitFor(() => records<RunRec>("runfiles-")[0], "spawn 1");
+    await waitFor(() => records("not-signed-in-").length > 0, "the sign-in trip");
+    await waitFor(() => s.status().running === false, "the trip's kill");
+    await s.relaunch(spawnDir);
+    const second = await waitFor(
+      () => records<RunRec>("runfiles-").find((r) => r.pid !== first.pid),
+      "spawn 2",
+    );
+    const serial2 = await waitFor(() => {
+      const snap = ownerHandleBindSnapshotForTests();
+      const live = snap.spawns.find((x) => x.serial === snap.current && x.bound.length > 0);
+      return live?.serial;
+    }, "spawn 2 bound");
+    expect(records("exited-")).toEqual([]); // spawn 1 has not exited yet
+    await waitFor(() => records("exited-").length > 0, "spawn 1's late exit", 15_000);
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(ownerHandleBindSnapshotForTests().current).toBe(serial2);
+    expect(
+      mcpSessionBindsForTests().filter((b) => b.boundSpawn === serial2).length,
+    ).toBeGreaterThan(0);
+    expect(fs.existsSync(second.settingsPath)).toBe(true);
+    expect(fs.existsSync(first.settingsPath)).toBe(false);
+    expect(fs.existsSync(first.mcpConfigPath)).toBe(false);
+
+    // Spawn 2's handle still binds a new transport; spawn 1's binds nothing.
+    const handleOf = (pid: number) =>
+      (
+        JSON.parse(fs.readFileSync(path.join(recordDir, `runfiles-${pid}.json`), "utf8")) as {
+          mcp: { value: { mcpServers: { tandem: { env: Record<string, string> } } } };
+        }
+      ).mcp.value.mcpServers.tandem.env.TANDEM_OWNER_HANDLE;
+    const init = async (handle: string, sid: string) => {
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          "X-Tandem-Owner-Handle": handle,
+          "X-Claude-Session-Id": sid,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "x", version: "1" },
+          },
+        }),
+      });
+      await res.text();
+      return res.headers.get("mcp-session-id") ?? "";
+    };
+    const fresh = await init(handleOf(second.pid), second.sessionId);
+    expect(mcpSessionBindsForTests().find((b) => b.sessionId === fresh)?.boundSpawn).toBe(serial2);
+    const stale = await init(handleOf(first.pid), first.sessionId);
+    expect(mcpSessionBindsForTests().find((b) => b.sessionId === stale)?.boundSpawn).toBeNull();
   }, 60_000);
 
   it("a handle-shaped string on the child's stderr and in a bad {-line on its stdout reaches the console redacted", async () => {
