@@ -30,6 +30,7 @@ import {
   attachCtrlObservers,
   attachObservers,
   emitModeReleaseWake,
+  getBufferedSelection,
   replaySince,
   resetForTesting,
   subscribe,
@@ -208,12 +209,15 @@ function select(stamp: number, from = 0, to = 5): void {
 /** Wait out the selection dwell (set to its minimum in `beforeEach`). */
 const dwell = () => new Promise((r) => setTimeout(r, SELECTION_DWELL_MIN_MS + 150));
 
-const pushedSelection = (id: string) =>
-  (
-    external.find(
-      (e) => e.type === "chat:message" && (e.payload as { messageId?: string }).messageId === id,
-    )?.payload as { selection?: { selectedText?: string } } | undefined
-  )?.selection;
+/** The selection a chat message's push carried. The push itself must exist
+ *  (round-2 item 5): a dropped event would otherwise read as "no selection". */
+const pushedSelection = (id: string) => {
+  const event = external.find(
+    (e) => e.type === "chat:message" && (e.payload as { messageId?: string }).messageId === id,
+  );
+  expect(event, `the chat push for ${id}`).toBeDefined();
+  return (event?.payload as { selection?: { selectedText?: string } }).selection;
+};
 
 async function poll(args: Record<string, unknown> = {}): Promise<Inbox> {
   const result = await client.callTool({ name: "tandem_checkInbox", arguments: args });
@@ -351,6 +355,23 @@ for (const ownership of ["", "1"] as const) {
         emitModeReleaseWake();
         expect(external).toEqual([]);
         expect(internal.map((e) => e.type)).toContain("chat:message");
+      });
+
+      it("positive twin (round-2 item 12): the same five, with no local period, each reach the external consumer", async () => {
+        annotation("mine", { author: "claude", type: "comment" });
+        external = [];
+        userChat("plain");
+        annotation("c-plain");
+        userReplyOn("mine", "r-plain");
+        setStatus("mine", "accepted");
+        emitModeReleaseWake();
+        expect(external.map((e) => e.type)).toEqual([
+          "chat:message",
+          "annotation:created",
+          "annotation:reply",
+          "annotation:accepted",
+          "annotation:created", // the Solo release wake
+        ]);
       });
 
       it("a replay with any Last-Event-ID yields nothing", async () => {
@@ -559,13 +580,14 @@ for (const ownership of ["", "1"] as const) {
         expect(inbox.activity.selectionAt).toBe(222);
       });
 
-      it("Claude edits above, and separately inside, a held selection: still held, in activity and on the push", async () => {
+      it("a held selection remapped as the editor does after an edit above it, and after one inside it (same stamp, new range): still held, in activity and on the push", async () => {
         await toLocal();
         select(111, 6, 11); // "world"
         await dwell();
         await toClaude();
-        // The editor remaps a selection on a Y-driven change and carries its
-        // stamp (#1991): above — shifted by the insertion, same stamp.
+        // No edit is made here: these writes are what the editor publishes
+        // when it remaps a selection on a Y-driven change, carrying its stamp
+        // (#1991). Above — shifted by an insertion, same stamp.
         select(111, 9, 14);
         await dwell();
         external = [];
@@ -598,7 +620,12 @@ for (const ownership of ["", "1"] as const) {
         select(111);
         await dwell(); // S1 buffered
         select(222); // S2 made within its dwell, before the switch back
-        await toClaude(); // records S2's stamp; S1 is still in the buffer
+        // Deterministic (round-2 item 5): S1 is what the buffer holds at the
+        // switch back. Were S2's dwell to fire first, this fails rather than
+        // passing on S2's stamp alone.
+        expect(getBufferedSelection(doc.id)?.stamp).toBe(111);
+        await toClaude(); // records S2's stamp; S1 is cleared from the buffer
+        expect(getBufferedSelection(doc.id)?.stamp).not.toBe(111);
         external = [];
         userChat("d", "x", doc.id);
         expect(pushedSelection("d")).toBeUndefined();
@@ -814,6 +841,10 @@ for (const ownership of ["", "1"] as const) {
       const ctrlFile = () => path.join(SESSION_DIR, `${CTRL_ROOM}.json`);
       const record = () =>
         (JSON.parse(fs.readFileSync(ctrlFile(), "utf8")) as { localPeriod?: unknown }).localPeriod;
+      // No test may be satisfied by the file an earlier one left (round-2 item 12).
+      beforeEach(() => {
+        fs.rmSync(ctrlFile(), { force: true });
+      });
 
       /** Wait until the switch's own queued write (the third write site) holds `open`. */
       async function switchWrote(open: boolean): Promise<void> {
@@ -829,7 +860,10 @@ for (const ownership of ["", "1"] as const) {
       }
 
       /** A process restart: module memory, the CTRL doc and the observers
-       *  gone; the files kept. Then the boot order of `index.ts`. */
+       *  gone; the files kept. Then a HAND COPY of `index.ts`'s boot order
+       *  (CTRL restore, priming, then `wireLocalPeriod`), not the boot itself;
+       *  the order it copies is pinned against `index.ts` by
+       *  `tests/server/boot-order.test.ts`. */
       async function restartServer(answererOnDisk?: "local" | "claude"): Promise<void> {
         await __flushLocalModelAnnouncedForTests();
         unsubscribe(extCb);
@@ -1010,14 +1044,19 @@ describe("the dark guard", () => {
     try {
       const tools = await c.listTools();
       const inbox = tools.tools.find((t) => t.name === "tandem_checkInbox");
-      const props = Object.keys(
-        (inbox?.outputSchema as { properties?: Record<string, unknown> }).properties ?? {},
-      ).sort();
-      expect(props).not.toContain("localModelAnswersChat");
-      // Master's shape (with ownership's own field when that flag is on).
-      expect(props.filter((k) => k !== "ownership")).toEqual(
-        Object.keys(checkInboxOutputShape).sort(),
+      const schema = inbox?.outputSchema as { properties?: Record<string, unknown> };
+      expect(Object.keys(schema.properties ?? {})).not.toContain("localModelAnswersChat");
+      // Master's bytes, frozen (round-2 item 11): the schema origin/master
+      // served at eea6728, dumped once with ownership off and once on. Which
+      // one applies is read from the schema itself, never from the flag (only
+      // ownership-anchor.test.ts may key on it).
+      const frozen = Object.hasOwn(schema.properties ?? {}, "ownership")
+        ? "master-checkinbox-output-schema.ownership.json"
+        : "master-checkinbox-output-schema.json";
+      const master = JSON.parse(
+        fs.readFileSync(path.join(process.cwd(), "tests/fixtures/local-period", frozen), "utf8"),
       );
+      expect(schema).toEqual(master);
     } finally {
       await done();
     }

@@ -2347,7 +2347,7 @@ function documentLabels(
  * to arm a watch or where to reply (pinned by a test).
  */
 export const LOCAL_PERIOD_STATUS_LINE =
-  "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem. You do not need to wait for this; a later poll will say when chat is answered by Claude again. If you already have a Tandem wake watch running, leave it running.";
+  "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem. You do not need to wait for this; a later poll will no longer carry this line once chat is answered by Claude again. If you already have a Tandem wake watch running, leave it running.";
 
 /** The R2.4 sentence: chat owed to Claude at the switch, handed after it,
  *  named by id (so a poll mixing old and new chat says which are old). No

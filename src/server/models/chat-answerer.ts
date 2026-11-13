@@ -727,26 +727,28 @@ export async function setChatAnswerer(
     await enqueue(async () => {
       how = makeDiskClaudeSync(own);
       if (how === "failed") await writeClaudeAsync(own);
-      // The user's own switch to Claude, after every local step queued ahead
-      // of it: a superseded own-window request may have recorded "chosen"
-      // after this request read the record, and the clear that undoes it may
-      // have failed. Clear it here, or write again what failed, so the next
-      // start does not announce a change the user did not make (round-1
-      // re-review, the generated sequence seed 63).
-      if (own && (answererLocalWasChosen() || answererChosenMayBeOnDisk())) {
+      // After every local step queued ahead of it: a superseded own-window
+      // request may have recorded "chosen" after this request read the
+      // record, and the withdrawal that undoes it may have failed. Clear it
+      // here, or write again what failed, so the next start does not
+      // announce a change nobody made (round-1 re-review, seed 63). The
+      // user's own request always; another only when it began with nothing
+      // chosen (round-2 item 2) — one that began with "chosen" owes its
+      // announcement, and that record stays until a window is told.
+      if ((own || !wasChosen) && (answererLocalWasChosen() || answererChosenMayBeOnDisk())) {
         recordedInQueue = true;
         recorded = recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
       }
     });
     const result = await settled("claude", seq !== mine);
-    // The user's own switch is silent at the next start only if the file
-    // carries its mark, or the record was cleared: a missing or unmarked file
-    // with a record still saying "chosen" would be announced. So when the
-    // mark did not land, its success waits for that record write (#1123
-    // review round 3).
+    // A missing or unmarked Claude file with a record still saying "chosen"
+    // is announced at the next start. So when the mark is not on disk, the
+    // response waits for the record write that clears it: the user's own
+    // switch's (#1123 review round 3), and the in-queue re-check's for any
+    // request — which, failing, leaves "chosen" on record although no local
+    // model answered (round-2 item 2). Either failing says unsaved.
     if (
-      own &&
-      (wasChosen || recordedInQueue) &&
+      ((own && wasChosen) || recordedInQueue) &&
       result.persisted &&
       readState(filePath()) !== "claude-own" &&
       !(await recorded)
@@ -773,10 +775,17 @@ export async function setChatAnswerer(
     // request records only restates it, and superseding it must not take it
     // back (round-1 re-review B1-R).
     const chosenBefore = answererLocalWasChosen();
-    // The user's own marked Claude is on disk and in effect: what a failed
-    // switch puts back must carry the mark, even when the start-up read failed
-    // and did not seed it (#1123 A2 review, item 25).
-    if (effective === "claude" && readState(filePath()) === "claude-own") claudeIsOwn = true;
+    // Whose Claude is in effect, read from the disk at every step (round-2
+    // item 7): the user's own marked Claude, so a failed switch puts the mark
+    // back even when the start-up read failed and did not seed it (item 25);
+    // or a program's unmarked Claude written since the user's own switch, so
+    // a failed switch never puts the user's mark back over it. A read that
+    // tells neither (unreadable, missing, invalid) keeps what is known.
+    if (effective === "claude") {
+      const onDisk = readState(filePath());
+      if (onDisk === "claude-own") claudeIsOwn = true;
+      else if (onDisk === "claude") claudeIsOwn = false;
+    }
     const outcome = await writeLocal();
     // A later request arrived while this one wrote: it reconciles.
     if (seq !== mine) return;
@@ -815,8 +824,12 @@ export async function setChatAnswerer(
           if (makeDiskClaudeSync(claudeIsOwn) === "failed") await writeClaudeAsync(claudeIsOwn);
           // The record says "chosen" only while the local model is in effect
           // (review item 1): an earlier request of this run that recorded its
-          // choice and was superseded by this failed one leaves it behind.
-          if (answererLocalWasChosen()) await recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+          // choice and was superseded by this failed one leaves it behind —
+          // in memory, or on disk only, when that request's withdrawal write
+          // failed (round-2 item 2).
+          if (answererLocalWasChosen() || answererChosenMayBeOnDisk()) {
+            await recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+          }
         }
         return;
       }

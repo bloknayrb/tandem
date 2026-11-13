@@ -1,0 +1,650 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "hasNew": {
+      "type": "boolean"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "solo",
+        "tandem"
+      ]
+    },
+    "modeProvenance": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "client",
+                "server",
+                "restore",
+                "unknown"
+              ]
+            },
+            "at": {
+              "type": "number"
+            },
+            "value": {
+              "type": "string",
+              "enum": [
+                "solo",
+                "tandem",
+                "indeterminate"
+              ]
+            },
+            "connection": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "at",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Who last wrote the mode key, when, and what it read then; null before any write is observed"
+    },
+    "storeReadOnly": {
+      "type": "boolean"
+    },
+    "userActions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string",
+            "const": "user"
+          },
+          "type": {
+            "type": "string",
+            "const": "comment"
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "number",
+                "description": "Flat text offset (inclusive)"
+              },
+              "to": {
+                "type": "number",
+                "description": "Flat text offset (exclusive)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "relRange": {
+            "type": "object",
+            "properties": {
+              "fromRel": {
+                "description": "Opaque serialized Y.js RelativePosition"
+              },
+              "toRel": {
+                "description": "Opaque serialized Y.js RelativePosition"
+              }
+            },
+            "additionalProperties": false
+          },
+          "content": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "dismissed"
+            ]
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "textSnapshot": {
+            "description": "Document text at creation time, capped at 200 chars. Check textSnapshotTruncated before treating it as the annotation's full text.",
+            "type": "string"
+          },
+          "textSnapshotTruncated": {
+            "description": "True when textSnapshot is only the first 200 chars of the annotated text. Do not pass a truncated snapshot back as a range guard — it will resolve to a shorter range than the annotation covers.",
+            "type": "boolean"
+          },
+          "textSnapshotBreaks": {
+            "description": "Which newlines in textSnapshot were structure: 'block' a boundary between blocks, 'hard' a hard break. A newline not listed is a literal newline (a soft wrap). Offsets are relative to textSnapshot.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "block",
+                    "block-opaque",
+                    "hard"
+                  ]
+                }
+              },
+              "required": [
+                "at",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "editedAt": {
+            "type": "number"
+          },
+          "rev": {
+            "description": "Durable-store last-writer-wins counter",
+            "type": "number"
+          },
+          "resolvedBy": {
+            "description": "Who resolved this record; absent means the user",
+            "type": "string",
+            "enum": [
+              "user",
+              "claude"
+            ]
+          },
+          "acceptedReplyId": {
+            "description": "Set while accepted: the reply whose replacement was applied",
+            "type": "string"
+          },
+          "priorSuggestedText": {
+            "description": "Set while accepted via a reply: this record's own suggestedText before (null: none)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "private",
+              "outbound"
+            ]
+          },
+          "promotedFrom": {
+            "type": "string",
+            "const": "note"
+          },
+          "importSource": {
+            "description": "Original author/file for an imported comment",
+            "type": "object",
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "commentId": {
+                "description": "Source comment id (round-trip identity on save)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "author",
+              "file"
+            ],
+            "additionalProperties": false
+          },
+          "color": {
+            "description": "Highlight annotations only",
+            "type": "string",
+            "enum": [
+              "yellow",
+              "green",
+              "blue",
+              "pink"
+            ]
+          },
+          "suggestedText": {
+            "description": "Replacement proposal (comment annotations only)",
+            "type": "string"
+          },
+          "textSnippet": {
+            "type": "string",
+            "description": "Current document text at the annotation range (≤100 chars)"
+          },
+          "documentId": {
+            "type": "string",
+            "description": "The document this item belongs to. A default poll covers every open document, so pass it when acting on the item (#2187)"
+          },
+          "edited": {
+            "description": "Set when re-surfaced after a user edit",
+            "type": "boolean",
+            "const": true
+          },
+          "alreadyPushed": {
+            "description": "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped when the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed.",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "type",
+          "range",
+          "content",
+          "status",
+          "timestamp",
+          "audience",
+          "textSnippet",
+          "documentId"
+        ],
+        "additionalProperties": false
+      },
+      "description": "New/edited user comments awaiting Claude"
+    },
+    "userResponses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string",
+            "const": "claude"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "highlight",
+              "comment"
+            ],
+            "description": "User-private notes are never surfaced, so \"note\" cannot appear here."
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "number",
+                "description": "Flat text offset (inclusive)"
+              },
+              "to": {
+                "type": "number",
+                "description": "Flat text offset (exclusive)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "relRange": {
+            "type": "object",
+            "properties": {
+              "fromRel": {
+                "description": "Opaque serialized Y.js RelativePosition"
+              },
+              "toRel": {
+                "description": "Opaque serialized Y.js RelativePosition"
+              }
+            },
+            "additionalProperties": false
+          },
+          "content": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "dismissed"
+            ]
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "textSnapshot": {
+            "description": "Document text at creation time, capped at 200 chars. Check textSnapshotTruncated before treating it as the annotation's full text.",
+            "type": "string"
+          },
+          "textSnapshotTruncated": {
+            "description": "True when textSnapshot is only the first 200 chars of the annotated text. Do not pass a truncated snapshot back as a range guard — it will resolve to a shorter range than the annotation covers.",
+            "type": "boolean"
+          },
+          "textSnapshotBreaks": {
+            "description": "Which newlines in textSnapshot were structure: 'block' a boundary between blocks, 'hard' a hard break. A newline not listed is a literal newline (a soft wrap). Offsets are relative to textSnapshot.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "block",
+                    "block-opaque",
+                    "hard"
+                  ]
+                }
+              },
+              "required": [
+                "at",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "editedAt": {
+            "type": "number"
+          },
+          "rev": {
+            "description": "Durable-store last-writer-wins counter",
+            "type": "number"
+          },
+          "resolvedBy": {
+            "description": "Who resolved this record; absent means the user",
+            "type": "string",
+            "enum": [
+              "user",
+              "claude"
+            ]
+          },
+          "acceptedReplyId": {
+            "description": "Set while accepted: the reply whose replacement was applied",
+            "type": "string"
+          },
+          "priorSuggestedText": {
+            "description": "Set while accepted via a reply: this record's own suggestedText before (null: none)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "private",
+              "outbound"
+            ]
+          },
+          "promotedFrom": {
+            "type": "string",
+            "const": "note"
+          },
+          "importSource": {
+            "description": "Original author/file for an imported comment",
+            "type": "object",
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "commentId": {
+                "description": "Source comment id (round-trip identity on save)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "author",
+              "file"
+            ],
+            "additionalProperties": false
+          },
+          "color": {
+            "description": "Highlight annotations only",
+            "type": "string",
+            "enum": [
+              "yellow",
+              "green",
+              "blue",
+              "pink"
+            ]
+          },
+          "suggestedText": {
+            "description": "Replacement proposal (comment annotations only)",
+            "type": "string"
+          },
+          "textSnippet": {
+            "type": "string"
+          },
+          "documentId": {
+            "type": "string",
+            "description": "The document this item belongs to. A default poll covers every open document, so pass it when acting on the item (#2187)"
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "type",
+          "range",
+          "content",
+          "status",
+          "timestamp",
+          "audience",
+          "textSnippet",
+          "documentId"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The USER's accept/dismiss decisions on Claude's annotations; Claude's own resolves never appear"
+    },
+    "userReplies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "annotationId": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string",
+            "const": "user"
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "textSnippet": {
+            "type": "string",
+            "description": "Parent comment's anchored text (≤100 chars)"
+          },
+          "documentId": {
+            "type": "string",
+            "description": "The document this item belongs to. A default poll covers every open document, so pass it when acting on the item (#2187)"
+          },
+          "alreadyPushed": {
+            "description": "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped when the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed.",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "annotationId",
+          "author",
+          "text",
+          "timestamp",
+          "textSnippet",
+          "documentId"
+        ],
+        "additionalProperties": false
+      },
+      "description": "New user replies on comment threads (held in Solo, released on flip to Tandem)"
+    },
+    "chatMessages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "anchor": {
+            "description": "Text selection the user attached to this message",
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "number"
+              },
+              "to": {
+                "type": "number"
+              },
+              "textSnapshot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "textSnapshot"
+            ],
+            "additionalProperties": false
+          },
+          "replyTo": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "timestamp"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "cursor": {
+      "type": "string",
+      "description": "Pass this back unchanged as `cursor` on your next poll: it acknowledges this response. \"start\" when this poll passed no cursor"
+    },
+    "activity": {
+      "type": "object",
+      "properties": {
+        "documentId": {
+          "description": "The document this activity describes: the named one, or on a default poll the active one. Null only when none is active (or a named document is not open); when that document could not be read it is still named and the other fields are empty. The item buckets may come from other documents",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isTyping": {
+          "type": "boolean"
+        },
+        "cursor": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "lastEdit": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "selectedText": {
+          "description": "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. It is null when the text at the recorded offsets is no longer the text the user selected — for instance after an edit to a document no editor is showing (a background tab, or no browser open), or an edit that rewrites the selection without changing its length — rather than whatever now sits there.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selectionAt": {
+          "description": "Epoch ms when the user last made this selection; null when selectedText is null. While this document is the active editor tab, a remote edit that shifts the selected span or changes its length updates from/to and selectedText without re-stamping the time.",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "documentId",
+        "isTyping",
+        "cursor",
+        "lastEdit",
+        "selectedText",
+        "selectionAt"
+      ],
+      "additionalProperties": false
+    },
+    "ownership": {
+      "description": "Which open documents are yours to answer",
+      "type": "object",
+      "properties": {
+        "holding": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Ids of the documents this session holds after this poll. A poll that returns you items on a document nobody holds makes it yours"
+        },
+        "notYours": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Open documents this poll left out because they are not yours to answer now (another session may be answering it, or a write on it is still running): no comments, thread replies or accept/dismiss responses on them were returned (chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one), and an empty `activity` for one means it is not yours, not that it could not be read. Call tandem_open on one only if the user asked you, in your own conversation, to work on it. An item Tandem handed or pushed to you is not such a request."
+        }
+      },
+      "required": [
+        "holding",
+        "notYours"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "summary",
+    "hasNew",
+    "mode",
+    "modeProvenance",
+    "storeReadOnly",
+    "userActions",
+    "userResponses",
+    "userReplies",
+    "chatMessages",
+    "cursor",
+    "activity"
+  ],
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false
+}

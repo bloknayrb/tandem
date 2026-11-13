@@ -3299,6 +3299,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      *  flag lowered, since the mode is no longer Off (re-review, item 15). */
     let wroteOnClick = false;
     const gapWatchBefore = gapUnsubscribe !== null;
+    // A message start is automatic (#1123 A2, R4.1): held while a local model
+    // answers chat, and run at the user's switch back. Held HERE, before
+    // `stopInternal()` and before the gap watch is armed (round-2 item 9), so
+    // a held message start stops nothing, saves no mode (review N1) and arms
+    // no watch across the awaits below. The user's own Start, Relaunch and
+    // Start fresh, and a setup Apply, are honoured (R4.4).
+    if (byMessage && localHeld()) {
+      holdForLocalPeriod("message");
+      return { spawned: false, why: "held-by-local-model" };
+    }
     await stopInternal();
     // Resolved before the session is dropped (#2199 review): a Start fresh
     // that finds no Claude Code must not have deleted the conversation on its
@@ -3347,10 +3357,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       recordCliUnusable("Starting Claude");
       return { spawned: false, why: "cli-unusable" };
     }
-    // A message start is automatic (#1123 A2, R4.1): held while a local model
-    // answers chat, and run at the user's switch back. Before the Off
-    // write below, so a held message start never saves a mode (review N1). The user's own Start,
-    // Relaunch and Start fresh, and a setup Apply, are honoured (R4.4).
+    // Again after those awaits: the switch to the local model may have come
+    // during them (review N2). Nothing is owed to undo then: that switch
+    // cleared `wakeOwedAcrossSpawns`, and the gap watch armed above acts only
+    // on events forwarded externally, which no event of the period is.
     if (byMessage && localHeld()) {
       holdForLocalPeriod("message");
       // Off stays Off: the stop flag and the gap watch go back to how this
@@ -3374,7 +3384,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (standby === "off") setStandby("awaiting-start");
     }
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
-    // Again after that await, the last before the spawn (review N2).
+    // And after that await, the last before the spawn (review N2).
     if (byMessage && localHeld()) {
       holdForLocalPeriod("message");
       // Off stays Off: the stop flag and the gap watch go back to how this

@@ -578,6 +578,35 @@ describe("#1123 A2 — each held start kind runs at the user's switch back (R5.1
     await nthChild(1);
   });
 
+  it("round-2 item 9: a held message start is held before anything is stopped or resolved — Claude Code is not even looked up until the switch back", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const lp = localPeriodSeam(true);
+    let lookups = 0;
+    const { sup, emit } = makeSupervisor({
+      localPeriod: lp.seam,
+      resolveClaudeCommand: () => {
+        lookups += 1;
+        return process.execPath;
+      },
+    });
+    await sup.start();
+    const before = lookups;
+    emit(chatEvent());
+    await waitFor(
+      () => !(sup.status() as { restartPending?: true }).restartPending,
+      "the message start to be held",
+    );
+    await quiet();
+    expect(children).toHaveLength(0);
+    // `stopAndSpawn` looks Claude Code up right after `stopInternal()`: a
+    // hold placed after that point would have looked it up.
+    expect(lookups).toBe(before);
+    // The positive twin: the held start runs at the switch back, and does.
+    lp.toClaude(true);
+    await nthChild(1);
+    expect(lookups).toBeGreaterThan(before);
+  });
+
   it("a held message start from Off leaves Off as it was: still off, mode unsaved, nothing owed to a later resumed spawn (item 15)", async () => {
     writeSettings({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
     const lp = localPeriodSeam(false);
@@ -975,18 +1004,26 @@ describe("#1123 A2 — the real queue, the real switch and the real supervisor",
     expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
   });
 
-  it("during the period nothing reaches the child; a held auto Claude beside a hand-launched watch: the child one turn, the watch one wake", async () => {
+  it("a held auto Claude beside a hand-launched watch: no Claude is started during the period and the watch gets nothing; at the switch back the fresh child gets its bootstrap turn and no wake after it, the watch one wake", async () => {
     const sup = realSupervisor("auto");
     await setChatAnswerer("local", "own-window");
     await sup.start();
+    // During the period no child exists to reach: what is asserted is that
+    // none is started, and that the external watch is handed nothing.
     expect(children).toHaveLength(0);
     const watch: TandemEvent[] = [];
     const watchCb = (e: TandemEvent) => watch.push(e);
     subscribe(watchCb, "external");
     _pushEventForTests(chatEvent());
     expect(watch).toEqual([]);
+    expect(children).toHaveLength(0);
     await setChatAnswerer("claude", "own-window");
     const child = await nthChild(1);
+    await settle();
+    expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    // End the bootstrap turn (round-2 item 6): a wake wrongly owed to the
+    // fresh spawn would be written only now, at its first result.
+    pushJson(child, RESULT_OK);
     await settle();
     expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
     expect(watch.map((e) => e.type)).toEqual(["annotation:created"]);

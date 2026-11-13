@@ -46,6 +46,7 @@ const writeControl = vi.hoisted(() => ({
   fail: new Set<string>(),
   decide: null as null | ((file: string, content: string) => boolean),
   before: null as null | ((file: string) => void),
+  after: null as null | ((file: string) => void),
 }));
 
 vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) => {
@@ -60,7 +61,9 @@ vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) =>
         if (file.endsWith(name)) throw new Error("simulated write failure");
       }
       if (writeControl.decide?.(file, content)) throw new Error("simulated write failure");
-      return actual.atomicWriteConfigFile(file, content);
+      await actual.atomicWriteConfigFile(file, content);
+      // The write has landed and the caller's await has not resumed yet.
+      writeControl.after?.(file);
     },
   };
 });
@@ -129,6 +132,7 @@ beforeEach(async () => {
   writeControl.fail.clear();
   writeControl.decide = null;
   writeControl.before = null;
+  writeControl.after = null;
   restart();
   quietConsole();
 });
@@ -137,6 +141,7 @@ afterEach(async () => {
   writeControl.fail.clear();
   writeControl.decide = null;
   writeControl.before = null;
+  writeControl.after = null;
   vi.restoreAllMocks();
   await __flushLocalModelAnnouncedForTests();
   __resetChatAnswererForTests();
@@ -261,6 +266,91 @@ describe("R7.1: a failed record write fails the user's own switch to the local m
     });
   }
 
+  it("round-2 item 2, one failure: an allowance switch to Claude during the user's own switch's record write, whose withdrawal then fails — no 'answered by Claude' at the next start", async () => {
+    markNotFirstLitStart();
+    prime();
+    let claude: Promise<SetChatAnswererResult> | null = null;
+    const contents: string[] = [];
+    writeControl.before = (file) => {
+      if (isRecord(file) && claude === null) claude = setChatAnswerer("claude", "allowance");
+    };
+    // Record writes, in order: the choice (lands), the allowance request's
+    // queued retry (written as the record stands then: "chosen"), the
+    // superseded choice's withdrawal (fails).
+    writeControl.decide = (file, content) => {
+      if (!isRecord(file)) return false;
+      contents.push(content);
+      return contents.length === 3;
+    };
+    const local = await setChatAnswerer("local", "own-window");
+    const result = await (claude as unknown as Promise<SetChatAnswererResult>);
+    writeControl.before = null;
+    writeControl.decide = null;
+    await __flushLocalModelAnnouncedForTests();
+    // The sequence the review reproduced.
+    expect(contents[0]).toContain('"answererChosen": true');
+    expect(contents[1]).toContain('"answererChosen": true');
+    expect(contents[2]).not.toContain('"answererChosen"');
+    expect(local.superseded).toBe(true);
+    expect(result).toEqual({ answerer: "claude", persisted: true });
+    expect(JSON.parse(fs.readFileSync(recordFile(), "utf8")).answererChosen).toBeUndefined();
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round-2 item 2, two failures, own-window requests only: L1's withdrawal and L2's record write both fail — no 'answered by Claude' at the next start", async () => {
+    markNotFirstLitStart();
+    prime();
+    let l2: Promise<SetChatAnswererResult> | null = null;
+    let recordWrites = 0;
+    writeControl.before = (file) => {
+      if (isRecord(file) && ++recordWrites === 1) l2 = setChatAnswerer("local", "own-window");
+    };
+    // Record writes: L1's choice (lands), L1's withdrawal (fails), L2's choice
+    // (fails), then the clear L2's refusal makes.
+    const contents: string[] = [];
+    writeControl.decide = (file, content) => {
+      if (!isRecord(file)) return false;
+      contents.push(content);
+      return contents.length === 2 || contents.length === 3;
+    };
+    const l1 = await setChatAnswerer("local", "own-window");
+    const r2 = await (l2 as unknown as Promise<SetChatAnswererResult>);
+    writeControl.before = null;
+    writeControl.decide = null;
+    await __flushLocalModelAnnouncedForTests();
+    expect(contents[0]).toContain('"answererChosen": true');
+    expect(contents[1]).not.toContain('"answererChosen"');
+    expect(contents[2]).toContain('"answererChosen": true');
+    expect(l1.superseded).toBe(true);
+    expect(r2.persisted).toBe(false);
+    expect(chatAnswerer()).toBe("claude");
+    expect(diskAnswerer()).toBe("claude");
+    expect(JSON.parse(fs.readFileSync(recordFile(), "utf8")).answererChosen).toBeUndefined();
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round-2 item 2: when the allowance request's own re-check write fails too, its response says unsaved", async () => {
+    markNotFirstLitStart();
+    prime();
+    let claude: Promise<SetChatAnswererResult> | null = null;
+    writeControl.before = (file) => {
+      if (isRecord(file) && claude === null) claude = setChatAnswerer("claude", "allowance");
+    };
+    let recordWrites = 0;
+    writeControl.decide = (file) => isRecord(file) && ++recordWrites >= 3;
+    await setChatAnswerer("local", "own-window");
+    const result = await (claude as unknown as Promise<SetChatAnswererResult>);
+    writeControl.before = null;
+    writeControl.decide = null;
+    expect(result.persisted).toBe(false);
+  });
+
   it("the announcement cannot go silent: chosen earlier, a refused re-choice, then a program sets Claude — the next start announces", async () => {
     markNotFirstLitStart();
     prime();
@@ -358,6 +448,18 @@ describe("R7.5 / review item 25: the user's mark is kept, and never invented, wh
     prime();
     writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
     await setChatAnswerer("local", "own-window");
+    expect(diskJson()).toEqual({ version: 1, answerer: "claude" });
+  });
+
+  it("round-2 item 7: the user's own Claude, then a program's unmarked Claude — a refused own switch puts back Claude WITHOUT the mark", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("claude", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    expect(diskJson()).toEqual(CLAUDE_OWN);
+    fs.writeFileSync(switchFile(), JSON.stringify({ version: 1, answerer: "claude" }));
+    writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    expect((await setChatAnswerer("local", "own-window")).persisted).toBe(false);
     expect(diskJson()).toEqual({ version: 1, answerer: "claude" });
   });
 
@@ -546,45 +648,80 @@ function rng(seed: number): () => number {
 }
 
 type Value = "claude" | "local";
+type Source = "own-window" | "allowance";
+interface Req {
+  value: Value;
+  source: Source;
+}
 
 interface Outcome {
+  requests: Req[];
   results: SetChatAnswererResult[];
   before: Value;
+  /** The switch file carried the user's mark before the run. */
+  beforeMarked: boolean;
+  /** The local model was in effect at some moment of the run (or at its start). */
+  localSeen: boolean;
+  /** The run's last attempt to put Claude on disk (a write, the removal's
+   *  rename, the emptying, the delete) failed, after the last request was
+   *  issued: only then may a residual below excuse a "local" left on disk. */
+  lastClaudeWriteFailed: boolean;
+  /** A read of the switch file was refused (locked) after the last request
+   *  was issued. */
+  lockedAfterLaunch: boolean;
   after: Value;
   disk: Value;
-  /** How many requests began while an earlier one's write was in flight. */
+  /** How many requests began while an earlier one's write was in flight, or
+   *  after a write landed and before its caller resumed. */
   overlapped: number;
 }
 
 /**
- * Run `values` as own-window requests that OVERLAP: request k+1 is issued from
- * inside an earlier request's in-flight async write (its local write, its
- * record write or the async Claude write) at a generated point — never all up
- * front, where each request's queued step would only see that a later one
- * exists. Every write the generator picks fails: the async writes, the
- * synchronous Claude write's and the removal's renames, the in-place
+ * Run `requests` so that they OVERLAP: request k+1 is issued from inside an
+ * earlier request's async write (its local write, its record write or the
+ * async Claude write) at a generated point — while the write is in flight, or
+ * after it has landed and before the awaiting step resumes (round-2 item 3) —
+ * never all up front, where each request's queued step would only see that a
+ * later one exists. Every write the generator picks fails: the async writes,
+ * the synchronous Claude write's and the removal's renames, the in-place
  * emptying and the delete; and with `locked`, reads of the switch file fail
  * too (a file a scanner holds without letting it be read, which Windows can
  * produce, R7.5).
  */
 async function runSequence(
-  values: Value[],
+  input: Array<Value | Req>,
   rand: () => number,
   opts: { failP: number; locked?: number; decide?: (file: string) => boolean } = { failP: 0 },
 ): Promise<Outcome> {
+  const requests: Req[] = input.map((q) =>
+    typeof q === "string" ? { value: q, source: "own-window" } : q,
+  );
   const before = diskAnswerer();
+  const beforeMarked = (diskJson() as { setBy?: unknown } | null)?.setBy === "own-window";
   const fail = () => rand() < opts.failP;
+  let localSeen = chatAnswerer() === "local";
+  const unsubscribe = onChatAnswererChanged((now) => {
+    if (now === "local") localSeen = true;
+  });
   const results: Array<Promise<SetChatAnswererResult>> = [];
   let next = 0;
   let overlapped = 0;
   let inFlight = 0;
+  let clock = 0;
+  let lastLaunchAt = 0;
+  let lastClaude: { ok: boolean; at: number } | null = null;
+  let lastLockedAt = 0;
+  const claudeAttempt = (ok: boolean): void => {
+    lastClaude = { ok, at: ++clock };
+  };
   const launch = (): void => {
-    if (next >= values.length) return;
+    if (next >= requests.length) return;
+    lastLaunchAt = ++clock;
     if (inFlight > 0) overlapped += 1;
-    const value = values[next++];
+    const { value, source } = requests[next++];
     inFlight += 1;
     results.push(
-      setChatAnswerer(value, "own-window").finally(() => {
+      setChatAnswerer(value, source).finally(() => {
         inFlight -= 1;
       }),
     );
@@ -592,28 +729,50 @@ async function runSequence(
   writeControl.before = (file) => {
     if ((isSwitch(file) || isRecord(file)) && rand() < 0.6) launch();
   };
-  writeControl.decide = opts.decide ?? ((file) => (isSwitch(file) || isRecord(file)) && fail());
+  writeControl.after = (file) => {
+    if ((isSwitch(file) || isRecord(file)) && rand() < 0.3) launch();
+  };
+  const decide = opts.decide ?? ((file: string) => (isSwitch(file) || isRecord(file)) && fail());
+  writeControl.decide = (file, content) => {
+    const failed = decide(file);
+    if (isSwitch(file) && content.includes('"claude"')) claudeAttempt(!failed);
+    return failed;
+  };
   const realRename = fs.renameSync;
   const realRm = fs.rmSync;
   const realOpen = fs.openSync;
   const realRead = fs.readFileSync;
   const ioError = () => Object.assign(new Error("EIO"), { code: "EIO" });
+  // Each of these is one way of putting Claude on disk; the attempt is noted.
   vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-    if ((isSwitch(to) || String(to) === markerFile()) && fail()) throw ioError();
+    if (isSwitch(to) || String(to) === markerFile()) {
+      const failed = fail();
+      claudeAttempt(!failed);
+      if (failed) throw ioError();
+    }
     return realRename(from, to);
   });
   vi.spyOn(fs, "rmSync").mockImplementation(((p: fs.PathLike, o?: fs.RmOptions) => {
-    if (isSwitch(p) && fail()) throw ioError();
+    if (isSwitch(p)) {
+      const failed = fail();
+      claudeAttempt(!failed);
+      if (failed) throw ioError();
+    }
     return realRm(p, o);
   }) as typeof fs.rmSync);
   vi.spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
-    if (isSwitch(p) && fail()) throw ioError();
+    if (isSwitch(p)) {
+      const failed = fail();
+      claudeAttempt(!failed);
+      if (failed) throw ioError();
+    }
     return (realOpen as (...a: unknown[]) => number)(p, ...rest);
   }) as typeof fs.openSync);
   if (opts.locked !== undefined) {
     const lockedP = opts.locked;
     vi.spyOn(fs, "readFileSync").mockImplementation(((p: fs.PathOrFileDescriptor, o?: unknown) => {
       if (isSwitch(p) && rand() < lockedP) {
+        lastLockedAt = ++clock;
         throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
       }
       return (realRead as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
@@ -625,55 +784,175 @@ async function runSequence(
     const issued = results.length;
     await Promise.all(results);
     if (results.length === issued) {
-      if (next >= values.length) break;
+      if (next >= requests.length) break;
       launch();
     }
   }
   const settled = await Promise.all(results);
+  unsubscribe();
   await __flushLocalModelAnnouncedForTests();
   vi.restoreAllMocks();
   quietConsole();
   writeControl.before = null;
+  writeControl.after = null;
   writeControl.decide = null;
-  return { results: settled, before, after: chatAnswerer(), disk: diskAnswerer(), overlapped };
+  return {
+    requests,
+    results: settled,
+    before,
+    beforeMarked,
+    localSeen,
+    lastClaudeWriteFailed:
+      (lastClaude as { ok: boolean; at: number } | null)?.ok === false &&
+      (lastClaude as { ok: boolean; at: number } | null)!.at > lastLaunchAt,
+    lockedAfterLaunch: lastLockedAt > lastLaunchAt,
+    after: chatAnswerer(),
+    disk: diskAnswerer(),
+    overlapped,
+  };
+}
+
+const CLAUDE_AGAIN = "Chat in Tandem is now answered by Claude, not by a local model.";
+
+function recordJson(): Record<string, unknown> | null {
+  try {
+    return JSON.parse(fs.readFileSync(recordFile(), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /**
  * R7.2's outcome, the brief's sentence: once the requests have settled, either
  * the disk agrees with what is in effect, or the last response said
- * `persisted: false` and what is in effect is what the disk held before the
- * run began. Then the restart: when the disk agrees, the next start reads
- * what was in effect, with no notice (every request was the user's own), and
- * a Claude on disk is either the user's marked file or one that reads Claude
- * without a value (missing or emptied).
+ * `persisted: false` and both what is in effect and the disk are what they
+ * were before the run began (round-2 item 1: a flipped disk passes only as the
+ * announced flip below). Then, in every branch:
+ * - the restart reads what was in effect (or, for the announced flip, the
+ *   local model WITH its notice) — checked by the product's own start-up
+ *   read, not only by this file's parser;
+ * - a Claude the last request reported saved carries the user's mark when
+ *   that request was the user's own (or the record no longer says the local
+ *   model was chosen, round 3's contract), and a mark nothing in the run (or
+ *   before it) could have written is never there (round-2 item 3);
+ * - after a saved last response, the restart says chat is answered by Claude
+ *   again only when that announcement was owed (round-2 item 2);
+ * - a run of the user's own requests whose last one was saved raises no
+ *   notice at the restart.
  */
 async function checkOutcome(r: Outcome, label: string): Promise<void> {
   const last = r.results[r.results.length - 1];
+  const lastReq = r.requests[r.requests.length - 1];
+  const allOwn = r.requests.every((q) => q.source === "own-window");
   const agrees = r.disk === r.after;
-  const fallback = last.persisted === false && r.after === r.before;
+  const fallback = last.persisted === false && r.after === r.before && r.disk === r.before;
+  const disk = diskJson() as Record<string, unknown> | null;
+  const rec = recordJson();
+  // Raised during the run (or at its start) and still standing.
+  const claudeAgainRaised = getStartupNotices().some((n) => n.message.startsWith(CLAUDE_AGAIN));
+  const ctx = () =>
+    `${label}: ${JSON.stringify(r)} disk ${JSON.stringify(disk)} record ${JSON.stringify(rec)}`;
   restart();
   prime();
+  const notices = getStartupNotices();
   // The stated residual: a refused switch whose every way of putting Claude
   // back fails (and A1's lone Claude request with every fallback failing)
   // leaves "local" on disk with Claude in effect. R7.1 keeps Claude in effect;
   // the flip is then never silent — the next start announces it.
   const announcedFlip =
+    !agrees &&
+    r.lastClaudeWriteFailed &&
     last.persisted === false &&
+    r.after === "claude" &&
     r.disk === "local" &&
-    getStartupNotices().some((n) => n.message === SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE);
-  expect(agrees || fallback || announcedFlip, `${label}: ${JSON.stringify(r)}`).toBe(true);
-  if (agrees) {
-    expect(chatAnswerer(), `${label}: the restart reads what was in effect`).toBe(r.after);
-    if (last.persisted) {
+    notices.some((n) => n.message === SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE);
+  // The second stated residual (for Bryan's ruling, round 2): the latest
+  // request asked for the local model and could not take effect — its record
+  // write failed and every way of putting Claude back failed too, or its own
+  // write failed and the read that followed was refused (a locked file) — and
+  // "local" is on disk, held from before the run or left by an earlier
+  // request's write. The response said unsaved, and the restart reads the
+  // value the latest request asked for: nothing answers that the last request
+  // did not ask for.
+  const latestAskedLocal =
+    !agrees &&
+    (r.lastClaudeWriteFailed || r.lockedAfterLaunch) &&
+    last.persisted === false &&
+    lastReq.value === "local" &&
+    r.after === "claude" &&
+    r.disk === "local";
+  // A1's residual, stated at the review's request in round 1: the latest
+  // request asked for Claude over a stored "local" and every way of writing
+  // Claude failed, so the disk never changed. Claude answers for this run;
+  // the restart reads the "local" the disk held before, and the response
+  // said unsaved.
+  const claudeNeverLanded =
+    !agrees &&
+    r.lastClaudeWriteFailed &&
+    last.persisted === false &&
+    lastReq.value === "claude" &&
+    r.after === "claude" &&
+    r.before === "local" &&
+    r.disk === "local";
+  expect(agrees || fallback || announcedFlip || latestAskedLocal || claudeNeverLanded, ctx()).toBe(
+    true,
+  );
+  expect(chatAnswerer(), `${ctx()}: the restart reads`).toBe(
+    agrees || fallback ? r.after : "local",
+  );
+  if (last.persisted) {
+    expect(agrees, `${ctx()}: a saved response agrees with the disk`).toBe(true);
+  }
+  if (
+    last.persisted &&
+    lastReq.value === "claude" &&
+    r.after === "claude" &&
+    disk !== null &&
+    disk.answerer === "claude"
+  ) {
+    // The user's own: always marked. Not the user's own: never strips a mark
+    // already there (round 4 P12), and never invents one.
+    const markPossible =
+      r.beforeMarked || r.requests.some((q) => q.source === "own-window" && q.value === "claude");
+    // The user's own switch reported saved: its mark is on disk, or the record
+    // no longer says the local model was chosen (round 3's contract — a
+    // Claude file whose mark could not be written is silent only then).
+    if (lastReq.source === "own-window") {
       expect(
-        getStartupNotices(),
-        `${label}: no notice for the user's own switches; disk ${JSON.stringify(diskJson())} record ${fs.existsSync(recordFile()) ? fs.readFileSync(recordFile(), "utf8") : "none"} results ${JSON.stringify(r.results)}`,
-      ).toEqual([]);
+        disk.setBy === "own-window" || rec?.answererChosen !== true,
+        `${ctx()}: the user's mark`,
+      ).toBe(true);
+    } else if (!markPossible) {
+      expect(disk.setBy, `${ctx()}: no invented mark`).toBeUndefined();
     }
   }
+  // "Chat in Tandem is now answered by Claude, not by a local model" at the
+  // restart, after a run whose last response was saved, only when such an
+  // announcement was owed before the restart (an allowance switch to Claude
+  // over the user's recorded choice, or a failed start-up read of it), or the
+  // local model really answered during the run and Claude answers now (the
+  // owed field's own write may have failed; the record's "chosen" then says
+  // the same). A "chosen" left on record by a superseded request that never
+  // took effect is neither (round-2 item 2). An announcement raised during
+  // the run and still standing is owed, even when the write that records it
+  // failed: an allowance switch to Claude that found the user's choice of the
+  // local model on record (just recorded, before its request resumed).
+  if (
+    last.persisted &&
+    !r.localSeen &&
+    !claudeAgainRaised &&
+    notices.some((n) => n.message.startsWith(CLAUDE_AGAIN))
+  ) {
+    expect(rec?.claudeAgainOwed ?? null, `${ctx()}: an unowed "answered by Claude"`).not.toBe(null);
+  }
+  if (allOwn && last.persisted) {
+    expect(notices, `${ctx()}: no notice for the user's own switches`).toEqual([]);
+  }
+  // The restart's own record writes land here, not in the next seed's files.
+  await __flushLocalModelAnnouncedForTests();
 }
 
-describe("R7.2: overlapping own-window requests never leave the disk differing from what is in effect", () => {
+describe("R7.2: overlapping requests never leave the disk differing from what is in effect", () => {
   it("P11: own local, then local (its write in flight) / Claude / local (failing)", async () => {
     markNotFirstLitStart();
     prime();
@@ -713,8 +992,10 @@ describe("R7.2: overlapping own-window requests never leave the disk differing f
     });
   }
 
-  it("generated: 2–5 overlapping requests with injected failures, a failed start-up read and a locked file, each followed by a restart", async () => {
-    const SEEDS = 80;
+  it("generated: 2–5 overlapping own-window and allowance requests with injected failures, a failed start-up read and a locked file, each followed by a restart", async () => {
+    // 80 seeds catch the put-back (round-2 item 1) by seed 8 and the in-queue
+    // re-assert by seed 1. `TANDEM_GEN_SEEDS` runs more by hand: 10,000 pass.
+    const SEEDS = Number(process.env.TANDEM_GEN_SEEDS ?? 80);
     let overlapped = 0;
     for (let seed = 1; seed <= SEEDS; seed++) {
       const rand = rng(seed);
@@ -731,15 +1012,22 @@ describe("R7.2: overlapping own-window requests never leave the disk differing f
       if (rand() < 0.2) primeWithFailedRead();
       else prime();
       const n = 2 + Math.floor(rand() * 4);
-      const values: Value[] = Array.from({ length: n }, () => (rand() < 0.5 ? "local" : "claude"));
+      const values: Req[] = Array.from({ length: n }, () => ({
+        value: rand() < 0.5 ? "local" : "claude",
+        source: rand() < 0.3 ? "allowance" : "own-window",
+      }));
       const r = await runSequence(values, rand, {
-        failP: 0.3,
+        failP: [0.2, 0.4, 0.6][Math.floor(rand() * 3)],
         ...(rand() < 0.3 ? { locked: 0.3 } : {}),
       });
       overlapped += r.overlapped;
-      await checkOutcome(r, `seed ${seed} ${values.join(",")}`);
+      await checkOutcome(
+        r,
+        `seed ${seed} ${values.map((q) => `${q.source === "allowance" ? "A:" : ""}${q.value}`).join(",")}`,
+      );
     }
     // The generator really overlaps requests.
     expect(overlapped).toBeGreaterThan(SEEDS);
-  });
+    // About 5 ms a seed here; the margin is for a loaded Windows runner.
+  }, 60_000);
 });

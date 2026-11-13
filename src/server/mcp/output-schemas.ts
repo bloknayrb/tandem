@@ -438,7 +438,7 @@ export const checkInboxLocalPeriodShape = {
     .literal(true)
     .optional()
     .describe(
-      "Present while Tandem chat is set to be answered by a local model: nothing in Tandem is handed to you meanwhile. Finish the step you are on and take no new work from Tandem; you do not need to wait, and a later poll will say when chat is answered by Claude again",
+      "Present while Tandem chat is set to be answered by a local model: nothing in Tandem is handed to you meanwhile. Finish the step you are on and take no new work from Tandem; you do not need to wait, and a later poll will no longer carry this field once chat is answered by Claude again",
     ),
 };
 
