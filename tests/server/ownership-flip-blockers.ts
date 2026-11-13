@@ -146,7 +146,7 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "again after this point, but the inbox's exclusion texts and `notYours`'s description say " +
       "only 'only if the user asked you, in your own conversation', which the original request " +
       "still satisfies, and decideTake checks no loss, so the re-open takes it back from Tandem's " +
-      "Claude. Unreachable until Tandem's Claude can be present (PR 3a/3b).",
+      "Claude. Unreachable until Tandem's Claude can be present (PR 3b).",
     closedBy:
       "PR 3b (take-back): carry the loss into the exclusion texts, or make decideTake honour it.",
   },
@@ -229,6 +229,50 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "#2360's switch has not merged (decisions 5 and 6: comment-thread replies are the " +
       "answered-link, and the switch lands immediately before the flip, in the same release).",
     closedBy: "#2360's switch PR merged.",
+  },
+  {
+    gap:
+      "Nothing reads PR 3a's bind fact: a transport bound to Tandem's Claude's current spawn " +
+      "still sits on its claude:<id> record, not on the `tandem` record, and there are no " +
+      "unbound-child records, no private records for its other own-child ids, and no retirement " +
+      "or demotion at a spawn (Ruling A).",
+    closedBy: "PR 3b (rule 0's routing to the `tandem` record, and the records around it).",
+  },
+  {
+    gap:
+      "The `unbound-child` refusal and the take guard against Tandem's Claude are not built, so a " +
+      "child of Tandem's Claude that did not bind is answered as an ordinary session.",
+    closedBy: "PR 3b for documents; the chat PR for messages.",
+  },
+  {
+    gap: "The Settings list of bound transports (Ruling C) is not built.",
+    closedBy: "PR 3b.",
+  },
+  {
+    gap:
+      "The greeting classification is still keyed on the reply's session id, and a " +
+      "`/api/channel-reply` reply can still be the greeting.",
+    closedBy: "The chat PR (classify by bound transport; a channel reply is never the greeting).",
+  },
+  {
+    gap:
+      "PR 3a's assumptions are unmeasured (its PR body lists them): the supervisor's own signed-in " +
+      "child honours --mcp-config and --settings as the headless probes did, --settings still " +
+      "disables the plugin beside --mcp-config, an entry's env wins Claude Code's merge, a " +
+      "--resume spawn reads its new run MCP config, a project-scope tandem entry is still " +
+      "replaced, macOS and Linux, and the bridge binds before a not-signed-in child closes it.",
+    closedBy: "The real-launcher smoke on Bryan's Windows PC before PR 3b (Ruling J).",
+  },
+  {
+    gap:
+      "Whether Claude Code lets a settings file's `env` block (a project or local settings file " +
+      "in the child's working folder, possibly hostile) beat the launcher's `--mcp-config` " +
+      "entry's `env` is unmeasured: if it does, such a file can point the bridge's URL variables " +
+      "at another local listener, which then receives the handle (accepted as a residual for 3a, " +
+      "Bryan 2026-11-13).",
+    closedBy:
+      "The real-launcher smoke measuring that merge order, before PR 3b gives the bound fact a " +
+      "reader; then refuse the flags on such a file, or record the residual as accepted.",
   },
 ];
 

@@ -3750,7 +3750,7 @@ export function shouldRegisterChannelShim(
 }
 
 /** Re-exported for `tandem setup` orchestration in `src/cli/setup.ts`. */
-export { CHANNEL_DIST, PACKAGE_ROOT };
+export { CHANNEL_DIST, PACKAGE_ROOT, STDIO_BRIDGE_DIST };
 
 /**
  * Does this config already carry a `tandem-channel` entry?

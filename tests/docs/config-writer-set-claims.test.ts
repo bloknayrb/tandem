@@ -306,6 +306,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // #2197: `first-run-greeting.json` (whether the one-time greeting is owed),
   // through `atomicWriteConfigFile`, in the same app-data root.
   "src/server/launcher/greeting.ts": 1,
+  // #2358 PR 3a: the run files (the run MCP config and the run settings
+  // file), one exclusive `open(…, "wx", 0o600)` in `writeRunFile`. Tandem's
+  // own per-spawn files, not a Claude Code config: WRITER_SITES and
+  // CONFIG_API_REFERENCES do not change.
+  "src/server/launcher/run-files.ts": 1,
   "src/server/launcher/supervisor.ts": 1,
   // #2231: `license-grace.json` (the licence grace period's first-failure
   // record), a temp-file write plus a rename, in Tandem's own app-data root —

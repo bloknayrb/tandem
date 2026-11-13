@@ -32,6 +32,7 @@ import {
   SENTRY_DATA_COLLECTION_OFF,
   scrubSentryEvent,
 } from "../shared/scrub-text.js";
+import { redactOwnerHandles } from "./log-redact.js";
 import { APP_VERSION } from "./mcp/server.js";
 
 const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
@@ -90,8 +91,16 @@ function redactHome(input: string): string {
  * genuinely is server-only because the sidecar can read the environment and the
  * WebView cannot.
  */
+/**
+ * Every text field of a shipped event goes through here (`scrubEvent`), and
+ * `captureFatal` ships whatever reached `uncaughtException`, so a string that
+ * carried an owner handle (#2358 PR 3a, R5.4) could reach Sentry through any
+ * error whose message quoted one. The handle pattern is applied here, in the
+ * sidecar's own wrapper, not in `src/shared/scrub-text.ts`, which the client's
+ * Sentry scrub shares.
+ */
 export function scrub(input: string): string {
-  return redactHome(redactSecrets(input));
+  return redactHome(redactSecrets(redactOwnerHandles(input)));
 }
 
 /**
