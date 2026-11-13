@@ -79,7 +79,8 @@ export type LauncherStatus =
       /** Loopback-only. The server matched a live MCP connection to THIS
        * spawn of Tandem's Claude (its session id, opened since the spawn, with
        * its stream open). Only reachable when the child's connection forwards
-       * its Claude session id (the plugin's stdio bridge); absent or false
+       * its Claude session id (the stdio bridge, which the setup entry runs
+       * since v0.31.0, as the plugin does); absent or false
        * means "can't confirm", not "not connected". */
       attached?: boolean;
       /** Loopback-only (#2197). Tandem's Claude was asked for its one-time
@@ -449,6 +450,9 @@ export const LAUNCHER_ERROR_NO_INTEGRATION = "NO_CLAUDE_INTEGRATION";
 /** A relaunch / start-fresh / Start found no Claude Code program it can start
  * (#2199) and spawned nothing, leaving a running Claude alone. */
 export const LAUNCHER_ERROR_CLI_UNUSABLE = "CLAUDE_CLI_UNUSABLE";
+/** A relaunch refused because Tandem began shutting down while its run files
+ * were being written (#2358 PR 3a, ownership on only). 503. */
+export const LAUNCHER_ERROR_SHUTTING_DOWN = "TANDEM_SHUTTING_DOWN";
 /** The reaper binary is missing from the install — the supervisor cannot spawn
  * Claude. Stable code so the UI can show a "reinstall Tandem" hint instead of a
  * raw filesystem path. */

@@ -335,7 +335,9 @@ describe("the identity headers stay out of CORS (ownership design §11.1)", () =
       headers: {
         Origin: "http://localhost:5173",
         "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "x-tandem-client-id, x-claude-session-id",
+        // PR 3a: the owner handle header is not granted either.
+        "Access-Control-Request-Headers":
+          "x-tandem-client-id, x-claude-session-id, x-tandem-owner-handle",
       },
     });
     await api.text();

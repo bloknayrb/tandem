@@ -37,6 +37,7 @@ import {
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
 import { formatLogLine } from "./log-filter.js";
+import { installLogRedaction } from "./log-redact.js";
 import { handOverDocumentInbox, onTandemReply } from "./mcp/awareness.js";
 import {
   restoreCtrlSession,
@@ -108,24 +109,34 @@ import { startHocuspocus } from "./yjs/provider.js";
 // to it as a real call site.)
 const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
 
+//
+// Both shapes go through `installLogRedaction` (#2358 PR 3a, R5.3; Ruling D6):
+// every formatted line is scrubbed of owner handles before it reaches stderr,
+// unconditionally — a secret filter does not switch off with a flag. The
+// installer also covers `console.debug`, `console.trace` and `console.dir`.
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
-if (isProduction) {
-  const filteredError = (...args: Parameters<typeof console.error>) => {
-    // `formatLogLine`, not `args.map(String).join(" ")`: the old shape printed
-    // every `%s`/`%d` placeholder literally and truncated Errors to
-    // `name: message`, dropping the stack (#1823 item 1).
-    const line = formatLogLine(args);
-    if (line === null) return;
+/** One log line to stderr. Never throws: a log line is not worth a crash. */
+function writeLogLine(line: string): void {
+  try {
     originalStderrWrite(line + "\n");
-  };
-  console.log = filteredError;
-  console.warn = filteredError;
-  console.info = filteredError;
-  console.error = filteredError;
+  } catch {
+    // A synchronously failing stderr: the line is lost, as Node's console loses it.
+  }
+}
+if (isProduction) {
+  // `formatLogLine`, not `args.map(String).join(" ")`: the old shape printed
+  // every `%s`/`%d` placeholder literally and truncated Errors to
+  // `name: message`, dropping the stack (#1823 item 1).
+  installLogRedaction(console, writeLogLine, formatLogLine);
 } else {
-  console.log = console.error;
-  console.warn = console.error;
-  console.info = console.error;
+  // The plain shape: what Node's own `console.error` prints (colours where it
+  // would use them), with `log`, `warn` and `info` going the same way. Node's
+  // console ignores errors on the stream it writes to (`ignoreErrors`); this
+  // shape used to keep it, so a closed stderr (Claude Code gone in stdio
+  // mode, a pager that quit) must stay a lost line, never an uncaught EPIPE.
+  // The sidecar shape has `installSidecarPipeGuard` for the same reason.
+  process.stderr.on("error", () => {});
+  installLogRedaction(console, writeLogLine);
 }
 
 const transportMode = (process.env.TANDEM_TRANSPORT || "http").toLowerCase();
@@ -190,6 +201,14 @@ async function startLauncherSupervisor(): Promise<void> {
       // The v1.0 setup walkthrough holds the boot start until it is done
       // (#2198; Bryan, 2026-10-14) — the same predicate the wizard opens on.
       walkthroughPending: () => isWalkthroughPending(appData, APP_VERSION),
+      // The address the MCP listener actually bound (#2358 PR 3a, Ruling D14),
+      // never the configured host: the run MCP config names it.
+      getBoundMcpAddress: () => {
+        const addr = httpServer?.address();
+        return addr !== null && addr !== undefined && typeof addr === "object"
+          ? { address: addr.address, port: addr.port }
+          : null;
+      },
     });
     await launcherSupervisor.start();
   } catch (err) {

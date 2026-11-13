@@ -300,3 +300,43 @@ export async function assertNoBroadAce(
     }
   }
 }
+
+/**
+ * Assert the SDDL owner of `path` is the current user's SID (#2358 PR 3a,
+ * R1.6). The launcher's `launcher/` directory must be the current user's own:
+ * an elevated Tandem's files are owned by Administrators (`O:BA`), so this
+ * fails there and that spawn launches without the run files. No-op off
+ * Windows (POSIX callers compare `stat.uid` with `process.getuid()`).
+ *
+ * @throws if the owner cannot be read or is anyone but the current user.
+ */
+export async function assertOwnedByCurrentUser(
+  path: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  if (process.platform !== "win32") return;
+  const { signal } = opts;
+  throwIfAborted(signal);
+  const sid = await getCurrentUserSid(signal);
+  // The owner resolved to a full SID, never read from the SDDL string: SDDL
+  // writes some owners as two-letter aliases (`BA` for Administrators, `LA` for
+  // the built-in Administrator account, RID 500, which is what the CI runner
+  // runs as), so a SID comparison against the SDDL would refuse a directory
+  // the current user does own.
+  const script =
+    "Import-Module Microsoft.PowerShell.Security; " +
+    "(Get-Acl -LiteralPath $env:TANDEM_ACL_PATH).GetOwner([System.Security.Principal.SecurityIdentifier]).Value";
+  const { stdout } = await runPowerShell(script, { ...process.env, TANDEM_ACL_PATH: path }, signal);
+  throwIfAborted(signal);
+  const owner = /^(S-[\d-]+)\s*$/m.exec(stdout.trim())?.[1];
+  if (owner === undefined) {
+    throw new Error("assertOwnedByCurrentUser: could not read the owner (no SID returned).");
+  }
+  if (owner !== sid) {
+    // The SIDs are in the message for diagnosis; the run-files caller maps any
+    // throw to a step name and never logs or returns this text.
+    throw new Error(
+      `assertOwnedByCurrentUser: the directory is not owned by the current user (owner ${owner}, user ${sid}).`,
+    );
+  }
+}

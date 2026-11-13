@@ -26,6 +26,7 @@ import {
 } from "../../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
 import { MODELS_DEV_ORIGIN_ENV } from "../../shared/models/contract.js";
+import { OWNER_HANDLE_HEADER } from "../../shared/owner-handle.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
@@ -50,6 +51,14 @@ import { ownershipEnabled } from "../ownership-flag.js";
 import { isTauriSidecar, resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
 import { sessionIdForLog } from "../sessions/log-id.js";
+import {
+  type BindCandidate,
+  confirmBind,
+  isSpawnLive,
+  judgeBind,
+  noteBoundTransportRemoved,
+  shouldLogUnboundHandle,
+} from "../sessions/owner-handle-bind.js";
 import {
   noteTransportChanged,
   noteTransportRegistered,
@@ -381,11 +390,30 @@ function readTandemClientIdHeader(req: import("express").Request): string | unde
   return normalizeSessionId(req.headers[TANDEM_CLIENT_ID_HEADER.toLowerCase()]);
 }
 
+/**
+ * Read the owner handle header (#2358 PR 3a, R3). The raw value: its shape is
+ * checked by `judgeBind` before any comparison. Read only while ownership is
+ * on; never logged, never stored on a transport.
+ */
+function readOwnerHandleHeader(req: import("express").Request): string | undefined {
+  const raw = req.headers[OWNER_HANDLE_HEADER.toLowerCase()];
+  // An empty header is no handle: it neither binds nor counts as "carried a
+  // handle" for Ruling D7's log line.
+  return typeof raw === "string" && raw.trim() !== "" ? raw : undefined;
+}
+
 /** What an `initialize` carried that decides its owner record. */
 interface TransportIdentity {
   claudeSessionId: string | undefined;
   clientId: string | undefined;
   clientName: string | undefined;
+  /**
+   * PR 3a: whether the `initialize` carried an owner handle header (read only
+   * while ownership is on), and the bind candidate judged from it in the POST
+   * handler before `openSession`, so the raw handle is never captured by the
+   * transport's callback (R3.5). Decides the bind fact, never the record.
+   */
+  ownerHandle?: { candidate: BindCandidate | null };
 }
 
 /** Send a JSON-RPC error response. */
@@ -582,12 +610,16 @@ async function openSession(
   identity: TransportIdentity,
   handshake: (transport: StreamableHTTPServerTransport) => Promise<void>,
 ): Promise<void> {
-  const { claudeSessionId, clientId, clientName } = identity;
+  const { claudeSessionId, clientId, clientName, ownerHandle } = identity;
   const server = buildServer();
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: async (sessionId) => {
+      // The bind fact (#2358 PR 3a, R3.9) was judged BEFORE the record is
+      // resolved (in the POST handler), so 3b's rule 0 can use it without
+      // reopening this callback. Nothing here reads it to choose a record
+      // (Ruling A).
       // Ownership (#2358, ADR-054): which record this transport belongs to.
       // Undefined while ownership is off, and then nothing below differs from
       // before. The record itself is created only once `add` has resolved
@@ -609,6 +641,8 @@ async function openSession(
           `${claudeSessionId ? ` (claude session ${sessionIdForLog(claudeSessionId)})` : ""}` +
           `${clientName ? ` (client ${clientName})` : ""} — ${registry.size} live`,
       );
+      if (ownerHandle !== undefined)
+        noteOwnerHandleBind(registry, sessionId, ownerHandle.candidate);
     },
     // Fires on DELETE /mcp. Dropping the entry here (rather than only in the
     // DELETE route) also covers session closes the SDK initiates itself.
@@ -632,6 +666,48 @@ async function openSession(
       await server.close().catch(() => {});
     }
   }
+}
+
+/**
+ * Record an `initialize`'s bind fact once its entry is registered (#2358 PR 3a,
+ * R3.8, R3.9). The candidate is judged again here, after `registry.add`'s
+ * await, so a transport is never recorded as bound to a spawn torn down during
+ * it; a bind revoked that way changes nothing else. The entry keeps the
+ * spawn's serial, never the handle (R3.5). One line per bind; a not-bound
+ * `initialize` that carried a handle header is logged as Ruling D7 limits it.
+ * Neither line carries the handle or a raw session id.
+ */
+function noteOwnerHandleBind(
+  registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
+  sessionId: string,
+  candidate: BindCandidate | null,
+): void {
+  const entry = registry.get(sessionId);
+  if (candidate !== null && entry !== undefined && confirmBind(candidate, sessionId)) {
+    entry.boundSpawn = candidate.serial;
+    console.error(
+      `[Tandem] MCP session ${sessionIdForLog(sessionId)} bound to Tandem's Claude's current run`,
+    );
+    return;
+  }
+  if (shouldLogUnboundHandle()) {
+    console.error(
+      `[Tandem] MCP session ${sessionIdForLog(sessionId)} presented an owner handle that does not bind (stale, unknown, malformed, or its session id does not match); it connects as usual`,
+    );
+  }
+}
+
+/**
+ * Each live session's bind fact (#2358 PR 3a, R3.7): the spawn serial it is
+ * bound to while that spawn is live, else null. Test-only; never read by
+ * production code, never carries a handle.
+ */
+export function mcpSessionBindsForTests(): Array<{ sessionId: string; boundSpawn: number | null }> {
+  return (sessions?.list() ?? []).map((entry) => ({
+    sessionId: entry.sessionId,
+    boundSpawn:
+      entry.boundSpawn !== undefined && isSpawnLive(entry.boundSpawn) ? entry.boundSpawn : null,
+  }));
 }
 
 /**
@@ -847,7 +923,11 @@ export async function startMcpServerHttp(
   const registry = createMcpSessionRegistry<McpServer, StreamableHTTPServerTransport>({
     // Ownership (#2358): a transport leaving the registry re-judges its record's
     // attachment (ownership design §3.4). A no-op while ownership is off.
-    onRemoved: (entry) => noteTransportChanged(entry.ownerId),
+    onRemoved: (entry) => {
+      noteTransportChanged(entry.ownerId);
+      // PR 3a (R3.4): a removed transport's bind fact goes with it.
+      if (entry.boundSpawn !== undefined) noteBoundTransportRemoved(entry.sessionId);
+    },
   });
   sessions = registry;
   // Attachment is judged from the registry's own counters, never a second copy.
@@ -1017,6 +1097,11 @@ export async function startMcpServerHttp(
     if (isInit) {
       const claudeSessionId = readClaudeSessionHeader(req);
       const clientId = readTandemClientIdHeader(req);
+      // PR 3a: the owner handle is read only while ownership is on; a dark
+      // server ignores the header entirely (no fact, no log line, no state).
+      const rawHandle = ownershipEnabled() ? readOwnerHandleHeader(req) : undefined;
+      const ownerHandle =
+        rawHandle !== undefined ? { candidate: judgeBind(rawHandle, claudeSessionId) } : undefined;
       // From the element that IS the initialize, in a batch too (#2199).
       const clientName = readClientName(
         Array.isArray(body) ? body.find(isInitializeRequest) : body,
@@ -1030,7 +1115,12 @@ export async function startMcpServerHttp(
         await openSession(
           registry,
           buildServer,
-          { claudeSessionId, clientId, clientName },
+          {
+            claudeSessionId,
+            clientId,
+            clientName,
+            ...(ownerHandle !== undefined ? { ownerHandle } : {}),
+          },
           (transport) =>
             runWithMcpContext(
               { claudeSessionId, peerIsLoopback: isLoopback(req.socket.remoteAddress) },
