@@ -47,6 +47,9 @@ const writeControl = vi.hoisted(() => ({
   decide: null as null | ((file: string, content: string) => boolean),
   before: null as null | ((file: string) => void),
   after: null as null | ((file: string) => void),
+  /** The generated runs: write without fsync (still temp file + rename), so
+   *  a seed costs no disk flushes — Windows is slow at those (round 2). */
+  fast: false,
 }));
 
 vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) => {
@@ -61,7 +64,13 @@ vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) =>
         if (file.endsWith(name)) throw new Error("simulated write failure");
       }
       if (writeControl.decide?.(file, content)) throw new Error("simulated write failure");
-      await actual.atomicWriteConfigFile(file, content);
+      if (writeControl.fast) {
+        const tmp = `${file}.${Math.random().toString(36).slice(2)}.gen.tmp`;
+        await fs.promises.writeFile(tmp, content);
+        await fs.promises.rename(tmp, file);
+      } else {
+        await actual.atomicWriteConfigFile(file, content);
+      }
       // The write has landed and the caller's await has not resumed yet.
       writeControl.after?.(file);
     },
@@ -69,6 +78,8 @@ vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) =>
 });
 
 let dir = "";
+let generating: Promise<void> | null = null;
+let stopGenerating = false;
 const switchFile = () => path.join(dir, CHAT_ANSWERER_FILE_NAME);
 const markerFile = () => path.join(dir, `.${CHAT_ANSWERER_FILE_NAME}.removed-by-tandem`);
 const recordFile = () => path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME);
@@ -138,6 +149,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // A generated run that outlived its test (a timeout) stops at its next seed
+  // and is waited for, so its writes cannot land in the directory removed
+  // below (round 2: ENOTEMPTY on Windows).
+  stopGenerating = true;
+  await generating?.catch(() => {});
+  generating = null;
+  stopGenerating = false;
+  writeControl.fast = false;
   writeControl.fail.clear();
   writeControl.decide = null;
   writeControl.before = null;
@@ -992,13 +1011,16 @@ describe("R7.2: overlapping requests never leave the disk differing from what is
     });
   }
 
-  it("generated: 2–5 overlapping own-window and allowance requests with injected failures, a failed start-up read and a locked file, each followed by a restart", async () => {
-    // 80 seeds catch the put-back (round-2 item 1) by seed 8 and the in-queue
-    // re-assert by seed 1. `TANDEM_GEN_SEEDS` runs more by hand: 10,000 pass.
-    const SEEDS = Number(process.env.TANDEM_GEN_SEEDS ?? 80);
+  /** One chunk of seeds. Every write is real but unflushed (`fast`, and the
+   *  synchronous Claude write's fsync stubbed), so a seed costs no fsync. */
+  async function runSeeds(from: number, to: number): Promise<number> {
+    writeControl.fast = true;
     let overlapped = 0;
-    for (let seed = 1; seed <= SEEDS; seed++) {
+    for (let seed = from; seed <= to; seed++) {
+      if (stopGenerating) return overlapped;
       const rand = rng(seed);
+      // Spied again each seed: `runSequence` restores every mock when it ends.
+      vi.spyOn(fs, "fsyncSync").mockImplementation(() => {});
       restart();
       await fs.promises.rm(switchFile(), { force: true });
       await fs.promises.rm(recordFile(), { force: true });
@@ -1026,8 +1048,24 @@ describe("R7.2: overlapping requests never leave the disk differing from what is
         `seed ${seed} ${values.map((q) => `${q.source === "allowance" ? "A:" : ""}${q.value}`).join(",")}`,
       );
     }
-    // The generator really overlaps requests.
-    expect(overlapped).toBeGreaterThan(SEEDS);
-    // About 5 ms a seed here; the margin is for a loaded Windows runner.
-  }, 60_000);
+    return overlapped;
+  }
+
+  // 80 seeds in chunks of 10, each its own test inside the suite's default
+  // timeout (round 2: one 80-seed test with real fsyncs timed out on a loaded
+  // Windows machine). They catch the put-back (round-2 item 1) at seed 8 and
+  // the in-queue re-assert at seed 1. `TANDEM_GEN_SEEDS` runs more by hand
+  // (10,000 pass); each chunk stays 10 seeds.
+  const CHUNK = 10;
+  const SEEDS = Number(process.env.TANDEM_GEN_SEEDS ?? 80);
+  for (let from = 1; from <= SEEDS; from += CHUNK) {
+    const to = Math.min(SEEDS, from + CHUNK - 1);
+    it(`generated, seeds ${from}–${to}: 2–5 overlapping own-window and allowance requests with injected failures, a failed start-up read and a locked file, each followed by a restart`, async () => {
+      const run = runSeeds(from, to);
+      generating = run.then(() => undefined);
+      const overlapped = await run;
+      // The generator really overlaps requests: at least one a seed, on average.
+      expect(overlapped).toBeGreaterThanOrEqual(to - from + 1);
+    });
+  }
 });
