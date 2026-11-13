@@ -217,10 +217,19 @@ describe("the words, not only the constants (#1123 review round 2)", () => {
     );
   });
 
-  it("the 'answered by Claude again' notice names the cause and the remedy", () => {
-    expect(answererClaudeNotice("missing")).toBe(
-      "Your chat is now answered by Claude, not by a local model as you chose, because the file that held that choice was removed. To have a local model answer it again, set who answers your chat in Settings → Models.",
+  it("the 'answered by Claude again' notice is true whoever made the switch (round 4)", () => {
+    expect(answererClaudeNotice(null)).toBe(
+      "Chat in Tandem is now answered by Claude, not by a local model. If you did not make this change, check Settings → Models.",
     );
+    expect(answererClaudeNotice("missing")).toBe(
+      "Chat in Tandem is now answered by Claude, not by a local model. The file that held this setting was removed. If you did not make this change, check Settings → Models.",
+    );
+    expect(answererClaudeNotice("unreadable")).toBe(
+      "Chat in Tandem is now answered by Claude, not by a local model. Tandem could not read the file that holds this setting, and will try again at the next start. If you did not make this change, check Settings → Models.",
+    );
+    for (const c of ["missing", "unreadable", null] as const) {
+      expect(answererClaudeNotice(c)).not.toMatch(/as you chose|outside Tandem's own window/);
+    }
   });
 });
 
@@ -535,8 +544,8 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
 
   const causes: Array<[string, () => void, Parameters<typeof answererClaudeNotice>[0]]> = [
     ["the file was removed", () => fs.rmSync(switchFile()), "missing"],
-    ["a newer build's file", () => writeSwitch({ version: 2, answerer: "local" }), "newer"],
-    ["the file was changed to garbage", () => writeSwitch("{nope"), "invalid"],
+    ["a newer build's file", () => writeSwitch({ version: 2, answerer: "local" }), null],
+    ["the file was changed to garbage", () => writeSwitch("{nope"), null],
   ];
   for (const [label, cause, key] of causes) {
     it(`${label}: exactly one notice, the switch at Claude, and the record cleared once a window was told`, async () => {
@@ -558,7 +567,7 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     await chosenLocalThen(() => writeSwitch({ version: 1, answerer: "claude" }));
     prime();
     expect(chatAnswerer()).toBe("claude");
-    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("claude")]);
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
   });
 
   it("a Claude file WITH the own-window marker is silent and clears the record", async () => {
@@ -631,11 +640,11 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     await __flushLocalModelAnnouncedForTests();
     await setChatAnswerer("claude", "allowance");
     await __flushLocalModelAnnouncedForTests();
-    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("allowance")]);
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
     restart();
     prime();
     expect(chatAnswerer()).toBe("claude");
-    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("allowance")]);
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
     // Delivered to a window: then, and only then, it is spent.
     deliver();
     await __flushLocalModelAnnouncedForTests();
@@ -757,7 +766,8 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     }) as typeof fs.readFileSync);
     prime(); // start 2: unreadable, the owed notice raised and delivered
     read.mockRestore();
-    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("claude")]);
+    // Its words are judged from the disk now: the read failed.
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("unreadable")]);
     deliver();
     await __flushLocalModelAnnouncedForTests();
     restart();
@@ -783,6 +793,125 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     restart();
     prime();
     expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("missing")]);
+  });
+
+  it("round 4 P1: the own-window mark is never carried into a later file — own Claude, own local, then a program sets Claude: announced", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("claude", "own-window");
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    const local = JSON.parse(fs.readFileSync(switchFile(), "utf8"));
+    expect(local).toEqual({ version: 1, answerer: "local" }); // no mark carried
+    writeSwitch({ ...local, answerer: "claude" }); // a program edits one field
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
+  });
+
+  it("round 4 P11: overlapping requests cannot leave 'local' on disk while Claude is in effect", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const storage = await import("../../../src/server/integrations/storage.js");
+    const real = storage.atomicWriteConfigFile;
+    let calls = 0;
+    vi.spyOn(storage, "atomicWriteConfigFile").mockImplementation(async (file, content) => {
+      if (file.endsWith(CHAT_ANSWERER_FILE_NAME)) {
+        calls += 1;
+        if (calls === 1)
+          await gate; // A: held, then lands "local"
+        else throw new Error("ENOSPC"); // C: fails
+      }
+      return real(file, content);
+    });
+    const a = setChatAnswerer("local", "own-window");
+    while (calls === 0) await new Promise((r) => setImmediate(r));
+    const b = setChatAnswerer("claude", "own-window");
+    const c = setChatAnswerer("local", "own-window");
+    release();
+    await Promise.all([a, b, c]);
+    expect(chatAnswerer()).toBe("claude");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    await __flushLocalModelAnnouncedForTests();
+    vi.restoreAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("claude");
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round 4 P6b: a told-only user's own → Claude with ENOSPC and a failing record write is not reported unsaved", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "allowance");
+    for (const n of getStartupNotices()) markStartupNoticeDelivered(n);
+    await __flushLocalModelAnnouncedForTests();
+    expect(answererLocalWasAnnounced()).toBe(true); // told, not chosen
+    failSyncWrite("ENOSPC");
+    writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    const result = await setChatAnswerer("claude", "own-window");
+    expect(result).toEqual({ answerer: "claude", persisted: true });
+  });
+
+  it("round 4 P12: an allowance 'claude' after the user's own marked Claude keeps the mark", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("claude", "own-window");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+    await setChatAnswerer("claude", "allowance");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8"))).toEqual(CLAUDE_FILE_OWN);
+  });
+
+  it("round 3 L1: the async last resort runs inside the queue and cannot overtake a later request", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "own-window");
+    failSyncWrite("EPERM");
+    vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("EPERM");
+    });
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const storage = await import("../../../src/server/integrations/storage.js");
+    const real = storage.atomicWriteConfigFile;
+    const order: string[] = [];
+    vi.spyOn(storage, "atomicWriteConfigFile").mockImplementation(async (file, content) => {
+      if (file.endsWith(CHAT_ANSWERER_FILE_NAME)) {
+        const what = (JSON.parse(content) as { answerer: string }).answerer;
+        if (what === "claude") await gate; // the async last resort, held
+        order.push(what);
+      }
+      return real(file, content);
+    });
+    const claude = setChatAnswerer("claude", "own-window");
+    const local = setChatAnswerer("local", "own-window");
+    await new Promise((r) => setImmediate(r));
+    release();
+    await Promise.all([claude, local]);
+    expect(order).toEqual(["claude", "local"]);
+    expect(chatAnswerer()).toBe("local");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8")).answerer).toBe("local");
+  });
+
+  it("round 3 L5: the synchronous Claude write is fsynced before its rename", async () => {
+    markNotFirstLitStart();
+    prime();
+    const fsync = vi.spyOn(fs, "fsyncSync");
+    const rename = vi.spyOn(fs, "renameSync");
+    await setChatAnswerer("claude", "own-window");
+    expect(fsync).toHaveBeenCalled();
+    expect(rename).toHaveBeenCalled();
+    expect(fsync.mock.invocationCallOrder[0]).toBeLessThan(rename.mock.invocationCallOrder[0]);
   });
 
   it("not yet told when Tandem stops: announced again at the next start", async () => {
@@ -824,8 +953,8 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     await __flushLocalModelAnnouncedForTests();
     await setChatAnswerer("claude", "allowance");
     expect(chatAnswerer()).toBe("claude");
-    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("allowance")]);
-    expect(getBuffer().map((n) => n.message)).toEqual([answererClaudeNotice("allowance")]);
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
+    expect(getBuffer().map((n) => n.message)).toEqual([answererClaudeNotice(null)]);
 
     resetNotifications();
     clearStartupNotices();

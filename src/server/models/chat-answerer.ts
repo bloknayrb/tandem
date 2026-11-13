@@ -60,7 +60,7 @@
  * in Tandem's own window (`answererChosen` in the record — not merely told),
  * any other way chat comes to be answered by Claude — the file removed,
  * unreadable, invalid or written by a newer build, or a switch through the
- * development allowance — raises one notice saying so and why (Bryan,
+ * development allowance — raises one notice, worded true whoever made the change (Bryan,
  * 2026-11-12: "Announce it"); a read that failed keeps the record, so a later
  * clean read of "local" restores the choice silently. The notice, once owed,
  * is kept in the record until one of Tandem's own windows was sent it, so a
@@ -137,6 +137,9 @@ let effective: ChatAnswerer = "claude";
 /** Counts requests, so a local write can tell whether a later one superseded it. */
 let seq = 0;
 let diskQueue: Promise<void> = Promise.resolve();
+/** Did the Claude now in effect come from Tandem's own window? Decides
+ *  whether a re-assertion of Claude on disk carries the mark. */
+let claudeIsOwn = false;
 const listeners = new Set<(now: ChatAnswerer) => void>();
 
 function filePath(): string {
@@ -242,7 +245,11 @@ function serialize(file: string, answerer: ChatAnswerer): string {
   if (existing) {
     const carried: Record<string, unknown> = {};
     for (const key of Object.keys(existing)) {
-      if (UNSAFE_KEYS.has(key) || key === "version" || key === "answerer") continue;
+      // `setBy` is the own-window Claude mark: only that write may carry it,
+      // so no other write of this file keeps it (#1123 review round 4).
+      if (UNSAFE_KEYS.has(key) || key === "version" || key === "answerer" || key === "setBy") {
+        continue;
+      }
       carried[key] = existing[key];
     }
     const merged = `${JSON.stringify({ ...carried, ...known }, null, 2)}\n`;
@@ -354,7 +361,9 @@ type ClaudeOnDisk = "already" | "written" | "deleted" | "failed";
 function makeDiskClaudeSync(own: boolean): ClaudeOnDisk {
   const file = filePath();
   const state = readState(file);
-  if (state === (own ? "claude-own" : "claude")) return "already";
+  // Own: only the marked file will do. Not own: any Claude file already is
+  // Claude — a non-own write never strips the user's own mark (round 4 P12).
+  if (own ? state === "claude-own" : state === "claude" || state === "claude-own") return "already";
   if (writeClaudeSync(file, own)) return "written";
   if (removeSync(file)) return "deleted";
   return isClaudeOnDisk(readState(file)) ? "already" : "failed";
@@ -377,24 +386,29 @@ async function writeClaudeAsync(own: boolean): Promise<void> {
   }
 }
 
-/** Why chat is answered by Claude again, in words for the notice. */
-const CLAUDE_AGAIN_BECAUSE: Record<
-  Exclude<DiskState, "local" | "claude-own"> | "allowance",
-  string
-> = {
-  missing: "the file that held that choice was removed",
-  claude: "the file that held that choice was changed",
-  invalid: "the file that held that choice was changed",
-  newer: "the file that holds that choice was written by a newer version of Tandem",
-  unreadable:
-    "the file that holds that choice could not be read (Tandem will read it again at the next start)",
-  allowance: "a change was made outside Tandem's own window",
-};
+/**
+ * The notice that chat is answered by Claude again (#1123, Bryan's decision
+ * 2026-11-12; wording by the review session's ruling in round 4). True
+ * whoever made the switch — it never says the user chose the local model or
+ * who changed it — so a notice raised in a rare case the user did cause
+ * themselves (a lost record write, a disk that refused the marked write, a
+ * restored backup) is redundant, never false. A cause clause appears only
+ * where Tandem knows the cause for certain, judged from the disk at the
+ * moment the notice is raised. Fixed strings: never a path.
+ */
+export function answererClaudeNotice(cause: "missing" | "unreadable" | null): string {
+  const clause =
+    cause === "missing"
+      ? " The file that held this setting was removed."
+      : cause === "unreadable"
+        ? " Tandem could not read the file that holds this setting, and will try again at the next start."
+        : "";
+  return `Chat in Tandem is now answered by Claude, not by a local model.${clause} If you did not make this change, check Settings → Models.`;
+}
 
-/** The notice that chat is answered by Claude again (#1123, Bryan's decision
- *  2026-11-12). Fixed strings: never a path. */
-export function answererClaudeNotice(cause: keyof typeof CLAUDE_AGAIN_BECAUSE): string {
-  return `Your chat is now answered by Claude, not by a local model as you chose, because ${CLAUDE_AGAIN_BECAUSE[cause]}. To have a local model answer it again, set who answers your chat in Settings → Models.`;
+/** The cause clause the disk supports right now, if any. */
+function certainCause(state: DiskState): "missing" | "unreadable" | null {
+  return state === "missing" || state === "unreadable" ? state : null;
 }
 
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -456,15 +470,15 @@ export function primeChatAnswerer(): void {
   // (#1123 review round 3: a restart must not spend it). Its record is kept
   // on delivery only when the notice is itself about a failed read; a cause
   // recorded as a failed read that now reads cleanly is told as what it is.
+  // Its words are judged afresh from the disk now, never replayed.
+  // The record is kept on delivery only when the notice was owed for a
+  // failed read and the read fails again (round 3 M2): a notice owed for
+  // another cause and shown during a failed read is still spent once seen.
   const owed = answererClaudeOwed();
-  if (owed !== null && Object.hasOwn(CLAUDE_AGAIN_BECAUSE, owed)) {
-    const cause =
-      owed === "unreadable" && state !== "unreadable"
-        ? state
-        : (owed as keyof typeof CLAUDE_AGAIN_BECAUSE);
-    announceAnswererClaude(answererClaudeNotice(cause), {
-      keepRecord: cause === "unreadable",
-      cause,
+  if (owed !== null) {
+    announceAnswererClaude(answererClaudeNotice(certainCause(state)), {
+      keepRecord: state === "unreadable" && owed === "unreadable",
+      cause: owed,
     });
     return;
   }
@@ -475,7 +489,7 @@ export function primeChatAnswerer(): void {
     // so (Bryan, 2026-11-12). A read that failed may be transient (a Windows
     // scanner holding the file), so the record is kept and the next clean
     // start that reads "local" restores the choice with no warning.
-    announceAnswererClaude(answererClaudeNotice(state), {
+    announceAnswererClaude(answererClaudeNotice(certainCause(state)), {
       keepRecord: state === "unreadable",
       cause: state,
     });
@@ -532,12 +546,16 @@ export async function setChatAnswerer(
     // the disk reads Claude before the route answers.
     setEffective("claude");
     const own = source === "own-window";
+    claudeIsOwn = own;
+    // Was the local model the user's own choice before this switch? Only then
+    // can a missing or unmarked file be announced at the next start.
+    const wasChosen = answererLocalWasChosen();
     let recorded: Promise<boolean> = Promise.resolve(true);
-    if (!own && answererLocalWasChosen()) {
+    if (!own && wasChosen) {
       // Not the user's own choice, and theirs was the local model: say so
       // (Bryan, 2026-11-12). Owed durably; the record is cleared once a
       // window of Tandem's was told.
-      announceAnswererClaude(answererClaudeNotice("allowance"), {
+      announceAnswererClaude(answererClaudeNotice(null), {
         keepRecord: false,
         cause: "allowance",
       });
@@ -548,8 +566,9 @@ export async function setChatAnswerer(
     // behind a local write still in flight, where the async last resort runs
     // too — so it can never overtake a later request.
     let how = makeDiskClaudeSync(own);
+    // Not skipped when a later request arrived: the queue keeps order, so a
+    // later local write still lands after this one (round 4 P11).
     await enqueue(async () => {
-      if (seq !== mine) return;
       how = makeDiskClaudeSync(own);
       if (how === "failed") await writeClaudeAsync(own);
     });
@@ -559,13 +578,26 @@ export async function setChatAnswerer(
     // with a record still saying "chosen" would be announced. So when the
     // mark did not land, its success waits for that record write (#1123
     // review round 3).
-    if (own && result.persisted && readState(filePath()) !== "claude-own" && !(await recorded)) {
+    if (
+      own &&
+      wasChosen &&
+      result.persisted &&
+      readState(filePath()) !== "claude-own" &&
+      !(await recorded)
+    ) {
       return { ...result, persisted: false };
     }
     return result;
   }
   await enqueue(async () => {
     const outcome = await writeLocal();
+    // A failed local write while Claude is in effect, with "local" on disk
+    // (an earlier local write that a Claude request overtook in memory, say):
+    // Claude is put back on disk, with the mark if it was the user's own, so
+    // a restart cannot bring the local model back (round 4 P11).
+    if (!outcome.written && effective !== "local" && readState(filePath()) === "local") {
+      if (makeDiskClaudeSync(claudeIsOwn) === "failed") await writeClaudeAsync(claudeIsOwn);
+    }
     if (outcome.written && seq === mine) {
       const wasLocal = effective === "local";
       setEffective("local");
@@ -595,5 +627,6 @@ export function __resetChatAnswererForTests(base?: string): void {
   effective = "claude";
   seq = 0;
   diskQueue = Promise.resolve();
+  claudeIsOwn = false;
   listeners.clear();
 }
