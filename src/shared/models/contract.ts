@@ -224,7 +224,13 @@ export const ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS = "INVALID_LOCAL_MODEL_SETT
 export const ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED = "LOCAL_MODEL_SETTINGS_WRITE_FAILED";
 /** `POST /api/models/chat-answerer` body was not `{ answerer: "claude" | "local" }`. */
 export const ERROR_CODE_INVALID_CHAT_ANSWERER = "INVALID_CHAT_ANSWERER";
-/** `POST /api/models/chat-answerer`: the switch took effect but did not reach the disk. */
+/**
+ * `POST /api/models/chat-answerer`: the response said `persisted: false`. Either
+ * the switch did not reach the disk (it may still have taken effect for this
+ * run — the answer carries what is in effect), or the record that keeps the
+ * next start quiet did not reach the disk (#1123 A2: a refused switch to the
+ * local model, or a switch to Claude whose clear of a left-over "chosen" failed).
+ */
 export const ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED = "CHAT_ANSWERER_WRITE_FAILED";
 /** `POST /api/models/chat-answerer`: a later request won before this one
  *  settled (409). Nothing failed; the body carries the state now. */

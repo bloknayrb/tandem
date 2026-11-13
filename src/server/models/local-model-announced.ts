@@ -152,6 +152,11 @@ interface Announced {
    *  has been sent it yet: its cause, kept so a restart cannot spend it
    *  (#1123 review round 3). Written only while set. */
   claudeAgainOwed: string | null;
+  /** Tandem removed `chat-answerer.json` itself and could leave no marker
+   *  beside it (#1123 A2, R7.3), so a missing file at the next start is not
+   *  told as "was removed". Written only while set; cleared once the file
+   *  holds a value again. */
+  removedByTandem: boolean;
 }
 
 let basePath: string | null = null;
@@ -159,6 +164,9 @@ let announced: Announced | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
 /** The last write failed, so the file may say more than the record does. */
 let unsaved = false;
+/** What the file is known to say about `answererChosen`: set by each write
+ *  that lands, and by the first load. */
+let chosenOnDisk = false;
 /** Writes queued and not yet settled. One of them may still fail. */
 let inFlight = 0;
 /** What the pending start-up notice will record when it is delivered. */
@@ -190,6 +198,7 @@ function load(): Announced {
     answererLocal: false,
     answererChosen: false,
     claudeAgainOwed: null,
+    removedByTandem: false,
   };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
@@ -216,23 +225,31 @@ function load(): Announced {
         ) {
           fresh.claudeAgainOwed = r.claudeAgainOwed;
         }
+        if (Object.hasOwn(r, "removedByTandem") && r.removedByTandem === true) {
+          fresh.removedByTandem = true;
+        }
       }
     }
   } catch (err) {
     console.error(`[tandem] ${LOCAL_MODEL_ANNOUNCED_FILE_NAME} could not be read:`, err);
   }
   announced = fresh;
+  chosenOnDisk = fresh.answererChosen;
   return fresh;
 }
 
 /** Queue a write of the record as it stands WHEN THE WRITE RUNS, so a retry
  *  never publishes an older state. Resolves to whether it reached the disk. */
-function persist(): Promise<boolean> {
+function persist(overlay?: Partial<Announced>): Promise<boolean> {
   const file = filePath();
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const { adopted, answererLocal, answererChosen, claudeAgainOwed, ...rest } = load();
+      // `overlay`: a change that reaches memory only once this write lands
+      // (#1123 A2, R7.1) — so a failed write leaves the record as it was, and
+      // no later write can persist a change that never happened.
+      const { adopted, answererLocal, answererChosen, claudeAgainOwed, removedByTandem, ...rest } =
+        { ...load(), ...(overlay ?? {}) };
       const snapshot = {
         version: VERSION,
         ...rest,
@@ -240,8 +257,11 @@ function persist(): Promise<boolean> {
         ...(answererLocal ? { answererLocal: true } : {}),
         ...(answererChosen ? { answererChosen: true } : {}),
         ...(claudeAgainOwed !== null ? { claudeAgainOwed } : {}),
+        ...(removedByTandem ? { removedByTandem: true } : {}),
       };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
+      chosenOnDisk = answererChosen;
+      if (overlay) Object.assign(load(), overlay);
       unsaved = false;
       return true;
     })
@@ -439,6 +459,50 @@ export function recordSetByUser(
   return record(change);
 }
 
+/**
+ * The user's own switch to the local model (#1123 A2, R7.1): recorded as
+ * chosen, and the notices it answers withdrawn, only once the write LANDS.
+ * Until then memory is unchanged, so a failed write leaves no trace a later
+ * write could persist: a switch that did not happen is never on record, and
+ * a waiting start-up or "answered by Claude again" notice still stands.
+ */
+export async function recordAnswererLocalChosen(withdrawKey: string): Promise<boolean> {
+  const landed = await persist({ answererLocal: true, answererChosen: true });
+  if (!landed) return false;
+  removeStartupNotice(withdrawKey);
+  dropStartupPart("answererLocal");
+  removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  return true;
+}
+
+/**
+ * Take back a choice of the local model that one request recorded and that
+ * never took effect (a later request superseded it): `answererLocal` and
+ * `answererChosen` only. An owed "answered by Claude again" notice and its
+ * replay are left alone — they belong to whatever switched to Claude
+ * (round-1 re-review B1-R).
+ */
+export function withdrawAnswererLocalChoice(): Promise<boolean> {
+  const r = load();
+  if (!r.answererLocal && !r.answererChosen) return Promise.resolve(true);
+  return record({ answererLocal: false, answererChosen: false });
+}
+
+/** Tandem removed the switch file and could leave no marker (R7.3). */
+export function noteAnswererFileRemovedByTandem(): void {
+  if (!load().removedByTandem) void record({ removedByTandem: true });
+}
+
+/** Did Tandem remove the switch file itself with no marker left? */
+export function answererFileRemovedByTandem(): boolean {
+  return load().removedByTandem;
+}
+
+/** The switch file holds a value again: a removal record no longer applies. */
+export function clearAnswererFileRemovedByTandem(): void {
+  if (load().removedByTandem) void record({ removedByTandem: false });
+}
+
 /** An own-window write that changed nothing recorded here: nothing to record,
  *  but a record write that failed (or may yet fail) is tried again now. */
 export function retryUnsavedRecord(): void {
@@ -542,6 +606,18 @@ export function recordEditingOff(dedupKey: string): void {
   else retryUnsavedRecord();
 }
 
+/** Is the record file possibly behind memory (a write failed, or is still in
+ *  flight and may fail)? */
+export function answererRecordUnsaved(): boolean {
+  return needsRetry();
+}
+
+/** May the record FILE still say the user chose the local model (memory says
+ *  not, but the write that cleared it failed or has not landed)? */
+export function answererChosenMayBeOnDisk(): boolean {
+  return chosenOnDisk || (inFlight > 0 && load().answererChosen);
+}
+
 /** Did the user choose the local model to answer chat, or were they told? */
 export function answererLocalWasAnnounced(): boolean {
   return load().answererLocal;
@@ -617,6 +693,7 @@ export function __resetLocalModelAnnouncedForTests(base?: string): void {
   basePath = base ?? null;
   announced = null;
   unsaved = false;
+  chosenOnDisk = false;
   inFlight = 0;
   startupParts = null;
   firstLit = null;

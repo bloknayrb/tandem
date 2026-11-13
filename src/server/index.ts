@@ -172,6 +172,7 @@ async function startLauncherSupervisor(): Promise<void> {
   launcherStartInflight = true;
   try {
     const { createSupervisor } = await import("./launcher/supervisor.js");
+    const { inLocalPeriod, subscribeLocalPeriod } = await import("./models/local-period.js");
     const { resolveAppDataDir } = await import("./platform.js");
     // Assigned before `start()` so a supervisor that spawned a reaper and then
     // threw is still reachable by `shutdown()`. Once a supervisor exists, the
@@ -201,6 +202,10 @@ async function startLauncherSupervisor(): Promise<void> {
       // The v1.0 setup walkthrough holds the boot start until it is done
       // (#2198; Bryan, 2026-10-14) — the same predicate the wizard opens on.
       walkthroughPending: () => isWalkthroughPending(appData, APP_VERSION),
+      // Who answers chat (#1123 A2): no automatic start and no wake while a
+      // local model answers it. Never held while dark (guard 1 reads Claude
+      // until primed, and priming happens only under the flag).
+      localPeriod: { held: inLocalPeriod, subscribe: subscribeLocalPeriod },
       // The address the MCP listener actually bound (#2358 PR 3a, Ruling D14),
       // never the configured host: the run MCP config names it.
       getBoundMcpAddress: () => {
@@ -752,6 +757,19 @@ async function main() {
         `[Tandem] Failed to prime who answers chat: ${err instanceof Error ? err.message : err}`,
       );
     }
+    // The local period (#1123 A2): Claude is handed nothing while a local
+    // model answers chat. Its own `try`, OUTSIDE the prime's, so a failed
+    // prime still installs it and still records the selection hold. After the
+    // CTRL and document restores, before Hocuspocus binds and before the
+    // supervisor starts.
+    try {
+      const { wireLocalPeriod } = await import("./local-period-wiring.js");
+      wireLocalPeriod();
+    } catch (err) {
+      console.error(
+        `[Tandem] Failed to wire the local period: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
@@ -928,6 +946,15 @@ async function main() {
     // (decision 11), so it leaves them unowned unless that changes.
     applyUserOpenDefaultToDocuments(getOpenDocs().keys());
 
+    // Decision 11's boot record point (#1123 A2), again now that every
+    // startup document is open (a document opened here can restore a session
+    // holding a selection), immediately before Hocuspocus binds. A no-op
+    // unless `wireLocalPeriod` ran, which only the flag's block above does.
+    {
+      const { recordBootSelections } = await import("./models/local-period.js");
+      recordBootSelections();
+    }
+
     const [srv] = await Promise.all([
       startMcpServerHttp(
         mcpPort,
@@ -1086,6 +1113,12 @@ async function main() {
         } catch (err) {
           console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
         }
+      }
+      // Decision 11's boot record point (#1123 A2), immediately before bind;
+      // a no-op unless the flag's block wired the local period.
+      {
+        const { recordBootSelections } = await import("./models/local-period.js");
+        recordBootSelections();
       }
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);

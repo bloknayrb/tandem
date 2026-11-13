@@ -88,6 +88,14 @@ let pendingSince: number | null = null;
 let pendingAbandoned = false;
 /** The most recent completed forward→poll interval, in ms. */
 let lastLatencyMs: number | null = null;
+/**
+ * A round open when chat came to be answered by a local model (#1123 A2,
+ * R3.5): suspended. While suspended it records no latency, no poll resolves
+ * it (the inbox hands nothing during the local period), and `/health` does
+ * not read `awaiting-poll` because of it. At the switch back it is discarded,
+ * never resumed, before the switch-back wake can open its own.
+ */
+let roundSuspended = false;
 
 /**
  * The inbox items the outstanding round is waiting on, keyed by
@@ -235,7 +243,7 @@ export function resolveDeliveryRound(
   now: number = Date.now(),
   undelivered?: UndeliveredScope,
 ): void {
-  if (pendingSince === null) return;
+  if (pendingSince === null || roundSuspended) return;
   if (undelivered) {
     const held = [...pendingItems].filter(
       ([key, entry]) => undelivered.documents.has(entry.documentId) || undelivered.items.has(key),
@@ -351,7 +359,9 @@ export function noteExternalConsumerAttached(): void {
 }
 
 export type DeliveryJoinState =
-  /** Nothing has been forwarded this run. No claim is made. */
+  /** Nothing has been forwarded this run — or, since #1123 A2, nothing since a
+   *  round was suspended or discarded at a switch of who answers chat. No
+   *  claim is made. */
   | "idle"
   /** A poll followed the last forward. `latencyMs` is that interval. */
   | "polled"
@@ -426,14 +436,19 @@ export function getDeliveryState(now: number, externalConsumerCount: number): De
   // where a consumer detaches and a NEW one attaches before anything is
   // forwarded — the old clock is meaningless either way, and only a read knows
   // what is attached right now.
-  const outstanding = pendingSince !== null;
+  //
+  // A suspended round (#1123 A2) is not outstanding: nothing is waiting on a
+  // poll while the local model answers chat.
+  const outstanding = pendingSince !== null && !roundSuspended;
   const stranded = outstanding && (pendingAbandoned || externalConsumerCount === 0);
 
+  // While a round is suspended nothing claims a poll followed the last
+  // forward: `idle` makes no claim at all (#1123 A2 review, item 16).
   const state: DeliveryJoinState = stranded
     ? "consumer-detached"
     : outstanding
       ? "awaiting-poll"
-      : lastForwardAt === null
+      : lastForwardAt === null || roundSuspended
         ? "idle"
         : "polled";
 
@@ -445,14 +460,45 @@ export function getDeliveryState(now: number, externalConsumerCount: number): De
     // two reads (NTP correction, a resumed VM, a laptop waking). A negative
     // duration is not a measurement, and rendering one looks like a bug in the
     // feature being diagnosed.
-    latencyMs: outstanding ? null : lastLatencyMs,
-    waitingMs: pendingSince === null || stranded ? null : Math.max(0, now - pendingSince),
+    // A suspended round reports no latency at all: the last one measured
+    // predates the local period, and would read as this round's.
+    latencyMs: outstanding || roundSuspended ? null : lastLatencyMs,
+    waitingMs:
+      pendingSince === null || !outstanding || stranded ? null : Math.max(0, now - pendingSince),
     sincePollMs: lastPollAt === null ? null : Math.max(0, now - lastPollAt),
   };
 }
 
+/**
+ * Chat came to be answered by a local model (#1123 A2, R3.5): suspend the round
+ * open now, if any. No round opens during the local period — nothing is
+ * forwarded externally — so only this one can be pending.
+ */
+export function suspendDeliveryRound(): void {
+  if (pendingSince !== null) roundSuspended = true;
+}
+
+/**
+ * Chat is answered by Claude again: discard a suspended round, never resume
+ * it, and record no latency for it (the interval spans the local period).
+ * Runs before the switch-back wake can open a round of its own.
+ */
+export function discardSuspendedRound(): void {
+  if (!roundSuspended) return;
+  roundSuspended = false;
+  pendingSince = null;
+  pendingAbandoned = false;
+  pendingItems.clear();
+  // The last latency measured predates the local period: it would read as
+  // this round's, and no poll followed the forward that opened the discarded
+  // round, so the state reads `idle` until the next forward (review item 16).
+  lastLatencyMs = null;
+  lastForwardAt = null;
+}
+
 /** Testing-only. */
 export function resetDeliveryStateForTests(): void {
+  roundSuspended = false;
   lastPollAt = null;
   pollCount = 0;
   lastForwardAt = null;

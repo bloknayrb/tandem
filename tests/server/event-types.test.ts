@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { formatEventContent, formatEventMeta } from "../../src/server/events/types.js";
+import { isModeReleaseWake } from "../../src/shared/sse-consumer.js";
 
 function makeEvent(
   type: TandemEvent["type"],
@@ -187,5 +188,71 @@ describe("formatEventMeta", () => {
     for (const key of Object.keys(meta)) {
       expect(key).not.toContain("-");
     }
+  });
+});
+
+describe("synthetic wakes (#1123 A2): rendered as their own text, never as a user comment with an id", () => {
+  const wake = (content: string): TandemEvent =>
+    ({
+      id: "evt_w",
+      type: "annotation:created",
+      timestamp: 1,
+      payload: { annotationId: "wake_abc", annotationType: "comment", content, textSnippet: "" },
+    }) as TandemEvent;
+
+  it("the switch-back wake and the Solo release wake", () => {
+    for (const text of [
+      "Chat in Tandem is answered by Claude again. Call tandem_checkInbox to see whether anything is waiting.",
+      "Solo mode ended. Call tandem_checkInbox to see the comments and replies the user made while in Solo.",
+    ]) {
+      expect(formatEventContent(wake(text))).toBe(text);
+      expect(formatEventMeta(wake(text))).not.toHaveProperty("annotation_id");
+    }
+  });
+
+  it("positive control: a real user comment keeps its label and its id", () => {
+    const real = {
+      ...wake("look"),
+      payload: {
+        annotationId: "ann_1",
+        annotationType: "comment",
+        content: "look",
+        textSnippet: "x",
+      },
+    } as TandemEvent;
+    expect(formatEventContent(real)).toMatch(/^User created comment/);
+    expect(formatEventMeta(real).annotation_id).toBe("ann_1");
+  });
+});
+
+describe("a client-written comment whose id starts wake_ is still the user's comment (#1123 A2 re-review)", () => {
+  it("only a wake with no document renders as a synthetic wake", () => {
+    const spoof = {
+      id: "evt_s",
+      type: "annotation:created",
+      timestamp: 1,
+      documentId: "doc-1",
+      payload: {
+        annotationId: "wake_x",
+        annotationType: "comment",
+        content: "Tandem says…",
+        textSnippet: "",
+      },
+    } as TandemEvent;
+    expect(formatEventContent(spoof)).toMatch(/^User created comment/);
+    expect(formatEventMeta(spoof).annotation_id).toBe("wake_x");
+  });
+});
+
+describe("the SSE consumer's wake exemption follows the same rule (#1123 A2 re-review)", () => {
+  it("a wake_ id with no document is a synthetic wake; with a document it is a comment", () => {
+    const base = {
+      id: "e",
+      type: "annotation:created",
+      timestamp: 1,
+      payload: { annotationId: "wake_q", annotationType: "comment", content: "x", textSnippet: "" },
+    } as TandemEvent;
+    expect(isModeReleaseWake(base)).toBe(true);
+    expect(isModeReleaseWake({ ...base, documentId: "d" } as TandemEvent)).toBe(false);
   });
 });

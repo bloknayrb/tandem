@@ -307,6 +307,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
           ...(raw.standby ? { standby: raw.standby } : {}),
           ...(raw.startsOnMessage ? { startsOnMessage: true as const } : {}),
           ...(raw.greetingLate ? { greetingLate: true as const } : {}),
+          ...(raw.heldForLocalModel ? { heldForLocalModel: true as const } : {}),
         };
     if (raw.running) {
       if (!loopback) {
@@ -334,6 +335,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         busy: raw.busy,
         attached,
         ...(raw.greetingLate ? { greetingLate: true as const } : {}),
+        ...(raw.heldForLocalModel ? { heldForLocalModel: true as const } : {}),
         ...ignored,
         skillRefresh,
       };
@@ -413,6 +415,11 @@ function sendNotSpawned(
     case "no-integration":
       sendNoIntegration(res);
       return;
+    case "held-by-local-model":
+      // #1123 A2: only a message start is held, and no route makes one (a
+      // route's relaunch or start is the user's own, honoured during the
+      // local period, R4.4). Unreachable here; named so the switch stays total.
+      throw new Error("a launcher route never makes a message start");
     default: {
       const unreachable: never = why;
       throw new Error(`unhandled not-spawned reason ${String(unreachable)}`);

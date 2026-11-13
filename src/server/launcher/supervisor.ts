@@ -316,6 +316,21 @@ interface SupervisorOpts {
   /** Override for `GREETING_REPLY_WINDOW_MS`, for tests. */
   greetingWindowMs?: number;
   /**
+   * The local period (#1123 A2): while Tandem chat is answered by a local
+   * model, Tandem starts its own Claude automatically from nothing and wakes
+   * it for nothing. `held` is guard 1 ("in the local period now");
+   * `subscribe` tells the supervisor of each switch, and whether a switch
+   * back to Claude was the user's own (`asked`). A seam because the switch
+   * lives in `models/`, which this module does not import; `index.ts` wires
+   * it. The default is never held — today's behaviour.
+   */
+  localPeriod?: {
+    held: () => boolean;
+    subscribe: (
+      cb: (change: { to: "local" } | { to: "claude"; asked: boolean }) => void,
+    ) => () => void;
+  };
+  /**
    * The address this server's MCP listener actually bound (#2358 PR 3a,
    * Ruling D14) — `httpServer.address()`, wired in `index.ts` (a source pin
    * holds the wiring). The run MCP config names it; anything but `127.0.0.1`
@@ -376,6 +391,9 @@ const RUN_FILE_DELETE_WAIT_MS = 1_000;
 function mintOwnerHandle(): string {
   return `th_${randomBytes(24).toString("base64url")}`;
 }
+
+/** A start the local period held (#1123 A2, R4.1). */
+type HeldStart = "boot" | "crash" | "licence" | "message";
 
 /** Exported for test only — the `"external"` argument below is the single line
  * standing between Solo mode and a leak, so it needs a test that exercises the
@@ -710,8 +728,12 @@ export interface Supervisor {
 export type RespawnResult =
   | { spawned: true }
   /** `shutting-down` (#2358 PR 3a, Ruling M): a relaunch whose run files were
-   * being written when Tandem began shutting down. Ownership on only. */
-  | { spawned: false; why: "no-integration" | "cli-unusable" | "shutting-down" };
+   * being written when Tandem began shutting down. Ownership on only.
+   * `held-by-local-model` (#1123 A2): a message start held by the local period. */
+  | {
+      spawned: false;
+      why: "no-integration" | "cli-unusable" | "shutting-down" | "held-by-local-model";
+    };
 
 /** Discriminated union: when `running === false` the extra fields are the
  * optional `lastError`, `restartPending` and `configured`; when `running === true` all process-level fields are
@@ -749,6 +771,8 @@ export type SupervisorStatus =
       startsOnMessage?: true;
       /** The greeting is late (#2197) — see `LauncherStatus`. */
       greetingLate?: true;
+      /** Held by the local period (#1123 A2, R4.5) — see `LauncherStatus`. */
+      heldForLocalModel?: true;
       /** The LAST spawn rejected the saved `workingDirectory` (#1822 item 4a)
        * — see `LauncherStatus`. */
       workingDirectoryIgnored?: WorkingDirectoryIgnored;
@@ -788,6 +812,8 @@ export type SupervisorStatus =
       spawnedAt: number;
       /** The greeting is late (#2197) — see `LauncherStatus`. */
       greetingLate?: true;
+      /** Not woken while a local model answers chat (#1123 A2, R4.5). */
+      heldForLocalModel?: true;
       /** Never set: a running supervisor has, by construction, no pending
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
@@ -1176,6 +1202,28 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const otherAiAttached = opts.otherAiAttached ?? (() => false);
   const greetingMarker = opts.greeting ?? { isOwed: () => false, markDone: async () => {} };
   const greetingWindowMs = opts.greetingWindowMs ?? GREETING_REPLY_WINDOW_MS;
+  /** Guard 1 of #1123 A2, read live; a throw reads as not held. */
+  function localHeld(): boolean {
+    try {
+      return opts.localPeriod?.held() === true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * The automatic starts the local period held (#1123 A2, R4.1), run once at
+   * the user's switch back (R5.1) and turned into the `awaiting-start`
+   * standby by an unasked one (R5.4). Cleared by every spawn.
+   */
+  const heldStarts = new Set<HeldStart>();
+  /** The standby now set was set by a local-period hold, not by the user or
+   *  the start mode — so a setup Apply, which is honoured like Start (R4.1),
+   *  does not read it as a choice to hold. Cleared with the standby. */
+  let standbyByLocalPeriod = false;
+  /** Bumped by every switch of who answers chat, so a start queued at the
+   *  user's switch back can tell that a later switch happened while it waited
+   *  for the op lock (review item 5). */
+  let localSwitchCount = 0;
   /**
    * Why Tandem's Claude is not running when nothing went wrong (#2195), or
    * undefined. Set by `stopByChoice` and by a start the settings held back;
@@ -1267,6 +1315,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     isBusy: () => boolean;
     /** Replace this spawn's idle limit and restart its clock (#2195). */
     setIdlePolicy: (ms: number | null) => void;
+    /** Drop this spawn's owed wake (#1123 A2: the local period's switches). */
+    clearOwedWakes: () => void;
   } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
@@ -1464,6 +1514,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * Solo, or a mode that cannot be read, the greeting waits (and stays owed). */
   function greetingOwedNow(): boolean {
     if (greetedThisProcess || greetingCrashedThisProcess) return false;
+    // No greeting while a local model answers chat (#1123 A2, R4.3): it stays
+    // owed, as in Solo, for a later spawn.
+    if (localHeld()) return false;
     try {
       if (opts.greetingHeldBySolo?.() === true) return false;
     } catch {
@@ -1517,6 +1570,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   function setStandby(next: LauncherStandby | undefined): void {
     standby = next;
+    standbyByLocalPeriod = false;
     if (next === undefined) {
       standbyUnsubscribe?.();
       standbyUnsubscribe = null;
@@ -1989,6 +2043,107 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
   }
 
+  /** Record a start the local period held, and say so in the standby
+   *  (`awaiting-start`, unless a standby is already set — an idle or
+   *  awaiting-start one is kept as it is). */
+  function holdForLocalPeriod(kind: HeldStart): void {
+    heldStarts.add(kind);
+    if (standby === undefined) {
+      setStandby("awaiting-start");
+      standbyByLocalPeriod = true;
+    }
+    console.error(
+      `[Launcher] Tandem chat is answered by a local model — not starting Claude (${kind}) until it is answered by Claude again`,
+    );
+  }
+
+  /**
+   * A switch of who answers Tandem chat (#1123 A2). To the local model: every
+   * wake owed now is cleared (R4.2) — the running spawn's pending wake and
+   * the one owed across spawns, which is also the gap watch's raise — and a
+   * turn in flight finishes (decision 9). Back to Claude: wakes the
+   * supervisor raised itself meanwhile are cleared, so the switch back adds
+   * no second wake; then
+   *  - the user's own switch back (R5.1) runs every start the local period
+   *    held, once, unless Claude is turned off or the user stopped it, and a
+   *    held boot only in the automatic mode; the started Claude's first turn
+   *    is its one wake (an owed greeting first, else the bootstrap when
+   *    fresh or the wake prompt when resumed). A running Claude is woken by
+   *    the switch-back wake the push path carries, not here.
+   *  - an unasked one (R5.4) starts and wakes nothing: a held start becomes
+   *    the `awaiting-start` standby, watch armed.
+   * Either way, with no Claude running, a wake is owed to whatever starts it
+   * next, so the user's next chat or Start hands what is owed (R5.1, R5.4).
+   */
+  function onLocalPeriodChange(change: { to: "local" } | { to: "claude"; asked: boolean }): void {
+    localSwitchCount += 1;
+    wakeOwedAcrossSpawns = false;
+    activeTurnDelivery?.clearOwedWakes();
+    if (change.to === "local") return;
+    if (isAlive()) {
+      heldStarts.clear();
+      return;
+    }
+    if (!userStopped && standby !== "off") wakeOwedAcrossSpawns = true;
+    // An unasked switch back starts nothing (decision 8, R5.4): the held starts
+    // stay recorded beside their `awaiting-start` standby, so the user's own
+    // next switch back — after a later local period — still starts them (the
+    // review session's ruling, item 13), and a setup Apply is still honoured
+    // (item 14). A chat or the user's Start in between starts Claude as any
+    // standby does, and that spawn clears them.
+    if (!change.asked || heldStarts.size === 0) return;
+    const mine = localSwitchCount;
+    // The held kinds stay in `heldStarts` while this start waits for the op
+    // lock, so a later switch back sees them too (round-1 re-review B2). A
+    // start that finds a later switch happened meanwhile does nothing: that
+    // switch decides (item 5) — a later own switch back queued its own start,
+    // and anything else leaves the kinds held.
+    withLock(async () => {
+      if (localSwitchCount !== mine || localHeld()) return;
+      if (shuttingDown || userStopped || isAlive() || breakerTripped) {
+        heldStarts.clear();
+        return;
+      }
+      const settings = await readSettingsNow();
+      if (localSwitchCount !== mine || localHeld()) return;
+      if (settings.startMode === "off" || userStopped || isAlive()) {
+        heldStarts.clear();
+        return;
+      }
+      const held = new Set(heldStarts);
+      heldStarts.clear();
+      wakeOwedAcrossSpawns = true;
+      const automatic =
+        held.has("crash") ||
+        held.has("licence") ||
+        (held.has("boot") && settings.startMode === "auto");
+      if (automatic) {
+        const kind = held.has("crash") ? "crash" : held.has("licence") ? "licence" : "boot";
+        console.error("[Launcher] Tandem chat is answered by Claude again — starting Claude");
+        const epoch = stopEpoch;
+        try {
+          await startInternal(epoch, settings, kind);
+        } catch (err) {
+          onRestartFailed(err, epoch);
+        }
+        return;
+      }
+      if (held.has("message") && standby !== undefined && !anotherAiOn()) {
+        console.error(
+          "[Launcher] Tandem chat is answered by Claude again — starting Claude for the message",
+        );
+        try {
+          await respawn(undefined, undefined, { clearSession: false, byMessage: true });
+        } catch (err) {
+          recordStartThrow(err, "Could not start Claude for the message");
+        }
+      }
+    }).catch((err: unknown) => {
+      console.error("[Launcher] Starting Claude at the switch back failed:", err);
+    });
+  }
+  opts.localPeriod?.subscribe(onLocalPeriodChange);
+
   /**
    * Mint this spawn's owner handle and write its run files (#2358 PR 3a,
    * Requirement 1). Called only while ownership is on, after admission (no
@@ -2237,6 +2392,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     lastRefusal = null;
     deliveryKillAt = undefined;
     setStandby(undefined);
+    heldStarts.clear();
     ownChildSessionIds.add(plan.sessionId);
 
     // One timestamp for the spawn: the exit handler's `ranFor` and the status
@@ -2488,6 +2644,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * re-raise it. */
     function flushPendingWake(): void {
       if (!pendingWake || turnInFlight) return;
+      // No wake turn while a local model answers chat (#1123 A2, R4.2), not
+      // even one the supervisor raised itself; the switch back clears it.
+      if (localHeld()) return;
       if (sendTurn(SUPERVISOR_WAKE_PROMPT)) pendingWake = false;
     }
 
@@ -2589,6 +2748,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         idleMs = ms;
         armIdle();
       },
+      clearOwedWakes: () => {
+        pendingWake = false;
+      },
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
@@ -2644,7 +2806,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
     if (plan.resuming && greetNow) {
       writeGreeting();
-    } else if (plan.resuming && (wakeOwedAcrossSpawns || loginRecheckOwed)) {
+    } else if (
+      plan.resuming &&
+      // While a local model answers chat (#1123 A2, R4.2, R4.4) no owed wake
+      // is written — only the sign-in re-check, which is not a wake.
+      ((wakeOwedAcrossSpawns && !localHeld()) || loginRecheckOwed)
+    ) {
       // `loginRecheckOwed` (#1780): a resumed CLI is silent until it is sent a
       // turn, so Check again after a sign-in refusal must send one. A fresh
       // spawn's bootstrap turn above already is that re-check.
@@ -3121,12 +3288,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * `resumeAfterLicence` and the public `start()` wrapper. `epoch` is the
    * `stopEpoch` this start belongs to; the restart timer passes the one its
    * failure handler checks. */
-  async function startInternal(epoch = stopEpoch, known?: LauncherSettings): Promise<void> {
+  async function startInternal(
+    epoch = stopEpoch,
+    known?: LauncherSettings,
+    kind: Exclude<HeldStart, "message"> = "crash",
+  ): Promise<void> {
     // Counted for `restartPending` (#2180). The restart timer nulls itself and
     // calls this synchronously, so no status poll lands between the two.
     launching++;
     try {
-      await planAndSpawn(epoch, known);
+      await planAndSpawn(epoch, known, kind);
     } finally {
       launching--;
     }
@@ -3134,7 +3305,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   /** `known`: settings the caller already read (boot), so they are not read
    * twice. */
-  async function planAndSpawn(epoch: number, known?: LauncherSettings): Promise<void> {
+  async function planAndSpawn(
+    epoch: number,
+    known: LauncherSettings | undefined,
+    kind: Exclude<HeldStart, "message">,
+  ): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
@@ -3206,6 +3381,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       recordCliUnusable("Starting Claude");
       return;
     }
+    // The local period (#1123 A2, R4.1): no automatic start — boot, the
+    // deferred start, a crash restart or a licence resume — while a local
+    // model answers chat. Decided after the plan's await, beside every other
+    // re-check, and after the Off, plan, licence and CLI checks, so those
+    // still report what they report. The held start runs at the user's
+    // switch back (R5.1). A message start is the exception: it is held at the
+    // top of `stopAndSpawn`, after the licence check only (round-2 item 9),
+    // so during the period a missing integration or CLI is reported when the
+    // held start runs at the switch back, not when the message arrives.
+    // Before the run files (#2358 PR 3a): a held start writes none and mints
+    // no owner handle.
+    if (localHeld()) {
+      holdForLocalPeriod(kind);
+      return;
+    }
     // The run files (#2358 PR 3a), ownership on only. The write is the first
     // await between planning and `spawn` (R1.8), so everything re-checked after
     // `buildPlan`'s await is re-checked again after it, plus `child` and
@@ -3234,6 +3424,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error(
           `[Launcher] Not spawning: ${why ?? "AI features are unlicensed"} while the run files were written`,
         );
+        return;
+      }
+      // The local period may have begun during the write: the start is held,
+      // and what the write made is discarded first (its handle stops binding,
+      // its files are deleted), so a held start leaves neither behind.
+      if (localHeld()) {
+        run?.discard();
+        holdForLocalPeriod(kind);
         return;
       }
     }
@@ -3318,7 +3516,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // poll lands between them; the settings travel along rather than being
       // read a second time.
       try {
-        await startInternal(stopEpoch, settings);
+        await startInternal(stopEpoch, settings, "boot");
       } catch (err) {
         // A boot whose integrations read throws would otherwise leave the
         // status route reading a clean stop (#2145). Recorded only with no
@@ -3395,6 +3593,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     clearSession: boolean,
     byMessage: boolean,
   ): Promise<RespawnResult> {
+    // What a held message start must leave as it found (review item 15).
+    const userStoppedBefore = userStopped;
+    /** The Off below was saved as on-click: a hold after that leaves the stop
+     *  flag lowered, since the mode is no longer Off (re-review, item 15). */
+    let wroteOnClick = false;
+    const gapWatchBefore = gapUnsubscribe !== null;
+    // A message start is automatic (#1123 A2, R4.1): held while a local model
+    // answers chat, and run at the user's switch back. Held HERE, before
+    // `stopInternal()` and before the gap watch is armed (round-2 item 9), so
+    // a held message start stops nothing, saves no mode (review N1) and arms
+    // no watch across the awaits below. The user's own Start, Relaunch and
+    // Start fresh, and a setup Apply, are honoured (R4.4).
+    if (byMessage && localHeld()) {
+      holdForLocalPeriod("message");
+      return { spawned: false, why: "held-by-local-model" };
+    }
     // A shutdown that begins anywhere in this relaunch (the stop's exit wait,
     // the plan read, the run-file write) is caught after the write (#2358 PR
     // 3a, Ruling M). Counted from here rather than read raw: `stop()` leaves
@@ -3449,6 +3663,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       recordCliUnusable("Starting Claude");
       return { spawned: false, why: "cli-unusable" };
     }
+    // Again after those awaits: the switch to the local model may have come
+    // during them (review N2). Nothing is owed to undo then: that switch
+    // cleared `wakeOwedAcrossSpawns`, and the gap watch armed above acts only
+    // on events forwarded externally, which no event of the period is.
+    if (byMessage && localHeld()) {
+      holdForLocalPeriod("message");
+      // Off stays Off: the stop flag and the gap watch go back to how this
+      // start found them, so a held message start changes no state.
+      userStopped = userStoppedBefore;
+      if (!gapWatchBefore) disarmGapWatch();
+      return { spawned: false, why: "held-by-local-model" };
+    }
     // A user start while the mode is `off` turns it back on as `on-click`
     // (#2195; Bryan's #2196 answer, applied to every user start). After the
     // plan, so a start that finds no integration changes nothing, and after
@@ -3456,6 +3682,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // relaunch and start-fresh as well as Start: otherwise Claude would run
     // while Settings still said Off, and its first crash would stay down.
     if (settings.startMode === "off") {
+      wroteOnClick = true;
       await persistStartMode("on-click");
       // Kept in step with the saved mode: if the spawn below fails, its error
       // outranks this anyway, and if it is retried the pill must not still say
@@ -3463,6 +3690,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (standby === "off") setStandby("awaiting-start");
     }
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
+    // And after that await (review N2), before the run files (#2358 PR 3a):
+    // a held message start writes none and mints no owner handle.
+    if (byMessage && localHeld()) {
+      holdForLocalPeriod("message");
+      // Off stays Off: the stop flag and the gap watch go back to how this
+      // start found them, so a held message start changes no state.
+      if (!wroteOnClick) {
+        userStopped = userStoppedBefore;
+        if (!gapWatchBefore) disarmGapWatch();
+      }
+      return { spawned: false, why: "held-by-local-model" };
+    }
     // The run files (#2358 PR 3a), ownership on only. This path re-checks two
     // things after the write (Ruling M) — new behaviour here, which had no
     // re-check: every stop takes the lock, so only a shutdown (raised before
@@ -3482,6 +3721,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         run?.discard();
         console.error("[Launcher] Not spawning: Tandem is shutting down");
         return { spawned: false, why: "shutting-down" };
+      }
+      // The local period may have begun during the write: held, and what the
+      // write made is discarded first, so a held start leaves nothing behind.
+      if (byMessage && localHeld()) {
+        run?.discard();
+        holdForLocalPeriod("message");
+        if (!wroteOnClick) {
+          userStopped = userStoppedBefore;
+          if (!gapWatchBefore) disarmGapWatch();
+        }
+        return { spawned: false, why: "held-by-local-model" };
       }
     }
     armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run));
@@ -3608,6 +3858,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
+      // Turned off: nothing the local period held is owed a start (R5.1).
+      heldStarts.clear();
       releaseTurnDelivery();
       disarmGapWatch();
     } else {
@@ -3679,6 +3931,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
+      heldStarts.clear();
       // A crash may have armed the watch; a user stop carries nothing (#2181).
       disarmGapWatch();
       // Shutdown: no message may start Claude after this (#2196); see
@@ -3730,6 +3983,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         busy: activeTurnDelivery !== null && activeTurnDelivery.isBusy(),
         spawnedAt: currentSpawnedAt,
         ...(greetingLate() ? { greetingLate: true as const } : {}),
+        // Running, and not woken while a local model answers chat (R4.5).
+        ...(localHeld() ? { heldForLocalModel: true as const } : {}),
         ...(lastSpawnIgnoredWorkingDirectory
           ? { workingDirectoryIgnored: lastSpawnIgnoredWorkingDirectory }
           : {}),
@@ -3768,9 +4023,27 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // forwarded, so it never reaches the watch) and `decideRefusal` here. The
       // in-memory check goes first: once the licence gate ships, `decideRefusal`
       // reads the licence file, and this runs on every status poll.
-      if (!shuttingDown && !breakerTripped && !anotherAiOn() && decideRefusal() === null) {
-        stopped.startsOnMessage = true;
+      const wouldStartOnMessage =
+        !shuttingDown && !breakerTripped && !anotherAiOn() && decideRefusal() === null;
+      // While a local model answers chat a message starts nothing (#1123 A2,
+      // R4.5): the chat panel must not promise "Claude is resuming" under a
+      // chat the local model answers.
+      if (wouldStartOnMessage && !localHeld()) stopped.startsOnMessage = true;
+      if (localHeld() && standby !== "off" && wouldStartOnMessage) {
+        stopped.heldForLocalModel = true;
       }
+    }
+    // A held automatic start is held by the local period alone (R4.5).
+    // Never for a Claude the user stopped or turned off (R4.5).
+    // A `lastError` is a diagnosis and outranks it, as it outranks `standby`.
+    if (
+      localHeld() &&
+      heldStarts.size > 0 &&
+      !userStopped &&
+      standby !== "off" &&
+      lastError === undefined
+    ) {
+      stopped.heldForLocalModel = true;
     }
     return stopped;
   }
@@ -3821,7 +4094,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // for a Claude that has never run), or any standby (idle is a choice too).
       if (
         !releasesWalkthrough &&
-        (userStopped || settings.startMode !== "auto" || standby !== undefined)
+        (userStopped ||
+          settings.startMode !== "auto" ||
+          // A standby a local-period hold set is not a choice (#1123 A2): an
+          // Apply is honoured like Start (R4.1).
+          (standby !== undefined && !standbyByLocalPeriod))
       ) {
         return decide("held");
       }
@@ -3927,7 +4204,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (lastError === "unlicensed") lastError = undefined;
       const epoch = stopEpoch;
       try {
-        await startInternal(epoch);
+        await startInternal(epoch, undefined, "licence");
       } catch (err) {
         // `buildPlan` threw (`integrations.json` unreadable or invalid). Same
         // handling as a crash restart's, so the real cause reaches the chip

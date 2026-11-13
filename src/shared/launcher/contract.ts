@@ -55,6 +55,13 @@ export type LauncherStatus =
        * promise keys on, so it is never shown for a message nothing will
        * answer. Absent from an older server. */
       startsOnMessage?: true;
+      /** Loopback-only (#1123 A2, R4.5): Tandem chat is answered by a local
+       * model, and that is why Tandem's Claude is not being started — an
+       * automatic start it held, or a standby a chat would otherwise have
+       * started (then `startsOnMessage` is absent). Never for a Claude the
+       * user stopped. Separate from `standby`, whose union is unchanged.
+       * Absent from an older server and while dark. */
+      heldForLocalModel?: true;
       /** Loopback-only (#2197): see the running arm's `greetingLate`. Here too,
        * because the commonest reason the hello never comes — Claude Code not
        * signed in — stops the child. */
@@ -89,6 +96,10 @@ export type LauncherStatus =
        * panel shows how to fix it. Decided server-side, so neither a cleared
        * chat nor the client's clock can fake it. */
       greetingLate?: true;
+      /** Loopback-only (#1123 A2, R4.5): Tandem chat is answered by a local
+       * model, so this Claude is woken for nothing until it is answered by
+       * Claude again. Absent from an older server and while dark. */
+      heldForLocalModel?: true;
       /** Loopback-only (#1822 item 4a). The LAST spawn did not use the saved
        * `workingDirectory` and ran in home instead. Absent when it did, when
        * none is saved, and from an older server. See

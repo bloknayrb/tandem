@@ -55,7 +55,7 @@ export function makeAwarenessObserver(deps: {
 
     if (event.keysChanged.has(Y_MAP_SELECTION)) {
       const selection = userAwareness.get(Y_MAP_SELECTION) as
-        | { from: FlatOffset; to: FlatOffset; selectedText?: string }
+        | { from: FlatOffset; to: FlatOffset; selectedText?: string; timestamp?: unknown }
         | undefined;
 
       // Cancel any pending dwell timer
@@ -77,6 +77,9 @@ export function makeAwarenessObserver(deps: {
           from: selection.from,
           to: selection.to,
           selectedText: selection.selectedText ?? "",
+          // #1123 A2: the stamp of the selection actually buffered, so the
+          // selection hold judges this one and not whatever is current later.
+          ...(selection.timestamp !== undefined ? { stamp: selection.timestamp } : {}),
         });
       }, getDwellMs());
     }

@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import { RUN_FILE_SWEEP_AGE_MS, type RunFileAcl } from "../../../src/server/launcher/run-files.js";
@@ -681,6 +682,115 @@ describe("the boot sweep (R1.9)", () => {
     const sup = makeSupervisor({ aiRefusal: () => REFUSAL, storeLockHeld: () => false });
     await sup.start();
     expect(fs.existsSync(old)).toBe(true);
+  });
+});
+
+describe("#1123 A2: a start the local period holds writes no run files and mints no handle", () => {
+  /** A local-period seam whose `held` the test flips. */
+  function localPeriod(initially: boolean) {
+    let held = initially;
+    return {
+      seam: { held: () => held, subscribe: () => () => {} },
+      set: (v: boolean) => {
+        held = v;
+      },
+    };
+  }
+
+  it("a boot held by the local period: no run file, no registered spawn, no child", async () => {
+    const lp = localPeriod(true);
+    let writes = 0;
+    const sup = makeSupervisor({
+      localPeriod: lp.seam,
+      runFileWriteHold: async () => {
+        writes += 1;
+      },
+    });
+    const logs = captureErrors();
+    await sup.start();
+    await sleep(100);
+    // Held BEFORE the write, not discarded after it: no handle was minted.
+    expect(writes).toBe(0);
+    expect(logs().some((l) => l.includes("not starting Claude (boot)"))).toBe(true);
+    expect(records("spawn-")).toEqual([]);
+    expect(runFilesOnDisk()).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+  });
+
+  it("the local period begins while the run files are written: the start is held, its files are deleted and its handle ended", async () => {
+    const lp = localPeriod(false);
+    const gate = deferred();
+    const reached = deferred();
+    const sup = makeSupervisor({
+      localPeriod: lp.seam,
+      runFileWriteHold: async () => {
+        reached.resolve();
+        await gate.promise;
+      },
+    });
+    const logs = captureErrors();
+    const started = sup.start();
+    await reached.promise;
+    // The files and the spawn's state exist now (the write is done, the
+    // re-checks are not): the positive control for what follows.
+    expect(runFilesOnDisk()).toHaveLength(2);
+    expect(ownerHandleBindSnapshotForTests().spawns).toHaveLength(1);
+    lp.set(true);
+    gate.resolve();
+    await started;
+    await waitFor(() => runFilesOnDisk().length === 0, "the run files deleted");
+    expect(logs().some((l) => l.includes("not starting Claude (boot)"))).toBe(true);
+    expect(logs().filter((l) => l.includes("Spawning Claude via reaper"))).toEqual([]);
+    expect(records("spawn-")).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+  });
+});
+
+describe("#1123 A2: a message start the local period holds during the run-file write", () => {
+  it("the switch lands while a message start's run files are written: nothing spawns, its files are deleted and its handle ended", async () => {
+    let held = false;
+    let standbyCb: ((event: TandemEvent) => void) | null = null;
+    const gate = deferred();
+    const reached = deferred();
+    const sup = makeSupervisor({
+      localPeriod: { held: () => held, subscribe: () => () => {} },
+      subscribeDuringStandby: (cb) => {
+        standbyCb = cb;
+        return () => {
+          standbyCb = null;
+        };
+      },
+      runFileWriteHold: async () => {
+        reached.resolve();
+        await gate.promise;
+      },
+    });
+    await sup.updateSettings({ startMode: "on-click" });
+    await sup.start(); // on-click: no boot start, the standby watch is armed
+    expect(standbyCb).not.toBeNull();
+    const logs = captureErrors();
+    (standbyCb as unknown as (event: TandemEvent) => void)({
+      id: "evt_msg",
+      type: "chat:message",
+      timestamp: Date.now(),
+      payload: { messageId: "m1", text: "hi" },
+    } as TandemEvent);
+    await reached.promise;
+    // The positive control: the message start wrote its files and registered.
+    expect(runFilesOnDisk()).toHaveLength(2);
+    expect(ownerHandleBindSnapshotForTests().spawns).toHaveLength(1);
+    held = true; // the switch to the local model lands during the write
+    gate.resolve();
+    await waitFor(() => runFilesOnDisk().length === 0, "the run files deleted");
+    await waitFor(
+      () => !(sup.status() as { restartPending?: true }).restartPending,
+      "the message start to finish",
+    );
+    expect(logs().some((l) => l.includes("not starting Claude (message)"))).toBe(true);
+    expect(logs().filter((l) => l.includes("Spawning Claude via reaper"))).toEqual([]);
+    expect(records("spawn-")).toEqual([]);
+    expect(ownerHandleBindSnapshotForTests().spawns).toEqual([]);
+    expect(sup.status()).toMatchObject({ running: false, heldForLocalModel: true });
   });
 });
 

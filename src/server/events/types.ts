@@ -19,4 +19,8 @@ export type BufferedSelection = {
   from: number; // FlatOffset
   to: number; // FlatOffset
   selectedText: string;
+  /** The selection record's own `timestamp` (#1991), compared against the
+   *  stamp recorded by decision 11's selection hold (#1123 A2). Server-side
+   *  only: never copied into an event payload. */
+  stamp?: unknown;
 };
