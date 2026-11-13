@@ -355,7 +355,7 @@ describe("cases the diff review found", () => {
     expect(six).toMatch(/misses\s+wordings/);
   });
 
-  it("round 5: \"should be\" alone is not a verdict, and a negation steps over a quotation", () => {
+  it('round 5: "should be" alone is not a verdict, and a negation steps over a quotation', () => {
     const maint = scenarioById("req-ops-review-maintenance-flag");
     const flood = scenarioById("req-lease-summary-flood-comment");
     const onMaint = (reply: string) =>

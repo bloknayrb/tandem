@@ -10,8 +10,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TapRecord } from "../../../../probe/local-model-spike/harness/fetch-tap.js";
 import { RUN_DEADLINE_DETAIL } from "../../../../probe/local-model-spike/harness/classify.js";
+import type { TapRecord } from "../../../../probe/local-model-spike/harness/fetch-tap.js";
 import { harnessConfig } from "../../../../probe/local-model-spike/harness/model-config.js";
 import {
   isSafeRunId,
@@ -608,9 +608,9 @@ describe("a run", () => {
           );
           vi.unstubAllGlobals();
         }
-        expect(outcomes[0].every((t) => t.ending === "timeout" && t.detail === RUN_DEADLINE_DETAIL)).toBe(
-          true,
-        );
+        expect(
+          outcomes[0].every((t) => t.ending === "timeout" && t.detail === RUN_DEADLINE_DETAIL),
+        ).toBe(true);
         expect(outcomes[1]).toEqual(outcomes[0]);
       }, 60_000);
     });
