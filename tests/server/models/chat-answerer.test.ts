@@ -724,6 +724,67 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     expect(getStartupNotices()).toEqual([]);
   });
 
+  it("round 3 review M1: a notice owed from an allowance switch, then the user's own → Claude with the record write failing: silent at the next start", async () => {
+    markNotFirstLitStart();
+    prime();
+    await setChatAnswerer("local", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    await setChatAnswerer("claude", "allowance"); // owed, no window
+    await __flushLocalModelAnnouncedForTests();
+    writeControl.fail.add(LOCAL_MODEL_ANNOUNCED_FILE_NAME);
+    const result = await setChatAnswerer("claude", "own-window");
+    expect(result).toEqual({ answerer: "claude", persisted: true }); // the mark landed
+    await __flushLocalModelAnnouncedForTests();
+    writeControl.fail.clear();
+    restart();
+    prime();
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round 3 review M2: a 'changed' notice delivered during a failed read is not raised again at the next clean start", async () => {
+    await chosenLocalThen(() => writeSwitch({ version: 1, answerer: "claude" }));
+    prime(); // start 1: owed "changed", no window
+    expect(claudeAgain()).toHaveLength(1);
+    await __flushLocalModelAnnouncedForTests();
+    restart();
+    const real = fs.readFileSync;
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      p: fs.PathOrFileDescriptor,
+      o?: unknown,
+    ) => {
+      if (String(p).endsWith(CHAT_ANSWERER_FILE_NAME)) throw new Error("EBUSY");
+      return (real as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
+    }) as typeof fs.readFileSync);
+    prime(); // start 2: unreadable, the owed notice raised and delivered
+    read.mockRestore();
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("claude")]);
+    deliver();
+    await __flushLocalModelAnnouncedForTests();
+    restart();
+    prime(); // start 3: clean, still the unmarked Claude file
+    expect(getStartupNotices()).toEqual([]);
+  });
+
+  it("round 3 review L1: an owed 'could not be read' that now reads as removed is told as removed", async () => {
+    await chosenLocalThen(() => {});
+    const real = fs.readFileSync;
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      p: fs.PathOrFileDescriptor,
+      o?: unknown,
+    ) => {
+      if (String(p).endsWith(CHAT_ANSWERER_FILE_NAME)) throw new Error("EBUSY");
+      return (real as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
+    }) as typeof fs.readFileSync);
+    prime();
+    read.mockRestore();
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("unreadable")]);
+    await __flushLocalModelAnnouncedForTests();
+    fs.rmSync(switchFile());
+    restart();
+    prime();
+    expect(claudeAgain().map((n) => n.message)).toEqual([answererClaudeNotice("missing")]);
+  });
+
   it("not yet told when Tandem stops: announced again at the next start", async () => {
     await chosenLocalThen(() => fs.rmSync(switchFile()));
     prime();

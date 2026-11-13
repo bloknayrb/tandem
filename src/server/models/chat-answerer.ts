@@ -444,21 +444,28 @@ export function primeChatAnswerer(): void {
     if (!answererLocalWasAnnounced()) announceStartupMismatch({ answererLocal: true });
     return;
   }
-  // A notice owed from an earlier run that no window was sent: raise it again
-  // (#1123 review round 3: a restart must not spend it).
-  const owed = answererClaudeOwed();
-  if (owed !== null && Object.hasOwn(CLAUDE_AGAIN_BECAUSE, owed)) {
-    const cause = owed as keyof typeof CLAUDE_AGAIN_BECAUSE;
-    announceAnswererClaude(answererClaudeNotice(cause), {
-      keepRecord: state === "unreadable",
-      cause,
-    });
-    return;
-  }
   // The user's own choice of Claude (the marked file) is silent whatever the
-  // record says, even one whose clearing write was lost.
+  // record says — even one whose clearing write was lost, and even with a
+  // notice still owed from before it: that notice is moot once the user chose
+  // Claude themselves (only the own-window route writes the mark).
   if (state === "claude-own") {
     void recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
+    return;
+  }
+  // A notice owed from an earlier run that no window was sent: raise it again
+  // (#1123 review round 3: a restart must not spend it). Its record is kept
+  // on delivery only when the notice is itself about a failed read; a cause
+  // recorded as a failed read that now reads cleanly is told as what it is.
+  const owed = answererClaudeOwed();
+  if (owed !== null && Object.hasOwn(CLAUDE_AGAIN_BECAUSE, owed)) {
+    const cause =
+      owed === "unreadable" && state !== "unreadable"
+        ? state
+        : (owed as keyof typeof CLAUDE_AGAIN_BECAUSE);
+    announceAnswererClaude(answererClaudeNotice(cause), {
+      keepRecord: cause === "unreadable",
+      cause,
+    });
     return;
   }
   if (answererLocalWasChosen()) {
@@ -547,11 +554,12 @@ export async function setChatAnswerer(
       if (how === "failed") await writeClaudeAsync(own);
     });
     const result = await settled("claude", seq !== mine);
-    // The user's own switch that could only DELETE the file is silent at the
-    // next start only if the record was cleared too (a missing file with a
-    // record still saying "chosen" would be announced as removed). So its
-    // success waits for that write (#1123 review round 3).
-    if (own && how === "deleted" && result.persisted && !(await recorded)) {
+    // The user's own switch is silent at the next start only if the file
+    // carries its mark, or the record was cleared: a missing or unmarked file
+    // with a record still saying "chosen" would be announced. So when the
+    // mark did not land, its success waits for that record write (#1123
+    // review round 3).
+    if (own && result.persisted && readState(filePath()) !== "claude-own" && !(await recorded)) {
       return { ...result, persisted: false };
     }
     return result;
