@@ -148,6 +148,7 @@ describe("tests and the flag", () => {
   // Every file that stubs the variable, by any argument: a stub through a
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
+    "tests/server/local-period.test.ts",
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
     "tests/server/ownership-api-no-context.test.ts",
@@ -180,7 +181,10 @@ describe("tests and the flag", () => {
     // flag-on and then turns the flag off, to show no path reaches the inbox.
     // The scope PR's one (`ownership-inbox-scope.test.ts`): its dark tests
     // build their server flag-off, to show tandem_checkInbox is master's.
+    // #1123 A2's one (`local-period.test.ts`): it runs every local-period case
+    // with ownership off and on (the brief's "ownership off and on").
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
+      "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
@@ -197,6 +201,7 @@ describe("tests and the flag", () => {
 
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
+      "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",

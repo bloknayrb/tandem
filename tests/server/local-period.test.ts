@@ -207,7 +207,9 @@ const wakes = () =>
 for (const ownership of ["", "1"] as const) {
   describe(`local period (ownership ${ownership ? "on" : "off"})`, () => {
     beforeEach(async () => {
-      vi.stubEnv("TANDEM_OWNERSHIP", ownership);
+      // Literal stubs, so the ownership seam's reviewed sets can see both.
+      if (ownership === "1") vi.stubEnv("TANDEM_OWNERSHIP", "1");
+      else vi.stubEnv("TANDEM_OWNERSHIP", "");
       vi.spyOn(console, "error").mockImplementation(() => {});
       dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-local-period-"));
       run++;
