@@ -92,6 +92,14 @@ export const WINDOWS_ACL_PROOF_SPECS = [
     realAcl: true,
   },
   {
+    // #2358 PR 3a: the launcher's run files (R1.6) — the SDDL owner check,
+    // the directory lock and re-read, and a file or dangling link at a run
+    // file's name refused before the create.
+    spec: "tests/server/launcher/run-files-acl-win.test.ts",
+    suite: "run files — Windows ACL proof (#2358 PR 3a)",
+    realAcl: true,
+  },
+  {
     // #1796. Unlike its two siblings this one is not about #1299's poisoned
     // install: it denies write on a convert output directory and pins that the
     // failure is reported as PERMISSION_DENIED whichever syscall trips on it.

@@ -63,6 +63,102 @@ writeRecord(`spawn-${process.pid}.json`, {
   cwd: process.cwd(),
 });
 
+// --- the run files (#2358 PR 3a), opt-in by their presence in argv ----------
+//
+// The stub reads the run MCP config and the run settings file from the paths
+// in ITS OWN argv — never by listing `launcher/`, which would pass even when
+// the argv named another path or none. What it found is recorded as
+// `runfiles-<pid>.json`. With TANDEM_STUB_CLAUDE_START_BRIDGE=1 it then starts
+// the entry's REAL bridge from the entry's own `command`, `args` and `env`,
+// adding what Claude Code adds for a server it spawns (`CLAUDECODE=1`,
+// `CLAUDE_CODE_SESSION_ID` = the session id from its own argv), and runs an
+// `initialize` through it, as Claude Code would.
+function argAfter(flag) {
+  const i = argv.indexOf(flag);
+  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
+}
+const mcpConfigPath = argAfter("--mcp-config");
+const settingsPath = argAfter("--settings");
+const sessionFromArgv = argAfter("--session-id") ?? argAfter("--resume");
+if (mcpConfigPath !== undefined || settingsPath !== undefined) {
+  const read = (p) => {
+    try {
+      return { ok: true, value: JSON.parse(fs.readFileSync(p, "utf8")) };
+    } catch (err) {
+      return { ok: false, code: err.code ?? String(err) };
+    }
+  };
+  const mcp = mcpConfigPath !== undefined ? read(mcpConfigPath) : undefined;
+  writeRecord(`runfiles-${process.pid}.json`, {
+    pid: process.pid,
+    mcpConfigPath,
+    settingsPath,
+    mcp,
+    settings: settingsPath !== undefined ? read(settingsPath) : undefined,
+    sessionId: sessionFromArgv,
+  });
+  if (process.env.TANDEM_STUB_CLAUDE_START_BRIDGE === "1" && mcp && mcp.ok) {
+    const entry = mcp.value.mcpServers.tandem;
+    const { spawn } = require("node:child_process");
+    const bridge = spawn(entry.command, entry.args, {
+      env: {
+        ...process.env,
+        ...entry.env,
+        CLAUDECODE: "1",
+        CLAUDE_CODE_SESSION_ID: sessionFromArgv,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let bridgeOut = "";
+    let bridgeErr = "";
+    bridge.stdout.on("data", (b) => {
+      bridgeOut += b.toString("utf8");
+      if (bridgeOut.includes('"id":1') && bridgeOut.includes("serverInfo")) {
+        bridge.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+        );
+        writeRecord(`bridge-initialized-${process.pid}.json`, { at: Date.now() });
+      }
+    });
+    bridge.stderr.on("data", (b) => {
+      bridgeErr += b.toString("utf8");
+      writeRecord(`bridge-stderr-${process.pid}.json`, { text: bridgeErr });
+    });
+    setTimeout(() => {
+      bridge.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "claude-code", version: "stub" },
+          },
+        })}\n`,
+      );
+    }, 500);
+    const killBridge = () => {
+      try {
+        bridge.kill();
+      } catch {}
+    };
+    process.on("exit", killBridge);
+    process.on("SIGTERM", () => {
+      killBridge();
+      if (process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS === undefined) process.exit(0);
+    });
+  }
+}
+
+// --- a secret-shaped string on both streams (#2358 PR 3a, R5.3; opt-in) ----
+// One stderr line (the supervisor logs each as `[Claude] …`) and one stdout
+// line that starts with `{` but does not parse (logged, not dropped).
+if (process.env.TANDEM_STUB_CLAUDE_LEAK) {
+  process.stderr.write(`leak ${process.env.TANDEM_STUB_CLAUDE_LEAK}\n`);
+  process.stdout.write(`{not json ${process.env.TANDEM_STUB_CLAUDE_LEAK}\n`);
+}
+
 // --- stdout: the init handshake, split hostilely ---------------------------
 
 // The line is written as two chunks 25 ms apart. A supervisor that parses raw

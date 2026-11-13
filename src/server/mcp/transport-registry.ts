@@ -94,6 +94,13 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
    * design §3.4). Written only while ownership is on.
    */
   streamEver?: true;
+  /**
+   * The bind fact (#2358 PR 3a, R3.5): the serial of the spawn of Tandem's
+   * own Claude this transport bound to at `initialize`, never the handle.
+   * Counts only while that spawn is live (`isSpawnLive`); a dark server never
+   * sets it. Nothing reads it in 3a except tests.
+   */
+  boundSpawn?: number;
 }
 
 export interface McpSessionRegistryOptions<S extends ClosableServer, T> {

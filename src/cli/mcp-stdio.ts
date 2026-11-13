@@ -68,6 +68,7 @@ import {
   STDIO_BRIDGE_REQUEST_TIMEOUT_MS,
 } from "../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
+import { OWNER_HANDLE_HEADER, ownerHandleForUpstream } from "../shared/owner-handle.js";
 import { probeTandemServer } from "./preflight.js";
 
 redirectConsoleToStderr();
@@ -504,11 +505,22 @@ export async function runMcpStdio(): Promise<void> {
   // `createUpstream` below, so a server with ownership on keeps this bridge on
   // one owner record (#2358). Unconditional: this bundle reads no flags.
   upstreamHeaders[TANDEM_CLIENT_ID_HEADER] = randomUUID();
+  // The owner handle (#2358 PR 3a, design §3.3 route L): read once, here, and
+  // presented only to the server whose launcher named it (R2.2). Unconditional:
+  // this bundle reads no flags, and nothing sets the variable while ownership
+  // is dark. Silent on every outcome: never echoed, never logged, never on
+  // stderr (Claude Code captures that into its own logs).
+  const ownerHandle = ownerHandleForUpstream(baseUrl, process.env);
+  if (ownerHandle !== undefined) upstreamHeaders[OWNER_HANDLE_HEADER] = ownerHandle;
 
   /**
    * Build an upstream transport. Extracted so a reconnect cannot drift from
    * the original construction (auth header, `X-Claude-Session-Id`,
-   * `X-Tandem-Client-Id`).
+   * `X-Tandem-Client-Id`, `X-Tandem-Owner-Handle`).
+   *
+   * No `redirectPolicy` (R2.4): the SDK then follows a redirect only within
+   * the same origin, so the handle and the token cannot be carried to another
+   * host by a 3xx. A source pin (`mcp-stdio-owner-handle.test.ts`) holds it.
    *
    * Deliberately passes no `sessionId`: the server mints a fresh one, which is
    * the entire point. The SDK never clears `_sessionId` on a 404 — it is set
