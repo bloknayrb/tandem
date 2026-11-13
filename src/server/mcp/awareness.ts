@@ -2264,7 +2264,12 @@ export function registerAwarenessTools(server: McpServer): void {
               .map((item) => item.documentId)
               .filter((id) => id !== activityDocumentId),
           );
-          const labels = documentLabels([...elsewhere, ...docs.dropped.keys()], activityDocumentId);
+          // One labelling over every document the summary names, so two files that
+          // share a basename are told apart across its sentences.
+          const labels = documentLabels(
+            [...elsewhere, ...docs.dropped.keys(), ...docs.excluded],
+            activityDocumentId,
+          );
           if (elsewhere.size > 0) {
             const names = [...elsewhere].map((id) => labels.get(id) ?? id);
             actions +=
@@ -2307,9 +2312,8 @@ export function registerAwarenessTools(server: McpServer): void {
           const activityExcluded =
             activityDocumentId !== null && docs.excluded.includes(activityDocumentId);
           if (docs.readAnyDocument && docs.excluded.length > 0) {
-            const excludedLabels = documentLabels(docs.excluded, activityDocumentId);
             actions += inboxExcludedSomeNote(
-              docs.excluded.map((id) => excludedLabels.get(id) ?? id),
+              docs.excluded.map((id) => labels.get(id) ?? id),
               activityExcluded,
             );
           }

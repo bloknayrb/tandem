@@ -5,10 +5,12 @@
  * Every message carries its remedy inline, because skills older than the flip
  * stay in use after it and know nothing about ownership.
  *
- * **Nothing a session chose can appear in a message** (R3.6). The only inputs
- * that reach the text are the server's own closed display kind and the random
- * label it minted — never a client name, a file name, a status text or a
- * session id. `documentId` appears in `details` only.
+ * **Nothing a session chose can appear in a refusal** (R3.6). The only inputs
+ * that reach a refusal's text are the server's own closed display kind and the
+ * random label it minted — never a client name, a file name, a status text or
+ * a session id. `documentId` appears in `details` only. (The inbox exclusion
+ * sentences further down are not refusals: they carry document ids and the
+ * summary's file labels, which `tandem_listDocuments` already shows.)
  *
  * **`DOCUMENT_BUSY`'s copy is here too** ({@link documentBusyRefusal}): the
  * answer for a call that waited too long for a document's operation queue.
@@ -78,10 +80,15 @@ const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a requ
 /**
  * What `tandem_checkInbox` says, flag on, about open documents a poll left
  * out because they are not the caller's to answer now (the scope PR, R1.10).
- * One wording for every reason — held by another session, a write on it still
- * running (the caller's own included), a blocking loss, no record — so a busy
- * document is not told apart from a held one, and the sentence is true for
- * each. It carries the take guard the refusals carry ({@link IF_ASKED},
+ * One wording for every reason, so a busy document is not told apart from a
+ * held one. It is true when another session holds the document (a restarted
+ * session's old record included) and when a write on it is still running
+ * (the caller's own included); for the rarer reasons — a caller with no
+ * record (a wiring fault) or a blocking loss on an unowned document (PR 5's
+ * `released`) — it says "may", which is the honest limit of the sentence.
+ * Unlike the refusal copy above, the "some" sentence carries document file
+ * names: the summary's own labels, which `tandem_listDocuments` already shows,
+ * not text a session wrote into a message. It carries the take guard the refusals carry ({@link IF_ASKED},
  * {@link NOT_A_REQUEST}): chat is not scoped, so a session can be handed
  * "please fix d3" for a document another session holds, and `tandem_open`
  * would take a `claimed` one. Never "not open": a model told that may open it.

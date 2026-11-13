@@ -1171,17 +1171,17 @@ const POLL_CLAIM_NOT_APPLIED =
 
 function pollScope(callerId: string | undefined, openIds: Iterable<string>, now: number) {
   const snapshot = new Map<string, InboxDocumentScope>();
-  for (const id of openIds) {
+  for (const documentId of openIds) {
     try {
-      snapshot.set(id, (scopeReadForTests ?? inboxScopeOf)(id, callerId, now));
+      snapshot.set(documentId, (scopeReadForTests ?? inboxScopeOf)(documentId, callerId, now));
     } catch (err) {
       // Every failure, with the document id and the error's class (never
       // its message, never an owner id): the summary tells the model the
       // error is in Tandem's log.
       console.error(
-        `[ownership] an inbox scope read failed for document ${id} (${err instanceof Error ? err.name : typeof err}); the document was not read this poll`,
+        `[ownership] an inbox scope read failed for document ${documentId} (${err instanceof Error ? err.name : typeof err}); the document was not read this poll`,
       );
-      snapshot.set(id, "unread");
+      snapshot.set(documentId, "unread");
     }
   }
   const passes = (check: InboxClaimCheck, documentId: string, ok: () => boolean): boolean =>
@@ -1200,7 +1200,11 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           passes("open", documentId, () => stillOpen) &&
           passes("unowned", documentId, () => readEntry(documentId) === undefined) &&
           // Tandem's Claude needs no record to claim (`standingOf`; the
-          // ownership change creates it), every other caller does.
+          // ownership change creates it), every other caller does. With
+          // "unowned" this is defence in depth the brief asks for: for any
+          // caller but Tandem's Claude, `standingOf` below refuses a missing
+          // record and the scope re-check refuses another holder anyway, so no
+          // test can tell either check from `true` (a mutation run shows it).
           passes(
             "record",
             documentId,

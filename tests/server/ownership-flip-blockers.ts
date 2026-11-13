@@ -126,7 +126,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Chat stays unscoped until the chat PR: every session is handed every user chat message, " +
       "whatever document it is about (#2358's own symptom, for chat). Besides duplicate answers, " +
       "a session handed 'please fix the intro in d3' for a document another session holds may " +
-      "tandem_open it, and the take rule lets an open take a `claimed` document; the inbox's " +
+      "tandem_open it, and the take rule lets an open by another session take a `claimed` " +
+      "document or one Tandem's Claude holds as `default`; the inbox's " +
       "exclusion texts carry the refusals' guard (an item Tandem handed you is not a request), " +
       "which only lowers that risk.",
     closedBy: "The chat PR (design §7: per-message owners).",
@@ -137,6 +138,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "it, and no other session is handed its items until a lapse, a close or a take moves it " +
       "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does).",
     closedBy: "PR 3b (waiting, startOrWake) for Tandem's Claude, or Bryan's answer for terminals.",
+  },
+  {
+    gap:
+      "A take-back and the inbox's exclusion texts: after Tandem's Claude takes a document back " +
+      "('taken back'), the refusal tells the loser not to tandem_open it again unless the user asks " +
+      "again after this point, but the inbox's exclusion texts and `notYours`'s description say " +
+      "only 'only if the user asked you, in your own conversation', which the original request " +
+      "still satisfies, and decideTake checks no loss, so the re-open takes it back from Tandem's " +
+      "Claude. Unreachable until Tandem's Claude can be present (PR 3a/3b).",
+    closedBy:
+      "PR 3b (take-back): carry the loss into the exclusion texts, or make decideTake honour it.",
   },
   {
     gap:

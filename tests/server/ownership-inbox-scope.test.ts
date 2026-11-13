@@ -869,7 +869,10 @@ describe("the claim's real commit-time checks, through the inbox's door (review 
     return scope;
   }
 
-  it("record: the caller's record is gone at commit", () => {
+  // Defence in depth: with the record gone, `standingOf` refuses the claim
+  // too, so this test cannot tell the record check from `true` (stated at the
+  // call site). It pins that the claim is refused, and nothing written.
+  it("a caller whose record is gone at commit is refused (the record check, backed by the standing rule)", () => {
     const scope = begin();
     // Its transport goes and its grace runs out: the record is deleted.
     vi.useFakeTimers();
@@ -949,6 +952,9 @@ describe("an unread document is not acknowledged (review fix 8)", () => {
 describe("re-entrancy in the commit: a claim that lapses its own claimant (review fix 8)", () => {
   it("past 64 detached records, the claimant's claim re-arms its grace, the cap lapses it, and the outcome is changed", async () => {
     annotation(docU.ydoc, "cu");
+    // A notice too: the lapse's handover KEEPS a notice's entry, so only the
+    // "changed" undo retires the one this poll registered and acknowledged.
+    annotation(docU.ydoc, "n", { author: "claude", status: "accepted" });
     vi.useFakeTimers({ toFake: ["Date"] });
     const t0 = Date.now();
     // 64 detached records, each holding a document, graces armed later than C's will be.
@@ -981,8 +987,12 @@ describe("re-entrancy in the commit: a claim that lapses its own claimant (revie
       "the lapse's handover ran",
     ).toBeGreaterThan(0);
     vi.useRealTimers();
-    // Nothing is lost: a fresh reader that may claim it is handed it.
-    expect(itemIds(await reader(B).poll())).toContain("cu");
+    expect(
+      deliveryRegistry.lookup("a", `${docU.id}:n#accepted`, 0),
+      "the changed undo retired this poll's notice entry",
+    ).toBeUndefined();
+    // Nothing is lost: a fresh reader that may claim it is handed both.
+    expect(itemIds(await reader(B).poll())).toEqual(["cu", "n"]);
   });
 });
 
@@ -1001,5 +1011,42 @@ describe("a cursor-less poll's refused claim takes back its acknowledgement of a
     expect(getDocOwner(docU.id)).toBeUndefined();
     expect(kept?.acked, "the refused claim took the acknowledgement back").toBe(false);
     expect(itemIds(await reader(C).poll())).toEqual(["n"]);
+  });
+});
+
+describe("labels across the summary's sentences (re-review of round 1)", () => {
+  it("two documents that share a basename, one read and one excluded, are told apart", async () => {
+    const mine = "scope-shared-mine";
+    const theirs = "scope-shared-theirs";
+    for (const [id, dir] of [
+      [mine, "x1"],
+      [theirs, "x2"],
+    ] as const) {
+      populateYDoc(getOrCreateDocument(id), "Hello world, this is a test document.");
+      addDoc(id, {
+        id,
+        filePath: `/${dir}/notes.md`,
+        format: "md",
+        readOnly: false,
+        source: "file",
+      });
+    }
+    setDocOwner(mine, { ownerId: A, kind: "opened" }, "take", A);
+    setDocOwner(theirs, { ownerId: B, kind: "opened" }, "take", B);
+    annotation(getOrCreateDocument(mine), "cm");
+    const inbox = await reader(A).poll();
+    expect(itemIds(inbox)).toEqual(["cm"]);
+    expect(inbox.summary).toContain(`notes.md (${mine})`);
+    expect(inbox.summary).toContain(`notes.md (${theirs})`);
+  });
+});
+
+describe("unacknowledge only re-owes a live entry (re-review of round 1)", () => {
+  it("a retired entry is not put back among the unacknowledged", () => {
+    const entry = deliveryRegistry.assign("a", docU.id, `${docU.id}:x`, 0);
+    deliveryRegistry.markAcked(entry);
+    deliveryRegistry.retire(entry);
+    deliveryRegistry.unacknowledge(entry);
+    expect(deliveryRegistry.unseenIn(docU.id, { mark: null, held: new Set() })).toEqual([]);
   });
 });
