@@ -73,38 +73,6 @@ export function isLoopbackHandleDestination(baseUrl: string): boolean {
 }
 
 /**
- * Whether Node's own environment proxy could carry a request from this
- * process (#2358 PR 3a review rounds 1 and 2). With the environment proxy on
- * and an `HTTP_PROXY`, Node sends a request for `http://127.0.0.1:<port>`
- * through the proxy as a plain-HTTP `CONNECT` tunnel, where every header is
- * readable.
- *
- * **A plain rule, deliberately not a model of Node's `NO_PROXY` handling**
- * (Bryan's ruling, review round 2): a copy of undici's parsing drifted from it
- * at once (`[::1]` with `NO_PROXY=::1`, lower- against upper-case precedence,
- * `*` inside a list, a quoted flag). So `NO_PROXY` is ignored, and the handle is
- * withheld whenever the proxy COULD be on and any HTTP proxy variable is set:
- *  - could be on: `NODE_USE_ENV_PROXY` is set to anything non-empty, or the text
- *    `use-env-proxy` appears anywhere in `NODE_OPTIONS` or the process's flags;
- *  - any HTTP proxy variable: `HTTP_PROXY` or `http_proxy` with a non-blank value.
- * That errs toward "not bound" for a user with a proxy and the flag set. When
- * #2422 lands (the bridge's own fetch never uses an environment proxy for
- * loopback), this guard can go.
- */
-export function envProxyMayCarry(
-  env: NodeJS.ProcessEnv,
-  execArgv: readonly string[] = [],
-): boolean {
-  const flagOn =
-    (env.NODE_USE_ENV_PROXY ?? "") !== "" ||
-    (env.NODE_OPTIONS ?? "").includes("use-env-proxy") ||
-    execArgv.some((a) => a.includes("use-env-proxy"));
-  if (!flagOn) return false;
-  const nonBlank = (v: string | undefined) => v !== undefined && v.trim() !== "";
-  return nonBlank(env.HTTP_PROXY) || nonBlank(env.http_proxy);
-}
-
-/**
  * The handle the bridge presents upstream, or `undefined` (R2.1, R2.2).
  *
  * `resolvedBaseUrl` is what the bridge actually connects to
@@ -114,15 +82,15 @@ export function envProxyMayCarry(
  *    silently: no header, no echo, no log line, no exit);
  *  - the launcher's own URL variable is set;
  *  - it equals the resolved URL, both normalized as `resolveTandemUrl` does;
- *  - that URL is a loopback handle destination;
- *  - Node's environment proxy cannot carry the request ({@link envProxyMayCarry}).
+ *  - that URL is a loopback handle destination.
+ * Requests to the local server never use an environment proxy (#2422,
+ * `src/shared/loopback-fetch.ts`), so the proxy variables are not consulted.
  * Otherwise the bridge sends no handle and carries on as before. Total and
  * silent: the caller prints nothing about the outcome.
  */
 export function ownerHandleForUpstream(
   resolvedBaseUrl: string,
   env: NodeJS.ProcessEnv,
-  execArgv: readonly string[] = [],
 ): string | undefined {
   const handle = env[OWNER_HANDLE_ENV];
   if (!isOwnerHandleShape(handle)) return undefined;
@@ -131,8 +99,5 @@ export function ownerHandleForUpstream(
   const target = normalizeBaseUrl(resolvedBaseUrl);
   if (normalizeBaseUrl(named) !== target) return undefined;
   if (!isLoopbackHandleDestination(target)) return undefined;
-  // Node's environment proxy would carry the header to the proxy (review
-  // item 3): withhold it rather than send it anywhere but the named server.
-  if (envProxyMayCarry(env, execArgv)) return undefined;
   return handle;
 }

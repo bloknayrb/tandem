@@ -117,7 +117,7 @@ describe("authFetch uses resolveAuthToken (integration)", () => {
     const fetchSpy = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("fetch", fetchSpy);
 
-    const { authFetch } = await import("../../src/shared/cli-runtime.js");
+    const { authFetch } = await import("../../src/shared/auth-fetch.js");
     await authFetch("http://127.0.0.1:3479/test");
 
     expect(fetchSpy).toHaveBeenCalledOnce();
@@ -131,7 +131,7 @@ describe("authFetch uses resolveAuthToken (integration)", () => {
     const fetchSpy = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("fetch", fetchSpy);
 
-    const { authFetch } = await import("../../src/shared/cli-runtime.js");
+    const { authFetch } = await import("../../src/shared/auth-fetch.js");
     await authFetch("http://127.0.0.1:3479/test");
 
     expect(fetchSpy).toHaveBeenCalledOnce();
