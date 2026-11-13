@@ -226,7 +226,7 @@ export function quotesVerbatim(reply: string, text: string): boolean {
  * bold (`**were**`), since the user sees the bold set the words off. Four
  * capture groups; `delimitedText` takes whichever matched.
  */
-const DELIMITED = String.raw`"([^"\n]{1,400}?)"|(?<![A-Za-z0-9])'([^'\n]{1,400}?)'(?![A-Za-z0-9])|\x60([^\x60\n]{1,400}?)\x60|\*\*([^*\n]{1,400}?)\*\*`;
+const DELIMITED = String.raw`"([^"\n]{1,400}?)"|(?<![A-Za-z0-9])'([^'\n]{1,400}?)'(?![A-Za-z0-9])|\x60([^\x60\n]{1,400}?)\x60|\*{2,3}([^*\n]{1,400}?)\*{2,3}`;
 const DELIMITED_GROUPS = 4;
 
 /** The quoted text of a DELIMITED match whose groups start at `first`, in `quoteForm`, one layer of inner quotes removed. */
@@ -552,13 +552,29 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
  * Words that say a quoted token is wrong. Used only for a ONE-token partial
  * quote in a comment request, which must be a figure, a date or a name that
  * the reply calls wrong in the same sentence (the owner's ruling on PR #2415).
+ * Only words that call it wrong: "is correct" does not, and a negated
+ * "wrong" ("not wrong", "no error") is refused by NEGATED_WRONG.
  */
 const SAYS_WRONG =
-  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|should\s+(?:be|read|say)|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:is|isn['’]?t|are|aren['’]?t)\s+(?:not\s+)?(?:right|correct|accurate)|not\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
+  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error(?![-\w])|typo|miscalculat\w*|should\s+(?:be|read|say)|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:isn['’]?t|aren['’]?t|(?:is|are)\s+not|not)\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
+const NEGATED_WRONG =
+  /\b(?:not|no|never|isn['’]?t|aren['’]?t|nothing)\s+(?:\w+\s+)?(?:wrong|incorrect|inaccurate|mistaken|mistake|error|typo|miscalculat\w*|inconsistent)\b/i;
 
-/** A token that can be named as wrong on its own: a figure, a date's number, or a name (capitalised). */
-function isNameableToken(word: string): boolean {
-  return /\d/.test(word) || /^[^\p{L}\p{N}]*\p{Lu}/u.test(word);
+/**
+ * A token that can be named as wrong on its own: a figure or a date's number
+ * (it holds a digit), or a name — a capitalised word that is capitalised
+ * somewhere in the target other than at the start of a sentence, where every
+ * word is.
+ */
+function isNameableToken(word: string, target: string): boolean {
+  if (/\d/.test(word)) return true;
+  if (!/^[^\p{L}\p{N}]*\p{Lu}/u.test(word)) return false;
+  const t = quoteForm(target);
+  for (let at = t.indexOf(word); at !== -1; at = t.indexOf(word, at + 1)) {
+    const lead = t.slice(0, at).trimEnd().replace(/["'(]+$/, "");
+    if (lead.length > 0 && !/[.!?:]$/.test(lead)) return true;
+  }
+  return false;
 }
 
 /**
@@ -580,13 +596,16 @@ export function partialQuoteRun(reply: string, target: string): string | null {
       const runWords = words(run);
       if (runWords.length === 0) continue;
       if (runWords.length < PARTIAL_RUN_MIN_WORDS) {
-        if (!isNameableToken(runWords[0])) continue;
+        if (!isNameableToken(runWords[0], target)) continue;
         const at = m.index ?? 0;
         const sentenceStart = Math.max(0, ...[". ", "! ", "? ", "; "].map((p) => line.lastIndexOf(p, at) + 1));
         const rest = line.slice(at + m[0].length);
-        const stop = rest.search(/[.!?;](?:\s|$)/);
+        // An ellipsis does not end the sentence.
+        const stop = rest.search(/(?<!\.)[.!?;](?!\.)(?:\s|$)/);
         const sentence = line.slice(sentenceStart, at + m[0].length + (stop === -1 ? rest.length : stop));
-        if (!SAYS_WRONG.test(sentence)) continue;
+        // A question ("Is "$45,000" wrong?") names nothing as wrong.
+        if (stop !== -1 && rest.charAt(stop) === "?") continue;
+        if (!SAYS_WRONG.test(sentence) || NEGATED_WRONG.test(sentence)) continue;
       }
       if (best === null || run.length > best.length) best = run;
     }
@@ -617,7 +636,7 @@ function scoreOfferComment(reply: string, target: string): ScoreResult {
     // A one-word run must be a figure, a date or a name here too; the pair's
     // replacement is what says it is wrong.
     const runWords = pair ? words(pair.run) : [];
-    if (pair && (runWords.length >= PARTIAL_RUN_MIN_WORDS || isNameableToken(runWords[0] ?? ""))) {
+    if (pair && (runWords.length >= PARTIAL_RUN_MIN_WORDS || isNameableToken(runWords[0] ?? "", target))) {
       return {
         pass: true,
         notes: [`partial quote: ${pair.run.slice(0, 80)} → ${pair.replacement.slice(0, 80)}`],

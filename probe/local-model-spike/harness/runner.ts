@@ -53,7 +53,7 @@ export { MAX_CONSECUTIVE_INFRASTRUCTURE };
 /**
  * THE SILENT-ERROR RULE. A trial that ended before the model produced any text
  * at all, in an error (an HTTP 500, an unreadable response) or in a timeout,
- * is, alone, the model's failure and is scored (brief R2.6). Several in a row
+ * and with no tool call and no streamed reasoning either, is, alone, the model's failure and is scored (brief R2.6). Several in a row
  * usually mean a server that is down, out of memory, or accepting connections
  * and never answering, and a run that scored them would print FAIL for an
  * endpoint fault. One rule decides:
@@ -77,7 +77,11 @@ export { MAX_CONSECUTIVE_INFRASTRUCTURE };
 function isSilentError(record: TrialRecord): boolean {
   return (
     (record.ending === "error" || record.ending === "timeout") &&
-    record.turns.every((t) => t.text.length === 0)
+    record.turns.every((t) => t.text.length === 0) &&
+    // A model that called a tool or streamed reasoning was answered by the
+    // server, whatever it failed to say (rule 2's own reason).
+    record.metrics.toolCalls === 0 &&
+    record.signals.reasoning === "none"
   );
 }
 
@@ -319,8 +323,11 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
     const byId = new Map(scenarios.map((s) => [s.id, s]));
     // Rule 4: trials held before, with the detail of their latest hold.
     const heldBefore = new Map<string, string>();
+    // A trial's LATEST infra record decides, as in the report: a hold followed
+    // by a plain endpoint error is no longer a hold.
     for (const r of readInfra<InfraRecord>(runDir)) {
       if (r.detail.startsWith(HELD_SILENT_ERROR)) heldBefore.set(r.trialId, r.detail.slice(HELD_SILENT_ERROR.length));
+      else heldBefore.delete(r.trialId);
     }
     /** Consecutive trials that produced nothing scorable: endpoint errors and held silent errors. */
     let streak = 0;

@@ -244,6 +244,24 @@ describe("cases the diff review found", () => {
       onMaint(`The word "over" is wrong: $310,000 against a $275,000 budget is $35,000 over.`)
         .failureMode,
     ).toBe("NO_QUOTE");
+    // The re-review's probes: the target's capitalised FIRST word is no name,
+    // and words that say a token is right, or not wrong, or ask, call nothing wrong.
+    for (const reply of [
+      `Change "Maintenance" to "Upkeep".`,
+      `"Maintenance" looks wrong to me; the maintenance spending figure needs a closer look by the team.`,
+      `The "$310,000" figure is correct. Maintenance spending was within the budget overall, fine.`,
+      `"$275,000" is correct: maintenance spending was $310,000 versus budget, so the overrun is off.`,
+      `"$45,000" is not wrong. Maintenance spending was $310,000 against the budget.`,
+      `Is "$45,000" wrong? I'm not sure; the maintenance budget of $275,000 seems fine.`,
+      `"$45,000" is error-free, and maintenance spending was $310,000 against the budget.`,
+    ]) {
+      expect(onMaint(reply).failureMode, reply).toBe("NO_QUOTE");
+    }
+    // An ellipsis does not end the sentence that calls the token wrong.
+    expect(
+      onMaint(`The figure "$45,000"... looks wrong: $310,000 against a $275,000 budget is $35,000.`)
+        .pass,
+    ).toBe(true);
     // A two-word run still has to say something tied to the target.
     expect(onMaint(`"$45,000 over" — noted.`).pass).toBe(false);
 
@@ -251,6 +269,7 @@ describe("cases the diff review found", () => {
     for (const reply of [
       `Change **were** to **was**.`,
       `Change **were reorganized** to "was reorganized".`,
+      `Change ***were*** to ***was***.`,
     ]) {
       expect(on(change, reply).pass, reply).toBe(true);
     }

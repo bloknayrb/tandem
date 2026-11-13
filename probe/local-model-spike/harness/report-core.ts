@@ -65,8 +65,10 @@ export interface GroupReport {
   gating: boolean;
   planned: number;
   scored: number;
-  /** Planned trials whose every attempt was an infrastructure error. */
+  /** Planned trials whose every attempt was an infrastructure error (held ones excluded). */
   unscored: number;
+  /** Planned trials still held under THE SILENT-ERROR RULE: owed a resume. */
+  held: number;
   /** Planned trials never attempted. */
   unrun: number;
   scenariosScored: number;
@@ -178,9 +180,9 @@ export function computeReport(input: ReportInput): Report {
   // endpoint error to be left out of the rate.
   const latestInfra = new Map<string, string>();
   for (const i of infra) latestInfra.set(i.trialId, i.detail);
-  const heldTrials = planned.filter(
-    (p) => !byTrial.has(p.trialId) && (latestInfra.get(p.trialId) ?? "").startsWith(HELD_SILENT_ERROR),
-  ).length;
+  const isHeld = (trialId: string) =>
+    !byTrial.has(trialId) && (latestInfra.get(trialId) ?? "").startsWith(HELD_SILENT_ERROR);
+  const heldTrials = planned.filter((p) => isHeld(p.trialId)).length;
 
   const checked = checkVerdicts(input.verdicts, identity.runId, [...byTrial.values()], input.rubricVersion);
   // planned.json is outside every hash, and the groups, gating and
@@ -207,7 +209,10 @@ export function computeReport(input: ReportInput): Report {
   const groups: GroupReport[] = groupOrder.map((group) => {
     const plan = planned.filter((p) => p.group === group);
     const scoredTrials = plan.map((p) => byTrial.get(p.trialId)).filter((t): t is TrialRecord => !!t);
-    const unscored = plan.filter((p) => !byTrial.has(p.trialId) && infraTrials.has(p.trialId)).length;
+    const held = plan.filter((p) => isHeld(p.trialId)).length;
+    const unscored = plan.filter(
+      (p) => !byTrial.has(p.trialId) && infraTrials.has(p.trialId) && !isHeld(p.trialId),
+    ).length;
     const unrun = plan.filter((p) => !byTrial.has(p.trialId) && !infraTrials.has(p.trialId)).length;
     const corrected = scoredTrials.map((t) => correctedPass(t, checked));
     const scenarioIds = [...new Set(plan.map((p) => p.scenarioId))];
@@ -218,6 +223,7 @@ export function computeReport(input: ReportInput): Report {
       planned: plan.length,
       scored: scoredTrials.length,
       unscored,
+      held,
       unrun,
       scenariosScored: new Set(scoredTrials.map((t) => t.scenarioId)).size,
       scorerPasses: scoredTrials.filter((t) => t.scorerPass).length,
@@ -460,7 +466,7 @@ export function computeReport(input: ReportInput): Report {
     lines.push(`  ${g.title} [${g.group}]${g.gating ? " — GATING" : ""}`);
     lines.push(`    scorer rate: ${scorer}    corrected by the reader: ${corrected}`);
     lines.push(
-      `    scenarios with a scored trial: ${g.scenariosScored}    timeouts: ${g.timeouts}    unscored (infrastructure only): ${g.unscored}    not run: ${g.unrun}`,
+      `    scenarios with a scored trial: ${g.scenariosScored}    timeouts: ${g.timeouts}    unscored (infrastructure only): ${g.unscored}    held, owed a resume: ${g.held}    not run: ${g.unrun}`,
     );
     if (g.failureModes.length > 0) lines.push(`    scorer failures by kind: ${g.failureModes.join(", ")}`);
     if (outcome === "SCREEN") {

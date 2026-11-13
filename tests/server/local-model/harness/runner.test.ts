@@ -391,6 +391,38 @@ describe("a run", () => {
       }
     });
 
+    it("a timeout with streamed reasoning but no text is the model's, not the server's", async () => {
+      stubScript([TIMED_OUT]);
+      const reasoning: RunDeps["runTrial"] = async (input) => {
+        const obs = await timingOut(() => true)(input);
+        // The shipped client streamed reasoning in a separate field.
+        return { ...obs, fetches: obs.fetches.map((f) => ({ ...f, separateReasoningChars: 500 })) };
+      };
+      const result = await runMeasurement(options(), deps({ runTrial: reasoning }));
+      expect(result.status).toBe("complete");
+      const trials = readTrials<TrialRecord>(result.runDir as string);
+      expect(trials).toHaveLength(20);
+      expect(trials.every((t) => t.ending === "timeout" && t.signals.reasoning !== "none")).toBe(
+        true,
+      );
+    });
+
+    it('a held timeout that times out again on resume is scored (rule 4, detail "timeout")', async () => {
+      stubScript([TIMED_OUT]);
+      const first = await runMeasurement(options(), deps({ runTrial: timingOut(() => true) }));
+      expect(first.status).toBe("stopped");
+      timingOut.calls = 0;
+      let n = 0;
+      stubScript(() => (++n <= 3 ? TIMED_OUT : ANSWER));
+      const second = await runMeasurement(
+        options({ resume: first.runId }),
+        deps({ runTrial: timingOut((k) => k <= 3) }),
+      );
+      expect(second.status).toBe("complete");
+      const trials = readTrials<TrialRecord>(first.runDir as string);
+      expect(trials.filter((t) => t.ending === "timeout")).toHaveLength(3);
+    });
+
     it("is held at the run's end, not scored as a FAIL; a timeout the server then answers after is scored", async () => {
       let n = 0;
       stubScript(() => {
