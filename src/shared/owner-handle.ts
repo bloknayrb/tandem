@@ -83,7 +83,7 @@ export function isLoopbackHandleDestination(baseUrl: string): boolean {
  *  - the launcher's own URL variable is set;
  *  - it equals the resolved URL, both normalized as `resolveTandemUrl` does;
  *  - that URL is a loopback handle destination.
- * Requests to the local server never use an environment proxy (#2422,
+ * Requests to `127.0.0.1` and `[::1]` never use an environment proxy (#2422,
  * `src/shared/loopback-fetch.ts`), so the proxy variables are not consulted.
  * Otherwise the bridge sends no handle and carries on as before. Total and
  * silent: the caller prints nothing about the outcome.

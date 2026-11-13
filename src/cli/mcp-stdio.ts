@@ -534,7 +534,7 @@ export async function runMcpStdio(): Promise<void> {
   function createUpstream(): StreamableHTTPClientTransport {
     return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: { headers: upstreamHeaders },
-      // Never through an environment proxy for a loopback URL (#2422).
+      // Never through an environment proxy for a `127.0.0.1` / `[::1]` URL (#2422).
       fetch: loopbackFetch,
     });
   }
