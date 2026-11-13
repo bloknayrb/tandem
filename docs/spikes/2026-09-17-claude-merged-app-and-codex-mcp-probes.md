@@ -357,6 +357,8 @@ no scoring rubric. It is **not** a substitute for the M0 harness.
 
 ## 7. §3L — local-model capability re-run: BLOCKED
 
+> **Note (2026-11-12):** the harness this section probed was rebuilt in the #1123 harness repair. `smoke.ts`, `tools.ts` and the other copies of product code named below no longer exist; the harness now drives the shipped collaborator (`probe/local-model-spike/measure.ts`) and is typechecked in `check`, so the import failure recorded here cannot recur unnoticed. The three June `.jsonl` logs moved, unchanged, to `probe/local-model-spike/june-2026/`. The text below is left as it was written.
+
 `npx tsx probe/local-model-spike/smoke.ts` fails at import:
 
 ```
