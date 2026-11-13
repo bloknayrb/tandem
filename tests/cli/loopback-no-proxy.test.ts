@@ -304,14 +304,13 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
   }, 60_000);
 
   it("bridge: a [::1] base URL; skipped where the host has no IPv6", async (ctx) => {
-    let result: Awaited<ReturnType<typeof run>>;
     try {
       await makeUpstream("::1");
     } catch {
       ctx.skip();
       return;
     }
-    result = await run("bridge", "env-var", "::1");
+    const result = await run("bridge", "env-var", "::1");
     expect(result.tunnel.connects).toEqual([]);
     expect(result.up.seen.find((s) => s.url === "/mcp")?.authorization).toBe(`Bearer ${TOKEN}`);
   }, 60_000);
