@@ -510,7 +510,7 @@ export async function runMcpStdio(): Promise<void> {
   // this bundle reads no flags, and nothing sets the variable while ownership
   // is dark. Silent on every outcome: never echoed, never logged, never on
   // stderr (Claude Code captures that into its own logs).
-  const ownerHandle = ownerHandleForUpstream(baseUrl, process.env);
+  const ownerHandle = ownerHandleForUpstream(baseUrl, process.env, process.execArgv);
   if (ownerHandle !== undefined) upstreamHeaders[OWNER_HANDLE_HEADER] = ownerHandle;
 
   /**

@@ -1159,6 +1159,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const runFileAcl = opts.runFileAcl ?? realRunFileAcl;
   /** The boot sweep runs once per supervisor (R1.9). */
   let runFilesSwept = false;
+  /** Run-file deletions still in flight (#2358 PR 3a review, item 9). A
+   * spawn's teardown deletes without waiting; `stop()` (shutdown) awaits these
+   * so a normal quit leaves no run file, and no dead handle, on disk. */
+  const pendingRunFileDeletes = new Set<Promise<void>>();
+  function deleteRunFileTracked(file: string): void {
+    const p = deleteRunFile(file).finally(() => pendingRunFileDeletes.delete(p));
+    pendingRunFileDeletes.add(p);
+  }
   const readSettings = opts.readSettings ?? (() => readLauncherSettings(opts.integrationsBase));
   const idleMinuteMs = opts.idleMinuteMs ?? 60_000;
   const subscribeDuringStandby = opts.subscribeDuringStandby ?? defaultSubscribeDuringGap;
@@ -2013,7 +2021,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (ended) return;
       ended = true;
       if (bind) endSpawn(bind);
-      for (const file of written) void deleteRunFile(file);
+      for (const file of written) deleteRunFileTracked(file);
     };
     try {
       let mcpConfigPath = "";
@@ -2022,7 +2030,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         sessionId: plan.sessionId,
         // Probe 11: the file is read only at start, so it goes at first bind.
         onFirstBind: () => {
-          if (mcpConfigPath) void deleteRunFile(mcpConfigPath);
+          if (mcpConfigPath) deleteRunFileTracked(mcpConfigPath);
         },
       });
       const dir = launcherDirFor(opts.integrationsBase);
@@ -3674,6 +3682,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // `shuttingDown`.
       setStandby(undefined);
       await stopInternal();
+      // The stopped spawn's run files (#2358 PR 3a): flag off there are none,
+      // and nothing here is awaited.
+      if (pendingRunFileDeletes.size > 0) await Promise.allSettled([...pendingRunFileDeletes]);
     });
   }
 

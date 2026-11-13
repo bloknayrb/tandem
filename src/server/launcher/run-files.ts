@@ -127,6 +127,10 @@ export function buildRunMcpConfig(opts: {
           [OWNER_HANDLE_ENV]: opts.handle,
           [OWNER_HANDLE_URL_ENV]: opts.baseUrl,
           TANDEM_URL: opts.baseUrl,
+          // `resolveTandemUrl` reads this before `TANDEM_URL` and skips a blank
+          // value: an inherited one (even another spelling of this address)
+          // would leave the launcher's own child connected but never bound.
+          CLAUDE_PLUGIN_OPTION_SERVER_URL: "",
           // An inherited `--report-on-*` or `--inspect` would expose the
           // bridge's environment. Whether an entry's `env` wins over the
           // environment Claude Code passes is unmeasured; if it does not, this
@@ -271,6 +275,23 @@ function errCode(err: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+/**
+ * Windows only: directories whose owner check, lock and re-read already passed
+ * in this process, keyed by path, valued by the identity they had then
+ * (#2358 PR 3a review, item 4: about five PowerShell starts per spawn, before
+ * the child starts). Re-run whenever the identity changes (a directory removed
+ * and recreated, or swapped). This weakens nothing against another user: once
+ * locked, only the current user can change the directory or its ACL, and that
+ * user can read the run files anyway. Each file's own ACL is still re-read per
+ * spawn. The `lstat` link check above it runs every time.
+ */
+const verifiedWindowsDirs = new Map<string, string>();
+
+/** Test-only: forget the per-process Windows directory verifications. */
+export function resetVerifiedLauncherDirsForTests(): void {
+  verifiedWindowsDirs.clear();
+}
+
 /** POSIX: is this the current user's own? Windows answers through the ACL. */
 function ownedByMe(st: { uid: number }): boolean {
   if (process.platform === "win32" || typeof process.getuid !== "function") return true;
@@ -307,16 +328,21 @@ export async function ensureLauncherDir(
   if (!st.isDirectory()) throw new RunFileError("launcher-dir-not-a-directory");
   if (!ownedByMe(st)) throw new RunFileError("launcher-dir-not-owned");
   if (process.platform === "win32") {
-    try {
-      await acl.assertOwned(dir);
-    } catch {
-      throw new RunFileError("launcher-dir-not-owned");
-    }
-    try {
-      await acl.lockDir(dir);
-      await acl.verifyNoBroadAce(dir);
-    } catch {
-      throw new RunFileError("launcher-dir-acl");
+    const identity = `${st.dev}:${st.ino}:${st.birthtimeMs}`;
+    if (verifiedWindowsDirs.get(dir) !== identity) {
+      verifiedWindowsDirs.delete(dir);
+      try {
+        await acl.assertOwned(dir);
+      } catch {
+        throw new RunFileError("launcher-dir-not-owned");
+      }
+      try {
+        await acl.lockDir(dir);
+        await acl.verifyNoBroadAce(dir);
+      } catch {
+        throw new RunFileError("launcher-dir-acl");
+      }
+      verifiedWindowsDirs.set(dir, identity);
     }
   } else if ((Number(st.mode) & 0o077) !== 0) {
     try {

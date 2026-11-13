@@ -25,10 +25,13 @@ import {
   assertNoBroadAce,
   assertOwnedByCurrentUser,
   setRestrictiveAcl,
+  withoutPsModulePath,
 } from "../../../src/server/integrations/acl-win.js";
 import {
   ensureLauncherDir,
+  type RunFileAcl,
   realRunFileAcl,
+  resetVerifiedLauncherDirsForTests,
   writeRunFile,
 } from "../../../src/server/launcher/run-files.js";
 
@@ -55,15 +58,37 @@ async function currentUserSid(): Promise<string> {
   return sid;
 }
 
-/** Set `dir`'s owner. Returns false when this process may not assign it (an
- * unelevated process cannot make Administrators the owner). */
+/** `dir`'s owner as a full SID (never the SDDL alias). */
+async function ownerSid(dir: string): Promise<string> {
+  const script =
+    "(Get-Acl -LiteralPath $env:TANDEM_SDDL_PATH).GetOwner([System.Security.Principal.SecurityIdentifier]).Value";
+  const args = ["-NoProfile", "-NonInteractive", "-Command", script];
+  const env: NodeJS.ProcessEnv = { ...process.env, TANDEM_SDDL_PATH: dir };
+  try {
+    return (await execFileAsync("pwsh.exe", args, { env })).stdout.trim();
+  } catch {
+    const fallbackEnv = withoutPsModulePath(env);
+    const ps = path.join(
+      process.env.SystemRoot ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    return (await execFileAsync(ps, args, { env: fallbackEnv })).stdout.trim();
+  }
+}
+
+/** Set `dir`'s owner, and report whether it now IS that owner: `icacls` exits 0
+ * on a partial failure, so its exit code proves nothing (an unelevated process
+ * cannot make Administrators the owner). */
 async function setOwner(dir: string, sid: string): Promise<boolean> {
   try {
     await execFileAsync(system32("icacls.exe"), [dir, "/setowner", `*${sid}`]);
-    return true;
   } catch {
     return false;
   }
+  return (await ownerSid(dir)) === sid;
 }
 
 describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () => {
@@ -81,7 +106,8 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
   async function ownLauncherDir(): Promise<string> {
     const dir = path.join(root, "launcher");
     fs.mkdirSync(dir);
-    expect(await setOwner(dir, me)).toBe(true);
+    const set = await setOwner(dir, me);
+    expect(set, `owner after /setowner: ${await ownerSid(dir)}, user ${me}`).toBe(true);
     return dir;
   }
 
@@ -131,6 +157,34 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
       { step: "settings-name-present" },
     );
     expect(fs.existsSync(path.join(root, "nowhere.json"))).toBe(false);
+  }, 120_000);
+
+  it("the directory's checks run once per process, and again when the directory is replaced (review item 4)", async () => {
+    resetVerifiedLauncherDirsForTests();
+    const calls: string[] = [];
+    const counting: RunFileAcl = {
+      assertOwned: async (p) => {
+        calls.push("owner");
+        await realRunFileAcl.assertOwned(p);
+      },
+      lockDir: async (p) => {
+        calls.push("lock");
+        await realRunFileAcl.lockDir(p);
+      },
+      verifyNoBroadAce: async (p) => {
+        calls.push("verify");
+        await realRunFileAcl.verifyNoBroadAce(p);
+      },
+    };
+    const dir = await ownLauncherDir();
+    await ensureLauncherDir(dir, { create: true, acl: counting });
+    await ensureLauncherDir(dir, { create: true, acl: counting });
+    expect(calls).toEqual(["owner", "lock", "verify"]);
+    // Replaced: a new directory at the same path is checked again.
+    fs.rmSync(dir, { recursive: true, force: true });
+    await ownLauncherDir();
+    await ensureLauncherDir(dir, { create: true, acl: counting });
+    expect(calls).toEqual(["owner", "lock", "verify", "owner", "lock", "verify"]);
   }, 120_000);
 
   it("a launcher/ that is a junction is refused", async () => {

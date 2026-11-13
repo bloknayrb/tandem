@@ -231,6 +231,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "replaced, macOS and Linux, and the bridge binds before a not-signed-in child closes it.",
     closedBy: "The real-launcher smoke on Bryan's Windows PC before PR 3b (Ruling J).",
   },
+  {
+    gap:
+      "Whether Claude Code lets a settings file's `env` block (a project or local settings file " +
+      "in the child's working folder, possibly hostile) beat the launcher's `--mcp-config` " +
+      "entry's `env` is unmeasured: if it does, such a file can point the bridge's URL variables " +
+      "at another local listener, which then receives the handle (accepted as a residual for 3a, " +
+      "Bryan 2026-11-13).",
+    closedBy:
+      "The real-launcher smoke measuring that merge order, before PR 3b gives the bound fact a " +
+      "reader; then refuse the flags on such a file, or record the residual as accepted.",
+  },
 ];
 
 /**

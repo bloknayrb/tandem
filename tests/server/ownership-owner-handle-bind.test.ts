@@ -200,6 +200,14 @@ describe("flag on: the bind fact (R3)", () => {
     expect(unboundLines()).toHaveLength(2);
   });
 
+  it("an empty handle header is no handle: it does not count as carried (review item 11)", async () => {
+    await boot("1");
+    const id = await initialize({ "X-Tandem-Owner-Handle": "", "X-Claude-Session-Id": SID });
+    expect(id).not.toBe("");
+    expect(bindOf(id)).toBeNull();
+    expect(unboundLines()).toHaveLength(0);
+  });
+
   it("with no current spawn, logs at most once a minute", async () => {
     await boot("1");
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -286,6 +294,13 @@ describe("flag on: the bind fact (R3)", () => {
     expect(bindOf(again)).toBe(newer.serial);
     const stale = await initialize(withHandle(handle("O"), SID));
     expect(bindOf(stale)).toBeNull();
+  });
+
+  it("the overlap counter the spawn suites assert on counts a start beside a live earlier spawn", () => {
+    startedSpawn(handle("O"), SID);
+    expect(ownerHandleBindSnapshotForTests().startOverlaps).toBe(0);
+    startedSpawn(LIVE, SID); // the earlier one was never ended
+    expect(ownerHandleBindSnapshotForTests().startOverlaps).toBe(1);
   });
 
   it("a spawn registered but not started binds nothing (Terms: not current)", async () => {

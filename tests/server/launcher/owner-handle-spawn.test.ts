@@ -185,6 +185,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const sup of supervisors.splice(0)) await sup.stop().catch(() => {});
+  // The supervisor's invariant (owner-handle-bind.ts, `startOverlaps`): no
+  // spawn became current while an earlier spawn's state was still alive.
+  expect(ownerHandleBindSnapshotForTests().startOverlaps).toBe(0);
   resetOwnerHandleBindForTests();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -567,7 +570,8 @@ describe("teardown on every exit path (R4)", () => {
     expect(fs.existsSync(run.settingsPath as string)).toBe(true);
     const handle = run.mcp?.value?.mcpServers.tandem.env.TANDEM_OWNER_HANDLE;
     await sup.stop();
-    await waitFor(() => runFilesOnDisk().length === 0, "the files deleted");
+    // No waiting: stop() (a normal quit) awaits the deletions (review item 9).
+    expect(runFilesOnDisk()).toEqual([]);
     expect(judgeBind(handle, run.sessionId)).toBeNull();
   });
 
@@ -605,7 +609,7 @@ describe("teardown on every exit path (R4)", () => {
   // process with no handler run. Platform-neutral cover of the property:
   // ownership-owner-handle-bind.test.ts, "a late teardown of an older spawn".
   it.runIf(process.platform !== "win32")(
-    "the superseded spawn's late teardown leaves the newer spawn's state alone (POSIX)",
+    "a relaunch's teardown of the previous spawn (its exit lands before the new spawn starts) leaves the new spawn's files and handle working (POSIX)",
     async () => {
       process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "300";
       const sup = makeSupervisor();

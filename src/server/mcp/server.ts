@@ -397,7 +397,9 @@ function readTandemClientIdHeader(req: import("express").Request): string | unde
  */
 function readOwnerHandleHeader(req: import("express").Request): string | undefined {
   const raw = req.headers[OWNER_HANDLE_HEADER.toLowerCase()];
-  return typeof raw === "string" ? raw : undefined;
+  // An empty header is no handle: it neither binds nor counts as "carried a
+  // handle" for Ruling D7's log line.
+  return typeof raw === "string" && raw.trim() !== "" ? raw : undefined;
 }
 
 /** What an `initialize` carried that decides its owner record. */

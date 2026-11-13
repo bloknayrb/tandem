@@ -318,15 +318,25 @@ export async function assertOwnedByCurrentUser(
   const { signal } = opts;
   throwIfAborted(signal);
   const sid = await getCurrentUserSid(signal);
+  // The owner resolved to a full SID, never read from the SDDL string: SDDL
+  // writes some owners as two-letter aliases (`BA` for Administrators, `LA` for
+  // the built-in Administrator account, RID 500, which is what the CI runner
+  // runs as), so a SID comparison against the SDDL would refuse a directory
+  // the current user does own.
   const script =
-    "Import-Module Microsoft.PowerShell.Security; (Get-Acl -LiteralPath $env:TANDEM_ACL_PATH).Sddl";
+    "Import-Module Microsoft.PowerShell.Security; " +
+    "(Get-Acl -LiteralPath $env:TANDEM_ACL_PATH).GetOwner([System.Security.Principal.SecurityIdentifier]).Value";
   const { stdout } = await runPowerShell(script, { ...process.env, TANDEM_ACL_PATH: path }, signal);
   throwIfAborted(signal);
-  const owner = /^O:(S-[\d-]+|[A-Z]{2})/m.exec(stdout.trim())?.[1];
+  const owner = /^(S-[\d-]+)\s*$/m.exec(stdout.trim())?.[1];
   if (owner === undefined) {
-    throw new Error("assertOwnedByCurrentUser: could not read the owner (no SDDL returned).");
+    throw new Error("assertOwnedByCurrentUser: could not read the owner (no SID returned).");
   }
   if (owner !== sid) {
-    throw new Error("assertOwnedByCurrentUser: the directory is not owned by the current user.");
+    // The SIDs are in the message for diagnosis; the run-files caller maps any
+    // throw to a step name and never logs or returns this text.
+    throw new Error(
+      `assertOwnedByCurrentUser: the directory is not owned by the current user (owner ${owner}, user ${sid}).`,
+    );
   }
 }

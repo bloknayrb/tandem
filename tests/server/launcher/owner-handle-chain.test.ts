@@ -148,6 +148,9 @@ afterEach(async () => {
   await closeMcpSession();
   await new Promise<void>((r) => httpServer.close(() => r()));
   resetOwnershipForTests();
+  // The supervisor's invariant (owner-handle-bind.ts, `startOverlaps`): no
+  // spawn became current while an earlier spawn's state was still alive.
+  expect(ownerHandleBindSnapshotForTests().startOverlaps).toBe(0);
   resetOwnerHandleBindForTests();
   Object.assign(console, realConsole);
   vi.unstubAllEnvs();
@@ -223,12 +226,17 @@ describe("the chain: launcher → child → real bridge → real server (R1–R3
     expect(health).not.toMatch(HANDLE_RE);
   }, 60_000);
 
+  // Not a late TEARDOWN in the sense of state still alive: the sign-in trip
+  // already ran spawn 1's `discard`, and under the supervisor's invariant no
+  // spawn starts while an earlier one's state is alive (`startOverlaps`,
+  // asserted after every test here). It shows that the late exit, and the
+  // second, latched run of its teardown, change nothing of the successor's.
   // POSIX only: spawn 1's late exit is the stub's SIGTERM handler, and on
   // Windows `kill()` ends the process with no handler run (the same gate as
   // stream-json-protocol.test.ts's superseded-exit block). Platform-neutral
   // cover: ownership-owner-handle-bind.test.ts, "a late teardown of an older spawn".
   it.runIf(process.platform !== "win32")(
-    "the superseded spawn's late teardown leaves the newer spawn bound; its handle still binds a new transport (R4.3, design §17; POSIX)",
+    "a superseded child that exits after its successor bound (its state already ended at the sign-in trip) leaves the successor bound and binding (R4.3; POSIX)",
     async () => {
       // Spawn 1 is tripped by the sign-in check (its run state ends then, R4.4)
       // and lingers 6 s before exiting, so its exit — and the second, late run

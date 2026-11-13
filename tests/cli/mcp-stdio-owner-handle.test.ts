@@ -6,6 +6,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { connect as netConnect } from "node:net";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -310,6 +311,48 @@ describe("the bridge's owner handle (R2)", () => {
   }, 30_000);
 });
 
+describe("Node's environment proxy (review item 3)", () => {
+  it("withholds the handle when NODE_USE_ENV_PROXY routes the request through an HTTP proxy", async () => {
+    const up = await makeUpstream();
+    // A CONNECT tunnel that records what it was asked to reach, then pipes.
+    const connects: string[] = [];
+    const proxy = createServer();
+    proxy.on("connect", (req, client) => {
+      connects.push(String(req.url));
+      const [host, port] = String(req.url).split(":");
+      const upstream = netConnect(Number(port), host, () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      upstream.on("error", () => client.destroy());
+      client.on("error", () => upstream.destroy());
+    });
+    servers.push(proxy);
+    await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+    const proxyAddr = proxy.address();
+    if (!proxyAddr || typeof proxyAddr === "string") throw new Error("address");
+    const url = `http://127.0.0.1:${up.port}`;
+    const { init } = await initializeThrough(
+      {
+        TANDEM_URL: url,
+        [OWNER_HANDLE_URL_ENV]: url,
+        [OWNER_HANDLE_ENV]: HANDLE,
+        NODE_USE_ENV_PROXY: "1",
+        HTTP_PROXY: `http://127.0.0.1:${proxyAddr.port}`,
+        http_proxy: undefined,
+        NO_PROXY: undefined,
+        no_proxy: undefined,
+      },
+      up,
+    );
+    // Not vacuous: the request really went through the proxy.
+    expect(connects).toContain(`127.0.0.1:${up.port}`);
+    expect(init).toBeDefined();
+    for (const seen of up.seen) expect(seen.headers[HEADER]).toBeUndefined();
+  }, 30_000);
+});
+
 describe("the destination rule's source (R2.2, R2.4)", () => {
   const bridgeSrc = readFileSync(resolve(__dirname, "../../src/cli/mcp-stdio.ts"), "utf8");
   const ruleSrc = readFileSync(resolve(__dirname, "../../src/shared/owner-handle.ts"), "utf8");
@@ -334,6 +377,6 @@ describe("the destination rule's source (R2.2, R2.4)", () => {
     // in tests/shared/owner-handle.test.ts.
     expect(ruleSrc).not.toMatch(/^import /m);
     expect(ruleSrc).not.toMatch(/tokenMayGoTo\(/);
-    expect(bridgeSrc).toMatch(/ownerHandleForUpstream\(baseUrl, process\.env\)/);
+    expect(bridgeSrc).toMatch(/ownerHandleForUpstream\(baseUrl, process\.env, process\.execArgv\)/);
   });
 });

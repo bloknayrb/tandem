@@ -52,6 +52,14 @@ let current: SpawnState | null = null;
 /** Ruling D7's limiter: the spawn whose not-bound line was logged, and when the
  * last not-bound line with no current spawn was logged. */
 let unboundLoggedForSerial: number | null = null;
+/** How many spawns became current while an EARLIER spawn's state was still
+ * started and not ended. The supervisor's invariant is that this stays 0: a
+ * new child starts only after the previous spawn's `discard` ran (every path
+ * to `spawn()` passes `child === null`, and every path that nulls `child`
+ * tears the spawn down first). The spawn and chain test suites assert it after
+ * every test. `confirmBind`'s and `endSpawn`'s identity checks are defence in
+ * depth behind it. */
+let startOverlaps = 0;
 let unboundLoggedWithoutSpawnAt: number | null = null;
 const UNBOUND_LOG_INTERVAL_MS = 60_000;
 
@@ -80,6 +88,9 @@ export function registerSpawn(opts: {
 export function markSpawnStarted(spawn: SpawnBind): void {
   const state = spawns.get(spawn.serial);
   if (!state || state.ended) return;
+  for (const other of spawns.values()) {
+    if (other !== state && other.started && !other.ended) startOverlaps++;
+  }
   state.started = true;
   current = state;
 }
@@ -139,6 +150,9 @@ export function judgeBind(
  */
 export function confirmBind(candidate: BindCandidate, mcpSessionId: string): boolean {
   const state = spawns.get(candidate.serial);
+  // `current !== state` is defence in depth: under the supervisor's invariant
+  // (see `startOverlaps`) a superseded spawn has already ended by the time its
+  // successor is current, so `state.ended` alone would refuse it.
   if (!state || state.ended || current !== state) return false;
   state.bound.add(mcpSessionId);
   if (!state.firstBindFired) {
@@ -191,9 +205,11 @@ export function shouldLogUnboundHandle(now: number = Date.now()): boolean {
 export function ownerHandleBindSnapshotForTests(): {
   current: number | null;
   spawns: Array<{ serial: number; started: boolean; bound: string[] }>;
+  startOverlaps: number;
 } {
   return {
     current: current?.serial ?? null,
+    startOverlaps,
     spawns: [...spawns.values()].map((s) => ({
       serial: s.serial,
       started: s.started,
@@ -209,4 +225,5 @@ export function resetOwnerHandleBindForTests(): void {
   current = null;
   unboundLoggedForSerial = null;
   unboundLoggedWithoutSpawnAt = null;
+  startOverlaps = 0;
 }
