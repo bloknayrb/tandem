@@ -1030,7 +1030,7 @@ describe("an item already in a reader's held list (Solo)", () => {
   });
 });
 
-describe("notices behave exactly as on master (R1.3)", () => {
+describe("notices after a lapse follow the notice rule (the notice-rule PR, R1.1, R1.2)", () => {
   type Who = "below" | "above" | "aboveUnacked" | "fresh" | "legacy";
 
   /**
@@ -1093,11 +1093,15 @@ describe("notices behave exactly as on master (R1.3)", () => {
   }
 
   it.each<Who>(["below", "above", "aboveUnacked", "fresh", "legacy"])(
-    "a reader %s the notices is handed the same notices with and without a handover",
+    "a reader %s the notices: after the handover it is handed only the notice no holder was handed, once",
     async (who) => {
       const without = await noticeRun(who, false);
       const withHandover = await noticeRun(who, true);
-      expect(withHandover.notices).toEqual(without.notices);
+      // The notice rule: `acked` and `unacked` were handed to A while it held
+      // the document, so the lapse settles them, for every reader, on this
+      // poll and the next. `unseen` was never handed: owed once, then not.
+      // (Before the notice-rule PR: the same notices as with no handover.)
+      expect(withHandover.notices).toEqual([["unseen"], []]);
       // Not vacuous: the reader is handed at least the notice no poll had returned.
       expect(without.notices[0]).toContain("unseen");
       // The handover ran in one run and not in the other.
@@ -1106,8 +1110,6 @@ describe("notices behave exactly as on master (R1.3)", () => {
       // The handover ran: the comment is owed again wherever it had been seen.
       expect(withHandover.comments[0]).toEqual(["u1"]);
       if (who === "above" || who === "fresh") expect(without.comments[0]).toEqual([]);
-      // Retiring an unacknowledged notice would hand it to this reader twice.
-      if (who === "aboveUnacked") expect(withHandover.notices[0]).toEqual(["unseen"]);
     },
   );
 
