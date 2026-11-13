@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { LocalModelConfig } from "../../../src/server/local-model/index.js";
+import { RUN_DEADLINE_DETAIL } from "./classify.js";
 import { evaluateTrial } from "./evaluate.js";
 import type { ModelFacts } from "./ollama-meta.js";
 import { makeRunId, runDirFor, sha256Hex } from "./paths.js";
@@ -52,7 +53,8 @@ export { MAX_CONSECUTIVE_INFRASTRUCTURE };
 
 /**
  * THE SILENT-ERROR RULE. A trial that ended in an error (an HTTP 500, an
- * unreadable response) or in a timeout, where the FAILING request (the last
+ * unreadable response) or in a timeout other than the run's own deadline
+ * (`run-deadline` in `classify.ts`, never silent), where the FAILING request (the last
  * chat request of the trial) streamed nothing at all — no byte of a response
  * body, no text, no reasoning — is, alone, the model's failure and is scored
  * (brief R2.6). What earlier requests in the same trial did does not decide it
@@ -80,6 +82,9 @@ export { MAX_CONSECUTIVE_INFRASTRUCTURE };
  */
 export function isSilentError(record: TrialRecord, obs: TrialObservation): boolean {
   if (record.ending !== "error" && record.ending !== "timeout") return false;
+  // The run's own deadline cut it (`classify.ts`): the model spent the time,
+  // whether the deadline passed between requests or in the middle of one.
+  if (record.detail === RUN_DEADLINE_DETAIL) return false;
   // The failing request's own text: a turn cut before its end is recorded
   // with `hadToolCalls: null`, and only when it streamed text (`trial.ts`).
   const cut = obs.turns[obs.turns.length - 1];

@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TapRecord } from "../../../../probe/local-model-spike/harness/fetch-tap.js";
+import { RUN_DEADLINE_DETAIL } from "../../../../probe/local-model-spike/harness/classify.js";
 import { harnessConfig } from "../../../../probe/local-model-spike/harness/model-config.js";
 import {
   isSafeRunId,
@@ -545,9 +546,73 @@ describe("a run", () => {
           ),
         ),
       ).toBe(false);
+      // Review round 5, item 4: a trial that ended in an error or a timeout
+      // before any chat request was made streamed nothing: silent.
+      expect(isSilentError(rec("error"), obs([], []))).toBe(true);
+      expect(isSilentError(rec("timeout"), obs([], []))).toBe(true);
+      expect(isSilentError(rec("timeout"), obs([toolTurn], []))).toBe(true);
+      // Review round 5, item 1: a timeout at the run's own deadline is never
+      // silent, with or without a request, with or without bytes.
+      const atDeadline = { ending: "timeout", detail: RUN_DEADLINE_DETAIL } as TrialRecord;
+      expect(isSilentError(atDeadline, obs([toolTurn], [answered, fetch()]))).toBe(false);
+      expect(isSilentError(atDeadline, obs([], []))).toBe(false);
       // Only errors and timeouts can be silent.
       expect(isSilentError(rec("completed"), obs([], [fetch()]))).toBe(false);
       expect(isSilentError(rec("budget"), obs([], [fetch()]))).toBe(false);
+    });
+
+    describe("a request cut short by the run deadline (review round 5, item 1)", () => {
+      // Only Date is faked, and it moves only when the scripted server moves
+      // it: a slow model that takes 150 s for each tool call. Timers are real,
+      // so the request the client clamps to the last millisecond really expires.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+      const toolMessages = (body: Record<string, unknown>) =>
+        ((body.messages as { role?: string }[] | undefined) ?? []).filter((m) => m.role === "tool")
+          .length;
+      /** Each tool call takes 150 s; the second takes `secondMs`; a third request goes quiet. */
+      const slowModel = (secondMs: number) =>
+        stubScript((_i, body) => {
+          const done = toolMessages(body);
+          if (done >= 2) return { hang: [] };
+          return {
+            ...TOOL_CALL,
+            onRequest: () => vi.setSystemTime(Date.now() + (done === 0 ? 150_000 : secondMs)),
+          };
+        });
+
+      it("ends the same way whether the deadline passes between requests or with 1 ms left", async () => {
+        const outcomes: { ending: string; detail: string; scorerPass: boolean }[][] = [];
+        // 300 s used: the loop's top-of-turn check ends the run before a third request.
+        // 299.999 s used: the third request is clamped to 1 ms, gets nothing, and expires.
+        for (const [secondMs, requestsPerTrial] of [
+          [150_000, 2],
+          [149_999, 3],
+        ] as const) {
+          const calls = slowModel(secondMs);
+          // A run id per run: the two runs share one runs directory.
+          const d = deps({ now: () => new Date(`2026-11-12T1${outcomes.length}:00:00Z`) });
+          const result = await runMeasurement(options(), d);
+          expect(result.status, `second request ${secondMs} ms`).toBe("complete");
+          expect(calls).toHaveLength(20 * requestsPerTrial);
+          expect(readInfra<InfraRecord>(result.runDir as string)).toEqual([]);
+          expect(d.lines.some((l) => /— held$/.test(l))).toBe(false);
+          const trials = readTrials<TrialRecord>(result.runDir as string);
+          expect(trials).toHaveLength(20);
+          outcomes.push(
+            trials.map((t) => ({ ending: t.ending, detail: t.detail, scorerPass: t.scorerPass })),
+          );
+          vi.unstubAllGlobals();
+        }
+        expect(outcomes[0].every((t) => t.ending === "timeout" && t.detail === RUN_DEADLINE_DETAIL)).toBe(
+          true,
+        );
+        expect(outcomes[1]).toEqual(outcomes[0]);
+      }, 60_000);
     });
 
     describe("a real hang: the server sends headers and then nothing (fake clock)", () => {

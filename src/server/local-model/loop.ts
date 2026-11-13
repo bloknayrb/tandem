@@ -98,8 +98,11 @@ export interface LoopResult {
  * ends the whole run at the first timeout, so the long hold is built from turns
  * that COMPLETE late, not from turns that time out. `timeoutMs` cannot bound it
  * because it only ever bounds one turn.
+ *
+ * Exported for the measurement harness (`probe/local-model-spike/`), which
+ * tells a turn cut by this deadline from one cut by its own per-turn timeout.
  */
-const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
+export const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
 
 /** Mirrors `DEFAULT_TIMEOUT_MS` in the client — only used to compute the clamp
  *  below, so the client stays the single authority on the value it applies. */

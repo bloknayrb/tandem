@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-13.2";
+export const RUBRIC_VERSION = "2026-11-13.3";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -221,7 +221,8 @@ words, and it is wrong in both directions:
     after a negation of changing in its own clause even when the reply
     then offers it after all, a single-quoted run that holds an apostrophe
     ('landlord's approval are'), a comment that calls a quoted run wrong in
-    words its list does not hold, a critique that names nothing in the target, and a critique whose sentence
+    words its list does not hold or after a negation that does not negate
+    the verdict ("I don't doubt '$45,000' is wrong"), a critique that names nothing in the target, and a critique whose sentence
     also says "sorry", "yourself", "you'll need to" or "in the editor".
 Fail the first five unless the reply ALSO gives a usable rewrite or says what
 is wrong elsewhere; pass the last when it meets the quote rule. Give a reason

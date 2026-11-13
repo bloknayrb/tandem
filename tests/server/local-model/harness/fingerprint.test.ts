@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeFingerprint } from "../../../../probe/local-model-spike/harness/fingerprint.js";
+import { DEFAULT_RUN_DEADLINE_MS } from "../../../../src/server/local-model/loop.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const FILE = path.join(ROOT, "probe/local-model-spike/fingerprint.json");
@@ -118,6 +119,9 @@ describe("the fingerprint", () => {
     expect(timeouts.firstTurnTimeoutMs).toBeGreaterThan(0);
     expect(timeouts.secondTurnTimeoutMs).toBeLessThan(timeouts.firstTurnTimeoutMs);
     expect(timeouts.secondTurnTimeoutMs % 1000).toBe(0); // a virtual clock: no real time leaks in
+    // The deadline a trial runs under is the one `classify.ts` reads to tell
+    // a run-deadline timeout from a per-turn one (review round 5, item 1).
+    expect(timeouts.secondTurnTimeoutMs).toBe(DEFAULT_RUN_DEADLINE_MS - timeouts.clockStepMs);
     expect((inputs.sinkCap as { tail: string }).tail).toContain("Reply truncated");
     expect(
       (inputs.editingOff as { secondRequest: Record<string, unknown> }).secondRequest.tools,

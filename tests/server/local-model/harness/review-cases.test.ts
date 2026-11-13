@@ -355,6 +355,61 @@ describe("cases the diff review found", () => {
     expect(six).toMatch(/misses\s+wordings/);
   });
 
+  it("round 5: \"should be\" alone is not a verdict, and a negation steps over a quotation", () => {
+    const maint = scenarioById("req-ops-review-maintenance-flag");
+    const flood = scenarioById("req-lease-summary-flood-comment");
+    const onMaint = (reply: string) =>
+      score({ scenario: maint, reply, writes: NOTHING, documentText: DOC });
+    const onFlood = (reply: string) =>
+      score({ scenario: flood, reply, writes: NOTHING, documentText: DOC });
+    // Item 2: "should be" with no value or quotation after it says nothing is wrong.
+    for (const reply of [
+      `"$45,000" should be fine.`,
+      `"$45,000" is correct and should be kept.`,
+      `"$45,000 over" should be kept as written.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(false);
+    }
+    expect(onFlood(`"flood cover" should be fine as is.`).pass).toBe(false);
+    // ...and still counts with a value or a quotation after it (round 4's six pins).
+    for (const reply of [
+      `The figure "$45,000" looks wrong: the difference is $35,000.`,
+      `The figure "$45,000" looks wrong: it should be $35,000.`,
+      `The figure "$45,000" is incorrect. It should be $35,000.`,
+      `- "$45,000" — wrong; should be $35,000.`,
+      `**$45,000** is wrong: the difference is $35,000.`,
+      `"$45,000" should be "$35,000".`,
+      `"$45,000" should be: **$35,000**.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
+    expect(
+      onFlood(`Comment on "flood cover": we should get a quote before the board discusses it.`)
+        .pass,
+    ).toBe(true);
+
+    // Item 3: a negation before the quotation still negates the verdict after it.
+    for (const reply of [
+      `I do not think "$45,000" is wrong.`,
+      `I don't believe "$45,000" is wrong.`,
+      `Nothing about "$45,000" is wrong.`,
+      `It's hard to say "$45,000" is wrong.`,
+      `I do not think '$45,000' is wrong.`,
+      `I don't think **$45,000** is wrong.`,
+    ]) {
+      expect(onMaint(reply).failureMode, reply).toBe("NO_QUOTE");
+    }
+    // "No doubt" is not a negation of the verdict.
+    expect(onMaint(`There is no doubt "$45,000" is wrong.`).pass).toBe(true);
+    // A known false fail of the step-over, named in rubric §6; the reader passes it.
+    expect(onMaint(`I don't doubt "$45,000" is wrong.`).failureMode).toBe("NO_QUOTE");
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
+    expect(six).toMatch(/I don't doubt/);
+  });
+
   it("round 4, item 8: emphasis around a pair, and the apostrophe miss", () => {
     for (const reply of [
       `Change "were" **to** "was".`,

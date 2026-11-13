@@ -11,7 +11,14 @@
  * The rule, in order:
  *  1. No turn ran at all → infrastructure (a harness fault, never the model's).
  *  2. The loop's exit is `timeout` → `timeout`; `max_turns` / `max_tool_calls`
- *     → `budget`; `editing_off` → `editing_off`.
+ *     → `budget`; `editing_off` → `editing_off`. A timeout whose run reached
+ *     the product's run deadline gets the detail `run-deadline`, whichever way
+ *     the loop got there: the check at the top of a turn, or a request the
+ *     client clamped to what was left of the deadline and that then expired.
+ *     "Reached" is the loop's own wall time at or past the deadline less
+ *     RUN_DEADLINE_SLACK_MS, because a timer can fire a little before the
+ *     wall clock says it is due. Any other timeout is the per-turn timeout:
+ *     detail `timeout`.
  *  3. The chat row ends with the sink's truncation marker → `stream_cap`, for
  *     any exit (checked first). Otherwise exit `aborted` or `doc-swapped`:
  *     nothing in a trial aborts a run or swaps its document, so it is a
@@ -43,9 +50,14 @@
  *  - a whitespace-only stream that reaches the sink's cap writes no marker and
  *    exits `aborted`, so it is excused as infrastructure;
  *  - a server that answers 200 with an error body in a shape other than a
- *    top-level `error` key is seen as whatever the product makes of it.
+ *    top-level `error` key is seen as whatever the product makes of it;
+ *  - a 200 whose whole body is a top-level `error` (an out-of-memory error
+ *    during prompt processing) is scored against the model: `error_frame`
+ *    when it comes as a streamed `data:` frame, `error` (`unreadable`) when
+ *    it comes as a bare JSON line (report-core.ts, Known limits).
  */
 import { TRUNCATION_MARKER } from "../../../src/server/local-model/collaborator.js";
+import { DEFAULT_RUN_DEADLINE_MS } from "../../../src/server/local-model/loop.js";
 import type { TrialObservation } from "./trial.js";
 
 export type TrialEnding =
@@ -64,6 +76,19 @@ export interface Classification {
   detail: string;
 }
 
+/** The detail of a timeout at the run's deadline. Never a silent trial (`runner.ts`). */
+export const RUN_DEADLINE_DETAIL = "run-deadline";
+
+/**
+ * How far before the run deadline a timeout still counts as reached it. Node
+ * arms a timer against its event loop's cached time, which can trail the wall
+ * clock by however long the current tick has run, so a clamped request can
+ * abort a few milliseconds before `Date.now()` reaches the deadline. The cost
+ * is the other way round: a per-turn timeout that happens to expire within
+ * this much of the deadline is labelled `run-deadline` and is never held.
+ */
+export const RUN_DEADLINE_SLACK_MS = 1_000;
+
 /** HTTP statuses counted as the endpoint's fault, not the model's. */
 export const INFRASTRUCTURE_STATUSES: ReadonlySet<number> = new Set([404, 429, 502, 503, 504]);
 
@@ -80,7 +105,13 @@ export function classifyTrial(obs: TrialObservation): Classification {
 
   switch (exit) {
     case "timeout":
-      return { ending: "timeout", detail: "timeout" };
+      return {
+        ending: "timeout",
+        detail:
+          obs.loop.metrics.wallMs >= DEFAULT_RUN_DEADLINE_MS - RUN_DEADLINE_SLACK_MS
+            ? RUN_DEADLINE_DETAIL
+            : "timeout",
+      };
     case "max_turns":
     case "max_tool_calls":
       return { ending: "budget", detail: exit };
