@@ -883,11 +883,15 @@ describe("the claim's real commit-time checks, through the inbox's door (review 
     expect(getDocOwner(docU.id)).toBeUndefined();
   });
 
-  it("scope: the scope rule no longer answers may-claim (a blocking loss)", () => {
+  it("scope: the scope rule no longer answers may-claim (a write started on it)", async () => {
     const scope = begin();
-    setLossForTests(docU.id, X, "taken");
+    // Only the scope re-read sees a busy queue; the standing rule after it does not.
+    let release!: () => void;
+    const op = runDocOp(docU.id, () => new Promise<void>((r) => (release = r)));
     expect(scope.claim(docU.id, deliveryRegistry.counter, true)).toBe("refused");
     expect(getDocOwner(docU.id)).toBeUndefined();
+    release();
+    await op;
   });
 
   it("unowned: another record holds it at commit", () => {
