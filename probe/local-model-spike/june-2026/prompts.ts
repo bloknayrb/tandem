@@ -1,4 +1,15 @@
 /**
+ * FROZEN HISTORY — the system prompt the June 2026 spike measured (#1123 M0).
+ *
+ * Nothing runs this file. It is kept, with the June result files beside it, so
+ * `tests/server/local-model/prompts.test.ts` can compare today's editing-tier
+ * prompt with the one those results describe. It is not on any run path of the
+ * harness, and it is exempt by path from the "harness defines no system
+ * prompt" source pin. Do not edit the prompt text. (The one change since June
+ * is the import path below, after the move into this directory.)
+ *
+ * Original header:
+ *
  * Shared prompt construction for the #1123 M0 spike, so run.ts and the scored
  * batch use IDENTICAL prompting (a prompt difference would invalidate the
  * Claude-as-control calibration).
@@ -7,7 +18,7 @@
  * fully into context; the windowed get_outline/read_section tools are the
  * intended path only at the 50-page envelope, where the whole doc won't fit.
  */
-import { extractText } from "../../src/server/mcp/document-model.js";
+import { extractText } from "../../../src/server/mcp/document-model.js";
 import type * as Y from "yjs";
 
 export const SYSTEM_PROMPT = `You are a writing collaborator working inside a document editor. You act on the document ONLY through the provided tools.
