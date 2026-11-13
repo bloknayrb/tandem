@@ -9,16 +9,20 @@
  *    replacements and reply in threads.
  *
  * **These prompts are no longer the ones the M0 spike measured.** The editing
- * prompt is the spike's text (`probe/local-model-spike/prompts.ts`) with one
+ * prompt is the spike's text (`probe/local-model-spike/june-2026/prompts.ts`,
+ * kept frozen beside the June result files) with one
  * section added, and the chat prompt is new. The section was added because a
  * real run showed the model telling the user a suggestion "has been made and is
  * now part of the document" after only proposing it, and quoting an internal
  * annotation id. So the spike's pass rates, which back ADR-039's "chat
- * default-on", do not describe either shipped prompt, and nothing in this
- * repository re-measures them: the spike's batch harness uses its own copies of
- * the loop and prompts and no longer loads on master. Treat a further change
- * here as a change to an unmeasured prompt, to be checked against a real model
- * (`probe/local-model-spike/dogfood-m1.ts` drives this code in either tier).
+ * default-on", do not describe either shipped prompt. The measurement harness
+ * (`probe/local-model-spike/measure.ts`) now drives these prompts through the
+ * shipped collaborator, and both are part of its fingerprint
+ * (`probe/local-model-spike/fingerprint.json`): a change here turns
+ * `tests/server/local-model/harness/fingerprint.test.ts` red until the
+ * fingerprint is updated, and marks any published measurement stale. No
+ * measurement has been published against these prompts yet, so treat a change
+ * here as a change to an unmeasured prompt.
  *
  * Context-window decision (ADR-039 §4): short documents are primed fully into
  * the user turn so the model can quote verbatim without a read tool; long

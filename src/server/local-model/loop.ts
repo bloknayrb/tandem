@@ -1,12 +1,14 @@
 /**
  * Tool-use turn loop for the local-model collaborator (#1123 M1, ADR-039) —
- * productionized from `probe/local-model-spike/loop.ts`.
+ * productionized from the June 2026 spike's own loop. That copy is gone: the
+ * measurement harness (`probe/local-model-spike/`) now drives THIS loop, so a
+ * change here changes what is measured.
  *
  * Wires the chat client <-> tool dispatch over a single Y.Doc, with hard
  * budgets and per-run metrics. Malformed tool-call JSON is a MEASURED outcome
  * (recorded), not a crash. Transport-agnostic.
  *
- * Production additions over the harness:
+ * Production additions over the spike's loop:
  *  - `signal`: an AbortSignal threaded into the chat client so a shutdown,
  *    document switch, or superseding message can abort an in-flight turn
  *    (exit "aborted"); under ADR-039 "one active agent at a time".
@@ -96,8 +98,11 @@ export interface LoopResult {
  * ends the whole run at the first timeout, so the long hold is built from turns
  * that COMPLETE late, not from turns that time out. `timeoutMs` cannot bound it
  * because it only ever bounds one turn.
+ *
+ * Exported for the measurement harness (`probe/local-model-spike/`), which
+ * tells a turn cut by this deadline from one cut by its own per-turn timeout.
  */
-const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
+export const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
 
 /** Mirrors `DEFAULT_TIMEOUT_MS` in the client — only used to compute the clamp
  *  below, so the client stays the single authority on the value it applies. */

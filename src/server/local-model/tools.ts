@@ -1,6 +1,9 @@
 /**
  * Quote-anchored tool registry + dispatch for the local-model loop
- * (#1123 M1, ADR-039) — productionized from `probe/local-model-spike/tools.ts`.
+ * (#1123 M1, ADR-039) — productionized from the June 2026 spike's tool
+ * registry. That copy is gone: the measurement harness
+ * (`probe/local-model-spike/`) now offers and dispatches THESE tools, so a
+ * change here changes what is measured.
  *
  * The model NEVER sees or emits character offsets. Every mutating tool takes
  * (quoted_text, occurrence_index); the server resolves to a CRDT-anchored range:

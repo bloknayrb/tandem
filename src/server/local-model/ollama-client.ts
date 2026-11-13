@@ -1,13 +1,15 @@
 /**
  * Local-model chat client (#1123 M1, ADR-039) — productionized from the M0
- * spike's `probe/local-model-spike/ollama.ts`.
+ * spike's chat client. That copy is gone: the measurement harness
+ * (`probe/local-model-spike/`) now calls THIS client, so a change here changes
+ * what is measured.
  *
  * Two transports, normalized to one `{content, toolCalls}` shape so the loop is
  * transport-agnostic:
  *  - "v1":     OpenAI-compatible POST {endpoint}/v1/chat/completions
  *  - "native": Ollama-native       POST {endpoint}/api/chat
  *
- * Hardening beyond the harness (security review #1123):
+ * Hardening beyond the spike's client (security review #1123):
  *  - endpoint comes from config, validated to loopback at the fetch boundary
  *    (validate-at-use, not just at config time);
  *  - `redirect: "error"` — a 3xx must not be followed off the loopback host;

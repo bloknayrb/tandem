@@ -29,9 +29,10 @@ afterEach(() => {
 // for #1123 amends that on purpose. What holds now:
 //
 //  - EDITING_SYSTEM_PROMPT is the spike's text with ONE section inserted. Every
-//    original section is still there verbatim (checked against the spike file
-//    itself, which stays as it was), but the prompt as a whole is no longer
-//    identical to `probe/local-model-spike/prompts.ts`.
+//    original section is still there verbatim (checked against the June
+//    prompt itself, kept frozen beside the June result files), but the prompt
+//    as a whole is no longer identical to
+//    `probe/local-model-spike/june-2026/prompts.ts`.
 //  - CHAT_SYSTEM_PROMPT is new, and names no writing tool.
 //
 // So the spike's measured pass rates describe neither shipped prompt. These
@@ -45,15 +46,26 @@ function namedWritingTools(text: string): string[] {
   return WRITING_TOOL_NAMES.filter((n) => text.includes(n));
 }
 
-/** The spike's SYSTEM_PROMPT, read as text (the probe directory is not
- *  typechecked, so it is not imported). Line endings are normalized because a
- *  Windows checkout may hold the file as CRLF. */
+/** The June spike's SYSTEM_PROMPT, read as text from its frozen file
+ *  (`probe/local-model-spike/june-2026/prompts.ts`, history that no run path
+ *  of the measurement harness touches). Read rather than imported, so this
+ *  test keeps comparing against the bytes on disk. Line endings are normalized
+ *  because a Windows checkout may hold the file as CRLF. */
 function spikeSystemPrompt(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const file = path.join(here, "..", "..", "..", "probe", "local-model-spike", "prompts.ts");
+  const file = path.join(
+    here,
+    "..",
+    "..",
+    "..",
+    "probe",
+    "local-model-spike",
+    "june-2026",
+    "prompts.ts",
+  );
   const source = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
   const match = /export const SYSTEM_PROMPT = `([\s\S]*?)`;/.exec(source);
-  if (!match?.[1]) throw new Error("could not find SYSTEM_PROMPT in the spike's prompts.ts");
+  if (!match?.[1]) throw new Error("could not find SYSTEM_PROMPT in the June prompts.ts");
   return match[1];
 }
 
