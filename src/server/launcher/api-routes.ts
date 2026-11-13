@@ -74,6 +74,7 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
   LAUNCHER_ERROR_SETTINGS_NEWER,
+  LAUNCHER_ERROR_SHUTTING_DOWN,
   LAUNCHER_ERROR_UNLICENSED,
   type LauncherCwdPreview,
   type LauncherSettingsResponse,
@@ -395,15 +396,35 @@ function sendNotSpawned(
   res: Response,
   why: Extract<RespawnResult, { spawned: false }>["why"],
 ): void {
-  if (why === "cli-unusable") {
-    res.status(409).json({
-      error: "CONFLICT",
-      code: LAUNCHER_ERROR_CLI_UNUSABLE,
-      message: "Tandem can't find Claude Code to start. Install it from Connect AI.",
-    });
-    return;
+  switch (why) {
+    case "cli-unusable":
+      res.status(409).json({
+        error: "CONFLICT",
+        code: LAUNCHER_ERROR_CLI_UNUSABLE,
+        message: "Tandem can't find Claude Code to start. Install it from Connect AI.",
+      });
+      return;
+    case "shutting-down":
+      // #2358 PR 3a (ownership on only): a relaunch caught by shutdown.
+      res.status(503).json({
+        error: "SERVICE_UNAVAILABLE",
+        code: LAUNCHER_ERROR_SHUTTING_DOWN,
+        message: "Tandem is shutting down, so Claude was not started.",
+      });
+      return;
+    case "no-integration":
+      sendNoIntegration(res);
+      return;
+    case "held-by-local-model":
+      // #1123 A2: only a message start is held, and no route makes one (a
+      // route's relaunch or start is the user's own, honoured during the
+      // local period, R4.4). Unreachable here; named so the switch stays total.
+      throw new Error("a launcher route never makes a message start");
+    default: {
+      const unreachable: never = why;
+      throw new Error(`unhandled not-spawned reason ${String(unreachable)}`);
+    }
   }
-  sendNoIntegration(res);
 }
 
 /** 404 for a relaunch / start-fresh whose plan found no launchable claude-code

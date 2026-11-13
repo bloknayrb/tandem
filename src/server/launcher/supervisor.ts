@@ -23,7 +23,7 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -51,13 +51,37 @@ import {
   type TandemClaudeAfterSetup,
   type WorkingDirectoryIgnored,
 } from "../../shared/launcher/contract.js";
+import { OWNER_HANDLE_ENV, OWNER_HANDLE_URL_ENV } from "../../shared/owner-handle.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import { isStoreLockHeld } from "../annotations/store.js";
 import { subscribe, unsubscribe, wasForwardedExternally } from "../events/queue.js";
+import { STDIO_BRIDGE_DIST } from "../integrations/apply.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
+import { ownershipEnabled } from "../ownership-flag.js";
 import { isTauriSidecar } from "../platform.js";
 import { sessionIdForLog } from "../sessions/log-id.js";
+import {
+  endSpawn,
+  markSpawnStarted,
+  registerSpawn,
+  type SpawnBind,
+} from "../sessions/owner-handle-bind.js";
+import {
+  buildRunMcpConfig,
+  buildRunSettings,
+  collectTandemPluginKeys,
+  deleteRunFile,
+  ensureLauncherDir,
+  launcherDirFor,
+  loopbackBaseUrl,
+  type RunFileAcl,
+  RunFileError,
+  realRunFileAcl,
+  sweepRunFiles,
+  writeRunFile,
+} from "./run-files.js";
 import {
   type LauncherSettingsRead,
   readLauncherSettings,
@@ -306,6 +330,66 @@ interface SupervisorOpts {
       cb: (change: { to: "local" } | { to: "claude"; asked: boolean }) => void,
     ) => () => void;
   };
+  /**
+   * The address this server's MCP listener actually bound (#2358 PR 3a,
+   * Ruling D14) — `httpServer.address()`, wired in `index.ts` (a source pin
+   * holds the wiring). The run MCP config names it; anything but `127.0.0.1`
+   * or `::1`, or null, means a spawn launches with neither run flag (R1.5).
+   * Read only while ownership is on. Default: null.
+   */
+  getBoundMcpAddress?: () => { address: string; port: number } | null;
+  /**
+   * Whether this process holds the annotation store lock (R1.9): the boot
+   * sweep of leftover run files runs only then. Defaults to the real
+   * `isStoreLockHeld`; a seam so the sweep can be tested without the store.
+   */
+  storeLockHeld?: () => boolean;
+  /**
+   * The ACL steps the run files take on Windows (R1.6). Defaults to the real
+   * ones; a spawn test injects no-ops so it does not shell out per spawn. The
+   * real steps are proven in the `windows-acl-proof` job's run-files spec.
+   */
+  runFileAcl?: RunFileAcl;
+  /**
+   * Test-only: awaited after a spawn's run files are written and before the
+   * re-checks (R1.8), so a test can land a stop, a shutdown, a restart or a
+   * licence change during the write. Never passed by `index.ts`.
+   */
+  runFileWriteHold?: () => Promise<void>;
+  /**
+   * Test-only: the bridge script the run MCP config names. Defaults to
+   * `STDIO_BRIDGE_DIST` (Ruling N). A seam because `TANDEM_STDIO_BRIDGE_DIST`
+   * is honoured only inside the desktop sidecar (by argv, #2358 PR 2b), so a
+   * test cannot reach the default through it. Never passed by `index.ts`.
+   */
+  stdioBridgeScript?: string;
+  /** Test-only override for `os.homedir()` when finding the user settings file. */
+  claudeSettingsHome?: string;
+  /** Test-only: the run files' 32-hex name suffix, so a test can plant a file
+   * or a link at the name. Never passed by `index.ts`. */
+  runFileNameSuffix?: (kind: "mcp" | "settings") => string;
+}
+
+/**
+ * One spawn's owner-handle state and run files (#2358 PR 3a, R4.1). Exists only
+ * while ownership is on. `discard` is its teardown (R4.3): idempotent, and it
+ * ends ONLY this spawn — its handle stops binding, its transports stop counting
+ * as bound, its run files are deleted. Moves no transport and no document.
+ */
+interface SpawnRun {
+  readonly bind: SpawnBind;
+  readonly mcpConfigPath: string;
+  readonly settingsPath: string;
+  readonly args: readonly string[];
+  discard(): void;
+}
+
+/** How long `stop()` waits for the run files' deletion (#2358 PR 3a). */
+const RUN_FILE_DELETE_WAIT_MS = 1_000;
+
+/** Mint an owner handle: `th_` + 32 base64url characters from 24 random bytes. */
+function mintOwnerHandle(): string {
+  return `th_${randomBytes(24).toString("base64url")}`;
 }
 
 /** A start the local period held (#1123 A2, R4.1). */
@@ -643,7 +727,13 @@ export interface Supervisor {
  * lock before stopping, and a removed entry is a deliberate act. */
 export type RespawnResult =
   | { spawned: true }
-  | { spawned: false; why: "no-integration" | "cli-unusable" | "held-by-local-model" };
+  /** `shutting-down` (#2358 PR 3a, Ruling M): a relaunch whose run files were
+   * being written when Tandem began shutting down. Ownership on only.
+   * `held-by-local-model` (#1123 A2): a message start held by the local period. */
+  | {
+      spawned: false;
+      why: "no-integration" | "cli-unusable" | "shutting-down" | "held-by-local-model";
+    };
 
 /** Discriminated union: when `running === false` the extra fields are the
  * optional `lastError`, `restartPending` and `configured`; when `running === true` all process-level fields are
@@ -931,8 +1021,15 @@ export function makeStdinGoneHandler(
  * Takes only the two fields it reads so callers/tests don't have to construct
  * a whole `SpawnPlan`.
  */
-export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }): string[] {
+export function buildClaudeArgs(
+  plan: { sessionId: string; resuming: boolean },
+  run?: { mcpConfigPath: string; settingsPath: string },
+): string[] {
   const args = [...CLAUDE_STREAM_JSON_FLAGS];
+  // The run files (#2358 PR 3a, R1.7), only for a spawn whose files were
+  // written (ownership on): always paths, never inline JSON, because argv is
+  // visible to other users on the machine. The session flag stays last.
+  if (run) args.push("--mcp-config", run.mcpConfigPath, "--settings", run.settingsPath);
   // --resume replays an existing conversation; --session-id names a new one.
   // Passing both is an error, so this is strictly either/or.
   if (plan.resuming) {
@@ -985,6 +1082,12 @@ export const DESKTOP_ONLY_ENV_KEYS = ["TANDEM_APP_DATA_DIR", "TANDEM_DATA_DIR"] 
  *   name, which `resolveAuthTokenCandidate` ranks above `TANDEM_AUTH_TOKEN`.
  * - `TANDEM_SENTRY_DSN` — the operator's crash-reporting DSN.
  *
+ * - `TANDEM_OWNER_HANDLE` — the owner handle (#2358 PR 3a, R5.1). Stripped
+ *   unconditionally (Ruling I) so the child never inherits one from this
+ *   server's environment; its bridge gets one only from the run MCP config.
+ * - `TANDEM_OWNER_HANDLE_URL` — not a secret: stripped so that only the
+ *   launcher's own `--mcp-config` entry can supply it (R2.2).
+ *
  * Nothing the launched session starts needs the env copy on the desktop's
  * loopback bind: loopback requests skip bearer auth (`auth/middleware.ts`),
  * and every config-spawned bridge or shim carries the token in its OWN config
@@ -995,6 +1098,8 @@ export const TANDEM_SECRET_ENV_KEYS = [
   "TANDEM_AUTH_TOKEN",
   "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN",
   "TANDEM_SENTRY_DSN",
+  OWNER_HANDLE_ENV,
+  OWNER_HANDLE_URL_ENV,
 ] as const;
 
 /**
@@ -1078,6 +1183,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
   const decideRefusal = opts.aiRefusal ?? aiRefusal;
+  const getBoundMcpAddress = opts.getBoundMcpAddress ?? (() => null);
+  const storeLockHeld = opts.storeLockHeld ?? isStoreLockHeld;
+  const runFileAcl = opts.runFileAcl ?? realRunFileAcl;
+  /** The boot sweep runs once per supervisor (R1.9). */
+  let runFilesSwept = false;
+  /** Run-file deletions still in flight (#2358 PR 3a review, item 9). A
+   * spawn's teardown deletes without waiting; `stop()` (shutdown) awaits these
+   * so a normal quit leaves no run file, and no dead handle, on disk. */
+  const pendingRunFileDeletes = new Set<Promise<void>>();
+  function deleteRunFileTracked(file: string): void {
+    const p = deleteRunFile(file).finally(() => pendingRunFileDeletes.delete(p));
+    pendingRunFileDeletes.add(p);
+  }
   const readSettings = opts.readSettings ?? (() => readLauncherSettings(opts.integrationsBase));
   const idleMinuteMs = opts.idleMinuteMs ?? 60_000;
   const subscribeDuringStandby = opts.subscribeDuringStandby ?? defaultSubscribeDuringGap;
@@ -1269,6 +1387,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * `start()`. While up, no message starts Claude, whatever lands on the lock
    * after it — including an Off that re-arms the standby watch (#2196). */
   let shuttingDown = false;
+  /** Bumped with `shuttingDown` by every `stop()` (#2358 PR 3a, Ruling M):
+   * the relaunch path re-checks "a shutdown began during this relaunch" by
+   * comparing it with its value at `stopAndSpawn`'s entry, so a relaunch after
+   * an earlier `stop()` is unchanged. */
+  let shutdownCount = 0;
   /** The boot found the v1.0 walkthrough owed (#2198), whatever the start
    * mode: an `awaiting-start` standby is then the walkthrough's to release, if
    * the mode is automatic by the time the user confirms. Cleared by the first
@@ -2021,6 +2144,108 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
   opts.localPeriod?.subscribe(onLocalPeriodChange);
 
+  /**
+   * Mint this spawn's owner handle and write its run files (#2358 PR 3a,
+   * Requirement 1). Called only while ownership is on, after admission (no
+   * handle is minted for a spawn refused before the write, R1.1). The spawn's
+   * state is registered BEFORE the files are written (R4.1), and is not
+   * current until its child starts (`markSpawnStarted` in `spawnOnce`).
+   *
+   * `null` means "launch with neither flag" (R1.5, Rulings D4 and D11): no
+   * usable bridge script, a bound address that is not a loopback literal, or
+   * any fail-closed step of R1.6. One line names the failed step, never a
+   * file's contents, and nothing is left behind.
+   */
+  async function prepareRun(plan: SpawnPlan): Promise<SpawnRun | null> {
+    const baseUrl = loopbackBaseUrl(getBoundMcpAddress());
+    if (baseUrl === null) {
+      console.error(
+        "[Launcher] Not passing the run files: this server's MCP address is not 127.0.0.1 or ::1",
+      );
+      return null;
+    }
+    const bridgeScript = opts.stdioBridgeScript ?? STDIO_BRIDGE_DIST;
+    if (!fs.existsSync(bridgeScript)) {
+      console.error(
+        "[Launcher] Not passing the run files: the stdio bridge script is missing from this install",
+      );
+      return null;
+    }
+    const handle = mintOwnerHandle();
+    const written: string[] = [];
+    let ended = false;
+    let bind: SpawnBind | undefined;
+    const discard = (): void => {
+      if (ended) return;
+      ended = true;
+      if (bind) endSpawn(bind);
+      for (const file of written) deleteRunFileTracked(file);
+    };
+    try {
+      let mcpConfigPath = "";
+      bind = registerSpawn({
+        handle,
+        sessionId: plan.sessionId,
+        // Probe 11: the file is read only at start, so it goes at first bind.
+        onFirstBind: () => {
+          if (mcpConfigPath) deleteRunFileTracked(mcpConfigPath);
+        },
+      });
+      const dir = launcherDirFor(opts.integrationsBase);
+      await ensureLauncherDir(dir, { create: true, acl: runFileAcl });
+      const keys = await collectTandemPluginKeys({
+        env: childEnv(),
+        cwd: plan.cwd,
+        ...(opts.claudeSettingsHome !== undefined ? { home: opts.claudeSettingsHome } : {}),
+      });
+      mcpConfigPath = await writeRunFile(
+        dir,
+        "mcp",
+        buildRunMcpConfig({ nodePath: process.execPath, bridgeScript, baseUrl, handle }),
+        runFileAcl,
+        opts.runFileNameSuffix?.("mcp"),
+      );
+      written.push(mcpConfigPath);
+      const settingsPath = await writeRunFile(
+        dir,
+        "settings",
+        buildRunSettings(keys),
+        runFileAcl,
+        opts.runFileNameSuffix?.("settings"),
+      );
+      written.push(settingsPath);
+      if (opts.runFileWriteHold) await opts.runFileWriteHold();
+      const run: SpawnRun = {
+        bind,
+        mcpConfigPath,
+        settingsPath,
+        args: ["--mcp-config", mcpConfigPath, "--settings", settingsPath],
+        discard,
+      };
+      return run;
+    } catch (err) {
+      discard();
+      const step = err instanceof RunFileError ? err.step : "unexpected";
+      console.error(`[Launcher] Not passing the run files: ${step} failed`);
+      return null;
+    }
+  }
+
+  /** The boot sweep (R1.9): once per supervisor, before its first spawn, only
+   * while ownership is on and this process holds the store lock. Never throws. */
+  async function sweepRunFilesOnce(): Promise<void> {
+    if (runFilesSwept || !ownershipEnabled()) return;
+    runFilesSwept = true;
+    try {
+      if (!storeLockHeld()) return;
+      await sweepRunFiles(launcherDirFor(opts.integrationsBase), { acl: runFileAcl });
+    } catch (err) {
+      console.error(
+        `[Launcher] Run-file sweep failed (non-fatal): ${err instanceof RunFileError ? err.step : "error"}`,
+      );
+    }
+  }
+
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
     const integration = await readIntegration();
     configured = integration !== null;
@@ -2069,8 +2294,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     plan: SpawnPlan,
     idleLimitMs: number | null,
     claudeBin: string,
+    run: SpawnRun | null = null,
   ): Promise<ChildProcess> {
-    if (child) throw new Error("Supervisor already running — call stop() first");
+    // A throw before `spawn()` returns ends this spawn's run state (R4.4):
+    // "already running", a missing reaper, a synchronous spawn throw.
+    if (child) {
+      run?.discard();
+      throw new Error("Supervisor already running — call stop() first");
+    }
 
     // A missing reaper throws here, before `child` is set (#2145). Recorded as
     // `binary-not-found` — the code the ENOENT spawn path uses for the same
@@ -2082,10 +2313,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     try {
       reaper = reaperPath();
     } catch (err) {
+      run?.discard();
       lastError = "binary-not-found";
       throw err;
     }
-    const claudeArgs = buildClaudeArgs(plan);
+    const claudeArgs = buildClaudeArgs(plan, run ?? undefined);
 
     const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
 
@@ -2098,15 +2330,30 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // a late callback from THIS process that dereferenced `child` could act on
     // a *different, newer* process — e.g. writing this spawn's bootstrap turn
     // into a freshly restarted Claude's stdin.
-    const spawned = spawn(reaper, reaperArgs, {
-      cwd: plan.cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      // NOT `process.env` — see `childEnv`. The desktop's app-data root must
-      // not reach a session whose own `tandem` would then claim it.
-      env: childEnv(),
-      windowsHide: true,
-    });
+    let spawned: ChildProcess;
+    try {
+      spawned = spawn(reaper, reaperArgs, {
+        cwd: plan.cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        // NOT `process.env` — see `childEnv`. The desktop's app-data root must
+        // not reach a session whose own `tandem` would then claim it.
+        env: childEnv(),
+        windowsHide: true,
+      });
+    } catch (err) {
+      run?.discard();
+      throw err;
+    }
     child = spawned;
+    if (run) {
+      // The child is started: this spawn is now the current one (Terms), and
+      // only now can its handle bind. Its own exit or error ends it, attached
+      // here before anything else can throw, so a throw between here and the
+      // long-lived handlers below cannot leave a live handle behind.
+      markSpawnStarted(run.bind);
+      spawned.once("exit", run.discard);
+      spawned.once("error", run.discard);
+    }
 
     // In `spawnOnce`, TWO bare statements at the same indentation as
     // `child = spawned;`. NEVER the single-line
@@ -2433,6 +2680,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * and `error` can both fire.
      */
     function teardownTurnDelivery(): void {
+      // This spawn's run state ends with it (#2358 PR 3a, R4.3, R4.4). Not
+      // identity-guarded, like the rest of this function: `discard` belongs to
+      // THIS spawn and ends nothing of a newer one.
+      run?.discard();
       // Latch once: `exit` and `error` can both reach here, and a user stop's
       // decision must not be re-read after `start()` lowers `userStopped`.
       if (!tornDown) {
@@ -2671,6 +2922,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             console.error(
               "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again.",
             );
+            // Its handle stops binding now, not when the exit arrives (R4.4).
+            run?.discard();
             try {
               spawned.kill("SIGTERM");
             } catch {
@@ -3137,12 +3390,53 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // top of `stopAndSpawn`, after the licence check only (round-2 item 9),
     // so during the period a missing integration or CLI is reported when the
     // held start runs at the switch back, not when the message arrives.
+    // Before the run files (#2358 PR 3a): a held start writes none and mints
+    // no owner handle.
     if (localHeld()) {
       holdForLocalPeriod(kind);
       return;
     }
+    // The run files (#2358 PR 3a), ownership on only. The write is the first
+    // await between planning and `spawn` (R1.8), so everything re-checked after
+    // `buildPlan`'s await is re-checked again after it, plus `child` and
+    // `shuttingDown`. Keyed on the flag, never on whether the write succeeded:
+    // a failed write awaited too, and a stop can have landed during it.
+    let run: SpawnRun | null = null;
+    if (ownershipEnabled()) {
+      run = await prepareRun(plan);
+      const why =
+        child !== null
+          ? "a Claude started meanwhile"
+          : stopRequested || epoch !== stopEpoch
+            ? "a stop or relaunch was requested"
+            : breakerTripped
+              ? "the breaker tripped"
+              : // Raw: every caller that reaches here after a `stop()` either
+                // lowered it first (a locked `start()`) or is caught by the
+                // epoch above (a crash restart).
+                shuttingDown
+                ? "Tandem is shutting down"
+                : null;
+      const lateRefusal = why === null ? decideRefusal() : null;
+      if (why !== null || lateRefusal !== null) {
+        run?.discard();
+        if (lateRefusal !== null && child === null) recordLicenceRefusal(lateRefusal);
+        console.error(
+          `[Launcher] Not spawning: ${why ?? "AI features are unlicensed"} while the run files were written`,
+        );
+        return;
+      }
+      // The local period may have begun during the write: the start is held,
+      // and what the write made is discarded first (its handle stops binding,
+      // its files are deleted), so a held start leaves neither behind.
+      if (localHeld()) {
+        run?.discard();
+        holdForLocalPeriod(kind);
+        return;
+      }
+    }
     try {
-      const spawned = await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
+      const spawned = await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run);
       armBackoffReset(spawned);
     } catch (err) {
       console.error("[Launcher] Spawn failed:", err);
@@ -3192,6 +3486,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       } finally {
         launching--;
       }
+      // Leftover run files from an earlier run (#2358 PR 3a, R1.9), before
+      // this supervisor's first spawn. Ownership on and store lock held only.
+      if (ownershipEnabled()) await sweepRunFilesOnce();
       walkthroughHold = walkthroughOwedAtBoot();
       // The walkthrough hold (#2198) is the on-click hold: the same standby, so
       // a message sent meanwhile still starts Claude (#2196) and Start is one
@@ -3312,6 +3609,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       holdForLocalPeriod("message");
       return { spawned: false, why: "held-by-local-model" };
     }
+    // A shutdown that begins anywhere in this relaunch (the stop's exit wait,
+    // the plan read, the run-file write) is caught after the write (#2358 PR
+    // 3a, Ruling M). Counted from here rather than read raw: `stop()` leaves
+    // `shuttingDown` raised, and a relaunch after an earlier `stop()` spawns,
+    // as before.
+    const shutdownsAtEntry = shutdownCount;
     await stopInternal();
     // Resolved before the session is dropped (#2199 review): a Start fresh
     // that finds no Claude Code must not have deleted the conversation on its
@@ -3387,7 +3690,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (standby === "off") setStandby("awaiting-start");
     }
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
-    // And after that await, the last before the spawn (review N2).
+    // And after that await (review N2), before the run files (#2358 PR 3a):
+    // a held message start writes none and mints no owner handle.
     if (byMessage && localHeld()) {
       holdForLocalPeriod("message");
       // Off stays Off: the stop flag and the gap watch go back to how this
@@ -3398,7 +3702,39 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
       return { spawned: false, why: "held-by-local-model" };
     }
-    armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin));
+    // The run files (#2358 PR 3a), ownership on only. This path re-checks two
+    // things after the write (Ruling M) — new behaviour here, which had no
+    // re-check: every stop takes the lock, so only a shutdown (raised before
+    // the lock) and the licence can move. Flag off, nothing here runs.
+    let run: SpawnRun | null = null;
+    if (ownershipEnabled()) {
+      run = await prepareRun(plan);
+      const refusal = decideRefusal();
+      if (refusal) {
+        run?.discard();
+        // Recorded before the throw, as `respawn` does, so activation can bring
+        // back the Claude this relaunch has already stopped.
+        if (child === null) recordLicenceRefusal(refusal);
+        throw new LicenseRefusedError(refusal);
+      }
+      if (shuttingDown && shutdownCount !== shutdownsAtEntry) {
+        run?.discard();
+        console.error("[Launcher] Not spawning: Tandem is shutting down");
+        return { spawned: false, why: "shutting-down" };
+      }
+      // The local period may have begun during the write: held, and what the
+      // write made is discarded first, so a held start leaves nothing behind.
+      if (byMessage && localHeld()) {
+        run?.discard();
+        holdForLocalPeriod("message");
+        if (!wroteOnClick) {
+          userStopped = userStoppedBefore;
+          if (!gapWatchBefore) disarmGapWatch();
+        }
+        return { spawned: false, why: "held-by-local-model" };
+      }
+    }
+    armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin, run));
     return { spawned: true };
   }
 
@@ -3590,6 +3926,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Synchronously, before the lock: a message start already queued AHEAD of
     // this stop must not spawn a Claude that shutdown then SIGTERMs (#2196).
     shuttingDown = true;
+    shutdownCount += 1;
     return withLock(async () => {
       userStopped = true;
       userStopCount += 1;
@@ -3601,6 +3938,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // `shuttingDown`.
       setStandby(undefined);
       await stopInternal();
+      // The stopped spawn's run files (#2358 PR 3a): flag off there are none,
+      // and nothing here is awaited.
+      // Bounded (review round 2, item 3): shutdown awaits this before the
+      // store lock is released, and the desktop shell allows 5 s; a stuck
+      // delete is left to the boot sweep.
+      if (pendingRunFileDeletes.size > 0) {
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          Promise.allSettled([...pendingRunFileDeletes]),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, RUN_FILE_DELETE_WAIT_MS);
+            timer.unref?.();
+          }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
     });
   }
 

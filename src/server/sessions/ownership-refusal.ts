@@ -17,7 +17,7 @@
  *
  * **What is written here is what PR 1c can reach.** `chat` and `post` arrive
  * with reply acceptance (PR 2), `unlinked` with the shim's identity (PR 4),
- * `unbound-child` with the handle (PR 3a), and the `released` and `assigned`
+ * `unbound-child` with the records around the handle (PR 3b), and the `released` and `assigned`
  * causes of `lost` with the controls (PR 5). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b; their copy is here
  * because the decision that produces them is.

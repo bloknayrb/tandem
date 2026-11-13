@@ -25,6 +25,7 @@ import {
   resolveSafeCwd,
   sessionCwdMatches,
   shouldClearSession,
+  TANDEM_SECRET_ENV_KEYS,
 } from "../../../src/server/launcher/supervisor.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
@@ -650,6 +651,35 @@ describe("buildClaudeArgs — CLI argument vector (#1267)", () => {
       "--dangerously-load-development-channels",
     );
   });
+});
+
+describe("buildClaudeArgs — the run files (#2358 PR 3a, R1.7)", () => {
+  const SESSION = "550e8400-e29b-41d4-a716-446655440000";
+  it("without run files it is master's vector exactly", () => {
+    const plain = buildClaudeArgs({ sessionId: SESSION, resuming: false });
+    expect(plain).not.toContain("--mcp-config");
+    expect(plain).not.toContain("--settings");
+    expect(buildClaudeArgs({ sessionId: SESSION, resuming: false }, undefined)).toEqual(plain);
+  });
+
+  it.each([false, true])(
+    "with run files it names both paths, and the session flag stays last (resuming=%s)",
+    (resuming) => {
+      const args = buildClaudeArgs(
+        { sessionId: SESSION, resuming },
+        { mcpConfigPath: "/l/mcp.json", settingsPath: "/l/settings.json" },
+      );
+      const plain = buildClaudeArgs({ sessionId: SESSION, resuming });
+      expect(args.slice(-2)).toEqual(plain.slice(-2));
+      expect(args.slice(-6, -2)).toEqual([
+        "--mcp-config",
+        "/l/mcp.json",
+        "--settings",
+        "/l/settings.json",
+      ]);
+      expect(args).toHaveLength(plain.length + 4);
+    },
+  );
 });
 
 describe("buildClaudeArgs — explicit permission posture (#2286)", () => {
@@ -1332,6 +1362,8 @@ describe("childEnv — the launched session must not inherit the desktop's app-d
         TANDEM_AUTH_TOKEN: "tok",
         CLAUDE_PLUGIN_OPTION_AUTH_TOKEN: "tok",
         TANDEM_SENTRY_DSN: "https://k@example.invalid/1",
+        TANDEM_OWNER_HANDLE: `th_${"h".repeat(32)}`,
+        TANDEM_OWNER_HANDLE_URL: "http://127.0.0.1:3479",
         PATH: "/usr/bin",
         HTTPS_PROXY: "http://proxy.invalid:8080",
         SOME_USER_TOOL_CONFIG: "keep-me",
@@ -1341,10 +1373,40 @@ describe("childEnv — the launched session must not inherit the desktop's app-d
     expect(env.TANDEM_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN).toBeUndefined();
     expect(env.TANDEM_SENTRY_DSN).toBeUndefined();
+    expect(env.TANDEM_OWNER_HANDLE).toBeUndefined();
+    expect(env.TANDEM_OWNER_HANDLE_URL).toBeUndefined();
     expect(env.PATH).toBe("/usr/bin");
     expect(env.HTTPS_PROXY).toBe("http://proxy.invalid:8080");
     expect(env.SOME_USER_TOOL_CONFIG).toBe("keep-me");
   });
+
+  /**
+   * #2358 PR 3a (R5.1, Ruling I): the owner handle and the launcher's URL
+   * variable are stripped unconditionally — flag on and flag off alike — so
+   * nothing but the launcher's own `--mcp-config` entry can supply either.
+   */
+  it.each(["", "1"])(
+    "strips the owner handle and its URL variable (TANDEM_OWNERSHIP=%j)",
+    (flag) => {
+      vi.stubEnv("TANDEM_OWNERSHIP", flag);
+      try {
+        const env = childEnv(
+          {
+            TANDEM_OWNER_HANDLE: `th_${"h".repeat(32)}`,
+            TANDEM_OWNER_HANDLE_URL: "http://x",
+            A: "1",
+          },
+          [],
+        );
+        expect(env).toEqual({ A: "1" });
+        expect(TANDEM_SECRET_ENV_KEYS).toEqual(
+          expect.arrayContaining(["TANDEM_OWNER_HANDLE", "TANDEM_OWNER_HANDLE_URL"]),
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   /**
    * #1822 item 6 sets `NODE_ENV=production` on the packaged sidecar. Inherited

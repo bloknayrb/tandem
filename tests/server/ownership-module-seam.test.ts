@@ -56,6 +56,10 @@ describe("ownership flag module seam", () => {
       .map(([file]) => file)
       .sort();
     expect(importers).toEqual([
+      // PR 3a: the supervisor reads the flag per spawn (handle, run files,
+      // boot sweep) rather than taking an injected boolean, so a forgotten
+      // wiring cannot make tests and production disagree.
+      "src/server/launcher/supervisor.ts",
       "src/server/mcp/owned-op.ts",
       "src/server/mcp/server.ts",
       "src/server/sessions/caller.ts",
@@ -148,6 +152,9 @@ describe("tests and the flag", () => {
   // Every file that stubs the variable, by any argument: a stub through a
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
+    "tests/server/launcher/owner-handle-chain.test.ts",
+    "tests/server/launcher/owner-handle-spawn.test.ts",
+    "tests/server/launcher/supervisor.test.ts",
     "tests/server/local-period.test.ts",
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
@@ -162,6 +169,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
+    "tests/server/ownership-owner-handle-bind.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
@@ -187,6 +195,8 @@ describe("tests and the flag", () => {
     // The notice-rule PR's one (`ownership-notice-rule.test.ts`): its lone-
     // session script and its dark test run flag-off to compare with master.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
+      // PR 3a: the launcher's spawn path, flag on, with a dark block.
+      "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
@@ -205,6 +215,9 @@ describe("tests and the flag", () => {
 
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
+      // PR 3a: the chain, and the launcher's spawn path (flag on, with a dark block).
+      "tests/server/launcher/owner-handle-chain.test.ts",
+      "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
