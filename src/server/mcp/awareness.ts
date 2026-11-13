@@ -355,22 +355,26 @@ interface NoticeSettlement {
  * document was unowned) is not settled, and goes to whoever reads next.
  *
  * **An observed change ends it** (the brief's R1.3a). An entry at or below
- * the mark that is not the current version of a current notice — its Claude
- * record now stands at another status, or at another `editedAt`, or is gone
- * — is retired here, and its cursor-less ledger key forgotten, so a later
- * return to that state is a new notice (for a record deleted and restored,
- * one duplicate). Only a pass over the document sees the change, so a status
- * that moves away and back between two passes is the same settled notice
- * (accepted). An entry under any current record's bare-id key (a client-
- * written id that collides) is left to master's rules. This walk is the only
- * place the rule writes, and it only ever re-owes. It logs nothing.
+ * the mark whose Claude record now stands at another status, or at another
+ * `editedAt`, is recorded in `into.ended`; the handler retires it, and
+ * forgets its cursor-less ledger key, only once the poll committed and only
+ * where the poll read the document as its holder (`endObservedNotices`), so
+ * a later return to that state is a new notice. A status that moves away and
+ * back with no such poll in between is the same settled notice (accepted).
+ * A record that is gone stays settled (its entry is kept), so an Undo of the
+ * delete restores a settled notice. An entry under any current record's
+ * bare-id key (a client-written id that collides) is not settled while the
+ * collision lasts, and is kept. The walk itself writes nothing and logs
+ * nothing; `carryHeld` never retires an annotation entry at or below the
+ * mark, so nothing here can be lost to a pass.
  *
  * **Bound.** The walk visits the entries at or below the mark, in seq
- * order, and stops at the first above it. Everything it keeps there is the
- * current version of a current notice (at most one entry per resolved Claude
- * annotation on the document); everything else it retires on first sight,
- * except entries under a colliding bare-id key, which a handover forgets.
- * The pass already reads every annotation.
+ * order, and stops at the first above it. A handover leaves only current
+ * notice entries there; an ended one is retired by the first committed
+ * holder poll that sees it. What stays besides current notices: entries of
+ * deleted Claude records (one per resolved Claude annotation kept at a
+ * handover and since deleted) and entries under a colliding key, until a
+ * later handover forgets them. The pass already reads every annotation.
  */
 function settleNotices(
   documentId: string,
