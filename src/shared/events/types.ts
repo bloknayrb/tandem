@@ -10,6 +10,7 @@
  * server layer boundary.
  */
 
+import { MODE_RELEASE_WAKE_ID_PREFIX } from "../constants.js";
 import type { Annotation, AnnotationType, ReplyAuthor } from "../types.js";
 
 // --- Per-event payload interfaces ---
@@ -154,6 +155,12 @@ export function parseTandemEvent(raw: unknown): TandemEvent | null {
   return raw as TandemEvent;
 }
 
+/** The disjoint `wake_` namespace of the server's synthetic wakes
+ *  (`MODE_RELEASE_WAKE_ID_PREFIX`). */
+function isSyntheticWakeId(id: unknown): boolean {
+  return typeof id === "string" && id.startsWith(MODE_RELEASE_WAKE_ID_PREFIX);
+}
+
 /**
  * Convert a TandemEvent into a human-readable string for the channel `content` field.
  * Claude sees this text inside `<channel source="tandem-channel">` tags.
@@ -163,7 +170,12 @@ export function formatEventContent(event: TandemEvent): string {
 
   switch (event.type) {
     case "annotation:created": {
-      const { annotationType, content, textSnippet, hasSuggestedText } = event.payload;
+      const { annotationId, annotationType, content, textSnippet, hasSuggestedText } =
+        event.payload;
+      // A synthetic wake (the Solo release, the switch back of who answers
+      // chat, #1123 A2): no user created anything, and there is no annotation
+      // to look up, so its own text alone.
+      if (isSyntheticWakeId(annotationId)) return `${content}${doc}`;
       const snippet = textSnippet ? ` on "${textSnippet}"` : "";
       const label = hasSuggestedText ? "replacement" : annotationType;
       return `User created ${label}${snippet}: ${content || "(no content)"}${doc}`;
@@ -230,6 +242,11 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
 
   switch (event.type) {
     case "annotation:created":
+      // A synthetic wake's id names no annotation: never hand it to Claude.
+      if (!isSyntheticWakeId(event.payload.annotationId)) {
+        meta.annotation_id = event.payload.annotationId;
+      }
+      break;
     case "annotation:accepted":
     case "annotation:dismissed":
       meta.annotation_id = event.payload.annotationId;

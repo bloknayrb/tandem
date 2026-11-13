@@ -104,10 +104,13 @@ import {
   announceLocalModelChange,
   announceStartupMismatch,
   answererClaudeOwed,
+  answererFileRemovedByTandem,
   answererLocalWasAnnounced,
   answererLocalWasChosen,
+  clearAnswererFileRemovedByTandem,
+  noteAnswererFileRemovedByTandem,
   recordAnswererClaude,
-  recordSetByUser,
+  recordAnswererLocalChosen,
   withdrawAnswererClaudeNotice,
 } from "./local-model-announced.js";
 import type { ModelsWriteSource } from "./own-window.js";
@@ -314,6 +317,7 @@ function markerExists(): boolean {
 }
 
 function clearRemovedMarker(): void {
+  clearAnswererFileRemovedByTandem();
   try {
     fs.rmSync(removedMarkerPath(), { force: true });
   } catch {
@@ -334,20 +338,24 @@ function removeSync(file: string): boolean {
   // The rename failed. Emptying a regular file in place needs no free space
   // and leaves a file that reads as not this file's (Claude), never as
   // missing, so the next start cannot say "was removed" of Tandem's own
-  // removal (#1123 A2, R7.3). Only a regular file: a link is never followed.
+  // removal (#1123 A2, R7.3). Only a regular file with one name, and only the
+  // very file checked: the descriptor is re-checked (same device and inode,
+  // a regular file, one link) before anything is written, so a link swapped
+  // in between the check and the open — which `O_NOFOLLOW` would refuse where
+  // the platform has it, and Windows does not — is never emptied.
   try {
     const st = fs.lstatSync(file);
-    // Never a hard-linked file: emptying it would empty every name it has.
     if (st.isFile() && st.nlink <= 1) {
-      // O_NOFOLLOW where the platform has it, so a link swapped in after the
-      // check is not followed (#2410's residual where it does not).
       const fd = fs.openSync(file, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0));
       try {
-        fs.ftruncateSync(fd, 0);
+        const now = fs.fstatSync(fd);
+        if (now.isFile() && now.nlink <= 1 && now.dev === st.dev && now.ino === st.ino) {
+          fs.ftruncateSync(fd, 0);
+          return true;
+        }
       } finally {
         fs.closeSync(fd);
       }
-      return true;
     }
   } catch {
     // Fall through to the delete.
@@ -359,17 +367,20 @@ function removeSync(file: string): boolean {
     try {
       // Never through a link planted at the marker path (where the platform
       // has O_NOFOLLOW; #2410 states the rest).
+      // Only its existence matters, so nothing is ever truncated: a link
+      // planted at this path (which Windows' missing `O_NOFOLLOW` would
+      // follow) never has its target changed.
       fs.closeSync(
         fs.openSync(
           removedMarkerPath(),
-          fs.constants.O_WRONLY |
-            fs.constants.O_CREAT |
-            fs.constants.O_TRUNC |
-            (fs.constants.O_NOFOLLOW ?? 0),
+          fs.constants.O_WRONLY | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0),
           0o600,
         ),
       );
     } catch {
+      // No marker: say so in the announced record instead, so the next start
+      // still does not say "was removed" of Tandem's own removal (R7.3).
+      noteAnswererFileRemovedByTandem();
       // Without it the next start may say "was removed": true, just not whose.
     }
     return true;
@@ -566,7 +577,7 @@ export function primeChatAnswerer(): void {
   // (round 5 #3).
   claudeIsOwn = state === "claude-own";
   if (state === "missing") {
-    removedByTandem = markerExists();
+    removedByTandem = markerExists() || answererFileRemovedByTandem();
   } else {
     removedByTandem = false;
     if (state !== "unreadable") clearRemovedMarker();
@@ -738,10 +749,18 @@ export async function setChatAnswerer(
   let failedRecord = false;
   await enqueue(async () => {
     if (seq !== mine) return;
+    // The user's own marked Claude is on disk and in effect: what a failed
+    // switch puts back must carry the mark, even when the start-up read failed
+    // and did not seed it (#1123 A2 review, item 25).
+    if (effective === "claude" && readState(filePath()) === "claude-own") claudeIsOwn = true;
     const outcome = await writeLocal();
     // A later request arrived while this one wrote: it reconciles.
     if (seq !== mine) return;
-    const state = readState(filePath());
+    const read = readState(filePath());
+    // A write known to have landed whose read-back fails (a scanner holding
+    // the file a moment) is "local" on disk: a restart would read it, so it
+    // is taken as what the disk says (review item 9).
+    const state: DiskState = outcome.saved && read === "unreadable" ? "local" : read;
     // A newer build's file: the switch takes effect for this run only,
     // unsaved and unrecorded, as before.
     const unsavedThisRun = outcome.written && !outcome.saved && state === "newer";
@@ -753,15 +772,16 @@ export async function setChatAnswerer(
       // to Claude be announced. A record write that fails fails the switch:
       // Claude stays in effect, and goes back on disk, with the user's mark
       // when the Claude in effect was their own.
-      const recorded = await recordSetByUser(
-        { answererLocal: true, answererChosen: true },
-        ANSWERER_LOCAL_NOTICE_KEY,
-      );
+      const recorded = await recordAnswererLocalChosen(ANSWERER_LOCAL_NOTICE_KEY);
       if (seq !== mine) return;
       if (!recorded) {
         failedRecord = true;
         if (effective !== "local") {
           if (makeDiskClaudeSync(claudeIsOwn) === "failed") await writeClaudeAsync(claudeIsOwn);
+          // The record says "chosen" only while the local model is in effect
+          // (review item 1): an earlier request of this run that recorded its
+          // choice and was superseded by this failed one leaves it behind.
+          if (answererLocalWasChosen()) await recordAnswererClaude(ANSWERER_LOCAL_NOTICE_KEY);
         }
         return;
       }

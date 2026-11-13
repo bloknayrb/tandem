@@ -1102,6 +1102,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *  the start mode — so a setup Apply, which is honoured like Start (R4.1),
    *  does not read it as a choice to hold. Cleared with the standby. */
   let standbyByLocalPeriod = false;
+  /** Bumped by every switch of who answers chat, so a start queued at the
+   *  user's switch back can tell that a later switch happened while it waited
+   *  for the op lock (review item 5). */
+  let localSwitchCount = 0;
   /**
    * Why Tandem's Claude is not running when nothing went wrong (#2195), or
    * undefined. Set by `stopByChoice` and by a start the settings held back;
@@ -1949,26 +1953,36 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * next, so the user's next chat or Start hands what is owed (R5.1, R5.4).
    */
   function onLocalPeriodChange(change: { to: "local" } | { to: "claude"; asked: boolean }): void {
+    localSwitchCount += 1;
     wakeOwedAcrossSpawns = false;
     activeTurnDelivery?.clearOwedWakes();
     if (change.to === "local") return;
+    if (isAlive()) {
+      heldStarts.clear();
+      return;
+    }
+    if (!userStopped && standby !== "off") wakeOwedAcrossSpawns = true;
+    // An unasked switch back starts nothing (decision 8, R5.4): the held starts
+    // stay recorded beside their `awaiting-start` standby, so the user's own
+    // next switch back — after a later local period — still starts them (the
+    // review session's ruling, item 13), and a setup Apply is still honoured
+    // (item 14). A chat or the user's Start in between starts Claude as any
+    // standby does, and that spawn clears them.
+    if (!change.asked || heldStarts.size === 0) return;
     const held = new Set(heldStarts);
     heldStarts.clear();
-    if (standbyByLocalPeriod) standbyByLocalPeriod = false;
-    if (isAlive()) return;
-    if (!userStopped && standby !== "off") wakeOwedAcrossSpawns = true;
-    if (!change.asked || held.size === 0) return;
-    /** The user switched back to the local model before this ran: the held
-     *  starts are still held, for the next switch back (review B1). */
+    const mine = localSwitchCount;
+    /** A later switch happened while this waited for the lock — back to the
+     *  local model, or an unasked one: nothing starts now, and every held kind
+     *  stays held for the next switch back (review B1, item 5). */
     const reHold = (): void => {
       for (const kind of held) heldStarts.add(kind);
-      if (standby === "awaiting-start" && !userStopped) standbyByLocalPeriod = true;
     };
     withLock(async () => {
-      if (localHeld()) return reHold();
+      if (localSwitchCount !== mine || localHeld()) return reHold();
       if (shuttingDown || userStopped || isAlive() || breakerTripped) return;
       const settings = await readSettingsNow();
-      if (localHeld()) return reHold();
+      if (localSwitchCount !== mine || localHeld()) return reHold();
       if (settings.startMode === "off" || userStopped || isAlive()) return;
       wakeOwedAcrossSpawns = true;
       const automatic =
@@ -3274,6 +3288,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     clearSession: boolean,
     byMessage: boolean,
   ): Promise<RespawnResult> {
+    // What a held message start must leave as it found (review item 15).
+    const userStoppedBefore = userStopped;
+    const gapWatchBefore = gapUnsubscribe !== null;
     await stopInternal();
     // Resolved before the session is dropped (#2199 review): a Start fresh
     // that finds no Claude Code must not have deleted the conversation on its
@@ -3328,6 +3345,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Relaunch and Start fresh, and a setup Apply, are honoured (R4.4).
     if (byMessage && localHeld()) {
       holdForLocalPeriod("message");
+      // Off stays Off: the stop flag and the gap watch go back to how this
+      // start found them, so a held message start changes no state.
+      userStopped = userStoppedBefore;
+      if (!gapWatchBefore) disarmGapWatch();
       return { spawned: false, why: "held-by-local-model" };
     }
     // A user start while the mode is `off` turns it back on as `on-click`
@@ -3347,6 +3368,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Again after that await, the last before the spawn (review N2).
     if (byMessage && localHeld()) {
       holdForLocalPeriod("message");
+      // Off stays Off: the stop flag and the gap watch go back to how this
+      // start found them, so a held message start changes no state.
+      userStopped = userStoppedBefore;
+      if (!gapWatchBefore) disarmGapWatch();
       return { spawned: false, why: "held-by-local-model" };
     }
     armBackoffReset(await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin));
@@ -3633,7 +3658,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
     // A held automatic start is held by the local period alone (R4.5).
     // Never for a Claude the user stopped or turned off (R4.5).
-    if (localHeld() && heldStarts.size > 0 && !userStopped && standby !== "off") {
+    // A `lastError` is a diagnosis and outranks it, as it outranks `standby`.
+    if (
+      localHeld() &&
+      heldStarts.size > 0 &&
+      !userStopped &&
+      standby !== "off" &&
+      lastError === undefined
+    ) {
       stopped.heldForLocalModel = true;
     }
     return stopped;

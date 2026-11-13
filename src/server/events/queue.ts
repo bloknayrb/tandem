@@ -675,7 +675,7 @@ export function emitModeReleaseWake(): void {
  * by Claude again. No user text, model name or count; not "Solo mode ended".
  */
 export const ANSWERER_RETURN_WAKE_CONTENT =
-  "Chat in Tandem is answered by Claude again. Call tandem_checkInbox to see what is waiting for you.";
+  "Chat in Tandem is answered by Claude again. Call tandem_checkInbox to see whether anything is waiting.";
 
 /**
  * The one wake at the user's switch back to Claude (#1123 A2, R5.2). Shaped

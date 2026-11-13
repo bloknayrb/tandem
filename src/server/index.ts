@@ -927,6 +927,15 @@ async function main() {
     // (decision 11), so it leaves them unowned unless that changes.
     applyUserOpenDefaultToDocuments(getOpenDocs().keys());
 
+    // Decision 11's boot record point (#1123 A2), again now that every
+    // startup document is open (a document opened here can restore a session
+    // holding a selection), immediately before Hocuspocus binds. A no-op
+    // unless `wireLocalPeriod` ran, which only the flag's block above does.
+    {
+      const { recordBootSelections } = await import("./models/local-period.js");
+      recordBootSelections();
+    }
+
     const [srv] = await Promise.all([
       startMcpServerHttp(
         mcpPort,
@@ -1085,6 +1094,12 @@ async function main() {
         } catch (err) {
           console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
         }
+      }
+      // Decision 11's boot record point (#1123 A2), immediately before bind;
+      // a no-op unless the flag's block wired the local period.
+      {
+        const { recordBootSelections } = await import("./models/local-period.js");
+        recordBootSelections();
       }
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);

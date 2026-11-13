@@ -152,6 +152,11 @@ interface Announced {
    *  has been sent it yet: its cause, kept so a restart cannot spend it
    *  (#1123 review round 3). Written only while set. */
   claudeAgainOwed: string | null;
+  /** Tandem removed `chat-answerer.json` itself and could leave no marker
+   *  beside it (#1123 A2, R7.3), so a missing file at the next start is not
+   *  told as "was removed". Written only while set; cleared once the file
+   *  holds a value again. */
+  removedByTandem: boolean;
 }
 
 let basePath: string | null = null;
@@ -190,6 +195,7 @@ function load(): Announced {
     answererLocal: false,
     answererChosen: false,
     claudeAgainOwed: null,
+    removedByTandem: false,
   };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
@@ -216,6 +222,9 @@ function load(): Announced {
         ) {
           fresh.claudeAgainOwed = r.claudeAgainOwed;
         }
+        if (Object.hasOwn(r, "removedByTandem") && r.removedByTandem === true) {
+          fresh.removedByTandem = true;
+        }
       }
     }
   } catch (err) {
@@ -227,12 +236,16 @@ function load(): Announced {
 
 /** Queue a write of the record as it stands WHEN THE WRITE RUNS, so a retry
  *  never publishes an older state. Resolves to whether it reached the disk. */
-function persist(): Promise<boolean> {
+function persist(overlay?: Partial<Announced>): Promise<boolean> {
   const file = filePath();
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const { adopted, answererLocal, answererChosen, claudeAgainOwed, ...rest } = load();
+      // `overlay`: a change that reaches memory only once this write lands
+      // (#1123 A2, R7.1) — so a failed write leaves the record as it was, and
+      // no later write can persist a change that never happened.
+      const { adopted, answererLocal, answererChosen, claudeAgainOwed, removedByTandem, ...rest } =
+        { ...load(), ...(overlay ?? {}) };
       const snapshot = {
         version: VERSION,
         ...rest,
@@ -240,8 +253,10 @@ function persist(): Promise<boolean> {
         ...(answererLocal ? { answererLocal: true } : {}),
         ...(answererChosen ? { answererChosen: true } : {}),
         ...(claudeAgainOwed !== null ? { claudeAgainOwed } : {}),
+        ...(removedByTandem ? { removedByTandem: true } : {}),
       };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
+      if (overlay) Object.assign(load(), overlay);
       unsaved = false;
       return true;
     })
@@ -437,6 +452,37 @@ export function recordSetByUser(
     removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
   }
   return record(change);
+}
+
+/**
+ * The user's own switch to the local model (#1123 A2, R7.1): recorded as
+ * chosen, and the notices it answers withdrawn, only once the write LANDS.
+ * Until then memory is unchanged, so a failed write leaves no trace a later
+ * write could persist: a switch that did not happen is never on record, and
+ * a waiting start-up or "answered by Claude again" notice still stands.
+ */
+export async function recordAnswererLocalChosen(withdrawKey: string): Promise<boolean> {
+  const landed = await persist({ answererLocal: true, answererChosen: true });
+  if (!landed) return false;
+  removeStartupNotice(withdrawKey);
+  dropStartupPart("answererLocal");
+  removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  return true;
+}
+
+/** Tandem removed the switch file and could leave no marker (R7.3). */
+export function noteAnswererFileRemovedByTandem(): void {
+  if (!load().removedByTandem) void record({ removedByTandem: true });
+}
+
+/** Did Tandem remove the switch file itself with no marker left? */
+export function answererFileRemovedByTandem(): boolean {
+  return load().removedByTandem;
+}
+
+/** The switch file holds a value again: a removal record no longer applies. */
+export function clearAnswererFileRemovedByTandem(): void {
+  if (load().removedByTandem) void record({ removedByTandem: false });
 }
 
 /** An own-window write that changed nothing recorded here: nothing to record,

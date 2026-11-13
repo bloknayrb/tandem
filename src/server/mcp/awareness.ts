@@ -1718,6 +1718,10 @@ interface UnreadChat {
   held: Set<number>;
   /** Cursor polls: the hand-out token the next cursor carries (`recordHandOut`). */
   handOut?: number;
+  /** The ids of returned messages whose ROW KEY was owed to Claude when the
+   *  last local period began (#1123 A2, R2.4), keyed on the map key the set
+   *  holds, never the client-written `id`. */
+  owedAtSwitch: string[];
 }
 
 /**
@@ -1789,6 +1793,7 @@ function inTimestampOrder(chatMap: Y.Map<unknown>, keys: readonly string[]): str
  */
 function collectUnreadChat(): UnreadChat {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const owedAtSwitch: string[] = [];
   const messages: InboxChatMessage[] = [];
   const keys: string[] = [];
   let dropped = 0;
@@ -1807,11 +1812,13 @@ function collectUnreadChat(): UnreadChat {
     }
     messages.push(item);
     keys.push(key);
+    if (wasOwedAtSwitch(key)) owedAtSwitch.push(item.id);
   });
 
   return {
     messages,
     dropped,
+    owedAtSwitch,
     held: new Set(),
     commit: () => {
       if (keys.length === 0) return;
@@ -1981,6 +1988,7 @@ function collectCursorChat(view: ScopeView): UnreadChat {
   // the latest answers the rest (`answeredBy`).
   const messages: InboxChatMessage[] = [];
   const keys: string[] = [];
+  const owedAtSwitch: string[] = [];
   const held = new Set<number>();
   let dropped = 0;
   const seqs: number[] = [];
@@ -1994,6 +2002,7 @@ function collectCursorChat(view: ScopeView): UnreadChat {
     }
     messages.push(item);
     keys.push(key);
+    if (wasOwedAtSwitch(key)) owedAtSwitch.push(item.id);
     seqs.push(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0).seq);
   }
   const handOut = deliveryRegistry.recordHandOut(seqs);
@@ -2001,6 +2010,7 @@ function collectCursorChat(view: ScopeView): UnreadChat {
   return {
     messages,
     dropped,
+    owedAtSwitch,
     held,
     ...(handOut !== undefined ? { handOut } : {}),
     commit: () => stampUserChat(keys, "delivered"),
@@ -2088,11 +2098,14 @@ function documentLabels(
  * to arm a watch or where to reply (pinned by a test).
  */
 export const LOCAL_PERIOD_STATUS_LINE =
-  "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem's inbox. If you already have a Tandem wake watch running, leave it running.";
+  "Tandem chat is set to be answered by a local model, and nothing in Tandem is handed to you while it is. Finish the step you are on and take no new work from Tandem. You do not need to wait for this; a later poll will say when chat is answered by Claude again. If you already have a Tandem wake watch running, leave it running.";
 
-/** The R2.4 sentence: chat owed to Claude at the switch, handed after it. */
-export const OWED_AT_SWITCH_SENTENCE =
-  "Some of the chat messages in this poll were sent before Tandem chat was switched to a local model.";
+/** The R2.4 sentence: chat owed to Claude at the switch, handed after it,
+ *  named by id (so a poll mixing old and new chat says which are old). No
+ *  trailing full stop: the summary's join adds it. */
+export function owedAtSwitchSentence(ids: readonly string[]): string {
+  return `${ids.length === 1 ? "Chat message" : "Chat messages"} ${ids.join(", ")} ${ids.length === 1 ? "was" : "were"} sent before Tandem chat was switched to a local model`;
+}
 
 /**
  * The poll during the local period (R1.1): no chat, comments, replies,
@@ -2358,8 +2371,8 @@ export function registerAwarenessTools(server: McpServer): void {
             parts.push(CHAT_ACK_DIRECTIVE);
             // #1123 A2, R2.4: chat owed to Claude when a local period began,
             // handed after it, is marked old — the set, never time, decides.
-            if (chatMessages.some((m) => typeof m.id === "string" && wasOwedAtSwitch(m.id))) {
-              parts.push(OWED_AT_SWITCH_SENTENCE);
+            if (chat.owedAtSwitch.length > 0) {
+              parts.push(owedAtSwitchSentence(chat.owedAtSwitch));
             }
           }
           let actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";

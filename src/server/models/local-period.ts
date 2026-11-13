@@ -110,6 +110,9 @@ export function forgetChatRows(keys: Iterable<string>): void {
   for (const key of keys) {
     classes.delete(key);
     deletedKeys.delete(key);
+    // A same-key re-add after Clear chat is a new row: never "sent before
+    // the switch" (review item 19).
+    owedAtSwitch.delete(key);
   }
 }
 
@@ -189,7 +192,11 @@ export function recordHeldSelection(documentId: string, stamp: unknown): void {
  * handed — decision 11's accepted gap for a session restored later).
  */
 export function selectionMayBeHanded(documentId: string, stamp: unknown): boolean {
-  if (inLocalPeriod()) return false;
+  // No "none during the local period" arm here: during the period the inbox
+  // is blank and every push is withheld from external consumers by the
+  // per-event verdict, so a selection reaches only in-process subscribers —
+  // the local model, which answers that chat and should see it. The switch
+  // back drops the buffer (review item 26).
   if (!honourLocalPeriodRecords()) return true;
   const held = heldSelections.get(documentId);
   return held === undefined || held !== stampOf(stamp);
@@ -245,10 +252,14 @@ function recordAllSelections(h: LocalPeriodHooks): void {
 }
 
 function beginPeriod(h: LocalPeriodHooks): void {
-  open = true;
   // A new local period replaces the set (the ruling): a period-1 chat is never
-  // marked again after period 2.
-  owedAtSwitch = new Set(h.unansweredUserChat());
+  // marked again after period 2. Emptied BEFORE it is taken, so a read that
+  // throws leaves no earlier period's set behind (review item 17).
+  owedAtSwitch = new Set();
+  open = true;
+  step("owed-at-switch", () => {
+    owedAtSwitch = new Set(h.unansweredUserChat());
+  });
 }
 
 /** Run one switch step on its own, so a step that throws (a document closing
@@ -265,8 +276,7 @@ function onSwitch(now: "claude" | "local", source: ChatAnswererSwitchSource): vo
   const h = hooks;
   if (!h) return;
   if (now === "local") {
-    open = true;
-    step("owed-at-switch", () => beginPeriod(h));
+    beginPeriod(h);
     step("round", () => h.suspendDeliveryRound());
     step("supervisor", () => tellSupervisor({ to: "local" }));
     step("persist", () => h.persist());
@@ -311,7 +321,9 @@ export function bootLocalPeriod(): void {
   // Every row restored from the CTRL file and not recorded as local-period
   // chat is classed now as not local-period chat, so a same-key re-add of
   // one keeps that class rather than being classed afresh.
-  for (const key of h.chatKeys()) if (!classes.has(key)) classes.set(key, false);
+  step("restored classes", () => {
+    for (const key of h.chatKeys()) if (!classes.has(key)) classes.set(key, false);
+  });
   let changed = false;
   if (!chatAnswererPrimed()) {
     // Priming failed: who answers chat is unknown to this run, so a persisted
@@ -325,8 +337,19 @@ export function bootLocalPeriod(): void {
     open = false;
     changed = true;
   }
-  recordAllSelections(h);
-  if (changed) h.persist();
+  step("selection hold", () => recordAllSelections(h));
+  if (changed) step("persist", () => h.persist());
+}
+
+/**
+ * Decision 11's boot record point, taken again immediately before Hocuspocus
+ * binds, once every startup document (CHANGELOG, `TANDEM_OPEN_FILE`,
+ * welcome) is open (review item 21). Guard 2.
+ */
+export function recordBootSelections(): void {
+  const h = hooks;
+  if (!h || !honourLocalPeriodRecords()) return;
+  step("selection hold", () => recordAllSelections(h));
 }
 
 // --- Persistence (the CTRL session file's `localPeriod` field) ----------------

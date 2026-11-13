@@ -440,11 +440,13 @@ export function getDeliveryState(now: number, externalConsumerCount: number): De
   const outstanding = pendingSince !== null && !roundSuspended;
   const stranded = outstanding && (pendingAbandoned || externalConsumerCount === 0);
 
+  // While a round is suspended nothing claims a poll followed the last
+  // forward: `idle` makes no claim at all (#1123 A2 review, item 16).
   const state: DeliveryJoinState = stranded
     ? "consumer-detached"
     : outstanding
       ? "awaiting-poll"
-      : lastForwardAt === null
+      : lastForwardAt === null || roundSuspended
         ? "idle"
         : "polled";
 
@@ -485,6 +487,9 @@ export function discardSuspendedRound(): void {
   pendingSince = null;
   pendingAbandoned = false;
   pendingItems.clear();
+  // The last latency measured predates the local period: it would read as
+  // this round's (review item 16).
+  lastLatencyMs = null;
 }
 
 /** Testing-only. */
