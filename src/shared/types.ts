@@ -696,6 +696,60 @@ export interface CapturedAnchor extends DocumentRange {
   textSnapshot: string;
 }
 
+/** Why the local model could not answer a chat (#1123). See `ChatMessage.chatNotice`. */
+export type ChatNoticeKind = "no-document" | "no-local-model";
+
+/** Why a local-model run ended without a reply, or with only part of one (#1123). */
+export type LocalRunStopReason =
+  /** The run's wall clock ran out. */
+  | "timeout"
+  /** The endpoint failed, or the run threw. */
+  | "error"
+  /** Superseded by a newer chat or a chat notice, its document closed or
+   *  switched away, the user switched who answers chat to Claude, or the
+   *  licence refused its first chat write. */
+  | "aborted"
+  /** It reached its turn or tool-call budget. */
+  | "step-limit"
+  /** It tried to comment or suggest in a run that may not, then said nothing. */
+  | "editing-off"
+  /** The same, where the cause was Solo mode (the editing setting allowed it). */
+  | "solo"
+  /** The same, where the mode could not be read (an absent mode key); the
+   *  write is refused for privacy, but the mode is not called Solo. */
+  | "mode-unknown"
+  /** The document was reloaded or edited in source view mid-run. */
+  | "content-replaced"
+  /** The document reconnected mid-run (its live instance was swapped). */
+  | "reconnected"
+  /** It finished cleanly and said nothing. */
+  | "no-reply";
+
+/** A stored stop reason, or `"interrupted"`: the read-time verdict on a
+ *  `running` state left by a server process that stopped (`effectiveLocalRun`).
+ *  Never written. */
+export type EffectiveLocalRunStopReason = LocalRunStopReason | "interrupted";
+
+/** {@link LocalRunState} as read now (`shared/local-run.ts`). */
+export interface EffectiveLocalRunState extends Omit<LocalRunState, "reason"> {
+  reason?: EffectiveLocalRunStopReason;
+}
+
+/**
+ * A local-model run's state, on the user's chat row it answers (#1123).
+ * `running` from its start; then `replied` (a reply row, `replyId`, was
+ * written and the run finished) or `stopped` with a `reason`. A `stopped`
+ * state that carries `replyId` left a partial reply. `generation` is the
+ * server process that wrote it (a random id of its own, never the
+ * Hocuspocus generation token).
+ */
+export interface LocalRunState {
+  status: "running" | "replied" | "stopped";
+  reason?: LocalRunStopReason;
+  replyId?: string;
+  generation: string;
+}
+
 /** Chat message between user and Claude, stored in Y.Map('chat') on CTRL_ROOM */
 export interface ChatMessage {
   id: string;
@@ -740,6 +794,25 @@ export interface ChatMessage {
    * absent, so every other row stays byte-identical.
    */
   greeting?: true;
+  /**
+   * Set only server-side, by the local-model collaborator, on a chat notice
+   * (#1123): a short message in the chat saying why the local model could not
+   * answer this chat — no document open (`"no-document"`), or no local model
+   * can answer (`"no-local-model"`). Carries `replyTo` (the chat it is about)
+   * and never `agentIdentity`. It is not an answer: no server path counts it as
+   * one (`answeredChatIds` skips it). Only ever one of the two strings or
+   * absent, so every other row stays byte-identical.
+   */
+  chatNotice?: ChatNoticeKind;
+  /**
+   * Set only server-side (`withMcp`), by the local-model collaborator, on the
+   * USER's chat message it is handling (#1123): whether its run has started,
+   * is still running, or ended with or without a reply, and why. Read it
+   * through `effectiveLocalRun` (`shared/local-run.ts`), which judges a
+   * `running` state stamped by an earlier server generation as ended. Never
+   * `inProgress` (that is Claude's acknowledgement row).
+   */
+  localRun?: LocalRunState;
   /**
    * The specific AI agent that authored this message (#1123 M3). Set only by the
    * local-model collaborator's streamed reply; absent on user messages and real

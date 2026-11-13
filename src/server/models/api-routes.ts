@@ -19,14 +19,20 @@
  *   POST   /api/models/local-settings — switch that setting. Body
  *                                       `{ editing: boolean }`.
  *
+ *   GET    /api/models/chat-answerer  — who answers chat, and whether a
+ *                                       local model would answer now (#1123).
+ *                                       Loopback, and Tandem's own window only.
+ *   POST   /api/models/chat-answerer  — switch who answers chat. Body
+ *                                       `{ answerer: "claude" | "local" }`.
+ *
  * **Secrets never travel back to the client.** There is intentionally no
  * `GET .../secrets/:ref` route — only server-side code reads the plaintext when
  * proxying an outbound request. Only the opaque `apiKeyRef` is persisted; the
  * registry file itself holds no plaintext (the schema is `.strict()`).
  *
- * **The two POSTs that decide what a local model does accept a request only
- * from Tandem's own window** (#2404): `POST /api/models` and
- * `POST /api/models/local-settings` test the browser-set `Origin` against
+ * **The three POSTs that decide what a local model does accept a request only
+ * from Tandem's own window** (#2404): `POST /api/models`,
+ * `POST /api/models/local-settings` and `POST /api/models/chat-answerer` test the browser-set `Origin` against
  * Tandem's own page origins exactly (`own-window.ts`), not against the shared
  * allowlist, which admits any `127.0.0.1` port. The decision is made before
  * the body is read by the pre-parse router (`api-body-preparse.ts`) — that
@@ -51,7 +57,13 @@ import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import { ERROR_CODE_INVALID_SECRET } from "../../shared/integrations/contract.js";
 import {
   API_MODELS,
+  API_MODELS_CHAT_ANSWERER,
   API_MODELS_LOCAL_SETTINGS,
+  type ChatAnswererPostResponse,
+  type ChatAnswererResponse,
+  ERROR_CODE_CHAT_ANSWERER_SUPERSEDED,
+  ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
+  ERROR_CODE_INVALID_CHAT_ANSWERER,
   ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS,
   ERROR_CODE_INVALID_MODELS_FILE,
   ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED,
@@ -73,8 +85,10 @@ import {
 } from "../integrations/api-routes.js";
 import type { Keychain } from "../integrations/keychain.js";
 import type { Handler } from "../mcp/routes/_shared.js";
+import { chatAnswerer, setChatAnswerer } from "./chat-answerer.js";
 import { isLocalModelEditingEnabled, setLocalModelEditing } from "./local-model-settings.js";
-import { type OwnWindowPolicy, refuseNotOwnWindow } from "./own-window.js";
+import { LOCAL_RUN_GENERATION } from "./local-run-generation.js";
+import { mayReadOwnWindowSetting, type OwnWindowPolicy, refuseNotOwnWindow } from "./own-window.js";
 import {
   getCachedModelsFile,
   getModelsEtag,
@@ -100,6 +114,13 @@ export interface ModelsRoutesDeps {
    * the feature is dark. A test passes `true` to exercise them.
    */
   localModelSettingsEnabled?: boolean;
+  /**
+   * Would a local model answer a chat now? `localModelResolvesNow` from
+   * `local-model/collaborator.ts` — the one sanctioned bridge across the dark
+   * audit — handed in by `index.ts` through `startMcpServerHttp`. Absent means
+   * no. Only the boolean is ever answered: never a name, endpoint or id.
+   */
+  localModelResolvesNow?: () => boolean;
 }
 
 // Ref / secret bounds. Refs are client-chosen but server-validated against
@@ -144,6 +165,122 @@ export function registerModelsRoutes(
     largeBody,
     makePostLocalSettingsHandler(settingsLive, deps.ownWindow),
   );
+  // Who answers chat (#1123). Same gating as the local settings: dark 404,
+  // own-window POST (decided first in the pre-parse router), loopback GET.
+  app.options(API_MODELS_CHAT_ANSWERER, mw);
+  app.get(
+    API_MODELS_CHAT_ANSWERER,
+    mw,
+    makeGetChatAnswererHandler(settingsLive, deps.ownWindow, deps.localModelResolvesNow),
+  );
+  app.post(
+    API_MODELS_CHAT_ANSWERER,
+    mw,
+    largeBody,
+    makePostChatAnswererHandler(settingsLive, deps.ownWindow),
+  );
+}
+
+/**
+ * `GET /api/models/chat-answerer` (#1123). 404 while dark; loopback only; and
+ * readable only from Tandem's own window (`mayReadOwnWindowSetting`): an own
+ * or allowance `Origin`, or none with `Sec-Fetch-Site: same-origin`. The
+ * shared CORS middleware grants any `127.0.0.1` port, so without this a page
+ * on another loopback port could read which way the switch points.
+ */
+function makeGetChatAnswererHandler(
+  live: boolean,
+  ownWindow: OwnWindowPolicy,
+  resolvesNow?: () => boolean,
+): Handler {
+  return (req: Request, res: Response) => {
+    if (!live) {
+      res.status(404).json({ error: "NOT_FOUND" });
+      return;
+    }
+    if (!isLoopback(req.socket.remoteAddress)) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
+      return;
+    }
+    if (!mayReadOwnWindowSetting(ownWindow, req)) {
+      refuseNotOwnWindow(res);
+      return;
+    }
+    let resolves = false;
+    try {
+      resolves = resolvesNow?.() === true;
+    } catch (err) {
+      console.error(
+        `[tandem] GET ${API_MODELS_CHAT_ANSWERER}: could not tell whether a local model resolves (${
+          err instanceof Error ? err.name : "error"
+        }).`,
+      );
+    }
+    const body: ChatAnswererResponse = {
+      answerer: chatAnswerer(),
+      localModelResolves: resolves,
+      runGeneration: LOCAL_RUN_GENERATION,
+    };
+    res.status(200).json(body);
+  };
+}
+
+/**
+ * `POST /api/models/chat-answerer` (#1123) — body `{ answerer: "claude" |
+ * "local" }`. Tandem's own window, then loopback, before anything else, as
+ * for the local settings POST (#2404): a switch to Claude is refused from
+ * elsewhere exactly as one to the local model, because an exemption would
+ * mean reading the body before the origin decision. Nothing is coerced.
+ *
+ * The answer always carries the EFFECTIVE value, including on a failed write:
+ * a failed switch to Claude is still Claude for this run of Tandem.
+ *
+ * Not licence-gated: it starts nothing and reaches no model; the local model
+ * itself is refused per chat event in `collaborator.ts`, and switching to
+ * Claude must never be refused.
+ */
+function makePostChatAnswererHandler(live: boolean, ownWindow: OwnWindowPolicy): Handler {
+  return async (req: Request, res: Response) => {
+    const source = ownWindow.classify(req);
+    if (source === null) {
+      refuseNotOwnWindow(res);
+      return;
+    }
+    if (assertLoopbackForMutation(req, res)) return;
+    if (!live) {
+      res.status(404).json({ error: "NOT_FOUND" });
+      return;
+    }
+    const answerer = (req.body as { answerer?: unknown } | undefined)?.answerer;
+    if (answerer !== "claude" && answerer !== "local") {
+      res.status(400).json({
+        error: "BAD_REQUEST",
+        code: ERROR_CODE_INVALID_CHAT_ANSWERER,
+        message: 'Body must be { answerer: "claude" | "local" }.',
+      });
+      return;
+    }
+    const result = await setChatAnswerer(answerer, source);
+    if (result.superseded) {
+      // A later request won before this one settled: nothing failed. 409 with
+      // the state the server is in now, so the page can show it.
+      const body: ChatAnswererPostResponse = {
+        answerer: result.answerer,
+        persisted: result.persisted,
+        code: ERROR_CODE_CHAT_ANSWERER_SUPERSEDED,
+      };
+      res.status(409).json(body);
+      return;
+    }
+    const body: ChatAnswererPostResponse = result.persisted
+      ? { answerer: result.answerer, persisted: true }
+      : {
+          answerer: result.answerer,
+          persisted: false,
+          code: ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
+        };
+    res.status(result.persisted ? 200 : 500).json(body);
+  };
 }
 
 /**

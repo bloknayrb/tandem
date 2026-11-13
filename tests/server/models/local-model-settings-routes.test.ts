@@ -741,9 +741,14 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       const mutating = constantsOf("post|put|patch|delete");
       const preflighted = constantsOf("options");
 
-      // The scan is live: it sees the three paths this file registers.
+      // The scan is live: it sees the four paths this file registers.
       expect([...mutating].sort()).toEqual(
-        ["API_MODELS", "API_MODELS_LOCAL_SETTINGS", "API_MODELS_SECRET"].sort(),
+        [
+          "API_MODELS",
+          "API_MODELS_CHAT_ANSWERER",
+          "API_MODELS_LOCAL_SETTINGS",
+          "API_MODELS_SECRET",
+        ].sort(),
       );
       expect([...mutating].filter((c) => !preflighted.has(c))).toEqual([]);
       // And every registration names its path by constant, so none hides from it.

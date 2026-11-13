@@ -16,6 +16,7 @@ import type {
   Annotation,
   AnnotationReply,
   ChatMessage,
+  ChatNoticeKind,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isClaudeFacing } from "../annotations/projection.js";
@@ -420,6 +421,9 @@ export function appendClaudeChatMessage(
     inProgress?: boolean;
     /** The one-time hello (#2227; `greeting-reply.ts`). Notification wording only. */
     greeting?: boolean;
+    /** A local-model chat notice (#1123): why the local model could not answer.
+     *  Never counted as an answer (`answeredChatIds`). */
+    chatNotice?: ChatNoticeKind;
   } = {},
 ): ClaudeChatAppend {
   const refusal = aiRefusal();
@@ -442,6 +446,7 @@ export function appendClaudeChatMessage(
     ...(opts.agentIdentity ? { agentIdentity: opts.agentIdentity } : {}),
     ...(opts.inProgress === true ? { inProgress: true as const } : {}),
     ...(opts.greeting === true ? { greeting: true as const } : {}),
+    ...(opts.chatNotice ? { chatNotice: opts.chatNotice } : {}),
     read: true,
   };
   withMcp(ctrlDoc, () => chatMap.set(id, msg));
@@ -1882,14 +1887,21 @@ function answeredBy(
  * `tandem_reply` (or channel reply) naming them, or a later message of the same
  * batch, in `replyTo` ({@link answeredBy}). A row carrying `agentIdentity` is
  * the local-model collaborator's, not Claude's, and answers nothing here —
- * consistent with `markUserChatRead`, which it never calls.
+ * consistent with `markUserChatRead`, which it never calls. Nor does a
+ * `chatNotice` row (#1123): it says the local model could not answer, which is
+ * the opposite of an answer.
  */
 function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
   const targets = new Set<string>();
   chatMap.forEach((value) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
-    if (msg.author === "claude" && !msg.agentIdentity && typeof msg.replyTo === "string") {
+    if (
+      msg.author === "claude" &&
+      !msg.agentIdentity &&
+      msg.chatNotice === undefined &&
+      typeof msg.replyTo === "string"
+    ) {
       targets.add(msg.replyTo);
     }
   });

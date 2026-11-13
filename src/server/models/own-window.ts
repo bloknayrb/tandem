@@ -131,6 +131,25 @@ export function createOwnWindowPolicy(opts: OwnWindowPolicyOptions): OwnWindowPo
   };
 }
 
+/**
+ * May this request READ a local-model setting (#1123: who answers chat)? The
+ * same decision as a write, for a request that carries an `Origin`. A browser
+ * sends none on a same-origin GET, so the npm install's own page is admitted
+ * by `Sec-Fetch-Site: same-origin` instead — a header a web page cannot set
+ * (the notify stream's own-window test uses the same pair). Anything else is
+ * refused: the shared CORS middleware reflects `Access-Control-Allow-Origin`
+ * for `127.0.0.1` on ANY port, so CORS alone would let a page on another port
+ * read the answer. A browser that sends no `Sec-Fetch-Site` cannot read it.
+ */
+export function mayReadOwnWindowSetting(
+  policy: OwnWindowPolicy,
+  req: Pick<Request, "headers">,
+): boolean {
+  const origin = req.headers?.origin;
+  if (typeof origin === "string") return policy.classify(req) !== null;
+  return req.headers?.["sec-fetch-site"] === "same-origin";
+}
+
 /** Answer the refusal. Says why in words a person can act on. */
 export function refuseNotOwnWindow(res: Response): void {
   res.status(403).json({

@@ -1,8 +1,19 @@
 /**
  * `local-model-announced.json` — what the user last set from Tandem's own
- * window, or was told, about the two things a local-model change can do
- * without their noticing: that local models may comment, and which local model
- * answers chat (#1123, #2404; register entry #2410 in docs/security.md).
+ * window, or was told, about the three things a local-model change can do
+ * without their noticing: that local models may comment, which local model
+ * would answer chat, and that the local model (not Claude) answers chat
+ * (#1123, #2404; register entry #2410 in docs/security.md).
+ *
+ * **What each part means** (since the switch, ADR-039's 2026-11-12
+ * amendment): `editing` — commenting is on, and the user chose it or was told;
+ * `answering` — the fingerprint of the model that answers chat WHEN the local
+ * model is chosen (the model's identity alone, whatever the switch says);
+ * `adopted` — the first lit start's baseline model, not yet named to one of
+ * Tandem's windows; `answererChosen` — the user chose the local model in
+ * Tandem's own window (the only state the "answered by Claude again" notice
+ * is raised for); `answererLocal` — the switch is at the local model, and
+ * the user chose it or was told. The switch is never part of the baseline.
  *
  * **Who can change those settings now.** The two routes accept a request only
  * from Tandem's own window (`own-window.ts`), so a web page on another
@@ -10,7 +21,8 @@
  * is the user's: it raises no warning, and the record is updated to match it
  * at once (`recordSetByUser`). What is left that can make the settings on disk
  * differ from this record:
- *  - a process writing `models.json` or `local-model-settings.json` directly;
+ *  - a process writing `models.json`, `local-model-settings.json` or
+ *    `chat-answerer.json` directly;
  *  - data from another build, or a restored copy of Tandem's data;
  *  - a record write that failed after the user's own change;
  *  - a write admitted through the development allowance
@@ -89,6 +101,7 @@ import { ownWindowSubscriberCount, pushNotification } from "../notifications.js"
 import { resolveAppDataDir } from "../platform.js";
 import {
   addStartupNotice,
+  getStartupNotices,
   onStartupNoticeDelivered,
   removeStartupNotice,
 } from "../startup-notices.js";
@@ -103,7 +116,17 @@ const MAX_BYTES = 4096;
  *  more than is known, and carries no endpoint, path or credential. */
 export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
 export const SETTINGS_CHANGED_NOTICE =
-  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
+  "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set who answers your chat back to Claude. This can also appear after an upgrade or after restoring Tandem's data.";
+/** The same notice when its parts include the switch: it says first that chat
+ *  is now answered by a local model (#1123), which is what the user most needs
+ *  to know. One replay key, so the parts still merge into one notice. */
+export const SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE =
+  "Your chat is now set to be answered by a local model, and your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: set who answers your chat back to Claude, remove any model you do not recognise, and switch commenting off. This can also appear after an upgrade or after restoring Tandem's data.";
+
+/** Replay key of the notice that chat is answered by Claude again although the
+ *  user's recorded choice was the local model, by anything but their own
+ *  choice in Tandem's own window (#1123, Bryan's decision 2026-11-12). */
+export const ANSWERER_CLAUDE_NOTICE_KEY = "local-model-answerer-claude";
 
 interface Announced {
   /** Did the user switch commenting on themselves, or were they told it is on? */
@@ -114,6 +137,21 @@ interface Announced {
    *  "this model was adopted" notice no window of Tandem's has been sent yet.
    *  Written to the file only while set. */
   adopted: string | null;
+  /** Did the user choose the local model to answer chat in Tandem's own
+   *  window, or were they told it does? (`chat-answerer.ts`.) Written to the
+   *  file only while set, so a record without it is byte-identical to one an
+   *  older build wrote. An older build reads only the fields it knows and
+   *  writes only those, so a downgrade drops it and the next start of this
+   *  build announces a stored "local model" again: accepted. */
+  answererLocal: boolean;
+  /** Narrower: the user CHOSE the local model in Tandem's own window (not
+   *  merely told). Only this makes "chat is answered by Claude again, not as
+   *  you chose" true (#1123 review round 2). Written only while set. */
+  answererChosen: boolean;
+  /** An "answered by Claude again" notice is owed and no window of Tandem's
+   *  has been sent it yet: its cause, kept so a restart cannot spend it
+   *  (#1123 review round 3). Written only while set. */
+  claudeAgainOwed: string | null;
 }
 
 let basePath: string | null = null;
@@ -145,7 +183,14 @@ function markerPath(): string {
 
 function load(): Announced {
   if (announced) return announced;
-  const fresh: Announced = { editing: false, answering: null, adopted: null };
+  const fresh: Announced = {
+    editing: false,
+    answering: null,
+    adopted: null,
+    answererLocal: false,
+    answererChosen: false,
+    claudeAgainOwed: null,
+  };
   try {
     const parsed = readBoundedJsonFileSync(filePath(), MAX_BYTES);
     if (parsed && parsed !== "unreadable" && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -157,6 +202,19 @@ function load(): Announced {
         }
         if (Object.hasOwn(r, "adopted") && typeof r.adopted === "string") {
           fresh.adopted = r.adopted;
+        }
+        if (Object.hasOwn(r, "answererLocal") && r.answererLocal === true) {
+          fresh.answererLocal = true;
+        }
+        if (Object.hasOwn(r, "answererChosen") && r.answererChosen === true) {
+          fresh.answererChosen = true;
+        }
+        if (
+          Object.hasOwn(r, "claudeAgainOwed") &&
+          typeof r.claudeAgainOwed === "string" &&
+          r.claudeAgainOwed.length <= 32
+        ) {
+          fresh.claudeAgainOwed = r.claudeAgainOwed;
         }
       }
     }
@@ -174,15 +232,26 @@ function persist(): Promise<boolean> {
   inFlight += 1;
   const run = writeQueue
     .then(async () => {
-      const { adopted, ...rest } = load();
-      const snapshot = { version: VERSION, ...rest, ...(adopted === null ? {} : { adopted }) };
+      const { adopted, answererLocal, answererChosen, claudeAgainOwed, ...rest } = load();
+      const snapshot = {
+        version: VERSION,
+        ...rest,
+        ...(adopted === null ? {} : { adopted }),
+        ...(answererLocal ? { answererLocal: true } : {}),
+        ...(answererChosen ? { answererChosen: true } : {}),
+        ...(claudeAgainOwed !== null ? { claudeAgainOwed } : {}),
+      };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
       unsaved = false;
       return true;
     })
     .catch((err: unknown) => {
       unsaved = true;
-      // The cost is one repeated notice after the next start, never silence.
+      // The cost is usually one repeated notice after the next start. Where a
+      // lost write would instead mean silence — the user's own switch to the
+      // local model, whose record is what lets a later change back to Claude
+      // be announced — the caller waits on this result and fails (#1123
+      // round 5 PD).
       console.error(
         `[tandem] ${LOCAL_MODEL_ANNOUNCED_FILE_NAME} could not be written (${
           err instanceof Error ? err.message : String(err)
@@ -204,9 +273,10 @@ function needsRetry(): boolean {
   return unsaved || inFlight > 0;
 }
 
-function record(change: Partial<Announced>): void {
+/** Change the record and queue its write; resolves to whether it landed. */
+function record(change: Partial<Announced>): Promise<boolean> {
   Object.assign(load(), change);
-  void persist();
+  return persist();
 }
 
 /** Keep the pending start-up notice's answering part current (module header). */
@@ -222,7 +292,18 @@ function dropStartupPart(part: keyof Announced): void {
   if (Object.keys(startupParts).length === 0) {
     startupParts = null;
     removeStartupNotice(SETTINGS_CHANGED_NOTICE_KEY);
+    return;
   }
+  // The waiting notice's text follows its parts: without the switch part it
+  // must no longer say chat is answered by a local model.
+  const waiting = getStartupNotices().find((n) => n.dedupKey === SETTINGS_CHANGED_NOTICE_KEY);
+  if (waiting) addStartupNotice({ ...waiting, message: startupMessage() });
+}
+
+function startupMessage(): string {
+  return startupParts && Object.hasOwn(startupParts, "answererLocal")
+    ? SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE
+    : SETTINGS_CHANGED_NOTICE;
 }
 
 /** Was commenting switched on by the user, or were they told it is on? */
@@ -289,7 +370,7 @@ export function finishFirstLitStart(): void {
 /** The first lit start found this model answering: take it as the baseline,
  *  and remember that the user has not yet been told which model that was. */
 export function recordBaselineAnswering(fingerprint: string): void {
-  record({ answering: fingerprint, adopted: fingerprint });
+  void record({ answering: fingerprint, adopted: fingerprint });
 }
 
 /** Replay key of the "this model was adopted at the first lit start" notice. */
@@ -307,7 +388,7 @@ export function baselineAdoptionPending(fingerprint: string): boolean {
  */
 export function announceBaselineAdopted(message: string): TandemNotification {
   return raise(BASELINE_ADOPTED_NOTICE_KEY, message, () => {
-    if (load().adopted !== null) record({ adopted: null });
+    if (load().adopted !== null) void record({ adopted: null });
   });
 }
 
@@ -336,7 +417,10 @@ function withdrawAdoptionNotice(): void {
  * record matches it at once. `withdrawKey` names a pending LIVE notice that
  * this change makes stale (the answering one names a model).
  */
-export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string): void {
+export function recordSetByUser(
+  change: Partial<Announced>,
+  withdrawKey?: string,
+): Promise<boolean> {
   if (withdrawKey !== undefined) removeStartupNotice(withdrawKey);
   if (typeof change.answering === "string") {
     refreshStartupAnswering(change.answering);
@@ -345,7 +429,14 @@ export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string
   // Their own On answers "your settings changed … switch commenting off" for
   // the commenting half: that part of a pending start-up notice is withdrawn.
   if (change.editing === true) dropStartupPart("editing");
-  record(change);
+  // Their own switch to the local model answers the start-up notice's "set
+  // who answers your chat back to Claude" half: that part is withdrawn, and so
+  // is a waiting "your chat is answered by Claude again" notice.
+  if (change.answererLocal === true) {
+    dropStartupPart("answererLocal");
+    removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  }
+  return record(change);
 }
 
 /** An own-window write that changed nothing recorded here: nothing to record,
@@ -410,7 +501,7 @@ export function announceLocalModelChange(
 export function announceStartupMismatch(part: Partial<Announced>): TandemNotification {
   if (Object.hasOwn(part, "answering")) withdrawAdoptionNotice();
   startupParts = { ...(startupParts ?? {}), ...part };
-  return raise(SETTINGS_CHANGED_NOTICE_KEY, SETTINGS_CHANGED_NOTICE, () => {
+  return raise(SETTINGS_CHANGED_NOTICE_KEY, startupMessage(), () => {
     // The parts as they stand NOW, not as they were when this was raised. Once
     // told which model answers, an earlier adoption is no longer pending.
     if (!startupParts) return;
@@ -432,7 +523,7 @@ export function recordAnsweringNone(dedupKey?: string): void {
   dropStartupPart("answering");
   const hadAdoption = load().adopted !== null;
   forgetAdoption();
-  if (load().answering !== null || hadAdoption) record({ answering: null });
+  if (load().answering !== null || hadAdoption) void record({ answering: null });
   // Nothing to change in memory, but an earlier clearing write may have failed:
   // the file could still name a model, and this is the next chance to fix it.
   else retryUnsavedRecord();
@@ -446,9 +537,72 @@ export function recordAnsweringNone(dedupKey?: string): void {
 export function recordEditingOff(dedupKey: string): void {
   removeStartupNotice(dedupKey);
   dropStartupPart("editing");
-  if (load().editing) record({ editing: false });
+  if (load().editing) void record({ editing: false });
   // A repeated Off: the earlier clearing write may have failed. Try it again.
   else retryUnsavedRecord();
+}
+
+/** Did the user choose the local model to answer chat, or were they told? */
+export function answererLocalWasAnnounced(): boolean {
+  return load().answererLocal;
+}
+
+/** Did the user CHOOSE the local model in Tandem's own window? */
+export function answererLocalWasChosen(): boolean {
+  return load().answererChosen;
+}
+
+/** Withdraw a waiting "answered by Claude again" notice, and forget that it
+ *  is owed: the local model answers again, however that came about. */
+export function withdrawAnswererClaudeNotice(): void {
+  removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  if (load().claudeAgainOwed !== null) void record({ claudeAgainOwed: null });
+}
+
+/** The cause of an "answered by Claude again" notice still owed, or null. */
+export function answererClaudeOwed(): string | null {
+  return load().claudeAgainOwed;
+}
+
+export function recordAnswererClaude(dedupKey: string): Promise<boolean> {
+  removeStartupNotice(dedupKey);
+  removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
+  dropStartupPart("answererLocal");
+  const r = load();
+  if (r.answererLocal || r.answererChosen || r.claudeAgainOwed !== null) {
+    return record({ answererLocal: false, answererChosen: false, claudeAgainOwed: null });
+  }
+  // A repeated switch: the earlier clearing write may have failed. Try again.
+  if (needsRetry()) return persist();
+  return Promise.resolve(true);
+}
+
+/**
+ * Chat is answered by Claude again although the record says the user chose
+ * the local model, and the user did not choose Claude in Tandem's own window
+ * (Bryan, 2026-11-12: "Announce it"). A warning of the existing kind, live and
+ * for replay. When one of Tandem's own windows was sent it, the record's
+ * `answererLocal` is cleared — unless `keepRecord` (a read that failed at
+ * start-up, which may be transient: the next clean start that reads "local"
+ * then restores the user's choice with no false "settings changed" warning).
+ * Until it is delivered the record keeps the choice, so a restart before any
+ * window connected announces it again.
+ */
+export function announceAnswererClaude(
+  message: string,
+  opts: { keepRecord: boolean; cause: string },
+): TandemNotification {
+  dropStartupPart("answererLocal");
+  // Owed durably until one of Tandem's own windows was sent it: a restart in
+  // between raises it again from the record (#1123 review round 3).
+  if (load().claudeAgainOwed !== opts.cause) void record({ claudeAgainOwed: opts.cause });
+  return raise(ANSWERER_CLAUDE_NOTICE_KEY, message, () => {
+    void record(
+      opts.keepRecord
+        ? { claudeAgainOwed: null }
+        : { answererLocal: false, answererChosen: false, claudeAgainOwed: null },
+    );
+  });
 }
 
 /** Wait for queued writes, the marker included. Tests only. */
