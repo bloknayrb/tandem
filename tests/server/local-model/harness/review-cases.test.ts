@@ -380,6 +380,14 @@ describe("cases the diff review found", () => {
       `**$45,000** is wrong: the difference is $35,000.`,
       `"$45,000" should be "$35,000".`,
       `"$45,000" should be: **$35,000**.`,
+      // Re-review of round 5, M1: italics, "~", a hedge, a bracket, a dash.
+      `"$45,000" should be *$35,000*.`,
+      `"$45,000" should be _$35,000_.`,
+      `"$45,000" should be ~$35,000.`,
+      `"$45,000" should be about $35,000.`,
+      `"$45,000" should be ($35,000).`,
+      `"$45,000" should be — $35,000.`,
+      `"$45,000" should be USD 35,000.`,
     ]) {
       expect(onMaint(reply).pass, reply).toBe(true);
     }
@@ -388,6 +396,10 @@ describe("cases the diff review found", () => {
         .pass,
     ).toBe(true);
 
+    const six = RUBRIC_TEXT.slice(
+      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
+      RUBRIC_TEXT.indexOf("7. WHAT"),
+    );
     // Item 3: a negation before the quotation still negates the verdict after it.
     for (const reply of [
       `I do not think "$45,000" is wrong.`,
@@ -399,14 +411,23 @@ describe("cases the diff review found", () => {
     ]) {
       expect(onMaint(reply).failureMode, reply).toBe("NO_QUOTE");
     }
-    // "No doubt" is not a negation of the verdict.
-    expect(onMaint(`There is no doubt "$45,000" is wrong.`).pass).toBe(true);
+    // Intensifiers shaped like a negation are not one (re-review of round 5, M2).
+    for (const reply of [
+      `There is no doubt "$45,000" is wrong.`,
+      `There is no question "$45,000" is wrong.`,
+      `There is no denying "$45,000" is wrong.`,
+      `No wonder "$45,000" is wrong.`,
+      `Not only is "$45,000" wrong, the total is off too.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
+    // Known misjudgements of "should be", named in rubric §6.
+    expect(onMaint(`"$45,000" should be lower.`).pass).toBe(false);
+    expect(onMaint(`"$45,000" should be 'kept'.`).pass).toBe(true);
+    expect(six).toMatch(/should be\s+lower/);
+    expect(six).toMatch(/should be 'kept'/);
     // A known false fail of the step-over, named in rubric §6; the reader passes it.
     expect(onMaint(`I don't doubt "$45,000" is wrong.`).failureMode).toBe("NO_QUOTE");
-    const six = RUBRIC_TEXT.slice(
-      RUBRIC_TEXT.indexOf("6. YOUR VERDICT"),
-      RUBRIC_TEXT.indexOf("7. WHAT"),
-    );
     expect(six).toMatch(/I don't doubt/);
   });
 

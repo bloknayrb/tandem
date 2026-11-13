@@ -187,7 +187,7 @@ These are determined by the harness design + first principles, independent of th
 
 One model per invocation. Results go to `probe/local-model-spike/runs/<run id>/`, which is gitignored.
 
-Before the first screen against an Ollama server, record whether its `/v1` endpoint sends any frame before the first token (a chunk with an empty or role-only `delta` and no `content`). The harness counts raw bytes, so on a server that does, a request that then wedges is scored rather than held (Known limits in `harness/report-core.ts`). In git-bash, with the model already loaded, look at the first `data:` line this prints:
+Before the first screen against an Ollama server, record whether its `/v1` endpoint sends any frame before the first token (a chunk with an empty or role-only `delta` and no `content`; a chunk carrying a `reasoning` field is not empty). The harness counts raw bytes, so on a server that does, a request that then wedges is scored rather than held (Known limits in `harness/report-core.ts`). In git-bash, with the model already loaded, look at the first `data:` line this prints:
 
 ```
 curl -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"<tag>","stream":true,"messages":[{"role":"user","content":"Say hello."}]}' | head -n 3

@@ -5,7 +5,7 @@
  * Bump RUBRIC_VERSION whenever the text below changes in meaning.
  */
 
-export const RUBRIC_VERSION = "2026-11-13.3";
+export const RUBRIC_VERSION = "2026-11-13.4";
 
 export const RUBRIC_TEXT = `RUBRIC ${RUBRIC_VERSION} — reading a local-model run
 
@@ -204,7 +204,8 @@ words, and it is wrong in both directions:
     "'$45,000' is wrong — just kidding", a quote followed by "?" that is a
     plain question or a verdict that it is right ("Is it '$45,000'?",
     "'$45,000'? Looks right to me."), and "not" before a quote that is the
-    right one ('The overrun is "$45,000", not "$275,000"');
+    right one ('The overrun is "$45,000", not "$275,000"'), and "should be"
+    followed by a quotation that is a verdict ("'$45,000' should be 'kept'");
   - it counts the target as quoted when its words, minus the final period,
     sit inside a longer sentence that carries on past them;
   - it PASSES a partial pair that meets the quote rule and does nothing
@@ -221,8 +222,10 @@ words, and it is wrong in both directions:
     after a negation of changing in its own clause even when the reply
     then offers it after all, a single-quoted run that holds an apostrophe
     ('landlord's approval are'), a comment that calls a quoted run wrong in
-    words its list does not hold or after a negation that does not negate
-    the verdict ("I don't doubt '$45,000' is wrong"), a critique that names nothing in the target, and a critique whose sentence
+    words its list does not hold, after a negation that does not negate
+    the verdict ("I don't doubt '$45,000' is wrong"), or with "should be"
+    followed by a word rather than a figure or a quotation ("should be
+    lower", "should be thirty-five thousand"), a critique that names nothing in the target, and a critique whose sentence
     also says "sorry", "yourself", "you'll need to" or "in the editor".
 Fail the first five unless the reply ALSO gives a usable rewrite or says what
 is wrong elsewhere; pass the last when it meets the quote rule. Give a reason

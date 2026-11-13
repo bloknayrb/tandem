@@ -578,7 +578,10 @@ describe("a run", () => {
       const slowModel = (secondMs: number) =>
         stubScript((_i, body) => {
           const done = toolMessages(body);
-          if (done >= 2) return { hang: [] };
+          // The clamp's timer is armed before this request arrives; moving the
+          // clock 1 ms here lets the run's wall time reach the deadline when it
+          // expires, as real time would, so the test does not lean on the slack.
+          if (done >= 2) return { hang: [], onRequest: () => vi.setSystemTime(Date.now() + 1) };
           return {
             ...TOOL_CALL,
             onRequest: () => vi.setSystemTime(Date.now() + (done === 0 ? 150_000 : secondMs)),
