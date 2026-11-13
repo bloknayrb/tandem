@@ -284,7 +284,16 @@ describe("R1.1: a default poll reads what its caller holds or may claim, and no 
     expect(registered).toHaveLength(1);
     expect(entry?.sinceSeq).toBeGreaterThanOrEqual(counterBefore);
     expect(entry?.sinceSeq).toBeLessThan(registered[0]?.seq as number);
-    expect(first.ownership).toEqual({ holding: [docA.id, docU.id].sort(), notYours: [docB.id] });
+    // `changed` (the change-notice PR): the setup's take of `a`, then this
+    // poll's own claim of `u`.
+    expect(first.ownership).toEqual({
+      holding: [docA.id, docU.id].sort(),
+      notYours: [docB.id],
+      changed: [
+        { documentId: docA.id, change: "gained", cause: "you opened or created it" },
+        { documentId: docU.id, change: "gained", cause: "a poll of yours claimed it" },
+      ],
+    });
 
     const second = await b.poll();
     expect(itemIds(second)).toEqual(["cb"]);
@@ -374,7 +383,8 @@ describe("R1.2, R1.9, R1.10: a named poll of a document that is not the caller's
     const before = positions(a.cursor);
     const named = await a.poll(docB.id);
     expect(itemIds(named)).toEqual([]);
-    expect(named.ownership).toEqual({ holding: [docA.id], notYours: [docB.id] });
+    // `changed` is empty: A's earlier polls drained the setup's take of `a`.
+    expect(named.ownership).toEqual({ holding: [docA.id], notYours: [docB.id], changed: [] });
     expect(named.summary).toBe(`${EXCLUDED_NAMED(docB.id)} No new actions.`);
     expect(named.summary).not.toMatch(/not open|No document is open/);
     expect(positions(named.cursor)).toEqual(before);

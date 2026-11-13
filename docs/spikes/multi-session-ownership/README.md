@@ -223,7 +223,7 @@ Every change goes through `setDocOwner(documentId, next | null, kind, cause, cal
 
 1. if the previous owner was a record other than `next`, run the **handover** (§6.3) and record the loss on that record (§5.3);
 2. update `ownerByDoc`, stamping `since` and `sinceSeq`;
-3. queue a change notice for both records, drained by their next poll (§6.6);
+3. queue a change notice for each record that gains or loses the document and still exists, none when the holder stays the same record; a tab close, which does not run this composite, queues one for the record that held the document (§6.6; *amended by the change-notice PR's brief, Requirement 2*);
 4. publish through `broadcastOpenDocs` (`src/server/documents/registry.ts:162`), never an ad-hoc broadcast;
 5. **wake or start** the new owner if it has waiting items there (§4.4).
 
@@ -374,7 +374,7 @@ A tab close runs steps 1 to 3; reopening D starts from the default rule with not
 
 ### 6.6 What the response says about ownership
 
-`tandem_checkInbox` gains `ownership: {holding: [documentId], notYours: [documentId], changed: [{documentId, change: "gained" | "lost", cause}]}`. `holding` is computed per poll; `changed` drains the record's change notices (§4.3 step 3). Loss records (§5.3) are separate and outlive the drain. Nothing here is read from or written into the cursor.
+`tandem_checkInbox` gains `ownership: {holding: [documentId], notYours: [documentId], changed: [{documentId, change: "gained" | "lost", cause}]}`. `holding` is computed per poll and is the truth; `changed` is an explanation of past changes to it that may be incomplete, and a notice is drained by the first poll of its record that returns (§4.3 step 3; *amended by the change-notice PR's brief, Requirements 1, 4 and 5*). Loss records (§5.3) are separate and outlive the drain. Nothing here is read from or written into the cursor.
 
 ### 6.7 Delivery rounds
 
@@ -486,7 +486,7 @@ Within `startOrWake`, `wakeOwedAcrossSpawns` is set in exactly two places (today
 - **Other records:** a payload-free `ownership` frame on `/api/wake`, and a payload-free `ownership-changed` event on every push stream, mapped or not (§9.1), so Assign, Release or a return also wakes a direct-HTTP terminal whose shim is unmapped. Before Phase 3 a wake socket is unscoped, so every armed session gets the frame, polls, and finds nothing unless it is the new owner.
 - **Licence.** Neither frame enters `pushEvent`, so neither inherits its revocation. Each writer calls `aiRefusal()` before writing and, on a refusal, ends the socket (4403) or the stream exactly as the revocation does.
 - **The inventory.** `tests/docs/ai-surface-inventory-claims.test.ts` gains derivations over these two writers and over every `sendTurn` caller, so a new path that skips the check fails the test (R3.2).
-- Pull is the backstop: the change is in the next poll's `ownership.changed`.
+- Pull is the backstop: the change is in the next poll's `holding`, and explained in its `ownership.changed` unless the explanation was lost (*amended by the change-notice PR's brief*).
 
 ### 8.7 A run that never binds (R2.5)
 

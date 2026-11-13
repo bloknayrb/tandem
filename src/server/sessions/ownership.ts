@@ -24,16 +24,18 @@
  * scope PR: the inbox's one door (`inboxOwnership`: a poll's scope, its
  * claims and `holding`) and the stuck-write release in `inboxScopeOf`. The
  * notice-rule PR: the one reader of `handoverSeq` (`settledThrough` on a
- * poll's scope). Still to come, named by content as in the plan: the
- * change-notice PR (change notices and `changed`), and the chat PR (chat
- * ownership, and per-document and per-message delivery rounds).
+ * poll's scope). The change-notice PR: change notices (step 3 of the
+ * composite, and the tab close's notice), queued per record and drained by
+ * a poll through `inboxOwnership` (`ownership.changed`). Still to come,
+ * named by content as in the plan: the chat PR (chat ownership, and
+ * per-document and per-message delivery rounds).
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
  *
  * **Nearly a leaf.** It imports the flag, one helper from `sessions/context.ts`,
- * the operation queue, two names from `mcp/transport-registry.ts` and
- * `node:crypto` — never the document registry or anything under `documents/`,
+ * the operation queue, two names from `mcp/transport-registry.ts`,
+ * `crossBasename` from `src/shared` (dependency-free) and `node:crypto` — never the document registry or anything under `documents/`,
  * so every route and service that calls it keeps its module graph. Callers
  * pass document ids in.
  *
@@ -42,6 +44,7 @@
  */
 
 import { randomInt } from "node:crypto";
+import { crossBasename } from "../../shared/cross-basename.js";
 import { CLAUDE_DESKTOP_CLIENT_NAME, claudeIdKey } from "../mcp/transport-registry.js";
 import { ownershipEnabled } from "../ownership-flag.js";
 import { runOutsideMcpContext } from "./context.js";
@@ -58,6 +61,46 @@ export type RecordKind = "tandem" | "claude" | "bridge" | "http" | "local";
 
 /** What the badge may call a record (ownership design §10.3): a closed list. */
 export type DisplayKind = "Tandem's Claude" | "terminal" | "Claude Desktop" | "other app";
+
+/**
+ * The cause words of `tandem_checkInbox`'s `ownership.changed` (the
+ * change-notice PR, Requirement 7): a closed set, each a past-tense fact in
+ * plain English that reads by itself. Their descriptions live in
+ * `ownership-refusal.ts` (`CHANGE_CAUSE_FACTS`), a `Record` over this type,
+ * and the output schema's enum is this list, so no word can be queued that
+ * the schema does not list. A cause no production path makes today (Tandem's
+ * Claude's gains and losses, its take-back, a chat post's claim, Release,
+ * Assign) is not here: each joins with the PR that produces it. None equals
+ * an internal {@link OwnershipChangeCause}.
+ */
+export const CHANGE_CAUSES = [
+  "your write claimed it",
+  "a poll of yours claimed it",
+  "you opened or created it",
+  "another session took it",
+  "its tab was closed",
+  "Tandem stopped counting this session as attached",
+] as const;
+export type ChangeCause = (typeof CHANGE_CAUSES)[number];
+
+/** One queued change notice: `ownership.changed`'s three keys, and a closed document's name. */
+export interface ChangeNotice {
+  readonly documentId: string;
+  readonly change: "gained" | "lost";
+  readonly cause: ChangeCause;
+  /**
+   * A tab close's notice only: the document's file name at the close
+   * (Requirement 8.3), for the summary. **Never part of a `changed` entry.**
+   * Freed with the notice.
+   */
+  readonly closedName?: string;
+}
+
+/**
+ * At most this many change notices per record; past it the oldest go.
+ * `changed`'s description names the number (`output-schemas.ts` reads it).
+ */
+export const MAX_CHANGE_NOTICES = 100;
 
 /** What can move a document (ownership design §4.1). */
 export type OwnershipKind = "default" | "claimed" | "opened" | "assigned";
@@ -161,6 +204,15 @@ export interface OwnerRecord {
   graceArmedAt?: number;
   /** Set once the grace expired; cleared when the record is attached again. */
   lapsed?: boolean;
+  /**
+   * The record's change notices not yet drained, oldest first (the
+   * change-notice PR). Shared by everything that polls as this record.
+   * **Not counted by `recordHoldsState`** (Ruling 6): a lapse queues one for
+   * the lapsing record, and counting it would keep a dead record alive. Goes
+   * with the record, so a record created again under the same owner id
+   * starts with none. At most {@link MAX_CHANGE_NOTICES}.
+   */
+  changeNotices?: ChangeNotice[];
 }
 
 /** One document's ownership entry (ownership design §2). No entry means unowned. */
@@ -228,6 +280,7 @@ let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
 let compositeObserver: ((step: CompositeStep, documentId: string) => void) | undefined;
+let noticeFaultForTests: ((at: "change" | "close", documentId: string) => void) | undefined;
 let graceMs = DEFAULT_GRACE_MS;
 const lastLogAt = new Map<string, number>();
 
@@ -458,9 +511,13 @@ export function getOwnerRecord(ownerId: string): Readonly<OwnerRecord> | undefin
 
 /**
  * Whether a record holds anything a lapse must move out (ownership design
- * §3.4). **The one place each later PR adds its per-record state** (change
- * notices and chat in 2). Loss records are per document (`lossByDoc`) and a
- * lapse moves none, so they are not counted here. A detached record that holds
+ * §3.4). **The one place a later PR adds per-record state that a lapse must
+ * move out** (chat, in the chat PR). Change notices are per-record state that
+ * is NOT counted here and that a lapse does not move (Ruling 6 of the
+ * change-notice PR): a record whose only state is queued notices is deleted,
+ * and ranked under the detached cap, as one holding nothing is, and its
+ * notices go with it. Loss records are per document (`lossByDoc`) and a
+ * lapse moves none, so they are not counted here either. A detached record that holds
  * state always has a grace running, even after an earlier lapse, so whatever
  * it picked up since is returned in turn; a record that holds none is not
  * re-armed. It never decides whether a record is kept: a lapse moves the
@@ -651,8 +708,11 @@ function enforceDetachedCap(): void {
 
 /**
  * The record's client went away (ownership design §3.4): each document it holds
- * goes to the default rule. Its chat follows in the chat PR, and each later PR moves
- * its own per-record state out here too. A lapse records no blocking loss. A
+ * goes to the default rule. Its chat follows in the chat PR. Its change
+ * notices are not moved: each move queues a `lost` notice for it, read only
+ * if its record survives (a transport still registered); a record deleted
+ * once its documents move takes its notices with it. A lapse records no
+ * blocking loss. A
  * record with no registered transport is then deleted; one whose transport is
  * still registered keeps its label and may claim again like anyone — a grace
  * starts again if it does while still detached (`recompute`).
@@ -726,9 +786,14 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
  * the absence of an entry) and step 5's seam; 1c adds step 1's loss record.
  * Step 1's handover (`handOver`) is decided where the design puts it and
  * runs as soon as the entry is written, in the same synchronous run, so a
- * change that fails before its entry hands nothing over. Step 3 (change
- * notices) is the change-notice PR's, step 4 (publishing owner fields through
- * `broadcastOpenDocs`) PR 5's.
+ * change that fails before its entry hands nothing over. Step 3 queues change
+ * notices (the change-notice PR): a `gained` for the record that holds the
+ * document afterwards and a `lost` for the one that held it before, each
+ * only if that record exists now, is not Tandem's Claude and the cause has a
+ * word (`changeCauseOf`); nothing when the holder stays the same record. It
+ * has its own catch, so a throw there loses the notice (the change stands
+ * and `holding` stays right) and steps 4 and 5 still run. Step 4 (publishing
+ * owner fields through `broadcastOpenDocs`) is PR 5's.
  *
  * **A write's claim reaches this only once its outcome is known** (PR 2a,
  * `settleWriteClaim`): a write that is refused on its arguments, or throws,
@@ -784,8 +849,12 @@ export function setDocOwner(
       });
     }
     if (leavesRecord) handOver(documentId);
-    // Step 3, change notices (the change-notice PR), and step 4, publishing (PR 5): no body yet.
+    // Step 3, change notices. Its own catch: the change above stands.
     compositeObserver?.("notices", documentId);
+    if (previousId !== next?.ownerId) {
+      queueChangeNotices(documentId, previousId, next?.ownerId, cause);
+    }
+    // Step 4, publishing (PR 5): no body yet.
     compositeObserver?.("publish", documentId);
     // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b's.
     compositeObserver?.("wake", documentId);
@@ -842,16 +911,22 @@ export function applyUserOpenDefaultToDocuments(documentIds: Iterable<string>): 
  * the entry is gone; the document is still registered and its annotations
  * are still readable at this point (`closeDocumentById`).
  */
-export function onDocumentClosed(documentId: string): void {
+export function onDocumentClosed(documentId: string, filePath?: string): void {
   if (!ownershipEnabled()) return;
   total("onDocumentClosed", undefined, () => {
-    const held = ownerByDoc.has(documentId);
+    const heldBy = ownerByDoc.get(documentId)?.ownerId;
+    const held = heldBy !== undefined;
     ownerByDoc.delete(documentId);
     lossByDoc.delete(documentId);
     for (const pending of [...pendingClaims]) {
       if (pending.documentId === documentId) pendingClaims.delete(pending);
     }
     if (held) handOver(documentId);
+    // The close's change notice (the change-notice PR, Ruling 8): after the
+    // handover and in its own catch, so it can never skip the handover. It
+    // carries the file name the document had, for the summary; the basename
+    // is computed here, flag on only.
+    if (held) queueCloseNotice(documentId, heldBy, filePath);
   });
 }
 
@@ -869,6 +944,87 @@ function lossCauseOf(cause: OwnershipChangeCause, nextOwnerId: string): LossCaus
   if (cause === "take-back") return "taken back";
   if (cause === "take") return nextOwnerId === TANDEM_OWNER_ID ? "taken back" : "taken";
   return undefined;
+}
+
+/**
+ * The cause word an ownership change gives the record it reaches, or
+ * undefined when it gives none: a cause no production path makes today
+ * (`user-open`, `take-back`), the clearing of a stale entry (its record is
+ * gone), or a combination no path makes (a claim never moves a document away
+ * from an existing record). Undefined queues nothing, so no word outside the
+ * schema can be queued.
+ */
+function changeCauseOf(
+  cause: OwnershipChangeCause,
+  change: "gained" | "lost",
+): ChangeCause | undefined {
+  if (change === "gained") {
+    if (cause === "claim") return "your write claimed it";
+    if (cause === "poll-claim") return "a poll of yours claimed it";
+    if (cause === "take") return "you opened or created it";
+    return undefined;
+  }
+  if (cause === "take") return "another session took it";
+  if (cause === "lapse") return "Tandem stopped counting this session as attached";
+  return undefined;
+}
+
+/** Fixed text: nothing from the error, no record and no document. */
+const NOTICES_FAILED =
+  "[ownership] a document changed hands but its change notice could not be queued; the change stands";
+
+/** The record a notice may reach: one that exists and is not Tandem's Claude (PR 3b's). */
+function noticeRecord(ownerId: string | undefined): OwnerRecord | undefined {
+  const record = ownerId === undefined ? undefined : records.get(ownerId);
+  return record && record.recordKind !== "tandem" ? record : undefined;
+}
+
+/** Append a notice to a record's queue, dropping the oldest past the cap. */
+function pushNotice(record: OwnerRecord, notice: ChangeNotice): void {
+  const queue = record.changeNotices ?? [];
+  queue.push(notice);
+  if (queue.length > MAX_CHANGE_NOTICES) queue.splice(0, queue.length - MAX_CHANGE_NOTICES);
+  record.changeNotices = queue;
+}
+
+/** Step 3 of the composite (see `setDocOwner`). Never throws. */
+function queueChangeNotices(
+  documentId: string,
+  previousId: string | undefined,
+  nextId: string | undefined,
+  cause: OwnershipChangeCause,
+): void {
+  try {
+    noticeFaultForTests?.("change", documentId);
+    for (const [ownerId, change] of [
+      [previousId, "lost"],
+      [nextId, "gained"],
+    ] as const) {
+      const record = noticeRecord(ownerId);
+      const word = changeCauseOf(cause, change);
+      if (record && word !== undefined) pushNotice(record, { documentId, change, cause: word });
+    }
+  } catch {
+    logLimited("notices-failed", NOTICES_FAILED);
+  }
+}
+
+/** The tab close's notice for the record that held the document. Never throws. */
+function queueCloseNotice(documentId: string, heldBy: string, filePath: string | undefined): void {
+  try {
+    noticeFaultForTests?.("close", documentId);
+    const record = noticeRecord(heldBy);
+    if (!record) return;
+    const name = filePath === undefined ? "" : crossBasename(filePath);
+    pushNotice(record, {
+      documentId,
+      change: "lost",
+      cause: "its tab was closed",
+      ...(name !== "" ? { closedName: name } : {}),
+    });
+  } catch {
+    logLimited("notices-failed", NOTICES_FAILED);
+  }
 }
 
 /**
@@ -1158,6 +1314,31 @@ export interface InboxPollScope {
    * reader of `handoverSeq`.** 0 while ownership is off.
    */
   settledThrough(documentId: string): number;
+  /**
+   * The caller's change notices not yet drained, oldest first, as copies
+   * (the change-notice PR). Changes nothing. Empty for a caller with no
+   * record, and while ownership is off.
+   */
+  changes(): readonly ChangeNotice[];
+  /**
+   * **The drain point**: remove the caller's whole queue and return it, in
+   * one swap (a throw cannot half-drain it). A poll calls it once, after its
+   * claims, and reads `holding` right after, with no ownership change
+   * between (Requirement 3.2). Empty for a caller with no record.
+   */
+  drainChanges(): InboxChangeBatch;
+  /**
+   * Put a drained batch back, for a poll that threw after its drain point
+   * (Requirement 4.2): before every notice queued since, in its order, then
+   * the cap (oldest dropped). Nothing if the record the batch came from is
+   * gone or was created again (a new record never inherits). Never throws.
+   */
+  giveBack(batch: InboxChangeBatch): void;
+}
+
+/** What a poll drained (`InboxPollScope.drainChanges`). */
+export interface InboxChangeBatch {
+  readonly notices: readonly ChangeNotice[];
 }
 
 /** What applying a poll's claim came to (`InboxPollScope.claim`). */
@@ -1170,7 +1351,13 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   claim: (): InboxClaimOutcome => "refused",
   holding: () => [],
   settledThrough: () => 0,
+  changes: () => [],
+  drainChanges: () => ({ notices: [] }),
+  giveBack: () => {},
 });
+
+/** Which record each drained batch came from, so a give-back reaches only that record. */
+const drainedFrom = new WeakMap<InboxChangeBatch, OwnerRecord>();
 
 /** One of the poll claim's commit-time checks, for {@link setInboxClaimCheckForTests}. */
 export type InboxClaimCheck = "claimable" | "open" | "unowned" | "record" | "scope";
@@ -1253,6 +1440,32 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
     },
     holding: () => (callerId === undefined ? [] : heldDocumentIds(callerId)),
     settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,
+    changes: () =>
+      (callerId === undefined ? undefined : records.get(callerId))?.changeNotices?.map((n) => ({
+        ...n,
+      })) ?? [],
+    drainChanges: () => {
+      const record = callerId === undefined ? undefined : records.get(callerId);
+      const batch: InboxChangeBatch = { notices: record?.changeNotices ?? [] };
+      if (record) {
+        record.changeNotices = undefined;
+        drainedFrom.set(batch, record);
+      }
+      return batch;
+    },
+    giveBack: (batch) => {
+      try {
+        const record = drainedFrom.get(batch);
+        if (!record || records.get(record.ownerId) !== record || batch.notices.length === 0) {
+          return;
+        }
+        const queue = [...batch.notices, ...(record.changeNotices ?? [])];
+        if (queue.length > MAX_CHANGE_NOTICES) queue.splice(0, queue.length - MAX_CHANGE_NOTICES);
+        record.changeNotices = queue;
+      } catch {
+        logLimited("notices-failed", NOTICES_FAILED);
+      }
+    },
   };
   return scope;
 }
@@ -1455,6 +1668,8 @@ export function ownershipSnapshotForTests(): {
   answerers: number;
   queuedDocuments: number;
   pendingClaims: number;
+  /** Each record's queued change notices, by owner id (records with none are left out). */
+  changeNotices: Array<[string, ChangeNotice[]]>;
 } {
   return {
     transportMode,
@@ -1466,6 +1681,9 @@ export function ownershipSnapshotForTests(): {
     answerers: answererByItem.size,
     queuedDocuments: docOpQueueSizeForTests(),
     pendingClaims: pendingClaims.size,
+    changeNotices: [...records.values()]
+      .filter((r) => (r.changeNotices?.length ?? 0) > 0)
+      .map((r) => [r.ownerId, (r.changeNotices ?? []).map((n) => ({ ...n }))]),
   };
 }
 
@@ -1495,6 +1713,17 @@ export function setCompositeObserverForTests(
  */
 export function setLossForTests(documentId: string, ownerId: string, cause: LossCause): void {
   lossByDoc.set(documentId, { ownerId, cause });
+}
+
+/**
+ * Make change-notice queueing throw, at step 3 of the composite
+ * (`"change"`) or at the tab close (`"close"`): `fault` runs first and may
+ * throw. Undefined clears it.
+ */
+export function setChangeNoticeFaultForTests(
+  fault: ((at: "change" | "close", documentId: string) => void) | undefined,
+): void {
+  noticeFaultForTests = fault;
 }
 
 /** Write a document's handover mark, which in production only a handover writes. */
@@ -1534,6 +1763,7 @@ export function resetOwnershipForTests(): void {
   answererByItem.clear();
   pendingClaims.clear();
   compositeObserver = undefined;
+  noticeFaultForTests = undefined;
   claimCheckForTests = undefined;
   scopeReadForTests = undefined;
   resetDocOpQueuesForTests();

@@ -23,7 +23,13 @@
  * because the decision that produces them is.
  */
 
-import type { HolderView, LossCause, OwnershipRefusalReason } from "./ownership.js";
+import {
+  type ChangeCause,
+  type HolderView,
+  type LossCause,
+  MAX_CHANGE_NOTICES,
+  type OwnershipRefusalReason,
+} from "./ownership.js";
 
 /** Which of the two `default` / `claimed` sentences applies (ownership design §5.3). */
 export type RefusalFamily = "answer" | "write";
@@ -145,6 +151,56 @@ export function inboxExcludedSomeNote(names: readonly string[], activityExcluded
 
 /** The flag-on `ownership.notYours` field's description. */
 export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): no comments, thread replies or accept/dismiss responses on them were returned (${CHAT_UNSCOPED_ANY}), and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`;
+
+/**
+ * What each cause word of `ownership.changed` states (the change-notice PR,
+ * Requirement 7, Ruling 10): only what happened, in the past tense. Never
+ * the document's state now (the taker may have lapsed since, the document
+ * may be held again or closed), never an instruction, never who another
+ * session is, never that the user chose. The lapse fact names no
+ * destination. A `Record` over {@link ChangeCause}, so a cause word with no
+ * fact does not compile.
+ */
+export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.freeze({
+  "your write claimed it": "a write of yours claimed it",
+  "a poll of yours claimed it": "a tandem_checkInbox poll of yours claimed it",
+  "you opened or created it":
+    "an open or create of yours (tandem_open, tandem_scratchpad) made it yours",
+  "another session took it": "another session opened or created it and took it",
+  "its tab was closed": "its tab was closed",
+  "Tandem stopped counting this session as attached":
+    "Tandem stopped counting this session as attached, and this session stopped holding it",
+});
+
+/** The flag-on `ownership.changed` field's description (Requirement 1.3, Ruling 10). */
+export const CHANGED_FIELD_DESCRIPTION = `Changes, oldest first, to which documents this session held, since the last poll that returned them. \`holding\` is the truth: when \`changed\` and \`holding\` disagree, \`holding\` is right. \`changed\` only explains past changes to \`holding\`, and may be incomplete: after Tandem restarts; after a poll's response did not arrive once its entries were taken from the list (an error in Tandem after the poll ran, rejection by the server or by the client, or loss in transit); past the most recent ${MAX_CHANGE_NOTICES} entries; when recording a change failed; and when Tandem forgot this session and later counted it again under the same identity. Everything that polls as this session (several connections, or agents sharing one) shares one list, so whichever polls first gets the explanation. A poll that names a documentId reports changes on every document, so an entry may name a document that neither \`holding\` nor \`notYours\` mentions. It does not change what this session may do; \`notYours\`, the summary's other sentences and refusals say what it may do.`;
+
+/** `changed[].change`'s description. */
+export const CHANGE_FIELD_DESCRIPTION =
+  '"gained": this session held the document after the change and not before; "lost": it held it before and not after';
+
+/** `changed[].cause`'s description: each word with its fact. */
+export const CAUSE_FIELD_DESCRIPTION = `What happened, as a past-tense fact. ${Object.entries(
+  CHANGE_CAUSE_FACTS,
+)
+  .map(([word, fact]) => `"${word}": ${fact}`)
+  .join("; ")}`;
+
+/**
+ * The summary's one sentence of facts about documents this session lost to
+ * a take or a tab close (Requirement 8, Ruling 11): each named with its last
+ * cause, up to {@link INBOX_EXCLUDED_NAMES_SHOWN}, the rest counted. No
+ * instruction follows it, so it cannot contradict the exclusion texts. The
+ * handler appends it at the very end of the summary.
+ */
+export function inboxLostNote(
+  items: ReadonlyArray<{ name: string; cause: "another session took it" | "its tab was closed" }>,
+): string {
+  const shown = items.slice(0, INBOX_EXCLUDED_NAMES_SHOWN);
+  const more = items.length - shown.length;
+  const list = shown.map((item) => `${item.name} (${item.cause})`).join(", ");
+  return ` You stopped holding ${list}${more > 0 ? ` and ${more} more` : ""}.`;
+}
 
 const RESTART = " If Tandem was updated while this terminal was open, restart this terminal.";
 const DEFAULTED =

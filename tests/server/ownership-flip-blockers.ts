@@ -94,7 +94,15 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "`ownership.notYours` in tandem_checkInbox tells any local MCP client that a document is " +
       "not its to answer (the named one, or on a default poll every open document it left out) (design §11.3's holder exposure, accepted by Bryan 2026-11-05, " +
-      "decision 4). It is not yet in docs/security.md's register.",
+      "decision 4). Since the change-notice PR, `ownership.changed` and the summary's loss " +
+      "sentence also tell it that another session's open took a document it held, without " +
+      "identifying that session: where `notYours` says only that another session 'may' be " +
+      "answering, `changed` says it definitely, and to within one poll interval. A " +
+      "'its tab was closed' entry tells it that some local actor (the user, or any process " +
+      "through POST /api/close) closed a tab it held. And anything presenting the same identity " +
+      "shares one queue, so any local process presenting a session's identity can drain the " +
+      "explanations meant for that session (a destructive read; `holding` is unaffected; within " +
+      "D4, coordination not security). It is not yet in docs/security.md's register.",
     closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
   },
   {
@@ -177,6 +185,41 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "`ownership-bundle-probe.mjs`'s `probeRefusal` is pinned by regex alone (the plan's flip " +
       "row, gate (c)).",
     closedBy: "A pin by behaviour.",
+  },
+  {
+    gap:
+      "Change-notice causes PR 3b owes (the change-notice PR, R7.2): 'taken back' (a lost entry " +
+      "when Tandem's Claude takes a document back), every gained entry for Tandem's Claude (the " +
+      "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
+      "present) and Tandem's Claude's lost entry when it stops being present. Each must follow " +
+      "Ruling 10 (a past-tense fact with no instruction, the change-notice PR's R7.3 and R7.4). " +
+      "Until then a session holding a document those paths move is told only through `holding`.",
+    closedBy: "PR 3b: the causes, with tests through their production paths.",
+  },
+  {
+    gap:
+      "Change-notice cause the chat PR owes (R7.2): a gained entry by a chat post's claim, a " +
+      "past-tense fact with no instruction (Ruling 10). Until then such a change is told only " +
+      "through `holding`.",
+    closedBy: "The chat PR: the cause, with a test through its production path.",
+  },
+  {
+    gap:
+      "Change-notice causes PR 5 owes (R7.2): lost by Release and by Assign, gained by Assign, " +
+      "each a past-tense fact with no instruction (Ruling 10); a released session is told only " +
+      "that the document was released, never that the user chose it (design §11.3). Until then " +
+      "such a change is told only through `holding`.",
+    closedBy: "PR 5: the causes, with tests through their production paths.",
+  },
+  {
+    gap:
+      "Whether Claude Code shows output-schema descriptions to a model is unverified (the " +
+      "change-notice PR): if it does not, a model sees only `changed`'s bare cause words and the " +
+      "summary sentence, not the description saying `holding` is the truth and `changed` may be " +
+      "incomplete.",
+    closedBy:
+      "A hand test on a real Claude Code session before the flip, recorded on #2358; if the " +
+      "descriptions are not shown, a decision on where that sentence goes.",
   },
   {
     gap:

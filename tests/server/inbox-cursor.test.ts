@@ -1224,12 +1224,13 @@ describe("no per-client state", () => {
     expect(awareness.match(/sessions\/ownership\.js/g)).toHaveLength(1);
     // The exclusion texts come from the refusal copy, whose module imports
     // only types from the ownership module (review round 1: the inbox texts
-    // carry the refusals' take guard). Those three builders and nothing else.
+    // carry the refusals' take guard). Those three builders, and the change
+    // notices' loss sentence (the change-notice PR), and nothing else.
     const fromCopy = [
       ...awareness.matchAll(/import \{([^}]*)\} from "\.\.\/sessions\/ownership-refusal\.js";/g),
     ];
     expect(fromCopy.map((m) => m[1]?.replace(/\s+/g, " ").trim())).toEqual([
-      "inboxExcludedAllNote, inboxExcludedNamedNote, inboxExcludedSomeNote,",
+      "inboxExcludedAllNote, inboxExcludedNamedNote, inboxExcludedSomeNote, inboxLostNote,",
     ]);
     expect(awareness.match(/sessions\/ownership-/g)).toHaveLength(1);
     const cursorModule = readFileSync("src/server/mcp/inbox-cursor.ts", "utf8");

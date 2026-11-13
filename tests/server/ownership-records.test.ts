@@ -340,8 +340,12 @@ describe("what a record holds", () => {
       graceTimer: setTimeout(() => {}, 0),
       graceArmedAt: 0,
       lapsed: true,
+      changeNotices: [],
     };
+    // `changeNotices` (the change-notice PR): NOT counted by
+    // recordHoldsState (Ruling 6), pinned by the next test.
     expect(Object.keys(full).sort()).toEqual([
+      "changeNotices",
       "clientName",
       "graceArmedAt",
       "graceTimer",
@@ -352,6 +356,15 @@ describe("what a record holds", () => {
       "recordKind",
     ]);
     clearTimeout(full.graceTimer);
+  });
+
+  it("queued change notices are not state: a record holding only notices holds nothing (Ruling 6)", () => {
+    register("claude:a");
+    setDocOwner("d", { ownerId: "claude:a", kind: "claimed" }, "claim", "claude:a");
+    setDocOwner("d", null, "lapse");
+    const record = getOwnerRecord("claude:a") as OwnerRecord;
+    expect(record.changeNotices?.length).toBe(2);
+    expect(recordHoldsState(record)).toBe(false);
   });
 
   it("holds state exactly while it holds a document", () => {
@@ -381,6 +394,7 @@ describe("reset", () => {
       answerers: 0,
       queuedDocuments: 0,
       pendingClaims: 0,
+      changeNotices: [],
     });
   });
 });
@@ -405,6 +419,7 @@ describe("flag off: nothing is ever created", () => {
       answerers: 0,
       queuedDocuments: 0,
       pendingClaims: 0,
+      changeNotices: [],
     });
   });
 });
