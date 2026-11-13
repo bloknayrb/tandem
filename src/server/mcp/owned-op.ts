@@ -522,10 +522,12 @@ export function callerOwnerInfo(
 
 /**
  * Where the caller stands on an open document for an inbox poll (ownership
- * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. For the scope PR's inbox
- * scope, which must not read `caller.ownerId` itself; nothing in production
- * calls it yet. `"neither"` while ownership is off (`inboxScopeOf`'s own
- * guard), and for a caller with no owner id or no owner record.
+ * design §6.2): `"holds"`, `"may-claim"` or `"neither"`. The tool-side name
+ * of the scope read. **The inbox does not use it**: `awareness.ts` may not
+ * import this file, so since the scope PR it reaches the same read through
+ * the inbox's own door in `sessions/ownership.ts`. Nothing in production calls
+ * this. `"neither"` while ownership is off (`inboxScopeOf`'s own guard), and
+ * for a caller with no owner id or no owner record.
  */
 export function inboxScope(caller: ToolCaller, documentId: string): InboxScope {
   return inboxScopeOf(documentId, caller.ownerId);

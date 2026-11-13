@@ -32,6 +32,12 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
+import { inboxOwnership } from "../sessions/ownership.js";
+import {
+  inboxExcludedAllNote,
+  inboxExcludedNamedNote,
+  inboxExcludedSomeNote,
+} from "../sessions/ownership-refusal.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
@@ -52,6 +58,7 @@ import {
 import { describeIssues, printableId } from "./inbox-log-format.js";
 import {
   checkInboxOutputShape,
+  checkInboxOwnershipShape,
   inboxChatMessageSchema,
   inboxUserReplySchema,
   userActionSchema,
@@ -622,6 +629,22 @@ function noDocumentInboxNote(requestedId: string | undefined): string {
     : "No document is open.";
 }
 
+/** Identity unless a test installed a corruptor (see `setInboxResponseCorruptorForTests`). */
+let responseCorruptorForTests: <T>(response: T) => unknown = (response) => response;
+
+/**
+ * Make the next responses fail the backstop schema, for tests of what a
+ * failed validation leaves behind. The corruptor's return value is only
+ * validated, never sent. No argument restores the identity.
+ */
+export function setInboxResponseCorruptorForTests(
+  corrupt: ((response: Record<string, unknown>) => unknown) | undefined,
+): void {
+  responseCorruptorForTests = corrupt
+    ? (response) => corrupt(response as Record<string, unknown>)
+    : (response) => response;
+}
+
 type DocumentStore = NonNullable<ReturnType<typeof getDocumentStore>>;
 
 /** The `activity` object `tandem_checkInbox` returns. */
@@ -745,13 +768,16 @@ function teeLegacyCommit(
   documentId: string,
   surfaced: StagedInboxLedger,
   replySurfaced: StagedReplyLedger,
+  /** Told of each entry that existed unacknowledged before this commit acknowledged it. */
+  ackedExisting: (entry: RegistryEntry) => void = () => {},
 ): void {
-  for (const [base, editedAt] of surfaced.staged()) {
-    deliveryRegistry.markAcked(deliveryRegistry.assign("a", documentId, base, editedAt));
-  }
-  for (const base of replySurfaced.staged()) {
-    deliveryRegistry.markAcked(deliveryRegistry.assign("r", documentId, base, 0));
-  }
+  const ack = (kind: "a" | "r", base: string, editedAt: number) => {
+    const known = deliveryRegistry.lookup(kind, base, editedAt);
+    if (known && !known.acked) ackedExisting(known);
+    deliveryRegistry.markAcked(deliveryRegistry.assign(kind, documentId, base, editedAt));
+  };
+  for (const [base, editedAt] of surfaced.staged()) ack("a", base, editedAt);
+  for (const base of replySurfaced.staged()) ack("r", base, 0);
 }
 
 /**
@@ -825,6 +851,87 @@ const INBOX_BUCKET_SCHEMAS = {
 
 /** The whole response, checked before anything is committed. Built once. */
 const checkInboxOutputSchema = z.object(checkInboxOutputShape);
+
+/**
+ * The same, for a tool registered with the `ownership` field (ownership on at
+ * registration; `inboxOwnership.responseField()`). Built once too; the
+ * handler picks between the two by what it advertised, never by a later
+ * read, so a response never carries a key its advertised schema forbids.
+ */
+const checkInboxOwnershipOutputSchema = z.object({
+  ...checkInboxOutputShape,
+  ...checkInboxOwnershipShape,
+});
+
+/** A poll's ownership scope (`inboxOwnership.begin`). */
+type PollScope = ReturnType<typeof inboxOwnership.begin>;
+
+/**
+ * What one poll registered and committed, per document, so it can be undone
+ * (the scope PR, R1.7; flag on only): the registry counter before the
+ * document's pass (every entry in its scope above that is this poll's: only a
+ * pass registers in a document scope, and the poll is synchronous), and the
+ * cursor-less ledger keys its commit wrote, with what each held before.
+ */
+interface PassLog {
+  counterBefore: Map<string, number>;
+  legacyWrites: Map<
+    string,
+    {
+      surfaced: Array<[string, number | undefined]>;
+      replies: Array<[string, boolean]>;
+    }
+  >;
+  /**
+   * Per document, entries that existed and were unacknowledged before this
+   * cursor-less poll's commit acknowledged them (`teeLegacyCommit`), so a
+   * refused claim can take the acknowledgement back.
+   */
+  ackedExisting: Map<string, RegistryEntry[]>;
+}
+
+/**
+ * Undo what this poll left on `documentId` (flag on only, R1.7): retire the
+ * registry entries its pass created there, so they hide nothing from the next
+ * reader, and put back the cursor-less ledger keys its commit wrote. Entries
+ * created by earlier polls, chat entries and hand-out tokens are untouched.
+ */
+function undoPassOn(
+  log: PassLog,
+  documentId: string,
+  options: { keepLedgers?: boolean } = {},
+): void {
+  const before = log.counterBefore.get(documentId);
+  if (before !== undefined) {
+    deliveryRegistry.retireWhere(documentId, (entry) => entry.seq > before);
+  }
+  // Acknowledgements this cursor-less poll made of entries that predated it
+  // (only re-owes).
+  for (const entry of log.ackedExisting.get(documentId) ?? []) {
+    deliveryRegistry.unacknowledge(entry);
+  }
+  log.ackedExisting.delete(documentId);
+  if (options.keepLedgers) return;
+  const writes = log.legacyWrites.get(documentId);
+  if (!writes) return;
+  for (const [key, prior] of writes.surfaced) {
+    if (prior === undefined) surfacedIds.delete(key);
+    else surfacedIds.set(key, prior);
+  }
+  for (const [key, had] of writes.replies) if (!had) replySurfacedIds.delete(key);
+  log.legacyWrites.delete(documentId);
+}
+
+/** {@link undoPassOn} for every document this poll touched. */
+function undoPass(log: PassLog): void {
+  for (const id of new Set([
+    ...log.counterBefore.keys(),
+    ...log.legacyWrites.keys(),
+    ...log.ackedExisting.keys(),
+  ])) {
+    undoPassOn(log, id);
+  }
+}
 
 /**
  * Drop log lines already written, keyed `(scope, id, editedAt)`, so a record
@@ -990,16 +1097,29 @@ interface DocumentLedgers {
 }
 
 /** A cursor-less pass: the shared ledgers, staged, mirrored into the registry on commit. */
-function legacyLedgers(documentId: string): DocumentLedgers {
+function legacyLedgers(documentId: string, log: PassLog | null): DocumentLedgers {
   const surfaced = new StagedInboxLedger(surfacedIds);
   const replySurfaced = new StagedReplyLedger(replySurfacedIds);
   return {
     surfaced,
     replySurfaced,
     commit: () => {
+      // Flag on only (`log` is null otherwise): what each key held before,
+      // so a claim not applied can put it back (R1.7).
+      if (log) {
+        log.legacyWrites.set(documentId, {
+          surfaced: [...surfaced.staged().keys()].map((key) => [key, surfacedIds.get(key)]),
+          replies: [...replySurfaced.staged()].map((key) => [key, replySurfacedIds.has(key)]),
+        });
+      }
       surfaced.commit();
       replySurfaced.commit();
-      teeLegacyCommit(documentId, surfaced, replySurfaced);
+      teeLegacyCommit(documentId, surfaced, replySurfaced, (entry) => {
+        if (!log) return;
+        const list = log.ackedExisting.get(documentId) ?? [];
+        list.push(entry);
+        log.ackedExisting.set(documentId, list);
+      });
     },
   };
 }
@@ -1257,6 +1377,14 @@ interface InboxDocumentsPass extends DocumentInbox {
    */
   readDocuments: Map<string, Set<number>>;
   /**
+   * Flag on: the documents this poll left out because they are not the
+   * caller's to answer (scope `"neither"`). Never read: no item collected,
+   * refreshed or registered, no store opened.
+   */
+  excluded: string[];
+  /** Flag on: the documents whose pass returned at least one item. */
+  yielded: Set<string>;
+  /**
    * Apply every read document's staged ledger writes and quiet-skip records.
    * Call only once the whole response has validated.
    */
@@ -1285,6 +1413,8 @@ function collectInboxDocuments(
   requestedId: string | undefined,
   modeState: ModeState,
   reader: ReaderCursor | null,
+  scope: PollScope,
+  log: PassLog,
 ): InboxDocumentsPass {
   // `getCurrentDoc` resolves only an OPEN document, so this is open or null.
   const activityDocumentId = requestedId ?? getCurrentDoc()?.id ?? null;
@@ -1307,6 +1437,8 @@ function collectInboxDocuments(
     unreadable: [],
     dropped: new Map(),
     readDocuments: new Map(),
+    excluded: [],
+    yielded: new Set(),
     commit: () => {
       for (const commit of commits) commit();
     },
@@ -1315,6 +1447,39 @@ function collectInboxDocuments(
     const isActivityDocument = id === activityDocumentId;
     // This reader's position in this document; null on a cursor-less poll.
     const view = reader ? viewOf(reader, id) : null;
+    // Ownership scope (flag on; the scope PR, design §6.2). Decided before
+    // the store is resolved, so an excluded document's store is never opened
+    // and it costs no collection work.
+    if (scope.scoped) {
+      const standing = scope.scopeOf(id);
+      if (standing === "neither") {
+        // Not this caller's to answer: not read, and on a default poll read
+        // as empty — its mark moves to the counter with nothing held, so the
+        // cursor never grows with another session's documents (R1.2). On a
+        // document another record holds, whatever the mark passes was
+        // registered for that owner, and the handover retires it (notices
+        // apart) whenever ownership moves. On one nobody holds (excluded while
+        // mid-write, under a blocking loss, or for a caller with no record) the
+        // only live entries are notices a handover kept and what a failed
+        // handover's inbox half left behind; the mark passes those without the
+        // retire step a read would take (ADR-054's scope amendment names this
+        // bound). A named poll leaves every position where it was.
+        pass.excluded.push(id);
+        if (view && requestedId === undefined) pass.readDocuments.set(id, new Set());
+        // Still named, its content empty: never "none is active" (R1.10).
+        if (isActivityDocument) pass.activity = { ...emptyActivity(), documentId: id };
+        continue;
+      }
+      if (standing === "unread") {
+        // The scope read itself failed: read as a pass that threw, so the
+        // reader keeps its position here and loses nothing it was owed.
+        pass.readAnyDocument = true;
+        pass.unreadable.push(id);
+        if (isActivityDocument) pass.activity = { ...emptyActivity(), documentId: id };
+        continue;
+      }
+      log.counterBefore.set(id, deliveryRegistry.counter);
+    }
     // Cursor polls: which registry entries this pass handed over, and which
     // ones `admit` refused (they stay owed — see `carryHeld`).
     const delivered = new Set<RegistryEntry>();
@@ -1342,7 +1507,7 @@ function collectInboxDocuments(
     };
     const ledgers: DocumentLedgers =
       view === null
-        ? legacyLedgers(id)
+        ? legacyLedgers(id, scope.scoped ? log : null)
         : {
             surfaced: new CursorInboxLedger(deliveryRegistry, id, view, delivered),
             replySurfaced: new CursorReplyLedger(deliveryRegistry, id, view, delivered),
@@ -1423,6 +1588,9 @@ function collectInboxDocuments(
         }
       }
     } catch (err) {
+      // Flag on: what this document's pass registered before it threw would
+      // otherwise hide its items from the next reader (R1.7).
+      if (scope.scoped) undoPassOn(log, id);
       if (requestedId !== undefined) throw err;
       console.error(`[Tandem] tandem_checkInbox could not read document ${id}:`, err);
       pass.unreadable.push(id);
@@ -1441,6 +1609,12 @@ function collectInboxDocuments(
     pass.userActions.push(...inbox.userActions);
     pass.userResponses.push(...inbox.userResponses);
     pass.userReplies.push(...inbox.userReplies);
+    if (
+      scope.scoped &&
+      inbox.userActions.length + inbox.userResponses.length + inbox.userReplies.length > 0
+    ) {
+      pass.yielded.add(id);
+    }
     if (refused > 0) {
       pass.dropped.set(id, refused);
     }
@@ -1810,8 +1984,16 @@ function collectCursorChat(view: ScopeView): UnreadChat {
  *    is now `received` (the only proof `answeredBy` accepts).
  * A fresh cursor acknowledges nothing.
  */
-function acknowledgeCursor(reader: ReaderCursor): void {
+function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
   for (const scope of deliveryRegistry.documentScopes()) {
+    // Flag on (the scope PR, R1.4): only documents in the caller's scope as
+    // it stands when the poll begins, and documents that are not open. A
+    // reader's mark passing another owner's entries never hides them from a
+    // fresh reader.
+    if (poll.scoped) {
+      const standing = poll.scopeOf(scope);
+      if (standing === "neither" || standing === "unread") continue;
+    }
     deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
   }
   if (reader.handOut !== undefined) deliveryRegistry.confirmHandOut(reader.handOut);
@@ -1925,6 +2107,13 @@ export function registerAwarenessTools(server: McpServer): void {
     }),
   );
 
+  // Ownership (the scope PR): whether this registration advertises the
+  // `ownership` field, decided once here and kept for every call, so the
+  // response and the backstop schema always match what `tools/list` said.
+  const ownershipField = inboxOwnership.responseField();
+  const inboxBackstopSchema = ownershipField
+    ? checkInboxOwnershipOutputSchema
+    : checkInboxOutputSchema;
   server.registerTool(
     "tandem_checkInbox",
     {
@@ -1944,7 +2133,9 @@ export function registerAwarenessTools(server: McpServer): void {
             'The `cursor` your previous tandem_checkInbox returned, passed back unchanged; "start" on your first poll. It acknowledges what that poll returned. Omitted, each item is returned once, shared by every caller that omits it',
           ),
       },
-      outputSchema: checkInboxOutputShape,
+      outputSchema: ownershipField
+        ? { ...checkInboxOutputShape, ...checkInboxOwnershipShape }
+        : checkInboxOutputShape,
       // #2294: with a cursor, a repeat writes nothing the first call did not
       // (every write follows from the cursor passed in) and returns what that
       // cursor is still owed. Without one the call is not idempotent, but a
@@ -1953,7 +2144,7 @@ export function registerAwarenessTools(server: McpServer): void {
       annotations: IDEMPOTENT_WRITE_TOOL,
     },
     withStructuredErrors(
-      withErrorBoundary("tandem_checkInbox", async ({ documentId, cursor }) => {
+      withErrorBoundary("tandem_checkInbox", async ({ documentId, cursor }, caller) => {
         // Stamped BEFORE the document check, deliberately. The fact being
         // recorded is "a model reached for the inbox" — the only signal in the
         // server written by a model rather than by a transport — and that is
@@ -1986,7 +2177,20 @@ export function registerAwarenessTools(server: McpServer): void {
         // cursor-less caller polls first, chat stamped read on return.
         const decoded = cursor ? decodeCursor(cursor) : null;
         const reader = decoded?.cursor ?? null;
-        if (reader) acknowledgeCursor(reader);
+
+        // Ownership scope (the scope PR; design §6.2). Flag off this is the
+        // unscoped answer and nothing below changes. Flag on, the caller's
+        // scope over the open documents is decided ONCE, here, with the
+        // poll's one clock reading, and serves the acknowledgement, the pass
+        // and the commit's claims alike. The caller is passed along unread.
+        const scope = inboxOwnership.begin(caller, getOpenDocs().keys(), performance.now());
+        const log: PassLog = {
+          counterBefore: new Map(),
+          legacyWrites: new Map(),
+          ackedExisting: new Map(),
+        };
+
+        if (reader) acknowledgeCursor(reader, scope);
 
         // PR #2225 review: NOTHING durable happens until the whole response
         // has validated. The documents' ledgers are staged, the chat is
@@ -2008,158 +2212,239 @@ export function registerAwarenessTools(server: McpServer): void {
         // `activity` — comes from `collectDocumentInbox`, whose per-record
         // filters (notes, private records, the Solo hold) are the same for
         // every document it reads.
-        const docs = collectInboxDocuments(requestedId, modeState, reader);
-        const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
+        // Flag on, anything that throws between the pass and the end of the
+        // commit would leave this poll's registry entries behind, hiding
+        // their items from the next reader (R1.7): undo them, then let the
+        // error reach the boundary as before.
+        try {
+          const docs = collectInboxDocuments(requestedId, modeState, reader, scope, log);
+          const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
 
-        // Bucket 3: user chat from CTRL_ROOM — on a cursor-less poll the unread
-        // messages, not yet marked read; on a cursor poll what this reader is owed.
-        const chat = reader ? collectCursorChat(reader.chat) : collectUnreadChat();
-        const chatMessages = chat.messages;
-        const nextCursorString = reader
-          ? encodeCursor(
-              nextCursor(reader, docs, chat.held, requestedId === undefined, chat.handOut),
-            )
-          : START_CURSOR;
+          // Bucket 3: user chat from CTRL_ROOM — on a cursor-less poll the unread
+          // messages, not yet marked read; on a cursor poll what this reader is owed.
+          const chat = reader ? collectCursorChat(reader.chat) : collectUnreadChat();
+          const chatMessages = chat.messages;
+          const nextCursorString = reader
+            ? encodeCursor(
+                nextCursor(reader, docs, chat.held, requestedId === undefined, chat.handOut),
+              )
+            : START_CURSOR;
 
-        // Reported mode is the two-state view of the same live read used for
-        // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
-        // to the default, matching the pre-WS-A2 `.catch(TANDEM_MODE_DEFAULT)`.
-        const mode = reportedMode(modeState);
+          // Reported mode is the two-state view of the same live read used for
+          // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
+          // to the default, matching the pre-WS-A2 `.catch(TANDEM_MODE_DEFAULT)`.
+          const mode = reportedMode(modeState);
 
-        // Build summary
-        const parts: string[] = [];
-        if (userActions.length > 0) {
-          const typeCounts: Record<string, number> = {};
-          for (const a of userActions) {
-            typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
+          // Build summary
+          const parts: string[] = [];
+          if (userActions.length > 0) {
+            const typeCounts: Record<string, number> = {};
+            for (const a of userActions) {
+              typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
+            }
+            const typeList = Object.entries(typeCounts)
+              .map(([t, n]) => `${n} ${t}${n > 1 ? "s" : ""}`)
+              .join(", ");
+            parts.push(`${userActions.length} new: ${typeList}`);
           }
-          const typeList = Object.entries(typeCounts)
-            .map(([t, n]) => `${n} ${t}${n > 1 ? "s" : ""}`)
-            .join(", ");
-          parts.push(`${userActions.length} new: ${typeList}`);
-        }
-        if (userResponses.length > 0) {
-          const statusCounts: Record<string, number> = {};
-          for (const r of userResponses) {
-            statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+          if (userResponses.length > 0) {
+            const statusCounts: Record<string, number> = {};
+            for (const r of userResponses) {
+              statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+            }
+            const statusList = Object.entries(statusCounts)
+              .map(([s, n]) => `${n} ${s}`)
+              .join(", ");
+            parts.push(statusList);
           }
-          const statusList = Object.entries(statusCounts)
-            .map(([s, n]) => `${n} ${s}`)
-            .join(", ");
-          parts.push(statusList);
-        }
-        if (userReplies.length > 0) {
-          parts.push(`${userReplies.length} new repl${userReplies.length > 1 ? "ies" : "y"}`);
-        }
-        if (chatMessages.length > 0) {
-          parts.push(
-            `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
+          if (userReplies.length > 0) {
+            parts.push(`${userReplies.length} new repl${userReplies.length > 1 ? "ies" : "y"}`);
+          }
+          if (chatMessages.length > 0) {
+            parts.push(
+              `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
+            );
+            parts.push(CHAT_ACK_DIRECTIVE);
+          }
+          let actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
+          // #2187: items from a background document are exactly the ones a
+          // follow-up call without `documentId` would aim at the WRONG document —
+          // a range-keyed write lands in the active one at another document's
+          // offsets. Named by file so no tandem_listDocuments round trip is needed.
+          const elsewhere = new Set(
+            [...userActions, ...userResponses, ...userReplies]
+              .map((item) => item.documentId)
+              .filter((id) => id !== activityDocumentId),
           );
-          parts.push(CHAT_ACK_DIRECTIVE);
-        }
-        let actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
-        // #2187: items from a background document are exactly the ones a
-        // follow-up call without `documentId` would aim at the WRONG document —
-        // a range-keyed write lands in the active one at another document's
-        // offsets. Named by file so no tandem_listDocuments round trip is needed.
-        const elsewhere = new Set(
-          [...userActions, ...userResponses, ...userReplies]
-            .map((item) => item.documentId)
-            .filter((id) => id !== activityDocumentId),
-        );
-        const labels = documentLabels([...elsewhere, ...docs.dropped.keys()], activityDocumentId);
-        if (elsewhere.size > 0) {
-          const names = [...elsewhere].map((id) => labels.get(id) ?? id);
-          actions +=
-            ` Some items are from ${activityDocumentId === null ? "open documents (none is active)" : "documents other than the active one"}: ${names.join(", ")}.` +
-            " Pass each item's documentId when acting on it.";
-        }
-        if (docs.unreadable.length > 0) {
-          const { unreadable } = docs;
-          actions += ` Could not read ${unreadable.length === 1 ? "document" : "documents"} ${unreadable.join(", ")}; ${unreadable.length === 1 ? "its" : "their"} items are missing from this poll (the error is in Tandem's log).`;
-        }
-        // PR #2225 review: refused records are counted, never described — the
-        // record is client-written and its text stays out of the response.
-        // They are retried on every poll, and they do not set `hasNew`: there
-        // is nothing in this response to act on.
-        for (const [id, n] of docs.dropped) {
-          actions += ` ${n} ${n === 1 ? "item" : "items"} in ${labels.get(id) ?? id} could not be returned (malformed record; details in Tandem's log).`;
-        }
-        if (chat.dropped > 0) {
-          actions += ` ${chat.dropped} chat ${chat.dropped === 1 ? "message" : "messages"} could not be returned (malformed record; details in Tandem's log).`;
-        }
-        // The summary never counts anything withheld. That is not a guarantee
-        // Claude cannot learn a held item exists: the cursor is plain encoded
-        // JSON, and once another reader has been handed an item the Solo hold
-        // then withholds, the cursor lists its number (and the document it is
-        // in) as held. Only items some reader was already given get a number,
-        // so notes and private records never appear there.
-        if (decoded && !decoded.recognised) {
-          actions +=
-            " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything not yet acknowledged.";
-        }
-        // Leads, so a model reading only the summary knows why the document
-        // buckets are empty. Not counted in `hasNew`: it is a state, not an ask.
-        const summary = docs.readAnyDocument
-          ? actions
-          : `${noDocumentInboxNote(requestedId)} ${actions}`;
-
-        const hasNew =
-          userActions.length > 0 ||
-          userResponses.length > 0 ||
-          userReplies.length > 0 ||
-          chatMessages.length > 0;
-
-        const response = {
-          summary,
-          hasNew,
-          mode,
-          // #1733: who last wrote the mode key. Diagnostic only — compare its
-          // `value` against `mode` above; under a lost concurrent tie they can
-          // disagree.
-          modeProvenance: readModeProvenance(),
-          storeReadOnly: isStoreReadOnly(),
-          userActions,
-          userResponses,
-          userReplies,
-          chatMessages,
-          activity,
-          cursor: nextCursorString,
-        };
-
-        // The backstop. With every client-written value admitted or narrowed
-        // above, a failure here is a server-built field — a code bug — so
-        // failing the poll and retrying everything next time is the right
-        // trade: nothing is committed, nothing stamped, the round stays open.
-        const checked = checkInboxOutputSchema.safeParse(response);
-        if (!checked.success) {
-          console.error(
-            `[Tandem] tandem_checkInbox built a response that fails its output schema; nothing was marked returned: ${describeIssues(checked.error.issues)}`,
+          // One labelling over every document the summary names, so two files that
+          // share a basename are told apart across its sentences.
+          const labels = documentLabels(
+            [...elsewhere, ...docs.dropped.keys(), ...docs.excluded],
+            activityDocumentId,
           );
-          return mcpError(
-            "INTERNAL_ERROR",
-            "tandem_checkInbox could not build a valid response, so nothing was marked as returned and the next poll returns the same items (details in Tandem's log).",
-          );
+          if (elsewhere.size > 0) {
+            const names = [...elsewhere].map((id) => labels.get(id) ?? id);
+            actions +=
+              ` Some items are from ${activityDocumentId === null ? "open documents (none is active)" : "documents other than the active one"}: ${names.join(", ")}.` +
+              " Pass each item's documentId when acting on it.";
+          }
+          if (docs.unreadable.length > 0) {
+            const { unreadable } = docs;
+            actions += ` Could not read ${unreadable.length === 1 ? "document" : "documents"} ${unreadable.join(", ")}; ${unreadable.length === 1 ? "its" : "their"} items are missing from this poll (the error is in Tandem's log).`;
+          }
+          // PR #2225 review: refused records are counted, never described — the
+          // record is client-written and its text stays out of the response.
+          // They are retried on every poll, and they do not set `hasNew`: there
+          // is nothing in this response to act on.
+          for (const [id, n] of docs.dropped) {
+            actions += ` ${n} ${n === 1 ? "item" : "items"} in ${labels.get(id) ?? id} could not be returned (malformed record; details in Tandem's log).`;
+          }
+          if (chat.dropped > 0) {
+            actions += ` ${chat.dropped} chat ${chat.dropped === 1 ? "message" : "messages"} could not be returned (malformed record; details in Tandem's log).`;
+          }
+          // The summary never counts anything withheld. That is not a guarantee
+          // Claude cannot learn a held item exists: the cursor is plain encoded
+          // JSON, and once another reader has been handed an item the Solo hold
+          // then withholds, the cursor lists its number (and the document it is
+          // in) as held. Only items some reader was already given get a number,
+          // so notes and private records never appear there.
+          if (decoded && !decoded.recognised) {
+            actions +=
+              " The cursor was not recognised (Tandem restarted, or it was altered), so this poll returns everything not yet acknowledged.";
+          }
+          // Leads, so a model reading only the summary knows why the document
+          // buckets are empty. Not counted in `hasNew`: it is a state, not an ask.
+          // Flag on, a document left out because it is not this caller's is
+          // never called "not open": a model told that may open it, and an
+          // open takes it from the session answering it (R1.10).
+          // A default poll that read some documents and left others out says
+          // so too, or a session could report "no new comments" while one
+          // waits on a document another session holds (the scope PR, R1.10).
+          // The texts carry the refusals' take guard (`ownership-refusal.ts`).
+          const activityExcluded =
+            activityDocumentId !== null && docs.excluded.includes(activityDocumentId);
+          if (docs.readAnyDocument && docs.excluded.length > 0) {
+            actions += inboxExcludedSomeNote(
+              docs.excluded.map((id) => labels.get(id) ?? id),
+              activityExcluded,
+            );
+          }
+          const summary = docs.readAnyDocument
+            ? actions
+            : `${
+                docs.excluded.length === 0
+                  ? noDocumentInboxNote(requestedId)
+                  : requestedId !== undefined
+                    ? inboxExcludedNamedNote(requestedId)
+                    : inboxExcludedAllNote(activityExcluded)
+              } ${actions}`;
+          const ownership =
+            ownershipField && scope.scoped
+              ? {
+                  // Provisional: replaced once the claims are applied.
+                  holding: scope.holding(),
+                  // Every open document this poll left out: the named one, or
+                  // on a default poll each excluded one.
+                  notYours: [...docs.excluded],
+                }
+              : undefined;
+
+          const hasNew =
+            userActions.length > 0 ||
+            userResponses.length > 0 ||
+            userReplies.length > 0 ||
+            chatMessages.length > 0;
+
+          const response = {
+            summary,
+            hasNew,
+            mode,
+            // #1733: who last wrote the mode key. Diagnostic only — compare its
+            // `value` against `mode` above; under a lost concurrent tie they can
+            // disagree.
+            modeProvenance: readModeProvenance(),
+            storeReadOnly: isStoreReadOnly(),
+            userActions,
+            userResponses,
+            userReplies,
+            chatMessages,
+            activity,
+            cursor: nextCursorString,
+            ...(ownership ? { ownership } : {}),
+          };
+
+          // The backstop. With every client-written value admitted or narrowed
+          // above, a failure here is a server-built field — a code bug — so
+          // failing the poll and retrying everything next time is the right
+          // trade: nothing is committed, nothing stamped, the round stays open.
+          const checked = inboxBackstopSchema.safeParse(responseCorruptorForTests(response));
+          if (!checked.success) {
+            // Flag on: retire what the pass registered (R1.7). Flag off, as on
+            // master, nothing.
+            if (scope.scoped) undoPass(log);
+            console.error(
+              `[Tandem] tandem_checkInbox built a response that fails its output schema; nothing was marked returned: ${describeIssues(checked.error.issues)}`,
+            );
+            return mcpError(
+              "INTERNAL_ERROR",
+              "tandem_checkInbox could not build a valid response, so nothing was marked as returned and the next poll returns the same items (details in Tandem's log).",
+            );
+          }
+
+          docs.commit();
+          chat.commit();
+
+          // Claims by this poll (the scope PR, design §6.2): an unowned document
+          // the caller may claim that yielded at least one item, after every
+          // gate, becomes the caller's. After the response validated and the
+          // ledgers and chat committed, in this same synchronous run. A claim
+          // not applied takes back what this poll left on that document, so it
+          // hides nothing from whoever does answer it. Chat never claims.
+          if (scope.scoped) {
+            for (const id of docs.yielded) {
+              if (scope.scopeOf(id) !== "may-claim") continue;
+              const before = log.counterBefore.get(id) ?? deliveryRegistry.counter;
+              const outcome = scope.claim(id, before, getOpenDocs().has(id));
+              if (outcome === "refused") undoPassOn(log, id);
+              else {
+                // The change ran but left the document with someone else (a
+                // re-entrant lapse): its handover already re-owed the items, so
+                // only this poll's own entries go, and the cursor-less ledger is
+                // left as the handover made it.
+                if (outcome === "changed") undoPassOn(log, id, { keepLedgers: true });
+                // Once a claim's change ran, a later throw must not put the
+                // ledger back either: a handover inside it (a claim over a
+                // stale entry) deleted keys on purpose, to re-owe them.
+                log.legacyWrites.delete(id);
+                log.ackedExisting.delete(id);
+              }
+            }
+            // What the caller holds once every claim is applied: a claim can
+            // arm a grace that lapses other records, or this one. Same type as
+            // the value validated above; not validated again, since a failure
+            // now, with the ledgers and claims applied, would lose items.
+            if (ownership) ownership.holding = scope.holding();
+          }
+          // The join closes only now, once what was returned is committed — a
+          // claim about the USER's message, kept apart from the poll stamp above.
+          // It stays OPEN while a document the round is waiting on could not be
+          // read at all; that held round is re-timed to its oldest item still
+          // undelivered (`resolveDeliveryRound`). A record `admit` refused does
+          // NOT hold it: the summary just told Claude about it, and holding would
+          // leave a permanently malformed record pinning the round at
+          // `awaiting-poll` for the life of the process (PR #2225 review). The round is process-wide, so a poll naming
+          // a different document still closes one whose forward was elsewhere —
+          // `polled` was never proof that that annotation was delivered.
+          resolveDeliveryRound(Date.now(), {
+            documents: new Set(docs.unreadable),
+            items: new Set(),
+          });
+
+          return mcpStructured(response);
+        } catch (err) {
+          if (scope.scoped) undoPass(log);
+          throw err;
         }
-
-        docs.commit();
-        chat.commit();
-        // The join closes only now, once what was returned is committed — a
-        // claim about the USER's message, kept apart from the poll stamp above.
-        // It stays OPEN while a document the round is waiting on could not be
-        // read at all; that held round is re-timed to its oldest item still
-        // undelivered (`resolveDeliveryRound`). A record `admit` refused does
-        // NOT hold it: the summary just told Claude about it, and holding would
-        // leave a permanently malformed record pinning the round at
-        // `awaiting-poll` for the life of the process (PR #2225 review). The round is process-wide, so a poll naming
-        // a different document still closes one whose forward was elsewhere —
-        // `polled` was never proof that that annotation was delivered.
-        resolveDeliveryRound(Date.now(), {
-          documents: new Set(docs.unreadable),
-          items: new Set(),
-        });
-
-        return mcpStructured(response);
       }),
     ),
   );

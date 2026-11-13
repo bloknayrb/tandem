@@ -138,7 +138,9 @@ describe("the flip cannot land with a blocker open (tests/server/ownership-flip-
     expect(flipBlockerViolations(OWNERSHIP_ENABLED, OWNERSHIP_FLIP_BLOCKERS)).toEqual([]);
   });
 
-  it("every row names its gap and what closes it, and the gap (a) row names a test that exists", () => {
+  // The gap (a) pins (its test's title exists, and a row names it) went with
+  // the row: the scope PR closed gap (a) and flipped that test.
+  it("every row names its gap and what closes it", () => {
     for (const row of OWNERSHIP_FLIP_BLOCKERS) {
       expect(row.gap.trim().length, row.gap).toBeGreaterThan(20);
       expect(row.closedBy.trim().length, row.gap).toBeGreaterThan(5);
@@ -146,11 +148,6 @@ describe("the flip cannot land with a blocker open (tests/server/ownership-flip-
     expect(new Set(OWNERSHIP_FLIP_BLOCKERS.map((row) => row.gap)).size).toBe(
       OWNERSHIP_FLIP_BLOCKERS.length,
     );
-    const handover = read("tests/server/ownership-handover.test.ts");
-    const title =
-      "FLIP-BLOCKER gap (a): the previous owner's poll is handed the item, and its acknowledgement hides it from a fresh cursor";
-    expect(handover).toContain(`it("${title}"`);
-    expect(OWNERSHIP_FLIP_BLOCKERS.some((row) => row.closedBy.includes(title))).toBe(true);
   });
 
   it("the plan's flip row points at the list instead of restating it", () => {

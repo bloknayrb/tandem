@@ -8,10 +8,14 @@
  * runs out first (below). With ownership off nothing calls
  * this module: handlers run their bodies directly, as they always have.
  *
- * **Not every ownership change is queued.** Four run where they are, not at a
+ * **Not every ownership change is queued.** Five run where they are, not at a
  * turn of their own: a lapse whose wait for its turn ran out
  * ({@link runWhenDocIdle}: beside the operation still running when its timer
- * fires first, or between two operations when its late turn comes first), and
+ * fires first, or between two operations when its late turn comes first), a
+ * claim made by an inbox poll (the poll scope's `claim` in `ownership.ts`,
+ * applied in `tandem_checkInbox`'s synchronous commit; on a document whose
+ * operation has run past {@link docOpWaitLimitMs} it lands beside that
+ * operation, the scope PR's stuck-write release), and
  * three that are synchronous by design: the tab-close point (`onDocumentClosed`), the user-open default
  * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, `/api/convert`,
  * startup; it only
@@ -90,6 +94,14 @@ export interface DocOpOptions {
 interface Chain {
   tail: Promise<void>;
   pending: number;
+  /**
+   * When the operation running now started, on the monotonic clock (`performance.now()`, so a wall-clock jump neither releases a healthy write nor holds a stuck one); undefined
+   * between operations. Set where an operation actually starts and cleared
+   * only by that same operation's settle (the token), so a skipped entrant
+   * never sets it and a healthy run of short operations restarts the clock at
+   * each one. Read only by `ownership.ts` ({@link docOpBusySince}).
+   */
+  running?: { since: number };
 }
 
 const chains = new Map<string, Chain>();
@@ -127,8 +139,10 @@ export function runDocOp<T>(
     // An idle document starts its operation in this very tick, as a handler
     // with no queue would: the synchronous head of the body (and so the
     // ownership check) runs before the caller's next line.
+    const run = markRunning(mine);
     const result = startNow(fn);
     const done = () => {
+      if (mine.running === run) mine.running = undefined;
       settle(documentId, mine);
       open();
     };
@@ -183,7 +197,9 @@ export function runDocOp<T>(
         open();
         return;
       }
+      const run = markRunning(mine);
       const done = () => {
+        if (mine.running === run) mine.running = undefined;
         settle(documentId, mine);
         open();
       };
@@ -192,6 +208,13 @@ export function runDocOp<T>(
       result.then(resolve, reject);
     });
   });
+}
+
+/** Record that an operation of `chain` starts now; returns its token. Set before the body runs, so its synchronous head already reads as running. */
+function markRunning(chain: Chain): { since: number } {
+  const run = { since: performance.now() };
+  chain.running = run;
+  return run;
 }
 
 function startNow<T>(fn: () => Promise<T> | T): Promise<T> {
@@ -210,6 +233,30 @@ function settle(documentId: string, chain: Chain): void {
 /** Whether any operation is queued or running for `documentId`. */
 export function isDocOpQueueBusy(documentId: string): boolean {
   return chains.has(documentId);
+}
+
+/**
+ * For the inbox scope's stuck-write release (#2358 scope PR, ADR-054; Bryan,
+ * 2026-11-12): `undefined` when the queue is idle; the `performance.now()` (monotonic) at which
+ * the operation running now started; or `null` when the queue is busy but no
+ * operation has started yet (the microtask between one operation settling and
+ * the next one's turn). **Read only by `sessions/ownership.ts`** (pinned in
+ * `tests/server/ownership-source-pins.test.ts`).
+ */
+export function docOpBusySince(documentId: string): number | null | undefined {
+  const chain = chains.get(documentId);
+  if (!chain) return undefined;
+  return chain.running?.since ?? null;
+}
+
+/**
+ * The wait limit in force, {@link DOC_OP_WAIT_MS} unless a test set another
+ * with `setDocOpWaitMsForTests`. The stuck-write release uses the same bound,
+ * so a test that shortens the wait shortens the release with it. Read only by
+ * `sessions/ownership.ts`.
+ */
+export function docOpWaitLimitMs(): number {
+  return waitMs;
 }
 
 /**

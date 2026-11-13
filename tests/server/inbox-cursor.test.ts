@@ -60,7 +60,11 @@ import { withInternal } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
+
+// #2358 scope PR: flag-on, a poll reads only what its record holds or may
+// claim, so this suite's one caller is a registered record (see the helper).
+registerTestCallerRecord();
 
 vi.mock("../../src/server/annotations/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/annotations/store.js")>();
@@ -1174,9 +1178,21 @@ describe("no per-client state", () => {
       }
     }
     // Since #2358, awareness.ts reads no request context at all: tandem_reply
-    // takes its session id from the caller `withErrorBoundary` passes it. The
-    // inbox handler must not take that caller either — its cursors are not
-    // per-client state (the pin #2358's PR 2 amends, ownership design §6.8).
+    // takes its session id from the caller `withErrorBoundary` passes it.
+    //
+    // Amended by #2358's scope PR (ownership design §6.8 as its brief amends
+    // it). The inbox handler now takes that caller, but only to hand it, unread,
+    // to the ownership side's one door (`inboxOwnership.begin`): it never names
+    // an owner id, never reads the flag, and imports exactly that one name from
+    // the ownership module. The cursor module imports nothing from it, and two
+    // records with the same scope get byte-identical cursors
+    // (`ownership-inbox-scope.test.ts`, R2.1), so the cursor is still not
+    // per-client state.
+    //
+    // The transport-registry check above is TEXTUAL and DIRECT only: it holds
+    // for these two files' own imports, but awareness.ts now imports
+    // `sessions/ownership.ts`, which imports two names from
+    // `mcp/transport-registry.ts`, so it no longer holds transitively.
     const awareness = readFileSync("src/server/mcp/awareness.ts", "utf8");
     expect(awareness).not.toMatch(/from "[^"]*sessions\/context/);
     const start = awareness.indexOf('"tandem_checkInbox",');
@@ -1186,8 +1202,37 @@ describe("no per-client state", () => {
     expect(end).toBeGreaterThan(start);
     const handler = awareness.slice(start, end);
     expect(handler).not.toMatch(/getCurrentSessionId|getMcpContext/);
-    // Its wrapped handler takes one parameter, never the caller.
-    expect(handler).toMatch(/withErrorBoundary\("tandem_checkInbox", async \(\{/);
-    expect(handler).not.toMatch(/withErrorBoundary\("tandem_checkInbox", async \([^)]*\},\s*\w/);
+    // The wrapped handler takes the caller as its second parameter, and the
+    // caller's one use is the argument of `inboxOwnership.begin`.
+    expect(handler).toMatch(
+      /withErrorBoundary\("tandem_checkInbox", async \(\{[^)]*\}, caller\) =>/,
+    );
+    // Code only (comments stripped); prose in the description says "caller" too.
+    const code = handler.replace(/\/\/.*$/gm, "");
+    expect(code.match(/[(,]\s*caller\b/g)).toHaveLength(2);
+    expect(code.match(/\bcaller\./g)).toBeNull();
+    expect(handler).toMatch(/inboxOwnership\.begin\(caller,/);
+    // The one name from the ownership module, value or type.
+    const fromOwnership = [
+      ...awareness.matchAll(/import (?:type )?\{([^}]*)\} from "\.\.\/sessions\/ownership\.js";/g),
+    ];
+    expect(fromOwnership.map((m) => m[1]?.trim())).toEqual(["inboxOwnership"]);
+    expect(awareness).not.toMatch(/\bownerId\b/);
+    expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled|owned-op/);
+    // Nothing else reaches the ownership module from awareness.ts (no
+    // namespace import, no re-export, no dynamic import).
+    expect(awareness.match(/sessions\/ownership\.js/g)).toHaveLength(1);
+    // The exclusion texts come from the refusal copy, whose module imports
+    // only types from the ownership module (review round 1: the inbox texts
+    // carry the refusals' take guard). Those three builders and nothing else.
+    const fromCopy = [
+      ...awareness.matchAll(/import \{([^}]*)\} from "\.\.\/sessions\/ownership-refusal\.js";/g),
+    ];
+    expect(fromCopy.map((m) => m[1]?.replace(/\s+/g, " ").trim())).toEqual([
+      "inboxExcludedAllNote, inboxExcludedNamedNote, inboxExcludedSomeNote,",
+    ]);
+    expect(awareness.match(/sessions\/ownership-/g)).toHaveLength(1);
+    const cursorModule = readFileSync("src/server/mcp/inbox-cursor.ts", "utf8");
+    expect(cursorModule).not.toMatch(/sessions\/ownership|owned-op|ownership-flag/);
   });
 });

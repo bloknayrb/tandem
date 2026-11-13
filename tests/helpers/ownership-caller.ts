@@ -5,8 +5,10 @@ import {
   runWithMcpContext,
 } from "../../src/server/sessions/context.js";
 import {
+  noteTransportRegistered,
   resetOwnershipForTests,
   setOwnershipTransportMode,
+  setTransportView,
 } from "../../src/server/sessions/ownership.js";
 
 /**
@@ -56,5 +58,28 @@ export function useStdioOwnershipMode(): void {
   });
   afterEach(() => {
     resetOwnershipForTests();
+  });
+}
+
+/**
+ * For the generic suites that poll `tandem_checkInbox` as the test caller
+ * (#2358 scope PR). Under inbox scope a poll by a caller with no owner record
+ * reads no document, so with ownership on these suites would get empty
+ * inboxes. This registers {@link TEST_OWNER_ID} as a real record before each
+ * test (attached, never streamed: `openStreams: 0`, so a claim arms no grace),
+ * so the suite's one caller reads every document it holds or may claim — in
+ * a single-caller suite, every document — and claims what it is handed, as a
+ * lone session does. Call it at a suite file's top level.
+ *
+ * Deliberately NOT part of `ownershipTestDispatch`, which about 37 files use:
+ * there it would turn every flag-on write into a claim, and break suites that
+ * pin the recordless caller (`mcp-write-precedence.test.ts`'s no-record arm,
+ * PR 2a's recordless pin). Flag off it records nothing (the ownership module's
+ * entry points return at once).
+ */
+export function registerTestCallerRecord(): void {
+  beforeEach(() => {
+    setTransportView(() => [{ ownerId: TEST_OWNER_ID, openStreams: 0 }]);
+    noteTransportRegistered(TEST_OWNER_ID, { recordKind: "claude" });
   });
 }

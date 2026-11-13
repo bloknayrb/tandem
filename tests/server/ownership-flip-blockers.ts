@@ -30,30 +30,21 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
-      "Handover gap (a): every poll still reads every document and acknowledgement is not scoped, " +
-      "so after a handover a poll by the previous owner, by any other session, or any cursor-less " +
-      "poll, is handed the re-owed items and its acknowledgement hides them from a fresh cursor again.",
-    closedBy:
-      "The scope PR (inbox scope and scoped acknowledgement, design §6.2), which must flip the test " +
-      "'FLIP-BLOCKER gap (a): the previous owner's poll is handed the item, and its acknowledgement " +
-      "hides it from a fresh cursor' in tests/server/ownership-handover.test.ts.",
-  },
-  {
-    gap:
-      "Handover gap (b): a session can be handed, and acknowledge, items on an unowned document " +
-      "that another session then claims with no handover, so design §6.3's 'nobody else could have " +
-      "been handed an unowned document's items' is not yet true.",
-    closedBy:
-      "The scope PR (a poll reads an unowned document only if it may claim it, and claims it).",
-  },
-  {
-    gap:
       "The notice rule: an accept or dismiss notice already handed to an earlier owner goes to " +
       "nobody after a handover (design §6.3 step 2's use of handoverSeq, §6.4's last bullet). " +
       "handoverSeq is written but has no reader.",
     closedBy:
-      "The scope PR. It moved there because, until acknowledgement is scoped, 'acknowledged' does " +
-      "not mean 'the owner had it'.",
+      "The change-notice PR (the second half of the scope work: change notices and `changed`, the " +
+      "notice rule, per-document delivery rounds). It must also re-owe past what the scope PR " +
+      "left: a close of an unowned document runs no handover, so an acknowledgement before the " +
+      "close can hide its kept notices from a fresh reader after a reopen; a reader's mark set " +
+      "by exclusion (its default polls read another holder's document as empty) passes a notice " +
+      "that holder was handed and never acknowledged, so once a handover keeps the notice, that " +
+      "reader acknowledges it and is never handed it, nor is a fresh reader; a poll's claim over " +
+      "a stale entry runs a handover that writes handoverSeq above notices the same poll handed; " +
+      "a claim refused at commit does not undo a cursor-less poll's acknowledgement of an " +
+      "entry that predates it; and a mark moved by exclusion drops the reader's held seqs there, " +
+      "so a Solo-held kept notice is passed with it.",
   },
   {
     gap:
@@ -69,16 +60,25 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
       "items are owed.",
-    closedBy: "The scope PR (per-document delivery rounds, design §6.7).",
+    closedBy: "The change-notice PR (per-document delivery rounds, design §6.7).",
   },
   {
     gap:
-      "tandem_checkInbox's description. Its sentence 'once a poll of yours has read a document, " +
-      "another session's polls never hide its items from you' stops being true once the scope PR " +
-      "lands, and its sentence 'each item repeats on every poll until you pass a cursor from a " +
-      "response that held it' is already not the whole truth flag-on: after a handover an " +
-      "acknowledged item is handed again, unmarked.",
-    closedBy: "A description change before the flip (the scope PR, or the flip PR itself).",
+      "tandem_checkInbox's description and the shipped skill say things that are false flag-on " +
+      "once the scope PR lands. The description: 'once a poll of yours has read a document, " +
+      "another session's polls never hide its items from you' (with inbox scope, only the " +
+      "document's holder reads it); 'each item repeats on every poll until you pass a cursor from " +
+      "a response that held it' (after a handover an acknowledged item is handed again, " +
+      "unmarked); 'Omit `documentId` to cover every open document'; and the summary's 'The cursor " +
+      "was not recognised ... returns everything not yet acknowledged' (only what is in scope). " +
+      "The `documentId` input: 'Omit it to poll every open document'. skills/tandem/SKILL.md: " +
+      "'polls every open document', and its contract that a summary with no document read means " +
+      "nothing is open (flag-on, it can mean nothing open is yours to answer). docs/mcp-tools.md's " +
+      "tandem_checkInbox section says the same things; it carries a 'ships dark' paragraph listing " +
+      "what changes flag-on, and the flip PR rewrites the section.",
+    closedBy:
+      "The flip PR: the flag-off text cannot change while dark, and the skill ships live, so it " +
+      "changes at the flip together with the plugin ref bump.",
   },
   {
     gap:
@@ -95,8 +95,72 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "handled filter lands; and a comment edited since it was seen arrives without `edited: true`. " +
       "On master a close and reopen re-hands nothing. (A restart that returns under the same owner " +
       "id inside the two-minute grace is no handover: its fresh cursor counts what its earlier " +
-      "incarnation acknowledged as seen, as on master, so the outcome turns on the grace.)",
+      "incarnation acknowledged as seen, as on master, so the outcome turns on the grace.) Since " +
+      "the scope PR a detached record also claims a document again on a poll that yields it " +
+      "something, so the write-then-idle cycle is also a poll-then-idle cycle.",
     closedBy: "Bryan's answer to it (PR of the handover, 'Needs Bryan').",
+  },
+  {
+    gap:
+      "`ownership.notYours` in tandem_checkInbox tells any local MCP client that a document it " +
+      "named is not its to answer (design §11.3's holder exposure, accepted by Bryan 2026-11-05, " +
+      "decision 4). It is not yet in docs/security.md's register.",
+    closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
+  },
+  {
+    gap:
+      "The delivery round is still one global round (pendingSince): a scoped poll closes it " +
+      "although it did not read the documents other sessions hold, so /health can read idle " +
+      "while another session's document has items no poll of its holder has returned.",
+    closedBy: "The change-notice PR (per-document delivery rounds, design §6.7).",
+  },
+  {
+    gap:
+      "A lapse to unowned wakes no session (startOrWake and the frames are stubs), so under " +
+      "inbox scope a user's next comment on that document waits until some session polls for " +
+      "an unrelated reason.",
+    closedBy: "PR 3b (presence, startOrWake and the ownership frames).",
+  },
+  {
+    gap:
+      "Chat stays unscoped until the chat PR: every session is handed every user chat message, " +
+      "whatever document it is about (#2358's own symptom, for chat). Besides duplicate answers, " +
+      "a session handed 'please fix the intro in d3' for a document another session holds may " +
+      "tandem_open it, and the take rule lets an open by another session take a `claimed` " +
+      "document or one Tandem's Claude holds as `default`; the inbox's " +
+      "exclusion texts carry the refusals' guard (an item Tandem handed you is not a request), " +
+      "which only lowers that risk.",
+    closedBy: "The chat PR (design §7: per-message owners).",
+  },
+  {
+    gap:
+      "A document claimed by a poll whose items its holder then never answers: the holder keeps " +
+      "it, and no other session is handed its items until a lapse, a close or a take moves it " +
+      "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does).",
+    closedBy: "PR 3b (waiting, startOrWake) for Tandem's Claude, or Bryan's answer for terminals.",
+  },
+  {
+    gap:
+      "A take-back and the inbox's exclusion texts: after Tandem's Claude takes a document back " +
+      "('taken back'), the refusal tells the loser not to tandem_open it again unless the user asks " +
+      "again after this point, but the inbox's exclusion texts and `notYours`'s description say " +
+      "only 'only if the user asked you, in your own conversation', which the original request " +
+      "still satisfies, and decideTake checks no loss, so the re-open takes it back from Tandem's " +
+      "Claude. Unreachable until Tandem's Claude can be present (PR 3a/3b).",
+    closedBy:
+      "PR 3b (take-back): carry the loss into the exclusion texts, or make decideTake honour it.",
+  },
+  {
+    gap:
+      "Output schemas across the flip: an MCP client caches tool output schemas from tools/list, " +
+      "and the stdio bridge's re-initialize after a 404 never lists again, so a session (Claude " +
+      "Desktop through the bridge, say) that lives across the upgrade from a dark build to the " +
+      "flipped one keeps tandem_checkInbox's and tandem_status's dark schemas, which have no " +
+      "`ownership` / `owner` field, and its SDK rejects every response that carries one " +
+      "(additionalProperties: false).",
+    closedBy:
+      "The flip PR: a remedy for cached schemas (a tools/list_changed notification, a re-list on " +
+      "the bridge's replay, or a documented restart), decided there.",
   },
   {
     gap:

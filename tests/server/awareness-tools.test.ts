@@ -47,9 +47,13 @@ import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
 import { range, unanchored } from "../helpers/positions.js";
 import { createAnnotation } from "../helpers/ydoc-factory.js";
+
+// #2358 scope PR: flag-on, a poll reads only what its record holds or may
+// claim, so this suite's one caller is a registered record (see the helper).
+registerTestCallerRecord();
 
 const DOC_HASH = "sha256:awareness-tools";
 // Ledger keys are document-scoped (see `surfacedIds`); tests share one id
