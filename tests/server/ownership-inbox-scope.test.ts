@@ -207,8 +207,8 @@ function positions(cursor: string) {
 const GUARD = "only if the user asked you, in your own conversation, to work on it";
 const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a request.";
 const EXCLUDED_NAMED = (id: string) =>
-  `Document ${id} is open but is not yours to answer right now (another session may be answering it, or a write on it is still running), so nothing on it was returned and only chat is shown; its \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on it ${GUARD}: opening it may take it from that session. ${NOT_A_REQUEST}`;
-const EXCLUDED_ALL_ACTIVE = `Nothing on the open documents is yours to answer right now (another session may be answering them, or a write on one is still running); the active document's \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`;
+  `Document ${id} is open but is not yours to answer right now (another session may be answering it, or a write on it is still running), so no comments, thread replies or accept/dismiss responses on it were returned (chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about it); its \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on it ${GUARD}: opening it may take it from that session. ${NOT_A_REQUEST}`;
+const EXCLUDED_ALL_ACTIVE = `No comments, thread replies or accept/dismiss responses on the open documents are yours to answer right now (another session may be answering them, or a write on one is still running), so none were returned; chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one of them; the active document's \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`;
 
 let docA: Doc;
 let docB: Doc;
@@ -324,8 +324,10 @@ describe("R1.1: a default poll reads what its caller holds or may claim, and no 
     expect(deliveryRegistry.lookup("a", noticeKey, 0)).toBe(kept);
     expect(deliveryRegistry.entriesIn(docU.id).map((e) => e.base)).toEqual([noticeKey]);
 
-    // A's poll is handed both (the notice was never acknowledged) and claims `u`.
-    expect(itemIds(await reader(A).poll())).toEqual(["cu", "n"]);
+    // A's poll is handed the comment and claims `u`. Not the notice: B, its
+    // holder, was handed it, so the lapse settled it (the notice-rule PR,
+    // R1.1; before it, A was handed both).
+    expect(itemIds(await reader(A).poll())).toEqual(["cu"]);
     const entry = getDocOwner(docU.id);
     expect(entry).toMatchObject({ ownerId: A, kind: "claimed" });
     const sinceSeq = entry?.sinceSeq as number;
@@ -514,11 +516,26 @@ describe("R1.5: what counts as yielding (after every gate)", () => {
     },
   );
 
-  it("a document whose only item is an accept or dismiss notice IS claimed (the next PR's notice rule may change this)", async () => {
+  it("a document whose only item is an unsettled accept or dismiss notice (never handed to a holder) IS claimed", async () => {
     annotation(docU.ydoc, "n", { author: "claude", status: "accepted" });
     const inbox = await reader(A).poll();
     expect(itemIds(inbox)).toEqual(["n"]);
     expect(ownerOf(docU.id)).toBe(A);
+    expect(inbox.ownership?.holding).toEqual([docA.id, docU.id].sort());
+  });
+
+  it("a document whose only item is a settled notice yields nothing and is NOT claimed (the notice-rule PR, R1.5)", async () => {
+    setDocOwner(docU.id, { ownerId: B, kind: "opened" }, "take", B);
+    annotation(docU.ydoc, "n", { author: "claude", status: "accepted" });
+    expect(itemIds(await reader(B).poll())).toEqual(["n"]);
+    setDocOwner(docU.id, null, "lapse"); // B, its holder, was handed it: settled
+    const a = reader(A);
+    for (const n of [1, 2]) {
+      const inbox = await a.poll();
+      expect(itemIds(inbox), `poll ${n}`).toEqual([]);
+      expect(ownerOf(docU.id)).toBeUndefined();
+      expect(inbox.ownership?.holding).toEqual([docA.id]);
+    }
   });
 
   it("a chat message never claims a document, whatever documentId it carries", async () => {
@@ -831,7 +848,7 @@ describe("a default poll that reads some documents and leaves others out says so
     const inbox = await reader(A).poll();
     expect(itemIds(inbox)).toEqual(["ca"]);
     expect(inbox.summary).toBe(
-      `1 new: 1 comment. Some items are from documents other than the active one: ${docA.id}.md. Pass each item's documentId when acting on it. One open document is not yours to answer right now (another session may be answering it, or a write on it is still running), so nothing on it was returned: ${docB.id}.md. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`,
+      `1 new: 1 comment. Some items are from documents other than the active one: ${docA.id}.md. Pass each item's documentId when acting on it. One open document is not yours to answer right now (another session may be answering it, or a write on it is still running), so no comments, thread replies or accept/dismiss responses on it were returned: ${docB.id}.md. Chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about it. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`,
     );
     expect(inbox.ownership?.notYours).toEqual([docB.id]);
   });
@@ -997,11 +1014,45 @@ describe("re-entrancy in the commit: a claim that lapses its own claimant (revie
 });
 
 describe("a cursor-less poll's refused claim takes back its acknowledgement of an older entry (review fix 10)", () => {
-  it("a kept notice acknowledged by that poll is owed again to a fresh reader", async () => {
+  // Rewritten by the notice-rule PR (case 4 of the five the scope PR left).
+  // Before it: B's kept notice, handed to A's cursor-less poll whose claim was
+  // refused, had that acknowledgement taken back and was handed to a fresh
+  // reader. Under R1.1 it is settled (B, its holder, was handed it before the
+  // lapse): a later poll is handed nothing, yields nothing and claims nothing.
+  it("a settled kept notice: a later poll is handed nothing, yields nothing and attempts no claim", async () => {
     setDocOwner(docU.id, { ownerId: B, kind: "opened" }, "take", B);
     annotation(docU.ydoc, "n", { author: "claude", status: "accepted" });
     expect(itemIds(await reader(B).poll())).toEqual(["n"]);
     setDocOwner(docU.id, null, "lapse"); // the handover keeps the notice's entry, unacknowledged
+    const kept = deliveryRegistry.lookup("a", `${docU.id}:n#accepted`, 0);
+    expect(kept?.acked).toBe(false);
+
+    const checks: string[] = [];
+    setInboxClaimCheckForTests((check) => {
+      checks.push(check);
+      return true;
+    });
+    for (const n of [1, 2]) expect(itemIds(await pollAs(A)), `cursor-less poll ${n}`).toEqual([]);
+    const c = reader(C);
+    for (const n of [1, 2]) expect(itemIds(await c.poll()), `fresh reader poll ${n}`).toEqual([]);
+    setInboxClaimCheckForTests(undefined);
+    expect(checks, "no claim was attempted").toEqual([]);
+    expect(getDocOwner(docU.id)).toBeUndefined();
+    expect(deliveryRegistry.lookup("a", `${docU.id}:n#accepted`, 0), "the entry stays").toBe(kept);
+  });
+
+  it("the undo still takes back an acknowledgement of an older unsettled entry (the catch-all after commit)", async () => {
+    // An unsettled entry predating the poll: one a handover whose inbox half
+    // failed left behind (its mark did not move).
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setDocOwner(docU.id, { ownerId: B, kind: "opened" }, "take", B);
+    annotation(docU.ydoc, "n", { author: "claude", status: "accepted" });
+    expect(itemIds(await reader(B).poll())).toEqual(["n"]);
+    setOwnershipInboxHandover(() => {
+      throw new Error("boom");
+    });
+    setDocOwner(docU.id, null, "lapse");
+    setOwnershipInboxHandover(handOverDocumentInbox);
     const kept = deliveryRegistry.lookup("a", `${docU.id}:n#accepted`, 0);
     expect(kept?.acked).toBe(false);
 
