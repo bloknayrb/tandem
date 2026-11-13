@@ -193,7 +193,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "default rule after a lapse or a user open, a take-back, its own tandem_open while " +
       "present) and Tandem's Claude's lost entry when it stops being present. Each must follow " +
       "Ruling 10 (a past-tense fact with no instruction, the change-notice PR's R7.3 and R7.4). " +
-      "Until then a session holding a document those paths move is told only through `holding`.",
+      "Until then a session holding a document those paths move is told only through `holding`. " +
+      "Note: `changeCauseOf` (sessions/ownership.ts) today maps every `take` loss to 'another " +
+      "session took it'; a take by Tandem's Claude, which `lossCauseOf` calls 'taken back', must " +
+      "get its own word then.",
     closedBy: "PR 3b: the causes, with tests through their production paths.",
   },
   {

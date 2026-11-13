@@ -551,10 +551,12 @@ describe("R2: which changes queue a notice", () => {
     const file = realFile("t.md");
     const id = await openAs(B, file);
     expect(changedOf(await reader(B).poll())).toEqual([gained(id, OPENED)]);
-    // B's hold is `opened`, which nobody can take: make it a claim, by B's
-    // own write on the unowned document (the lapse that unowns it is setup).
-    setDocOwner(id, null, "lapse");
-    await reader(B).poll(); // drains the setup's notice
+    // B's hold is `opened`, which nobody can take: make it a claim. B lapses
+    // through the grace (its stream drops; it survives), its stream returns,
+    // and its own write claims the unowned document.
+    lapseByGrace(B, "stream dropped");
+    reattach(B);
+    expect(changedOf(await reader(B).poll())).toEqual([lost(id, LAPSED)]);
     await writeAs(B, { id });
     expect(changedOf(await reader(B).poll())).toEqual([gained(id, WROTE)]);
     await openAs(A, file);
@@ -779,7 +781,8 @@ describe("R3: the property and the cap", () => {
     await pollBoth(); // A's poll claims d2 (poll)
     const d3 = await openAs(B, f3); // B gained (open)
     await pollBoth();
-    setDocOwner(d3, null, "lapse"); // setup: make B's hold a claim
+    lapseByGrace(B, "stream dropped"); // B lost (lapse, grace), so B's next hold is a claim
+    reattach(B);
     await pollBoth();
     await writeAs(B, { id: d3 });
     await pollBoth();
@@ -787,10 +790,34 @@ describe("R3: the property and the cap", () => {
     await pollBoth();
     await closeByRoute(d1.id); // A lost (close)
     await pollBoth();
+    const made = await as(A, "tandem_scratchpad", {}); // A gained (create)
+    expect(made.error).toBe(false);
+    await pollBoth();
     await writeAs(B, mkDoc("d4"));
     await pollBoth();
+    lapseByGrace(B, "stream dropped"); // B lost (lapse, grace)
     reattach(B);
-    lapseByGrace(B, "stream dropped"); // B lost (lapse)
+    await pollBoth();
+    // B lost (lapse, the detached-record cap): B detaches first and holds
+    // d5, then 64 records holding documents detach after it; the cap lapses
+    // the holder detached longest, B. The fillers are setup.
+    await writeAs(B, mkDoc("d5"));
+    await pollBoth();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.now();
+    entryOf(B).streamEver = true;
+    entryOf(B).openStreams = 0;
+    noteTransportChanged(B);
+    vi.setSystemTime(t0 + 1_000);
+    for (let i = 0; i < 64; i++) {
+      const id = `claude:change-cap-${i}`;
+      register(id);
+      setDocOwner(`${prefix}-held-${i}`, { ownerId: id, kind: "opened" }, "take", id);
+      entryOf(id).streamEver = true;
+      noteTransportChanged(id);
+    }
+    vi.useRealTimers();
+    expect(getDocOwner(docId("d5"))).toBeUndefined();
     await pollBoth();
     for (const owner of [A, B]) expect(reported.get(owner)).toEqual(new Set(["gained", "lost"]));
   });
@@ -823,7 +850,10 @@ describe("R3: the property and the cap", () => {
       expected.push(gained(id, WROTE));
       await openAs(B, file);
       expected.push(lost(id, TOOK));
-      setDocOwner(id, null, "lapse");
+      // B lapses through the grace (it survives) and its stream returns:
+      // the document is unowned again, and only B's queue hears of it.
+      lapseByGrace(B, "stream dropped");
+      reattach(B);
     }
     await writeAs(A, d);
     expected.push(gained(d.id, WROTE));
@@ -911,7 +941,7 @@ describe("R4: draining", () => {
   it("not in the cursor: two records with the same holdings get byte-identical cursors, one with notices queued", async () => {
     const d = mkDoc("d");
     await writeAs(A, d);
-    setDocOwner(d.id, null, "lapse"); // setup: A holds nothing, a notice queued
+    await closeByRoute(d.id); // A holds nothing, two notices queued
     expect(ownershipSnapshotForTests().changeNotices.map(([o]) => o)).toEqual([A]);
     const a = await pollAs(A, { cursor: "start" });
     const b = await pollAs(B, { cursor: "start" });
@@ -1045,6 +1075,22 @@ describe("R8: the summary", () => {
     const id = await userOpen(file);
     await writeAs(A, { id });
     await reader(A).poll();
+    await openAs(B, file);
+    return id;
+  }
+
+  /**
+   * After {@link takenFromA}: B lapses (its stream drops), A's write claims the
+   * document again and B's open takes it again, so A has the same take queued
+   * once more. Returns the document id.
+   */
+  async function takenFromAgain(id: string): Promise<string> {
+    // The file's path as `tandem_open` stored it (canonical: on Windows a
+    // short-name temp directory is expanded), not as this test spelled it.
+    const file = getOpenDocs().get(id)?.filePath as string;
+    lapseByGrace(B, "stream dropped");
+    reattach(B);
+    await writeAs(A, { id });
     await openAs(B, file);
     return id;
   }
@@ -1232,21 +1278,33 @@ describe("R8: the summary", () => {
   });
 
   it("documentLabels runs once per poll, and the text before the sentence is what it would be without the claims", async () => {
-    await takenFromA();
+    const takenId = await takenFromA();
     const claimable = mkDoc("claimable");
     comment(claimable.ydoc, "c1");
-    const before = documentLabelCallsForTests();
-    const inbox = await reader(A).poll();
-    expect(documentLabelCallsForTests() - before).toBe(1);
-    expect(holdingOf(inbox)).toContain(claimable.id);
     const sentence = TOOK_SENTENCE("taken.md");
-    expect(inbox.summary.endsWith(sentence)).toBe(true);
-    // The text before the sentence names the claimed document as an item's
-    // document, as a poll without the claim would.
-    expect(inbox.summary.slice(0, -sentence.length)).not.toContain("You stopped holding");
+    // Baseline: the same poll with its claim refused at commit. The refused
+    // claim takes back what the pass left, so the next poll reads the same
+    // items; this one drains the notice, so it carries the sentence.
+    setInboxClaimCheckForTests((check) => check !== "scope");
+    const before = documentLabelCallsForTests();
+    const refused = await pollAs(A);
+    expect(documentLabelCallsForTests() - before).toBe(1);
+    setInboxClaimCheckForTests(undefined);
+    expect(holdingOf(refused)).not.toContain(claimable.id);
+    expect(refused.summary.endsWith(sentence)).toBe(true);
+    const baseline = refused.summary.slice(0, -sentence.length);
+    // The same poll with its claim applied: queue the same take again so it
+    // carries the sentence too, then compare the text before it.
+    await takenFromAgain(takenId);
+    const between = documentLabelCallsForTests();
+    const claimed = await pollAs(A);
+    expect(documentLabelCallsForTests() - between).toBe(1);
+    expect(holdingOf(claimed)).toContain(claimable.id);
+    expect(claimed.summary.endsWith(sentence)).toBe(true);
+    expect(claimed.summary.slice(0, -sentence.length)).toBe(baseline);
   });
 
-  it("flag off: no sentence, no field, byte for byte as a server that never heard of change notices", async () => {
+  it("flag off: no sentence, no field, the summary master gives, and nothing queued", async () => {
     await close?.();
     await buildWorld("");
     const d = mkDoc("d");
@@ -1254,7 +1312,11 @@ describe("R8: the summary", () => {
     await closeByRoute(d.id);
     const inbox = await pollAs(A);
     expect(inbox.ownership).toBeUndefined();
-    expect(inbox.summary).not.toContain("You stopped holding");
+    expect(Object.keys(inbox)).not.toContain("ownership");
+    // The whole summary, as master gives it for a poll with nothing new. (The
+    // structure is what keeps it master's: no field, no labelling input, no
+    // sentence; this pins the observable result.)
+    expect(inbox.summary).toBe("No new actions.");
     expect(ownershipSnapshotForTests().changeNotices).toEqual([]);
   });
 });

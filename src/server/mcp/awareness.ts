@@ -366,8 +366,9 @@ interface NoticeSettlement {
  * delete restores a settled notice. That holds for a delete made after the
  * handover. For one made before it, the handover finds no current record
  * for the key and forgets it (`handOverDocumentInbox` keeps only current
- * notice keys), so an Undo restores a notice that is not settled, and the
- * new holder is handed it once: an accepted duplicate (ADR-054's
+ * notice keys), so an Undo restores a notice that is not settled, and
+ * whoever next reads the document (its holder, or a poll that may claim it)
+ * is handed it once: an accepted duplicate (ADR-054's
  * notice-rule amendment, as the change-notice PR records it). An entry under any current record's
  * bare-id key (a client-written id that collides) is not settled while the
  * collision lasts, and is kept. The walk itself writes nothing and logs
@@ -2807,10 +2808,10 @@ export function registerAwarenessTools(server: McpServer): void {
 
           return mcpStructured(response);
         } catch (err) {
-          if (scope.scoped) undoPass(log);
-          // After the undo, so a give-back that failed could not skip it;
-          // `giveBack` never throws.
+          // First, so a throw in the undo cannot lose what was drained;
+          // `giveBack` never throws, so it cannot skip the undo either.
           if (drained) scope.giveBack(drained);
+          if (scope.scoped) undoPass(log);
           throw err;
         }
       }),

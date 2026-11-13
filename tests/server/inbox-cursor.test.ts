@@ -1223,8 +1223,9 @@ describe("no per-client state", () => {
     // namespace import, no re-export, no dynamic import).
     expect(awareness.match(/sessions\/ownership\.js/g)).toHaveLength(1);
     // The exclusion texts come from the refusal copy, whose module imports
-    // only types from the ownership module (review round 1: the inbox texts
-    // carry the refusals' take guard). Those three builders, and the change
+    // from the ownership module only types and, since the change-notice PR,
+    // the constant `MAX_CHANGE_NOTICES` (named in `changed`'s description)
+    // (review round 1: the inbox texts carry the refusals' take guard). Those three builders, and the change
     // notices' loss sentence (the change-notice PR), and nothing else.
     const fromCopy = [
       ...awareness.matchAll(/import \{([^}]*)\} from "\.\.\/sessions\/ownership-refusal\.js";/g),

@@ -14,10 +14,17 @@
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
+import { handOverDocumentInbox, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { deliveryRegistry } from "../../src/server/mcp/inbox-cursor.js";
 import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
-import { getDocOwner, resetOwnershipForTests } from "../../src/server/sessions/ownership.js";
+import {
+  getDocOwner,
+  resetOwnershipForTests,
+  setOwnershipInboxHandover,
+  setOwnershipSeqSource,
+} from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
@@ -34,6 +41,9 @@ beforeEach(async () => {
   const port = await allocPort();
   baseUrl = `http://127.0.0.1:${port}`;
   httpServer = await startMcpServerHttp(port, "127.0.0.1");
+  // The two lines of `src/server/index.ts`.
+  setOwnershipSeqSource(() => deliveryRegistry.counter);
+  setOwnershipInboxHandover(handOverDocumentInbox);
 });
 
 afterEach(async () => {
@@ -41,6 +51,7 @@ afterEach(async () => {
   if (httpServer) await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   resetOwnershipForTests();
+  resetInbox();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
