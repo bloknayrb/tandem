@@ -198,6 +198,8 @@ describe("switching editing through the real route reaches a run in flight (#112
       },
       unsubscribe: () => {},
       aiRefusal: () => null,
+      // The local model is chosen to answer chat (#1123).
+      chatAnswerer: () => "local",
       ...over,
     });
     collab.__startForTests();
@@ -229,7 +231,9 @@ describe("switching editing through the real route reaches a run in flight (#112
     withInternal(ctrl, () => {
       ctrl.getMap(Y_MAP_CHAT).clear();
       ctrl.getMap(Y_MAP_CHAT_STREAM).clear();
-      ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE); // unset reads as Tandem
+      // Tandem, written as the editor writes it: an unset key now fails closed
+      // for the editing tier (#1123 R3.1).
+      ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem");
     });
 
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-editing-live-"));

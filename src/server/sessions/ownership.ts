@@ -20,10 +20,12 @@
  * effect at its operation's outcome (`beginWriteClaim`, `settleWriteClaim`),
  * and the inbox scope read the scope PR will call (`inboxScopeOf`). The
  * handover PR: the handover (`handOver`, ownership design §6.3's rule) for
- * user comments and thread replies, and the writing of `handoverSeq`. Still
- * to come, named by content as in the plan: the scope PR (inbox scope, scoped
- * acknowledgement, claims by a poll, the notice rule that reads
- * `handoverSeq`), and the chat PR.
+ * user comments and thread replies, and the writing of `handoverSeq`. The
+ * scope PR: the inbox's one door (`inboxOwnership`: a poll's scope, its
+ * claims and `holding`) and the stuck-write release in `inboxScopeOf`. Still
+ * to come, named by content as in the plan: the change-notice PR (change
+ * notices, the notice rule that reads `handoverSeq`, per-document delivery
+ * rounds), and the chat PR.
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -43,8 +45,9 @@ import { CLAUDE_DESKTOP_CLIENT_NAME, claudeIdKey } from "../mcp/transport-regist
 import { ownershipEnabled } from "../ownership-flag.js";
 import { runOutsideMcpContext } from "./context.js";
 import {
+  docOpBusySince,
   docOpQueueSizeForTests,
-  isDocOpQueueBusy,
+  docOpWaitLimitMs,
   resetDocOpQueuesForTests,
   runWhenDocIdle,
 } from "./doc-op-queue.js";
@@ -63,9 +66,18 @@ export type OwnershipKind = "default" | "claimed" | "opened" | "assigned";
  * write to an unowned document, applied once the write's outcome is known
  * (a refusal that never claims, §5.1, and a throw apply nothing, so there is
  * no cause for undoing one); `take` a `tandem_open` (ownership design §4.2);
- * `stale` an entry whose record was gone.
+ * `stale` an entry whose record was gone; `poll-claim` an inbox poll that
+ * was handed items on an unowned document it may claim (the scope PR,
+ * applied in the poll's synchronous commit, not at a turn in the queue).
  */
-export type OwnershipChangeCause = "user-open" | "lapse" | "take-back" | "claim" | "take" | "stale";
+export type OwnershipChangeCause =
+  | "user-open"
+  | "lapse"
+  | "take-back"
+  | "claim"
+  | "take"
+  | "stale"
+  | "poll-claim";
 
 /**
  * Why a record lost a document, for the causes that block it from claiming
@@ -1054,31 +1066,214 @@ export type InboxScope = "holds" | "may-claim" | "neither";
 
 /**
  * Where `callerId` stands on an **open** document for an inbox poll
- * (ownership design §6.2; the scope PR calls it, nothing in production does yet).
+ * (ownership design §6.2). The scope PR calls it through `inboxOwnership`
+ * below; `inboxScope` in `owned-op.ts` is its tool-side name.
  * **Pure**: a reader never changes ownership, so an entry whose record is
  * gone reads as unowned and is left alone.
  *
- * - `"holds"`: the caller's record holds it.
+ * - `"holds"`: the caller's record holds it (decided before the queue, so a
+ *   holder reads its document mid-write).
  * - `"may-claim"`: nobody holds it and a poll by the caller may claim it now —
  *   the caller has a record, holds no blocking loss for it, is not a
  *   Tandem's Claude that is not present, **and the document's operation queue
- *   is idle**. A write whose outcome is not known yet keeps the queue busy, so
- *   a poll cannot claim a document in the middle of one.
+ *   is idle, or the operation running now started at least the queue's wait
+ *   bound (`DOC_OP_WAIT_MS`, 20 s) before `now`** (the stuck-write release,
+ *   Bryan 2026-11-12: a write that never settles must not hide a document from
+ *   every session until restart). Measured from when the operation running
+ *   now started, never from when the queue first became busy, so a run of
+ *   healthy short operations is not released; a queue busy with no operation
+ *   started yet (the microtask between two) reads as within the bound.
  * - `"neither"`: anything else, including a caller with no owner id or no
- *   record (design §6.2 gives no answer for one; this is provisional, and
- *   listed for Bryan on PR 2a), and every caller while ownership is off.
+ *   record (PR 2a's ruling), and every caller while ownership is off.
  *
  * It cannot see whether the document is open (this module never imports the
- * registry): pass open documents only. Chat is PR 2c's.
+ * registry): pass open documents only. Chat is the chat PR's.
  */
-export function inboxScopeOf(documentId: string, callerId: string | undefined): InboxScope {
+export function inboxScopeOf(
+  documentId: string,
+  callerId: string | undefined,
+  now: number = performance.now(),
+): InboxScope {
   if (!ownershipEnabled() || callerId === undefined) return "neither";
   const standing = standingOf(documentId, callerId, readEntry(documentId));
   if (!standing.ok) return "neither";
   if (standing.holds) return "holds";
   if (standing.claim === null) return "neither";
-  return isDocOpQueueBusy(documentId) ? "neither" : "may-claim";
+  const since = docOpBusySince(documentId);
+  if (since === undefined) return "may-claim";
+  return since !== null && now - since >= docOpWaitLimitMs() ? "may-claim" : "neither";
 }
+
+/**
+ * Where a poll stands on one open document, as the poll's scope snapshot
+ * holds it: an {@link InboxScope}, `"unread"` when the scope read for it
+ * threw (the poll neither reads nor acknowledges it and keeps the reader's
+ * position there, so nothing it was owed is passed), or `"closed"` for an id
+ * the poll did not find open (master's behaviour applies).
+ */
+export type InboxDocumentScope = InboxScope | "unread" | "closed";
+
+/** What a poll needs from ownership, fixed when the poll begins. */
+export interface InboxPollScope {
+  /**
+   * False while ownership is off: the poll reads every document,
+   * acknowledges as master does and returns no `ownership` field. True flag
+   * on, for every caller — one with no record included, whose every document
+   * is `"neither"`.
+   */
+  readonly scoped: boolean;
+  /** The document's answer in this poll's snapshot. */
+  scopeOf(documentId: string): InboxDocumentScope;
+  /**
+   * Apply a poll's claim of `documentId` (the inbox commit, ownership design
+   * §6.2), only if, now: the snapshot answered `"may-claim"` for it; it is
+   * still open (`stillOpen`, read by the caller from the document registry);
+   * it is still unowned (an entry whose record is gone reads as unowned, and
+   * the claim then runs a handover inside `setDocOwner`); the caller's record
+   * still exists; and the scope rule, with the poll's own clock reading, still
+   * answers `"may-claim"`. `sinceSeq` is the registry counter before this
+   * poll's pass over the document. Never throws. Answers `"held"` when the
+   * caller holds the document afterwards; `"refused"` when a check refused it
+   * and nothing changed; `"changed"` when `setDocOwner` was called but the
+   * caller does not hold the document after it (a re-entrant lapse moved it
+   * on): its handover may already have re-owed the document's items, which
+   * the caller must not undo. `setDocOwner` is total, so one that failed
+   * before writing the entry also reads `"changed"`; the inbox then keeps
+   * this poll's cursor-less ledger keys (a missed undo, never a loss of an
+   * entry). Judged unreachable: with `sinceSeq` given, nothing before the
+   * entry write can throw.
+   */
+  claim(documentId: string, sinceSeq: number, stillOpen: boolean): InboxClaimOutcome;
+  /** The documents the caller holds right now (empty for no record). */
+  holding(): string[];
+}
+
+/** What applying a poll's claim came to (`InboxPollScope.claim`). */
+export type InboxClaimOutcome = "held" | "refused" | "changed";
+
+/** The poll scope while ownership is off: read everything, claim nothing. */
+const UNSCOPED: InboxPollScope = Object.freeze({
+  scoped: false,
+  scopeOf: (): InboxDocumentScope => "holds",
+  claim: (): InboxClaimOutcome => "refused",
+  holding: () => [],
+});
+
+/** One of the poll claim's commit-time checks, for {@link setInboxClaimCheckForTests}. */
+export type InboxClaimCheck = "claimable" | "open" | "unowned" | "record" | "scope";
+
+let claimCheckForTests: ((check: InboxClaimCheck, documentId: string) => boolean) | undefined;
+
+let scopeReadForTests: typeof inboxScopeOf | undefined;
+
+const POLL_CLAIM_NOT_APPLIED =
+  "[ownership] an inbox poll's claim of a document could not be applied; the document stays unowned";
+
+function pollScope(callerId: string | undefined, openIds: Iterable<string>, now: number) {
+  const snapshot = new Map<string, InboxDocumentScope>();
+  for (const documentId of openIds) {
+    try {
+      snapshot.set(documentId, (scopeReadForTests ?? inboxScopeOf)(documentId, callerId, now));
+    } catch (err) {
+      // Every failure, with the document id and the error's class (never
+      // its message, never an owner id): the summary tells the model the
+      // error is in Tandem's log.
+      console.error(
+        `[ownership] an inbox scope read failed for document ${documentId} (${err instanceof Error ? err.name : typeof err}); the document was not read this poll`,
+      );
+      snapshot.set(documentId, "unread");
+    }
+  }
+  const passes = (check: InboxClaimCheck, documentId: string, ok: () => boolean): boolean =>
+    ok() && (claimCheckForTests?.(check, documentId) ?? true);
+  const scope: InboxPollScope = {
+    scoped: true,
+    scopeOf: (documentId) => snapshot.get(documentId) ?? "closed",
+    claim: (documentId, sinceSeq, stillOpen) => {
+      let changed = false;
+      const outcomeAfterChange = (): InboxClaimOutcome =>
+        callerId !== undefined && readEntry(documentId)?.ownerId === callerId ? "held" : "changed";
+      try {
+        if (callerId === undefined) return "refused";
+        const applies =
+          passes("claimable", documentId, () => snapshot.get(documentId) === "may-claim") &&
+          passes("open", documentId, () => stillOpen) &&
+          passes("unowned", documentId, () => readEntry(documentId) === undefined) &&
+          // Tandem's Claude needs no record to claim (`standingOf`; the
+          // ownership change creates it), every other caller does. With
+          // "unowned" this is defence in depth the brief asks for: for any
+          // caller but Tandem's Claude, `standingOf` below refuses a missing
+          // record and the scope re-check refuses another holder anyway, so no
+          // test can tell either check from `true` (a mutation run shows it).
+          passes(
+            "record",
+            documentId,
+            () => callerId === TANDEM_OWNER_ID || records.has(callerId),
+          ) &&
+          passes(
+            "scope",
+            documentId,
+            () => inboxScopeOf(documentId, callerId, now) === "may-claim",
+          );
+        if (!applies) return "refused";
+        // The kind from the same rule a write's claim uses (`standingOf`).
+        const standing = standingOf(documentId, callerId, readEntry(documentId));
+        if (!standing.ok || standing.holds || standing.claim === null) return "refused";
+        const kind = standing.claim;
+        changed = true;
+        setDocOwner(documentId, { ownerId: callerId, kind }, "poll-claim", callerId, sinceSeq);
+        const entry = ownerByDoc.get(documentId);
+        if (entry?.ownerId !== callerId || entry.kind !== kind) {
+          logLimited("poll-claim-not-applied", POLL_CLAIM_NOT_APPLIED);
+          return outcomeAfterChange();
+        }
+        // A holder that is detached must have a grace running, or it would
+        // keep the document until its transport is reaped. This can lapse
+        // other records, or this one, re-entrantly (`enforceDetachedCap`).
+        const record = records.get(callerId);
+        if (record) rejudge(record);
+        return outcomeAfterChange();
+      } catch {
+        logLimited("poll-claim-not-applied", POLL_CLAIM_NOT_APPLIED);
+        return changed ? outcomeAfterChange() : "refused";
+      }
+    },
+    holding: () => (callerId === undefined ? [] : heldDocumentIds(callerId)),
+  };
+  return scope;
+}
+
+/**
+ * **The inbox's one door into ownership** (#2358 scope PR; design §6.2,
+ * §6.6, §6.8 as amended by the scope PR's brief). `mcp/awareness.ts` imports
+ * this name and nothing else from this module, passes the tool caller it was
+ * given along without reading it, and never reads the ownership flag:
+ * `responseField` answers that for it.
+ */
+export const inboxOwnership = Object.freeze({
+  /**
+   * Whether `tandem_checkInbox` carries the `ownership` field. Read once at
+   * the tool's registration; the handler keeps that answer for its own
+   * backstop schema and for whether it emits the field, so a server never
+   * answers outside the output schema it advertised.
+   */
+  responseField(): boolean {
+    return ownershipEnabled();
+  },
+  /**
+   * Begin a poll: the caller's scope over `openIds`, decided once, at `now`
+   * (the poll's one reading of the monotonic clock, `performance.now()`, reused for acknowledgement, the pass and
+   * the commit). Flag off: the unscoped answer, whoever the caller is.
+   */
+  begin(
+    caller: { readonly ownerId?: string },
+    openIds: Iterable<string>,
+    now: number,
+  ): InboxPollScope {
+    if (!ownershipEnabled()) return UNSCOPED;
+    return pollScope(caller.ownerId, openIds, now);
+  },
+});
 
 /**
  * The take rule for `tandem_open` (ownership design §4.2), as a decision:
@@ -1293,6 +1488,23 @@ export function setHandoverSeqForTests(documentId: string, seq: number): void {
   handoverSeq.set(documentId, seq);
 }
 
+/**
+ * Force one of a poll claim's commit-time checks to fail for a test (it is
+ * ANDed with the real check, so it can never make a failing check pass).
+ * The checks cannot fail while the commit stays synchronous except through
+ * re-entrancy, which an ESM spy cannot reach. Undefined clears it.
+ */
+export function setInboxClaimCheckForTests(
+  hook: ((check: InboxClaimCheck, documentId: string) => boolean) | undefined,
+): void {
+  claimCheckForTests = hook;
+}
+
+/** Replace the poll snapshot's scope read for a test (to make it throw); undefined restores it. */
+export function setInboxScopeReadForTests(read: typeof inboxScopeOf | undefined): void {
+  scopeReadForTests = read;
+}
+
 /** Shorten the grace for a test. */
 export function setGraceMsForTests(ms: number): void {
   graceMs = ms;
@@ -1308,6 +1520,8 @@ export function resetOwnershipForTests(): void {
   answererByItem.clear();
   pendingClaims.clear();
   compositeObserver = undefined;
+  claimCheckForTests = undefined;
+  scopeReadForTests = undefined;
   resetDocOpQueuesForTests();
   lastLogAt.clear();
   transportMode = undefined;

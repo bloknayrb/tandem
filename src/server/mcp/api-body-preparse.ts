@@ -46,7 +46,7 @@
  * handler-level `assertOriginAllowlisted` / `assertLoopbackForMutation` still
  * run after the parse, exactly as before.
  *
- * **The one exception: the two local-model settings POSTs** (kind
+ * **The one exception: the three local-model settings POSTs** (kind
  * `models-own-window`, #2404). For those the origin decision is made in THIS
  * router, between `mw` and the parser, so a request that is not from Tandem's
  * own window is answered 403 before a byte of its body is parsed. It is the
@@ -84,7 +84,11 @@ import {
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { API_INTEGRATIONS, API_INTEGRATIONS_APPLY } from "../../shared/integrations/contract.js";
-import { API_MODELS, API_MODELS_LOCAL_SETTINGS } from "../../shared/models/contract.js";
+import {
+  API_MODELS,
+  API_MODELS_CHAT_ANSWERER,
+  API_MODELS_LOCAL_SETTINGS,
+} from "../../shared/models/contract.js";
 import { API_INTEGRATIONS_SECRET } from "../integrations/api-routes.js";
 import { API_MODELS_SECRET } from "../models/api-routes.js";
 import { rejectOversizeLicenseBody, scratchpadJsonBody } from "./api-routes.js";
@@ -140,7 +144,7 @@ export type RouteBodyKind =
  *   they see no change. Listed explicitly rather than left to the SDK, so the
  *   limit does not depend on an SDK default and this table stays complete.
  *
- * - `models-own-window` (100 kB, after the own-window test): the two POSTs
+ * - `models-own-window` (100 kB, after the own-window test): the three POSTs
  *   that decide what a local model does (#2404). Their `Origin` must be one of
  *   Tandem's own page origins, and that is decided HERE, before the parser, so
  *   a refused request's body is never read. It is the one refusal this router
@@ -175,6 +179,7 @@ export const ROUTE_OWNED_BODY_PARSERS: Readonly<Record<string, RouteBodyKind>> =
   [API_INTEGRATIONS_SECRET]: "small",
   [API_MODELS]: "models-own-window",
   [API_MODELS_LOCAL_SETTINGS]: "models-own-window",
+  [API_MODELS_CHAT_ANSWERER]: "models-own-window",
   [API_MODELS_SECRET]: "small",
 });
 
@@ -203,8 +208,8 @@ export interface ApiBodyPreParserDeps {
   largeBody: Handler;
   /**
    * `ownWindowGate(policy)` from `models/own-window.ts`: refuses a request to
-   * the two local-model settings POSTs that is not from Tandem's own window
-   * (#2404), before its body is parsed. Required, so the two routes cannot be
+   * the three local-model settings POSTs that is not from Tandem's own window
+   * (#2404), before its body is parsed. Required, so the three routes cannot be
    * registered here without it.
    */
   modelsOwnWindowGate: Handler;

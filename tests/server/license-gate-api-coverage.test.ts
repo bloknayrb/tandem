@@ -203,6 +203,11 @@ const ROUTE_GATES: RouteGate[] = [
     gate: "open",
     why: "whether a local model may comment and suggest (#1123, ADR-039), itself dark behind BYO_MODELS_ENABLED; it starts nothing and reaches no model — the setting only narrows or widens what an already-admitted run may write, the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching editing off must never be refused",
   },
+  {
+    constant: "API_MODELS_CHAT_ANSWERER",
+    gate: "open",
+    why: "who answers chat, Claude or the local model (#1123, ADR-039), itself dark behind BYO_MODELS_ENABLED; it starts nothing and reaches no model — the local model is refused per chat event by `aiRefusal()` in `local-model/collaborator.ts`, and switching to Claude must never be refused",
+  },
 ];
 
 /** A handler that answers the licence refusal in its own body. */

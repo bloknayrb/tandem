@@ -76,7 +76,10 @@ export interface RegistryEntry {
   readonly base: string;
   /** The version: an annotation's `editedAt` (0 if never edited); 0 for replies and chat. */
   readonly editedAt: number;
-  /** Some reader acknowledged it (or a cursor-less poll returned it). Never reset. */
+  /**
+   * Some reader acknowledged it (or a cursor-less poll returned it). Reset only
+   * by {@link DeliveryRegistry.unacknowledge}, the undo of a refused claim.
+   */
   acked: boolean;
   /**
    * Chat only: a cursor reader that was HANDED this entry passed back the cursor
@@ -327,8 +330,9 @@ export class DeliveryRegistry {
    * by `documentScopes`.
    *
    * Never the chat scope: a chat entry carries `received` and hand-out
-   * tokens, which only `reset` may forget. The one caller is the ownership
-   * handover (`handOverDocumentInbox` in `awareness.ts`).
+   * tokens, which only `reset` may forget. Two callers, both in
+   * `awareness.ts`: the ownership handover (`handOverDocumentInbox`) and the
+   * scope PR's undo of a failed or unclaimed poll (`undoPassOn`).
    */
   retireWhere(scope: string, drop: (entry: RegistryEntry) => boolean): number {
     if (scope === CHAT_SCOPE) return 0;
@@ -374,6 +378,23 @@ export class DeliveryRegistry {
     for (const entry of unacked) {
       if (entry.seq <= view.mark && !view.held.has(entry.seq)) this.markAcked(entry);
     }
+  }
+
+  /**
+   * Take back an acknowledgement this process just made, for a live entry
+   * only: the inbox's undo of a cursor-less poll whose claim was refused at
+   * commit (the scope PR, R1.7), which acknowledged an entry that predated it.
+   * Only re-owes, like {@link retire}.
+   */
+  unacknowledge(entry: RegistryEntry): void {
+    if (this.#bySeq.get(entry.seq) !== entry || !entry.acked) return;
+    entry.acked = false;
+    let unacked = this.#unacked.get(entry.scope);
+    if (!unacked) {
+      unacked = new Set();
+      this.#unacked.set(entry.scope, unacked);
+    }
+    unacked.add(entry);
   }
 
   markAcked(entry: RegistryEntry): void {

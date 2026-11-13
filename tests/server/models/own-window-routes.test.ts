@@ -43,6 +43,7 @@ import {
 } from "../../../src/shared/constants.js";
 import {
   API_MODELS,
+  API_MODELS_CHAT_ANSWERER,
   API_MODELS_LOCAL_SETTINGS,
   ERROR_CODE_OWN_WINDOW_ONLY,
   MODELS_DEV_ORIGIN_ENV,
@@ -529,7 +530,7 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
     const OVERSIZE = JSON.stringify({ file: { pad: "x".repeat(150_000) }, ifMatch: "" });
     const MALFORMED = '{"file": ';
 
-    it.each([API_MODELS, API_MODELS_LOCAL_SETTINGS])(
+    it.each([API_MODELS, API_MODELS_LOCAL_SETTINGS, API_MODELS_CHAT_ANSWERER])(
       "%s: an over-limit body from a foreign origin is 403 OWN_WINDOW_ONLY, not 413",
       async (url) => {
         await boot();
@@ -547,7 +548,7 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
       },
     );
 
-    it.each([API_MODELS, API_MODELS_LOCAL_SETTINGS])(
+    it.each([API_MODELS, API_MODELS_LOCAL_SETTINGS, API_MODELS_CHAT_ANSWERER])(
       "%s: a malformed JSON body from a foreign origin is 403 OWN_WINDOW_ONLY, not 400",
       async (url) => {
         await boot();

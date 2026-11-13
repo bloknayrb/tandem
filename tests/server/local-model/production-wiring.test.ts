@@ -7,6 +7,7 @@ import {
   DEFAULT_COLLABORATOR_DEPS,
 } from "../../../src/server/local-model/collaborator.js";
 import { answeringLocalModel } from "../../../src/server/local-model/config-source.js";
+import { chatAnswerer, onChatAnswererChanged } from "../../../src/server/models/chat-answerer.js";
 import {
   answeringWasAnnounced,
   baselineAdoptionPending,
@@ -103,6 +104,123 @@ describe("local-model production wiring (#1123, #2404)", () => {
     expect(startAt).toBeGreaterThan(gateAt + gated.length);
   });
 
+  // #1123 R1.4: the dark guard for who answers chat. `chatAnswerer()` reads
+  // Claude until `primeChatAnswerer()` has run, and that call is the only disk
+  // read of `chat-answerer.json` — so it must sit inside the flag's block, and
+  // after the editing prime (which makes the first-lit-start decision before
+  // anything could write the record). Its own `try`, so a failed registry
+  // prime cannot leave the switch unprimed.
+  it("index.ts primes who answers chat INSIDE the BYO_MODELS_ENABLED block, after the editing prime", async () => {
+    const src = stripComments(await read("index.ts"));
+    const gated = blockAfter(src, "if (BYO_MODELS_ENABLED) {");
+    expect(count(gated, "primeChatAnswerer()")).toBe(1);
+    expect(gated).toMatch(
+      /const\s*\{\s*primeChatAnswerer\s*\}\s*=\s*await\s+import\(\s*"\.\/models\/chat-answerer\.js"\s*\)/,
+    );
+    expect(count(src, "primeChatAnswerer()")).toBe(1);
+    expect(count(src, "primeChatAnswerer")).toBe(2);
+    expect(gated.indexOf("primeChatAnswerer()")).toBeGreaterThan(
+      gated.indexOf("primeLocalModelSettings()"),
+    );
+    // Not in the registry prime's `try`: a `catch` lies between the two.
+    const between = gated.slice(
+      gated.indexOf("primeModelStoreCache()"),
+      gated.indexOf("primeChatAnswerer()"),
+    );
+    expect(between).toMatch(/\}\s*catch\s*\(/);
+  });
+
+  // Repo-wide: the prime is the switch's only disk read, so a call anywhere
+  // else in src/ — even one that looks harmless — would read the file in a
+  // dark build. The definition is the one other mention.
+  it("primeChatAnswerer is called nowhere in src/ but index.ts's flag block", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const root = path.join(SRC, "..");
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(path.join(dir, e.name))
+          : /\.(ts|svelte)$/.test(e.name)
+            ? [path.join(dir, e.name)]
+            : [],
+      );
+    const callers = walk(root)
+      .filter((f) => /\bprimeChatAnswerer\s*\(/.test(stripComments(readFileSync(f, "utf8"))))
+      .map((f) => path.relative(root, f).replace(/\\/g, "/"))
+      .sort();
+    expect(callers).toEqual(["server/index.ts", "server/models/chat-answerer.ts"]);
+    const own = stripComments(await read("models", "chat-answerer.ts"));
+    expect(count(own, "primeChatAnswerer(")).toBe(1); // the definition only
+  });
+
+  // An aliased import (`import { primeChatAnswerer as p }`) or a namespace
+  // import of the module would call it under another name, which the call
+  // pin above cannot see. So: the name appears in no src/ file but its
+  // definition and index.ts, and no src/ file but index.ts loads the module
+  // in any way that could reach it.
+  it("no src/ file but index.ts imports primeChatAnswerer, under any name", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const root = path.join(SRC, "..");
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(path.join(dir, e.name))
+          : /\.(ts|svelte)$/.test(e.name)
+            ? [path.join(dir, e.name)]
+            : [],
+      );
+    const files = walk(root).map((f) => ({
+      rel: path.relative(root, f).replace(/\\/g, "/"),
+      src: stripComments(readFileSync(f, "utf8")),
+    }));
+    const naming = files
+      .filter((f) => /\bprimeChatAnswerer\b/.test(f.src))
+      .map((f) => f.rel)
+      .sort();
+    expect(naming).toEqual(["server/index.ts", "server/models/chat-answerer.ts"]);
+    // Namespace or default-style imports of the module, which would reach the
+    // export without naming it, are refused everywhere.
+    const namespaced = files
+      .filter((f) =>
+        /import\s*\*\s*as\s+\w+\s+from\s*["'][^"']*chat-answerer(\.js)?["']/.test(f.src),
+      )
+      .map((f) => f.rel);
+    expect(namespaced).toEqual([]);
+    const dynamicWhole = files
+      .filter((f) =>
+        /(?:const|let|var)\s+\w+\s*=\s*await\s+import\(\s*["'][^"']*chat-answerer\.js["']\s*\)/.test(
+          f.src,
+        ),
+      )
+      .map((f) => f.rel);
+    expect(dynamicWhole).toEqual([]);
+  });
+
+  // Critical Rule 2: the run state is written on the user's row with the
+  // `mcp` origin, so the ctrl-chat observer skips it and it can wake nothing.
+  it("writeLocalRun writes through withMcp, and only through it", async () => {
+    const src = stripComments(await read("local-model", "collaborator.ts"));
+    const body = blockAfter(src, '"generation">,\n): void {');
+    expect(body).toMatch(/withMcp\(ctrlDoc,\s*\(\)\s*=>\s*chatMap\.set\(/);
+    expect(count(body, "chatMap.set(")).toBe(1);
+    expect(body).not.toMatch(/\.transact\(/);
+  });
+
+  it("index.ts hands localModelResolvesNow to startMcpServerHttp, and server.ts to the models routes", async () => {
+    const index = stripComments(await read("index.ts"));
+    expect(index).toMatch(/\{\s*localModelResolvesNow\s*\}\s*,?\s*\)/);
+    expect(index).toMatch(
+      /import\s*\{[^}]*\blocalModelResolvesNow\b[^}]*\}\s*from\s*"\.\/local-model\/collaborator\.js"/,
+    );
+    const server = stripComments(await read("mcp", "server.ts"));
+    expect(server).toMatch(/localModelResolvesNow:\s*modelsWiring\?\.localModelResolvesNow/);
+  });
+
+  it("DEFAULT_COLLABORATOR_DEPS wires who answers chat and its change listener, by identity", () => {
+    expect(DEFAULT_COLLABORATOR_DEPS.chatAnswerer).toBe(chatAnswerer);
+    expect(DEFAULT_COLLABORATOR_DEPS.onChatAnswererChanged).toBe(onChatAnswererChanged);
+  });
+
   it("startLocalModelCollaborator builds the collaborator with NO arguments", async () => {
     const src = stripComments(await read("local-model", "collaborator.ts"));
     const body = blockAfter(src, "export function startLocalModelCollaborator(): void {");
@@ -178,7 +296,7 @@ describe("local-model production wiring (#1123, #2404)", () => {
     // The user's own change records the fingerprint as the ANSWERING model and
     // withdraws the pending live notice under the answering notice's own key.
     expect(body).toMatch(
-      /setByUser:\s*\(fingerprint\)\s*=>\s*\{\s*recordSetByUser\(\s*\{\s*answering:\s*fingerprint\s*\}\s*,\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*;?\s*\}\s*,/,
+      /setByUser:\s*\(fingerprint\)\s*=>\s*\{\s*(?:void\s+)?recordSetByUser\(\s*\{\s*answering:\s*fingerprint\s*\}\s*,\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*;?\s*\}\s*,/,
     );
     expect(body).toMatch(
       /startupMismatch:\s*\(fingerprint\)\s*=>\s*\{\s*announceStartupMismatch\(\s*\{\s*answering:\s*fingerprint\s*\}\s*\)\s*;?\s*\}\s*,/,

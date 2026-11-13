@@ -125,6 +125,9 @@ function makeDeps(over: Partial<CollaboratorDeps> = {}): CollaboratorDeps {
     resolveConfig: () => CONFIG,
     subscribe: () => {},
     unsubscribe: () => {},
+    // The local model is chosen to answer chat (#1123): every "runs" case here
+    // is the positive control for the Claude-chosen "runs nothing" cases.
+    chatAnswerer: () => "local",
     ...over,
   };
 }
@@ -215,6 +218,9 @@ beforeEach(() => {
     ctrl.getMap(Y_MAP_CHAT_STREAM).clear();
     ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
   });
+  // Tandem mode, written as the editor writes it. An ABSENT key now fails
+  // closed for the editing tier (#1123 R3.1: compared with "tandem" exactly).
+  setMode("tandem");
 });
 
 afterEach(() => {
@@ -317,18 +323,26 @@ describe("collaborator — dispatch", () => {
     expect(seenTask).not.toContain("x".repeat(600)); // raw oversized text never reaches the prompt
   });
 
-  it("holds in Solo mode (no loop)", async () => {
+  it("answers in Solo mode, in the chat tier, with editing switched on (#1123 R3.1)", async () => {
     setupDoc("doc-solo", "Body");
     setMode("solo");
-    const runTurn = vi.fn(async () => cleanResult("x"));
-    const collab = createLocalModelCollaborator(makeDeps({ runTurn }));
+    const allowed: boolean[] = [];
+    const runTurn = vi.fn(async (opts: RunTurnOpts) => {
+      allowed.push(opts.editingAllowed());
+      opts.onContentDelta?.("x");
+      return cleanResult("x");
+    });
+    const collab = createLocalModelCollaborator(
+      makeDeps({ runTurn, editingState: () => ({ enabled: true, offEpoch: 0 }) }),
+    );
     collab.onEvent(chatEvent("hi", { documentId: "doc-solo" }));
     await drain(collab);
-    expect(runTurn).not.toHaveBeenCalled();
-    expect(chatMessages()).toHaveLength(0);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(allowed).toEqual([false]);
+    expect(chatMessages().filter((m) => m.author === "claude")).toHaveLength(1);
   });
 
-  it("is inert while no config resolves, asking again on every chat event (no loop, no throw)", async () => {
+  it("runs no loop while no config resolves, asking again and posting the notice on every chat event", async () => {
     setupDoc("doc-noconf", "Body");
     const runTurn = vi.fn(async () => cleanResult("x"));
     const resolveConfig = vi.fn((): LocalModelConfig | null => null);
@@ -346,7 +360,12 @@ describe("collaborator — dispatch", () => {
     expect(resolveConfig).toHaveBeenCalledTimes(2);
 
     expect(runTurn).not.toHaveBeenCalled();
-    expect(chatMessages()).toHaveLength(0);
+    // One "no local model can answer" chat notice per chat (decision 5), and
+    // no toast: nothing is diagnosed as broken.
+    expect(chatMessages().map((m) => [m.chatNotice, m.replyTo])).toEqual([
+      ["no-local-model", "a"],
+      ["no-local-model", "b"],
+    ]);
     expect(getBuffer()).toEqual([]);
     await collab.stop();
   });
@@ -2010,7 +2029,7 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
     expect(h.hasListener()).toBe(false);
   });
 
-  it("a null diagnosis is silent and runs nothing", async () => {
+  it("a null diagnosis raises no toast and runs nothing; each chat gets the chat notice", async () => {
     setupDoc("doc-notice-none", "Body");
     const h = harness();
     h.state.broken = null; // no models, a disabled default, a cloud default…
@@ -2020,11 +2039,15 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
     expect(h.diagnose).toHaveBeenCalledTimes(3); // it was asked, and said "nothing to tell"
     expect(h.runTurn).not.toHaveBeenCalled();
     expect(getBuffer()).toEqual([]);
-    expect(chatMessages()).toHaveLength(0);
+    expect(chatMessages().map((m) => m.chatNotice)).toEqual([
+      "no-local-model",
+      "no-local-model",
+      "no-local-model",
+    ]);
     await h.collab.stop();
   });
 
-  it("no diagnose dep at all is silent too", async () => {
+  it("no diagnose dep at all raises no toast either", async () => {
     setupDoc("doc-notice-nodiag", "Body");
     const runTurn = vi.fn(async () => cleanResult(""));
     const collab = createLocalModelCollaborator(makeDeps({ runTurn, resolveConfig: () => null }));
@@ -2046,32 +2069,33 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
     await h.collab.stop();
   });
 
-  it("Solo mode: no notice and no run, and a Solo chat does not use up the once", async () => {
+  it("Solo mode: the chosen local model still answers, so an unusable one is told once, and each chat gets the chat notice", async () => {
     setupDoc("doc-notice-solo", "Body");
     const h = harness();
     h.state.broken = unusable("endpoint-rejected");
     setMode("solo");
 
     await h.chat("doc-notice-solo", 3);
-    expect(getBuffer()).toEqual([]);
+    expect(getBuffer()).toHaveLength(1);
+    expect(getBuffer()[0].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
     expect(h.runTurn).not.toHaveBeenCalled();
 
     setMode("tandem");
     await h.chat("doc-notice-solo", 2);
     expect(getBuffer()).toHaveLength(1);
-    expect(getBuffer()[0].message).toBe(UNUSABLE_NOTICE["endpoint-rejected"]);
-    expect(h.runTurn).not.toHaveBeenCalled();
+    expect(chatMessages().filter((m) => m.chatNotice === "no-local-model")).toHaveLength(5);
     await h.collab.stop();
   });
 
-  it("Solo mode with a usable config: no run and no notice", async () => {
+  it("Solo mode with a usable config: it runs, and no notice", async () => {
     setupDoc("doc-notice-solo-ok", "Body");
     const h = harness();
     h.state.config = CONFIG;
     setMode("solo");
     await h.chat("doc-notice-solo-ok", 2);
-    expect(h.runTurn).not.toHaveBeenCalled();
+    expect(h.runTurn).toHaveBeenCalledTimes(2);
     expect(getBuffer()).toEqual([]);
+    expect(chatMessages().filter((m) => m.chatNotice !== undefined)).toEqual([]);
     await h.collab.stop();
   });
 
@@ -2098,7 +2122,7 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
     await h.collab.stop();
   });
 
-  it("the notice is not a chat message and not an event-queue event", async () => {
+  it("the toast is not an event-queue event, and the chat notice beside it wakes nothing", async () => {
     setupDoc("doc-notice-surface", "Body");
     attachCtrlObservers();
     const events: TandemEvent[] = [];
@@ -2125,13 +2149,18 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
       unsubscribe(external);
     }
 
-    expect(getBuffer()).toHaveLength(REASONS.length); // the notices did go out…
-    // …through the browser's notify stream only: the chat map and its streaming
-    // sidecar are untouched, CTRL_ROOM saw no write at all, and no subscriber of
-    // the event queue (the AI-facing surface) was handed anything.
-    expect(chatMap().size).toBe(0);
+    expect(getBuffer()).toHaveLength(REASONS.length); // the toasts did go out…
+    // …through the browser's notify stream only. The chat holds only the
+    // per-chat notices (#1123 R3.2), written `withMcp` with no streaming
+    // sidecar, and no subscriber of the event queue (the AI-facing surface)
+    // was handed anything.
+    const rows = chatMessages();
+    expect(rows).toHaveLength(REASONS.length * 2);
+    expect(rows.every((m) => m.chatNotice === "no-local-model" && m.author === "claude")).toBe(
+      true,
+    );
     expect(streamMap().size).toBe(0);
-    expect(ctrlUpdates).toBe(0);
+    expect(ctrlUpdates).toBe(REASONS.length * 2);
     expect(events).toEqual([]);
   });
 });
@@ -2680,7 +2709,7 @@ describe("answeringChangedNotice — what it may carry (#2404)", () => {
   // was told about, so it says "set or changed" and no longer asserts an edit.
   it("the notice, whole", () => {
     expect(answeringChangedNotice(base)).toBe(
-      'The local model that is set up to answer your chat was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
+      'The local model used when your chat is answered by a local model was set or changed: a model was chosen, or its Endpoint or model was edited. It was set to "Local One". If you did not do this, check Settings → Models.',
     );
   });
 

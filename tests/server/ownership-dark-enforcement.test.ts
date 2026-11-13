@@ -142,6 +142,10 @@ describe("tools/list while dark", () => {
       "this session its owner",
       '"owner"',
       "this session holds",
+      // The scope PR's `ownership` field (quoted: the bare words are common English).
+      '"ownership"',
+      '"holding"',
+      '"notYours"',
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }
@@ -153,7 +157,9 @@ describe("tools/list while dark", () => {
     // The three descriptions that tell an older skill what changed, and
     // read-mode `tandem_status`'s `owner` field. Anything else is a leak
     // of ownership into a tool that PR 1c did not mean to change.
+    // The scope PR adds `tandem_checkInbox`'s `ownership` output field.
     expect(changed.sort()).toEqual([
+      "tandem_checkInbox",
       "tandem_close",
       "tandem_open",
       "tandem_status",
@@ -166,6 +172,16 @@ describe("tools/list while dark", () => {
     expect(on.get("tandem_status")?.description).toBe(off.get("tandem_status")?.description);
     expect(JSON.stringify(on.get("tandem_status")?.outputSchema)).toContain('"owner"');
     expect(JSON.stringify(off.get("tandem_status")?.outputSchema)).not.toContain('"owner"');
+    // The inbox: only the output schema changes — description and input are
+    // byte-identical, and the flag-on field is optional.
+    const inboxOn = on.get("tandem_checkInbox");
+    const inboxOff = off.get("tandem_checkInbox");
+    expect(inboxOn?.description).toBe(inboxOff?.description);
+    expect(inboxOn?.inputSchema).toEqual(inboxOff?.inputSchema);
+    expect(JSON.stringify(inboxOn?.outputSchema)).toContain('"notYours"');
+    expect(JSON.stringify(inboxOff?.outputSchema)).not.toContain('"ownership"');
+    const required = (inboxOn?.outputSchema as { required?: string[] } | undefined)?.required;
+    expect(required ?? []).not.toContain("ownership");
   });
 });
 

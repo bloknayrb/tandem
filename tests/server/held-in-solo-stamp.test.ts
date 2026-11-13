@@ -26,7 +26,11 @@ import { MODE_RELEASE_ORIGIN, transactForTest, withMcp } from "../../src/shared/
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
+
+// #2358 scope PR: flag-on, a poll reads only what its record holds or may
+// claim, so this suite's one caller is a registered record (see the helper).
+registerTestCallerRecord();
 
 const DOC_ID = "held-in-solo-stamp-doc";
 

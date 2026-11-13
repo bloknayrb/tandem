@@ -54,7 +54,11 @@ import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js"
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch } from "../helpers/ownership-caller.js";
+import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
+
+// #2358 scope PR: flag-on, a poll reads only what its record holds or may
+// claim, so this suite's one caller is a registered record (see the helper).
+registerTestCallerRecord();
 
 // Pass-through mocks: each behaves exactly as the real function until a row
 // overrides it for one call. `isStoreReadOnly` is the server-built field the

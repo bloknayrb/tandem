@@ -159,6 +159,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-flag.test.ts",
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
+    "tests/server/ownership-inbox-scope.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
@@ -177,6 +178,8 @@ describe("tests and the flag", () => {
     // what enforcement must not do while dark.
     // The handover PR's one (`ownership-handover.test.ts`): it seeds state
     // flag-on and then turns the flag off, to show no path reaches the inbox.
+    // The scope PR's one (`ownership-inbox-scope.test.ts`): its dark tests
+    // build their server flag-off, to show tandem_checkInbox is master's.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
@@ -185,6 +188,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-default-rule.test.ts",
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-handover.test.ts",
+      "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
@@ -203,6 +207,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-enforcement.test.ts",
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-handover.test.ts",
+      "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",

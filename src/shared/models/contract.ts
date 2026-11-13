@@ -45,6 +45,34 @@ export interface LocalModelSettingsPostResponse {
   code?: string;
 }
 
+/**
+ * Who answers chat: Claude, or the local model (#1123, ADR-039 amendment of
+ * 2026-11-12). Its own route and its own file (`chat-answerer.json`). The
+ * default is Claude, and saving or changing a model never changes it.
+ */
+export const API_MODELS_CHAT_ANSWERER = "/api/models/chat-answerer";
+
+/** The switch's two positions. */
+export type ChatAnswerer = "claude" | "local";
+
+/** `GET /api/models/chat-answerer`. `localModelResolves` says only whether a
+ *  local model would answer now — never which one, or where it points. */
+export interface ChatAnswererResponse {
+  answerer: ChatAnswerer;
+  localModelResolves: boolean;
+  /** This server process's run id, for judging a chat row's `localRun`
+   *  (`shared/local-run.ts`). Authorises nothing. */
+  runGeneration: string;
+}
+
+/** `POST /api/models/chat-answerer` answer, on success (200) and on a failed
+ *  write (500) alike: `answerer` is what the server is acting on now. */
+export interface ChatAnswererPostResponse {
+  answerer: ChatAnswerer;
+  persisted: boolean;
+  code?: string;
+}
+
 // --- Schema version ----------------------------------------------------------
 
 /** On-disk `models.json` schema version. Net-new at M1a; no migrations yet. */
@@ -194,3 +222,10 @@ export const ERROR_CODE_MODELS_BUSY = "MODELS_BUSY";
 export const ERROR_CODE_INVALID_LOCAL_MODEL_SETTINGS = "INVALID_LOCAL_MODEL_SETTINGS";
 /** 500 — the setting could not be saved; the answer still carries the effective value. */
 export const ERROR_CODE_LOCAL_MODEL_SETTINGS_WRITE_FAILED = "LOCAL_MODEL_SETTINGS_WRITE_FAILED";
+/** `POST /api/models/chat-answerer` body was not `{ answerer: "claude" | "local" }`. */
+export const ERROR_CODE_INVALID_CHAT_ANSWERER = "INVALID_CHAT_ANSWERER";
+/** `POST /api/models/chat-answerer`: the switch took effect but did not reach the disk. */
+export const ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED = "CHAT_ANSWERER_WRITE_FAILED";
+/** `POST /api/models/chat-answerer`: a later request won before this one
+ *  settled (409). Nothing failed; the body carries the state now. */
+export const ERROR_CODE_CHAT_ANSWERER_SUPERSEDED = "CHAT_ANSWERER_SUPERSEDED";

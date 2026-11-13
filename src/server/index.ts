@@ -32,6 +32,7 @@ import { isWalkthroughPending } from "./integrations/walkthrough.js";
 import { armFirstRunGreeting, isGreetingOwed, markGreeted } from "./launcher/greeting.js";
 import { resolveInitialLauncherReason } from "./launcher/initial-reason.js";
 import {
+  localModelResolvesNow,
   startLocalModelCollaborator,
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
@@ -718,6 +719,20 @@ async function main() {
         `[Tandem] Failed to prime model-registry cache: ${err instanceof Error ? err.message : err}`,
       );
     }
+    // Who answers chat (#1123), under the same gate and AFTER the editing
+    // prime: that one decides "is this the first lit start?" before anything
+    // could write the record, and this one may write it. Its own `try`, so a
+    // failed registry prime cannot leave the switch unprimed (it would then
+    // read Claude and refuse every change). Until this runs the switch reads
+    // Claude and its file is never opened (the dark guard).
+    try {
+      const { primeChatAnswerer } = await import("./models/chat-answerer.js");
+      primeChatAnswerer();
+    } catch (err) {
+      console.error(
+        `[Tandem] Failed to prime who answers chat: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
@@ -912,6 +927,9 @@ async function main() {
           // so dirty docs flush and the session snapshot stays in sync.
           requestShutdown: (reason) => void shutdown(reason),
         },
+        undefined,
+        // The chat-answerer GET's "would a local model answer now?" (#1123).
+        { localModelResolvesNow },
       ),
       startHocuspocus(wsPort).then(() => {
         console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);

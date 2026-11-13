@@ -119,7 +119,7 @@ describe("EDITING_SYSTEM_PROMPT", () => {
       "- So never tell the user that a change w",
       "- Never quote annotation ids, reply ids ",
       "- You only know the ids of comments you ",
-      "- If a tool returns EDITING_OFF, the use",
+      "- If a tool returns EDITING_OFF, comment",
     ]);
   });
 
@@ -163,7 +163,8 @@ describe("EDITING_SYSTEM_PROMPT", () => {
     // Round 2: was "Stop calling tools that write". The loop now offers no
     // tools at all on the next turn, so the prompt says to call none.
     expect(EDITING_SYSTEM_PROMPT).toContain(
-      "- If a tool returns EDITING_OFF, the user has switched off commenting and suggesting. Call no more tools: your next message is your reply, so answer in plain text.",
+      // #1123 A1: true whether the cause is the editing setting or Solo mode.
+      "- If a tool returns EDITING_OFF, commenting and suggesting are not allowed for this reply. Call no more tools: your next message is your reply, so answer in plain text.",
     );
     expect(EDITING_SYSTEM_PROMPT).not.toMatch(/Stop calling tools that write/);
   });

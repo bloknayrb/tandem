@@ -184,8 +184,9 @@ export function chatRowsFor(messageId: string): string[] {
     text?: string;
     chatNotice?: unknown;
   }[];
-  // A row carrying `chatNotice` is a notice the product posts about the turn,
-  // not the model's reply (PR #2417 adds them; today the field is absent).
+  // A row carrying `chatNotice` is a notice the product posts about the turn
+  // (no document open, no usable local model: PR #2417), not the model's
+  // reply. A trial always has both, so none is expected; one is never scored.
   return rows
     .filter((r) => r.author === "claude" && r.replyTo === messageId && r.chatNotice === undefined)
     .map((r) => r.text ?? "");
@@ -209,6 +210,10 @@ export function trialDeps(
     editingState: () => ({ enabled: input.tier === "editing", offEpoch: 0 }),
     onModelsChanged: () => () => {},
     answering: () => null,
+    // The switch set to the local model (PR #2417): with Claude chosen, the
+    // collaborator runs nothing. Never told of a change: a trial does not move it.
+    chatAnswerer: () => "local",
+    onChatAnswererChanged: () => () => {},
     announced: { wasAnnounced: () => true, announce: () => {}, none: () => {} },
   };
 }

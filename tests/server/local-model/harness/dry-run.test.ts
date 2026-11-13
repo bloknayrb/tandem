@@ -272,6 +272,9 @@ describe("a trial sends what the product sends for the same message", () => {
       );
     }
     expect(deps.aiRefusal()).toBeNull();
+    // With Claude chosen the collaborator runs nothing (PR #2417), so a trial
+    // measures only with the switch on the local model.
+    expect(deps.chatAnswerer()).toBe("local");
   });
 });
 
