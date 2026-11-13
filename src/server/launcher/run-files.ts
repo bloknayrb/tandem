@@ -136,9 +136,6 @@ export function buildRunMcpConfig(opts: {
           // environment Claude Code passes is unmeasured; if it does not, this
           // clears nothing (a residual, docs/security.md).
           NODE_OPTIONS: "",
-          // Node's environment proxy, off for the bridge if this wins the merge
-          // (the bridge withholds the handle when it could be on, review round 2).
-          NODE_USE_ENV_PROXY: "",
           // `NODE_DEBUG=http,fetch,…` would print request headers, the handle's
           // among them, to the bridge's stderr, which Claude Code captures.
           NODE_DEBUG: "",

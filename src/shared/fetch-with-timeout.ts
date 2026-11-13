@@ -15,7 +15,7 @@
  * "operation was aborted" string from AbortError/TimeoutError.
  */
 
-import { authFetch } from "./cli-runtime.js";
+import { authFetch } from "./auth-fetch.js";
 
 /**
  * Fetch with a per-request deadline.

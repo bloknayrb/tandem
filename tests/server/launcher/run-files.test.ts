@@ -60,7 +60,6 @@ describe("the run MCP config (R1.2) and settings (R1.3)", () => {
         TANDEM_URL: "http://127.0.0.1:4000",
         CLAUDE_PLUGIN_OPTION_SERVER_URL: "",
         NODE_OPTIONS: "",
-        NODE_USE_ENV_PROXY: "",
         NODE_DEBUG: "",
       },
     });

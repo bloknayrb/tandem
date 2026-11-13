@@ -49,7 +49,7 @@
  */
 
 import { API_CHANNEL_AWARENESS, API_CHANNEL_ERROR, API_EVENTS, API_MODE } from "./api-paths.js";
-import { authFetch } from "./cli-runtime.js";
+import { authFetch } from "./auth-fetch.js";
 import {
   CHANNEL_AWARENESS_FETCH_TIMEOUT_MS,
   CHANNEL_CONNECT_FETCH_TIMEOUT_MS,
