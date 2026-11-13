@@ -263,7 +263,7 @@ export const DEFAULT_COLLABORATOR_DEPS: CollaboratorDeps = {
     },
     none: () => recordAnsweringNone(ANSWERING_CHANGED_NOTICE_KEY),
     setByUser: (fingerprint) => {
-      recordSetByUser({ answering: fingerprint }, ANSWERING_CHANGED_NOTICE_KEY);
+      void recordSetByUser({ answering: fingerprint }, ANSWERING_CHANGED_NOTICE_KEY);
     },
     retry: retryUnsavedRecord,
     firstLitStart: isFirstLitStart,

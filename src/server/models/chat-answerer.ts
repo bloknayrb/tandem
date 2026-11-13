@@ -31,9 +31,11 @@
  * a crash straight after cannot bring the local model back. The user's own
  * switch adds `setBy: "own-window"`, which no other path writes, so the next
  * start can tell their choice of Claude (silent) from any other change
- * (announced). If that write fails the file is deleted — and then the
- * route's success waits for the record write, because a missing file with a
- * record still saying "chosen" would read as removed — and failing that it is
+ * (announced). If that write fails the file is removed — renamed to a
+ * `.removed-by-tandem` marker where it can be, so the next start does not say
+ * "was removed", else deleted — and then the route's success waits for the
+ * record write, because a missing file with a record still saying "chosen"
+ * would be announced; and failing that it is
  * written asynchronously, inside the disk queue, so it can never overtake a
  * later request. It is done again inside the queue, behind any write still in
  * flight. Only a missing file or a parsed
@@ -140,11 +142,19 @@ let diskQueue: Promise<void> = Promise.resolve();
 /** Did the Claude now in effect come from Tandem's own window? Decides
  *  whether a re-assertion of Claude on disk carries the mark. */
 let claudeIsOwn = false;
-/** Did a local write that a later request superseded put the "local" now on
- *  disk? Only then may a failed local write re-assert Claude over it: a
- *  "local" read back for any other reason (the user's own choice, readable
- *  again after a transient lock) is never overwritten (round 4 review). */
+/** Did a superseded local write of this run put the "local" now on disk where
+ *  it does not belong — because a Claude request superseded it, or because it
+ *  replaced a file that said Claude? Only then may a failed local write
+ *  re-assert Claude over it: a "local" that was already the user's stored
+ *  choice (readable again after a transient lock, say) is never overwritten
+ *  (round 4 review; round 5 PA). */
 let supersededLocalOnDisk = false;
+/** The `seq` of the latest Claude request, so a local write can tell whether
+ *  a Claude request is among those that superseded it (round 5 PA). */
+let lastClaudeSeq = 0;
+/** Set at start-up: the file was missing and Tandem had removed it itself (its
+ *  fallback when a Claude write failed), so "was removed" is not said (round 5). */
+let removedByTandem = false;
 const listeners = new Set<(now: ChatAnswerer) => void>();
 
 function filePath(): string {
@@ -275,7 +285,41 @@ interface DiskOutcome {
 }
 
 /** Remove the file (Claude). Never throws; logs a failure. */
+/** Where Tandem's own removal of the file leaves it: a marker, read only for
+ *  whether it exists. */
+function removedMarkerPath(): string {
+  return path.join(path.dirname(filePath()), `.${CHAT_ANSWERER_FILE_NAME}.removed-by-tandem`);
+}
+
+/** The file holds a value again: a marker of Tandem's own removal no longer
+ *  applies. Best effort; never throws. */
+function markerExists(): boolean {
+  try {
+    fs.lstatSync(removedMarkerPath());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearRemovedMarker(): void {
+  try {
+    fs.rmSync(removedMarkerPath(), { force: true });
+  } catch {
+    // A marker left behind only ever omits a cause clause.
+  }
+}
+
 function removeSync(file: string): boolean {
+  // Renamed rather than unlinked where it can be: the marker it leaves tells
+  // the next start that Tandem removed the file itself, so its notice does not
+  // say "was removed" (round 5). A rename needs no free space.
+  try {
+    fs.renameSync(file, removedMarkerPath());
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return true;
+  }
   try {
     fs.rmSync(file, { force: true });
     return true;
@@ -300,6 +344,7 @@ async function writeLocal(): Promise<DiskOutcome> {
   }
   try {
     await atomicWriteConfigFile(file, serialize(file, "local"));
+    clearRemovedMarker();
     return { written: true, saved: true };
   } catch (err) {
     console.error(
@@ -362,14 +407,17 @@ function writeClaudeSync(file: string, own: boolean): boolean {
 type ClaudeOnDisk = "already" | "written" | "deleted" | "failed";
 
 /** Make the disk read Claude now, synchronously: Claude (with the marker when
- *  `own`) written over the file; failing that the file deleted. */
+ *  `own`) written over the file; failing that the file removed. */
 function makeDiskClaudeSync(own: boolean): ClaudeOnDisk {
   const file = filePath();
   const state = readState(file);
   // Own: only the marked file will do. Not own: any Claude file already is
   // Claude — a non-own write never strips the user's own mark (round 4 P12).
   if (own ? state === "claude-own" : state === "claude" || state === "claude-own") return "already";
-  if (writeClaudeSync(file, own)) return "written";
+  if (writeClaudeSync(file, own)) {
+    clearRemovedMarker();
+    return "written";
+  }
   if (removeSync(file)) return "deleted";
   return isClaudeOnDisk(readState(file)) ? "already" : "failed";
 }
@@ -382,6 +430,7 @@ async function writeClaudeAsync(own: boolean): Promise<void> {
       file,
       `${JSON.stringify({ version: CHAT_ANSWERER_VERSION, answerer: "claude", ...(own ? OWN_WINDOW_MARKER : {}) }, null, 2)}\n`,
     );
+    clearRemovedMarker();
   } catch (err) {
     console.error(
       `[tandem] ${CHAT_ANSWERER_FILE_NAME} could not be switched to Claude on disk either (${
@@ -399,21 +448,33 @@ async function writeClaudeAsync(own: boolean): Promise<void> {
  * themselves (a lost record write, a disk that refused the marked write, a
  * restored backup) is redundant, never false. A cause clause appears only
  * where Tandem knows the cause for certain, judged from the disk at the
- * moment the notice is raised. Fixed strings: never a path.
+ * moment the notice is raised: "missing" only for a removal Tandem did not
+ * make itself, and "will try again" only where the record is kept for that
+ * retry (round 5). Fixed strings: never a path.
  */
-export function answererClaudeNotice(cause: "missing" | "unreadable" | null): string {
+export function answererClaudeNotice(
+  cause: "missing" | "unreadable" | "unreadable-no-retry" | null,
+): string {
   const clause =
     cause === "missing"
       ? " The file that held this setting was removed."
       : cause === "unreadable"
         ? " Tandem could not read the file that holds this setting, and will try again at the next start."
-        : "";
+        : cause === "unreadable-no-retry"
+          ? " Tandem could not read the file that holds this setting."
+          : "";
   return `Chat in Tandem is now answered by Claude, not by a local model.${clause} If you did not make this change, check Settings → Models.`;
 }
 
-/** The cause clause the disk supports right now, if any. */
-function certainCause(state: DiskState): "missing" | "unreadable" | null {
-  return state === "missing" || state === "unreadable" ? state : null;
+/** The cause clause the disk supports right now, if any. `kept`: the record
+ *  is kept for a retry at the next start. */
+function certainCause(
+  state: DiskState,
+  kept: boolean,
+): "missing" | "unreadable" | "unreadable-no-retry" | null {
+  if (state === "missing") return removedByTandem ? null : "missing";
+  if (state === "unreadable") return kept ? "unreadable" : "unreadable-no-retry";
+  return null;
 }
 
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -451,6 +512,15 @@ export function primeChatAnswerer(): void {
   const state = readState(filePath());
   if (seq !== 0) return;
   effective = state === "local" ? "local" : "claude";
+  // A re-assertion of Claude later in this run keeps the user's own mark
+  // (round 5 #3).
+  claudeIsOwn = state === "claude-own";
+  if (state === "missing") {
+    removedByTandem = markerExists();
+  } else {
+    removedByTandem = false;
+    if (state !== "unreadable") clearRemovedMarker();
+  }
   if (state === "local") {
     // The local model answers again: an owed "answered by Claude again"
     // notice is no longer true.
@@ -481,8 +551,9 @@ export function primeChatAnswerer(): void {
   // another cause and shown during a failed read is still spent once seen.
   const owed = answererClaudeOwed();
   if (owed !== null) {
-    announceAnswererClaude(answererClaudeNotice(certainCause(state)), {
-      keepRecord: state === "unreadable" && owed === "unreadable",
+    const keep = state === "unreadable" && owed === "unreadable";
+    announceAnswererClaude(answererClaudeNotice(certainCause(state, keep)), {
+      keepRecord: keep,
       cause: owed,
     });
     return;
@@ -494,7 +565,7 @@ export function primeChatAnswerer(): void {
     // so (Bryan, 2026-11-12). A read that failed may be transient (a Windows
     // scanner holding the file), so the record is kept and the next clean
     // start that reads "local" restores the choice with no warning.
-    announceAnswererClaude(answererClaudeNotice(certainCause(state)), {
+    announceAnswererClaude(answererClaudeNotice(certainCause(state, state === "unreadable")), {
       keepRecord: state === "unreadable",
       cause: state,
     });
@@ -552,6 +623,7 @@ export async function setChatAnswerer(
     setEffective("claude");
     const own = source === "own-window";
     claudeIsOwn = own;
+    lastClaudeSeq = mine;
     // Was the local model the user's own choice before this switch? Only then
     // can a missing or unmarked file be announced at the next start.
     const wasChosen = answererLocalWasChosen();
@@ -595,15 +667,22 @@ export async function setChatAnswerer(
     }
     return result;
   }
+  let recorded: Promise<boolean> = Promise.resolve(true);
   await enqueue(async () => {
+    const before = readState(filePath());
     const outcome = await writeLocal();
-    if (outcome.saved) supersededLocalOnDisk = seq !== mine;
-    // A failed local write while Claude is in effect, with "local" on disk
-    // that an earlier, superseded local write of this run put there (one the
-    // Claude request's own queued step could not undo): Claude is put back on
-    // disk, with the mark if it was the user's own, so a restart cannot bring
-    // the local model back (round 4 P11). Never over a "local" this run did
-    // not leave behind — that one is the user's stored choice.
+    // Superseded, and out of place on disk: a Claude request came after it,
+    // or it replaced a file that said Claude. Superseded only by another
+    // local request over a "local" already stored, it is the user's stored
+    // choice written again (round 5 PA).
+    if (outcome.saved) {
+      supersededLocalOnDisk =
+        seq !== mine && (lastClaudeSeq > mine || (before !== "local" && before !== "unreadable"));
+    }
+    // A failed local write while Claude is in effect, over such a "local":
+    // Claude is put back on disk, with the mark if the Claude in effect was
+    // the user's own, so a restart cannot bring the local model back (round 4
+    // P11). Never over a "local" that was already the user's stored choice.
     if (
       !outcome.written &&
       supersededLocalOnDisk &&
@@ -622,7 +701,10 @@ export async function setChatAnswerer(
       // something else start silently.
       if (source === "own-window") {
         if (outcome.saved) {
-          recordSetByUser({ answererLocal: true, answererChosen: true }, ANSWERER_LOCAL_NOTICE_KEY);
+          recorded = recordSetByUser(
+            { answererLocal: true, answererChosen: true },
+            ANSWERER_LOCAL_NOTICE_KEY,
+          );
         }
       } else if (!wasLocal) {
         announceLocalModelChange(ANSWERER_LOCAL_NOTICE_KEY, ANSWERER_LOCAL_NOTICE, {
@@ -631,7 +713,15 @@ export async function setChatAnswerer(
       }
     }
   });
-  return settled("local", seq !== mine);
+  const result = await settled("local", seq !== mine);
+  // The user's own switch to the local model counts as made only once the
+  // record says they chose it: without that record, a later change back to
+  // Claude by anything else would go unannounced (round 5 PD). So a failed
+  // record write fails the switch the user sees.
+  if (source === "own-window" && result.persisted && !(await recorded)) {
+    return { ...result, persisted: false };
+  }
+  return result;
 }
 
 /** Test seam: point the module at a temp dir (or reset it) and forget all
@@ -644,5 +734,7 @@ export function __resetChatAnswererForTests(base?: string): void {
   diskQueue = Promise.resolve();
   claudeIsOwn = false;
   supersededLocalOnDisk = false;
+  lastClaudeSeq = 0;
+  removedByTandem = false;
   listeners.clear();
 }

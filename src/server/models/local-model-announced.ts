@@ -247,7 +247,11 @@ function persist(): Promise<boolean> {
     })
     .catch((err: unknown) => {
       unsaved = true;
-      // The cost is one repeated notice after the next start, never silence.
+      // The cost is usually one repeated notice after the next start. Where a
+      // lost write would instead mean silence — the user's own switch to the
+      // local model, whose record is what lets a later change back to Claude
+      // be announced — the caller waits on this result and fails (#1123
+      // round 5 PD).
       console.error(
         `[tandem] ${LOCAL_MODEL_ANNOUNCED_FILE_NAME} could not be written (${
           err instanceof Error ? err.message : String(err)
@@ -413,7 +417,10 @@ function withdrawAdoptionNotice(): void {
  * record matches it at once. `withdrawKey` names a pending LIVE notice that
  * this change makes stale (the answering one names a model).
  */
-export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string): void {
+export function recordSetByUser(
+  change: Partial<Announced>,
+  withdrawKey?: string,
+): Promise<boolean> {
   if (withdrawKey !== undefined) removeStartupNotice(withdrawKey);
   if (typeof change.answering === "string") {
     refreshStartupAnswering(change.answering);
@@ -429,7 +436,7 @@ export function recordSetByUser(change: Partial<Announced>, withdrawKey?: string
     dropStartupPart("answererLocal");
     removeStartupNotice(ANSWERER_CLAUDE_NOTICE_KEY);
   }
-  void record(change);
+  return record(change);
 }
 
 /** An own-window write that changed nothing recorded here: nothing to record,

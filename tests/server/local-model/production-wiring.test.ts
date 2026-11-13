@@ -296,7 +296,7 @@ describe("local-model production wiring (#1123, #2404)", () => {
     // The user's own change records the fingerprint as the ANSWERING model and
     // withdraws the pending live notice under the answering notice's own key.
     expect(body).toMatch(
-      /setByUser:\s*\(fingerprint\)\s*=>\s*\{\s*recordSetByUser\(\s*\{\s*answering:\s*fingerprint\s*\}\s*,\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*;?\s*\}\s*,/,
+      /setByUser:\s*\(fingerprint\)\s*=>\s*\{\s*(?:void\s+)?recordSetByUser\(\s*\{\s*answering:\s*fingerprint\s*\}\s*,\s*ANSWERING_CHANGED_NOTICE_KEY\s*\)\s*;?\s*\}\s*,/,
     );
     expect(body).toMatch(
       /startupMismatch:\s*\(fingerprint\)\s*=>\s*\{\s*announceStartupMismatch\(\s*\{\s*answering:\s*fingerprint\s*\}\s*\)\s*;?\s*\}\s*,/,
