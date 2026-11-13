@@ -253,9 +253,13 @@ async function run(kind: Kind, style: ProxyStyle, host = "127.0.0.1") {
   } else if (kind === "shim") {
     await new Promise((r) => setTimeout(r, 700));
     p.send(INITIALIZE);
-    await waitFor(() => p.stdout().includes("annotation:created"), "the pushed event");
+    // The channel notification itself, not any text that merely mentions the type.
+    await waitFor(
+      () => p.stdout().includes("notifications/claude/channel"),
+      "the pushed event as a channel notification",
+    );
   } else {
-    await waitFor(() => p.stdout().includes("annotation:created"), "the pushed event");
+    await waitFor(() => p.stdout().includes("Tandem: annotation:created"), "the pushed event");
   }
   return { up, tunnel, p };
 }
