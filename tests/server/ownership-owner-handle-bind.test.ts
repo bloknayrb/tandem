@@ -273,6 +273,21 @@ describe("flag on: the bind fact (R3)", () => {
     expect(mcpSessionOwnerIdsForTests()).toEqual([`claude:${SID}`, `claude:${SID}`]);
   });
 
+  it("a late teardown of an older spawn leaves a newer, bound spawn alone (R4.3, every platform)", async () => {
+    await boot("1");
+    const older = startedSpawn(handle("O"), SID);
+    const newer = startedSpawn(LIVE, SID);
+    const id = await initialize(withHandle(LIVE, SID));
+    expect(bindOf(id)).toBe(newer.serial);
+    endSpawn(older); // the superseded spawn's teardown lands late
+    expect(ownerHandleBindSnapshotForTests().current).toBe(newer.serial);
+    expect(bindOf(id)).toBe(newer.serial);
+    const again = await initialize(withHandle(LIVE, SID));
+    expect(bindOf(again)).toBe(newer.serial);
+    const stale = await initialize(withHandle(handle("O"), SID));
+    expect(bindOf(stale)).toBeNull();
+  });
+
   it("a spawn registered but not started binds nothing (Terms: not current)", async () => {
     await boot("1");
     registerSpawn({ handle: LIVE, sessionId: SID });

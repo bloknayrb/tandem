@@ -600,25 +600,32 @@ describe("teardown on every exit path (R4)", () => {
     ).toBeNull();
   });
 
-  it("the superseded spawn's late teardown leaves the newer spawn's state alone", async () => {
-    process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "300";
-    const sup = makeSupervisor();
-    await sup.startFresh(spawnDir);
-    const first = await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn 1");
-    await sup.relaunch(spawnDir);
-    const second = await waitFor(
-      () => records<RunFilesRecord>("runfiles-").find((r) => r.pid !== first.pid),
-      "spawn 2",
-    );
-    // Spawn 1's exit (and its idempotent teardown) has landed by now.
-    await waitFor(() => records("exited-").length >= 1, "spawn 1's exit");
-    await sleep(100);
-    expect(fs.existsSync(second.mcpConfigPath as string)).toBe(true);
-    expect(fs.existsSync(second.settingsPath as string)).toBe(true);
-    expect(
-      judgeBind(second.mcp?.value?.mcpServers.tandem.env.TANDEM_OWNER_HANDLE, second.sessionId),
-    ).not.toBeNull();
-  });
+  // POSIX only, like stream-json-protocol.test.ts's superseded-exit block: the
+  // stub's delayed exit is a SIGTERM handler, and on Windows `kill()` ends the
+  // process with no handler run. Platform-neutral cover of the property:
+  // ownership-owner-handle-bind.test.ts, "a late teardown of an older spawn".
+  it.runIf(process.platform !== "win32")(
+    "the superseded spawn's late teardown leaves the newer spawn's state alone (POSIX)",
+    async () => {
+      process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "300";
+      const sup = makeSupervisor();
+      await sup.startFresh(spawnDir);
+      const first = await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn 1");
+      await sup.relaunch(spawnDir);
+      const second = await waitFor(
+        () => records<RunFilesRecord>("runfiles-").find((r) => r.pid !== first.pid),
+        "spawn 2",
+      );
+      // Spawn 1's exit (and its idempotent teardown) has landed by now.
+      await waitFor(() => records("exited-").length >= 1, "spawn 1's exit");
+      await sleep(100);
+      expect(fs.existsSync(second.mcpConfigPath as string)).toBe(true);
+      expect(fs.existsSync(second.settingsPath as string)).toBe(true);
+      expect(
+        judgeBind(second.mcp?.value?.mcpServers.tandem.env.TANDEM_OWNER_HANDLE, second.sessionId),
+      ).not.toBeNull();
+    },
+  );
 });
 
 describe("the remaining R4.4 exit paths", () => {
