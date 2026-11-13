@@ -116,6 +116,9 @@ const EMPTY_SNAPSHOT = {
   answerers: 0,
   queuedDocuments: 0,
   pendingClaims: 0,
+  // The change-notice PR: every record's queued notices (closed names
+  // included, stored on the notice). Empty, since no record exists.
+  changeNotices: [],
 };
 
 describe("tools/list while dark", () => {
@@ -146,6 +149,17 @@ describe("tools/list while dark", () => {
       '"ownership"',
       '"holding"',
       '"notYours"',
+      // The change-notice PR's `changed` part, its keys, values and each cause word.
+      '"changed"',
+      '"cause"',
+      '"gained"',
+      '"lost"',
+      '"your write claimed it"',
+      '"a poll of yours claimed it"',
+      '"you opened or created it"',
+      '"another session took it"',
+      '"its tab was closed"',
+      '"Tandem stopped counting this session as attached"',
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }

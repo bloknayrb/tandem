@@ -284,7 +284,16 @@ describe("R1.1: a default poll reads what its caller holds or may claim, and no 
     expect(registered).toHaveLength(1);
     expect(entry?.sinceSeq).toBeGreaterThanOrEqual(counterBefore);
     expect(entry?.sinceSeq).toBeLessThan(registered[0]?.seq as number);
-    expect(first.ownership).toEqual({ holding: [docA.id, docU.id].sort(), notYours: [docB.id] });
+    // `changed` (the change-notice PR): the setup's take of `a`, then this
+    // poll's own claim of `u`.
+    expect(first.ownership).toEqual({
+      holding: [docA.id, docU.id].sort(),
+      notYours: [docB.id],
+      changed: [
+        { documentId: docA.id, change: "gained", cause: "you opened or created it" },
+        { documentId: docU.id, change: "gained", cause: "a poll of yours claimed it" },
+      ],
+    });
 
     const second = await b.poll();
     expect(itemIds(second)).toEqual(["cb"]);
@@ -327,7 +336,12 @@ describe("R1.1: a default poll reads what its caller holds or may claim, and no 
     // A's poll is handed the comment and claims `u`. Not the notice: B, its
     // holder, was handed it, so the lapse settled it (the notice-rule PR,
     // R1.1; before it, A was handed both).
-    expect(itemIds(await reader(A).poll())).toEqual(["cu"]);
+    // Two consecutive polls of A, the second with the cursor the first
+    // returned (#2420 review, R9.6): a single-poll check would pass a
+    // mechanism that let the next poll hand the notice under a new seq.
+    const a = reader(A);
+    expect(itemIds(await a.poll())).toEqual(["cu"]);
+    expect(itemIds(await a.poll()), "A's next poll, with the returned cursor").toEqual([]);
     const entry = getDocOwner(docU.id);
     expect(entry).toMatchObject({ ownerId: A, kind: "claimed" });
     const sinceSeq = entry?.sinceSeq as number;
@@ -369,7 +383,8 @@ describe("R1.2, R1.9, R1.10: a named poll of a document that is not the caller's
     const before = positions(a.cursor);
     const named = await a.poll(docB.id);
     expect(itemIds(named)).toEqual([]);
-    expect(named.ownership).toEqual({ holding: [docA.id], notYours: [docB.id] });
+    // `changed` is empty: A's earlier polls drained the setup's take of `a`.
+    expect(named.ownership).toEqual({ holding: [docA.id], notYours: [docB.id], changed: [] });
     expect(named.summary).toBe(`${EXCLUDED_NAMED(docB.id)} No new actions.`);
     expect(named.summary).not.toMatch(/not open|No document is open/);
     expect(positions(named.cursor)).toEqual(before);
@@ -555,6 +570,30 @@ describe("R1.5: what counts as yielding (after every gate)", () => {
     expect(ownerOf(docU.id)).toBeUndefined();
     // B, which holds nothing it could be told about here, is handed it too.
     expect((await reader(B).poll()).chatMessages.map((m) => m.id)).toEqual(["m1"]);
+  });
+
+  it("chat about a document and that document's exclusion arrive together (#2420 review, R9.9)", async () => {
+    // A reads `a`; `b` is B's, so A's poll leaves it out, and the chat about
+    // it is still handed: the exclusion text says so.
+    withInternal(getOrCreateDocument(CTRL_ROOM), () =>
+      getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).set("m2", {
+        id: "m2",
+        author: "user",
+        text: "about b",
+        timestamp: Date.now(),
+        read: false,
+        documentId: docB.id,
+      }),
+    );
+    const inbox = await reader(A).poll();
+    // CTRL_ROOM outlives a test, so only this test's message is looked at.
+    const m2 = inbox.chatMessages.filter((m) => m.id === "m2");
+    expect(m2.map((m) => [m.id, m.documentId])).toEqual([["m2", docB.id]]);
+    expect(inbox.ownership?.notYours).toContain(docB.id);
+    expect(inbox.summary).toContain(
+      "Chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about",
+    );
+    expect(ownerOf(docB.id)).toBe(B);
   });
 });
 

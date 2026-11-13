@@ -1915,8 +1915,10 @@ export async function closeDocumentById(
 
   // Ownership's tab-close point (#2358, ownership design §4.2): the entry goes
   // with the tab. Synchronous and immediately before the untrack, with no
-  // await between them. A no-op while ownership is off.
-  onDocumentClosed(safeId);
+  // await between them. A no-op while ownership is off. The path is passed
+  // as it is (the change notice's file name is computed inside, flag on
+  // only), so nothing new runs here while ownership is off.
+  onDocumentClosed(safeId, closedPath);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and
