@@ -1154,7 +1154,7 @@ export interface InboxPollScope {
    * brief rules): the document's handover mark, read live, or 0 when no
    * handover has run on it this server run. A notice whose registry entry is
    * at or below it was handed to a holder the document has since left, and is
-   * handed to nobody again (`awareness.ts`, `noticeSettlement`). **The one
+   * handed to nobody again (`awareness.ts`, `settleNotices`). **The one
    * reader of `handoverSeq`.** 0 while ownership is off.
    */
   settledThrough(documentId: string): number;

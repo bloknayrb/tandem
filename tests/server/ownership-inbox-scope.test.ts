@@ -1041,7 +1041,7 @@ describe("a cursor-less poll's refused claim takes back its acknowledgement of a
     expect(deliveryRegistry.lookup("a", `${docU.id}:n#accepted`, 0), "the entry stays").toBe(kept);
   });
 
-  it("the undo still takes back an acknowledgement of an older unsettled entry (the catch-all after commit)", async () => {
+  it("a refused claim still takes back an acknowledgement of an older unsettled entry", async () => {
     // An unsettled entry predating the poll: one a handover whose inbox half
     // failed left behind (its mark did not move).
     vi.spyOn(console, "error").mockImplementation(() => {});

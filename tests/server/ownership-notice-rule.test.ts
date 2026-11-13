@@ -71,6 +71,22 @@ import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
+/** Set to make the next `resolveDeliveryRound` throw: a throw after the commit. */
+const roundThrows = vi.hoisted(() => ({ next: false }));
+vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/server/events/delivery-state.js")>();
+  return {
+    ...real,
+    resolveDeliveryRound: (...args: Parameters<typeof real.resolveDeliveryRound>) => {
+      if (roundThrows.next) {
+        roundThrows.next = false;
+        throw new Error("after the commit");
+      }
+      return real.resolveDeliveryRound(...args);
+    },
+  };
+});
+
 const A = "claude:notice-a";
 const B = "claude:notice-b";
 /** A registered record holding nothing. */
@@ -745,6 +761,29 @@ describe("the five cases the scope PR left", () => {
     take(doc.id, A);
     await neverHanded(a, "n", "A");
     await neverHanded(reader(A), "n", "A fresh");
+  });
+});
+
+describe("the handler's catch-all after the commit (case 4's `ackedExisting`)", () => {
+  it("a cursor-less poll that acknowledged an older entry and then throws takes the acknowledgement back", async () => {
+    const doc = mkDoc("d");
+    take(doc.id, A);
+    notice(doc.ydoc, "n");
+    // A cursor reader of A's is handed it and never acknowledges it.
+    expect(responseIds(await reader(A).poll())).toEqual(["n"]);
+    const entry = deliveryRegistry.lookup("a", `${doc.id}:n#accepted`, 0);
+    expect(entry?.acked).toBe(false);
+    // A's cursor-less poll is handed it too (acknowledging that older entry),
+    // then something after the commit throws.
+    roundThrows.next = true;
+    callingAs = A;
+    const failed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(failed.error).toBe(true);
+    expect(entry?.acked, "the catch-all took the acknowledgement back").toBe(false);
+    // Nothing was lost: the cursor-less ledger was put back, and a fresh
+    // cursor of the holder is handed it.
+    expect(responseIds(await pollAs(A))).toEqual(["n"]);
+    expect(responseIds(await reader(A).poll())).toEqual([]);
   });
 });
 
