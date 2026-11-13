@@ -585,7 +585,7 @@ function scoreOfferChange(reply: string, target: string): ScoreResult {
  * both (rubric §6).
  */
 const SAYS_WRONG =
-  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error(?![-\w])|typo|miscalculat\w*|should\s+(?:be|read|say)\b(?=\s*:?\s*(?:["'`]|[*_~(—–-]{0,3}\s*(?:(?:about|approximately|roughly|around|nearly)\s+)?(?:[$£€]|USD\s*)?\d))|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:isn['’]?t|aren['’]?t|(?:is|are)\s+not|not)\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
+  /\b(?:wrong|incorrect|inaccurate|mistaken|mistake|error(?![-\w])|typo|miscalculat\w*|should\s+(?:be|read|say)\b(?=\s*:?\s*(?:["'`]|[*_~(—–-]{0,3}\s*(?:(?:about|approximately|roughly|around|nearly)\s+)?(?:[$£€]|USD\s*)?\d|\*\*))|(?:does\s+not|doesn['’]?t|do\s+not|don['’]?t)\s+(?:add\s+up|match|look\s+right|seem\s+right)|(?:isn['’]?t|aren['’]?t|(?:is|are)\s+not|not)\s+(?:right|correct|accurate)|inconsistent|off\s+by)\b/i;
 /** Said of the quotation itself, right before it: 'the issue with "…"', '$35,000, not "…"'. */
 const WRONG_BEFORE_QUOTE = /(?:\bthe\s+(?:issue|problem)\s+with|\bnot)\s*[*_]{0,3}$/i;
 /** Said of the quotation itself, right after it: '"…" is off', '"…" looks a bit off', '"…"?'. */

@@ -21,11 +21,15 @@
  *    refused run produces no reply to measure);
  *  - the unusable-model notice and the "answering model changed" notice: never
  *    reached, their seams are injected inert so nothing is written to app data;
+ *  - who answers chat (PR #2417): set to the local model, and never changed
+ *    during a trial (with Claude chosen the collaborator runs nothing);
  *  - the event queue: the event is handed to `onEvent` directly, so a selection
  *    is given in the event payload instead of through the queue's selection
  *    buffer. The collaborator reads only `payload.selection.selectedText`.
- * Solo/Tandem is NOT substituted: the collaborator's own `readLiveMode()` runs
- * against the in-process control document, which the trial sets to Tandem.
+ * Solo/Tandem is NOT substituted: the collaborator's own `readModeState()` and
+ * `leftTandemEpoch()` run against the in-process control document, which the
+ * trial sets to Tandem. In Solo the product runs the chat tier only; the
+ * harness does not measure Solo.
  */
 import type * as Y from "yjs";
 

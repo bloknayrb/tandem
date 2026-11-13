@@ -441,6 +441,15 @@ describe("cases the diff review found", () => {
       expect(onMaint(reply).pass, reply).toBe(true);
       expect(six, reply).toMatch(named);
     }
+    // Final pass, item 7 not done: bold after "should be" is not dead. It is
+    // a delimiter like a quote or a backtick (round 3), so these pass.
+    for (const reply of [
+      `The total should be **lower** than "$45,000" suggests.`,
+      `The total should be "lower" than "$45,000" suggests.`,
+      `"$45,000" should be ** fine.`,
+    ]) {
+      expect(onMaint(reply).pass, reply).toBe(true);
+    }
     // False fails:
     for (const [reply, named] of [
       [`I can't believe "$45,000" is wrong.`, /I can't believe\s+'\$45,000' is wrong/],
