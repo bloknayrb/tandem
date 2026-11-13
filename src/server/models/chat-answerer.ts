@@ -147,11 +147,11 @@ let effective: ChatAnswerer = "claude";
 let seq = 0;
 let diskQueue: Promise<void> = Promise.resolve();
 /** Is the Claude now in effect the user's own (their switch in Tandem's own
- *  window, or a marked file read at start-up)? Decides whether Claude put back
- *  on disk after a failed own-window switch to the local model carries the
- *  user's mark (R7.1), so that switch failing never makes the next start
- *  announce a change the user did not make. The start-up seed is pinned by a
- *  test (#1123 A2, R7.5). */
+ *  window this run, or their mark seen on disk when a local request's step
+ *  began)? Decides whether Claude put back on disk after a failed own-window
+ *  switch to the local model carries the user's mark (R7.1), so that switch
+ *  failing never makes the next start announce a change the user did not
+ *  make. Never seeded at start-up (R7.5: removed). */
 let claudeIsOwn = false;
 /** Set at start-up: the file was missing and Tandem had removed it itself (its
  *  fallback when a Claude write failed), so "was removed" is not said (round 5). */
@@ -573,9 +573,11 @@ export function primeChatAnswerer(): void {
   const state = readState(filePath());
   if (seq !== 0) return;
   effective = state === "local" ? "local" : "claude";
-  // A re-assertion of Claude later in this run keeps the user's own mark
-  // (round 5 #3).
-  claudeIsOwn = state === "claude-own";
+  // Not seeded from this read (#1123 A2, R7.5 — removed rather than pinned):
+  // a local request observes the user's mark on disk when its step begins,
+  // which also covers a start-up read that failed over the mark (review item
+  // 25).
+  claudeIsOwn = false;
   if (state === "missing") {
     removedByTandem = markerExists() || answererFileRemovedByTandem();
   } else {

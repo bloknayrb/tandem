@@ -189,3 +189,37 @@ describe("formatEventMeta", () => {
     }
   });
 });
+
+describe("synthetic wakes (#1123 A2): rendered as their own text, never as a user comment with an id", () => {
+  const wake = (content: string): TandemEvent =>
+    ({
+      id: "evt_w",
+      type: "annotation:created",
+      timestamp: 1,
+      payload: { annotationId: "wake_abc", annotationType: "comment", content, textSnippet: "" },
+    }) as TandemEvent;
+
+  it("the switch-back wake and the Solo release wake", () => {
+    for (const text of [
+      "Chat in Tandem is answered by Claude again. Call tandem_checkInbox to see whether anything is waiting.",
+      "Solo mode ended. Call tandem_checkInbox to see the comments and replies the user made while in Solo.",
+    ]) {
+      expect(formatEventContent(wake(text))).toBe(text);
+      expect(formatEventMeta(wake(text))).not.toHaveProperty("annotation_id");
+    }
+  });
+
+  it("positive control: a real user comment keeps its label and its id", () => {
+    const real = {
+      ...wake("look"),
+      payload: {
+        annotationId: "ann_1",
+        annotationType: "comment",
+        content: "look",
+        textSnippet: "x",
+      },
+    } as TandemEvent;
+    expect(formatEventContent(real)).toMatch(/^User created comment/);
+    expect(formatEventMeta(real).annotation_id).toBe("ann_1");
+  });
+});

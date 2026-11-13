@@ -22,15 +22,41 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 import { spawn } from "node:child_process";
+import {
+  _pushEventForTests,
+  emitAnswererReturnWake,
+  resetForTesting as resetQueue,
+  subscribe,
+  unsubscribe,
+} from "../../../src/server/events/queue.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import { createSupervisor, type Supervisor } from "../../../src/server/launcher/supervisor.js";
+import type { AiRefusal } from "../../../src/server/license/ai-refusal.js";
+import {
+  __resetChatAnswererForTests,
+  primeChatAnswerer,
+  setChatAnswerer,
+} from "../../../src/server/models/chat-answerer.js";
+import {
+  __flushLocalModelAnnouncedForTests,
+  __resetLocalModelAnnouncedForTests,
+} from "../../../src/server/models/local-model-announced.js";
+import { primeLocalModelSettings } from "../../../src/server/models/local-model-settings.js";
+import {
+  __resetLocalPeriodForTests,
+  __setHonourLocalPeriodRecordsForTests,
+  inLocalPeriod,
+  installLocalPeriod,
+  subscribeLocalPeriod,
+} from "../../../src/server/models/local-period.js";
 import {
   SUPERVISOR_GREETING_PROMPT,
   SUPERVISOR_INITIAL_PROMPT,
   SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
+import { setCtrlMode } from "../../helpers/ctrl-mode.js";
 
 // --- Fake child -------------------------------------------------------------
 
@@ -436,6 +462,20 @@ describe("#1123 A2 — a running Claude (R4.2, R5.1)", () => {
     expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
   });
 
+  it("a running Claude's switch back owes nothing to a later spawn: a relaunch afterwards writes no extra wake", async () => {
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("on-click") });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    lp.toLocal();
+    lp.toClaude(true);
+    await sup.relaunch(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+  });
+
   it("an unasked switch back clears a wake the supervisor raised itself during the period", async () => {
     const lp = localPeriodSeam(false);
     const { sup, emit } = makeSupervisor({
@@ -465,5 +505,339 @@ describe("#1123 A2 — a running Claude (R4.2, R5.1)", () => {
     await sup.startFresh(cwdDir);
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([SUPERVISOR_GREETING_PROMPT]);
+  });
+});
+
+// --- Review round 1 (items 5, 6, 13, 14, 15) ----------------------------------
+
+const INIT = { type: "system", subtype: "init" };
+const NOT_SIGNED_IN = {
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  result: "Not logged in · Please run /login",
+  terminal_reason: "api_error",
+};
+const REFUSED: AiRefusal = {
+  error: "LICENSE_REQUIRED",
+  kind: "unlicensed",
+  message: "unlicensed",
+} as unknown as AiRefusal;
+
+function writeSettings(settings: Record<string, unknown>): void {
+  fs.writeFileSync(
+    path.join(baseDir, "launcher-settings.json"),
+    JSON.stringify({ version: 1, ...settings }),
+  );
+}
+
+describe("#1123 A2 — each held start kind runs at the user's switch back (R5.1, test each)", () => {
+  it("a held licence resume", async () => {
+    writeSettings({ startMode: "auto", lifetime: "always", idleMinutes: 30 });
+    let refused = true;
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({
+      localPeriod: lp.seam,
+      aiRefusal: () => (refused ? REFUSED : null),
+    });
+    await sup.start(); // refused: recorded for the licence resume
+    expect(children).toHaveLength(0);
+    lp.toLocal();
+    refused = false;
+    await sup.resumeAfterLicence(); // held by the local period
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toMatchObject({ running: false, heldForLocalModel: true });
+    lp.toClaude(true);
+    await nthChild(1);
+  });
+
+  it("a held message start", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const lp = localPeriodSeam(true);
+    const { sup, emit } = makeSupervisor({ localPeriod: lp.seam });
+    await sup.start();
+    // A chat that reached the standby watch before the switch, its start
+    // running after it (this harness's fan-out has no forward gate).
+    emit(chatEvent());
+    await waitFor(
+      () => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel,
+      "the message start to be held",
+    );
+    expect(children).toHaveLength(0);
+    lp.toClaude(true);
+    await nthChild(1);
+  });
+
+  it("a held message start from Off leaves Off as it was: still off, mode unsaved, nothing owed to a later resumed spawn (item 15)", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const lp = localPeriodSeam(false);
+    const { sup, emit } = makeSupervisor({ localPeriod: lp.seam });
+    await sup.start();
+    await sup.startByUser();
+    const child1 = await nthChild(1);
+    pushJson(child1, RESULT_OK);
+    await settle();
+    await sup.updateSettings({ startMode: "off" });
+    lp.toLocal();
+    emit(chatEvent()); // its message start is held
+    await waitFor(
+      () => !(sup.status() as { restartPending?: true }).restartPending,
+      "the message start to finish",
+    );
+    expect(children).toHaveLength(1);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(baseDir, "launcher-settings.json"), "utf8")).startMode,
+    ).toBe("off");
+    lp.toClaude(false);
+    emit(annotationEvent()); // while Off: owed to nobody
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    expect(texts(child2), JSON.stringify(texts(child2))).toEqual([]); // resumed, with nothing owed
+  });
+});
+
+describe("#1123 A2 — resumed spawns and idle stops (R4.4, R5.1)", () => {
+  it("a crash restart held through the period resumes at the switch back with the wake prompt as its first turn", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    lp.toLocal();
+    exitChild(child1, 1);
+    await waitFor(() => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel, "held");
+    lp.toClaude(true);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("after an unasked switch back, the user's Start resumes with a polling turn", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    lp.toLocal();
+    exitChild(child1, 1);
+    await waitFor(() => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel, "held");
+    lp.toClaude(false);
+    await settle(10);
+    expect(children).toHaveLength(1);
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("the sign-in re-check still runs during the period; an owed wake does not", async () => {
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("on-click") });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, NOT_SIGNED_IN);
+    await waitFor(() => sup.status().lastError === "needs-login", "the sign-in trip");
+    lp.toLocal();
+    await sup.relaunch(cwdDir); // the user's Check again
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("a user Relaunch during the period carries no wake into the resumed spawn (R4.2)", async () => {
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("on-click") });
+    await sup.startFresh(cwdDir); // its bootstrap turn is still unanswered
+    lp.toLocal();
+    await sup.relaunch(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a wake raised during the period is not flushed at the end of the turn in flight", async () => {
+    const lp = localPeriodSeam(false);
+    const { sup, emit } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: settingsOf("on-click"),
+    });
+    await sup.startFresh(cwdDir);
+    const child = children[0];
+    lp.toLocal();
+    emit(annotationEvent()); // reaches this harness's fan-out; a turn is in flight
+    pushJson(child, RESULT_OK);
+    await settle();
+    expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("an idle-stopped Claude stays stopped at the user's switch back", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "idle", idleMinutes: 1 });
+    const lp = localPeriodSeam(false);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, idleMinuteMs: 30 });
+    await sup.start();
+    await sup.startByUser();
+    const child1 = await nthChild(1);
+    pushJson(child1, RESULT_OK);
+    await waitFor(() => child1.killed, "the idle stop");
+    lp.toLocal();
+    lp.toClaude(true);
+    await settle(20);
+    expect(children).toHaveLength(1);
+  });
+
+  it("an idle-stopped Claude starts at the switch back when a held message start runs for it", async () => {
+    writeSettings({ startMode: "on-click", lifetime: "idle", idleMinutes: 1 });
+    const lp = localPeriodSeam(false);
+    const { sup, emit } = makeSupervisor({ localPeriod: lp.seam, idleMinuteMs: 30 });
+    await sup.start();
+    await sup.startByUser();
+    const child1 = await nthChild(1);
+    pushJson(child1, RESULT_OK);
+    await waitFor(() => child1.killed, "the idle stop");
+    await waitFor(
+      () => (sup.status() as { standby?: string }).standby === "idle",
+      "the idle standby",
+    );
+    lp.toLocal();
+    emit(chatEvent());
+    await waitFor(() => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel, "held");
+    expect((sup.status() as { standby?: string }).standby).toBe("idle");
+    lp.toClaude(true);
+    await nthChild(2);
+  });
+});
+
+describe("#1123 A2 — review items 5, 13, 14", () => {
+  it("item 5: a switch-back start that waits on its settings read does not run after a later unasked switch back", async () => {
+    const lp = localPeriodSeam(true);
+    let releaseRead = (): void => {};
+    let readStarted = false;
+    let holdReads = false;
+    const { sup } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: async () => {
+        if (holdReads) {
+          readStarted = true;
+          await new Promise<void>((r) => {
+            releaseRead = r;
+          });
+        }
+        return {
+          source: "default",
+          settings: { startMode: "auto", lifetime: "always", idleMinutes: 30 },
+        };
+      },
+    });
+    await sup.start(); // boot held
+    holdReads = true;
+    lp.toClaude(true);
+    await waitFor(() => readStarted, "the switch back's settings read");
+    lp.toLocal();
+    lp.toClaude(false); // unasked, while the start waits
+    holdReads = false;
+    releaseRead();
+    await settle(20);
+    expect(children).toHaveLength(0);
+  });
+
+  it("item 13: a boot an unasked switch back parked is started at the user's own next switch back, after a later period", async () => {
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("auto") });
+    await sup.start();
+    lp.toClaude(false);
+    await settle(10);
+    expect(children).toHaveLength(0);
+    lp.toLocal();
+    expect(sup.status()).toMatchObject({ heldForLocalModel: true });
+    lp.toClaude(true);
+    await nthChild(1);
+  });
+
+  it("item 14: a setup Apply is honoured during the period and after an unasked switch back", async () => {
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("auto") });
+    await sup.start();
+    lp.toClaude(false);
+    expect(await sup.startAfterSetup()).toBe("starting");
+    await nthChild(1);
+  });
+});
+
+describe("#1123 A2 — the real queue, the real switch and the real supervisor", () => {
+  let dir = "";
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-sup-lp-"));
+    resetQueue();
+    __resetLocalPeriodForTests();
+    __setHonourLocalPeriodRecordsForTests(true);
+    __resetLocalModelAnnouncedForTests(dir);
+    __resetChatAnswererForTests(dir);
+    fs.writeFileSync(path.join(dir, "local-model-baseline.json"), '{"version":1}\n');
+    primeLocalModelSettings();
+    primeChatAnswerer();
+    setCtrlMode("tandem");
+    installLocalPeriod({
+      unansweredUserChat: () => [],
+      chatKeys: () => [],
+      currentSelections: () => [],
+      suspendDeliveryRound: () => {},
+      discardSuspendedRound: () => {},
+      clearBufferedSelections: () => {},
+      emitReturnWake: emitAnswererReturnWake,
+      persist: () => {},
+    });
+  });
+  afterEach(async () => {
+    await __flushLocalModelAnnouncedForTests();
+    __resetLocalPeriodForTests();
+    __setHonourLocalPeriodRecordsForTests(null);
+    __resetChatAnswererForTests();
+    resetQueue();
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  function realSupervisor(startMode: "auto" | "on-click"): Supervisor {
+    const sup = createSupervisor({
+      probeCliUsable: () => true,
+      resolveClaudeCommand: () => process.execPath,
+      restartBackoffsMs: [0],
+      homeOverride: fs.realpathSync(os.tmpdir()),
+      integrationsBase: baseDir,
+      readSettings: settingsOf(startMode),
+      localPeriod: { held: inLocalPeriod, subscribe: subscribeLocalPeriod },
+    });
+    sups.push(sup);
+    return sup;
+  }
+
+  it("a turn in flight across the user's switch back still gets its one wake (the supervisor is told before the wake is pushed)", async () => {
+    const sup = realSupervisor("on-click");
+    await sup.startFresh(cwdDir);
+    const child = children[0];
+    expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT]); // turn in flight
+    await setChatAnswerer("local", "own-window");
+    await setChatAnswerer("claude", "own-window");
+    pushJson(child, RESULT_OK);
+    await settle();
+    expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("during the period nothing reaches the child; a held auto Claude beside a hand-launched watch: the child one turn, the watch one wake", async () => {
+    const sup = realSupervisor("auto");
+    await setChatAnswerer("local", "own-window");
+    await sup.start();
+    expect(children).toHaveLength(0);
+    const watch: TandemEvent[] = [];
+    const watchCb = (e: TandemEvent) => watch.push(e);
+    subscribe(watchCb, "external");
+    _pushEventForTests(chatEvent());
+    expect(watch).toEqual([]);
+    await setChatAnswerer("claude", "own-window");
+    const child = await nthChild(1);
+    await settle();
+    expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    expect(watch.map((e) => e.type)).toEqual(["annotation:created"]);
+    unsubscribe(watchCb);
   });
 });
