@@ -959,10 +959,14 @@ async function checkOutcome(r: Outcome, label: string): Promise<void> {
   // local model really answered during the run and Claude answers now (the
   // owed field's own write may have failed; the record's "chosen" then says
   // the same). A "chosen" left on record by a superseded request that never
-  // took effect is neither (round-2 item 2). An announcement raised during
-  // the run and still standing is owed, even when the write that records it
-  // failed: an allowance switch to Claude that found the user's choice of the
-  // local model on record (just recorded, before its request resumed).
+  // took effect is neither (round-2 item 2). An announcement raised before
+  // or during the run and still standing (the start-up notice for a failed
+  // read, or an allowance switch to Claude that found the user's choice on
+  // record) is owed even when the write recording it failed. Not reachable
+  // here: an allowance request issued after the choice's record write landed
+  // and before its request resumed — the `after` hook fires before `persist`
+  // applies the choice to memory, so such a request still reads nothing
+  // chosen (round 3).
   if (
     last.persisted &&
     !r.localSeen &&

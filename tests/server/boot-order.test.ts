@@ -48,7 +48,9 @@ describe("server boot ordering invariants (#334)", () => {
  * else would notice these calls going missing: `wireLocalPeriod` only installs
  * hooks, and `recordBootSelections` only stamps the selections a restored
  * session holds, so a deleted call leaves every behaviour test green (they
- * call both themselves). The persistence round trip in
+ * call both themselves). These are TEXT pins over the source: a call that is
+ * commented out (`// wireLocalPeriod();`) still matches and stays green, so
+ * they catch a deletion or a reorder, not a disabling. The persistence round trip in
  * `tests/server/local-period.test.ts` (`restartServer`) is a hand copy of
  * the order pinned here: CTRL restore, priming, then the wiring.
  */
