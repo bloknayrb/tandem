@@ -78,6 +78,17 @@ const ONLY_THE_USER =
 const IF_ASKED = "only if the user asked you, in your own conversation, to work on it";
 const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a request.";
 /**
+ * Chat is not scoped until the chat PR, and push paths are not scoped until
+ * PR 4, so a chat message in the same response, or a push, can be about a
+ * document the poll left out: the exclusion texts say what was not returned
+ * and never that nothing about the document was (the notice-rule PR, R2.1).
+ * Each text keeps the take guard after this clause, never before it.
+ */
+const CHAT_UNSCOPED_ONE =
+  "chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about it";
+const CHAT_UNSCOPED_ANY =
+  "chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one";
+/**
  * What `tandem_checkInbox` says, flag on, about open documents a poll left
  * out because they are not the caller's to answer now (the scope PR, R1.10).
  * One wording for every reason, so a busy document is not told apart from a
@@ -86,6 +97,9 @@ const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a requ
  * (the caller's own included); for the rarer reasons — a caller with no
  * record (a wiring fault) or a blocking loss on an unowned document (PR 5's
  * `released`) — it says "may", which is the honest limit of the sentence.
+ * Each says only that no comments, thread replies or accept/dismiss
+ * responses on the document were returned, never that nothing about it was:
+ * chat and pushes are not scoped (the notice-rule PR, R2.1).
  * Unlike the refusal copy above, the "some" sentence carries document file
  * names: the summary's own labels, which `tandem_listDocuments` already shows,
  * not text a session wrote into a message. It carries the take guard the refusals carry ({@link IF_ASKED},
@@ -99,13 +113,13 @@ const EMPTY_ACTIVITY =
 
 /** A named poll of a document left out (a named poll's `activity` always describes that document). */
 export function inboxExcludedNamedNote(documentId: string): string {
-  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so nothing on it was returned and only chat is shown; ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}`;
+  return `Document ${documentId} is open but is not yours to answer right now (${NOT_YOURS_WHY}), so no comments, thread replies or accept/dismiss responses on it were returned (${CHAT_UNSCOPED_ONE}); ${EMPTY_ACTIVITY}. Call tandem_open on it ${IF_ASKED}: opening it may take it from that session. ${NOT_A_REQUEST}`;
 }
 
 /** A default poll that read no document because every open one was left out. */
 export function inboxExcludedAllNote(activityExcluded: boolean): string {
   return (
-    "Nothing on the open documents is yours to answer right now (another session may be answering them, or a write on one is still running)" +
+    `No comments, thread replies or accept/dismiss responses on the open documents are yours to answer right now (another session may be answering them, or a write on one is still running), so none were returned; ${CHAT_UNSCOPED_ANY} of them` +
     `${activityExcluded ? "; the active document's `activity` is empty because it is not yours to answer now, not because it could not be read" : ""}. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
   );
 }
@@ -123,14 +137,14 @@ export function inboxExcludedSomeNote(names: readonly string[], activityExcluded
   const list = `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
   const one = names.length === 1;
   return (
-    ` ${one ? "One open document is" : `${names.length} open documents are`} not yours to answer right now (another session may be answering ${one ? "it" : "them"}, or a write on ${one ? "it" : "one"} is still running), so nothing on ${one ? "it" : "them"} was returned: ${list}.` +
+    ` ${one ? "One open document is" : `${names.length} open documents are`} not yours to answer right now (another session may be answering ${one ? "it" : "them"}, or a write on ${one ? "it" : "one"} is still running), so no comments, thread replies or accept/dismiss responses on ${one ? "it" : "them"} were returned: ${list}. Chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about ${one ? "it" : "one of them"}.` +
     `${activityExcluded ? " The active document is one of them: its `activity` is empty because it is not yours to answer now, not because it could not be read." : ""}` +
     ` Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`
   );
 }
 
 /** The flag-on `ownership.notYours` field's description. */
-export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): nothing on them was returned, and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`;
+export const NOT_YOURS_FIELD_DESCRIPTION = `Open documents this poll left out because they are not yours to answer now (${NOT_YOURS_WHY}): no comments, thread replies or accept/dismiss responses on them were returned (${CHAT_UNSCOPED_ANY}), and an empty \`activity\` for one means it is not yours, not that it could not be read. Call tandem_open on one ${IF_ASKED}. ${NOT_A_REQUEST}`;
 
 const RESTART = " If Tandem was updated while this terminal was open, restart this terminal.";
 const DEFAULTED =

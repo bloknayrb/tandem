@@ -161,6 +161,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-handover.test.ts",
     "tests/server/ownership-http-identity.test.ts",
     "tests/server/ownership-inbox-scope.test.ts",
+    "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
@@ -183,6 +184,8 @@ describe("tests and the flag", () => {
     // build their server flag-off, to show tandem_checkInbox is master's.
     // #1123 A2's one (`local-period.test.ts`): it runs every local-period case
     // with ownership off and on (the brief's "ownership off and on").
+    // The notice-rule PR's one (`ownership-notice-rule.test.ts`): its lone-
+    // session script and its dark test run flag-off to compare with master.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
@@ -193,6 +196,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
@@ -213,6 +217,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-flag.test.ts",
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
+      "tests/server/ownership-notice-rule.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
