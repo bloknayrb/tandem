@@ -946,6 +946,39 @@ describe("chat answered by Claude again, not by the user's own choice (Bryan, 20
     expect(getStartupNotices()).toEqual([]);
   });
 
+  it("round 4 review: a transient read failure then a failed own local write never overwrites the stored 'local'", async () => {
+    await chosenLocalThen(() => {});
+    const real = fs.readFileSync;
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      p: fs.PathOrFileDescriptor,
+      o?: unknown,
+    ) => {
+      if (String(p).endsWith(CHAT_ANSWERER_FILE_NAME)) throw new Error("EBUSY");
+      return (real as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
+    }) as typeof fs.readFileSync);
+    prime();
+    read.mockRestore();
+    expect(chatAnswerer()).toBe("claude");
+    deliver();
+    await __flushLocalModelAnnouncedForTests();
+    const storage = await import("../../../src/server/integrations/storage.js");
+    const realWrite = storage.atomicWriteConfigFile;
+    vi.spyOn(storage, "atomicWriteConfigFile").mockImplementation(async (file, content) => {
+      if (file.endsWith(CHAT_ANSWERER_FILE_NAME)) throw new Error("EBUSY");
+      return realWrite(file, content);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await setChatAnswerer("local", "own-window");
+    vi.restoreAllMocks();
+    expect(chatAnswerer()).toBe("claude");
+    expect(JSON.parse(fs.readFileSync(switchFile(), "utf8")).answerer).toBe("local");
+    await __flushLocalModelAnnouncedForTests();
+    restart();
+    prime();
+    expect(chatAnswerer()).toBe("local");
+    expect(getStartupNotices()).toEqual([]);
+  });
+
   it("a switch to Claude through the development allowance: one notice; the user's own switch to Claude: none", async () => {
     markNotFirstLitStart();
     prime();

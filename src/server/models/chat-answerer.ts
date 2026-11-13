@@ -140,6 +140,11 @@ let diskQueue: Promise<void> = Promise.resolve();
 /** Did the Claude now in effect come from Tandem's own window? Decides
  *  whether a re-assertion of Claude on disk carries the mark. */
 let claudeIsOwn = false;
+/** Did a local write that a later request superseded put the "local" now on
+ *  disk? Only then may a failed local write re-assert Claude over it: a
+ *  "local" read back for any other reason (the user's own choice, readable
+ *  again after a transient lock) is never overwritten (round 4 review). */
+let supersededLocalOnDisk = false;
 const listeners = new Set<(now: ChatAnswerer) => void>();
 
 function filePath(): string {
@@ -571,6 +576,7 @@ export async function setChatAnswerer(
     await enqueue(async () => {
       how = makeDiskClaudeSync(own);
       if (how === "failed") await writeClaudeAsync(own);
+      if (readState(filePath()) !== "local") supersededLocalOnDisk = false;
     });
     const result = await settled("claude", seq !== mine);
     // The user's own switch is silent at the next start only if the file
@@ -591,12 +597,21 @@ export async function setChatAnswerer(
   }
   await enqueue(async () => {
     const outcome = await writeLocal();
+    if (outcome.saved) supersededLocalOnDisk = seq !== mine;
     // A failed local write while Claude is in effect, with "local" on disk
-    // (an earlier local write that a Claude request overtook in memory, say):
-    // Claude is put back on disk, with the mark if it was the user's own, so
-    // a restart cannot bring the local model back (round 4 P11).
-    if (!outcome.written && effective !== "local" && readState(filePath()) === "local") {
+    // that an earlier, superseded local write of this run put there (one the
+    // Claude request's own queued step could not undo): Claude is put back on
+    // disk, with the mark if it was the user's own, so a restart cannot bring
+    // the local model back (round 4 P11). Never over a "local" this run did
+    // not leave behind — that one is the user's stored choice.
+    if (
+      !outcome.written &&
+      supersededLocalOnDisk &&
+      effective !== "local" &&
+      readState(filePath()) === "local"
+    ) {
       if (makeDiskClaudeSync(claudeIsOwn) === "failed") await writeClaudeAsync(claudeIsOwn);
+      if (readState(filePath()) !== "local") supersededLocalOnDisk = false;
     }
     if (outcome.written && seq === mine) {
       const wasLocal = effective === "local";
@@ -628,5 +643,6 @@ export function __resetChatAnswererForTests(base?: string): void {
   seq = 0;
   diskQueue = Promise.resolve();
   claudeIsOwn = false;
+  supersededLocalOnDisk = false;
   listeners.clear();
 }
