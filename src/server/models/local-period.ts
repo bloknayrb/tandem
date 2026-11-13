@@ -232,6 +232,9 @@ const supervisorListeners = new Set<(change: LocalPeriodChange) => void>();
 /** The supervisor's subscription. Returns the unsubscribe. */
 export function subscribeLocalPeriod(cb: (change: LocalPeriodChange) => void): () => void {
   supervisorListeners.add(cb);
+  // Told of every switch even if the wiring failed (round-1 item 17): the
+  // supervisor's holds read the switch live, so it must hear the switch back.
+  unsubscribeSwitch ??= onChatAnswererChanged(onSwitch);
   return () => {
     supervisorListeners.delete(cb);
   };
@@ -274,7 +277,16 @@ function step(label: string, fn: () => void): void {
 
 function onSwitch(now: "claude" | "local", source: ChatAnswererSwitchSource): void {
   const h = hooks;
-  if (!h) return;
+  if (!h) {
+    // Unwired (the wiring failed at boot): only the supervisor is told.
+    open = now === "local";
+    step("supervisor", () =>
+      tellSupervisor(
+        now === "local" ? { to: "local" } : { to: "claude", asked: source === "own-window" },
+      ),
+    );
+    return;
+  }
   if (now === "local") {
     beginPeriod(h);
     step("round", () => h.suspendDeliveryRound());

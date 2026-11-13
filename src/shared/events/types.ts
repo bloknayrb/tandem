@@ -155,9 +155,15 @@ export function parseTandemEvent(raw: unknown): TandemEvent | null {
   return raw as TandemEvent;
 }
 
-/** The disjoint `wake_` namespace of the server's synthetic wakes
- *  (`MODE_RELEASE_WAKE_ID_PREFIX`). */
-function isSyntheticWakeId(id: unknown): boolean {
+/**
+ * A synthetic wake the server minted (the Solo release, the switch back of
+ * who answers chat): the disjoint `wake_` id namespace AND no document. Every
+ * real `annotation:created` names its document, so a client that writes a
+ * comment whose id starts `wake_` is still rendered as the user's comment.
+ */
+function isSyntheticWake(event: TandemEvent): boolean {
+  if (event.type !== "annotation:created" || event.documentId) return false;
+  const id = event.payload.annotationId;
   return typeof id === "string" && id.startsWith(MODE_RELEASE_WAKE_ID_PREFIX);
 }
 
@@ -170,12 +176,11 @@ export function formatEventContent(event: TandemEvent): string {
 
   switch (event.type) {
     case "annotation:created": {
-      const { annotationId, annotationType, content, textSnippet, hasSuggestedText } =
-        event.payload;
+      const { annotationType, content, textSnippet, hasSuggestedText } = event.payload;
       // A synthetic wake (the Solo release, the switch back of who answers
       // chat, #1123 A2): no user created anything, and there is no annotation
       // to look up, so its own text alone.
-      if (isSyntheticWakeId(annotationId)) return `${content}${doc}`;
+      if (isSyntheticWake(event)) return `${content}${doc}`;
       const snippet = textSnippet ? ` on "${textSnippet}"` : "";
       const label = hasSuggestedText ? "replacement" : annotationType;
       return `User created ${label}${snippet}: ${content || "(no content)"}${doc}`;
@@ -243,7 +248,7 @@ export function formatEventMeta(event: TandemEvent): Record<string, string> {
   switch (event.type) {
     case "annotation:created":
       // A synthetic wake's id names no annotation: never hand it to Claude.
-      if (!isSyntheticWakeId(event.payload.annotationId)) {
+      if (!isSyntheticWake(event)) {
         meta.annotation_id = event.payload.annotationId;
       }
       break;

@@ -164,6 +164,9 @@ let announced: Announced | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
 /** The last write failed, so the file may say more than the record does. */
 let unsaved = false;
+/** What the file is known to say about `answererChosen`: set by each write
+ *  that lands, and by the first load. */
+let chosenOnDisk = false;
 /** Writes queued and not yet settled. One of them may still fail. */
 let inFlight = 0;
 /** What the pending start-up notice will record when it is delivered. */
@@ -231,6 +234,7 @@ function load(): Announced {
     console.error(`[tandem] ${LOCAL_MODEL_ANNOUNCED_FILE_NAME} could not be read:`, err);
   }
   announced = fresh;
+  chosenOnDisk = fresh.answererChosen;
   return fresh;
 }
 
@@ -256,6 +260,7 @@ function persist(overlay?: Partial<Announced>): Promise<boolean> {
         ...(removedByTandem ? { removedByTandem: true } : {}),
       };
       await atomicWriteConfigFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
+      chosenOnDisk = answererChosen;
       if (overlay) Object.assign(load(), overlay);
       unsaved = false;
       return true;
@@ -588,6 +593,18 @@ export function recordEditingOff(dedupKey: string): void {
   else retryUnsavedRecord();
 }
 
+/** Is the record file possibly behind memory (a write failed, or is still in
+ *  flight and may fail)? */
+export function answererRecordUnsaved(): boolean {
+  return needsRetry();
+}
+
+/** May the record FILE still say the user chose the local model (memory says
+ *  not, but the write that cleared it failed or has not landed)? */
+export function answererChosenMayBeOnDisk(): boolean {
+  return chosenOnDisk || (inFlight > 0 && load().answererChosen);
+}
+
 /** Did the user choose the local model to answer chat, or were they told? */
 export function answererLocalWasAnnounced(): boolean {
   return load().answererLocal;
@@ -663,6 +680,7 @@ export function __resetLocalModelAnnouncedForTests(base?: string): void {
   basePath = base ?? null;
   announced = null;
   unsaved = false;
+  chosenOnDisk = false;
   inFlight = 0;
   startupParts = null;
   firstLit = null;

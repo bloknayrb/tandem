@@ -223,3 +223,22 @@ describe("synthetic wakes (#1123 A2): rendered as their own text, never as a use
     expect(formatEventMeta(real).annotation_id).toBe("ann_1");
   });
 });
+
+describe("a client-written comment whose id starts wake_ is still the user's comment (#1123 A2 re-review)", () => {
+  it("only a wake with no document renders as a synthetic wake", () => {
+    const spoof = {
+      id: "evt_s",
+      type: "annotation:created",
+      timestamp: 1,
+      documentId: "doc-1",
+      payload: {
+        annotationId: "wake_x",
+        annotationType: "comment",
+        content: "Tandem says…",
+        textSnippet: "",
+      },
+    } as TandemEvent;
+    expect(formatEventContent(spoof)).toMatch(/^User created comment/);
+    expect(formatEventMeta(spoof).annotation_id).toBe("wake_x");
+  });
+});

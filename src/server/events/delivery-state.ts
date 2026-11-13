@@ -488,8 +488,10 @@ export function discardSuspendedRound(): void {
   pendingAbandoned = false;
   pendingItems.clear();
   // The last latency measured predates the local period: it would read as
-  // this round's (review item 16).
+  // this round's, and no poll followed the forward that opened the discarded
+  // round, so the state reads `idle` until the next forward (review item 16).
   lastLatencyMs = null;
+  lastForwardAt = null;
 }
 
 /** Testing-only. */

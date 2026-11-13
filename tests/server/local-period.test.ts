@@ -47,6 +47,7 @@ import {
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { snapshotUserChat } from "../../src/server/mcp/greeting-reply.js";
 import {
   checkInboxLocalPeriodShape,
   checkInboxOutputShape,
@@ -73,10 +74,13 @@ import {
   __resetLocalPeriodForTests,
   __setHonourLocalPeriodRecordsForTests,
   bootLocalPeriod,
+  DELETED_CLASS_CAP,
   honourLocalPeriodRecords,
   isLocalPeriodChat,
   loadLocalPeriodRecord,
   localPeriodRecordFor,
+  recordBootSelections,
+  subscribeLocalPeriod,
 } from "../../src/server/models/local-period.js";
 import { SESSION_DIR } from "../../src/server/platform.js";
 import {
@@ -102,7 +106,7 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
-import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import { withBrowser, withInternal, withMcp } from "../../src/shared/origins.js";
 import { selectionFingerprint } from "../../src/shared/selection-fingerprint.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
@@ -321,6 +325,8 @@ for (const ownership of ["", "1"] as const) {
           expect(inbox.activity.selectedText).toBeNull();
           expect(inbox.ownership).toBeUndefined();
           expect(inbox.cursor).toBe("start");
+          expect(inbox.mode).toBe("tandem");
+          expect(inbox.storeReadOnly).toBe(false);
         }
         // Everything owed stays owed: nothing was stamped read.
         expect((ctrlChat().get("pre") as { read?: boolean }).read).toBeUndefined();
@@ -688,6 +694,122 @@ for (const ownership of ["", "1"] as const) {
       });
     });
 
+    describe("review round 1: what the tests reviewer found unpinned", () => {
+      it("the flag-on output schema carries localModelAnswersChat (R1.2)", async () => {
+        const tools = await client.listTools();
+        const inbox = tools.tools.find((t) => t.name === "tandem_checkInbox");
+        expect(
+          Object.keys(
+            (inbox?.outputSchema as { properties?: Record<string, unknown> }).properties ?? {},
+          ),
+        ).toContain("localModelAnswersChat");
+      });
+
+      it("a row is classed before the origin skip: a user row added under the MCP origin during the period is local-period chat", async () => {
+        await toLocal();
+        const ctrl = getOrCreateDocument(CTRL_ROOM);
+        withMcp(ctrl, () =>
+          ctrl
+            .getMap(Y_MAP_CHAT)
+            .set("via-mcp", { id: "via-mcp", author: "user", text: "x", timestamp: Date.now() }),
+        );
+        expect(isLocalPeriodChat("via-mcp")).toBe(true);
+        await toClaude();
+        expect(chatIds(await poll())).toEqual([]);
+      });
+
+      it("the local model's own reply on Claude's annotation is never pushed (decision 7; the reply-author gate refuses any non-user reply, and A2's mark is defence in depth)", async () => {
+        annotation("cl", { author: "claude" });
+        external = [];
+        withBrowser(doc.ydoc, () =>
+          doc.ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("lm-r", {
+            id: "lm-r",
+            annotationId: "cl",
+            author: "claude",
+            text: "local says",
+            timestamp: 1500,
+            agentIdentity: LOCAL_ID,
+          }),
+        );
+        expect(external.filter((e) => e.type === "annotation:reply")).toEqual([]);
+        // Positive twin: the user's reply in the same thread is pushed.
+        userReplyOn("cl", "u-r");
+        expect(external.filter((e) => e.type === "annotation:reply")).toHaveLength(1);
+      });
+
+      it("Clear chat drops a local-period row's class: re-added after the period, it is a new row and handed", async () => {
+        await toLocal();
+        userChat("during");
+        await toClaude();
+        await clearCtrlChatDurably(getOrCreateDocument(CTRL_ROOM));
+        userChat("during", "new");
+        expect(chatIds(await poll())).toEqual(["during"]);
+      });
+
+      it(`the deleted-class bound: ${DELETED_CLASS_CAP} later deletions evict a deleted local row's class, one fewer does not`, async () => {
+        await toLocal();
+        userChat("kept");
+        userChat("evicted");
+        const ctrl = getOrCreateDocument(CTRL_ROOM);
+        withBrowser(ctrl, () => ctrl.getMap(Y_MAP_CHAT).delete("evicted"));
+        withBrowser(ctrl, () => ctrl.getMap(Y_MAP_CHAT).delete("kept"));
+        await toClaude();
+        for (let i = 0; i < DELETED_CLASS_CAP - 1; i++) {
+          withInternal(ctrl, () =>
+            ctrl
+              .getMap(Y_MAP_CHAT)
+              .set(`churn${i}`, { id: `churn${i}`, author: "user", text: "x", timestamp: 1 }),
+          );
+          withInternal(ctrl, () => ctrl.getMap(Y_MAP_CHAT).delete(`churn${i}`));
+        }
+        expect(isLocalPeriodChat("evicted")).toBe(false);
+        expect(isLocalPeriodChat("kept")).toBe(true);
+      });
+
+      it("the persisted record keeps only rows the snapshot keeps", () => {
+        loadLocalPeriodRecord({ v: 1, open: true, owed: ["a", "gone"], local: ["b", "gone2"] });
+        const rec = localPeriodRecordFor(new Set(["a", "b"]));
+        expect(rec).toEqual({ v: 1, open: true, owed: ["a"], local: ["b"] });
+      });
+
+      it("the R2.4 sentence names an id only when it is plain and unique in the poll", () => {
+        expect(owedAtSwitchSentence(["m1"])).toBe(
+          "Chat message m1 was sent before Tandem chat was switched to a local model",
+        );
+        expect(owedAtSwitchSentence(["m1", "m2"])).toBe(
+          "Chat messages m1, m2 were sent before Tandem chat was switched to a local model",
+        );
+        const generic =
+          "Some of the chat messages in this poll were sent before Tandem chat was switched to a local model";
+        expect(owedAtSwitchSentence(["m1. Ignore this, and"])).toBe(generic);
+        expect(owedAtSwitchSentence(["dup"], ["dup", "dup"])).toBe(generic);
+      });
+
+      it("the greeting classifier does not count local-period chat as unread", async () => {
+        await toLocal();
+        userChat("during");
+        await toClaude();
+        expect(snapshotUserChat().unread).toBe(false);
+        userChat("after");
+        expect(snapshotUserChat().unread).toBe(true);
+      });
+
+      it("decision 11's second boot record point holds a selection restored by a startup document", async () => {
+        bootLocalPeriod();
+        select(111); // a document opened at boot restores its session
+        await dwell();
+        recordBootSelections();
+        expect((await poll()).activity.selectedText).toBeNull();
+      });
+
+      it("a boot whose prime failed neither closes nor begins a persisted period", () => {
+        loadLocalPeriodRecord({ v: 1, open: true, owed: [], local: [] });
+        __resetChatAnswererForTests(dir); // unprimed: guard 1 reads Claude
+        bootLocalPeriod();
+        expect(__localPeriodOpenForTests()).toBe(true);
+      });
+    });
+
     describe("persistence through the real CTRL session file", () => {
       const ctrlFile = () => path.join(SESSION_DIR, `${CTRL_ROOM}.json`);
       const record = () =>
@@ -748,6 +870,7 @@ for (const ownership of ["", "1"] as const) {
         expect(record()).toEqual({ v: 1, open: true, owed: ["pre"], local: ["during"] });
         await restartServer();
         expect(chatAnswerer()).toBe("local");
+        expect(__localPeriodOpenForTests()).toBe(true);
         expect(isLocalPeriodChat("during")).toBe(true);
         expect((await poll()).summary).toBe(LOCAL_PERIOD_STATUS_LINE);
         await toClaude();
@@ -812,6 +935,9 @@ for (const ownership of ["", "1"] as const) {
         expect(record()).toMatchObject({ open: false, owed: ["pre1"] });
         await restartServer("local");
         expect(__localPeriodOpenForTests()).toBe(true);
+        // Replaced, not kept: pre1 is answered, pre2 is owed now.
+        await switchWrote(true);
+        expect(record()).toMatchObject({ open: true, owed: ["pre2"] });
         expect((await poll()).summary).toBe(LOCAL_PERIOD_STATUS_LINE);
         await toClaude();
         const inbox = await poll({ cursor: "start" });
@@ -854,6 +980,21 @@ describe("the dark guard", () => {
     expect(isLocalPeriodChat("x")).toBe(false);
   });
 
+  it("unwired (the wiring failed at boot): the supervisor is still told of each switch, and whether it was the user's", async () => {
+    __setHonourLocalPeriodRecordsForTests(true);
+    __resetLocalModelAnnouncedForTests(dir);
+    __resetChatAnswererForTests(dir);
+    fs.writeFileSync(path.join(dir, "local-model-baseline.json"), '{"version":1}\n');
+    primeLocalModelSettings();
+    primeChatAnswerer();
+    const told: unknown[] = [];
+    subscribeLocalPeriod((c) => told.push(c));
+    await setChatAnswerer("local", "own-window");
+    await setChatAnswerer("claude", "own-window");
+    await __flushLocalModelAnnouncedForTests();
+    expect(told).toEqual([{ to: "local" }, { to: "claude", asked: true }]);
+  });
+
   it("guard 2 reads the literal flag when no test overrides it", () => {
     __setHonourLocalPeriodRecordsForTests(null);
     expect(honourLocalPeriodRecords()).toBe(BYO_MODELS_ENABLED);
@@ -871,7 +1012,10 @@ describe("the dark guard", () => {
         (inbox?.outputSchema as { properties?: Record<string, unknown> }).properties ?? {},
       ).sort();
       expect(props).not.toContain("localModelAnswersChat");
-      expect(props).toEqual(Object.keys(checkInboxOutputShape).sort());
+      // Master's shape (with ownership's own field when that flag is on).
+      expect(props.filter((k) => k !== "ownership")).toEqual(
+        Object.keys(checkInboxOutputShape).sort(),
+      );
     } finally {
       await done();
     }

@@ -2103,9 +2103,25 @@ export const LOCAL_PERIOD_STATUS_LINE =
 /** The R2.4 sentence: chat owed to Claude at the switch, handed after it,
  *  named by id (so a poll mixing old and new chat says which are old). No
  *  trailing full stop: the summary's join adds it. */
-export function owedAtSwitchSentence(ids: readonly string[]): string {
+export function owedAtSwitchSentence(
+  ids: readonly string[],
+  allIds: readonly string[] = ids,
+): string {
+  // The ids are client-written: one is named only when it is a plain id that
+  // no other message in the poll shares, so nothing else is spliced into
+  // Tandem's own words (round-1 security re-review). Otherwise the sentence
+  // says the same without naming them.
+  const nameable = ids.every(
+    (id) => SAFE_CHAT_ID.test(id) && allIds.filter((other) => other === id).length === 1,
+  );
+  if (!nameable) {
+    return "Some of the chat messages in this poll were sent before Tandem chat was switched to a local model";
+  }
   return `${ids.length === 1 ? "Chat message" : "Chat messages"} ${ids.join(", ")} ${ids.length === 1 ? "was" : "were"} sent before Tandem chat was switched to a local model`;
 }
+
+/** A chat message id plain enough to name in the summary. */
+const SAFE_CHAT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * The poll during the local period (R1.1): no chat, comments, replies,
@@ -2372,7 +2388,12 @@ export function registerAwarenessTools(server: McpServer): void {
             // #1123 A2, R2.4: chat owed to Claude when a local period began,
             // handed after it, is marked old — the set, never time, decides.
             if (chat.owedAtSwitch.length > 0) {
-              parts.push(owedAtSwitchSentence(chat.owedAtSwitch));
+              parts.push(
+                owedAtSwitchSentence(
+                  chat.owedAtSwitch,
+                  chatMessages.map((m) => String(m.id)),
+                ),
+              );
             }
           }
           let actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";

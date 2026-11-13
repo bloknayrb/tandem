@@ -43,7 +43,7 @@ import { clearStartupNotices, getStartupNotices } from "../../../src/server/star
  */
 const writeControl = vi.hoisted(() => ({
   fail: new Set<string>(),
-  decide: null as null | ((file: string) => boolean),
+  decide: null as null | ((file: string, content: string) => boolean),
   before: null as null | ((file: string) => void),
 }));
 
@@ -58,7 +58,7 @@ vi.mock("../../../src/server/integrations/storage.js", async (importOriginal) =>
       for (const name of writeControl.fail) {
         if (file.endsWith(name)) throw new Error("simulated write failure");
       }
-      if (writeControl.decide?.(file)) throw new Error("simulated write failure");
+      if (writeControl.decide?.(file, content)) throw new Error("simulated write failure");
       return actual.atomicWriteConfigFile(file, content);
     },
   };
@@ -200,7 +200,10 @@ describe("R7.1: a failed record write fails the user's own switch to the local m
       recordWrites += 1;
       if (recordWrites === 1) l2 = setChatAnswerer("local", "own-window");
     };
-    writeControl.decide = (file) => isRecord(file) && recordWrites === 2;
+    // Fail L2's own record write: the second write that records a choice.
+    let choiceWrites = 0;
+    writeControl.decide = (file, content) =>
+      isRecord(file) && content.includes('"answererChosen": true') && ++choiceWrites === 2;
     const l1 = setChatAnswerer("local", "own-window");
     await l1;
     const r2 = await (l2 as unknown as Promise<SetChatAnswererResult>);
@@ -215,6 +218,27 @@ describe("R7.1: a failed record write fails the user's own switch to the local m
     expect(chatAnswerer()).toBe("claude");
     expect(getStartupNotices()).toEqual([]);
   });
+
+  for (const source of ["allowance", "own-window"] as const) {
+    it(`re-review B1: a Claude request (${source}) arriving while an own-window switch records its choice — the record never says 'chosen' once they settle`, async () => {
+      markNotFirstLitStart();
+      prime();
+      let claude: Promise<SetChatAnswererResult> | null = null;
+      writeControl.before = (file) => {
+        if (isRecord(file) && claude === null) claude = setChatAnswerer("claude", source);
+      };
+      await setChatAnswerer("local", "own-window");
+      await (claude as unknown as Promise<SetChatAnswererResult>);
+      writeControl.before = null;
+      await __flushLocalModelAnnouncedForTests();
+      expect(chatAnswerer()).toBe("claude");
+      expect(answererLocalWasChosen()).toBe(false);
+      restart();
+      prime();
+      expect(chatAnswerer()).toBe("claude");
+      expect(getStartupNotices()).toEqual([]);
+    });
+  }
 
   it("the announcement cannot go silent: chosen earlier, a refused re-choice, then a program sets Claude — the next start announces", async () => {
     markNotFirstLitStart();
@@ -280,9 +304,10 @@ describe("review item 9: a local write that landed but cannot be read back", () 
       if (wrote && isSwitch(p)) throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
       return (realRead as (p: fs.PathOrFileDescriptor, o?: unknown) => unknown)(p, o);
     }) as typeof fs.readFileSync);
-    await setChatAnswerer("local", "own-window");
+    const result = await setChatAnswerer("local", "own-window");
     vi.restoreAllMocks();
     quietConsole();
+    expect(result).toEqual({ answerer: "local", persisted: true });
     expect(chatAnswerer()).toBe("local");
     expect(diskAnswerer()).toBe("local");
     await __flushLocalModelAnnouncedForTests();
@@ -605,13 +630,22 @@ async function checkOutcome(r: Outcome, label: string): Promise<void> {
   const last = r.results[r.results.length - 1];
   const agrees = r.disk === r.after;
   const fallback = last.persisted === false && r.after === r.before;
-  expect(agrees || fallback, `${label}: ${JSON.stringify(r)}`).toBe(true);
   restart();
   prime();
+  // The stated residual: a refused switch whose every way of putting Claude
+  // back fails (and A1's lone Claude request with every fallback failing)
+  // leaves "local" on disk with Claude in effect. R7.1 keeps Claude in effect;
+  // the flip is then never silent — the next start announces it.
+  const announcedFlip =
+    last.persisted === false && r.disk === "local" && getStartupNotices().length > 0;
+  expect(agrees || fallback || announcedFlip, `${label}: ${JSON.stringify(r)}`).toBe(true);
   if (agrees) {
     expect(chatAnswerer(), `${label}: the restart reads what was in effect`).toBe(r.after);
     if (last.persisted) {
-      expect(getStartupNotices(), `${label}: no notice for the user's own switches`).toEqual([]);
+      expect(
+        getStartupNotices(),
+        `${label}: no notice for the user's own switches; disk ${JSON.stringify(diskJson())} record ${fs.existsSync(recordFile()) ? fs.readFileSync(recordFile(), "utf8") : "none"} results ${JSON.stringify(r.results)}`,
+      ).toEqual([]);
     }
   }
 }

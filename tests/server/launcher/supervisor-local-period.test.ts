@@ -128,6 +128,13 @@ const RESULT_OK = { type: "result", subtype: "success", is_error: false, result:
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Long enough for a start that WOULD happen to have spawned: every queued
+ *  start reads settings and the integrations file before it spawns. */
+async function quiet(): Promise<void> {
+  await sleep(300);
+  await settle(5);
+}
+
 async function settle(n = 3): Promise<void> {
   for (let i = 0; i < n; i++) await tick();
 }
@@ -343,7 +350,7 @@ describe("#1123 A2 — no automatic start during the local period (R4.1)", () =>
     await sup.start();
     await settle();
     lp.toClaude(false);
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(0);
     expect(sup.status()).toMatchObject({
       running: false,
@@ -361,7 +368,7 @@ describe("#1123 A2 — no automatic start during the local period (R4.1)", () =>
     const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("on-click") });
     await sup.start();
     lp.toClaude(true);
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(0);
   });
 
@@ -387,7 +394,7 @@ describe("#1123 A2 — no automatic start during the local period (R4.1)", () =>
     const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("off") });
     await sup.start();
     lp.toClaude(true);
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(0);
     expect((sup.status() as { heldForLocalModel?: true }).heldForLocalModel).toBeUndefined();
   });
@@ -417,7 +424,7 @@ describe("#1123 A2 — diff review B1/B2", () => {
     await settle();
     lp.toClaude(true);
     lp.toLocal(); // before the switch back's locked body runs
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(0);
     expect(sup.status()).toMatchObject({ running: false, heldForLocalModel: true });
     lp.toClaude(true);
@@ -434,7 +441,7 @@ describe("#1123 A2 — diff review B1/B2", () => {
     expect(status.standby).toBe("off");
     expect(status.heldForLocalModel).toBeUndefined();
     lp.toClaude(true);
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(0);
   });
 });
@@ -559,10 +566,13 @@ describe("#1123 A2 — each held start kind runs at the user's switch back (R5.1
     // A chat that reached the standby watch before the switch, its start
     // running after it (this harness's fan-out has no forward gate).
     emit(chatEvent());
+    // Wait for the start itself to finish (in on-click the field is already
+    // true for the standby, so it cannot say the start was held).
     await waitFor(
-      () => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel,
+      () => !(sup.status() as { restartPending?: true }).restartPending,
       "the message start to be held",
     );
+    await quiet();
     expect(children).toHaveLength(0);
     lp.toClaude(true);
     await nthChild(1);
@@ -625,7 +635,7 @@ describe("#1123 A2 — resumed spawns and idle stops (R4.4, R5.1)", () => {
     exitChild(child1, 1);
     await waitFor(() => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel, "held");
     lp.toClaude(false);
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(1);
     await sup.startByUser();
     const child2 = await nthChild(2);
@@ -682,7 +692,7 @@ describe("#1123 A2 — resumed spawns and idle stops (R4.4, R5.1)", () => {
     await waitFor(() => child1.killed, "the idle stop");
     lp.toLocal();
     lp.toClaude(true);
-    await settle(20);
+    await quiet();
     expect(children).toHaveLength(1);
   });
 
@@ -701,7 +711,9 @@ describe("#1123 A2 — resumed spawns and idle stops (R4.4, R5.1)", () => {
     );
     lp.toLocal();
     emit(chatEvent());
-    await waitFor(() => (sup.status() as { heldForLocalModel?: true }).heldForLocalModel, "held");
+    await waitFor(() => !(sup.status() as { restartPending?: true }).restartPending, "held");
+    await quiet();
+    expect(children).toHaveLength(1);
     expect((sup.status() as { standby?: string }).standby).toBe("idle");
     lp.toClaude(true);
     await nthChild(2);
@@ -737,7 +749,7 @@ describe("#1123 A2 — review items 5, 13, 14", () => {
     lp.toClaude(false); // unasked, while the start waits
     holdReads = false;
     releaseRead();
-    await settle(20);
+    await quiet();
     expect(children).toHaveLength(0);
   });
 
@@ -746,7 +758,7 @@ describe("#1123 A2 — review items 5, 13, 14", () => {
     const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("auto") });
     await sup.start();
     lp.toClaude(false);
-    await settle(10);
+    await quiet();
     expect(children).toHaveLength(0);
     lp.toLocal();
     expect(sup.status()).toMatchObject({ heldForLocalModel: true });
@@ -761,6 +773,144 @@ describe("#1123 A2 — review items 5, 13, 14", () => {
     lp.toClaude(false);
     expect(await sup.startAfterSetup()).toBe("starting");
     await nthChild(1);
+  });
+});
+
+describe("#1123 A2 — the switch-back start paths (tests review)", () => {
+  it("decision 10 / R5.1: a held boot is started only when the mode still reads auto", async () => {
+    let mode: "auto" | "on-click" = "auto";
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: async () => ({
+        source: "default",
+        settings: { startMode: mode, lifetime: "always", idleMinutes: 30 },
+      }),
+    });
+    await sup.start();
+    mode = "on-click";
+    lp.toClaude(true);
+    await quiet();
+    expect(children).toHaveLength(0);
+  });
+
+  it("a held boot does not start when the mode reads Off at the switch back", async () => {
+    let mode: "auto" | "off" = "auto";
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: async () => ({
+        source: "default",
+        settings: { startMode: mode, lifetime: "always", idleMinutes: 30 },
+      }),
+    });
+    await sup.start();
+    mode = "off";
+    lp.toClaude(true);
+    await quiet();
+    expect(children).toHaveLength(0);
+  });
+
+  it("R5.1 'except Off': a held message start does not run when the mode reads Off at the switch back", async () => {
+    let mode: "on-click" | "off" = "on-click";
+    const lp = localPeriodSeam(true);
+    const { sup, emit } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: async () => ({
+        source: "default",
+        settings: { startMode: mode, lifetime: "always", idleMinutes: 30 },
+      }),
+    });
+    await sup.start();
+    emit(chatEvent());
+    await waitFor(
+      () => !(sup.status() as { restartPending?: true }).restartPending,
+      "the message start to be held",
+    );
+    mode = "off";
+    lp.toClaude(true);
+    await quiet();
+    expect(children).toHaveLength(0);
+  });
+
+  it("a held message start does not run beside another AI", async () => {
+    let other = false;
+    const lp = localPeriodSeam(true);
+    const { sup, emit } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: settingsOf("on-click"),
+      otherAiAttached: () => other,
+    });
+    await sup.start();
+    emit(chatEvent());
+    await waitFor(
+      () => !(sup.status() as { restartPending?: true }).restartPending,
+      "the message start to be held",
+    );
+    other = true;
+    lp.toClaude(true);
+    await quiet();
+    expect(children).toHaveLength(0);
+  });
+
+  it("re-review B2: the user's second own switch back, while the first's start still waits, starts Claude", async () => {
+    const lp = localPeriodSeam(true);
+    let releaseRead = (): void => {};
+    let readStarted = false;
+    let holdReads = false;
+    const { sup } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: async () => {
+        if (holdReads) {
+          readStarted = true;
+          holdReads = false;
+          await new Promise<void>((r) => {
+            releaseRead = r;
+          });
+        }
+        return {
+          source: "default",
+          settings: { startMode: "auto", lifetime: "always", idleMinutes: 30 },
+        };
+      },
+    });
+    await sup.start();
+    holdReads = true;
+    lp.toClaude(true);
+    await waitFor(() => readStarted, "the first switch back's settings read");
+    lp.toLocal();
+    lp.toClaude(true); // the user's own, again
+    releaseRead();
+    await nthChild(1);
+  });
+
+  it("R4.5: in on-click with no held start, a standby a chat would start reports the field and no startsOnMessage", async () => {
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({ localPeriod: lp.seam, readSettings: settingsOf("on-click") });
+    await sup.start();
+    const status = sup.status() as { heldForLocalModel?: true; startsOnMessage?: true };
+    expect(status.heldForLocalModel).toBe(true);
+    expect(status.startsOnMessage).toBeUndefined();
+    lp.toClaude(false);
+    const after = sup.status() as { heldForLocalModel?: true; startsOnMessage?: true };
+    expect(after.heldForLocalModel).toBeUndefined();
+    expect(after.startsOnMessage).toBe(true);
+  });
+
+  it("R4.5: a lastError outranks the field even with a start held", async () => {
+    let cli: string | null = process.execPath;
+    const lp = localPeriodSeam(true);
+    const { sup } = makeSupervisor({
+      localPeriod: lp.seam,
+      readSettings: settingsOf("auto"),
+      resolveClaudeCommand: () => cli,
+    });
+    await sup.start(); // boot held
+    cli = null;
+    await sup.startByUser(); // the user's Start finds no Claude Code
+    const status = sup.status() as { lastError?: string; heldForLocalModel?: true };
+    expect(status.lastError).toBe("cli-unusable");
+    expect(status.heldForLocalModel).toBeUndefined();
   });
 });
 
