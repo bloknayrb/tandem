@@ -3133,7 +3133,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // model answers chat. Decided after the plan's await, beside every other
     // re-check, and after the Off, plan, licence and CLI checks, so those
     // still report what they report. The held start runs at the user's
-    // switch back (R5.1).
+    // switch back (R5.1). A message start is the exception: it is held at the
+    // top of `stopAndSpawn`, after the licence check only (round-2 item 9),
+    // so during the period a missing integration or CLI is reported when the
+    // held start runs at the switch back, not when the message arrives.
     if (localHeld()) {
       holdForLocalPeriod(kind);
       return;
