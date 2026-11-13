@@ -30,24 +30,6 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
-      "The notice rule: an accept or dismiss notice already handed to an earlier owner goes to " +
-      "nobody after a handover (design §6.3 step 2's use of handoverSeq, §6.4's last bullet). " +
-      "handoverSeq is written but has no reader.",
-    closedBy:
-      "The change-notice PR (the second half of the scope work: change notices and `changed`, the " +
-      "notice rule, per-document delivery rounds). It must also re-owe past what the scope PR " +
-      "left: a close of an unowned document runs no handover, so an acknowledgement before the " +
-      "close can hide its kept notices from a fresh reader after a reopen; a reader's mark set " +
-      "by exclusion (its default polls read another holder's document as empty) passes a notice " +
-      "that holder was handed and never acknowledged, so once a handover keeps the notice, that " +
-      "reader acknowledges it and is never handed it, nor is a fresh reader; a poll's claim over " +
-      "a stale entry runs a handover that writes handoverSeq above notices the same poll handed; " +
-      "a claim refused at commit does not undo a cursor-less poll's acknowledgement of an " +
-      "entry that predates it; and a mark moved by exclusion drops the reader's held seqs there, " +
-      "so a Solo-held kept notice is passed with it.",
-  },
-  {
-    gap:
       "The handled filter for comment threads (design §6.4's first two bullets), together with the " +
       "stripping of client-written Claude replies: without the filter an answered comment or reply " +
       "is re-owed by every handover (handover gap (c)); without the stripping a browser client " +
@@ -60,7 +42,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
       "items are owed.",
-    closedBy: "The change-notice PR (per-document delivery rounds, design §6.7).",
+    closedBy:
+      "The chat PR (per-document delivery rounds beside its per-message rounds, design §6.7; " +
+      "moved there by the notice-rule PR's brief).",
   },
   {
     gap:
@@ -69,7 +53,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "another session's polls never hide its items from you' (with inbox scope, only the " +
       "document's holder reads it); 'each item repeats on every poll until you pass a cursor from " +
       "a response that held it' (after a handover an acknowledged item is handed again, " +
-      "unmarked); 'Omit `documentId` to cover every open document'; and the summary's 'The cursor " +
+      "unmarked; and since the notice-rule PR an accept or dismiss notice is not repeated once " +
+      "its document has left the holder that was handed it, even to that holder's own retry " +
+      "with an old cursor, so 'Items repeat until acknowledged ... recovered by polling again " +
+      "with the same cursor' is false for it); 'Omit `documentId` to cover every open document'; and the summary's 'The cursor " +
       "was not recognised ... returns everything not yet acknowledged' (only what is in scope). " +
       "The `documentId` input: 'Omit it to poll every open document'. skills/tandem/SKILL.md: " +
       "'polls every open document', and its contract that a summary with no document read means " +
@@ -93,7 +80,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "not, every resolved comment that was ever edited, and every user reply on a Claude-facing " +
       "thread, resolved long ago or not, so the re-hand grows with the document's history until the " +
       "handled filter lands; and a comment edited since it was seen arrives without `edited: true`. " +
-      "On master a close and reopen re-hands nothing. (A restart that returns under the same owner " +
+      "On master a close and reopen re-hands nothing. Since the notice-rule PR, each lapse also " +
+      "settles the accept and dismiss notices from any response that session lost (#2294): in " +
+      "the write-then-idle cycle a lost response's notices go to nobody, the session included. " +
+      "(A restart that returns under the same owner " +
       "id inside the two-minute grace is no handover: its fresh cursor counts what its earlier " +
       "incarnation acknowledged as seen, as on master, so the outcome turns on the grace.) Since " +
       "the scope PR a detached record also claims a document again on a poll that yields it " +
@@ -102,8 +92,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "`ownership.notYours` in tandem_checkInbox tells any local MCP client that a document it " +
-      "named is not its to answer (design §11.3's holder exposure, accepted by Bryan 2026-11-05, " +
+      "`ownership.notYours` in tandem_checkInbox tells any local MCP client that a document is " +
+      "not its to answer (the named one, or on a default poll every open document it left out) (design §11.3's holder exposure, accepted by Bryan 2026-11-05, " +
       "decision 4). It is not yet in docs/security.md's register.",
     closedBy: "PR 5's owners entry in docs/security.md (design §11.3).",
   },
@@ -112,7 +102,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The delivery round is still one global round (pendingSince): a scoped poll closes it " +
       "although it did not read the documents other sessions hold, so /health can read idle " +
       "while another session's document has items no poll of its holder has returned.",
-    closedBy: "The change-notice PR (per-document delivery rounds, design §6.7).",
+    closedBy:
+      "The chat PR (per-document delivery rounds beside its per-message rounds, design §6.7; " +
+      "moved there by the notice-rule PR's brief).",
   },
   {
     gap:
@@ -185,6 +177,20 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "`ownership-bundle-probe.mjs`'s `probeRefusal` is pinned by regex alone (the plan's flip " +
       "row, gate (c)).",
     closedBy: "A pin by behaviour.",
+  },
+  {
+    gap:
+      "Two notice-rule duplicates outside the brief's list of exceptions (the notice-rule PR): " +
+      "(a) a notice whose key collides with another record (a client-written id) only after the " +
+      "handover is not settled while the collision lasts, so a holder may be handed it once more " +
+      "(the handover's own colliding-key rule covers only a collision present at the handover); " +
+      "(b) a notice that only a cursor reader of the holder was handed, whose registry entry a " +
+      "pass of an older cursor of that holder retired before the handover (its status moved away " +
+      "and back, or its record was deleted and restored, in between), has no entry to settle, so " +
+      "the next holder is handed it once. Each is one duplicate notice, never a loss.",
+    closedBy:
+      "Bryan's answer (the notice-rule PR, 'Needs Bryan'): accept each as a duplicate, or ask " +
+      "for a mechanism.",
   },
   {
     gap:

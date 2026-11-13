@@ -22,10 +22,11 @@
  * handover PR: the handover (`handOver`, ownership design §6.3's rule) for
  * user comments and thread replies, and the writing of `handoverSeq`. The
  * scope PR: the inbox's one door (`inboxOwnership`: a poll's scope, its
- * claims and `holding`) and the stuck-write release in `inboxScopeOf`. Still
- * to come, named by content as in the plan: the change-notice PR (change
- * notices, the notice rule that reads `handoverSeq`, per-document delivery
- * rounds), and the chat PR.
+ * claims and `holding`) and the stuck-write release in `inboxScopeOf`. The
+ * notice-rule PR: the one reader of `handoverSeq` (`settledThrough` on a
+ * poll's scope). Still to come, named by content as in the plan: the
+ * change-notice PR (change notices and `changed`), and the chat PR (chat
+ * ownership, and per-document and per-message delivery rounds).
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -188,8 +189,9 @@ const ownerByDoc = new Map<string, OwnershipEntry>();
  * ownership entries, an unowned spell and a close and reopen, for the server
  * run: a notice at or below it was handed to an earlier owner. Only a
  * handover writes it (`handOver`), with the delivery registry's counter at
- * that moment; nothing reads it until the scope PR's notice rule. One entry
- * per document that ever had a handover, never pruned.
+ * that moment. Read only by the notice rule, through a poll's scope
+ * (`InboxPollScope.settledThrough`). One entry per document that ever had a
+ * handover, never pruned.
  */
 const handoverSeq = new Map<string, number>();
 /**
@@ -357,8 +359,8 @@ const HANDOVER_FAILED =
  * once it is deleted), with no `await` between the ownership change and this,
  * so no poll sees one without the other. **It never throws**: the change it
  * rides on has already happened and must stand. The mark is written last, so
- * a failure in the inbox half leaves it where it was (the notice rule that
- * will read it then errs toward a duplicate notice).
+ * a failure in the inbox half leaves it where it was (the notice rule, which
+ * reads it, then errs toward a duplicate notice).
  */
 function handOver(documentId: string): void {
   try {
@@ -725,7 +727,7 @@ export function defaultRuleOwner(): { ownerId: string; kind: OwnershipKind } | n
  * Step 1's handover (`handOver`) is decided where the design puts it and
  * runs as soon as the entry is written, in the same synchronous run, so a
  * change that fails before its entry hands nothing over. Step 3 (change
- * notices) is the scope PR's, step 4 (publishing owner fields through
+ * notices) is the change-notice PR's, step 4 (publishing owner fields through
  * `broadcastOpenDocs`) PR 5's.
  *
  * **A write's claim reaches this only once its outcome is known** (PR 2a,
@@ -782,7 +784,7 @@ export function setDocOwner(
       });
     }
     if (leavesRecord) handOver(documentId);
-    // Step 3, change notices (the scope PR), and step 4, publishing (PR 5): no body yet.
+    // Step 3, change notices (the change-notice PR), and step 4, publishing (PR 5): no body yet.
     compositeObserver?.("notices", documentId);
     compositeObserver?.("publish", documentId);
     // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b's.
@@ -1130,7 +1132,8 @@ export interface InboxPollScope {
    * still open (`stillOpen`, read by the caller from the document registry);
    * it is still unowned (an entry whose record is gone reads as unowned, and
    * the claim then runs a handover inside `setDocOwner`); the caller's record
-   * still exists; and the scope rule, with the poll's own clock reading, still
+   * still exists, unless the caller is Tandem's Claude (`tandem`), which
+   * needs none (the ownership change creates it); and the scope rule, with the poll's own clock reading, still
    * answers `"may-claim"`. `sinceSeq` is the registry counter before this
    * poll's pass over the document. Never throws. Answers `"held"` when the
    * caller holds the document afterwards; `"refused"` when a check refused it
@@ -1146,6 +1149,15 @@ export interface InboxPollScope {
   claim(documentId: string, sinceSeq: number, stillOpen: boolean): InboxClaimOutcome;
   /** The documents the caller holds right now (empty for no record). */
   holding(): string[];
+  /**
+   * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
+   * brief rules): the document's handover mark, read live, or 0 when no
+   * handover has run on it this server run. A notice whose registry entry is
+   * at or below it was handed to a holder the document has since left, and is
+   * handed to nobody again (`awareness.ts`, `settleNotices`). **The one
+   * reader of `handoverSeq`.** 0 while ownership is off.
+   */
+  settledThrough(documentId: string): number;
 }
 
 /** What applying a poll's claim came to (`InboxPollScope.claim`). */
@@ -1157,6 +1169,7 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   scopeOf: (): InboxDocumentScope => "holds",
   claim: (): InboxClaimOutcome => "refused",
   holding: () => [],
+  settledThrough: () => 0,
 });
 
 /** One of the poll claim's commit-time checks, for {@link setInboxClaimCheckForTests}. */
@@ -1239,6 +1252,7 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
       }
     },
     holding: () => (callerId === undefined ? [] : heldDocumentIds(callerId)),
+    settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,
   };
   return scope;
 }

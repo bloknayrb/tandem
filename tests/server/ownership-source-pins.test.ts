@@ -241,8 +241,14 @@ describe("the handover is wired in a running server, and reachable only through 
       "handoverSeq.set(documentId, seqSource());",
     );
     expect(functionBody("export function setHandoverSeqForTests(")).toContain("handoverSeq.set(");
-    // Nothing reads it yet: the notice rule that will is the scope PR's.
-    expect(ownership.match(/\bhandoverSeq\.(get|has)\(/g)).toBeNull();
+    // One reader (the notice-rule PR): a poll scope's `settledThrough`, inside
+    // this module, and nothing else in it or anywhere.
+    expect(ownership.match(/\bhandoverSeq\.(get|has|forEach|keys|values|entries)\(/g)).toEqual([
+      "handoverSeq.get(",
+    ]);
+    expect(ownership).toContain(
+      "settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,",
+    );
     expect(filesNaming(/\bhandoverSeq\b/)).toEqual(["src/server/sessions/ownership.ts"]);
   });
 

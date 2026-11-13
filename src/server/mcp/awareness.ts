@@ -275,28 +275,187 @@ function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<str
     const doc = getCurrentDoc(documentId);
     if (!doc || !ydoc) return null;
     const annotations = new YDocStore(ydoc, doc.filePath, doc.id).listAnnotations();
-    // How many current Claude records have each notice key: two with one key
-    // (the same id under two map keys) are each other's "other record".
-    const claimed = new Map<string, number>();
-    for (const ann of annotations) {
-      if (ann.author !== "claude") continue;
-      const key = inboxLedgerKey(documentId, ann);
-      claimed.set(key, (claimed.get(key) ?? 0) + 1);
-    }
-    const keys = new Set<string>();
-    for (const [key, count] of claimed) if (count === 1) keys.add(key);
-    // Every record's bare-id key, read from the map itself so that a record
-    // the sanitising read skips as malformed still counts. A Claude record's
-    // own bare key is never its notice key (that one carries the status).
-    for (const ann of annotations) keys.delete(ledgerKey(documentId, ann.id));
-    ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((value, mapKey) => {
-      keys.delete(ledgerKey(documentId, mapKey));
-      const id = (value as { id?: unknown } | null)?.id;
-      if (typeof id === "string") keys.delete(ledgerKey(documentId, id));
-    });
-    return keys;
+    return noticeKeysAmong(documentId, annotations, ydoc);
   } catch {
     return null;
+  }
+}
+
+/**
+ * The rule {@link currentNoticeKeys} states, over records already read: the
+ * handover and the notice rule's per-pass walk ({@link settleNotices}) share
+ * it, so the two can never disagree on what a notice key is. Reads the raw
+ * annotation map too, so a record the sanitising read skips as malformed
+ * (its map key, and its raw `value.id` when that differs) still counts as a
+ * colliding record.
+ */
+function noticeKeysAmong(
+  documentId: string,
+  annotations: readonly Annotation[],
+  ydoc: Y.Doc,
+): Set<string> {
+  // How many current Claude records have each notice key: two with one key
+  // (the same id under two map keys) are each other's "other record".
+  const claimed = new Map<string, number>();
+  for (const ann of annotations) {
+    if (ann.author !== "claude") continue;
+    const key = inboxLedgerKey(documentId, ann);
+    claimed.set(key, (claimed.get(key) ?? 0) + 1);
+  }
+  const keys = new Set<string>();
+  for (const [key, count] of claimed) if (count === 1) keys.add(key);
+  // Every record's bare-id key, read from the map itself so that a record
+  // the sanitising read skips as malformed still counts. A Claude record's
+  // own bare key is never its notice key (that one carries the status).
+  for (const ann of annotations) keys.delete(ledgerKey(documentId, ann.id));
+  ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((value, mapKey) => {
+    keys.delete(ledgerKey(documentId, mapKey));
+    const id = (value as { id?: unknown } | null)?.id;
+    if (typeof id === "string") keys.delete(ledgerKey(documentId, id));
+  });
+  return keys;
+}
+
+/**
+ * What the notice rule settled on one document for one pass
+ * ({@link settleNotices}): the settled notice entries, and per notice key the
+ * newest settled `editedAt`, which the pass's ledger reports as already seen
+ * ({@link SettledNoticeLedger}).
+ */
+interface NoticeSettlement {
+  versions: Map<string, number>;
+  /**
+   * Entries at or below the mark that are no longer the current version of a
+   * current notice (an observed change, R1.3a). Retired only once the poll
+   * committed, and only where it read the document as its holder
+   * (`endObservedNotices`): a poll that is not the holder's, or that does
+   * not commit, observed nothing.
+   */
+  ended: RegistryEntry[];
+}
+
+/**
+ * The notice rule (#2358, ADR-054's notice-rule amendment; ownership design
+ * §6.3 step 2 and §6.4's last bullet, as that PR's brief rules), for one pass
+ * over `documentId`. `through` is the document's handover mark
+ * (`InboxPollScope.settledThrough`), never 0 here: the caller skips this
+ * entirely for a document that never had a handover, and for every poll
+ * while ownership is off.
+ *
+ * **Settled.** A live annotation entry at or below the mark whose key is a
+ * current notice key ({@link noticeKeysAmong}). Under inbox scope only the
+ * document's holder, or a poll whose claim of it is judged at the commit,
+ * reads the document and so registers an entry on it; a claim not applied,
+ * a response that failed validation and a pass that threw retire what they
+ * registered (`undoPassOn`). A handover retires every entry on the document
+ * except current notices and then writes the mark. So an entry at or below
+ * the mark that is still a current notice was handed to a holder the
+ * document has since left: it is handed to nobody again. A notice with no
+ * entry (pushed only, held back from its first poll on, or created while the
+ * document was unowned) is not settled, and goes to whoever reads next.
+ *
+ * **An observed change ends it** (the brief's R1.3a). An entry at or below
+ * the mark whose Claude record now stands at another status, or at another
+ * `editedAt`, is recorded in `into.ended`; the handler retires it, and
+ * forgets its cursor-less ledger key, only once the poll committed and only
+ * where the poll read the document as its holder (`endObservedNotices`), so
+ * a later return to that state is a new notice. A status that moves away and
+ * back with no such poll in between is the same settled notice (accepted).
+ * A record that is gone stays settled (its entry is kept), so an Undo of the
+ * delete restores a settled notice. An entry under any current record's
+ * bare-id key (a client-written id that collides) is not settled while the
+ * collision lasts, and is kept. The walk itself writes nothing and logs
+ * nothing; `carryHeld` never retires an annotation entry at or below the
+ * mark, so nothing here can be lost to a pass.
+ *
+ * **Bound.** The walk visits the entries at or below the mark, in seq
+ * order, and stops at the first above it. A handover leaves only current
+ * notice entries there; an ended one is retired by the first committed
+ * holder poll that sees it. What stays besides current notices: entries of
+ * deleted Claude records (one per resolved Claude annotation kept at a
+ * handover and since deleted) and entries under a colliding key, until a
+ * later handover forgets them. The pass already reads every annotation.
+ */
+function settleNotices(
+  documentId: string,
+  through: number,
+  annotations: readonly Annotation[],
+  ydoc: Y.Doc,
+  into: NoticeSettlement,
+): void {
+  const notices = noticeKeysAmong(documentId, annotations, ydoc);
+  // Every record's bare-id key, as `noticeKeysAmong` reads them (sanitised
+  // ids, raw map keys, raw `value.id`): an entry under one of these may be a
+  // user record's, so the walk leaves it to master's rules.
+  const bare = new Set<string>(annotations.map((ann) => ledgerKey(documentId, ann.id)));
+  ydoc.getMap(Y_MAP_ANNOTATIONS).forEach((value, mapKey) => {
+    bare.add(ledgerKey(documentId, mapKey));
+    const id = (value as { id?: unknown } | null)?.id;
+    if (typeof id === "string") bare.add(ledgerKey(documentId, id));
+  });
+  // Claude records by their bare ledger key.
+  const claude = new Map<string, Annotation>();
+  for (const ann of annotations) {
+    if (ann.author === "claude") claude.set(ledgerKey(documentId, ann.id), ann);
+  }
+  for (const entry of deliveryRegistry.entriesIn(documentId)) {
+    if (entry.seq > through) break;
+    if (entry.kind !== "a" || bare.has(entry.base)) continue;
+    const cut = entry.base.lastIndexOf("#");
+    const record = cut > 0 ? claude.get(entry.base.slice(0, cut)) : undefined;
+    // A record that is gone stays settled: if it comes back (an Undo of a
+    // delete), it is the same notice.
+    if (!record) continue;
+    if (notices.has(entry.base) && (record.editedAt ?? 0) === entry.editedAt) {
+      into.versions.set(entry.base, entry.editedAt);
+      continue;
+    }
+    // Its record stands at another status (R1.3a), or at another version.
+    if (inboxLedgerKey(documentId, record) !== entry.base || notices.has(entry.base)) {
+      into.ended.push(entry);
+    }
+  }
+}
+
+/**
+ * End the settled marks a committed poll observed changing
+ * (`NoticeSettlement.ended`), on documents it read as their holder: retire
+ * each entry, and forget its cursor-less ledger key, so a later return to
+ * that state is a new notice. Only ever re-owes.
+ */
+function endObservedNotices(ended: readonly RegistryEntry[]): void {
+  for (const entry of ended) {
+    deliveryRegistry.retire(entry);
+    // Only a key that still records this version or an older one: a holder
+    // handed the current version of the same key keeps it.
+    const known = surfacedIds.get(entry.base);
+    if (known !== undefined && known <= entry.editedAt) surfacedIds.delete(entry.base);
+  }
+}
+
+/**
+ * A pass's annotation ledger with the notice rule applied: a settled notice
+ * key reads as seen at its settled version ({@link settleNotices}), so the
+ * collectors never hand it, never refresh it and never count it as an item
+ * (a document whose only items are settled notices yields nothing and is
+ * not claimed). Writes go to the wrapped ledger unchanged.
+ */
+class SettledNoticeLedger implements InboxLedger {
+  constructor(
+    private readonly inner: InboxLedger,
+    private readonly settlement: NoticeSettlement,
+  ) {}
+  get(key: string): number | undefined {
+    const own = this.inner.get(key);
+    const settled = this.settlement.versions.get(key);
+    if (settled === undefined) return own;
+    return own === undefined || settled > own ? settled : own;
+  }
+  set(key: string, value: number): void {
+    this.inner.set(key, value);
+  }
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
   }
 }
 
@@ -311,9 +470,12 @@ function currentNoticeKeys(documentId: string, ydoc: Y.Doc | undefined): Set<str
  * qualifies later must not be lost because it was skipped here, and
  * forgetting an item the collectors will never hand out reveals nothing).
  *
- * Accept and dismiss notices about Claude's own annotations are left exactly
- * as they are ({@link currentNoticeKeys}); when in doubt a key is forgotten,
- * which costs one duplicate.
+ * Accept and dismiss notices about Claude's own annotations keep their
+ * entries and cursor-less keys ({@link currentNoticeKeys}); when in doubt a
+ * key is forgotten, which costs one duplicate. The mark the ownership module
+ * writes right after this makes every kept notice settled (the notice rule,
+ * {@link settleNotices}), so a kept cursor-less key with no live entry is
+ * registered here first.
  *
  * **Reached only through the ownership module's seam**, which `index.ts`
  * wires at boot and which nothing calls while ownership is off; this file
@@ -357,8 +519,20 @@ export function handOverDocumentInbox(documentId: string): void {
   // ledgers can hold a key whose registry entry `carryHeld` already retired.
   // A document id holds no colon (`docIdFromPath`), so the prefix is exact.
   const prefix = ledgerKey(documentId, "");
-  for (const key of [...surfacedIds.keys()]) {
-    if (key.startsWith(prefix) && !notices.has(key)) surfacedIds.delete(key);
+  for (const [key, editedAt] of [...surfacedIds]) {
+    if (!key.startsWith(prefix)) continue;
+    if (!notices.has(key)) {
+      surfacedIds.delete(key);
+      continue;
+    }
+    // A kept notice a cursor-less poll was handed whose registry entry is
+    // gone (a pass retired it while its status was away, and it came back):
+    // registered here, below the mark this handover writes, so the notice
+    // rule settles it for cursor readers too (the notice-rule PR). One
+    // `assign` per such key, inside the walk this step already makes.
+    if (!deliveryRegistry.lookup("a", key, editedAt)) {
+      deliveryRegistry.assign("a", documentId, key, editedAt);
+    }
   }
   for (const key of [...replySurfacedIds]) {
     if (key.startsWith(prefix)) replySurfacedIds.delete(key);
@@ -871,14 +1045,16 @@ type PollScope = ReturnType<typeof inboxOwnership.begin>;
  * (the scope PR, R1.7; flag on only): the registry counter before the
  * document's pass (every entry in its scope above that is this poll's: only a
  * pass registers in a document scope, and the poll is synchronous), and the
- * cursor-less ledger keys its commit wrote, with what each held before.
+ * cursor-less ledger keys its commit wrote, with what each held before and
+ * what this poll wrote there.
  */
 interface PassLog {
   counterBefore: Map<string, number>;
   legacyWrites: Map<
     string,
     {
-      surfaced: Array<[string, number | undefined]>;
+      /** `[key, what it held before, what this poll wrote]`. */
+      surfaced: Array<[string, number | undefined, number]>;
       replies: Array<[string, boolean]>;
     }
   >;
@@ -895,11 +1071,19 @@ interface PassLog {
  * registry entries its pass created there, so they hide nothing from the next
  * reader, and put back the cursor-less ledger keys its commit wrote. Entries
  * created by earlier polls, chat entries and hand-out tokens are untouched.
+ *
+ * `ownKeysOnly` is the undo of a claim whose ownership change ran but left
+ * the caller without the document (outcome `changed`): the handover inside
+ * that change deleted keys on purpose, to re-owe them, so a key is put back
+ * only where it still holds exactly what this poll wrote. That takes back the
+ * notice keys the handover keeps, so a cursor-less next holder is handed the
+ * notice this caller, which never held the document, was handed (the
+ * notice-rule PR, R1.6); a key the handover deleted stays deleted.
  */
 function undoPassOn(
   log: PassLog,
   documentId: string,
-  options: { keepLedgers?: boolean } = {},
+  options: { ownKeysOnly?: boolean } = {},
 ): void {
   const before = log.counterBefore.get(documentId);
   if (before !== undefined) {
@@ -911,14 +1095,17 @@ function undoPassOn(
     deliveryRegistry.unacknowledge(entry);
   }
   log.ackedExisting.delete(documentId);
-  if (options.keepLedgers) return;
   const writes = log.legacyWrites.get(documentId);
   if (!writes) return;
-  for (const [key, prior] of writes.surfaced) {
+  for (const [key, prior, wrote] of writes.surfaced) {
+    if (options.ownKeysOnly && surfacedIds.get(key) !== wrote) continue;
     if (prior === undefined) surfacedIds.delete(key);
     else surfacedIds.set(key, prior);
   }
-  for (const [key, had] of writes.replies) if (!had) replySurfacedIds.delete(key);
+  for (const [key, had] of writes.replies) {
+    if (options.ownKeysOnly && !replySurfacedIds.has(key)) continue;
+    if (!had) replySurfacedIds.delete(key);
+  }
   log.legacyWrites.delete(documentId);
 }
 
@@ -1108,7 +1295,11 @@ function legacyLedgers(documentId: string, log: PassLog | null): DocumentLedgers
       // so a claim not applied can put it back (R1.7).
       if (log) {
         log.legacyWrites.set(documentId, {
-          surfaced: [...surfaced.staged().keys()].map((key) => [key, surfacedIds.get(key)]),
+          surfaced: [...surfaced.staged()].map(([key, wrote]) => [
+            key,
+            surfacedIds.get(key),
+            wrote,
+          ]),
           replies: [...replySurfaced.staged()].map((key) => [key, replySurfacedIds.has(key)]),
         });
       }
@@ -1145,8 +1336,11 @@ function collectDocumentInbox(
   withActivity: boolean,
   admit: InboxPollContext["admit"],
   ledgers: DocumentLedgers,
+  /** Told the document's records before anything is collected (the notice rule). */
+  onAnnotations?: (allAnnotations: Annotation[]) => void,
 ): DocumentInbox & { allAnnotations: Annotation[] } {
   const allAnnotations = store.listAnnotations();
+  onAnnotations?.(allAnnotations);
   // Nothing to surface and no activity wanted: skip the full-text walk. A
   // default poll reaches every open document, most of them quiet.
   if (!withActivity && allAnnotations.length === 0) {
@@ -1256,8 +1450,22 @@ function carryHeld(
   delivered: ReadonlySet<RegistryEntry>,
   refused: ReadonlySet<RegistryEntry>,
   modeState: ModeState,
+  /**
+   * The document's handover mark (`InboxPollScope.settledThrough`; 0 while
+   * ownership is off). An annotation entry at or below it is a notice a
+   * handover kept: neither held nor retired here, whatever its record does
+   * now, so the entry the notice rule depends on stays in the registry and a
+   * settled notice goes to nobody on this poll or any later one. Whether it
+   * stays settled is the notice rule's to decide (`settleNotices`), never a
+   * pass's by passing it.
+   */
+  settledThrough: number,
 ): Set<number> {
-  const owed = deliveryRegistry.unseenIn(documentId, view).filter((entry) => !delivered.has(entry));
+  const owed = deliveryRegistry
+    .unseenIn(documentId, view)
+    .filter(
+      (entry) => !delivered.has(entry) && !(entry.kind === "a" && entry.seq <= settledThrough),
+    );
   const held = new Set<number>();
   if (owed.length === 0) return held;
   let annotations: Map<string, Annotation> | undefined;
@@ -1385,6 +1593,12 @@ interface InboxDocumentsPass extends DocumentInbox {
   /** Flag on: the documents whose pass returned at least one item. */
   yielded: Set<string>;
   /**
+   * Flag on, the notice rule: per document, the settled marks this pass saw
+   * change (`NoticeSettlement.ended`), ended by the commit only where the
+   * poll read the document as its holder (`endObservedNotices`).
+   */
+  noticeEnds: Map<string, RegistryEntry[]>;
+  /**
    * Apply every read document's staged ledger writes and quiet-skip records.
    * Call only once the whole response has validated.
    */
@@ -1439,6 +1653,7 @@ function collectInboxDocuments(
     readDocuments: new Map(),
     excluded: [],
     yielded: new Set(),
+    noticeEnds: new Map(),
     commit: () => {
       for (const commit of commits) commit();
     },
@@ -1505,7 +1720,7 @@ function collectInboxDocuments(
       }
       return false;
     };
-    const ledgers: DocumentLedgers =
+    const baseLedgers: DocumentLedgers =
       view === null
         ? legacyLedgers(id, scope.scoped ? log : null)
         : {
@@ -1515,6 +1730,22 @@ function collectInboxDocuments(
             // the next cursor back.
             commit: () => {},
           };
+    // The notice rule (`settleNotices`): only on a document that had a
+    // handover this server run, so never while ownership is off (the mark is
+    // then 0) and never for a document that never changed hands.
+    const settlement: NoticeSettlement = { versions: new Map(), ended: [] };
+    const through = scope.settledThrough(id);
+    const ledgers: DocumentLedgers =
+      through > 0
+        ? { ...baseLedgers, surfaced: new SettledNoticeLedger(baseLedgers.surfaced, settlement) }
+        : baseLedgers;
+    const onAnnotations =
+      through > 0
+        ? (all: Annotation[]) => {
+            const ydoc = getDocument(id);
+            if (ydoc) settleNotices(id, through, all, ydoc, settlement);
+          }
+        : undefined;
     let inbox: ReturnType<typeof collectDocumentInbox>;
     let commitQuiet: (() => void) | undefined;
     try {
@@ -1537,7 +1768,7 @@ function collectInboxDocuments(
         // fails the skip test, rather than being covered by the record.
         const counterBefore = deliveryRegistry.counter;
         const outsideTransaction = ydoc._transaction === null;
-        inbox = collectDocumentInbox(store, modeState, false, admit, ledgers);
+        inbox = collectDocumentInbox(store, modeState, false, admit, ledgers, onAnnotations);
         const produced =
           inbox.userActions.length + inbox.userResponses.length + inbox.userReplies.length;
         // A fixed point: nothing changed the document while the pass ran. Never
@@ -1562,6 +1793,7 @@ function collectInboxDocuments(
             delivered,
             refusedEntries,
             modeState,
+            through,
           );
           pass.readDocuments.set(id, held);
           const record =
@@ -1579,11 +1811,27 @@ function collectInboxDocuments(
           };
         }
       } else {
-        inbox = collectDocumentInbox(store, modeState, isActivityDocument, admit, ledgers);
+        inbox = collectDocumentInbox(
+          store,
+          modeState,
+          isActivityDocument,
+          admit,
+          ledgers,
+          onAnnotations,
+        );
         if (view) {
           pass.readDocuments.set(
             id,
-            carryHeld(id, store, inbox.allAnnotations, view, delivered, refusedEntries, modeState),
+            carryHeld(
+              id,
+              store,
+              inbox.allAnnotations,
+              view,
+              delivered,
+              refusedEntries,
+              modeState,
+              through,
+            ),
           );
         }
       }
@@ -1615,6 +1863,7 @@ function collectInboxDocuments(
     ) {
       pass.yielded.add(id);
     }
+    if (settlement.ended.length > 0) pass.noticeEnds.set(id, settlement.ended);
     if (refused > 0) {
       pass.dropped.set(id, refused);
     }
@@ -2400,18 +2649,22 @@ export function registerAwarenessTools(server: McpServer): void {
           // ledgers and chat committed, in this same synchronous run. A claim
           // not applied takes back what this poll left on that document, so it
           // hides nothing from whoever does answer it. Chat never claims.
+          const claimed = new Set<string>();
           if (scope.scoped) {
             for (const id of docs.yielded) {
               if (scope.scopeOf(id) !== "may-claim") continue;
               const before = log.counterBefore.get(id) ?? deliveryRegistry.counter;
               const outcome = scope.claim(id, before, getOpenDocs().has(id));
+              if (outcome === "held") claimed.add(id);
               if (outcome === "refused") undoPassOn(log, id);
               else {
                 // The change ran but left the document with someone else (a
                 // re-entrant lapse): its handover already re-owed the items, so
-                // only this poll's own entries go, and the cursor-less ledger is
-                // left as the handover made it.
-                if (outcome === "changed") undoPassOn(log, id, { keepLedgers: true });
+                // only this poll's own entries go, and of the cursor-less
+                // ledger only the keys this poll wrote that the handover kept
+                // (notice keys): the caller never held the document, so its
+                // notices are owed to the next holder (R1.6).
+                if (outcome === "changed") undoPassOn(log, id, { ownKeysOnly: true });
                 // Once a claim's change ran, a later throw must not put the
                 // ledger back either: a handover inside it (a claim over a
                 // stale entry) deleted keys on purpose, to re-owe them.
@@ -2439,6 +2692,15 @@ export function registerAwarenessTools(server: McpServer): void {
             documents: new Set(docs.unreadable),
             items: new Set(),
           });
+
+          // The notice rule (R1.3a), last, so a throw anywhere above ends
+          // nothing: a settled mark ends where this committed poll read the
+          // document as its holder and saw the notice's record change. A poll
+          // that only may claim and did not, or one that did not commit,
+          // observed nothing. Empty while ownership is off.
+          for (const [id, ended] of docs.noticeEnds) {
+            if (scope.scopeOf(id) === "holds" || claimed.has(id)) endObservedNotices(ended);
+          }
 
           return mcpStructured(response);
         } catch (err) {
