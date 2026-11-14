@@ -21,6 +21,7 @@ import {
 } from "../documents/dirty.js";
 import { aiRefusal } from "../license/ai-refusal.js";
 import { installModeProvenanceObserver, readModeState } from "../mode.js";
+import { inLocalPeriod, withheldForLocalPeriod } from "../models/local-period.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   isUnansweredAsk,
@@ -117,6 +118,15 @@ let trackedEvents = new WeakSet<TandemEvent>();
  * re-decides the licence per run.)
  */
 let forwardedEvents = new WeakSet<TandemEvent>();
+
+/**
+ * Events withheld from every external consumer for the local period when they
+ * were pushed (#1123 A2, R3.2): pushed while chat was answered by a local
+ * model, or local-model activity, or local-period chat re-added. The verdict
+ * is recorded per event at push and never re-decided, so a replay after the
+ * switch back cannot yield one whatever `Last-Event-ID` is presented.
+ */
+let localPeriodWithheld = new WeakSet<TandemEvent>();
 
 /** Did this event forward externally when it was pushed? See `forwardedEvents`. */
 export function wasForwardedExternally(event: TandemEvent): boolean {
@@ -357,7 +367,16 @@ function pushEvent(event: TandemEvent): void {
   // synchronous so two reads cannot currently disagree, but binding it is the
   // difference between correct and correct-by-accident. It sits HERE, above the
   // tracking, because tracking is one of its consumers (#1823 item 7).
-  const forwardExternally = !licenceRefused && shouldForwardExternally(event);
+  //
+  // The local period (#1123 A2, R3.1, R3.2a) joins the bound decision as a
+  // separate term AFTER the licence's, so payload tracking, `alreadyPushed`,
+  // the rounds and the gap and standby watches (which read this verdict) all
+  // see it. It never replaces or reorders the licence decision: a refused
+  // event is still refused, and still revokes, as on master. Internal
+  // subscribers — the local-model collaborator among them — still receive.
+  const localWithheld = withheldForLocalPeriod(event);
+  if (localWithheld) localPeriodWithheld.add(event);
+  const forwardExternally = !licenceRefused && shouldForwardExternally(event) && !localWithheld;
   if (forwardExternally) forwardedEvents.add(event);
 
   // Track only when the fan-out below is non-empty AND this event actually
@@ -560,9 +579,15 @@ export function unsubscribe(cb: EventCallback): void {
  * inside the function is complete.
  */
 export function replaySince(lastEventId: string): TandemEvent[] {
+  // While chat is answered by a local model, a replay yields nothing at all
+  // (#1123 A2, R3.2): the inbox alone delivers what the local period leaves
+  // owed, from live records, once it ends.
+  if (inLocalPeriod()) return [];
   const idx = buffer.findIndex((e) => e.id === lastEventId);
   const slice = idx === -1 ? [...buffer] : buffer.slice(idx + 1);
-  return slice.filter((e) => shouldForwardExternally(e) && !heldLifecycleEvent(e));
+  return slice.filter(
+    (e) => !localPeriodWithheld.has(e) && shouldForwardExternally(e) && !heldLifecycleEvent(e),
+  );
 }
 
 /**
@@ -643,6 +668,47 @@ export function emitModeReleaseWake(): void {
       textSnippet: "",
     },
   });
+}
+
+/**
+ * Content of the switch-back wake (#1123 A2, R5.2): chat in Tandem is answered
+ * by Claude again. No user text, model name or count; not "Solo mode ended".
+ */
+export const ANSWERER_RETURN_WAKE_CONTENT =
+  "Chat in Tandem is answered by Claude again. Call tandem_checkInbox to see whether anything is waiting.";
+
+/**
+ * The one wake at the user's switch back to Claude (#1123 A2, R5.2). Shaped
+ * like the Solo release wake — an `annotation:created` with a `wake_` id, the
+ * only non-chat shape `isWakeWorthy` accepts — and pushed through the normal
+ * path, so the Solo and licence holds apply exactly as to any push: in Solo,
+ * or with the mode indeterminate, `isUserPrivacyHeld` drops it (owed items
+ * then wait for Claude's next poll or the next event). It opens a delivery
+ * round like the Solo release wake does, closed by any poll. Never
+ * start-worthy (`isStartWorthy` takes chat and user replies only).
+ */
+export function emitAnswererReturnWake(): void {
+  pushEvent({
+    id: generateEventId(),
+    type: "annotation:created",
+    timestamp: Date.now(),
+    payload: {
+      annotationId: `${MODE_RELEASE_WAKE_ID_PREFIX}${generateEventId()}`,
+      annotationType: "comment",
+      content: ANSWERER_RETURN_WAKE_CONTENT,
+      textSnippet: "",
+    },
+  });
+}
+
+/**
+ * Drop every buffered selection (#1123 A2, at the switch back to Claude).
+ * Whatever is buffered then was made while a local model answered chat, or is
+ * held anyway; a dwell timer still pending fires with the selection whose
+ * stamp the switch back recorded, so it stays held too.
+ */
+export function clearBufferedSelections(): void {
+  selectionBuffer.clear();
 }
 
 /** Read the buffered selection for a document. For tests and checkInbox. */
@@ -747,6 +813,7 @@ export function resetForTesting(): void {
   // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
   trackedEvents = new WeakSet<TandemEvent>();
   forwardedEvents = new WeakSet<TandemEvent>();
+  localPeriodWithheld = new WeakSet<TandemEvent>();
   selectionBuffer.clear();
 
   for (const cleanups of docObservers.values()) {

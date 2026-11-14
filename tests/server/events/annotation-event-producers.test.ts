@@ -104,7 +104,11 @@ const PRODUCERS: Record<string, number> = {
   //
   // This entry is why the guard is a pinned map and not "must import
   // projection.js": a legitimate producer exists that correctly does not.
-  "src/server/events/queue.ts": 1,
+  //
+  // The second (#1123 A2): `emitAnswererReturnWake`, the same shape for the
+  // user's switch back of who answers chat — content the module constant
+  // `ANSWERER_RETURN_WAKE_CONTENT`, a `wake_` id, no document data.
+  "src/server/events/queue.ts": 2,
 };
 
 /**

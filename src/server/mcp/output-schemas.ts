@@ -447,6 +447,22 @@ export const checkInboxOwnershipShape = {
     .describe("Which open documents are yours to answer"),
 };
 
+/**
+ * What `tandem_checkInbox` adds on a server with local models on (#1123 A2,
+ * R1.2): the machine-readable twin of the local period's status line. Spread
+ * into the inbox schema only when the tool is registered with
+ * `BYO_MODELS_ENABLED` on, so a dark server's `tools/list` carries no such
+ * field. Present (and `true`) only while a local model answers Tandem chat.
+ */
+export const checkInboxLocalPeriodShape = {
+  localModelAnswersChat: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Present while Tandem chat is set to be answered by a local model: nothing in Tandem is handed to you meanwhile. Finish the step you are on and take no new work from Tandem; you do not need to wait, and a later poll will no longer carry this field once chat is answered by Claude again",
+    ),
+};
+
 // ---------------------------------------------------------------------------
 // tandem_listDocuments
 // ---------------------------------------------------------------------------

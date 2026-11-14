@@ -155,6 +155,7 @@ describe("tests and the flag", () => {
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
     "tests/server/launcher/supervisor.test.ts",
+    "tests/server/local-period.test.ts",
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
     "tests/server/ownership-api-no-context.test.ts",
@@ -191,6 +192,8 @@ describe("tests and the flag", () => {
     // flag-on and then turns the flag off, to show no path reaches the inbox.
     // The scope PR's one (`ownership-inbox-scope.test.ts`): its dark tests
     // build their server flag-off, to show tandem_checkInbox is master's.
+    // #1123 A2's one (`local-period.test.ts`): it runs every local-period case
+    // with ownership off and on (the brief's "ownership off and on").
     // The notice-rule PR's one (`ownership-notice-rule.test.ts`): its lone-
     // session script and its dark test run flag-off to compare with master.
     // The change-notice PR's one (`ownership-change-notices.test.ts`): its
@@ -198,6 +201,7 @@ describe("tests and the flag", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
@@ -219,6 +223,7 @@ describe("tests and the flag", () => {
       // PR 3a: the chain, and the launcher's spawn path (flag on, with a dark block).
       "tests/server/launcher/owner-handle-chain.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",

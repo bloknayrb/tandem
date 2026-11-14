@@ -151,6 +151,10 @@ const MODE_CACHE_TTL_MS = 2000;
  */
 export function isModeReleaseWake(event: TandemEvent): boolean {
   if (event.type !== "annotation:created") return false;
+  // The server's synthetic wakes name no document; a comment a client wrote
+  // with a `wake_` id names its document and is not one (#1123 A2 re-review,
+  // the same rule as `formatEventContent`).
+  if (event.documentId) return false;
   // Defensive read, not decoration: this runs on every inbound frame, and a
   // payload missing `annotationId` must yield "not a wake" rather than throw.
   // A throw here escapes into the stream loop and drops the event entirely —

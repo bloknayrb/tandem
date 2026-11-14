@@ -933,7 +933,8 @@ describe("selection buffering", () => {
     // No selection:changed event emitted
     expect(events).toHaveLength(0);
     // But selection is buffered
-    expect(getBufferedSelection("sel-doc")).toEqual({
+    // (#1123 A2: the buffer also keeps the record's `stamp`, server-side only.)
+    expect(getBufferedSelection("sel-doc")).toMatchObject({
       from: 10,
       to: 50,
       selectedText: "some selected text",
@@ -946,7 +947,7 @@ describe("selection buffering", () => {
     awareness.set("selection", { from: 10, to: 50, timestamp: Date.now() });
     vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
 
-    expect(getBufferedSelection("sel-doc")).toEqual({
+    expect(getBufferedSelection("sel-doc")).toMatchObject({
       from: 10,
       to: 50,
       selectedText: "",

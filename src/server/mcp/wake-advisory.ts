@@ -56,6 +56,7 @@
  */
 
 import { readModeState } from "../mode.js";
+import { inLocalPeriod } from "../models/local-period.js";
 
 /**
  * Has the advisory already fired during the current "nothing attached" period?
@@ -107,6 +108,12 @@ export function takeWakeAdvisory(externalConsumerCount: number): string | null {
   // Whether an indeterminate read should speak is an open policy decision for
   // Bryan. Until it is made, this gate is left as it is.
   if (readModeState() !== "tandem") return null;
+
+  // #1123 A2 (R1.1a): while a local model answers Tandem chat, no tool result
+  // carries the advisory, and the once-per-period latch is neither consulted
+  // nor spent, so an uncovered Claude still hears it after the switch back.
+  // (Arming a watch meanwhile is harmless: nothing is delivered.)
+  if (inLocalPeriod()) return null;
 
   if (externalConsumerCount > 0 || advisedWhileEmpty) return null;
   advisedWhileEmpty = true;
