@@ -16,9 +16,11 @@
  * then be what the user needs. `localhost` is deliberately not matched; Tandem
  * only ever writes the two IP literals (`resolveTandemUrl`).
  *
- * Used by the three programs that carry the auth token to the local server:
- * the stdio bridge's MCP transport and preflight, and `authFetch` (the channel
- * shim, the monitor and the SSE consumer). The SSE body streams as before.
+ * Used by the programs that carry the auth token, the owner handle or a
+ * licence to the local server: the stdio bridge's MCP transport and preflight,
+ * `authFetch` (the channel shim, the monitor and the SSE consumer),
+ * `tandem rotate-token`, and the licence commands (`tandem activate` /
+ * `deactivate`). The SSE body streams as before.
  * Redirects are not touched: the caller's `redirect` mode passes through.
  *
  * Imports nothing from `src/server`, and reads no build flag, so any bundle
