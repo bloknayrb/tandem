@@ -543,7 +543,7 @@ describe("what is scored is what the chat row holds", () => {
     expect(classifyTrial(obs).ending).toBe("timeout");
   });
 
-  it("a timeout within the slack of the run deadline is run-deadline; one well before it, after a tool call, is the per-turn timeout", async () => {
+  it("a timeout within the slack of the run deadline is run-deadline; one well before it is the per-turn timeout", async () => {
     // Pins RUN_DEADLINE_SLACK_MS: without the slack, 299.5 s would read as a
     // per-turn timeout, and the runner would hold a trial the deadline ended.
     const s = scenario("ans-ops-review-q3-revenue");

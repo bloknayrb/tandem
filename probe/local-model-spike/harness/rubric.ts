@@ -213,7 +213,8 @@ words, and it is wrong in both directions:
     right one ('The overrun is "$45,000", not "$275,000"'), "should be"
     followed by a quotation that is a verdict ("'$45,000' should be 'kept'"),
     any digit after "should be" ("'$45,000' should be 100% correct"), a word
-    in emphasis or code after it ("'$45,000' should be **fine**"), and a
+    in emphasis or code after it ("'$45,000' should be **fine**"), or after
+    a bold marker that opens nothing ("'$45,000' should be ** fine"), and a
     quotation the reply only mentions ("Your summary should say '$45,000'
     too; that figure is right");
   - it counts the target as quoted when its words, minus the final period,

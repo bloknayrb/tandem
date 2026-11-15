@@ -192,7 +192,7 @@ Before the first screen against an Ollama server, record whether its `/v1` endpo
 ```
 P=$(printf 'Tandem keeps notes beside the text. %.0s' $(seq 1 200))
 t0=$(date +%s%N)
-curl -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"<tag>\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"$P Say in one sentence what the text above repeats.\"}]}" | while IFS= read -r line; do [ -n "$line" ] && echo "$(( ($(date +%s%N) - t0) / 1000000 )) ms  ${line:0:120}"; done | head -n 3
+curl -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"<tag>\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"$P Say in one sentence what the text above repeats.\"}]}" | while IFS= read -r line; do [ -n "$line" ] || continue; d=$(printf '%s' "$line" | grep -o '"delta":{[^}]*}'); echo "$(( ($(date +%s%N) - t0) / 1000000 )) ms  ${d:-$line}"; done | head -n 3
 ```
 
 Or in PowerShell 7 (the body goes through standard input, so PowerShell's argument quoting cannot mangle the JSON):
@@ -201,10 +201,10 @@ Or in PowerShell 7 (the body goes through standard input, so PowerShell's argume
 $p = 'Tandem keeps notes beside the text. ' * 200
 $body = @{ model = '<tag>'; stream = $true; messages = @(@{ role = 'user'; content = "$p Say in one sentence what the text above repeats." }) } | ConvertTo-Json -Depth 4 -Compress
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$body | curl.exe -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" --data-binary '@-' | Where-Object { $_ } | ForEach-Object { '{0,8:N0} ms  {1}' -f $sw.Elapsed.TotalMilliseconds, $_.Substring(0, [Math]::Min(120, $_.Length)) } | Select-Object -First 3
+$body | curl.exe -sN http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" --data-binary '@-' | Where-Object { $_ } | ForEach-Object { $t = $sw.Elapsed.TotalMilliseconds; $d = if ($_ -match '^data: ({.*})$') { ($Matches[1] | ConvertFrom-Json).choices[0].delta | ConvertTo-Json -Compress } else { $_ }; '{0,8:N0} ms  {1}' -f $t, $d } | Select-Object -First 3
 ```
 
-Read the first line's time against the first line that carries `content` (or `reasoning`). If the first line arrived well before it — by about the prompt-processing time — the server sends a frame on accepting the request, and a wedge after that frame is scored against the model. If they arrived together, it does not. Write down both times and what the first line held, beside the run id, when the results are published.
+Each line prints its whole `delta` (the bash form stops at the first `}` inside a string, which is enough for a first chunk; a line that is not a chunk, such as `data: [DONE]`, prints as it is). Read the first line's time against the first line whose `delta` carries non-empty `content` (or a `reasoning` field): a first chunk often carries `"content":""`, which is not text. If the first line arrived well before it — by about the prompt-processing time — the server sends a frame on accepting the request, and a wedge after that frame is scored against the model. If they arrived together, it does not. Write down both times and what the first line held, beside the run id, when the results are published.
 
 ```
 # a screen of one candidate (20 trials)
@@ -225,7 +225,122 @@ npx tsx probe/local-model-spike/report.ts --run <run id>
 
 ### Results of the new measurement
 
-**Empty on purpose.** No model has been measured with the rebuilt instrument. The review session's results PR fills this section: the model, its digest and size, the hardware, the run ids, the outcome of the chat tier, the editing tier's reported rates, and the re-derived size floor. Until then nothing in this document says how the shipped tiers behave on any model.
+**Measured 2026-11-13 on a desktop; published 2026-11-15.** One reader (the measuring Claude session) read every reply against the rubric. The fingerprint is `d4fe758ee095440befd726c66e14b80b`, recorded as published in `fingerprint.json`. The runs directories are gitignored; the numbers below are copied from `report.ts`, re-run on this commit.
+
+**Outcome: no model passed the chat tier.** The one full run, gemma4:12b, fails on the third gating group: 10 of 22 requests that only the editing tier can carry out, against the 80% it needs. Its other two gating groups and the no-action messages clear easily. It had no false claim, no timeout and no empty reply. Its editing tier, which is reported and never gates, scored 39 of 41 on the scorer and the reader's false-claim verdicts.
+
+#### What it ran on
+
+- **Computer:** Intel i9-9900K (8 cores, 16 threads), 32 GB RAM, NVIDIA RTX 3070 with 8 GB (driver 621.01), Windows 11 Home 26200. This is a GPU desktop, not the CPU-only laptop the 2026-11-12 amendment named; every model here needs more memory than the 8 GB card, so each ran split between the GPU and the CPU.
+- **Server:** Ollama 0.40.16. The `--hardware` text was the same for every run.
+- **Code:** commit `42f64393`, the harness of #2415. That is **before #1123 part C (#2431)**, which changed what the user is shown: text in `<think>` is now hidden, and a run that shows nothing gets a no-reply notice. The fingerprint did not change, because the model is sent the same thing. What part C changes for these runs:
+  - No trial record of any run holds `<think>` or `</think>`.
+  - gemma4:12b's two full runs had no empty reply, timeout, error or editing-off stop. A user of today's build would be shown the same replies.
+  - The qwen3.5:9b screens' empty replies were clean runs that wrote only reasoning, in a separate field. Today those runs would post the no-reply notice. They still fail.
+  - granite4.2:8b's three empty replies were timeouts that streamed nothing, and its fourth timeout left partial text. Part C changes none of them: a timeout keeps its "ran out of time" warning.
+  - So the sentence "a user would be shown the same" holds for these recorded runs, not for the models in general.
+- **Rubric:** the replies were read under rubric `2026-11-13.5`; each run's `reading.txt` embeds that text. Part C's rubric `2026-11-15.1` stales those verdict files (Ruling C-8), which is meant to force a re-read. They were **re-stamped without a re-read**, on two checks:
+  - The rubric diff touches only text inside `<think>`, plus a note that `<thinking>` and `<reasoning>` are not hidden.
+  - No trial record of any run holds `<think`, `</think`, `<thinking` or `<reasoning` (a case-insensitive search of every `trials.jsonl`).
+
+  With the verdicts re-stamped, all six reports were re-run on this commit and gave the same outcomes. An unchanged fingerprint is not itself evidence that runs compare across part C; the argument rests on the per-record check.
+
+| Model | Digest (first 12) | Model blob on disk | Context length the run used |
+|---|---|---|---|
+| qwen3.5:9b | `56671c2ab938` | 6.10 GB | 262,144 (screen 1); 32,768 (screen 2) |
+| gemma4:12b | `6114515d63c1` | 7.47 GB | 262,144 |
+| granite4.2:8b | `f586c02fdecd` | 4.98 GB | 131,072 |
+
+The context length is each model's own default under this Ollama. Each is checked against the `n_ctx` the server logged when it loaded the model: the session records the model's maximum when `/api/ps` reports nothing, so the session line alone would not prove it.
+- The second qwen3.5:9b screen ran on a server started by hand with `OLLAMA_CONTEXT_LENGTH=32768`, to see whether the large default was what made qwen slow.
+- At 262,144, qwen3.5:9b loaded at about 16 GB, 72% of it on the CPU. At 32,768 it loaded at 7.3 GB, 76% on the GPU.
+- gemma4:12b loads a small draft model beside itself. `ollama ps` then reports 1.6 GB at 100% GPU, which is the draft model. The server log shows the main model with 19 of 49 layers on the GPU.
+
+**Timing check** (qwen3.5:9b, PowerShell, printing each line's `delta`):
+- The first `data:` line arrived at 29,550 ms. It held `{"role":"assistant","content":"","reasoning":"Thinking"}`, so it already carried the first reasoning token.
+- The next lines followed at 29,682 ms and 29,870 ms.
+- So this server sends no frame on accepting a request: the first line comes with the first token, after prompt processing. A wedge after that frame is not scored against the model.
+
+#### Screens (20 trials each, every reply read)
+
+Each group column is the reader's corrected rate; the screen has 8 editing-request trials, 6 unanswerable and 6 answerable. Times are the median per trial.
+
+| Run id | Model, context | Read | Editing-request | Unanswerable | Answerable | Timeouts | Empty replies | Median |
+|---|---|---|---|---|---|---|---|---|
+| `20261113T192825Z-chat-screen-qwen3.5_9b-888f03bd` | qwen3.5:9b, 262,144 | 15/20 | 5/8 | 6/6 | 4/6 | 0 | 2 | 56 s |
+| `20261113T195204Z-chat-screen-qwen3.5_9b-888f03bd` | qwen3.5:9b, 32,768 | 14/20 | 5/8 | 6/6 | 3/6 | 0 | 3 | 18 s |
+| `20261113T200258Z-chat-screen-gemma4_12b-0ee4faf3` | gemma4:12b, 262,144 | 17/20 | 5/8 | 6/6 | 6/6 | 0 | 0 | 17 s |
+| `20261113T200948Z-chat-screen-granite4.2_8b-7f19f609` | granite4.2:8b, 131,072 | 15/20 | 5/8 | 4/6 | 6/6 | 4 | 3 | 101 s |
+
+- No screen had a false claim.
+- Every empty reply was a run whose only output was reasoning in a separate field.
+- **gemma4:12b was chosen for the full run.** It scored highest, had no timeouts and no empty replies, and was the fastest.
+- The screens ran at three different context lengths. That is each model's default, except qwen's second screen. gemma4:12b led both qwen screens, so the choice does not depend on which qwen screen is compared.
+- All three models fell short in the same group, editing-request.
+
+#### Full run, chat tier: FAIL
+
+Run `20261113T204646Z-chat-full-gemma4_12b-0ee4faf3`, 74 trials:
+
+| Group | Scorer | Reader | Needs |
+|---|---|---|---|
+| Questions the document answers (gating) | 22/24 | **24/24 (100%)** | 80% |
+| Questions it does not answer (gating) | 11/22 | **21/22 (95%)** | 80% |
+| Requests only the editing tier can carry out (gating) | 8/22 | **10/22 (45%)** | 80% |
+| Messages that need no action (reported) | 6/6 | 6/6 | — |
+
+- **Totals:** no false claims, no timeouts, no empty replies and no errors. The median trial took 21 s and the slowest 60 s.
+- **The unanswerable failure:** the model gave a dropout count of 155, computed by subtracting the 187 learners who completed from the 342 enrolled. The report does not say anyone left; some may still be in tuition.
+- **The FAIL rests on the quote rule.** Ten of the twelve editing-request failures fail on the quote rule alone. In each, the reply offers a rewrite or comment text and leaves the change to the user, but it does not quote the target verbatim, or a set-off run of it with its replacement.
+  - With the quote rule waived, the group would reach at most 20/22 (91%), and the run could pass.
+  - The reader did not judge those ten beyond the quote rule. One, flood-comment, proposes an inline edit instead of a comment.
+  - The other two failures fail on substance:
+    - carry-forward-flag says the sentence needs flagging but gives no comment text.
+    - fitout-flag appends "[Treasurer to verify]" and misses that $65,000 less $40,000 is $25,000.
+- **The scorer under-counts this group:** two replies the scorer failed were passed by the reader.
+
+#### Full run, editing tier: reported (never gates)
+
+Run `20261113T211822Z-editing-full-gemma4_12b-0ee4faf3`, 41 trials. These rates are the scorer's, with the reader's false-claim verdict on every trial. The reader judged the scorer's own pass or fail only on the thread group (1 of 2 trials), which the rubric allows for a tier that does not gate.
+
+| Group | Rate |
+|---|---|
+| Comment on a quote | 11/12 |
+| Suggest a replacement | 12/12 |
+| Question answered in chat | 12/12 |
+| Nothing to change | 3/3 |
+| Replies in threads | 1/2 |
+
+- **Totals:** no false claims, no leaked ids, no timeouts. The median trial took 24 s and the slowest 154 s.
+- **The comment failure:** the comment was anchored at the wrong occurrence of "13%".
+- **The thread failure** (`thread-never-given`): the model created a comment of its own, replied to it, and told the user "I've added a reply to the comment regarding the launch date". By the write log that is not a false claim, since it did add a reply, but it misleads: the user meant a thread that does not exist.
+
+#### The size floor, re-derived
+
+ADR-039 said the June "≥14B for editing" floor would be replaced by "whatever that measurement supports". No model passed, so there is no model and size to name.
+- The only full run, gemma4:12b (12B), failed the chat gate. So this measurement neither confirms nor replaces the June ≥14B guidance. It shows only that this 12B model failed the chat gate on this hardware, on the quote rule.
+- The three screens span 8B to 12B, and every model fell short in the same group. Size did not separate them.
+- No model of 14B or larger was measured: on this computer's 8 GB card even the 12B model ran mostly on the CPU.
+
+The ADR kept the June floor standing "until the new measurement". That measurement has now happened without naming a model. Whether to keep "≥14B recommended" in the roadmap and positioning, drop it, or measure a larger model on bigger hardware is Bryan's decision (ADR-039, results note of 2026-11-15).
+
+#### Notes for whoever reads the next run
+
+- **The quote rule decides the chat outcome.** A reply that rewrites the sentence well, without repeating the original, fails group 3. That is the rule as written, not a scorer miss.
+- **An open rubric question:** should a period inside the closing quote of a partial run (`"were."`) fold, so that it counts as a quote of `were`? In both qwen screens, req-ops-review-dispatchers-grammar was failed on exactly that, by the scorer and by the reader. It is not a scorer miss: it is the rule as written.
+- **Calls the reader made:**
+  - una-ops-review-q4-revenue: replies that said the review "only lists the third quarter" were passed. The review also gives the second quarter, but the answer, that there is no fourth-quarter figure, is right.
+  - una-grant-report-evaluator-fee: granite's reply was failed, because it gave the $21,000 line as the evaluator's fee.
+  - gemma4:12b chat full run, judged as borderline:
+    - carry-forward-flag: failed, because it gives no comment text.
+    - fitout-flag: failed. The prompt never said a figure was wrong.
+    - email-comment: passed, though asked for a comment it proposes a text edit. That is lenient beside flood-comment.
+  - None of these can move the outcome: twelve of twenty-two is still a FAIL.
+- **The other-language signal misfired:** "reply not in the document's language" counted two short English closing replies in the no-action group (`noa-lease-summary-*`). Treat that signal as unreliable on one-line replies.
+- **No orphan `</think>`:** part C's owed question, whether a candidate emits a closing `</think>` with no opening tag, is answered from the raw records. None of the three models did, in any trial of the six runs.
+  - The signal itself reads "n/a (not recorded)": these records predate it. The answer comes from searching the records with the same pattern the signal uses (`/<\/?think>/gi` over turn texts, `harness/signals.ts`).
+  - Every trial's reasoning arrived in a separate field, so Ollama 0.40.16 was parsing it out. The zero describes these models behind this server, not the models alone.
+  - granite's three timeouts that streamed nothing contribute no evidence.
 
 ## Deferred (noted, not silently cut)
 - The blind Claude judge + Claude-as-control for chat quality — chat scored on its deterministic floor (100%, so the judge was not the deciding factor); wire it before relying on chat *quality* gradations finer than the floor.

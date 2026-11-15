@@ -436,17 +436,19 @@ describe("cases the diff review found", () => {
     for (const [reply, named] of [
       [`"$45,000" should be 100% correct.`, /should be 100% correct/],
       [`"$45,000" should be **fine**.`, /should be \*\*fine\*\*/],
+      [`"$45,000" should be ** fine.`, /should be \*\* fine/],
       [`Your summary should say "$45,000" too; that figure is right.`, /that figure is right/],
     ] as const) {
       expect(onMaint(reply).pass, reply).toBe(true);
       expect(six, reply).toMatch(named);
     }
     // Final pass, item 7 not done: bold after "should be" is not dead. It is
-    // a delimiter like a quote or a backtick (round 3), so these pass.
+    // a delimiter like a quote or a backtick (round 3), so these pass. (A bare
+    // "** fine" passes too, but says the figure is right: it is a false pass,
+    // in the list above.)
     for (const reply of [
       `The total should be **lower** than "$45,000" suggests.`,
       `The total should be "lower" than "$45,000" suggests.`,
-      `"$45,000" should be ** fine.`,
     ]) {
       expect(onMaint(reply).pass, reply).toBe(true);
     }

@@ -720,7 +720,7 @@ describe("the sessions of a run, and the header (review M2, M4, item 7)", () => 
     expect(KNOWN_LIMITS.join(" ")).toMatch(/slow the next trial/);
     // Round 3, item 8.
     expect(KNOWN_LIMITS.join(" ")).toMatch(
-      /context length, parallel requests, GPU offload\) are not captured/,
+      /otherwise the model's maximum .*\(parallel requests, GPU offload, a draft model loaded beside the main one\) are not captured/,
     );
     expect(KNOWN_LIMITS.join(" ")).toMatch(/record hash is unkeyed/);
     expect(KNOWN_LIMITS.join(" ")).toMatch(/within 2 seconds of the product finishing/);
