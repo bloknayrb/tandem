@@ -87,6 +87,7 @@
  */
 import { onDestroy, untrack } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
+import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import {
   isTransientlyUnavailable,
   type LauncherErrorCode,
@@ -574,6 +575,14 @@ export interface AiReadiness {
    * as connected.
    */
   readonly launcherStandbyRecent: boolean;
+  /**
+   * The launcher status carries `heldForLocalModel` (#1123 A2, R4.5), read
+   * through the same freshness gate as `launcherRunning` (`launcherFresh &&
+   * !serverUnreachable`), so one failed poll ends it (#1123 part B, Ruling
+   * B-16). Always false while `BYO_MODELS_ENABLED` is off, so a status from a
+   * flag-on server changes nothing in a dark editor.
+   */
+  readonly launcherHeldForLocalModel: boolean;
   /**
    * A chat message sent now would start Tandem's Claude
    * (`LauncherStatus.startsOnMessage`, #2196): it is in standby, no other AI is
@@ -1235,6 +1244,14 @@ export function createAiReadiness(deps: {
   // green.
   const launcherAttached = $derived(runningStatus?.attached === true);
   const launcherRestarting = $derived(restartPending && launcherFresh && !serverUnreachable);
+  const launcherHeldForLocalModel = $derived(
+    BYO_MODELS_ENABLED &&
+      status !== null &&
+      status.available &&
+      status.heldForLocalModel === true &&
+      launcherFresh &&
+      !serverUnreachable,
+  );
   // Suppressed while the AI is refused: the chip already says why, and the
   // launcher cannot be restarted until the licence returns.
   const launcherFailure = $derived<LauncherFailure | null>(
@@ -1323,6 +1340,9 @@ export function createAiReadiness(deps: {
     },
     get launcherStandbyRecent() {
       return launcherStandbyRecent;
+    },
+    get launcherHeldForLocalModel() {
+      return launcherHeldForLocalModel;
     },
     get launcherStartsOnMessage() {
       return launcherStartsOnMessage;

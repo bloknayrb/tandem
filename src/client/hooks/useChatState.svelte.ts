@@ -46,6 +46,18 @@ export function createChatState(options: {
    * never an `inProgress` ack. See `notifications/reply-detector.ts`.
    */
   onClaudeReplies?: (replies: ChatMessage[]) => void;
+  /**
+   * Called with the notice rows (`isChatNoticeRow`) that arrived live, by the
+   * same baseline rules as `onClaudeReplies` (#1123 part B, R6.2): for the
+   * chat panel's live region and the chat-answerer store's trigger. Never
+   * called while `BYO_MODELS_ENABLED` is off.
+   */
+  onNoticeRows?: (notices: ChatMessage[]) => void;
+  /**
+   * Called synchronously from `send()` with the row just written — from the
+   * user's send handler, never inside a reaction (#1123 part B, R1.2, R5.1).
+   */
+  onSent?: (message: ChatMessage) => void;
 }): ChatState {
   let messages = $state<ChatMessage[]>([]);
   let streamingIds = $state<ReadonlySet<string>>(new Set());
@@ -200,6 +212,26 @@ export function createChatState(options: {
     if (fresh.length > 0) untrack(() => onClaudeReplies(fresh));
   });
 
+  // #1123 part B: the same, for notice rows (never replies, never chimed).
+  const noticeDetector = createReplyDetector({ select: "notices" });
+  $effect(() => {
+    const onNoticeRows = options.onNoticeRows;
+    const doc = options.getCtrlYdoc();
+    const synced = options.getInitialSyncComplete();
+    const baselineIds = options.getInitialClaudeMessageIds();
+    const current = messages;
+    const streaming = streamingIds;
+    if (!onNoticeRows || !doc) return;
+    const fresh = noticeDetector.observe({
+      doc,
+      synced,
+      baselineIds,
+      messages: current,
+      streamingIds: streaming,
+    });
+    if (fresh.length > 0) untrack(() => onNoticeRows(fresh));
+  });
+
   // Keep path-free names only for documents referenced by current chat. An
   // open document alone is not permission to copy its filename into CTRL.
   // Existing names survive tab closure while their messages remain.
@@ -266,6 +298,7 @@ export function createChatState(options: {
         }
         doc.getMap(Y_MAP_CHAT).set(message.id, message);
       });
+      options.onSent?.(message);
       return true;
     },
     async clear() {

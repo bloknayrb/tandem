@@ -21,6 +21,7 @@ import {
   type AiIndicatorView,
   aiIndicatorView,
   type CwdDriftPill as CwdDriftPillView,
+  type LocalChatLabel,
   sessionCountLabel,
 } from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
@@ -52,6 +53,12 @@ interface Props {
    *  "Tandem's Claude" green. Required (as is `aiSessionCount`) so a mount that
    *  forgets to wire it is a type error, not a permanently neutral dot. */
   aiLauncherAttached: boolean;
+  /**
+   * Chat is set to the local model (#1123 part B, R7): which label the pill
+   * carries, or null out of the local period (the pill is then exactly
+   * today's). Required, so a mount that forgets it is a type error.
+   */
+  aiLocalChat: LocalChatLabel | null;
   /** Tandem is restarting its own Claude → "Restarting Claude…" (#2180).
    *  Required for the same reason as `aiLauncherAttached`. */
   aiLauncherRestarting: boolean;
@@ -161,6 +168,7 @@ let {
   aiLauncherCwd = null,
   aiLauncherBusy = false,
   aiLauncherAttached,
+  aiLocalChat,
   aiLauncherRestarting,
   aiLauncherStarting,
   aiLauncherStandby,
@@ -325,6 +333,7 @@ const aiView = $derived(
     launcherCwd: aiLauncherCwd,
     launcherBusy: aiLauncherBusy,
     launcherAttached: aiLauncherAttached,
+    localChat: aiLocalChat,
     launcherRestarting: aiLauncherRestarting,
     launcherStarting: aiLauncherStarting,
     launcherStandby: aiLauncherStandby,
@@ -395,7 +404,15 @@ const aiCta = $derived.by(() => {
       onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),
     };
   }
-  const lead = aiChip === "start" && aiView ? `${aiView.label}. ` : "";
+  // In the local period (#1123 part B, Ruling B-19) the chip's title and
+  // accessible name begin with the visible label and the title sentence, then
+  // `AI_CTA`'s text; the chip's action is today's.
+  const lead =
+    aiView?.localSentence != null
+      ? `${aiView.label}. ${aiView.localSentence} `
+      : aiChip === "start" && aiView
+        ? `${aiView.label}. `
+        : "";
   return {
     title: lead + AI_CTA[aiChip].title,
     ariaLabel: lead + AI_CTA[aiChip].ariaLabel,
@@ -453,6 +470,9 @@ const AI_TONE: Record<AiIndicatorTone, { dot: string; text: string }> = {
   // Told apart from not-connected by SHAPE (a hollow ring, see the dot's
   // `class:pending-ring`), since muted-grey tokens differ by ~0.03 lightness.
   pending: { dot: "transparent", text: "var(--tandem-fg-muted)" },
+  // "Chat: your local model" (#1123 part B, Ruling B-17): the existing info
+  // family, no new token, never `connected`'s green.
+  "local-chat": { dot: "var(--tandem-info)", text: "var(--tandem-info-fg-strong)" },
 };
 
 // Word-count cycle (W5). Mode persists in localStorage. The chip click
@@ -615,7 +635,7 @@ function cycleWordMode() {
              Never appended while a `pulse` override is set: beside Tandem's
              Claude, `claudeStatus` may be another session's, and the chat UI
              shows status only for the chat's attached session. -->
-        {view.label}{#if view.sessionCount !== null}<span data-testid="status-ai-session-count">{` · ${sessionCountLabel(view.sessionCount)}`}</span>{/if}{#if claudeStatus && view.canAnimate && view.pulse === null}{` · ${claudeStatus}`}{#if view.tone === "solo"}{" (not your comments)"}{/if}{/if}
+        {view.label}{#if view.sessionCount !== null}<span data-testid="status-ai-session-count">{` · ${sessionCountLabel(view.sessionCount)}`}</span>{/if}{#if claudeStatus && view.canAnimate && view.pulse === null}{view.localChat !== null ? ` · Claude: ${claudeStatus}` : ` · ${claudeStatus}`}{#if view.tone === "solo"}{" (not your comments)"}{/if}{/if}
       </span>
   {/snippet}
   {#if aiView}

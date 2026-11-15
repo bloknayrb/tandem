@@ -1,8 +1,9 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
-import type { CapturedAnchor, ChatMessage } from "../../shared/types";
+import { type CapturedAnchor, type ChatMessage, isChatNoticeRow } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
@@ -14,7 +15,13 @@ import { CLAUDE_CODE_OFFER_TEXT, showClaudeCodeOffer } from "./chat-claude-code-
 import { localChatDateLabel } from "./chat-export";
 import { GREETING_LATE_TEXT, GREETING_RELAUNCH, type GreetingAction } from "./chat-greeting";
 import { renderMarkdown } from "./chat-markdown";
-import { chatPickup, chatPickupAnnouncement, chatPickupLabel } from "./chat-pickup";
+import {
+  chatPickup,
+  chatPickupAnnouncement,
+  chatPickupLabel,
+  isLocalPickup,
+  type LocalPickupInputs,
+} from "./chat-pickup";
 import { type ChatResume, chatResumeLabel } from "./chat-resume";
 import "./markdown-body.css";
 
@@ -89,6 +96,22 @@ interface Props {
    * forgets it fails to compile rather than fail open.
    */
   aiDisabled: boolean;
+  /**
+   * What the pickup row needs for a message a local model handles (#1123
+   * part B, R5.5): the chat-answerer store's read, or null while the flag is
+   * off. Required, with no default, for the same PanelSlot reason as
+   * `tandemClaudeControl`.
+   */
+  localPickup: LocalPickupInputs | null;
+  /** Chat is set to the local model (the editor's local period, Ruling
+   *  B-16): the Claude Code offer never shows (R5.2). Required. */
+  localPeriod: boolean;
+  /**
+   * The text of the latest notice row that arrived live (#1123 part B, R6.2),
+   * for the chat's own live region; "" between notices, so a second identical
+   * notice is announced too. Required.
+   */
+  noticeAnnouncement: string;
 }
 
 let {
@@ -118,7 +141,14 @@ let {
   onClaudeCodeOfferSetup,
   onClaudeCodeOfferDismiss,
   aiDisabled,
+  localPickup,
+  localPeriod,
+  noticeAnnouncement,
 }: Props = $props();
+
+/** Render a row as a notice (#1123 part B, R6.1). Flag-gated: a dark editor
+ *  renders a restored notice row exactly as before. */
+const isNotice = (msg: ChatMessage) => BYO_MODELS_ENABLED && isChatNoticeRow(msg);
 
 // One lookup for the control's copy, keyed like the prop. A double click needs
 // no guard here: both actions take the launcher claim before any request, so
@@ -163,12 +193,12 @@ let now = $state(Date.now());
 const pickup = $derived(
   tandemClaudeResume || tandemClaudeGreetingLate
     ? null
-    : chatPickup(messages, Math.max(now, Date.now())),
+    : chatPickup(messages, Math.max(now, Date.now()), localPickup),
 );
 const pickupKind = $derived(pickup?.kind ?? null);
 // Beside the pickup row, not instead of it: "still waiting" stays true.
 const claudeCodeOffer = $derived(
-  showClaudeCodeOffer(claudeCodeOfferEligible, messages.length, pickup),
+  showClaudeCodeOffer(claudeCodeOfferEligible, messages.length, pickup, localPeriod),
 );
 // The primitive, for the scroll effect: `chatResume` returns a new object on
 // every recompute, and an effect reading the object would scroll a reader who
@@ -464,6 +494,32 @@ async function exportChat() {
           <span>{localChatDateLabel(msg.timestamp)}</span>
         </div>
       {/if}
+      {#if isNotice(msg)}
+        <!-- A notice row (#1123 part B, R6): the server's own line, not a
+             reply. Labelled "Tandem", plain text, no agent colour, no Insert,
+             its document badge and time kept. -->
+        <div class="chat-notice" data-testid="chat-notice-{msg.id}" data-notice={msg.chatNotice}>
+          <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 2px;">
+            <span
+              data-testid="chat-author-{msg.id}"
+              style="font-weight: 600; font-size: 11px; color: var(--tandem-info-fg-strong); text-transform: uppercase;"
+            >
+              Tandem
+            </span>
+            {#if msg.documentId}
+              <span
+                style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-muted); background: var(--tandem-surface-muted); padding: 1px 6px; border-radius: var(--tandem-r-2);"
+              >
+                {getDocFileName(msg.documentId) ?? msg.documentId}
+              </span>
+            {/if}
+            <span style="font-size: 10px; color: var(--tandem-fg-subtle); margin-left: auto;">
+              {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+          <div style="white-space: pre-wrap; word-break: break-word;">{msg.text}</div>
+        </div>
+      {:else}
       <div
         class="chat-bubble"
         data-allow-context-menu
@@ -534,6 +590,7 @@ async function exportChat() {
           >Insert into open document</button>
         </div>
       </div>
+      {/if}
     {/each}
 
     {#snippet typingDots()}
@@ -609,9 +666,16 @@ async function exportChat() {
         class="chat-status-row"
         data-testid="chat-pickup-status"
         data-pickup={pickup.kind}
-        style="color: {pickup.kind === 'waiting' ? 'var(--tandem-fg-muted)' : 'var(--tandem-author-claude)'};"
+        style="color: {pickup.kind === 'waiting' ||
+        pickup.kind === 'local-sent' ||
+        pickup.kind === 'local-stopped' ||
+        pickup.kind === 'local-interrupted'
+          ? 'var(--tandem-fg-muted)'
+          : isLocalPickup(pickup)
+            ? 'var(--tandem-info-fg-strong)'
+            : 'var(--tandem-author-claude)'};"
       >
-        {#if pickup.kind === "working"}
+        {#if pickup.kind === "working" || pickup.kind === "local-working"}
           {@render typingDots()}
         {/if}
         <span>{chatPickupLabel(pickup)}</span>
@@ -661,6 +725,9 @@ async function exportChat() {
             : chatPickupAnnouncement(pickupKind)}
       data-testid="chat-pickup-live"
     />
+    <!-- A notice row arriving live (#1123 part B, R6.2): its own announcer,
+         one host per message (LiveRegion's rule), never the reply chime. -->
+    <LiveRegion srOnly message={noticeAnnouncement} data-testid="chat-notice-live" />
   </div>
 
   <!-- Anchor indicator -->
@@ -745,6 +812,15 @@ async function exportChat() {
   .chat-bubble.claude {
     background: var(--tandem-author-claude-bg);
     border-color: var(--tandem-author-claude-border);
+  }
+  .chat-notice {
+    margin-bottom: var(--tandem-space-3);
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+    border: 1px dashed var(--tandem-info-border);
+    border-radius: var(--tandem-r-3);
+    background: var(--tandem-info-bg);
+    color: var(--tandem-fg);
+    font-size: var(--tandem-text-sm);
   }
   .chat-bubble.claude.identified {
     background: color-mix(in srgb, var(--chat-agent-color) 10%, var(--tandem-surface));
