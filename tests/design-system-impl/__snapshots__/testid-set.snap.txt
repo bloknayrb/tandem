@@ -226,6 +226,7 @@ find-word-toggle
 first-run-apikey
 first-run-displayname
 first-run-endpoint
+first-run-endpoint-hint
 first-run-error
 first-run-model-modal
 first-run-modelid
@@ -234,6 +235,7 @@ first-run-providers
 first-run-save
 first-run-skip
 first-run-skip-secondary
+first-run-subtitle
 font-by-extension-reset
 font-by-extension-row-{*}
 font-by-extension-section
@@ -363,7 +365,9 @@ model-edit-btn-{*}
 model-edit-cancel
 model-edit-displayname
 model-edit-endpoint
+model-edit-endpoint-hint
 model-edit-error
+model-edit-local-intro
 model-edit-modal
 model-edit-modelid
 model-edit-provider
@@ -374,6 +378,7 @@ model-toggle-{*}
 models-empty-state
 models-load-error
 models-loading
+models-local-intro
 models-own-window-live
 models-own-window-notice
 models-reload-btn
