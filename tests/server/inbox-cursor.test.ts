@@ -1222,11 +1222,12 @@ describe("no per-client state", () => {
     // Nothing else reaches the ownership module from awareness.ts (no
     // namespace import, no re-export, no dynamic import).
     expect(awareness.match(/sessions\/ownership\.js/g)).toHaveLength(1);
-    // The exclusion texts come from the refusal copy, whose module imports
-    // from the ownership module only types and, since the change-notice PR,
-    // the constant `MAX_CHANGE_NOTICES` (named in `changed`'s description)
-    // (review round 1: the inbox texts carry the refusals' take guard). Those three builders, and the change
-    // notices' loss sentence (the change-notice PR), and nothing else.
+    // The exclusion texts come from the refusal copy (review round 1: the
+    // inbox texts carry the refusals' take guard), whose module imports only
+    // types from the ownership module (#2423 review, R1.4: it names the
+    // change-notice cap from its own constant). awareness.ts takes those three
+    // builders and the change notices' loss sentence (the change-notice PR)
+    // from it, and nothing else.
     const fromCopy = [
       ...awareness.matchAll(/import \{([^}]*)\} from "\.\.\/sessions\/ownership-refusal\.js";/g),
     ];
@@ -1236,5 +1237,11 @@ describe("no per-client state", () => {
     expect(awareness.match(/sessions\/ownership-/g)).toHaveLength(1);
     const cursorModule = readFileSync("src/server/mcp/inbox-cursor.ts", "utf8");
     expect(cursorModule).not.toMatch(/sessions\/ownership|owned-op|ownership-flag/);
+    // R1.4: the refusal copy's one import from the ownership module is types only.
+    const copy = readFileSync("src/server/sessions/ownership-refusal.ts", "utf8");
+    const fromOwnershipInCopy = [
+      ...copy.matchAll(/^import (type )?\{[^}]*\} from "\.\/ownership\.js";$/gm),
+    ];
+    expect(fromOwnershipInCopy.map((m) => m[1])).toEqual(["type "]);
   });
 });

@@ -23,13 +23,15 @@
  * because the decision that produces them is.
  */
 
-import {
-  type ChangeCause,
-  type HolderView,
-  type LossCause,
-  MAX_CHANGE_NOTICES,
-  type OwnershipRefusalReason,
-} from "./ownership.js";
+import type { ChangeCause, HolderView, LossCause, OwnershipRefusalReason } from "./ownership.js";
+
+/**
+ * How many change notices a record keeps, as `changed`'s description names it.
+ * A copy of `ownership.ts`'s `MAX_CHANGE_NOTICES`, so this module imports only
+ * types from the ownership module (#2423 review, R1.4); a test pins that the
+ * two numbers agree.
+ */
+export const CHANGED_ENTRIES_NAMED = 100;
 
 /** Which of the two `default` / `claimed` sentences applies (ownership design §5.3). */
 export type RefusalFamily = "answer" | "write";
@@ -165,7 +167,7 @@ export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.
   "your write claimed it": "a write of yours claimed it",
   "a poll of yours claimed it": "a tandem_checkInbox poll of yours claimed it",
   "you opened or created it":
-    "an open or create of yours (tandem_open, tandem_scratchpad) made it yours",
+    "an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours",
   "another session took it": "another session opened or created it and took it",
   "its tab was closed": "its tab was closed",
   "Tandem stopped counting this session as attached":
@@ -173,7 +175,7 @@ export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.
 });
 
 /** The flag-on `ownership.changed` field's description (Requirement 1.3, Ruling 10). */
-export const CHANGED_FIELD_DESCRIPTION = `Changes, oldest first, to which documents this session held, since the last poll that returned them. \`holding\` is the truth: when \`changed\` and \`holding\` disagree, \`holding\` is right. \`changed\` only explains past changes to \`holding\`, and may be incomplete: after Tandem restarts; after a poll's response did not arrive once its entries were taken from the list (an error in Tandem after the poll ran, rejection by the server or by the client, or loss in transit); past the most recent ${MAX_CHANGE_NOTICES} entries; when recording a change failed; and when Tandem forgot this session and later counted it again under the same identity. Everything that polls as this session (several connections, or agents sharing one) shares one list, so whichever polls first gets the explanation. A poll that names a documentId reports changes on every document, so an entry may name a document that neither \`holding\` nor \`notYours\` mentions. It does not change what this session may do; \`notYours\`, the summary's other sentences and refusals say what it may do.`;
+export const CHANGED_FIELD_DESCRIPTION = `Changes, oldest first, to which documents this session held, that no poll of this session that returned has reported yet. \`holding\` is the truth: when \`changed\` and \`holding\` disagree, \`holding\` is right. \`changed\` only explains past changes to \`holding\`, and may be incomplete: after Tandem restarts; after a poll's response did not arrive once its entries were taken from the list (an error in Tandem after the poll ran, rejection by the server or by the client, or loss in transit); past the most recent ${CHANGED_ENTRIES_NAMED} entries; when recording a change failed; and when Tandem forgot this session and later counted it again under the same identity. Everything that polls as this session (several connections, or agents sharing one) shares one list, so whichever polls first gets the explanation. A poll that names a documentId reports changes on every document, so an entry may name a document that neither \`holding\` nor \`notYours\` mentions. It does not change what this session may do; \`notYours\`, the summary's other sentences and refusals say what it may do.`;
 
 /** `changed[].change`'s description. */
 export const CHANGE_FIELD_DESCRIPTION =

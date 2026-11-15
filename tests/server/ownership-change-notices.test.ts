@@ -70,6 +70,7 @@ import {
   CAUSE_FIELD_DESCRIPTION,
   CHANGE_CAUSE_FACTS,
   CHANGE_FIELD_DESCRIPTION,
+  CHANGED_ENTRIES_NAMED,
   CHANGED_FIELD_DESCRIPTION,
 } from "../../src/server/sessions/ownership-refusal.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -81,7 +82,11 @@ import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
 /** Set to make the next `resolveDeliveryRound` throw: a throw after the drain point. */
-const roundThrows = vi.hoisted(() => ({ next: false }));
+const roundThrows = vi.hoisted(() => ({
+  next: false,
+  /** Runs just before the throw: notices that arrive while the poll is still running. */
+  before: undefined as (() => void) | undefined,
+}));
 vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../src/server/events/delivery-state.js")>();
   return {
@@ -89,6 +94,8 @@ vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
     resolveDeliveryRound: (...args: Parameters<typeof real.resolveDeliveryRound>) => {
       if (roundThrows.next) {
         roundThrows.next = false;
+        roundThrows.before?.();
+        roundThrows.before = undefined;
         throw new Error("after the drain point");
       }
       return real.resolveDeliveryRound(...args);
@@ -360,6 +367,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   roundThrows.next = false;
+  roundThrows.before = undefined;
   setInboxClaimCheckForTests(undefined);
   setInboxResponseCorruptorForTests(undefined);
   setCompositeObserverForTests(undefined);
@@ -415,14 +423,17 @@ describe("R1: the field", () => {
 
   it("the descriptions, exactly", () => {
     expect(CHANGED_FIELD_DESCRIPTION).toBe(
-      "Changes, oldest first, to which documents this session held, since the last poll that returned them. `holding` is the truth: when `changed` and `holding` disagree, `holding` is right. `changed` only explains past changes to `holding`, and may be incomplete: after Tandem restarts; after a poll's response did not arrive once its entries were taken from the list (an error in Tandem after the poll ran, rejection by the server or by the client, or loss in transit); past the most recent 100 entries; when recording a change failed; and when Tandem forgot this session and later counted it again under the same identity. Everything that polls as this session (several connections, or agents sharing one) shares one list, so whichever polls first gets the explanation. A poll that names a documentId reports changes on every document, so an entry may name a document that neither `holding` nor `notYours` mentions. It does not change what this session may do; `notYours`, the summary's other sentences and refusals say what it may do.",
+      "Changes, oldest first, to which documents this session held, that no poll of this session that returned has reported yet. `holding` is the truth: when `changed` and `holding` disagree, `holding` is right. `changed` only explains past changes to `holding`, and may be incomplete: after Tandem restarts; after a poll's response did not arrive once its entries were taken from the list (an error in Tandem after the poll ran, rejection by the server or by the client, or loss in transit); past the most recent 100 entries; when recording a change failed; and when Tandem forgot this session and later counted it again under the same identity. Everything that polls as this session (several connections, or agents sharing one) shares one list, so whichever polls first gets the explanation. A poll that names a documentId reports changes on every document, so an entry may name a document that neither `holding` nor `notYours` mentions. It does not change what this session may do; `notYours`, the summary's other sentences and refusals say what it may do.",
     );
     expect(MAX_CHANGE_NOTICES).toBe(100);
+    // R1.4 (#2423 review): the refusal copy names the cap from its own
+    // constant, so it imports only types from the ownership module.
+    expect(CHANGED_ENTRIES_NAMED).toBe(MAX_CHANGE_NOTICES);
     expect(CHANGE_FIELD_DESCRIPTION).toBe(
       '"gained": this session held the document after the change and not before; "lost": it held it before and not after',
     );
     expect(CAUSE_FIELD_DESCRIPTION).toBe(
-      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it',
+      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it',
     );
   });
 
@@ -915,6 +926,28 @@ describe("R4: draining", () => {
     expect(holdingOf(inbox)).toEqual([d1.id, d2.id, d3.id].sort());
   });
 
+  it("R1.2 (#2423 review): a give-back past the cap keeps the newest MAX_CHANGE_NOTICES, in order", async () => {
+    // A full queue, drained by a poll that throws after its drain point while
+    // three more notices arrive. Setup queues them with `setDocOwner` (a take
+    // as A), on ids no tab shows: nothing a real tool can do runs inside the
+    // poll's synchronous run.
+    const take = (id: string) => setDocOwner(id, { ownerId: A, kind: "opened" }, "take", A);
+    const early = Array.from({ length: MAX_CHANGE_NOTICES }, (_, i) => `${prefix}-early-${i}`);
+    const late = Array.from({ length: 3 }, (_, i) => `${prefix}-late-${i}`);
+    for (const id of early) take(id);
+    roundThrows.next = true;
+    roundThrows.before = () => {
+      for (const id of late) take(id);
+    };
+    callingAs = A;
+    const failed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(failed.error).toBe(true);
+    const inbox = await reader(A).poll();
+    expect(changedOf(inbox)).toEqual(
+      [...early, ...late].slice(-MAX_CHANGE_NOTICES).map((id) => gained(id, OPENED)),
+    );
+  });
+
   it("a named poll of D1 reports a `lost` entry for D2", async () => {
     const d1 = mkDoc("d1");
     const d2 = mkDoc("d2");
@@ -1161,9 +1194,22 @@ describe("R8: the summary", () => {
   });
 
   it("nothing in the sentence reads as an instruction", async () => {
+    // R1.3 (#2423 review): the sentence `inboxLostNote` produced, read from a
+    // poll's summary, with a take and a close in it, not this test's own strings.
     await takenFromA();
-    const sentence = TOOK_SENTENCE("taken.md") + CLOSED_SENTENCE("x.md");
-    expect(sentence).not.toMatch(/\b(do not|don't|should|must|call|stop|leave|reopen|please)\b/i);
+    const d = mkDoc("x", "/tmp/x.md");
+    await writeAs(A, d);
+    await closeByRoute(d.id);
+    const { summary } = await reader(A).poll();
+    const at = summary.lastIndexOf(" You stopped holding ");
+    expect(at).toBeGreaterThan(-1);
+    const sentence = summary.slice(at);
+    expect(sentence).toBe(
+      " You stopped holding taken.md (another session took it), x.md (its tab was closed).",
+    );
+    expect(sentence).not.toMatch(
+      /\b(do not|don't|should|must|call|stop|leave|reopen|please|retry|open|tell|ask|wait)\b/i,
+    );
   });
 
   it("one sentence naming D1 (taken) and D2 (closed); a longer list is shortened", async () => {
@@ -1257,6 +1303,19 @@ describe("R8: the summary", () => {
     const inbox = await reader(A).poll();
     expect(inbox.summary).toContain(`notes.md (${open.id})`);
     expect(inbox.summary.endsWith(CLOSED_SENTENCE(`notes.md (${closed.id})`))).toBe(true);
+  });
+
+  it("R1.1 (#2423 review): a closed notes.md is told apart from an open notes.md the summary does not mention", async () => {
+    const closed = mkDoc("closed", "/tmp/a/notes.md");
+    // Open, with nothing on it, so nothing in the summary names it.
+    mkDoc("open", "/tmp/b/notes.md");
+    await writeAs(A, closed);
+    await reader(A).poll();
+    await closeByRoute(closed.id);
+    const inbox = await reader(A).poll();
+    expect(inbox.summary).toBe(
+      `No new actions. You stopped holding notes.md (${closed.id}) (its tab was closed).`,
+    );
   });
 
   it("the stored name is used only for a last-loss close: closed, reopened, claimed, taken, closed under B -> named by its id", async () => {
