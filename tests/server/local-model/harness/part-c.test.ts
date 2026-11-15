@@ -196,7 +196,10 @@ describe("chat notices in the record (R5.4)", () => {
 describe("a record written by master's code (before part C)", () => {
   // Produced by master's own `runTrial` + `evaluateTrial` at b57d850 for the
   // script "<think>The Q2 figure was $4.41 million.</think>" +
-  // "Revenue was $4.82 million.", and committed verbatim.
+  // "Revenue was $4.82 million.", and committed verbatim. The helper and the
+  // method are `capture-part-c-master-record.test.ts` (#1123 part B, R0.8);
+  // re-run at b57d850 it reproduces every field but the two timings and the
+  // hash over them.
   const FIXTURE = join(
     process.cwd(),
     "tests/server/local-model/__fixtures__/part-c-master-record.json",
