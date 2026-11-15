@@ -68,6 +68,7 @@ import {
   STDIO_BRIDGE_REQUEST_TIMEOUT_MS,
 } from "../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
+import { loopbackFetch } from "../shared/loopback-fetch.js";
 import { OWNER_HANDLE_HEADER, ownerHandleForUpstream } from "../shared/owner-handle.js";
 import { probeTandemServer } from "./preflight.js";
 
@@ -510,7 +511,7 @@ export async function runMcpStdio(): Promise<void> {
   // this bundle reads no flags, and nothing sets the variable while ownership
   // is dark. Silent on every outcome: never echoed, never logged, never on
   // stderr (Claude Code captures that into its own logs).
-  const ownerHandle = ownerHandleForUpstream(baseUrl, process.env, process.execArgv);
+  const ownerHandle = ownerHandleForUpstream(baseUrl, process.env);
   if (ownerHandle !== undefined) upstreamHeaders[OWNER_HANDLE_HEADER] = ownerHandle;
 
   /**
@@ -533,6 +534,8 @@ export async function runMcpStdio(): Promise<void> {
   function createUpstream(): StreamableHTTPClientTransport {
     return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
       requestInit: { headers: upstreamHeaders },
+      // Never through an environment proxy for a `127.0.0.1` / `[::1]` URL (#2422).
+      fetch: loopbackFetch,
     });
   }
 

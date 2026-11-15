@@ -43,6 +43,7 @@ import {
   licenseRemovedMessage,
   unverifiableLicenseMessage,
 } from "../shared/license-copy.js";
+import { loopbackFetch } from "../shared/loopback-fetch.js";
 
 /**
  * Resolve the activate argument to a license blob. If it names a readable file
@@ -443,7 +444,7 @@ async function postToLoopbackTandem(
   payload: unknown,
   opts: { url: string; fetchImpl?: typeof fetch; timeoutMs?: number },
 ): Promise<LoopbackPostResult> {
-  const { fetchImpl = fetch, timeoutMs = 30_000 } = opts;
+  const { fetchImpl = loopbackFetch, timeoutMs = 30_000 } = opts;
   let target: URL;
   try {
     const parsed = new URL(opts.url);

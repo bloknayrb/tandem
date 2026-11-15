@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Must use dynamic import after resetModules because of the module-level flag
 async function importAuthFetch() {
   vi.resetModules();
-  const mod = await import("../../src/shared/cli-runtime.js");
+  const mod = await import("../../src/shared/auth-fetch.js");
   return mod.authFetch;
 }
 
