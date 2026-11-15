@@ -32,7 +32,6 @@
 const OPEN = "<think>";
 const CLOSE = "</think>";
 
-
 type Mode =
   /** Nothing visible yet this turn: only whitespace and closed blocks. */
   | "lead"
