@@ -119,6 +119,10 @@ const EMPTY_SNAPSHOT = {
   // The change-notice PR: every record's queued notices (closed names
   // included, stored on the notice). Empty, since no record exists.
   changeNotices: [],
+  // The chat owners PR: per-message owners (with their origins) and what
+  // each record was handed. Empty, since no record exists.
+  messageOwners: [],
+  handed: [],
 };
 
 describe("tools/list while dark", () => {
@@ -160,6 +164,8 @@ describe("tools/list while dark", () => {
       '"another session took it"',
       '"its tab was closed"',
       '"Tandem stopped counting this session as attached"',
+      // The chat owners PR's cause word (a reply's claim of a document).
+      '"a chat reply of yours claimed it"',
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }

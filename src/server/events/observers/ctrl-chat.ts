@@ -4,6 +4,7 @@ import * as Y from "yjs";
 import { Y_MAP_CHAT } from "../../../shared/constants.js";
 import { shouldSkipChannel } from "../../../shared/origins.js";
 import type { ChatMessage, FlatOffset } from "../../../shared/types.js";
+import { noteChatRowsDeleted } from "../../chat-row-deletions.js";
 import {
   classChatRowAdded,
   isLocalPeriodChat,
@@ -30,10 +31,18 @@ export function makeCtrlChatObserver(deps: {
     // rows, the local model's and a restore's rows are classed too, and no
     // later write (a `read` stamp, `localRun`) ever re-classes one. A row
     // deleted keeps its class, so a same-key re-add keeps it.
+    const deleted: string[] = [];
     for (const [key, change] of event.changes.keys) {
       if (change.action === "add") classChatRowAdded(key);
-      else if (change.action === "delete") noteChatRowDeleted(key);
+      else if (change.action === "delete") {
+        noteChatRowDeleted(key);
+        deleted.push(key);
+      }
     }
+    // #2358 (the chat owners PR, R3.6): a deleted row's per-message owner
+    // goes, whatever the origin — through the seam, never an import of the
+    // ownership module.
+    noteChatRowsDeleted(deleted);
 
     if (shouldSkipChannel(txn.origin)) return;
 

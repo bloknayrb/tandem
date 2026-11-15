@@ -42,6 +42,7 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   LOCAL_PERIOD_STATUS_LINE,
   owedAtSwitchSentence,
+  ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
 } from "../../src/server/mcp/awareness.js";
@@ -92,7 +93,9 @@ import {
 } from "../../src/server/session/manager.js";
 import {
   noteTransportRegistered,
+  ownershipSnapshotForTests,
   resetOwnershipForTests,
+  setOwnershipChatSide,
   setTransportView,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
@@ -238,6 +241,38 @@ async function toClaude(source: "own-window" | "allowance" = "own-window"): Prom
 }
 
 const chatIds = (inbox: Inbox) => inbox.chatMessages.map((m) => m.id).sort();
+
+/**
+ * The chat owners PR's (#2358) changes to the flag-on `tandem_checkInbox`
+ * output schema, as JSON-encoded text in master's frozen dump: each `before`
+ * occurs exactly once and becomes `after`.
+ */
+const CHAT_OWNERS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    "(chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one)",
+    "(a chat message you answer can still be about one of them, and so can anything Tandem pushed to you)",
+  ],
+  [
+    '"a poll of yours claimed it",',
+    '"a poll of yours claimed it",\n                                    "a chat reply of yours claimed it",',
+  ],
+  [
+    '\\"a poll of yours claimed it\\": a tandem_checkInbox poll of yours claimed it; ',
+    '\\"a poll of yours claimed it\\": a tandem_checkInbox poll of yours claimed it; \\"a chat reply of yours claimed it\\": a tandem_reply of yours to a chat message about it claimed it; ',
+  ],
+  [
+    "an open or create of yours (tandem_open, tandem_scratchpad) made it yours",
+    "an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours",
+  ],
+  [
+    "to which documents this session held, since the last poll that returned them.",
+    "to which documents this session held, that no poll of this session that returned has reported yet.",
+  ],
+];
+
+/** The chat owners PR's second session, and who the next tool call runs as. */
+const LP_OTHER = "claude:lp-other";
+let lpCaller = "test:caller";
 const wakes = () =>
   external.filter(
     (e) =>
@@ -258,8 +293,16 @@ for (const ownership of ["", "1"] as const) {
       resetDeliveryStateForTests();
       resetInbox();
       resetOwnershipForTests();
-      setTransportView(() => [{ ownerId: "test:caller", openStreams: 0 }]);
+      lpCaller = "test:caller";
+      // A second session, for the chat owners PR's cases (R7): its polls show
+      // who else is handed what. Flag off it records nothing.
+      setTransportView(() => [
+        { ownerId: "test:caller", openStreams: 0 },
+        { ownerId: LP_OTHER, openStreams: 0 },
+      ]);
       noteTransportRegistered("test:caller", { recordKind: "claude" });
+      noteTransportRegistered(LP_OTHER, { recordKind: "claude" });
+      setOwnershipChatSide(ownershipChatSide);
       resetWakeAdvisoryForTests();
       __resetLocalPeriodForTests();
       __setHonourLocalPeriodRecordsForTests(true);
@@ -289,7 +332,7 @@ for (const ownership of ["", "1"] as const) {
       subscribe(intCb, "internal");
       ({ client, close } = await setupMcpServer(
         [registerAwarenessTools, registerDocumentTools, registerAnnotationTools],
-        { dispatch: (fn) => asTestCaller(fn) },
+        { dispatch: (fn) => asTestCaller(fn, { ownerId: lpCaller }) },
       ));
     });
 
@@ -309,6 +352,87 @@ for (const ownership of ["", "1"] as const) {
       vi.unstubAllEnvs();
       await fs.promises.rm(dir, { recursive: true, force: true });
     });
+
+    if (ownership === "1") {
+      describe("ownership on: chat owners (the chat owners PR, R7)", () => {
+        const as = async <T>(who: string, fn: () => Promise<T>): Promise<T> => {
+          lpCaller = who;
+          try {
+            return await fn();
+          } finally {
+            lpCaller = "test:caller";
+          }
+        };
+
+        it("a blanked poll sets no owner and claims nothing while a claimable doc-less message and an unowned document with a comment exist", async () => {
+          // Both added BEFORE the switch (review round 1, item 1): a row added
+          // during the period is local-period chat and never claimable, so
+          // only a pre-switch row tests the blanked poll. The active document
+          // is open and nobody holds it.
+          userChat("waiting-claimable");
+          annotation("c-claimable");
+          await toLocal();
+          const before = ownershipSnapshotForTests();
+          expect(before.ownerByDoc).toEqual([]);
+          for (const cursor of ["start", undefined]) {
+            const inbox = await poll(cursor ? { cursor } : {});
+            expect(inbox.chatMessages).toEqual([]);
+            expect(inbox.userActions).toEqual([]);
+          }
+          const after = ownershipSnapshotForTests();
+          expect(after.messageOwners).toEqual(before.messageOwners);
+          expect(after.ownerByDoc).toEqual([]);
+          expect(after.handed).toEqual(before.handed);
+          // The positive twin: the same poll after the switch back claims the
+          // document and takes the message, so the fixture can fail.
+          await toClaude();
+          const back = await poll({ cursor: "start" });
+          expect(chatIds(back)).toEqual(["waiting-claimable"]);
+          expect(back.userActions.map((a) => a.id)).toEqual(["c-claimable"]);
+          const claimed = ownershipSnapshotForTests();
+          expect(claimed.ownerByDoc.map(([id, e]) => [id, e.ownerId])).toEqual([
+            [doc.id, "test:caller"],
+          ]);
+          expect(claimed.messageOwners.map(([key]) => key)).toEqual(["waiting-claimable"]);
+        });
+
+        it("a local-period row is handed to nobody across the switch back, and Claude's reply to it is refused", async () => {
+          await toLocal();
+          userChat("during-lp");
+          await toClaude();
+          for (const who of ["test:caller", LP_OTHER]) {
+            expect(chatIds(await as(who, () => poll({ cursor: "start" }))), who).toEqual([]);
+            expect(chatIds(await as(who, () => poll())), who).toEqual([]);
+          }
+          const refused = parseResult(
+            await client.callTool({
+              name: "tandem_reply",
+              arguments: { text: "hi", replyTo: "during-lp" },
+            }),
+          );
+          expect(refused.error).toBe(true);
+          expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+        });
+
+        it("a pre-switch message the caller owned and had not answered is handed to it after the switch back, and to no one else", async () => {
+          userChat("pre-owned");
+          // The caller's cursor poll hands it (and makes the caller its owner);
+          // that cursor is never passed back.
+          expect(chatIds(await poll({ cursor: "start" }))).toEqual(["pre-owned"]);
+          expect(
+            ownershipSnapshotForTests().messageOwners.map(([key, o]) => [key, o.ownerId]),
+          ).toEqual([["pre-owned", "test:caller"]]);
+          await toLocal();
+          await toClaude();
+          // The other session polls first (review round 1, item 12), so it is
+          // not passing only because the owner's poll got there before it.
+          const other = await as(LP_OTHER, () => poll({ cursor: "start" }));
+          expect(chatIds(other)).toEqual([]);
+          expect(chatIds(await as(LP_OTHER, () => poll()))).toEqual([]);
+          expect(chatIds(await poll({ cursor: "start" }))).toEqual(["pre-owned"]);
+        });
+      });
+    }
 
     describe("during the local period (guard 1)", () => {
       it("a poll returns the constant status line and field, nothing else, and the cursor as passed", async () => {
@@ -1049,14 +1173,25 @@ describe("the dark guard", () => {
       // Master's bytes, frozen (round-2 item 11): the schema origin/master
       // served at ed035a8 (master after #2423), dumped once with ownership off and once on. Which
       // one applies is read from the schema itself, never from the flag (only
-      // ownership-anchor.test.ts may key on it).
-      const frozen = Object.hasOwn(schema.properties ?? {}, "ownership")
+      // ownership-anchor.test.ts may key on it). Flag off it must equal master's
+      // bytes; flag on it is master's bytes with exactly #2358's chat owners PR's
+      // changes applied (a new cause word, and three reworded descriptions),
+      // spelled out here so any other difference fails.
+      const isOwnership = Object.hasOwn(schema.properties ?? {}, "ownership");
+      const frozen = isOwnership
         ? "master-checkinbox-output-schema.ownership.json"
         : "master-checkinbox-output-schema.json";
-      const master = JSON.parse(
-        fs.readFileSync(path.join(process.cwd(), "tests/fixtures/local-period", frozen), "utf8"),
+      let masterText = fs.readFileSync(
+        path.join(process.cwd(), "tests/fixtures/local-period", frozen),
+        "utf8",
       );
-      expect(schema).toEqual(master);
+      if (isOwnership) {
+        for (const [before, after] of CHAT_OWNERS_SCHEMA_CHANGES) {
+          expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
+          masterText = masterText.replace(before, after);
+        }
+      }
+      expect(schema).toEqual(JSON.parse(masterText));
     } finally {
       await done();
     }

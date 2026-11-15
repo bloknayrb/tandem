@@ -114,7 +114,9 @@ describe("TOOL_MODES", () => {
       .filter(([, entry]) => entry.enforcedIn !== "1c")
       .map(([tool, entry]) => `${tool}:${entry.enforcedIn}`)
       .sort();
-    // `tandem_reply`'s acceptance rules and the inbox's scope are PR 2's.
+    // `tandem_reply`'s acceptance rules and the inbox's scope are PR 2's, which
+    // lands in parts: the scope PR scoped documents, the chat owners PR chat
+    // and replies that name a message; posts are the posts PR's.
     expect(later).toEqual(["tandem_checkInbox:2", "tandem_reply:2"]);
   });
 });
