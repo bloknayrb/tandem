@@ -8,12 +8,13 @@
  * end, which resets it):
  *  - a closed block is never shown, wherever it is (R2.1);
  *  - an unclosed `<think>` that opens the turn — after leading whitespace and
- *    leading closed blocks — hides the rest of the turn (R2.2);
+ *    leading closed blocks (and format characters such as U+200B) — hides
+ *    the rest of the turn (R2.2);
  *  - a `<think>` later in the text is HELD until it closes (then dropped) or
  *    the turn ends; it is released as text only when `finish(true)` is called,
  *    which the sink does only at a `clean` end; otherwise it is dropped (R2.3);
  *  - blocks do not nest: the first `</think>` after an opening tag closes it;
- *  - the tags are exactly `<think>` and `</think>`, case-insensitive, no
+ *  - the tags are exactly `<think>` and `</think>`, ASCII case-insensitive, no
  *    attributes; `<think foo>`, `<thinking>`, `<reasoning>` and a lone
  *    `</think>` are text (R2.5). A tag split across deltas is matched.
  *
@@ -52,7 +53,17 @@ export function resetThinkFilterScannedForTests(): void {
   scannedForTests = 0;
 }
 
-const isWhitespace = (c: string) => c.trim().length === 0;
+/**
+ * Leading for the "opens the turn" rule: whitespace, and Unicode format
+ * characters (zero-width space, BOM, bidi marks — `\p{Cf}`), which show
+ * nothing either. Both still pass through: the sink never mints a row for
+ * text that is only these.
+ */
+const isLeading = (c: string) => c.trim().length === 0 || /\p{Cf}/u.test(c);
+
+/** ASCII-only case folding: `<THINK>` is a tag, the Kelvin sign is not a "k". */
+const asciiLower = (s: string) =>
+  s.replace(/[A-Z]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 32));
 
 export class ThinkFilter {
   private mode: Mode = "lead";
@@ -71,6 +82,12 @@ export class ThinkFilter {
   /** `showCap`: the most text the caller will ever show (the sink's cap). */
   constructor(showCap: number = Number.POSITIVE_INFINITY) {
     this.heldCap = showCap + OPEN.length;
+  }
+
+  /** Characters this filter is keeping right now (held block + tail): the
+   *  memory bound of R2.6, for tests. */
+  bufferedForTests(): number {
+    return this.held.length + this.tail.length;
   }
 
   /** Feed one delta; returns the text that may be shown now. */
@@ -124,7 +141,7 @@ export class ThinkFilter {
     if (this.tail.length === 0 && c !== "<") return this.literal(c);
     const candidate = this.tail + c;
     const target = this.target();
-    if (target.startsWith(candidate.toLowerCase())) {
+    if (target.startsWith(asciiLower(candidate))) {
       if (candidate.length === target.length) {
         this.tail = "";
         this.tag(candidate);
@@ -144,7 +161,7 @@ export class ThinkFilter {
   private literal(c: string): string {
     switch (this.mode) {
       case "lead":
-        if (!isWhitespace(c)) this.mode = "shown";
+        if (!isLeading(c)) this.mode = "shown";
         return c;
       case "shown":
         return c;

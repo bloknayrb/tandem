@@ -13,9 +13,13 @@ import {
 } from "../../../../probe/local-model-spike/harness/reading.js";
 import {
   recordHash,
+  sealRecord,
   type TrialRecord,
 } from "../../../../probe/local-model-spike/harness/record.js";
-import { computeReport } from "../../../../probe/local-model-spike/harness/report-core.js";
+import {
+  computeReport,
+  NOT_RECORDED,
+} from "../../../../probe/local-model-spike/harness/report-core.js";
 import { RUBRIC_TEXT, RUBRIC_VERSION } from "../../../../probe/local-model-spike/harness/rubric.js";
 import {
   plannedHash,
@@ -118,26 +122,28 @@ describe("shown text is what is judged (R5.2)", () => {
     expect(rec.timeToFirstTextMs).toBe(obs.timeToFirstTextMs);
   });
 
-  it("an error during a <think>-only turn is not 'error after text': the user was shown nothing", async () => {
-    const { classifyTrial } = await import(
-      "../../../../probe/local-model-spike/harness/classify.js"
-    );
-    const stream = manualStream();
-    vi.stubGlobal("fetch", async (_u: string, init: RequestInit) => {
-      stream.push({ content: ["<think>reasoning that never finishes"] });
-      setTimeout(() => stream.fail(new Error("socket hang up")), 0);
-      return stream.response(init);
+  for (const lead of ["", "\n"]) {
+    it(`an error during a <think>-only turn${lead ? " after leading whitespace" : ""} is not 'error after text': the user was shown nothing`, async () => {
+      const { classifyTrial } = await import(
+        "../../../../probe/local-model-spike/harness/classify.js"
+      );
+      const stream = manualStream();
+      vi.stubGlobal("fetch", async (_u: string, init: RequestInit) => {
+        stream.push({ content: [`${lead}<think>reasoning that never finishes`] });
+        setTimeout(() => stream.fail(new Error("socket hang up")), 0);
+        return stream.response(init);
+      });
+      const { runTrial } = await import("../../../../probe/local-model-spike/harness/trial.js");
+      const { trialInput } = await import("./helpers.js");
+      const obs = await runTrial(trialInput(s()));
+      expect(obs.loop?.metrics.exit).toBe("error");
+      expect(classifyTrial(obs).detail).not.toBe("error-after-text");
     });
-    const { runTrial } = await import("../../../../probe/local-model-spike/harness/trial.js");
-    const { trialInput } = await import("./helpers.js");
-    const obs = await runTrial(trialInput(s()));
-    expect(obs.loop?.metrics.exit).toBe("error");
-    expect(classifyTrial(obs).detail).not.toBe("error-after-text");
-  });
+  }
 });
 
 describe("the orphan closing tag (R5.3)", () => {
-  it("counts a </think> with no <think> before it in the same turn, any case", () => {
+  it("counts a </think> with no block open before it in its turn, any case (a second close after a closed block too)", () => {
     expect(
       orphanCloseThink([
         { turn: 1, text: "reasoning</think>Answer", hadToolCalls: false },
@@ -145,7 +151,7 @@ describe("the orphan closing tag (R5.3)", () => {
         { turn: 3, text: "<think>x</think>Answer</think>", hadToolCalls: false },
         { turn: 4, text: "no tags", hadToolCalls: false },
       ]),
-    ).toBe(3);
+    ).toBe(4);
   });
 
   it("is recorded on a new record, and stays visible in the reply", async () => {
@@ -249,7 +255,12 @@ describe("a record written by master's code (before part C)", () => {
     expect(report.text).toContain(
       "median time to first text (raw stream: recorded before shown text was measured)",
     );
-    expect(report.columns["no-reply notice posted"]).toBe(0);
+    expect(report.columns["no-reply notice posted"]).toBe(NOT_RECORDED);
+    expect(report.columns["a </think> with no opening tag"]).toBe(NOT_RECORDED);
+    expect(report.text).toContain(`${NOT_RECORDED}  no-reply notice posted`);
+    expect(report.text).toContain(
+      "This run was recorded before #1123 part C: its replies and signals were judged on raw text",
+    );
     const reading = renderReadingFile({
       identity,
       trials: readingOrder(trials),
@@ -261,6 +272,70 @@ describe("a record written by master's code (before part C)", () => {
     // Nothing was written back into the record by any of the three.
     expect(rec).toEqual(pristine());
     expect(recordHash(rec)).toBe(rec.hash);
+  });
+});
+
+describe("a run recorded after part C", () => {
+  it("reports the median of the SHOWN time to first text, and counts the new columns", () => {
+    const base = JSON.parse(
+      readFileSync(
+        join(process.cwd(), "tests/server/local-model/__fixtures__/part-c-master-record.json"),
+        "utf8",
+      ),
+    ) as TrialRecord;
+    const make = (i: number, raw: number, shown: number | null, notice: boolean, orphans: number) =>
+      sealRecord({
+        ...base,
+        trialId: `t${i}`,
+        scenarioId: `${base.scenarioId}-${i}`,
+        timeToFirstTextMs: raw,
+        timeToFirstShownTextMs: shown,
+        chatNotices: notice
+          ? [{ kind: "no-reply", text: "Your local model produced no reply." }]
+          : [],
+        signals: { ...base.signals, orphanCloseThink: orphans },
+      });
+    // Raw times are all 1 s; shown times are 9 s, 11 s and never: a build
+    // reading the raw field would report 1 s.
+    const trials = [
+      make(1, 1000, 9000, false, 0),
+      make(2, 1000, 11_000, false, 1),
+      make(3, 1000, null, true, 0),
+    ];
+    const planned = trials.map((t) => ({
+      trialId: t.trialId,
+      scenarioId: t.scenarioId,
+      group: t.group,
+      repeat: 1,
+    }));
+    const report = computeReport({
+      identity: {
+        runId: base.runId,
+        modelTag: "m:1b",
+        endpoint: "http://127.0.0.1:11434",
+        commit: "c".repeat(40),
+        modelDigest: "sha256:d",
+        ollamaVersion: "1",
+        fingerprint: "fp",
+        tier: "chat",
+        mode: "full",
+        repeats: 1,
+        scenarioSetHash: "h",
+        includeExtended: false,
+        plannedHash: plannedHash(planned),
+        sessions: [],
+      } as unknown as RunIdentity,
+      planned,
+      trials,
+      infra: [],
+      verdicts: null,
+      rubricVersion: RUBRIC_VERSION,
+      fingerprint: { current: "fp", published: null, statement: "None published." },
+    });
+    expect(report.text).toContain("median time to first shown text 11 s");
+    expect(report.columns["no-reply notice posted"]).toBe(1);
+    expect(report.columns["a </think> with no opening tag"]).toBe(1);
+    expect(report.text).not.toContain("recorded before #1123 part C");
   });
 });
 

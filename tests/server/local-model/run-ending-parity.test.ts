@@ -29,6 +29,18 @@ import {
   userChat,
 } from "./run-ending-helpers.js";
 
+const refuse = vi.hoisted(() => ({ on: false }));
+vi.mock("../../../src/server/license/ai-refusal.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/server/license/ai-refusal.js")>();
+  return {
+    ...actual,
+    aiRefusal: () =>
+      refuse.on
+        ? { error: "LICENSE_REQUIRED" as const, kind: "unlicensed" as const, message: "x" }
+        : null,
+  };
+});
+
 const FIXTURE = join(process.cwd(), "tests/server/local-model/__fixtures__/part-c-master.json");
 const CAPTURE = process.env.TANDEM_CAPTURE_PART_C === "1";
 const expected: Record<string, unknown> =
@@ -49,6 +61,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  refuse.on = false;
   resetWorld();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -361,6 +374,77 @@ describe("R4 endings with nothing shown are as on master", () => {
     r1.stream.close();
     await settle(collab);
     check("not-still-owner-nothing-shown", snapshot("d"));
+  });
+});
+
+describe("more endings as on master (review round 1 item 9)", () => {
+  it("a licence that lapses before the first chat write: the run aborts, nothing written", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    refuse.on = true;
+    r1.stream.push({ content: ["The body says hello, at some length to pass the trigger."] });
+    await vi.advanceTimersByTimeAsync(PAST_FLUSH_MS);
+    try {
+      r1.stream.close();
+    } catch {
+      // already errored by the abort
+    }
+    await settle(collab);
+    check("licence-abort", snapshot("d"));
+  });
+
+  it("a run that never started (superseded while it waited)", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    await net.next();
+    collab.onEvent(userChat("u2", "d"));
+    collab.onEvent(userChat("u3", "d"));
+    const r3 = await net.next();
+    r3.stream.push({ content: ["Third answer."] });
+    r3.stream.close();
+    await settle(collab);
+    await settle(collab);
+    await settle(collab);
+    check("never-started", snapshot("d"));
+  });
+
+  it("max_tool_calls, with a flushed preamble", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    r1.stream.push({ content: ["Let me read everything."] });
+    await vi.advanceTimersByTimeAsync(PAST_FLUSH_MS);
+    r1.stream.push({
+      toolCalls: Array.from({ length: 20 }, (_, i) => ({
+        id: `c${i}`,
+        name: "get_outline",
+        args: {},
+      })),
+    });
+    r1.stream.close();
+    await settle(collab);
+    check("max-tool-calls", snapshot("d"));
+  });
+
+  it("a '<' as the 80th character (the flush trigger), then more text: the same final row", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    r1.stream.push({ content: [`${"a".repeat(79)}<`] });
+    await vi.advanceTimersByTimeAsync(PAST_FLUSH_MS);
+    r1.stream.push({ content: [" b is less."] });
+    r1.stream.close();
+    await settle(collab);
+    check("lt-at-flush-trigger", snapshot("d"));
   });
 });
 

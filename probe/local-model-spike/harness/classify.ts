@@ -157,7 +157,7 @@ function classifyError(obs: TrialObservation, errorMessage: string | undefined):
   }
   if (/exceeded .*cap/.test(errorMessage ?? "")) return { ending: "error", detail: "response-cap" };
   const failing = obs.turns[obs.turns.length - 1];
-  if (failing && failing.hadToolCalls === null && shownText(failing.text, false).length > 0) {
+  if (failing && failing.hadToolCalls === null && shownText(failing.text, false).trim().length > 0) {
     // The failing request had already streamed text the user was SHOWN
     // (#1123 part C: a `<think>` block never is): the user watched a reply
     // start and then got a notice.

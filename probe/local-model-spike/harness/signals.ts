@@ -67,19 +67,22 @@ export function stalePreamble(input: { reply: string; turns: TurnText[] }): bool
 }
 
 /**
- * How many `</think>` (any case) the model wrote with no `<think>` before it
- * in the same turn (#1123 part C, R5.3). The product leaves such a tag
+ * How many `</think>` (any case) the model wrote with no `<think>` block open
+ * before it in the same turn (#1123 part C, R5.3) — including a second close
+ * after a block already closed, which the product also leaves visible. The product leaves such a tag
  * visible; this is the measurement that says whether any model needs more.
  */
 export function orphanCloseThink(turns: TurnText[]): number {
   let n = 0;
   for (const t of turns) {
-    const lower = t.text.toLowerCase();
-    const firstOpen = lower.indexOf("<think>");
-    let at = lower.indexOf("</think>");
-    while (at !== -1 && (firstOpen === -1 || at < firstOpen)) {
-      n += 1;
-      at = lower.indexOf("</think>", at + 1);
+    // Walk the tags in order: a close with no block open is an orphan, as the
+    // product sees it (it stays visible); blocks do not nest.
+    let open = false;
+    for (const m of t.text.matchAll(/<\/?think>/gi)) {
+      const isClose = m[0][1] === "/";
+      if (!isClose) open = true;
+      else if (open) open = false;
+      else n += 1;
     }
   }
   return n;

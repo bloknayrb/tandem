@@ -67,6 +67,9 @@ export const MAX_INFRASTRUCTURE_SHARE = 0.1;
 
 export type Outcome = "PASS" | "FAIL" | "INCONCLUSIVE" | "REPORTED" | "SCREEN";
 
+/** A report column for a field the run's records do not carry (#1123 part C). */
+export const NOT_RECORDED = "n/a (not recorded)";
+
 export interface GroupReport {
   group: Group;
   title: string;
@@ -96,7 +99,8 @@ export interface Report {
   reasons: string[];
   groups: GroupReport[];
   confirmedFalseClaims: string[];
-  columns: Record<string, number>;
+  /** A count, or {@link NOT_RECORDED} for a field no record of the run carries. */
+  columns: Record<string, number | typeof NOT_RECORDED>;
   text: string;
 }
 
@@ -261,7 +265,11 @@ export function computeReport(input: ReportInput): Report {
   // --- columns (reported, never gating) ---
   const all = [...byTrial.values()];
   const count = (f: (t: TrialRecord) => boolean) => all.filter(f).length;
-  const columns: Record<string, number> = {
+  // #1123 part C: a field that no record of this run carries (a run written
+  // before part C) is "not recorded", never a measured zero.
+  const recorded = (has: (t: TrialRecord) => boolean, f: (t: TrialRecord) => boolean) =>
+    all.some(has) ? count(f) : NOT_RECORDED;
+  const columns: Record<string, number | typeof NOT_RECORDED> = {
     "scored trials": all.length,
     timeout: count((t) => t.ending === "timeout"),
     "step limit": count((t) => t.ending === "budget"),
@@ -283,8 +291,14 @@ export function computeReport(input: ReportInput): Report {
     "earlier turn's preamble left as the reply": count((t) => t.signals.stalePreamble),
     // #1123 part C. Read only where the record has the field: a record written
     // before part C has none, and is never given one.
-    "no-reply notice posted": count((t) => (t.chatNotices ?? []).some((n) => n.kind === "no-reply")),
-    "a </think> with no opening tag": count((t) => (t.signals.orphanCloseThink ?? 0) > 0),
+    "no-reply notice posted": recorded(
+      (t) => t.chatNotices !== undefined,
+      (t) => (t.chatNotices ?? []).some((n) => n.kind === "no-reply"),
+    ),
+    "a </think> with no opening tag": recorded(
+      (t) => t.signals.orphanCloseThink !== undefined,
+      (t) => (t.signals.orphanCloseThink ?? 0) > 0,
+    ),
     "reply not in the document's language": count((t) => t.signals.otherLanguage),
     "reply repeats the system prompt": count((t) => t.signals.repeatsPrompt),
     "prompt over the context length": count((t) => t.signals.context.overContext === true),
@@ -449,6 +463,11 @@ export function computeReport(input: ReportInput): Report {
   const names = Object.keys(columns);
   const ordered = outcome === "SCREEN" ? [...firstThings, ...names.filter((n) => !firstThings.includes(n))] : names;
   for (const name of ordered) lines.push(`  ${String(columns[name]).padStart(4)}  ${name}`);
+  if (all.length > 0 && !all.some((t) => t.chatNotices !== undefined)) {
+    lines.push(
+      "  This run was recorded before #1123 part C: its replies and signals were judged on raw text, inline <think> reasoning included.",
+    );
+  }
 
   const times = all.map((t) => t.totalMs).sort((a, b) => a - b);
   // Time to first SHOWN text (#1123 part C, R5.2): inline reasoning and

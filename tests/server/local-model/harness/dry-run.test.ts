@@ -764,20 +764,23 @@ describe("visible reasoning (R2.7)", () => {
     expect(rec.scorerPassWithoutReasoning).toBe(true);
   });
 
-  it("<thinking> and <reasoning> are not hidden: they still reach the reply and are marked", async () => {
-    const { obs } = await runScripted(s(), [
-      {
-        content: [
-          "<thinking>The Q2 figure was $4.41 million, so…</thinking>",
-          "Revenue was $4.82 million.",
-        ],
-      },
-    ]);
-    const rec = record(s(), obs);
-    expect(rec.signals.replyShowsReasoning).toBe(true);
-    expect(rec.scorerPass).toBe(false);
-    expect(rec.scorerPassWithoutReasoning).toBe(true);
-  });
+  for (const tag of ["thinking", "reasoning"]) {
+    it(`<${tag}> is not hidden: it still reaches the reply, is marked, and is scored`, async () => {
+      const { obs } = await runScripted(s(), [
+        {
+          content: [
+            `<${tag}>The Q2 figure was $4.41 million, so…</${tag}>`,
+            "Revenue was $4.82 million.",
+          ],
+        },
+      ]);
+      const rec = record(s(), obs);
+      expect(obs.reply).toContain(`<${tag}>`);
+      expect(rec.signals.replyShowsReasoning).toBe(true);
+      expect(rec.scorerPass).toBe(false);
+      expect(rec.scorerPassWithoutReasoning).toBe(true);
+    });
+  }
 
   it("reasoning in a separate field is dropped by the product and recorded by the tap", async () => {
     const { obs } = await runScripted(s(), [
