@@ -1928,19 +1928,21 @@ export async function closeDocumentById(
   // only), so nothing new runs here while ownership is off.
   onDocumentClosed(safeId, closedPath);
 
+  // The document's delivery round goes with the tab (#2358, the
+  // delivery-rounds PR, R3.1): dropped, never closed, immediately before the
+  // step that makes the document not open, with no await since the awaits
+  // above, so a forward that landed during them cannot leave a round nothing
+  // will close, and any later forward on this id is key-less (R1.5). Before
+  // `closeDocument` rather than after it, so a throw from its broadcast
+  // cannot strand the round on a document no poll reads (diff review M1).
+  // After the handover, outside it (it pushes nothing: the source pin).
+  // Rounds of messages on the document survive. A no-op while not keyed.
+  dropDocumentDeliveryRound(safeId);
+
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and
   // dirty teardown above stay here — their ordering is load-bearing.
   closeDocument(safeId);
-
-  // The document's delivery round goes with the tab (#2358, the
-  // delivery-rounds PR, R3.1): dropped, never closed, right after the step
-  // that makes the document not open, with no await since the awaits above,
-  // so a forward that landed during them cannot leave a round nothing will
-  // close, and any later forward on this id is key-less (R1.5). Outside the
-  // handover. Rounds of messages on the document survive. A no-op while
-  // rounds are not keyed.
-  dropDocumentDeliveryRound(safeId);
 
   // Delete the session file so this document doesn't reopen on restart —
   // unless the block above just wrote it as the surviving copy of unpersisted

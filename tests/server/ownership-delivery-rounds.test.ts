@@ -601,6 +601,12 @@ describe("R2.1: a document's round", () => {
     await pollAs(C, { documentId: d3.id });
     vi.useRealTimers();
     expect(getDocOwner(d3.id), "the claim ran and the cap lapsed C again").toBeUndefined();
+    // Only a claim whose change ran (`"changed"`) hands d3 over; a `"refused"`
+    // claim writes nothing, so d3 would have no handover mark.
+    expect(
+      new Map(ownershipSnapshotForTests().handoverSeq).get(d3.id),
+      "the lapse's handover ran on d3: the outcome was changed, not refused",
+    ).toBeGreaterThan(0);
     expect(rounds()).toEqual([docRound(d2), docRound(d3), docRound(worldDoc("d1"))].sort());
   });
 

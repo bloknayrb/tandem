@@ -864,7 +864,6 @@ function noDocumentInboxNote(requestedId: string | undefined): string {
 /** Identity unless a test installed a corruptor (see `setInboxResponseCorruptorForTests`). */
 let responseCorruptorForTests: <T>(response: T) => unknown = (response) => response;
 
-/** Run at the start of a poll's chat commit (both collectors); may throw (the posts PR, R0.7). */
 /**
  * Testing-only (#2358, the delivery-rounds PR, R2.4): throws inside the
  * notice step of a committed poll, after its hand-out, so a test can show a
@@ -876,6 +875,7 @@ export function setInboxNoticeFaultForTests(fault: (() => void) | undefined): vo
   noticeFaultForTests = fault;
 }
 
+/** Run at the start of a poll's chat commit (both collectors); may throw (the posts PR, R0.7). */
 let chatCommitFaultForTests: (() => void) | undefined;
 
 /** Make a poll's chat commit (`chat.commit`) throw for a test; undefined clears it. */
