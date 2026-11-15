@@ -349,7 +349,7 @@ function postRefusalText(input: PostRefusalInput): string {
   // Why this was judged a post at all, when the call did not look like one
   // (plan review H1, M2): never a reason the model cannot see.
   const why = input.unmatchedReplyTo
-    ? "The `replyTo` you passed names no message in the chat, so this was treated as a message that answers nothing. "
+    ? "The `replyTo` you passed names no user chat message, so this was treated as a message that answers nothing. "
     : input.namedNotOpen
       ? "The document you named is not open in Tandem, so this counts as a message that is not about a document. Do not open it just to post. "
       : "";

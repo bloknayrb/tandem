@@ -967,7 +967,7 @@ describe("R1: posts", () => {
     const refused = await reply(A, "no-such-message");
     expect(refused.details?.reason).toBe("post");
     expect(refused.message).toMatch(
-      /^The `replyTo` you passed names no message in the chat, so this was treated as a message that answers nothing\. /,
+      /^The `replyTo` you passed names no user chat message, so this was treated as a message that answers nothing\. /,
     );
   });
 
