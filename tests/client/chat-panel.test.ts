@@ -27,6 +27,10 @@ function renderChat(messages: ChatMessage[]) {
       tandemClaudeControl: null,
       onStartClaude: () => {},
       onTurnOffClaude: () => {},
+      // #1123 part B: required props (null / false / "" = out of the local period).
+      localPickup: null,
+      localPeriod: false,
+      noticeAnnouncement: "",
       aiDisabled: false,
       tandemClaudeResume: null,
       onResumeRemedy: () => {},
@@ -166,6 +170,9 @@ describe("ChatPanel — Tandem's Claude Start / Turn off control (#2195)", () =>
         onStartClaude,
         onTurnOffClaude,
         aiDisabled: false,
+        localPickup: null,
+        localPeriod: false,
+        noticeAnnouncement: "",
         tandemClaudeResume: null,
         onResumeRemedy: () => {},
         tandemClaudeGreetingLate: null,
@@ -230,6 +237,10 @@ describe("ChatPanel — AI off by licence", () => {
         tandemClaudeControl: null,
         onStartClaude: () => {},
         onTurnOffClaude: () => {},
+        // #1123 part B: required props (null / false / "" = out of the local period).
+        localPickup: null,
+        localPeriod: false,
+        noticeAnnouncement: "",
       },
     });
     const input = r.container.querySelector<HTMLTextAreaElement>(
@@ -353,6 +364,10 @@ describe("ChatPanel — the resume row (#2196)", () => {
       tandemClaudeControl: null,
       onStartClaude: () => {},
       onTurnOffClaude: () => {},
+      // #1123 part B: required props (null / false / "" = out of the local period).
+      localPickup: null,
+      localPeriod: false,
+      noticeAnnouncement: "",
       tandemClaudeResume: cell ? null : (resume as ChatResume | null),
       onResumeRemedy,
       tandemClaudeGreetingLate: null,
@@ -456,6 +471,10 @@ describe("ChatPanel — the 'hasn't said hello' note (#2197)", () => {
         tandemClaudeControl: null,
         onStartClaude: () => {},
         onTurnOffClaude: () => {},
+        // #1123 part B: required props (null / false / "" = out of the local period).
+        localPickup: null,
+        localPeriod: false,
+        noticeAnnouncement: "",
         tandemClaudeResume: opts.resume ?? null,
         onResumeRemedy: () => {},
         tandemClaudeGreetingLate: greeting,

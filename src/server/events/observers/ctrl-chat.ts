@@ -11,6 +11,7 @@ import {
   isLocalPeriodChat,
   markWithheldForLocalPeriod,
   noteChatRowDeleted,
+  noteLocalPeriodUserChat,
   selectionMayBeHanded,
 } from "../../models/local-period.js";
 import { describeRangeFailure, validateRange } from "../../positions.js";
@@ -62,7 +63,17 @@ export function makeCtrlChatObserver(deps: {
     const removing = new Set(undo?.removed ?? []);
     for (const [key, change] of event.changes.keys) {
       if (change.action === "add") {
-        if (!removing.has(key)) classChatRowAdded(key);
+        // #1123 part B, R11.3: the author test belongs here, where the row
+        // can be read; `classChatRowAdded` answers whether it classed the row
+        // as local-period chat just now. A row the undo removes at once is
+        // never classed (#2358).
+        if (
+          !removing.has(key) &&
+          classChatRowAdded(key) &&
+          (chatMap.get(key) as ChatMessage | undefined)?.author === "user"
+        ) {
+          noteLocalPeriodUserChat();
+        }
       } else if (change.action === "delete") {
         if (undo?.restored.has(key)) continue;
         noteChatRowDeleted(key);

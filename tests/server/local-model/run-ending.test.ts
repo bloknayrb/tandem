@@ -22,9 +22,11 @@ import {
 } from "../../../src/server/local-model/collaborator.js";
 import { type RunTurnOpts, runLocalModelTurn } from "../../../src/server/local-model/index.js";
 import {
+  isShownTextEmpty,
   resetThinkFilterScannedForTests,
   shownText,
   ThinkFilter,
+  thinkFilterMaxBufferedForTests,
   thinkFilterScannedForTests,
 } from "../../../src/server/local-model/think-filter.js";
 import {
@@ -69,6 +71,20 @@ vi.mock("../../../src/server/license/ai-refusal.js", async (importOriginal) => {
   };
 });
 
+/**
+ * #1123 part B R0.6: a remover that refuses (returns false, writes nothing),
+ * as it does for any row that is not a local-model reply. Off by default.
+ */
+const remover = vi.hoisted(() => ({ refuses: false }));
+vi.mock("../../../src/server/mcp/awareness.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/server/mcp/awareness.js")>();
+  return {
+    ...actual,
+    removeClaudeChatMessage: (id: string) =>
+      remover.refuses ? false : actual.removeClaudeChatMessage(id),
+  };
+});
+
 const CAP = 64 * 1024;
 const EDITING_OFF_TOAST =
   "The local model stopped without replying: it tried to comment on or change the document, which local models were not allowed to do for that reply. Ask again for an answer in chat.";
@@ -79,6 +95,7 @@ const SECRET = `secret reasoning ${"s".repeat(100)}`;
 beforeEach(() => {
   vi.useFakeTimers();
   refuse.on = false;
+  remover.refuses = false;
   resetWorld();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -336,35 +353,66 @@ describe("hiding <think> (R2)", () => {
     expect(row("u1")?.localRun?.status).toBe("replied");
   });
 
-  for (const [label, lead] of [
-    ["a block opening the turn (hiding)", ""],
-    ["a block after visible text (holding)", "Answer. "],
+  // The 3.5 MiB runs are the size R2.6 states; a quadratic regression stalls
+  // them rather than failing them, so each has a 256 KiB twin with the same
+  // bound and a short timeout, which fails within seconds (#1123 part B, R0.4).
+  for (const [label, lead, size, timeout] of [
+    ["a block opening the turn (hiding)", "", 3.5 * 1024 * 1024, 60_000],
+    ["a block after visible text (holding)", "Answer. ", 3.5 * 1024 * 1024, 60_000],
+    ["a block opening the turn (hiding), 256 KiB", "", 256 * 1024, 10_000],
+    ["a block after visible text (holding), 256 KiB", "Answer. ", 256 * 1024, 10_000],
   ] as const) {
-    it(`cost, ${label}: every character is scanned, and at most twice (k = 2)`, async () => {
-      // ~3.5 MiB of content in ~1 KiB deltas: under the 4 MiB wire cap with
-      // the frames' overhead. The block never closes, so nothing after the
-      // tag is shown and the sink cap never stops the filter early: the
-      // whole input passes through it. Candidate tags that fail on their
-      // last character make the filter back off as often as it can.
-      const unit = "x <thinx <</think <thi</thinkx </thin ";
-      const body = unit.repeat(Math.floor((3.5 * 1024 * 1024) / unit.length));
-      const text = `${lead}<think>${body}`;
-      resetThinkFilterScannedForTests();
-      const net = streamFetch();
-      setupDoc("d");
-      const collab = collaborator();
-      collab.onEvent(userChat("u1", "d"));
-      const r1 = await net.next();
-      for (let k = 0; k < text.length; k += 1024)
-        r1.stream.push({ content: [text.slice(k, k + 1024)] });
-      r1.stream.close();
-      await settle(collab);
-      expect(row("u1")?.localRun?.status).toBe(lead === "" ? "stopped" : "replied");
-      const scanned = thinkFilterScannedForTests();
-      expect(scanned).toBeGreaterThanOrEqual(text.length);
-      expect(scanned).toBeLessThanOrEqual(2 * text.length);
-    }, 60_000);
+    it(
+      `cost, ${label}: every character is scanned, and at most twice (k = 2)`,
+      async () => {
+        // ~3.5 MiB (or 256 KiB) of content in ~1 KiB deltas: under the 4 MiB
+        // wire cap with the frames' overhead. The block never closes, so nothing
+        // after the tag is shown and the sink cap never stops the filter early:
+        // the whole input passes through it. Candidate tags that fail on their
+        // last character make the filter back off as often as it can.
+        const unit = "x <thinx <</think <thi</thinkx </thin ";
+        const body = unit.repeat(Math.floor(size / unit.length));
+        const text = `${lead}<think>${body}`;
+        resetThinkFilterScannedForTests();
+        const net = streamFetch();
+        setupDoc("d");
+        const collab = collaborator();
+        collab.onEvent(userChat("u1", "d"));
+        const r1 = await net.next();
+        for (let k = 0; k < text.length; k += 1024)
+          r1.stream.push({ content: [text.slice(k, k + 1024)] });
+        r1.stream.close();
+        await settle(collab);
+        expect(row("u1")?.localRun?.status).toBe(lead === "" ? "stopped" : "replied");
+        const scanned = thinkFilterScannedForTests();
+        expect(scanned).toBeGreaterThanOrEqual(text.length);
+        expect(scanned).toBeLessThanOrEqual(2 * text.length);
+      },
+      timeout,
+    );
   }
+
+  it("the sink's filter is bounded by its cap plus one tag (#1123 part B, R0.2)", async () => {
+    // A held block four times the cap, never closed, through the SHIPPED sink.
+    // A collaborator that built its filter unbounded would hold all of it.
+    resetThinkFilterScannedForTests();
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    const text = `Answer. <think>${"h".repeat(4 * CAP)}`;
+    for (let k = 0; k < text.length; k += 1024)
+      r1.stream.push({ content: [text.slice(k, k + 1024)] });
+    r1.stream.push(OUTLINE());
+    r1.stream.close();
+    const r2 = await net.next();
+    r2.stream.close();
+    await settle(collab);
+    const held = thinkFilterMaxBufferedForTests();
+    expect(held).toBeGreaterThan(CAP);
+    expect(held).toBeLessThanOrEqual(CAP + "<think>".length + "</think>".length);
+  });
 
   it("memory: a hidden block keeps nothing; a held block keeps at most the cap plus one tag", () => {
     const hiding = new ThinkFilter(100);
@@ -385,6 +433,41 @@ describe("hiding <think> (R2)", () => {
         .trim()
         .replace(/\p{Cf}/gu, ""),
     ).toBe("");
+  });
+
+  it("an astral format character is leading, judged per code point (#1123 part B, R0.3)", () => {
+    // U+E0001 LANGUAGE TAG is \p{Cf} but arrives as two code units.
+    expect(shownText("\u{E0001}<think>secret", true).replace(/\p{Cf}/gu, "")).toBe("");
+    // Its two halves split across deltas.
+    const f = new ThinkFilter(Number.POSITIVE_INFINITY);
+    const shown = f.push("\uDB40") + f.push("\uDC01<think>secret") + f.finish(true);
+    expect(shown).toBe("\u{E0001}");
+    // An astral character that is not a format character is visible text:
+    // the block after it is held, then released at a clean end.
+    expect(shownText("\u{1F600}<think>b", true)).toBe("\u{1F600}<think>b");
+    // A lone high surrogate is not leading either.
+    expect(shownText("\uD800<think>b", false)).toBe("\uD800");
+  });
+
+  it("whitespace and format characters alone are not shown text (#1123 part B, R0.1)", () => {
+    for (const c of [
+      "\u200B",
+      "\u200C",
+      "\u200D",
+      "\u200E",
+      "\u200F",
+      "\u2060",
+      "\u202E",
+      "\u00AD",
+      "\uFEFF",
+      "\u{E0001}",
+    ]) {
+      // `trim()` keeps all but the BOM; the sink's check does not.
+      expect(isShownTextEmpty(` ${c}\n${c}`)).toBe(true);
+      expect(isShownTextEmpty(`${c}a`)).toBe(false);
+    }
+    expect(isShownTextEmpty("")).toBe(true);
+    expect(isShownTextEmpty("\uD800")).toBe(false);
   });
 
   it("the tag match is ASCII-only: the Kelvin sign is not a 'k'", () => {
@@ -461,6 +544,33 @@ describe("the removal set (R1)", () => {
       expect(toasts("d")).toEqual([{ severity: "info", message: toast }]);
     });
   }
+
+  it("a removal the remover refuses keeps the row, folded, and localRun names it (#1123 part B, R0.6)", async () => {
+    remover.refuses = true;
+    const net = streamFetch();
+    setupDoc("d");
+    setMode("tandem");
+    const collab = collaborator({ editingState: () => ({ enabled: false, offEpoch: 0 }) });
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    await streamTurn(r1, ["I will add a comment on that sentence."]);
+    r1.stream.push(COMMENT);
+    r1.stream.close();
+    const r2 = await net.next();
+    await streamTurn(r2, ["  "]);
+    r2.stream.close();
+    await settle(collab);
+    const kept = replyRows("u1");
+    expect(kept.map((m) => m.text)).toEqual(["I will add a comment on that sentence."]);
+    // Folded: no sidecar left authoritative over the row.
+    expect(streamMap().size).toBe(0);
+    expect(row("u1")?.localRun).toEqual({
+      status: "stopped",
+      reason: "editing-off",
+      generation: G,
+      replyId: kept[0].id,
+    });
+  });
 
   it("editing_off after the sink cap truncated the row: removed, no sidecar, no marker", async () => {
     // The cap's marker write and its abort share one deferred task (#1292),
@@ -711,6 +821,23 @@ describe("the no-reply notice (R3)", () => {
     expectNotice();
   });
 
+  // #1123 part B, R0.1: format characters before the block show nothing, so
+  // no row is minted for them and the run gets the notice.
+  for (const [label, chunks] of [
+    ["a zero-width space, then a closed block", [`\u200B<think>${SECRET}</think>`]],
+    ["a zero-width space, then an unclosed block", [`\u200B<think>${SECRET}`]],
+    ["U+E0001, then an unclosed block (R0.3)", [`\u{E0001}<think>${SECRET}`]],
+    [
+      "a soft hyphen and a word joiner around a closed block",
+      [`\u00AD<think>${SECRET}</think>\u2060`],
+    ],
+  ] as const) {
+    it(`${label}, at a clean end: no reply row, stopped / no-reply, and the notice`, async () => {
+      await cleanTurn([...chunks]);
+      expectNotice();
+    });
+  }
+
   it("a run whose reasoning came only in a separate field", async () => {
     const net = streamFetch();
     setupDoc("d");
@@ -765,6 +892,27 @@ describe("the no-reply notice (R3)", () => {
     expect(row("u1")?.localRun).toEqual({ status: "stopped", reason: "no-reply", generation: G });
     expect(row("u2")?.localRun?.status).toBe("replied");
     expect(replyRows("u2").map((m) => m.text)).toEqual(["Second answer."]);
+  });
+
+  it("positive control for the abort spy: it records an abort that does happen (#1123 part B, R0.7)", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d", "first"));
+    const r1 = await net.next();
+    const abortSpy = vi.spyOn(AbortController.prototype, "abort");
+    // A newer chat supersedes the running one: `run()`, queued on a
+    // microtask as every hand-off is, aborts it. The same spy, the same
+    // setup and the same wait as the test below: an abort there would show.
+    collab.onEvent(userChat("u2", "d", "second"));
+    expect(abortSpy.mock.calls.length).toBe(0);
+    await microtasks(5000);
+    expect(abortSpy.mock.calls.length).toBeGreaterThan(0);
+    // The abort closed r1's stream; the newer run goes on.
+    expect(r1).toBeDefined();
+    const r2 = await net.next();
+    r2.stream.close();
+    await settle(collab);
   });
 
   it("none when the switch moved to Claude first; the run state is still written", async () => {

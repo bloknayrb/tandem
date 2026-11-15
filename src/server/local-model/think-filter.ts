@@ -25,9 +25,15 @@
  * the sink's cap plus one tag) plus a tail of at most seven characters; a block that
  * opens the turn is dropped as it streams.
  *
- * Whitespace before the first visible character passes straight through: the
- * sink never mints a row for a whitespace-only buffer, so it is invisible, and
- * text with no `<think>` reaches the sink exactly as it arrived.
+ * Whitespace and format characters before the first visible character pass
+ * straight through: the sink never mints a row for a buffer that is only these
+ * (`isShownTextEmpty`), so they are invisible, and text with no `<think>`
+ * reaches the sink exactly as it arrived.
+ *
+ * Leading is judged per code point (#1123 part B, R0.3): a format character
+ * outside the BMP (U+E0001…) arrives as two UTF-16 code units, neither of
+ * which is `\p{Cf}` alone, so a high surrogate in the lead is judged with the
+ * code unit after it.
  */
 
 const OPEN = "<think>";
@@ -44,6 +50,7 @@ type Mode =
   | "holding";
 
 let scannedForTests = 0;
+let maxBufferedForTests = 0;
 
 /** Characters examined by every filter since the last reset (test seam, R2.6). */
 export function thinkFilterScannedForTests(): number {
@@ -51,15 +58,40 @@ export function thinkFilterScannedForTests(): number {
 }
 export function resetThinkFilterScannedForTests(): void {
   scannedForTests = 0;
+  maxBufferedForTests = 0;
+}
+/**
+ * The most text any filter has held at once since the last reset (held block
+ * plus tail): pins, through the shipped sink, that the filter it builds is
+ * bounded by the sink's cap plus one tag (#1123 part B, R0.2).
+ */
+export function thinkFilterMaxBufferedForTests(): number {
+  return maxBufferedForTests;
+}
+
+/**
+ * Whitespace and Unicode format characters (`\p{Cf}`: zero-width space and
+ * joiners, bidi marks, word joiner, soft hyphen, BOM, tag characters) show
+ * nothing. Text that is only these is not shown text: the sink mints no row
+ * for it, and the harness does not count it as text the user saw (#1123 part
+ * B, R0.1). `trim()` alone keeps U+200B, U+200C, U+200D, U+200E, U+200F,
+ * U+2060, U+202E and U+00AD. Judged per code point.
+ */
+export function isShownTextEmpty(text: string): boolean {
+  return /^[\s\p{Cf}]*$/u.test(text);
 }
 
 /**
  * Leading for the "opens the turn" rule: whitespace, and Unicode format
  * characters (zero-width space, BOM, bidi marks — `\p{Cf}`), which show
- * nothing either. Both still pass through: the sink never mints a row for
- * text that is only these.
+ * nothing either. Both still pass through; the sink never mints a row for a
+ * buffer that is only these, because its emptiness check is
+ * `isShownTextEmpty`, not `trim()`. `c` is one code point.
  */
-const isLeading = (c: string) => c.trim().length === 0 || /\p{Cf}/u.test(c);
+const isLeading = (c: string) => isShownTextEmpty(c);
+
+const isHighSurrogate = (c: string) => c >= "\uD800" && c <= "\uDBFF";
+const isLowSurrogate = (c: string) => c >= "\uDC00" && c <= "\uDFFF";
 
 /** ASCII-only case folding: `<THINK>` is a tag, the Kelvin sign is not a "k". */
 const asciiLower = (s: string) =>
@@ -72,6 +104,9 @@ export class ThinkFilter {
   /** The held block, its opening tag as written included. */
   private held = "";
   private heldOverflow = false;
+  /** A high surrogate seen in the lead, waiting for its low half to be judged
+   *  as one code point (R0.3). It has already been passed through. */
+  private leadHigh = "";
   /**
    * Held text beyond this is never shown: on release it goes through the
    * sink's cap, which keeps at most that many characters plus a marker. One
@@ -79,8 +114,12 @@ export class ThinkFilter {
    */
   private readonly heldCap: number;
 
-  /** `showCap`: the most text the caller will ever show (the sink's cap). */
-  constructor(showCap: number = Number.POSITIVE_INFINITY) {
+  /**
+   * `showCap`: the most text the caller will ever show (the sink's cap).
+   * Required, so no caller builds an unbounded filter by omission (R0.2);
+   * pass `Number.POSITIVE_INFINITY` to mean "no cap" on purpose.
+   */
+  constructor(showCap: number) {
     this.heldCap = showCap + OPEN.length;
   }
 
@@ -129,6 +168,7 @@ export class ThinkFilter {
     this.tail = "";
     this.held = "";
     this.heldOverflow = false;
+    this.leadHigh = "";
     return out;
   }
 
@@ -138,6 +178,12 @@ export class ThinkFilter {
 
   private step(c: string): string {
     scannedForTests += 1;
+    // A high surrogate in the lead is judged with the unit after it; anything
+    // but its low half makes it a lone surrogate, which is not leading.
+    if (this.leadHigh !== "" && !isLowSurrogate(c)) {
+      this.leadHigh = "";
+      if (this.mode === "lead") this.mode = "shown";
+    }
     if (this.tail.length === 0 && c !== "<") return this.literal(c);
     const candidate = this.tail + c;
     const target = this.target();
@@ -161,7 +207,16 @@ export class ThinkFilter {
   private literal(c: string): string {
     switch (this.mode) {
       case "lead":
-        if (!isLeading(c)) this.mode = "shown";
+        if (this.leadHigh !== "") {
+          // `c` is the low half (checked in `step`): judge the pair.
+          const pair = this.leadHigh + c;
+          this.leadHigh = "";
+          if (!isLeading(pair)) this.mode = "shown";
+        } else if (isHighSurrogate(c)) {
+          this.leadHigh = c;
+        } else if (!isLeading(c)) {
+          this.mode = "shown";
+        }
         return c;
       case "shown":
         return c;
@@ -180,6 +235,8 @@ export class ThinkFilter {
       this.held = this.held.slice(0, this.heldCap);
       this.heldOverflow = true;
     }
+    const buffered = this.held.length + this.tail.length;
+    if (buffered > maxBufferedForTests) maxBufferedForTests = buffered;
   }
 
   private tag(written: string): void {
@@ -214,6 +271,6 @@ export class ThinkFilter {
  * judges shown text (R5.2).
  */
 export function shownText(raw: string, release: boolean): string {
-  const f = new ThinkFilter();
+  const f = new ThinkFilter(Number.POSITIVE_INFINITY);
   return f.push(raw) + f.finish(release);
 }

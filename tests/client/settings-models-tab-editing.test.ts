@@ -171,10 +171,14 @@ describe("SettingsModelsTab — local-model editing control", () => {
     expect(queryByTestId("local-model-editing-toggle")).not.toBeNull();
   });
 
-  it("says that replies in comment threads are part of what it switches", () => {
-    const { getByTestId } = mount();
-    expect(getByTestId("local-model-editing-section").textContent).toMatch(
-      /reply in comment threads/,
+  // #1123 part B, R4 (Ruling B-5): the help text is true with the switch.
+  // It no longer says "reply in comment threads" (it was false: a local model
+  // replies only in threads it started in the same reply).
+  it("the help text, pinned (R4)", () => {
+    const { container } = mount();
+    const help = container.querySelector("#local-model-editing-help");
+    expect(help?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Experimental — review every suggestion. This applies only while chat is set to your local model; while chat is set to Claude, local models are sent nothing. When this is on, your local model can add comments and suggest replacements, except in Solo mode, where it replies in chat only. When it is off, it can read your document and reply in chat only. A change here applies from your next message; switching it off also stops a reply that is already running from adding more.",
     );
   });
 

@@ -25,7 +25,7 @@ import {
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
 import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
-import { MODELS_DEV_ORIGIN_ENV } from "../../shared/models/contract.js";
+import { type LocalModelState, MODELS_DEV_ORIGIN_ENV } from "../../shared/models/contract.js";
 import { OWNER_HANDLE_HEADER } from "../../shared/owner-handle.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
@@ -894,10 +894,11 @@ export async function startMcpServerHttp(
   /**
    * Models-route wiring (#1123). `localModelResolvesNow` is the local-model
    * collaborator's one sanctioned export across the dark audit, handed in by
-   * `index.ts` so this module never imports `local-model/`. Omitted in tests:
-   * the chat-answerer GET then answers that no local model resolves.
+   * `index.ts` so this module never imports `local-model/`. It answers the
+   * closed `LocalModelState` (#1123 part B, R1.3). Omitted in tests: the
+   * chat-answerer GET then answers `none`.
    */
-  modelsWiring?: { localModelResolvesNow?: () => boolean },
+  modelsWiring?: { localModelResolvesNow?: () => LocalModelState },
 ): Promise<Server> {
   // ADR-056: `main()` refuses a non-loopback bind before getting here. This is
   // the function that calls `listen`, so the guard also covers a future

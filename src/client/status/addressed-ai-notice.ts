@@ -57,12 +57,34 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *      count includes an attached-but-inert shim — so `true` and `null` (field
  *      absent, redacted, or not yet read) must both stay silent. Guessing here
  *      would tell a working user their comment went nowhere.
+ *   7. The local period (#1123 part B, R8): chat set to the local model.
+ *      Applied AFTER rules 1–6 have decided, so Solo, `offline` and `ai-off`
+ *      are untouched. A CHAT then raises no `no-agent` and no `no-push`: the
+ *      local model has it, and "nothing will answer" or "it'll see this when
+ *      it checks in" would be false. A COMMENT, whenever rules 1–6 return
+ *      anything but `offline`, `ai-off` or Solo's null — including a null
+ *      from a live, notified session or an unanswered probe — says T
+ *      (`LOCAL_COMMENT_TEXT`): the local model is not sent comments, and
+ *      Tandem is not sending it to Claude now. T promises nothing about
+ *      later. Where rules 1–6 return `no-agent`, its kind, severity and CTA
+ *      are kept and only the message becomes T.
  */
 export type AddressedAiNotice =
   | { kind: "offline" }
   | { kind: "ai-off" }
-  | { kind: "no-agent"; chip: Exclude<AiChip, null | "ai-off"> }
-  | { kind: "no-push" };
+  | {
+      kind: "no-agent";
+      chip: Exclude<AiChip, null | "ai-off">;
+      /** Rule 7: a comment in the local period; the message becomes T. */
+      localComment?: true;
+    }
+  | { kind: "no-push" }
+  /** Rule 7: a comment in the local period, everywhere else. */
+  | { kind: "local-comment" };
+
+/** T (#1123 part B, R8.2). */
+export const LOCAL_COMMENT_TEXT =
+  "Comment saved. Chat is set to your local model, which is not sent comments, and Tandem is not sending this comment to Claude now.";
 
 export function addressedAiNotice(input: {
   /** Must be re-read after any await — see the caller. */
@@ -89,6 +111,31 @@ export function addressedAiNotice(input: {
   /** Only `"none"` is actionable; `"attached"` and `"unknown"` stay silent. */
   pushDelivery: PushDelivery;
   /** This send is a chat that is starting Tandem's Claude (rule 2c). */
+  startingForMessage: boolean;
+  /** Rule 7: what was sent. Absent reads as a chat (today's callers). */
+  via?: "chat" | "comment";
+  /** Rule 7: chat is set to the local model (the editor's local period). */
+  localPeriod?: boolean;
+}): AddressedAiNotice | null {
+  const today = todaysNotice(input);
+  if (input.localPeriod !== true) return today;
+  // Rule 7. Solo, `offline` and `ai-off` stand as today.
+  if (input.soloMode) return today;
+  if (today?.kind === "offline" || today?.kind === "ai-off") return today;
+  if (input.via !== "comment") {
+    return today?.kind === "no-agent" || today?.kind === "no-push" ? null : today;
+  }
+  if (today?.kind === "no-agent") return { ...today, localComment: true };
+  return { kind: "local-comment" };
+}
+
+function todaysNotice(input: {
+  soloMode: boolean;
+  serverUnreachable: boolean;
+  probeAnswered: boolean;
+  sessionLive: boolean;
+  chip: AiChip;
+  pushDelivery: PushDelivery;
   startingForMessage: boolean;
 }): AddressedAiNotice | null {
   // Rule 1. Belt-and-braces: the production caller short-circuits on Solo
@@ -191,6 +238,15 @@ export function noticeAction(notice: AddressedAiNotice, noun: string): Addressed
         cta: "ai-off",
       };
     case "no-agent":
+      if (notice.localComment) {
+        // Rule 7: the same toast and CTA, with T as its message.
+        return {
+          idPrefix: "ai-not-ready",
+          severity: "warning",
+          message: LOCAL_COMMENT_TEXT,
+          cta: notice.chip,
+        };
+      }
       return {
         idPrefix: "ai-not-ready",
         severity: "warning",
@@ -219,6 +275,13 @@ export function noticeAction(notice: AddressedAiNotice, noun: string): Addressed
         idPrefix: "ai-no-push",
         severity: "info",
         message: `${noun} saved. Something is connected to Tandem but isn't being notified. If it's a session you're using, it'll see this the next time it checks in.`,
+        cta: null,
+      };
+    case "local-comment":
+      return {
+        idPrefix: "ai-local-comment",
+        severity: "info",
+        message: LOCAL_COMMENT_TEXT,
         cta: null,
       };
     default: {

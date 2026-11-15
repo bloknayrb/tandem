@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { localModelResolvesNow } from "../../../src/server/local-model/collaborator.js";
 import {
   type EndpointRejectCode,
   validateEndpoint,
@@ -211,9 +211,14 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
 
   type Unusable = Extract<LocalModelResolution, { kind: "unusable" }>;
 
-  /** Resolve, and require the four entry points to tell the same story. */
+  /** Resolve, and require the five entry points to tell the same story. */
   function resolveAll(): LocalModelResolution {
     const r = resolveLocalModel();
+    // The chat-answerer GET's closed state (#1123 part B, R1.3), through the
+    // one export `index.ts` may import.
+    expect(localModelResolvesNow()).toBe(
+      r.kind === "ok" ? "usable" : r.kind === "none" ? "none" : r.reason,
+    );
     const config = resolveLocalModelConfig();
     const diagnosis = diagnoseLocalModel();
     const answering = answeringLocalModel();

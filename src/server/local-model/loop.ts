@@ -16,6 +16,7 @@
  *    chat continuity (M1.1 defaults to none).
  */
 import type * as Y from "yjs";
+import { DEFAULT_RUN_DEADLINE_MS } from "../../shared/local-run.js";
 import type { LocalModelConfig } from "./config.js";
 import { type ChatMessage, chat, type ToolSchema } from "./ollama-client.js";
 import { dispatch, type ToolOutcome } from "./tools.js";
@@ -101,8 +102,12 @@ export interface LoopResult {
  *
  * Exported for the measurement harness (`probe/local-model-spike/`), which
  * tells a turn cut by this deadline from one cut by its own per-turn timeout.
+ * Defined in `shared/local-run.ts` since #1123 part B (R5.3): the editor's
+ * pickup row ends a `running` line it can no longer vouch for past this
+ * deadline plus a minute. Re-exported here unchanged, so the harness and the
+ * fingerprint read the same value.
  */
-export const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
+export { DEFAULT_RUN_DEADLINE_MS };
 
 /** Mirrors `DEFAULT_TIMEOUT_MS` in the client — only used to compute the clamp
  *  below, so the client stays the single authority on the value it applies. */

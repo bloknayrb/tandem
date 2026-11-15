@@ -47,6 +47,17 @@ bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
 chat-anchor-quote-{*}
+chat-answerer-error
+chat-answerer-load-error
+chat-answerer-loading
+chat-answerer-refused
+chat-answerer-retry
+chat-answerer-section
+chat-answerer-set-claude-done
+chat-answerer-status
+chat-answerer-unavailable
+chat-answerer-use-claude
+chat-answerer-{*}
 chat-author-{*}
 chat-claude-code-offer
 chat-claude-code-offer-dismiss
@@ -55,6 +66,8 @@ chat-composer-input
 chat-greeting-late
 chat-greeting-late-action
 chat-messages
+chat-notice-live
+chat-notice-{*}
 chat-panel
 chat-pickup-live
 chat-pickup-status

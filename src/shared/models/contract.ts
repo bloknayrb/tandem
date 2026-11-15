@@ -55,15 +55,61 @@ export const API_MODELS_CHAT_ANSWERER = "/api/models/chat-answerer";
 /** The switch's two positions. */
 export type ChatAnswerer = "claude" | "local";
 
-/** `GET /api/models/chat-answerer`. `localModelResolves` says only whether a
- *  local model would answer now — never which one, or where it points. */
+/**
+ * Whether a local model can answer a chat now, and if not, why (#1123 part B,
+ * Ruling B-2): the editor tells "nothing is saved or enabled" apart from "one
+ * is saved but cannot be used", because their remedies differ. A closed enum:
+ * it names no model, endpoint, id, path or count.
+ *  - `usable`: a local model would answer;
+ *  - `none`: no enabled local model is used (none saved, none enabled, or a
+ *    default that is disabled or a cloud model);
+ *  - the three unusable reasons of `resolveLocalModel`.
+ */
+export type LocalModelState =
+  | "usable"
+  | "none"
+  | "no-default-chosen"
+  | "endpoint-rejected"
+  | "no-endpoint";
+
+/** Every {@link LocalModelState}, for validating an answer. */
+export const LOCAL_MODEL_STATES: readonly LocalModelState[] = [
+  "usable",
+  "none",
+  "no-default-chosen",
+  "endpoint-rejected",
+  "no-endpoint",
+];
+
+/** `GET /api/models/chat-answerer`. `localModelResolves` and `localModelState`
+ *  say only whether a local model would answer now and, if not, which closed
+ *  reason — never which model, or where it points. */
 export interface ChatAnswererResponse {
   answerer: ChatAnswerer;
   localModelResolves: boolean;
+  /** Present on every 200 whatever the switch says; absent only when the check
+   *  threw (then `localModelResolves` is false). #1123 part B, R1.3. */
+  localModelState?: LocalModelState;
   /** This server process's run id, for judging a chat row's `localRun`
    *  (`shared/local-run.ts`). Authorises nothing. */
   runGeneration: string;
 }
+
+/**
+ * The notify-stream replay keys of the switch's notices (#1123). Defined here,
+ * not in the server modules that raise them (`chat-answerer.ts`,
+ * `local-model-announced.ts`, which re-export them), so the editor can key on
+ * them too: a notice with one of these `dedupKey`s is a trigger to re-read the
+ * switch (#1123 part B, R1.2). The keys only; the texts stay with the server.
+ */
+export const ANSWERER_LOCAL_NOTICE_KEY = "local-model-answerer-local";
+export const ANSWERER_CLAUDE_NOTICE_KEY = "local-model-answerer-claude";
+export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
+export const CHAT_ANSWERER_NOTICE_KEYS: readonly string[] = [
+  ANSWERER_LOCAL_NOTICE_KEY,
+  ANSWERER_CLAUDE_NOTICE_KEY,
+  SETTINGS_CHANGED_NOTICE_KEY,
+];
 
 /** `POST /api/models/chat-answerer` answer, on success (200) and on a failed
  *  write (500) alike: `answerer` is what the server is acting on now. */

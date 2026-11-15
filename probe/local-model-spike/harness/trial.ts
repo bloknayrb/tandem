@@ -59,7 +59,7 @@ import {
 } from "../../../src/shared/constants.js";
 import type { TandemEvent } from "../../../src/shared/events/types.js";
 import { withInternal } from "../../../src/shared/origins.js";
-import { ThinkFilter } from "../../../src/server/local-model/think-filter.js";
+import { isShownTextEmpty, ThinkFilter } from "../../../src/server/local-model/think-filter.js";
 import { type FetchTap, installFetchTap, type TapRecord } from "./fetch-tap.js";
 
 export type Tier = "chat" | "editing";
@@ -315,7 +315,7 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
   // Its own filter, the product's class, fed the same deltas: what the user
   // would be shown, for the shown time to first text. Reset per turn as the
   // sink's is.
-  const shown = new ThinkFilter();
+  const shown = new ThinkFilter(Number.POSITIVE_INFINITY);
   const seen: {
     loop: TrialObservation["loop"];
     turnOpts: TrialObservation["turnOpts"];
@@ -348,7 +348,7 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
       ...opts,
       onContentDelta: (delta) => {
         if (firstTextAt === null && delta.length > 0) firstTextAt = Date.now();
-        if (firstShownAt === null && shown.push(delta).trim().length > 0) firstShownAt = Date.now();
+        if (firstShownAt === null && !isShownTextEmpty(shown.push(delta))) firstShownAt = Date.now();
         currentText += delta;
         opts.onContentDelta?.(delta);
       },

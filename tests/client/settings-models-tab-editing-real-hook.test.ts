@@ -25,6 +25,29 @@ vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   BYO_MODELS_ENABLED: true as false,
 }));
 
+// The tab's "who answers your chat" section (#1123 part B) has its own store
+// and its own real-store test (`settings-models-tab-chat-answerer.test.ts`);
+// here it is a still pose, so this file's wire holds the editing setting's
+// requests only.
+vi.mock(import("../../src/client/hooks/useChatAnswerer.svelte"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  createChatAnswerer: () => ({
+    status: "pending" as const,
+    known: false,
+    answerer: "claude" as const,
+    localModelState: "none" as const,
+    runGeneration: null,
+    reading: false,
+    postPending: false,
+    outcomeLine: null,
+    setToClaudeDone: false,
+    sentLocal: new Set<string>(),
+    load: vi.fn(async () => ({ status: "dark" as const })),
+    set: vi.fn(async () => {}),
+    clearOutcome: vi.fn(),
+  }),
+}));
+
 vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
   createModels: () => ({
     models: [],
