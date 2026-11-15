@@ -84,12 +84,20 @@ export function chatPickup(
     if (verdict !== "today") return verdict;
   }
 
+  // A `superseded` acknowledgement (#2358, the posts PR, R3.7: the server marks
+  // one when its message changed owner) is left out of both the replies and
+  // what ends "working", so a re-owed message reads "waiting" again. Only the
+  // server writes it, and only with ownership on; the client reads no flag.
   // Notice rows (#1123 part B) are the server's, not an answer: under the
   // flag they never count as a reply or as an untagged Claude row, so the
   // switch-back line (which names no message) never ends the row of a
   // message owed to Claude.
   const after = messages.filter(
-    (m) => m.author === "claude" && m.timestamp >= latest.timestamp && !(lit && isChatNoticeRow(m)),
+    (m) =>
+      m.author === "claude" &&
+      m.timestamp >= latest.timestamp &&
+      m.superseded !== true &&
+      !(lit && isChatNoticeRow(m)),
   );
   const replies = after.filter((m) => m.replyTo === latest.id);
 

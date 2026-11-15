@@ -81,6 +81,7 @@ import {
   noteTransportRegistered,
   ownershipSnapshotForTests,
   inboxScopeOf as realScopeOf,
+  recordHoldsStateCallsForTests,
   resetOwnershipForTests,
   setChatOwnershipFaultForTests,
   setCompositeObserverForTests,
@@ -728,13 +729,25 @@ describe("R3.3/R3.5: owners and held state", () => {
     expect(messageOwner(mb)).toBeUndefined();
   });
 
-  it("an acknowledged message is held state for nobody: an already-lapsed acknowledger is deleted when its transport goes", async () => {
+  // The posts PR (R3.3, R0.2) changed this test. Before: "an acknowledged
+  // message is held state for nobody: an already-lapsed acknowledger is
+  // deleted when its transport goes" (an acknowledgement handled the message).
+  // Now an acknowledgement answers nothing: the message stays unhandled, so
+  // it is held state, re-arms the lapsed acknowledger's grace, and keeps the
+  // record when its transport goes; once A's final reply handles it, A goes.
+  it("an acknowledged message is held state: an already-lapsed acknowledger is re-armed and kept when its transport goes, and deleted once its final reply lands", async () => {
     lapseByGrace(A, "stream dropped");
     const m = userChat(key("m"));
     expect((await reply(A, m, { inProgress: true })).error).toBe(false);
     expect(messageOwner(m)).toEqual({ ownerId: A, origin: "acknowledgement" });
+    expect(getOwnerRecord(A)?.graceTimer, "R0.2: the acknowledgement re-armed it").toBeDefined();
     removeTransport(A);
+    expect(getOwnerRecord(A), "kept: its message is unhandled").toBeDefined();
+    expect((await reply(A, m)).error).toBe(false);
+    lapseByGrace(A, "transport removed");
     expect(getOwnerRecord(A)).toBeUndefined();
+    // Kept from the merged test (review round 1, item 13): the owner goes
+    // with the deleted record.
     expect(messageOwner(m)).toBeUndefined();
   });
 
@@ -915,11 +928,16 @@ describe("R5: the reply gate", () => {
     const d2 = mkDoc("u2");
     setLossForTests(d2.id, C, "taken");
     const m2 = userChat(key("m2"), d2.id);
-    expect((await reply(C, m2)).details).toEqual({
+    const lost = await reply(C, m2);
+    expect(lost.details).toEqual({
       reason: "chat",
       holder: null,
       documentId: d2.id,
     });
+    // The posts PR (R0.7): the blocking-loss sentence itself.
+    expect(lost.message).toBe(
+      "This message is not yours to answer right now: you lost its document, which nobody holds now. Nothing was sent. If a later tandem_checkInbox hands it to you, answer it then.",
+    );
     expect(ownerOf(d2.id)).toBeUndefined();
   });
 
@@ -996,7 +1014,7 @@ describe("R5: the reply gate", () => {
     const start = awareness.indexOf('withErrorBoundary("tandem_reply"');
     const gate = awareness.indexOf("inboxOwnership.replyGate(", start);
     const append = awareness.indexOf("appendClaudeChatMessage(text,", start);
-    const apply = awareness.indexOf("gate.apply()", start);
+    const apply = awareness.indexOf("gate.apply(appended.id)", start);
     const stamp = awareness.indexOf("markUserChatRead(replyTo)", start);
     expect(start).toBeGreaterThan(-1);
     expect(gate > start && append > gate && apply > append && stamp > apply).toBe(true);
@@ -1024,20 +1042,27 @@ describe("R5: the reply gate", () => {
     expect(text).not.toMatch(/Another session answers/);
   });
 
-  it("R5.8 (a): A acknowledges M on D it holds; B's tandem_open takes D; M stays A's", async () => {
+  // The posts PR (R3.3) changed R5.8 (a) to (c). Before, each asserted that
+  // A's acknowledgement of M on D made A M's per-message owner (origin
+  // "acknowledgement"), so M stayed A's whoever took D. Now an
+  // acknowledgement of a message that follows a document sets no owner: M
+  // follows D, a handover re-owes it and supersedes A's acknowledgement, and
+  // A's final reply is refused naming the new holder. (c): a close while A
+  // holds D gives M to A as a close owner, so M stays A's, with origin "close".
+  it("R5.8 (a), as the posts PR changes it: A acknowledges M on D it holds; no owner is set; B's tandem_open takes D; M is B's", async () => {
     const file = realFile("ack-a.md");
     const id = await userOpen(file);
     await writeAs(A, id);
     const m = userChat(key("m"), id);
     expect(chatIds(await reader(A).poll())).toEqual([m]);
     expect((await reply(A, m, { inProgress: true })).error).toBe(false);
-    expect(messageOwner(m)).toEqual({ ownerId: A, origin: "acknowledgement" });
+    expect(messageOwner(m)).toBeUndefined();
     await openAs(B, getOpenDocs().get(id)?.filePath as string);
     expect(ownerOf(id)).toBe(B);
-    await assertStaysA(m);
+    await assertFollowsB(m);
   });
 
-  it("R5.8 (b): A acknowledges M on D; A lapses with its transport registered; B claims D by a write; M stays A's", async () => {
+  it("R5.8 (b), as the posts PR changes it: A acknowledges M on D; A lapses with its transport registered; B claims D by a write; M is B's", async () => {
     const d = mkDoc("ack-b");
     await writeAs(A, d.id);
     const m = userChat(key("m"), d.id);
@@ -1046,24 +1071,33 @@ describe("R5: the reply gate", () => {
     expect(getOwnerRecord(A)).toBeDefined();
     expect(ownerOf(d.id)).toBeUndefined();
     await writeAs(B, d.id);
-    // A is still lapsed (its transport registered, its stream down): its
-    // final reply is accepted as a lapsed record's (review round 1, item 19).
     expect(getOwnerRecord(A)?.lapsed).toBe(true);
-    await assertStaysA(m);
+    await assertFollowsB(m);
   });
 
-  it("R5.8 (c): A acknowledges M on D; D's tab closes (nothing assigned); D reopens and B claims it; M stays A's", async () => {
+  it("R5.8 (c): A acknowledges M on D; D's tab closes while A holds it; D reopens and B claims it; M stays A's, as a close owner", async () => {
     const file = realFile("ack-c.md");
     const id = await userOpen(file);
     await writeAs(A, id);
     const m = userChat(key("m"), id);
     expect((await reply(A, m, { inProgress: true })).error).toBe(false);
+    expect(messageOwner(m)).toBeUndefined();
     await closeByRoute(id);
-    expect(messageOwner(m)?.origin).toBe("acknowledgement");
+    expect(messageOwner(m)).toEqual({ ownerId: A, origin: "close", closedDocumentId: id });
     expect(await userOpen(file)).toBe(id);
     await writeAs(B, id);
     await assertStaysA(m);
   });
+
+  async function assertFollowsB(m: string): Promise<void> {
+    const ack = repliesTo(m).find((r) => r.inProgress === true);
+    expect(ack?.superseded, "the re-owe superseded A's acknowledgement").toBe(true);
+    expect(chatIds(await reader(B).poll())).toEqual([m]);
+    expect((await reply(A, m)).message).toBe(
+      `The terminal session ${labelOf(B)} answers this message. Do not reply to it.`,
+    );
+    expect((await reply(B, m)).error).toBe(false);
+  }
 
   async function assertStaysA(m: string): Promise<void> {
     await notHanded(B, m);
@@ -1078,17 +1112,21 @@ describe("R5: the reply gate", () => {
     expect(repliesTo(m).filter((r) => r.inProgress !== true)).toHaveLength(1);
   }
 
-  it("R5.8: Tandem's Claude acknowledges while present; once not present its reply is refused and others are told it answers", async () => {
+  // The posts PR (R3.3) changed this test. Before: Tandem's Claude's
+  // acknowledgement made it the doc-less message's per-message owner, so
+  // once not present every other session was refused. Now a doc-less message
+  // is Tandem's Claude's by presence (design §7.1), its acknowledgement sets
+  // no owner, and once it is not present the message is claimable again.
+  it("R5.8, as the posts PR changes it: Tandem's Claude acknowledges while present (no owner); once not present its reply is refused and A may take the message", async () => {
     let present = true;
     setTandemPresenceSource(() => present);
     const m = userChat(key("m"));
     expect((await reply(TANDEM_OWNER_ID, m, { inProgress: true })).error).toBe(false);
-    expect(messageOwner(m)).toEqual({ ownerId: TANDEM_OWNER_ID, origin: "acknowledgement" });
+    expect(messageOwner(m)).toBeUndefined();
     present = false;
     expect((await reply(TANDEM_OWNER_ID, m)).details?.reason).toBe("not-present");
-    expect((await reply(A, m)).message).toBe(
-      "Tandem's Claude answers this message. Do not reply to it.",
-    );
+    expect((await reply(A, m)).error).toBe(false);
+    expect(messageOwner(m)).toEqual({ ownerId: A, origin: "reply" });
   });
 
   it("accepted loss: an acknowledger deleted before its final reply; its doc-less message is claimable again", async () => {
@@ -1332,9 +1370,16 @@ describe("R6: the chat half of a handover, and the tab close", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     attachCtrlObservers();
     subscribe(cb, "internal");
+    // The posts PR (R0.7): the observer pushes only on an `add`, and a
+    // re-owe is an update, so the event list alone cannot catch a re-owe
+    // written under a channel-visible origin. Record the write's origin.
+    const origins: unknown[] = [];
+    const watch = (_e: unknown, txn: Y.Transaction) => origins.push(txn.origin);
+    chatMap().observe(watch);
     try {
       setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
       expect(row(m)?.read).toBe(false);
+      expect(origins, "the re-owe is one internal-origin write").toEqual(["internal"]);
       expect(seen.filter((e) => e.type === "chat:message")).toEqual([]);
       // The positive twin: the subscriber does see a re-owe's neighbour, a
       // new user row added through the browser path.
@@ -1353,6 +1398,7 @@ describe("R6: the chat half of a handover, and the tab close", () => {
           .map((e) => (e.payload as { messageId?: string }).messageId),
       ).toEqual([key("pushed")]);
     } finally {
+      chatMap().unobserve(watch);
       unsubscribe(cb);
       resetEventsForTesting();
     }
@@ -1385,18 +1431,23 @@ describe("review round 1: the cases the first build missed", () => {
     const m = userChat(key("m"), d.id);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const a = reader(A);
+    // The posts PR (R0.7) fixed this fixture: its "earlier" poll used to run
+    // with the scope fault already set, so it handed nothing and the throwing
+    // poll had nothing to acknowledge. Now the earlier poll runs first and
+    // hands M, so the throwing poll's cursor would acknowledge it.
+    expect(chatIds(await a.poll())).toEqual([m]);
+    expect(row(m)?.read, "handed, not yet acknowledged").toBe(false);
     setInboxScopeReadForTests((id, caller, now) => {
       if (id === d.id) throw new Error("scope read");
       return realScopeOf(id, caller, now);
     });
-    // An earlier hand-out, so the throwing poll has something to acknowledge.
-    const earlier = await reader(A).poll();
-    expect(chatIds(earlier)).toEqual([]);
     expect(chatIds(await a.poll())).toEqual([]);
-    setInboxScopeReadForTests(undefined);
-    expect(chatIds(await a.poll())).toEqual([m]);
-    // Handed once, and only now: the throwing poll neither handed nor stamped it.
+    // The throwing poll neither handed it again nor acknowledged it.
     expect(row(m)?.read).toBe(false);
+    setInboxScopeReadForTests(undefined);
+    await a.poll();
+    // Only a poll that read the document acknowledges it.
+    expect(row(m)?.read).toBe(true);
   });
 
   for (const how of ["cursor", "cursor-less"] as const) {
@@ -1623,12 +1674,15 @@ describe("review round 2 (the reviewing session's round 1)", () => {
     await op;
   });
 
-  it("item 7: an acknowledgement on an open unowned document claims it AND sets an owner of origin acknowledgement", async () => {
+  // The posts PR (R3.3) changed this test. Before: "...claims it AND sets an
+  // owner of origin acknowledgement". Now the message follows the document
+  // it claimed; no per-message owner is set.
+  it("item 7, as the posts PR changes it: an acknowledgement on an open unowned document claims it and sets no per-message owner", async () => {
     const d = mkDoc("u");
     const m = userChat(key("m"), d.id);
     expect((await reply(B, m, { inProgress: true })).error).toBe(false);
     expect(ownerOf(d.id)).toBe(B);
-    expect(messageOwner(m)).toEqual({ ownerId: B, origin: "acknowledgement" });
+    expect(messageOwner(m)).toBeUndefined();
   });
 
   it("item 8: a reply the licence refuses claims nothing and sets no owner", async () => {
@@ -1654,10 +1708,19 @@ describe("review round 2 (the reviewing session's round 1)", () => {
     expect(ownerOf(d.id)).toBeUndefined();
     expect(messageOwner(onD)).toBeUndefined();
     expect(repliesTo(onD)).toEqual([]);
+    // The posts PR (R0.7): the doc-less message too, which a claim cannot
+    // show (it has no document), so only its owner and rows can.
+    expect(messageOwner(docless)).toBeUndefined();
+    expect(repliesTo(docless)).toEqual([]);
     licence.refuse = false;
     // The positive twin: licensed, the same reply claims.
     expect((await reply(B, onD)).error).toBe(false);
     expect(ownerOf(d.id)).toBe(B);
+    // And the doc-less half's twin (review round 1, item 13): licensed, the
+    // same reply lands and makes B its owner.
+    expect((await reply(B, docless)).error).toBe(false);
+    expect(messageOwner(docless)).toEqual({ ownerId: B, origin: "reply" });
+    expect(repliesTo(docless)).toHaveLength(1);
   });
 
   it("item 9: R3.1 row 4 with Tandem's Claude present: a doc-less message is its, handed to neither A nor B, and their replies are refused naming it", async () => {
@@ -1687,13 +1750,17 @@ describe("review round 2 (the reviewing session's round 1)", () => {
       return m;
     }
 
-    it("case 2: Tandem's Claude present: the doc-less message is its; the returning reply is refused naming it", async () => {
+    // The posts PR changed cases 2 and 4: before, the acknowledged message
+    // read as handled, so nobody was handed it again (the interim's loss).
+    // Now an acknowledgement answers nothing: the lapse re-owed it, and its
+    // new owner is handed it.
+    it("case 2: Tandem's Claude present: the doc-less message is its; the returning reply is refused naming it, and it is handed to Tandem's Claude", async () => {
       const m = await ackedThenDeleted();
       setTandemPresenceSource(() => true);
       expect((await reply(A, m)).message).toBe(
         "Tandem's Claude answers this message. Do not reply to it.",
       );
-      await notHanded(TANDEM_OWNER_ID, m);
+      expect(chatIds(await reader(TANDEM_OWNER_ID).poll())).toEqual([m]);
     });
 
     it("case 3: a document nobody holds: the returning reply claims it; while its queue is busy, refused with no holder", async () => {
@@ -1720,7 +1787,7 @@ describe("review round 2 (the reviewing session's round 1)", () => {
       expect((await reply(A, m)).message).toBe(
         `The terminal session ${labelOf(B)} answers this message. Do not reply to it.`,
       );
-      await notHanded(B, m);
+      expect(chatIds(await reader(B).poll())).toEqual([m]);
     });
   });
 
@@ -1765,30 +1832,40 @@ describe("review round 2 (the reviewing session's round 1)", () => {
       message: (k) => (counts.message++, ownershipChatSide.message(k)),
       messagesOn: (id) => (counts.messagesOn++, ownershipChatSide.messagesOn(id)),
       reOwe: (keys) => (counts.reOwe++, ownershipChatSide.reOwe(keys)),
+      settleCandidates: (row) => ownershipChatSide.settleCandidates(row),
+      addSettles: (row, keys) => ownershipChatSide.addSettles(row, keys),
     });
     const r = reader(A);
     await r.poll();
+    // The posts PR (R0.7): the count also sees `recordHoldsState`, so a
+    // call of it for A's record per foreign message would show.
+    const holds = () => recordHoldsStateCallsForTests();
     const reset = () => {
       for (const k of Object.keys(counts) as Array<keyof typeof counts>) counts[k] = 0;
     };
     reset();
+    let before = holds();
     await r.poll();
-    const without = { ...counts };
+    const without = { ...counts, recordHoldsState: holds() - before };
     for (let i = 0; i < 300; i++) userChat(key(`b${i}`));
     expect((await pollAs(B)).chatMessages).toHaveLength(300);
     reset();
+    before = holds();
     await r.poll();
-    expect(counts).toEqual(without);
+    expect({ ...counts, recordHoldsState: holds() - before }).toEqual(without);
   });
 
-  it("item 16: a lapse whose re-owe throws keeps the owner (and so the record's grace), and the next lapse retries", async () => {
+  // The posts PR (R0.7) changed this test. Before: the failed re-owe kept
+  // the owner and re-armed the record's GRACE, whose expiry lapsed it again.
+  // A grace runs the detached cap, which can lapse other records early, or
+  // recurse; now the retry has its own timer, outside the grace and the cap.
+  it("item 16: a lapse whose re-owe throws keeps the owner and arms a retry (not a grace), and the retry re-owes", async () => {
     const m = userChat(key("m"));
     expect(chatIds(await pollAs(A))).toEqual([m]);
     vi.spyOn(console, "error").mockImplementation(() => {});
     setChatOwnershipFaultForTests((at) => {
       if (at === "re-owe") throw new Error("re-owe");
     });
-    // One fake-timer window, so the grace the failed lapse re-arms is the one advanced.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     entryOf(A).streamEver = true;
     entryOf(A).openStreams = 0;
@@ -1796,11 +1873,13 @@ describe("review round 2 (the reviewing session's round 1)", () => {
     vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
     expect(getOwnerRecord(A)?.lapsed).toBe(true);
     expect(messageOwner(m)?.ownerId, "kept: the re-owe failed").toBe(A);
-    expect(getOwnerRecord(A)?.graceTimer, "held state: its grace runs").toBeDefined();
+    expect(getOwnerRecord(A)?.graceTimer, "no grace: a retry of its own").toBeUndefined();
+    expect(ownershipSnapshotForTests().timers, "the retry's timer").toBe(1);
     setChatOwnershipFaultForTests(undefined);
     vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
     vi.useRealTimers();
     expect(messageOwner(m)).toBeUndefined();
+    expect(ownershipSnapshotForTests().timers).toBe(0);
     expect(chatIds(await reader(B).poll())).toEqual([m]);
   });
 
@@ -1921,5 +2000,20 @@ describe("dark", () => {
     expect(snap.messageOwners).toEqual([]);
     expect(snap.handed).toEqual([]);
     expect(snap.records).toEqual([]);
+  });
+
+  // The posts PR (R0.7) restores the chat owners PR's round-1 case its merged
+  // flag-off test dropped: a reply with `replyTo` and an explicit documentId
+  // that is not the message's is accepted and stamped with the id given.
+  it("flag off: a reply with replyTo and an explicit documentId that is not the message's is accepted and stamped with the id given", async () => {
+    await close?.();
+    await buildWorld("");
+    const d = mkDoc("held");
+    const other = mkDoc("other");
+    const m = userChat(key("m"), d.id);
+    const result = await reply(B, m, { documentId: other.id });
+    expect(result.error).toBe(false);
+    expect((repliesTo(m)[0] as ChatMessage).documentId).toBe(other.id);
+    expect(ownershipSnapshotForTests().records).toEqual([]);
   });
 });

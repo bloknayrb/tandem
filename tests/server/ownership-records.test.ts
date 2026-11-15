@@ -414,6 +414,11 @@ describe("reset", () => {
       // each record was handed. Empty, since no record exists.
       messageOwners: [],
       handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
   });
 });
@@ -443,6 +448,11 @@ describe("flag off: nothing is ever created", () => {
       // each record was handed. Empty, since no record exists.
       messageOwners: [],
       handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
   });
 });
