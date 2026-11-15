@@ -18,6 +18,20 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { z } from "zod";
+
+/** #1123 part B, R11.6: refuse AI chat writes for one test. Off by default. */
+const refusal = vi.hoisted(() => ({ on: false }));
+vi.mock("../../src/server/license/ai-refusal.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/license/ai-refusal.js")>();
+  return {
+    ...actual,
+    aiRefusal: () =>
+      refusal.on
+        ? { error: "LICENSE_REQUIRED" as const, kind: "unlicensed" as const, message: "x" }
+        : actual.aiRefusal(),
+  };
+});
+
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
@@ -241,6 +255,18 @@ async function toClaude(source: "own-window" | "allowance" = "own-window"): Prom
 }
 
 const chatIds = (inbox: Inbox) => inbox.chatMessages.map((m) => m.id).sort();
+/** #1123 part B, R11: the switch-back lines in chat. */
+const switchBackLines = () =>
+  [...ctrlChat().values()].filter(
+    (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+  ) as Array<{
+    text: string;
+    author: string;
+    chatNotice?: string;
+    replyTo?: string;
+    documentId?: string;
+    agentIdentity?: unknown;
+  }>;
 
 /**
  * The chat owners PR's (#2358) changes to the flag-on `tandem_checkInbox`
@@ -699,6 +725,90 @@ for (const ownership of ["", "1"] as const) {
       });
     });
 
+    describe("the switch-back line (#1123 part B, R11)", () => {
+      const LINE = "Claude was not sent the chat from while chat was set to your local model.";
+
+      it("an own switch back after a period with user chat writes exactly one line: text, kind and fields", async () => {
+        await toLocal();
+        userChat("during");
+        await toClaude();
+        const lines = switchBackLines();
+        expect(lines).toHaveLength(1);
+        const [line] = lines;
+        expect(line.text).toBe(LINE);
+        expect(line.author).toBe("claude");
+        expect(line.chatNotice).toBe("claude-again");
+        expect(line.replyTo).toBeUndefined();
+        expect(line.documentId).toBeUndefined();
+        expect(line.agentIdentity).toBeUndefined();
+      });
+
+      it("after a period with no chat: no line", async () => {
+        await toLocal();
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("Claude's own rows in the period do not count as chat", async () => {
+        userChat("pre");
+        await toLocal();
+        claudeReply("late", "pre");
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("an unasked switch back: no line", async () => {
+        await toLocal();
+        userChat("during");
+        await toClaude("allowance");
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("period 1 with chat, an unasked switch back, period 2 with none, then an own switch back: no line", async () => {
+        await toLocal();
+        userChat("p1");
+        await toClaude("allowance");
+        await toLocal();
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("once per own switch back: two periods with chat write two lines, one each", async () => {
+        await toLocal();
+        userChat("p1");
+        await toClaude();
+        await toLocal();
+        userChat("p2");
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(2);
+      });
+
+      it("under a licence refusal the append is refused: no line", async () => {
+        await toLocal();
+        userChat("during");
+        refusal.on = true;
+        try {
+          await toClaude();
+        } finally {
+          refusal.on = false;
+        }
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("is in no tandem_checkInbox result and answers nothing: the pre-switch row is still handed", async () => {
+        userChat("pre");
+        await toLocal();
+        userChat("during");
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(1);
+        const inbox = await poll();
+        expect(chatIds(inbox)).toEqual(["pre"]);
+        expect(JSON.stringify(inbox)).not.toContain(LINE);
+        // Still owed on the next poll as well: the line answered nothing.
+        expect(JSON.stringify(await poll())).not.toContain(LINE);
+      });
+    });
+
     describe("the selection hold (decision 11, guard 2)", () => {
       it("a selection made during the period is in neither activity nor the next chat push; a new one after the switch back is, in both", async () => {
         await toLocal();
@@ -1040,7 +1150,15 @@ for (const ownership of ["", "1"] as const) {
         await toLocal();
         userChat("during");
         await saveCtrlSession(getOrCreateDocument(CTRL_ROOM)); // shutdown
-        expect(record()).toEqual({ v: 1, open: true, owed: ["pre"], local: ["during"] });
+        // #1123 part B, R11.3: the record gained `chat: true` (user chat was
+        // sent in the open period); still `v: 1`.
+        expect(record()).toEqual({
+          v: 1,
+          open: true,
+          owed: ["pre"],
+          local: ["during"],
+          chat: true,
+        });
         await restartServer();
         expect(chatAnswerer()).toBe("local");
         expect(__localPeriodOpenForTests()).toBe(true);
@@ -1050,6 +1168,34 @@ for (const ownership of ["", "1"] as const) {
         const inbox = await poll();
         expect(chatIds(inbox)).toEqual(["pre"]);
         expect(inbox.summary).toContain(owedAtSwitchSentence(["pre"]));
+      });
+
+      it("R11: a restart mid-period keeps the 'chat was sent' fact: the own switch back writes the line", async () => {
+        await toLocal();
+        userChat("during");
+        await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+        await restartServer();
+        expect(switchBackLines()).toHaveLength(0);
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(1);
+      });
+
+      it("R11: a record with no `chat` field, or a non-literal one, reads as no chat: no line", async () => {
+        for (const chat of [undefined, "true", 1]) {
+          ctrlChat().forEach((_v, k) => {
+            withInternal(getOrCreateDocument(CTRL_ROOM), () => ctrlChat().delete(k));
+          });
+          await toLocal();
+          await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+          const file = JSON.parse(fs.readFileSync(ctrlFile(), "utf8"));
+          file.localPeriod = { ...file.localPeriod, ...(chat === undefined ? {} : { chat }) };
+          delete (file.localPeriod as { chat?: unknown }).chat;
+          if (chat !== undefined) file.localPeriod.chat = chat;
+          fs.writeFileSync(ctrlFile(), JSON.stringify(file));
+          await restartServer();
+          await toClaude();
+          expect(switchBackLines(), `chat: ${String(chat)}`).toHaveLength(0);
+        }
       });
 
       it("a period a boot begins is written at once: the file says open before any shutdown", async () => {
@@ -1170,6 +1316,22 @@ describe("the dark guard", () => {
     expect(__localPeriodOpenForTests()).toBe(false);
   });
 
+  it("flag off (#1123 part B, R11): the answerer is never primed, a chat classes nothing, and no line is written", async () => {
+    __setHonourLocalPeriodRecordsForTests(false);
+    fs.writeFileSync(path.join(dir, "chat-answerer.json"), '{"version":1,"answerer":"local"}');
+    setCtrlMode("tandem");
+    attachCtrlObservers();
+    wireLocalPeriod();
+    userChat("x");
+    expect(chatAnswerer()).toBe("claude");
+    expect(localPeriodRecordFor(new Set(["x"]))).toBeUndefined();
+    expect(
+      [...ctrlChat().values()].some(
+        (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+      ),
+    ).toBe(false);
+  });
+
   it("guard 2 reads the literal flag when no test overrides it", () => {
     __setHonourLocalPeriodRecordsForTests(null);
     expect(honourLocalPeriodRecords()).toBe(BYO_MODELS_ENABLED);
@@ -1210,6 +1372,34 @@ describe("the dark guard", () => {
     } finally {
       await done();
     }
+  });
+
+  it("flag off (#1123 part B, R11; review round 1 item 10): switches attempted unprimed write no line, and the CTRL file is master's shape", async () => {
+    __setHonourLocalPeriodRecordsForTests(false);
+    setCtrlMode("tandem");
+    attachCtrlObservers();
+    wireLocalPeriod();
+    // Never primed, as in a dark build: whatever is attempted, the answerer
+    // reads Claude and nothing reaches onSwitch.
+    await setChatAnswerer("local", "own-window").catch(() => {});
+    userChat("during");
+    await setChatAnswerer("claude", "own-window").catch(() => {});
+    await __flushLocalModelAnnouncedForTests();
+    expect(chatAnswerer()).toBe("claude");
+    expect(
+      [...ctrlChat().values()].some(
+        (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+      ),
+    ).toBe(false);
+    expect(localPeriodRecordFor(new Set(["during"]))).toBeUndefined();
+    const file = path.join(SESSION_DIR, `${CTRL_ROOM}.json`);
+    fs.rmSync(file, { force: true });
+    await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+    // Master writes exactly these two fields (`saveCtrlSession`), in this order.
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, "utf8")))).toEqual([
+      "ydocState",
+      "lastAccessed",
+    ]);
   });
 
   it("flag off (guard 2): the CTRL session file gains no field, and a stored record is ignored", () => {

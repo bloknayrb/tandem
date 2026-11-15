@@ -1,4 +1,5 @@
-import type { ChatMessage } from "../../shared/types";
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
+import { type ChatMessage, isChatNoticeRow } from "../../shared/types";
 
 /**
  * Picks out the Claude chat replies that arrived *live* (#2168): the ones a
@@ -48,9 +49,26 @@ export interface ReplyDetector {
 }
 
 export function createReplyDetector(
-  options: { now?: () => number; staleMs?: number } = {},
+  options: {
+    now?: () => number;
+    staleMs?: number;
+    /**
+     * Which Claude-authored rows this detector picks out (#1123 part B, R6.2).
+     * `"replies"` (the default): every row but a notice row (`isChatNoticeRow`)
+     * while `BYO_MODELS_ENABLED` is on — a notice is announced in the chat
+     * panel's live region only, never chimed or notified. `"notices"`: only
+     * notice rows, for that live region and the chat-answerer store's
+     * trigger; nothing while the flag is off.
+     */
+    select?: "replies" | "notices";
+  } = {},
 ): ReplyDetector {
   const now = options.now ?? Date.now;
+  const select = options.select ?? "replies";
+  const wanted = (message: ChatMessage): boolean => {
+    if (!BYO_MODELS_ENABLED) return select === "replies";
+    return isChatNoticeRow(message) === (select === "notices");
+  };
   const staleMs = options.staleMs ?? 60_000;
   let seededFor: object | null = null;
   let known = new Set<string>();
@@ -66,7 +84,7 @@ export function createReplyDetector(
       const fresh: ChatMessage[] = [];
       const cutoff = seeding ? now() - staleMs : Number.NEGATIVE_INFINITY;
       for (const message of messages) {
-        if (message.author !== "claude" || known.has(message.id)) continue;
+        if (message.author !== "claude" || known.has(message.id) || !wanted(message)) continue;
         // A row first seen while its `Y_MAP_CHAT_STREAM` sidecar is already
         // present: leave it unknown and announce it once the sidecar is gone.
         // This is NOT how a live streamed reply normally arrives. The

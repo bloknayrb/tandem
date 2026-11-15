@@ -41,8 +41,16 @@ export function showClaudeCodeOffer(
   eligible: boolean,
   messageCount: number,
   pickup: ChatPickup | null,
+  /**
+   * Chat is set to the local model (#1123 part B, R5.2). The offer says
+   * "Answers here can come from Tandem's own Claude, as you send them", which
+   * is false while chat is set to the local model: never shown then, on an
+   * empty chat or beside any row (a message sent before the switch can still
+   * read "still waiting"). App passes false while the flag is off.
+   */
+  localPeriod = false,
 ): boolean {
-  if (!eligible) return false;
+  if (!eligible || localPeriod) return false;
   if (messageCount === 0) return true;
   return isPickupStalled(pickup);
 }

@@ -4,7 +4,12 @@ import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, COWORK_ENABLED, Y_MAP_ANNOTATIONS } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
-import type { Annotation, ChatMessage, TandemNotification } from "../shared/types";
+import {
+  type Annotation,
+  type ChatMessage,
+  isChatNoticeRow,
+  type TandemNotification,
+} from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import { bannerStackHeight } from "./actions/bannerStackHeight.svelte.js";
 import {
@@ -73,6 +78,17 @@ import {
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
+import {
+  createChatAnswerer,
+  localChatSettingFor,
+  noteChatSent,
+  noteCtrlSynced,
+  noteHeld,
+  noteNoticeRowArrived,
+  noteNotifyNotice,
+  observeChatForAnswerer,
+  setChatAnswererToastSink,
+} from "./hooks/useChatAnswerer.svelte";
 import { createChatState } from "./hooks/useChatState.svelte";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
@@ -301,7 +317,13 @@ createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
-const notifications = createNotifications();
+// #1123 part B, R1.2: the switch's own notices are a trigger to re-read who
+// answers chat. Called from the stream's message handler (an event handler).
+const notifications = createNotifications({
+  onStreamNotice: (n) => noteNotifyNotice(n.dedupKey),
+});
+// R3: the first local model's toast goes where every client toast goes.
+if (BYO_MODELS_ENABLED) setChatAnswererToastSink((n) => notifications.push(n));
 
 // #1722/#1792: a settings blob written by a NEWER Tandem makes every
 // `updateSettings` call a silent no-op — the theme picker, rail toggles,
@@ -686,15 +708,87 @@ function turnOffClaude(): void {
   turnOffTandemClaude();
 }
 
+// --- Who answers chat (#1123 part B) -----------------------------------------
+// The editor's read of the switch (`useChatAnswerer`), and what every chat
+// and status surface derives from it. Every value here is null/false while
+// `BYO_MODELS_ENABLED` is off, so a session or launcher status from a
+// flag-on build changes nothing in a dark editor (R10.1).
+const chatAnswerer = createChatAnswerer();
+/** The local period, for the editor (Ruling B-16): a known read wins; the
+ *  freshness-gated held flag counts only when the read is not known. */
+const localPeriodNow = $derived(
+  BYO_MODELS_ENABLED &&
+    (chatAnswerer.known
+      ? chatAnswerer.answerer === "local"
+      : aiReadiness.launcherHeldForLocalModel),
+);
+/** The pill's local label (Ruling B-17), or null. */
+const localChatSetting = $derived(
+  BYO_MODELS_ENABLED
+    ? localChatSettingFor(chatAnswerer, aiReadiness.launcherHeldForLocalModel)
+    : null,
+);
+/** The pickup row's inputs (R5.5), or null while dark. */
+const localPickupInputs = $derived(
+  BYO_MODELS_ENABLED
+    ? {
+        runGeneration: chatAnswerer.runGeneration,
+        sentLocal: chatAnswerer.sentLocal,
+        readKnownLocal: chatAnswerer.known && chatAnswerer.answerer === "local",
+        aiOff: licenseStore.ui.aiOff,
+      }
+    : null,
+);
+/** R6.2: the latest live notice row's text, for the chat's live region. */
+let chatNoticeAnnouncement = $state("");
+let noticeAnnounceTimer: ReturnType<typeof setTimeout> | null = null;
+onDestroy(() => {
+  if (noticeAnnounceTimer !== null) clearTimeout(noticeAnnounceTimer);
+});
+/** From `useChatState`'s notice detector (inside an effect): every write is
+ *  deferred. Cleared first, so a second identical notice is announced too. */
+function announceNoticeRows(rows: ChatMessage[]) {
+  const text = rows[rows.length - 1]?.text ?? "";
+  queueMicrotask(() => {
+    chatNoticeAnnouncement = "";
+    noteNoticeRowArrived();
+    if (noticeAnnounceTimer !== null) clearTimeout(noticeAnnounceTimer);
+    noticeAnnounceTimer = setTimeout(() => {
+      noticeAnnounceTimer = null;
+      chatNoticeAnnouncement = text;
+    }, 100);
+  });
+}
+// R1.2 triggers that come from reactive state. Each entry point writes no
+// `$state` in this frame (the store defers), and runs untracked so the store's
+// own state never becomes a dependency here. None runs while dark.
+$effect(() => {
+  if (!BYO_MODELS_ENABLED) return;
+  const doc = yjsSync.bootstrapYdoc;
+  const synced = yjsSync.ctrlInitialSyncComplete;
+  if (doc && synced) untrack(() => noteCtrlSynced(doc));
+});
+$effect(() => {
+  if (!BYO_MODELS_ENABLED) return;
+  const held = aiReadiness.launcherHeldForLocalModel;
+  untrack(() => noteHeld(held));
+});
+
 /** The chat panel's resume row (#2196): a chat sent while Tandem's Claude was
  *  stopped by choice, which the server is starting it to answer. */
-const chatResumeState = createChatResume(aiReadiness, refreshAiReadinessAfterLauncherAction, () => {
-  let latest: number | null = null;
-  for (const m of chatState.messages) {
-    if (m.author === "claude" && (latest === null || m.timestamp > latest)) latest = m.timestamp;
-  }
-  return latest;
-});
+const chatResumeState = createChatResume(
+  aiReadiness,
+  refreshAiReadinessAfterLauncherAction,
+  () => {
+    let latest: number | null = null;
+    for (const m of chatState.messages) {
+      if (m.author === "claude" && (latest === null || m.timestamp > latest)) latest = m.timestamp;
+    }
+    return latest;
+  },
+  // R5.6: no resume request, and no resume row, in the local period.
+  () => localPeriodNow,
+);
 
 /** The chat panel's Start / Turn off control (#2195): Turn off while Tandem's
  *  Claude runs, Start while it is in standby, hidden otherwise (no launcher,
@@ -793,7 +887,15 @@ $effect(() => {
     // ever SUPPRESS a notice, never manufacture one, and suppression is the
     // direction #1083 does NOT care about. `=== "attached"` is load-bearing:
     // `"unknown"` must still fall through and probe.
-    if (aiReadiness.chip === null && aiReadiness.pushDelivery === "attached") return;
+    // Not for a comment in the local period (#1123 part B, R8.2): its toast
+    // says chat is set to the local model even beside a notified session.
+    if (
+      aiReadiness.chip === null &&
+      aiReadiness.pushDelivery === "attached" &&
+      !(via === "comment" && localPeriodNow)
+    ) {
+      return;
+    }
 
     // ONE fresh /health read settles both branches. It re-confirms the session
     // — the polled value can be up to 8s stale, and an agent whose MCP
@@ -812,6 +914,9 @@ $effect(() => {
       chip: aiReadiness.chip,
       pushDelivery: aiReadiness.pushDelivery,
       startingForMessage: viaKey === "chat" && chatResumeState.pending,
+      via: via === "comment" ? "comment" : "chat",
+      // Re-read after the await, like every input here.
+      localPeriod: localPeriodNow,
     });
     if (notice === null) return;
 
@@ -2366,6 +2471,23 @@ const chatState = createChatState({
   getOpenDocuments: () => openDocs,
   getVisible: () => chatVisible && windowAttention.active,
   onClaudeReplies: (replies) => chatAttention.push(replies),
+  onNoticeRows: announceNoticeRows,
+  // #1123 part B: from the send handler. Records a "Sent to your local model"
+  // candidate and, in the local period, re-reads the switch (R1.2, R5.1).
+  onSent: (message) =>
+    noteChatSent(message, {
+      aiOff: licenseStore.ui.aiOff,
+      held: aiReadiness.launcherHeldForLocalModel,
+    }),
+});
+// R1.2's row-based triggers: only changes seen after the chat synced count.
+$effect(() => {
+  if (!BYO_MODELS_ENABLED) return;
+  const doc = yjsSync.bootstrapYdoc;
+  const synced = yjsSync.ctrlInitialSyncComplete;
+  const messages = chatState.messages;
+  if (!doc) return;
+  untrack(() => observeChatForAnswerer({ doc, synced, messages }));
 });
 
 function sendChatMessage(text: string): boolean {
@@ -2398,6 +2520,8 @@ async function exportChatToScratchpad(): Promise<void> {
 function insertChatMessage(message: ChatMessage): boolean {
   const targetEditor = editor;
   if (!chatCanInsert || !targetEditor) return false;
+  // A notice row is Tandem's, not a reply: never inserted (#1123 part B, R6.1).
+  if (BYO_MODELS_ENABLED && isChatNoticeRow(message)) return false;
   insertChatMarkdown(targetEditor, message.text, message.author);
   return true;
 }
@@ -2996,6 +3120,9 @@ const shouldShowModelPicker = $derived(
             onClaudeCodeOfferDismiss={claudeCodeOfferDismissed.mark}
             visible={chatVisible}
             aiDisabled={licenseStore.ui.aiOff}
+            localPickup={localPickupInputs}
+            localPeriod={localPeriodNow}
+            noticeAnnouncement={chatNoticeAnnouncement}
           />
           <PanelSlot
             kind="side"
@@ -3046,6 +3173,7 @@ const shouldShowModelPicker = $derived(
       aiLauncherCwd={aiReadiness.launcherCwd}
       aiLauncherBusy={aiReadiness.launcherBusy}
       aiLauncherAttached={aiReadiness.launcherAttached}
+      aiLocalChat={localChatSetting}
       aiLauncherRestarting={aiReadiness.launcherRestarting}
       aiLauncherStarting={aiReadiness.launcherStarting}
       aiLauncherStandby={aiReadiness.launcherStandby}

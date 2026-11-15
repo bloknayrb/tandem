@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
-import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
+import { cleanupAllOpenDocuments, expectOnlyAllowanceNotices, McpTestClient } from "./helpers";
 
 /**
  * Per-agent identity choreography E2E (#1123 M4).
@@ -36,6 +36,14 @@ test.beforeAll(() => {
 test.afterAll(async () => {
   await cleanupAllOpenDocuments(mcp).catch(() => {});
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// #1123 part B, R10.3: this page is not Tandem's own window, so a models
+// write is admitted through the development allowance (playwright.config.ts)
+// and may raise its warning notices; those, and only those, are expected.
+test.afterEach(async ({ page }) => {
+  if (!BYO_MODELS_ENABLED) return;
+  await expectOnlyAllowanceNotices(page);
 });
 
 test.beforeEach(async ({ page }) => {

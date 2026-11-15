@@ -460,7 +460,7 @@ changed. Six exist:
 | 1 | MCP over HTTP (`:3479`) | the `/mcp` handshake (`POST`/`GET` in `src/server/mcp/server.ts`) | yes — before any tool is reachable |
 | 2 | MCP over stdio | `src/cli/mcp-stdio.ts` (bridge) | **inherits row 1**: relays the refusal, latches it mid-session |
 | 3 | `/api` mutating twins | Express registrars | **not an AI surface** — see below |
-| 4 | Chat | `appendClaudeChatMessage()`, plus `/api/channel-*` | yes |
+| 4 | Chat | `appendClaudeChatMessage()`, plus `/api/channel-*`; also Tandem's switch-back line (#1123 part B, a Tandem notice, not a model's words) | yes |
 | 5 | Event push / wake | `pushEvent` and `subscribe(cb, "external")` (SSE, wake socket, supervisor) | yes; the launcher's spawn too |
 | 6 | Local-model collaborator | `onEvent`, per run | yes |
 
@@ -514,7 +514,7 @@ function call cannot be routed through one interception), but each has one narro
 and those are where `aiRefusal()` is consulted:
 
 - The MCP session handshake — rows 1 and 2 together.
-- `appendClaudeChatMessage()` — every AI chat write: `tandem_reply`, `POST /api/channel-reply`, the collaborator.
+- `appendClaudeChatMessage()` — every AI chat write: `tandem_reply`, `POST /api/channel-reply`, the collaborator, and the one line Tandem writes at the user's own switch of who answers chat back to Claude (`src/server/local-period-wiring.ts`, #1123 part B). That line is recorded as a Tandem notice (`chatNotice: "claude-again"`), not a model's words; it is routed through this choke point so it inherits the licence refusal, and under a refusal no line appears.
 - `pushEvent` plus `subscribe(cb, "external")` — every push consumer: SSE `/api/events`, WS `/api/wake`, the supervisor's stdin. The supervisor's gap and standby watches subscribe `"internal"` and read the push's own verdict (`wasForwardedExternally`), so a refused event neither owes a wake nor starts Claude for a message (#2196).
 - The supervisor's spawn — the launcher's own Claude Code.
 - The collaborator's per-run check — row 6.

@@ -88,6 +88,10 @@ describe("ChatPanel — the offer row", () => {
         tandemClaudeControl: null,
         onStartClaude: () => {},
         onTurnOffClaude: () => {},
+        // #1123 part B: required props (null / false / "" = out of the local period).
+        localPickup: null,
+        localPeriod: false,
+        noticeAnnouncement: "",
         tandemClaudeResume: null,
         onResumeRemedy: () => {},
         tandemClaudeGreetingLate: null,
