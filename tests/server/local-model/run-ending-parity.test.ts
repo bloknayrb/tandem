@@ -9,6 +9,13 @@
  * running this file, with `TANDEM_CAPTURE_PART_C=1`, against master at
  * b57d850 (which contains #2419, 86ff4e20) before any part C change. They are
  * never regenerated from the branch: a mismatch is a change of behaviour.
+ *
+ * Provenance (#1123 part B, R0.8): the capture switch above IS the helper.
+ * Method, re-run on 2026-11-15: a worktree at b57d850, this file and
+ * `run-ending-helpers.ts` copied in from 72cf1f5 (part C's merge), then
+ * `TANDEM_CAPTURE_PART_C=1 npx vitest run` on this file. The file it wrote was
+ * byte-identical to the committed fixture. Cases added after part C (R0.5
+ * below) assert directly and capture nothing.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,6 +30,7 @@ import {
   resetWorld,
   settle,
   setupDoc,
+  shownNow,
   snapshot,
   streamFetch,
   swapDoc,
@@ -446,6 +454,34 @@ describe("more endings as on master (review round 1 item 9)", () => {
     await settle(collab);
     check("lt-at-flush-trigger", snapshot("d"));
   });
+
+  // #1123 part B, R0.5: the case above passes the time-based flush before it
+  // looks. This one observes the flush the 80th character triggers, before
+  // the 120 ms timer could fire: the held '<' counts toward the trigger, as
+  // master counted it, but is not shown until it proves not to be a tag.
+  for (const [label, as, flushes] of [
+    ["a '<' as the 80th character", 79, true],
+    ["a '<' as the 79th character (control: no flush yet)", 78, false],
+  ] as const) {
+    it(`${label}: observed at 1 ms, before the time-based flush`, async () => {
+      const net = streamFetch();
+      setupDoc("d");
+      const collab = collaborator();
+      collab.onEvent(userChat("u1", "d"));
+      const r1 = await net.next();
+      r1.stream.push({ content: [`${"a".repeat(as)}<`] });
+      // Let the stream deliver the delta without moving the clock.
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(shownNow("u1")).toBe(flushes ? "a".repeat(as) : "");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(shownNow("u1")).toBe(flushes ? "a".repeat(as) : "");
+      r1.stream.push({ content: [" b is less."] });
+      r1.stream.close();
+      await settle(collab);
+      expect(shownNow("u1")).toBe(`${"a".repeat(as)}< b is less.`);
+    });
+  }
 });
 
 describe("what the model is sent does not change (R2.8)", () => {

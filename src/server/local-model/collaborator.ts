@@ -101,7 +101,7 @@ import {
   resolveLocalModelConfig,
 } from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
-import { ThinkFilter } from "./think-filter.js";
+import { isShownTextEmpty, ThinkFilter } from "./think-filter.js";
 
 /** Inline the whole document into the prompt below this length; else windowed reads.
  *  Exported for the measurement harness (`probe/local-model-spike/`), which
@@ -548,12 +548,14 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // still own the run; no-op on an empty buffer (never mint/write ""). A
     // whitespace-only buffer counts as empty: the loop treats such a turn as
     // "said nothing" (`editing_off`), and a blank bubble beside that notice
-    // would contradict it. Leading whitespace is only held back, not lost —
-    // it is committed with the first visible character.
+    // would contradict it. So does a buffer of only whitespace and format
+    // characters (U+200B…), which shows nothing either (`isShownTextEmpty`,
+    // #1123 part B R0.1; `trim()` keeps them). Leading whitespace is only
+    // held back, not lost — it is committed with the first visible character.
     const write = () => {
       cancelTimer();
       charsSinceFlush = 0;
-      if (!isOwner() || buffer.trim().length === 0) return;
+      if (!isOwner() || isShownTextEmpty(buffer)) return;
       if (liveId === null) {
         const appended = appendClaudeChatMessage(buffer, {
           documentId: ctx.docName,
@@ -1030,7 +1032,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       // it starts, so its own "running" can never be overwritten by this.
       const final = ended ?? { status: "stopped" as const, reason: "error" as const };
       const minted = sink.replyId();
-      const replyId = removeReply ? null : minted;
+      // Whether the minted row is gone. Only a removal the remover confirmed
+      // counts: a refused one (not a local-model reply) or one that threw
+      // leaves the row, folded, and `localRun` names it (#1123 part B, R0.6).
+      let removed = false;
       // One Y.Doc transaction for whatever ends the run in chat — the row's
       // removal or the no-reply notice — and the run state, so the editor
       // never sees one without the other. Yjs runs the nested `withMcp`
@@ -1043,8 +1048,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         try {
           // A row the remover refuses (not a local-model reply) is folded
           // instead, as `dispose` would have, so its streamed text is kept.
-          if (removeReply && minted !== null && !removeClaudeChatMessage(minted)) {
-            finalizeClaudeChatMessage(minted);
+          if (removeReply && minted !== null) {
+            removed = removeClaudeChatMessage(minted);
+            if (!removed) finalizeClaudeChatMessage(minted);
           }
           if (noReplyNotice && req.replyTo) postNoReplyNotice(req.replyTo, req.docName);
         } catch (err) {
@@ -1058,6 +1064,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             }
           }
         }
+        const replyId = minted !== null && !removed ? minted : null;
         writeLocalRun(req.replyTo, { ...final, ...(replyId ? { replyId } : {}) });
       });
     }
