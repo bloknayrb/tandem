@@ -39,7 +39,10 @@ import { CHAT_FIELD_CATEGORY } from "../../src/server/events/observers/chat-clie
 import {
   attachCtrlObservers,
   resetForTesting as resetEventsForTesting,
+  subscribe,
+  unsubscribe,
 } from "../../src/server/events/queue.js";
+import type { TandemEvent } from "../../src/server/events/types.js";
 import {
   ownershipChatSide,
   registerAwarenessTools,
@@ -51,6 +54,11 @@ import {
   checkInboxOutputShape,
   checkInboxOwnershipShape,
 } from "../../src/server/mcp/output-schemas.js";
+import {
+  __resetLocalPeriodForTests,
+  __setHonourLocalPeriodRecordsForTests,
+  isLocalPeriodChat,
+} from "../../src/server/models/local-period.js";
 import { restoreCtrlDoc, saveCtrlSession } from "../../src/server/session/manager.js";
 import {
   DEFAULT_GRACE_MS,
@@ -103,6 +111,16 @@ async function waitFor(predicate: () => boolean, what: string, ms = 5_000): Prom
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+/** Who answers chat, for #2419's classing (R4.6's test): "local" classes a new row local-period. */
+const answerer = vi.hoisted(() => ({ local: false }));
+vi.mock("../../src/server/models/chat-answerer.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/server/models/chat-answerer.js")>();
+  return {
+    ...real,
+    chatAnswerer: () => (answerer.local ? "local" : real.chatAnswerer()),
+  };
+});
 
 const GEN = "gen-chat-undo";
 const A = "claude:undo-a";
@@ -238,9 +256,9 @@ async function clientWrites(write: (chat: Y.Map<unknown>) => void): Promise<void
     () => target() === serverRows(),
     "the client and the server to converge after the write",
   );
-  // One more round trip, so a late undo cannot land after the check.
-  await new Promise((r) => setTimeout(r, 50));
-  await waitFor(() => target() === serverRows(), "convergence again");
+  // Event-bounded, not timed (review round 1, item 13): the client holds
+  // the forged value until the server's answer arrives, so convergence means
+  // the undo (or, flag off, the server's apply) has landed.
 }
 
 /** The rows after a save and a restore into a fresh doc. */
@@ -294,7 +312,12 @@ async function assertUnhandled(m: string, path: "cursor" | "cursor-less"): Promi
 /** M is handled: no poll hands it. */
 async function assertHandled(m: string): Promise<void> {
   expect(settledChatIds(serverChat()).has(m)).toBe(true);
-  expect((await pollChat(A, "start")).ids).not.toContain(m);
+  // Two consecutive cursor polls (the second with the first's cursor), and
+  // two cursor-less ones (review round 1, item 11).
+  const first = await pollChat(A, "start");
+  expect(first.ids).not.toContain(m);
+  expect((await pollChat(A, first.cursor)).ids).not.toContain(m);
+  expect((await pollChat(B)).ids).not.toContain(m);
   expect((await pollChat(B)).ids).not.toContain(m);
 }
 
@@ -642,5 +665,74 @@ describe("flag off: client writes are untouched (master's behaviour)", () => {
     });
     expect((serverChat().get(key("forged")) as ChatMessage).replyTo).toBe(M());
     expect((serverChat().get(M()) as ChatMessage).read).toBe(true);
+  });
+});
+
+describe("R4.6 and R4.2: classing and pushes (review round 1, item 8)", () => {
+  afterEach(() => {
+    answerer.local = false;
+    __setHonourLocalPeriodRecordsForTests(null);
+    __resetLocalPeriodForTests();
+  });
+
+  it("a row restored after a client delete keeps #2419's class", async () => {
+    __setHonourLocalPeriodRecordsForTests(true);
+    answerer.local = true;
+    await seed({ [M()]: userRow(M()) });
+    answerer.local = false;
+    expect(isLocalPeriodChat(M()), "classed local-period at its add").toBe(true);
+    await clientWrites((chat) => chat.delete(M()));
+    expect(serverChat().has(M())).toBe(true);
+    expect(isLocalPeriodChat(M()), "the restored row keeps its class").toBe(true);
+  });
+
+  it("the undo's own write pushes no chat:message; a client's own user row does", async () => {
+    await seed({ [M()]: userRow(M()) });
+    const seen: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => seen.push(e);
+    subscribe(cb, "internal");
+    try {
+      await clientWrites((chat) => chat.delete(M()));
+      await clientWrites((chat) => chat.set(key("forged"), claudeRow(key("forged"))));
+      expect(serverChat().has(M())).toBe(true);
+      expect(seen.filter((e) => e.type === "chat:message")).toEqual([]);
+      // The positive twin: a legitimate user row from the tab is pushed.
+      await clientWrites((chat) => chat.set(key("mine"), userRow(key("mine"))));
+      expect(
+        seen
+          .filter((e) => e.type === "chat:message")
+          .map((e) => (e.payload as { messageId?: string }).messageId),
+      ).toEqual([key("mine")]);
+    } finally {
+      unsubscribe(cb);
+    }
+  });
+});
+
+describe("flag off: more client writes untouched (review round 1, item 9)", () => {
+  it("a deleted row and a non-object row stand; pending data a client leaves is kept, as on master", async () => {
+    await setWorld("");
+    await seed({ [M()]: userRow(M()), [key("r")]: claudeRow(key("r"), { replyTo: M() }) });
+    await clientWrites((chat) => {
+      chat.delete(key("r"));
+      chat.set(key("junk"), "not an object");
+    });
+    expect(serverChat().has(key("r"))).toBe(false);
+    expect(serverChat().get(key("junk"))).toBe("not an object");
+    const S = getOrCreateDocument(CTRL_ROOM);
+    const F = new Y.Doc();
+    Y.applyUpdate(F, Y.encodeStateAsUpdate(S));
+    F.clientID = S.clientID;
+    F.getMap(Y_MAP_CHAT).set(key("next"), { placeholder: true });
+    const C = new Y.Doc();
+    Y.applyUpdate(C, Y.encodeStateAsUpdate(F));
+    C.getMap(Y_MAP_CHAT).set(key("next"), { author: "claude", replyTo: M(), text: "" });
+    Y.applyUpdate(S, Y.encodeStateAsUpdate(C, Y.encodeStateVector(F)), { socketId: "a-tab" });
+    expect(
+      (S.store as { pendingStructs: unknown }).pendingStructs,
+      "not dropped flag-off",
+    ).not.toBeNull();
+    // Leave no pending data for the next test.
+    (S.store as { pendingStructs: unknown }).pendingStructs = null;
   });
 });

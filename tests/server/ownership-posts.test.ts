@@ -464,57 +464,102 @@ describe("R3: the handled rule, `settles` and the sweep", () => {
     expect(finalReplyTo(m3).settles, "step 2: M2 at the confirmation").toEqual([m1, m2].sort());
   });
 
-  it("the conjunction: a re-owed M_old with a higher sequence but an earlier timestamp does not settle M_new", async () => {
-    const d1 = mkDoc("d1");
-    const d2 = mkDoc("d2");
-    setDocOwner(d2, { ownerId: A, kind: "opened" }, "take", A);
-    setDocOwner(d1, { ownerId: B, kind: "opened" }, "take", B);
-    const mOld = userChat(key("old"), d1);
-    const mNew = userChat(key("new"), d2);
+  /** The live registry sequence of chat key `k`. */
+  const seqOf = (k: string) => deliveryRegistry.lookup("c", k, 0)?.seq as number;
+  /** Open a real file as the user; then `owner` holds it through a write. */
+  async function heldBy(owner: string, name: string): Promise<{ id: string; file: string }> {
+    const file = realFile(name);
+    const id = await userOpen(file);
+    await writeAs(owner, id);
+    return { id, file };
+  }
+
+  it("the conjunction at step 1: a re-owed M_old (higher sequence, earlier timestamp) does not settle M_new; M_early (lower on both) is settled", async () => {
+    const d1 = await heldBy(B, "c1.md");
+    const d2 = await heldBy(A, "c2.md");
+    const mEarly = userChat(key("early"), d2.id);
+    const mOld = userChat(key("old"), d1.id);
+    const mNew = userChat(key("new"), d2.id);
     // M_old is handed to B first.
     expect(chatIds(await reader(B).poll())).toEqual([mOld]);
-    // A is handed M_new and confirms it.
+    // A is handed M_early and M_new and confirms them.
     const a = reader(A);
-    expect(chatIds(await a.poll())).toEqual([mNew]);
+    expect(chatIds(await a.poll())).toEqual([mEarly, mNew].sort());
     await a.poll();
-    // A takes D1: M_old is re-owed and gets a higher sequence than M_new.
-    setDocOwner(d1, { ownerId: A, kind: "opened" }, "take", A);
+    // A's tandem_open takes D1: M_old is re-owed and gets a new sequence.
+    await openAs(A, d1.file);
     expect(chatIds(await a.poll())).toEqual([mOld]);
+    // The precondition (review round 1, item 7): M_old's sequence is now above
+    // M_new's, while its timestamp is below.
+    expect(seqOf(mOld)).toBeGreaterThan(seqOf(mNew));
+    expect((row(mOld) as ChatMessage).timestamp).toBeLessThan((row(mNew) as ChatMessage).timestamp);
     expect((await reply(A, mOld)).error).toBe(false);
     await a.poll();
+    expect(finalReplyTo(mOld).settles ?? [], "the settled twin").toContain(mEarly);
     expect(finalReplyTo(mOld).settles ?? []).not.toContain(mNew);
     expect(handled().has(mNew)).toBe(false);
   });
 
-  it("the conjunction at step 2: a message in the same hand-out with a lower sequence but a later timestamp than the target is not settled", async () => {
-    const d = mkDoc("d");
-    setDocOwner(d, { ownerId: B, kind: "opened" }, "take", B);
-    const target = userChat(key("t"), d); // earlier timestamp
+  it("the conjunction at step 2: in one hand-out, a message with a lower sequence but a later timestamp than the target is not settled; one lower on both is", async () => {
+    const d = await heldBy(B, "c3.md");
+    const early = userChat(key("early")); // doc-less, earliest
+    const target = userChat(key("t"), d.id);
+    // A takes `early` first (unconfirmed), so it is A's; B is handed the target.
+    expect(chatIds(await reader(A).poll())).toEqual([early]);
     expect(chatIds(await reader(B).poll())).toEqual([target]);
-    const later = userChat(key("later")); // later timestamp, doc-less
-    expect(chatIds(await reader(A).poll())).toEqual([later]); // its entry, not confirmed
-    // A takes D: the target is re-owed and gets a higher sequence than `later`.
-    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
+    const later = userChat(key("later")); // doc-less, latest
+    // A is handed `early` and `later` (their entries; not confirmed).
+    expect(chatIds(await reader(A).poll())).toEqual([early, later].sort());
+    // A's tandem_open takes D: the target is re-owed and gets a new sequence.
+    await openAs(A, d.file);
     const a2 = reader(A);
-    expect(chatIds(await a2.poll())).toEqual([later, target].sort());
+    expect(chatIds(await a2.poll())).toEqual([early, later, target].sort());
+    expect(seqOf(target)).toBeGreaterThan(seqOf(later));
+    expect((row(target) as ChatMessage).timestamp).toBeLessThan(
+      (row(later) as ChatMessage).timestamp,
+    );
     expect((await reply(A, target)).error).toBe(false);
-    await a2.poll(); // confirms the hand-out holding both
-    expect(finalReplyTo(target).settles ?? []).not.toContain(later);
+    expect(finalReplyTo(target).settles, "not yet received").toBeUndefined();
+    await a2.poll(); // confirms the hand-out holding all three
+    expect(finalReplyTo(target).settles).toEqual([early]);
     expect(handled().has(later)).toBe(false);
   });
 
-  it("step 2 skips retired entries: M2's entry is retired by a re-owe before A's confirming poll; A's reply to M3 does not settle M2", async () => {
-    const d = mkDoc("d");
-    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
-    const [m1, m2, m3] = [userChat(key("m1")), userChat(key("m2"), d), userChat(key("m3"))];
+  it("step 2 skips retired entries: M2's entry is retired by a re-owe before A's confirming poll; A's reply to M3 settles M1 and not M2", async () => {
+    const d = await heldBy(A, "c4.md");
+    const [m1, m2, m3] = [userChat(key("m1")), userChat(key("m2"), d.id), userChat(key("m3"))];
     const a = reader(A);
     expect(chatIds(await a.poll())).toEqual([m1, m2, m3].sort());
+    const handedSeq = seqOf(m2);
     expect((await reply(A, m3)).error).toBe(false);
-    // D's holder changes to B: M2 is re-owed (its entry retired) and B is handed it.
-    setDocOwner(d, { ownerId: B, kind: "opened" }, "take", B);
+    // B's tandem_open takes D: M2 is re-owed (its entry retired) and B is handed it.
+    await openAs(B, d.file);
+    expect(deliveryRegistry.lookup("c", m2, 0), "the precondition: retired").toBeUndefined();
     expect(chatIds(await reader(B).poll())).toEqual([m2]);
+    expect(seqOf(m2), "a new entry, not the one A was handed").not.toBe(handedSeq);
     await a.poll();
     expect(finalReplyTo(m3).settles).toEqual([m1]);
+  });
+
+  it("a step 1 write that throws skips nothing else: the reply stands, A answers M3 and owns it, and A is the row's writer (review round 1, item 12)", async () => {
+    const a = reader(A);
+    const m1 = userChat(key("m1"));
+    expect(chatIds(await a.poll())).toEqual([m1]);
+    await a.poll(); // M1 received: step 1 has something to write
+    const m3 = userChat(key("m3"));
+    expect(chatIds(await a.poll())).toEqual([m3]); // M3 has an entry: a batch to settle
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    setChatOwnershipFaultForTests((at) => {
+      if (at === "settles") throw new Error("settles write");
+    });
+    expect((await reply(A, m3)).error).toBe(false);
+    setChatOwnershipFaultForTests(undefined);
+    const r = finalReplyTo(m3);
+    expect(r.settles, "the write failed").toBeUndefined();
+    expect(answererOf(m3)).toBe(A);
+    expect(messageOwner(m3)?.ownerId).toBe(A);
+    expect(ownershipSnapshotForTests().repliers).toContainEqual([r.id, A]);
+    expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toContain("replySettles failed");
   });
 
   it("step 2 writes only the confirming record's rows: B's confirming poll adds nothing to A's row", async () => {
@@ -605,6 +650,8 @@ describe("R3: the handled rule, `settles` and the sweep", () => {
         }),
       );
       expect(row(m)?.read).toBe(false);
+      // The twin: in the `replyTo` variant `other` is unhandled and handed.
+      if (how === "replyTo") expect(chatIds(await pollAs(A))).toContain(other);
       await notHandedCursorless(A, m);
     });
   }
@@ -742,25 +789,39 @@ describe("R0.1: carried-over messages", () => {
     });
   }
 
-  it("A, holding D, lapses through the grace: neither is re-owed or handed", async () => {
-    const { id, m1, m2 } = await carriedOverWorld();
-    await writeAs(A, id);
-    const before = snapshotRows([m1, m2]);
-    lapseByGrace(A, "transport removed");
-    expect(ownerOf(id)).toBeUndefined();
-    expect(snapshotRows([m1, m2])).toEqual(before);
-    await notHanded(B, m1);
-    await notHanded(B, m2);
-  });
+  for (const path of ["cursor", "cursor-less"] as const) {
+    const notHandedBy = async (owner: string, m: string) => {
+      if (path === "cursor") await notHanded(owner, m);
+      else await notHandedCursorless(owner, m);
+    };
 
-  it("D's tab closes while A holds it: neither gets a per-message owner", async () => {
-    const { id, m1, m2 } = await carriedOverWorld();
-    await writeAs(A, id);
-    await closeByRoute(id);
-    expect(messageOwner(m1)).toBeUndefined();
-    expect(messageOwner(m2)).toBeUndefined();
-    await notHanded(A, m1);
-  });
+    it(`A, holding D, lapses through the grace: neither is re-owed, nor handed to B or a fresh reader (${path})`, async () => {
+      const { id, m1, m2 } = await carriedOverWorld();
+      await writeAs(A, id);
+      const before = snapshotRows([m1, m2]);
+      lapseByGrace(A, "transport removed");
+      expect(ownerOf(id)).toBeUndefined();
+      expect(snapshotRows([m1, m2])).toEqual(before);
+      for (const m of [m1, m2]) {
+        await notHandedBy(B, m);
+        await notHandedBy(C, m);
+      }
+    });
+
+    it(`D's tab closes while A holds it: neither gets a per-message owner, nor is handed to A or a fresh reader (${path})`, async () => {
+      const { id, m1, m2 } = await carriedOverWorld();
+      await writeAs(A, id);
+      const before = snapshotRows([m1, m2]);
+      await closeByRoute(id);
+      expect(messageOwner(m1)).toBeUndefined();
+      expect(messageOwner(m2)).toBeUndefined();
+      expect(snapshotRows([m1, m2])).toEqual(before);
+      for (const m of [m1, m2]) {
+        await notHandedBy(A, m);
+        await notHandedBy(C, m);
+      }
+    });
+  }
 
   it("a tab close whose holder has lapsed (its move deferred behind a busy queue) re-owes no carried-over message (R0.6)", async () => {
     const { id, m1, m2 } = await carriedOverWorld();
@@ -869,6 +930,7 @@ describe("R1: posts", () => {
   it("design §14 item 4: while Tandem's Claude is present, a doc-less post from a terminal is refused post", async () => {
     setTandemPresenceSource(() => true);
     const refused = await post(A);
+    expect(refused.code).toBe("NOT_DOC_OWNER");
     expect(refused.details).toEqual({
       reason: "post",
       holder: { label: labelOf(TANDEM_OWNER_ID), displayKind: "Tandem's Claude" },
@@ -926,8 +988,9 @@ describe("R1: posts", () => {
       holder: { label: labelOf(TANDEM_OWNER_ID), displayKind: "Tandem's Claude" },
       documentId: "not-open-doc",
     });
-    expect(refused.message).toMatch(
-      /^The document you named is not open in Tandem, so this counts as a message that is not about a document\. Do not open it just to post\. /,
+    expect(refused.code).toBe("NOT_DOC_OWNER");
+    expect(refused.message).toBe(
+      "The document you named is not open in Tandem, so this counts as a message that is not about a document. Do not open it just to post. Tandem's Claude answers chat that is not about a document. To answer a user's chat message, pass its id as `replyTo`. Do not open or take a document in order to post. Nothing was sent. If the user asked you in your own conversation to say this, tell them there.",
     );
   });
 
@@ -981,7 +1044,12 @@ describe("R1: posts", () => {
     const c = mkDoc("claimed");
     setDocOwner(c, { ownerId: B, kind: "claimed" }, "claim", B);
     const claimed = await post(A, { documentId: c });
-    expect(claimed.details?.reason).toBe("claimed");
+    expect(claimed.code).toBe("NOT_DOC_OWNER");
+    expect(claimed.details).toEqual({
+      reason: "claimed",
+      holder: { label: labelOf(B), displayKind: "terminal" },
+      documentId: c,
+    });
     expect(claimed.message).toBe(
       `The terminal session ${labelOf(B)} picked this document up while Tandem's Claude was away, and answers its comments and chat. Do not take the document in order to post about it. Nothing was sent. If the user asked you in your own conversation to say this, tell them there.`,
     );
@@ -989,11 +1057,22 @@ describe("R1: posts", () => {
     const t = mkDoc("tandem");
     setDocOwner(t, { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
     const def = await post(A, { documentId: t });
-    expect(def.details?.reason).toBe("default");
+    expect(def.code).toBe("NOT_DOC_OWNER");
+    expect(def.details).toEqual({
+      reason: "default",
+      holder: { label: labelOf(TANDEM_OWNER_ID), displayKind: "Tandem's Claude" },
+      documentId: t,
+    });
     expect(def.message).toBe(
       "Tandem's Claude answers this document's comments and chat. Do not take the document in order to post about it. Nothing was sent. If the user asked you in your own conversation to say this, tell them there.",
     );
     for (const text of [claimed.message, def.message]) expect(text).not.toMatch(/answer this/i);
+  });
+
+  it("a present Tandem's Claude's doc-less post is accepted (it is the doc-less chat owner; the greeting's path once PR 3b binds it)", async () => {
+    setTandemPresenceSource(() => true);
+    expect((await post(TANDEM_OWNER_ID)).error).toBe(false);
+    expect((claudeRows().at(-1) as ChatMessage).documentId).toBeUndefined();
   });
 
   it("not-present: Tandem's Claude, not present, is refused with no document", async () => {
@@ -1030,39 +1109,86 @@ describe("R1: posts", () => {
     expect(accepted.data?.warning).toMatch(/^replyTo did not match any user chat message/);
     setTandemPresenceSource(() => true);
     const refused = await reply(A, "no-such-message");
-    expect(refused.details?.reason).toBe("post");
-    expect(refused.message).toMatch(
-      /^The `replyTo` you passed names no user chat message, so this was treated as a message that answers nothing\. /,
+    expect(refused.code).toBe("NOT_DOC_OWNER");
+    expect(refused.details).toEqual({
+      reason: "post",
+      holder: { label: labelOf(TANDEM_OWNER_ID), displayKind: "Tandem's Claude" },
+    });
+    expect(refused.message).toBe(
+      "The `replyTo` you passed names no user chat message, so this was treated as a message that answers nothing. Tandem's Claude answers chat that is not about a document. To answer a user's chat message, pass its id as `replyTo`. Do not open or take a document in order to post. Nothing was sent. If the user asked you in your own conversation to say this, tell them there.",
     );
   });
 
-  it("R1.5: every refusal leaves no trace: no row, no notify, no claim, no presence", async () => {
+  it("R1.5: every refusal leaves no trace: no row, no Y.Doc write, no notify, no claim, no presence, no read stamp; an accepted post moves each", async () => {
     const heard: unknown[] = [];
     const off = onTandemReply((s) => heard.push(s));
+    // Every Y.Doc update while the refusals run (as the merged reply version
+    // watches): the CTRL doc and every document.
+    const updates: string[] = [];
+    const watched = [ctrl(), ...[...getOpenDocs().keys()].map((id) => getOrCreateDocument(id))];
+    const listener = () => updates.push("update");
     try {
       const held = mkDoc("held");
       setDocOwner(held, { ownerId: B, kind: "opened" }, "take", B);
+      const claimedDoc = mkDoc("claimed");
+      setDocOwner(claimedDoc, { ownerId: B, kind: "claimed" }, "claim", B);
       const lost = mkDoc("lost");
       setLossForTests(lost, A, "taken");
+      const takenFile = realFile("taken-trace.md");
+      const taken = await userOpen(takenFile);
+      await writeAs(A, taken);
+      await openAs(B, takenFile);
+      const m = userChat(key("m")); // an unread user row: no read stamp may land on it
       const rows = chatMap().size;
       const activity = licence.activity;
       const before = JSON.stringify(ownershipSnapshotForTests().ownerByDoc);
+      for (const d of [...watched, ...[held, claimedDoc, lost, taken].map(getOrCreateDocument)]) {
+        d.on("update", listener);
+      }
       const refusals: Array<[string | undefined, Record<string, unknown>]> = [
-        [A, { documentId: held }],
-        [A, { documentId: lost }],
-        [TANDEM_OWNER_ID, {}],
-        [NOBODY, {}],
-        [undefined, {}],
+        [A, { documentId: held }], // held
+        [A, { documentId: claimedDoc }], // claimed
+        [A, { documentId: lost }], // lost, no holder
+        [A, { documentId: taken }], // lost, with a holder
+        [TANDEM_OWNER_ID, {}], // not-present
+        [NOBODY, {}], // no record
+        [undefined, {}], // no owner id
       ];
-      for (const [who, args] of refusals) expect((await post(who, args)).error).toBe(true);
+      for (const [who, args] of refusals) {
+        expect((await post(who, args)).error, JSON.stringify(args)).toBe(true);
+      }
       setTandemPresenceSource(() => true);
-      expect((await post(A)).details?.reason).toBe("post");
-      expect(chatMap().size).toBe(rows);
-      expect(heard).toEqual([]);
+      const tandemDoc = mkDoc("tandem-default");
+      setDocOwner(tandemDoc, { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
+      getOrCreateDocument(tandemDoc).on("update", listener);
+      updates.length = 0;
+      for (const args of [
+        {}, // post
+        { documentId: tandemDoc }, // default
+        { replyTo: "no-such-message" }, // the unmatched-replyTo post
+        { documentId: "not-open-doc" }, // the named-not-open post
+      ]) {
+        expect((await post(A, args)).error, JSON.stringify(args)).toBe(true);
+      }
+      expect(chatMap().size, "no row").toBe(rows);
+      expect(updates, "no Y.Doc write").toEqual([]);
+      expect(heard, "no notify").toEqual([]);
       expect(licence.activity, "no typing presence").toBe(activity);
-      expect(JSON.stringify(ownershipSnapshotForTests().ownerByDoc)).toBe(before);
+      expect(row(m)?.read, "no read stamp").toBe(false);
+      expect(row(m)?.greeting).toBeUndefined();
+      expect(
+        JSON.stringify(ownershipSnapshotForTests().ownerByDoc.filter(([d]) => d !== tandemDoc)),
+      ).toBe(before);
+      // The positive twin: an accepted post moves each of them.
+      setTandemPresenceSource(() => false);
+      expect((await post(A)).error).toBe(false);
+      expect(chatMap().size).toBe(rows + 1);
+      expect(updates.length).toBeGreaterThan(0);
+      expect(heard).toHaveLength(1);
+      expect(licence.activity).toBeGreaterThan(activity);
     } finally {
       off();
+      for (const d of watched) d.off("update", listener);
     }
   });
 
@@ -1249,14 +1375,27 @@ describe("R0.7: the throw sites and the failed re-owe's retry", () => {
     expect(lapsed, "the cap lapsed A and nobody else").toEqual([A]);
     expect(messageOwner(m)?.ownerId, "A keeps its owner: the re-owe failed").toBe(A);
     expect(throws, "the re-owe was reached").toBe(0);
+    // What A got (review round 1, item 4): a retry timer of its own, never a
+    // grace, so the cap still counts exactly MAX_DETACHED_RECORDS graces.
+    expect(getOwnerRecord(A)?.graceTimer, "A has no grace").toBeUndefined();
+    const graces = ownershipSnapshotForTests().records.filter((r) => r.graceTimer).length;
+    expect(graces).toBe(MAX_DETACHED_RECORDS);
+    expect(ownershipSnapshotForTests().timers, "the graces and A's one retry").toBe(
+      MAX_DETACHED_RECORDS + 1,
+    );
     vi.useRealTimers();
     setChatOwnershipFaultForTests(undefined);
   });
 
-  it("a re-owe that always throws neither recurses nor overflows; quick retries then slow retries, never a grace", async () => {
+  it("a re-owe that always throws, for several records in their graces at once, neither recurses nor overflows; quick retries then slow retries, never a grace", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const m = userChat(key("m"));
-    expect(chatIds(await pollAs(A))).toEqual([m]);
+    // A, B and C each own an unhandled doc-less message.
+    const owned = new Map<string, string>();
+    for (const who of [A, B, C]) {
+      const m = userChat(key(`m-${who}`));
+      expect(chatIds(await pollAs(who))).toEqual([m]);
+      owned.set(who, m);
+    }
     let attempts = 0;
     setChatOwnershipFaultForTests((at) => {
       if (at === "re-owe") {
@@ -1265,29 +1404,35 @@ describe("R0.7: the throw sites and the failed re-owe's retry", () => {
       }
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    view = view.filter((e) => e.ownerId !== A);
-    noteTransportChanged(A);
+    // All three detach at once: three graces running together.
+    view = [];
+    for (const who of [A, B, C]) noteTransportChanged(who);
+    expect(ownershipSnapshotForTests().timers).toBe(3);
     vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
-    expect(attempts).toBe(1);
-    // Three quick retries, one grace apart.
+    expect(attempts, "one re-owe per lapse, no recursion").toBe(3);
+    // Three quick retries each, one grace apart.
     for (let i = 0; i < 3; i++) vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
-    expect(attempts).toBe(4);
+    expect(attempts).toBe(12);
     // Then slower: one grace is not enough for the next.
     vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
-    expect(attempts).toBe(4);
+    expect(attempts).toBe(12);
     vi.advanceTimersByTime(3 * DEFAULT_GRACE_MS);
-    expect(attempts).toBe(5);
-    expect(getOwnerRecord(A)?.graceTimer, "never a grace").toBeUndefined();
-    expect(ownershipSnapshotForTests().timers).toBe(1);
+    expect(attempts).toBe(15);
+    for (const who of [A, B, C]) {
+      expect(getOwnerRecord(who)?.graceTimer, `${who}: never a grace`).toBeUndefined();
+    }
+    expect(ownershipSnapshotForTests().timers, "one retry each").toBe(3);
     expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toContain(
       "Tandem keeps retrying, less often",
     );
-    // The fault clears: the next retry re-owes and the record goes.
+    // The fault clears: the next retries re-owe and the records go.
     setChatOwnershipFaultForTests(undefined);
     vi.advanceTimersByTime(4 * DEFAULT_GRACE_MS + 1);
     vi.useRealTimers();
-    expect(messageOwner(m)).toBeUndefined();
-    expect(getOwnerRecord(A)).toBeUndefined();
+    for (const [who, m] of owned) {
+      expect(messageOwner(m)).toBeUndefined();
+      expect(getOwnerRecord(who)).toBeUndefined();
+    }
     expect(ownershipSnapshotForTests().timers).toBe(0);
   });
 });

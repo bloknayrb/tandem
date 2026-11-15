@@ -1287,6 +1287,7 @@ describe("no per-client state", () => {
     // Every other import form names the module too (a namespace or default
     // import, a re-export, a dynamic import): exactly one mention, the type import.
     // A backtick specifier counts too (the posts PR, R0.7): `import(\`./ownership.js\`)`.
-    expect(copy.match(/["'`]\.\/ownership(\.js)?["'`]/g)).toHaveLength(1);
+    // An interpolated template specifier too (`./ownership${ext}`), review round 1, item 13.
+    expect(copy.match(/["'`]\.\/ownership(\.js|\$\{[^}]*\})?["'`]/g)).toHaveLength(1);
   });
 });

@@ -610,4 +610,12 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
     expect(queue).toContain("a claim made by an accepted `tandem_reply`");
   });
+
+  it("a post's claim is a named unqueued change too, and only the ownership module names its cause (review round 1, item 13)", () => {
+    expect(filesNaming(/"post-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted chat post");
+    expect(queue).toContain("cause\n * `post-claim`");
+    expect(queue).toContain("Seven run where they are");
+  });
 });

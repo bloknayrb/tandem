@@ -746,6 +746,9 @@ describe("R3.3/R3.5: owners and held state", () => {
     expect((await reply(A, m)).error).toBe(false);
     lapseByGrace(A, "transport removed");
     expect(getOwnerRecord(A)).toBeUndefined();
+    // Kept from the merged test (review round 1, item 13): the owner goes
+    // with the deleted record.
+    expect(messageOwner(m)).toBeUndefined();
   });
 
   it("R3.5a: deleting a record drops its owners and handed memory; a new record under its id is a stranger", async () => {
@@ -1713,6 +1716,11 @@ describe("review round 2 (the reviewing session's round 1)", () => {
     // The positive twin: licensed, the same reply claims.
     expect((await reply(B, onD)).error).toBe(false);
     expect(ownerOf(d.id)).toBe(B);
+    // And the doc-less half's twin (review round 1, item 13): licensed, the
+    // same reply lands and makes B its owner.
+    expect((await reply(B, docless)).error).toBe(false);
+    expect(messageOwner(docless)).toEqual({ ownerId: B, origin: "reply" });
+    expect(repliesTo(docless)).toHaveLength(1);
   });
 
   it("item 9: R3.1 row 4 with Tandem's Claude present: a doc-less message is its, handed to neither A nor B, and their replies are refused naming it", async () => {

@@ -488,7 +488,7 @@ describe("R1: the field", () => {
       expect(fact).not.toMatch(/\buser\b|\bchose\b/i);
       expect(fact).not.toMatch(/\b(holds|is held|is open|is closed|now)\b/i);
       expect(word).not.toMatch(
-        /^(claim|take|lapse|stale|poll-claim|reply-claim|user-open|take-back)$/,
+        /^(claim|take|lapse|stale|poll-claim|reply-claim|post-claim|user-open|take-back)$/,
       );
     }
     const lapse = CHANGE_CAUSE_FACTS[LAPSED];
