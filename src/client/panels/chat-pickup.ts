@@ -151,12 +151,15 @@ function localPickup(
       return { kind: "local-working" };
     }
     if (run.status === "replied") return null;
-    // Stopped: the reply (or a partial one) or a notice speaks if present.
+    // Stopped: a reply row for the message (the local model's partial one,
+    // or a Claude's `tandem_reply` naming it after a switch back) or a notice
+    // speaks if present. A superseded acknowledgement (#2358) answers nothing.
     const replyFor = messages.some(
       (m) =>
         m.author === "claude" &&
         !isChatNoticeRow(m) &&
-        (m.id === run.replyId || (m.replyTo === latest.id && m.agentIdentity !== undefined)),
+        m.superseded !== true &&
+        (m.id === run.replyId || m.replyTo === latest.id),
     );
     if (replyFor || noticeFor) return null;
     return { kind: "local-stopped" };

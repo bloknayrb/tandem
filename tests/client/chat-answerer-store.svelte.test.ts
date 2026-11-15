@@ -331,13 +331,81 @@ describe("the triggers (R1.2)", () => {
   it("a send under a licence refusal, or with the read not known local, is not recorded", async () => {
     const msg = (id: string) =>
       ({ id, author: "user", text: "q", timestamp: 1, read: false }) as ChatMessage;
+    // Pending: not recorded, and (review round 1 item 2) one read.
     store.noteChatSent(msg("pending"), { aiOff: false, held: false });
-    await readAs(200, known("local"));
+    await (await held.request(1)).answer(200, known("local"));
     store.noteChatSent(msg("refused"), { aiOff: true, held: false });
     // A send in the local period re-reads: answer it.
     await (await held.request(2)).answer(200, known("claude"));
     store.noteChatSent(msg("claude"), { aiOff: false, held: false });
+    await drain();
     expect([...state.sentLocal]).toEqual([]);
+    // Known Claude: a send reads nothing.
+    expect(gets()).toHaveLength(2);
+  });
+
+  it("history's running generation is a baseline: no read on the first chat change (review round 1, item 9)", async () => {
+    await readAs(200, known("local"));
+    const doc = {};
+    const old = {
+      id: "h",
+      author: "user",
+      text: "q",
+      timestamp: 1,
+      read: false,
+      localRun: { status: "running", generation: "crashed" },
+    } as ChatMessage;
+    store.observeChatForAnswerer({ doc, synced: true, messages: [old] });
+    store.observeChatForAnswerer({
+      doc,
+      synced: true,
+      messages: [old, { ...old, id: "h2", localRun: undefined }],
+    });
+    await drain();
+    expect(gets()).toHaveLength(1);
+  });
+
+  describe("a failed re-read during a real local period (review round 1, item 2)", () => {
+    const doc = {};
+    const user = (id: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+      id,
+      author: "user",
+      text: "q",
+      timestamp: 1,
+      read: false,
+      ...extra,
+    });
+
+    it("this window's send while the read is not known reads once", async () => {
+      await readAs(200, known("local"));
+      const p = store.requestRead();
+      await (await held.request(2)).timeout();
+      await p;
+      expect(state.status).toBe("failed");
+      // Not in the local period any more (nothing held), so only the new
+      // trigger can read.
+      store.noteChatSent(user("u1"), { aiOff: false, held: false });
+      await held.request(3);
+      await drain();
+      expect(gets()).toHaveLength(3);
+    });
+
+    it("a user row's localRun appearing while the read is not known reads once", async () => {
+      const p = store.requestRead();
+      await (await held.request(1)).fail();
+      await p;
+      expect(state.status).toBe("failed");
+      store.observeChatForAnswerer({ doc, synced: true, messages: [user("a")] });
+      store.observeChatForAnswerer({
+        doc,
+        synced: true,
+        messages: [
+          user("a", { localRun: { status: "stopped", reason: "error", generation: "g9" } }),
+        ],
+      });
+      await held.request(2);
+      expect(gets()).toHaveLength(2);
+    });
   });
 });
 
@@ -442,6 +510,32 @@ describe("the switch (R2.4)", () => {
     await (await held.request(2)).answer(200, { answerer: "local", persisted: true });
     await (await held.request(3)).answer(200, known("local"));
     await done;
+  });
+
+  it("a second press during the first press's re-read sends nothing (review round 1, item 9)", async () => {
+    const done = store.setChatAnswerer("local");
+    await (await held.request(2)).answer(200, { answerer: "local", persisted: true });
+    await held.request(3); // the re-read is in flight
+    expect(state.postPending).toBe(true);
+    void store.setChatAnswerer("claude");
+    await drain();
+    expect(posts()).toHaveLength(1);
+    await held.calls[2].answer(200, known("local"));
+    await done;
+    expect(state.postPending).toBe(false);
+  });
+
+  it("a clear during a press (the tab closed) keeps that press's line from being written (review round 1, item 9)", async () => {
+    const done = store.setChatAnswerer("local");
+    store.clearChatAnswererOutcome();
+    await (await held.request(2)).answer(500, {
+      answerer: "claude",
+      persisted: false,
+      code: "CHAT_ANSWERER_WRITE_FAILED",
+    });
+    await (await held.request(3)).answer(200, known("claude"));
+    await done;
+    expect(state.outcomeLine).toBeNull();
   });
 
   it("a line is cleared by a later read that answers differently", async () => {

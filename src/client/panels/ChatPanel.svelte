@@ -727,7 +727,9 @@ async function exportChat() {
     />
     <!-- A notice row arriving live (#1123 part B, R6.2): its own announcer,
          one host per message (LiveRegion's rule), never the reply chime. -->
-    <LiveRegion srOnly message={noticeAnnouncement} data-testid="chat-notice-live" />
+    {#if BYO_MODELS_ENABLED}
+      <LiveRegion srOnly message={noticeAnnouncement} data-testid="chat-notice-live" />
+    {/if}
   </div>
 
   <!-- Anchor indicator -->

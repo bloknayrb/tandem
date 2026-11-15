@@ -4,11 +4,7 @@
  * allows, and the same row out of the local period asserting today's view.
  */
 import { describe, expect, it } from "vitest";
-import {
-  aiIndicatorView,
-  LOCAL_CHAT_LABEL,
-  LOCAL_CHAT_SENTENCE,
-} from "../../src/client/status/status-ai-view.js";
+import { aiIndicatorView } from "../../src/client/status/status-ai-view.js";
 
 type ViewInput = Parameters<typeof aiIndicatorView>[0];
 
@@ -33,7 +29,25 @@ function input(over: Partial<ViewInput> = {}): ViewInput {
   };
 }
 
-const S = LOCAL_CHAT_SENTENCE;
+/**
+ * Literal strings, never the product's constants (review round 1, item 4):
+ * a test that built its expectations from `LOCAL_CHAT_SENTENCE` would pass
+ * whatever the product said.
+ */
+const S = {
+  local:
+    "Chat is set to your local model. Tandem does not send Claude the chat messages you send while it is, then or later.",
+  unusable:
+    "Chat is set to your local model, but no local model can be used now (see Settings → Models). Tandem does not send Claude the chat messages you send while it is, then or later.",
+} as const;
+const LABEL = {
+  local: "Chat: your local model",
+  unusable: "Your local model can't answer",
+} as const;
+const SOLO_LABEL = {
+  local: "Solo · chat: your local model",
+  unusable: "Solo · your local model can't answer",
+} as const;
 const SESSION_SENTENCE = (n: number) =>
   `${n === 1 ? "1 session is" : `${n} sessions are`} connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.`;
 
@@ -204,11 +218,9 @@ describe("every row of R7.4, in the local period and out of it", () => {
       });
 
       for (const local of ["local", "unusable"] as const) {
-        it(`in the local period, '${LOCAL_CHAT_LABEL[local]}'`, () => {
+        it(`in the local period, '${LABEL[local]}'`, () => {
           const v = aiIndicatorView(input({ ...row.today, localChat: local }));
-          const label = row.solo
-            ? `Solo · ${LOCAL_CHAT_LABEL[local].charAt(0).toLowerCase()}${LOCAL_CHAT_LABEL[local].slice(1)}`
-            : LOCAL_CHAT_LABEL[local];
+          const label = row.solo ? SOLO_LABEL[local] : LABEL[local];
           expect(v?.label).toBe(label);
           const count = row.counts ? (today?.sessionCount ?? null) : null;
           const sentence = count !== null ? ` ${SESSION_SENTENCE(count)}` : "";

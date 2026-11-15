@@ -137,3 +137,31 @@ describe("createReplyDetector (#2168)", () => {
     expect(observeIds(detector, { doc, messages: [msg("s")] })).toEqual(["s"]);
   });
 });
+
+describe("flag off (#1123 part B, R10.1)", () => {
+  it("a notice row is announced as a reply, as on master; the notices detector returns nothing", () => {
+    const doc = {};
+    const notice = {
+      id: "n",
+      author: "claude" as const,
+      text: "x",
+      timestamp: Date.now(),
+      read: true,
+      chatNotice: "no-reply" as const,
+    };
+    const replies = createReplyDetector();
+    const notices = createReplyDetector({ select: "notices" });
+    for (const d of [replies, notices]) {
+      d.observe({ doc, synced: true, baselineIds: [], messages: [], streamingIds: new Set() });
+    }
+    const input = {
+      doc,
+      synced: true,
+      baselineIds: [],
+      messages: [notice],
+      streamingIds: new Set<string>(),
+    };
+    expect(replies.observe(input).map((m) => m.id)).toEqual(["n"]);
+    expect(notices.observe(input)).toEqual([]);
+  });
+});

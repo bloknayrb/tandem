@@ -121,6 +121,19 @@ describe("the local rows, in order (R5.1)", () => {
     });
   });
 
+  it("stopped, then a Claude's tandem_reply naming the message (no agentIdentity): the row ends (review round 1, item 3)", () => {
+    const m = user("u", 0, { localRun: run({ status: "stopped", reason: "error" }) });
+    expect(chatPickup([m, claude("c", 1, { replyTo: "u" })], at, inputs())).toBeNull();
+    // A superseded acknowledgement (#2358) answers nothing.
+    expect(
+      chatPickup(
+        [m, claude("old", 1, { replyTo: "u", inProgress: true, superseded: true })],
+        at,
+        inputs(),
+      ),
+    ).toEqual({ kind: "local-stopped" });
+  });
+
   it("no localRun and a notice row for it (A1's no-document / no-local-model): the row ends", () => {
     const m = user("u", 0);
     const notice = claude("n", 1, { replyTo: "u", chatNotice: "no-document" });

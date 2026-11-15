@@ -100,6 +100,12 @@ let _inFlight: Promise<ReadOutcome> | null = null;
 let _next: Promise<ReadOutcome> | null = null;
 /** Bumped when a POST settles: a read that started before it is stale. */
 let _postEpoch = 0;
+/** A switch's POST is on the wire (reads that settle meanwhile are not
+ *  adopted). `_postPending` stays set longer, through its re-read. */
+let _postInFlight = false;
+/** Bumped by every clear of the outcome line: a switch whose tail finds it
+ *  changed (the tab closed, or the user is selecting again) writes no line. */
+let _outcomeToken = 0;
 /** Bumped when a new server process is detected: a read that started
  *  against the old one would write its run id back. */
 let _processEpoch = 0;
@@ -190,7 +196,7 @@ function startRead(): Promise<ReadOutcome> {
       // more than this read can, and its own re-read is on its way.
       // So did a new server process: this read may have been answered by the
       // old one (its run id would be written back).
-      if (epoch === _postEpoch && processEpoch === _processEpoch && !_postPending) adopt(outcome);
+      if (epoch === _postEpoch && processEpoch === _processEpoch && !_postInFlight) adopt(outcome);
       return outcome;
     } finally {
       if (_inFlight === slot.read) _inFlight = null;
@@ -255,9 +261,13 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
   // A page that cannot see the switch never sends it to the local model
   // (R2.2, R2.6); "Set chat to Claude" is the one send allowed then.
   if (value === "local" && _status !== "known") return;
+  // Pending until its own re-read settles, so a second press cannot start
+  // another POST during that re-read.
   _postPending = true;
+  _postInFlight = true;
   _outcomeLine = null;
   _outcomeFor = null;
+  const token = ++_outcomeToken;
   const readBefore = _status;
   let line: string | null = null;
   let unconfirmed = false;
@@ -304,16 +314,24 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
     console.warn("[chat-answerer] switch failed", err);
     unconfirmed = true;
   } finally {
-    _postPending = false;
+    _postInFlight = false;
     _postEpoch += 1;
   }
-  const outcome = await requestRead();
+  let outcome: ReadOutcome;
+  try {
+    outcome = await requestRead();
+  } finally {
+    _postPending = false;
+  }
   if (unconfirmed) line = outcome.status === "known" ? LINE_UNCONFIRMED : LINE_UNCONFIRMED_UNREAD;
   // R2.6: a page whose re-read still cannot show the switch says, in the past
   // tense, that the press worked — never leaving it with nothing said.
   if (setToClaude && outcome.status !== "known" && outcome.status !== "dark") {
     _setToClaudeDone = true;
   }
+  // The tab closed, or the user pressed again, while this was in flight: the
+  // line belongs to a press nobody is looking at any more.
+  if (token !== _outcomeToken) return;
   // Shown beside the answer this re-read gave, and only while it holds.
   _outcomeFor = outcome.status === "known" ? outcome.answerer : null;
   _outcomeLine = line;
@@ -322,6 +340,7 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
 /** The tab body unmounted, or the user is selecting again: an outcome line
  *  belongs to the press that produced it and is not shown again later. */
 export function clearChatAnswererOutcome(): void {
+  _outcomeToken += 1;
   _outcomeLine = null;
   _outcomeFor = null;
 }
@@ -342,6 +361,10 @@ export function noteCtrlSynced(doc: object): void {
   _lastCtrlDoc = doc;
   if (newProcess) {
     _processEpoch += 1;
+    // On a microtask, not here: this is called from App's effect, and no
+    // `$state` is written inside a reaction (R1.2). The cost is that the
+    // pickup row may change twice (run id cleared, then the read's), one
+    // flush apart.
     queueMicrotask(() => {
       _runGeneration = null;
     });
@@ -396,8 +419,13 @@ export function observeChatForAnswerer(input: {
     const stamped = m.read === true || m.delivered === true;
     const before = _userRows.get(m.id);
     _userRows.set(m.id, { run, stamped });
-    if (seeding) continue;
     const r = m.localRun;
+    if (seeding) {
+      // History's running states are a baseline: a row left `running` by a
+      // crashed process does not fire a read on the first chat change.
+      if (r?.status === "running") _generationsTriggered.add(r.generation);
+      continue;
+    }
     // A run stamped by a server process this read has not answered for (once
     // per such run id).
     if (
@@ -408,9 +436,17 @@ export function observeChatForAnswerer(input: {
       _generationsTriggered.add(r.generation);
       trigger = true;
     }
-    // `localRun` appeared while the read says Claude: the switch may have
-    // moved in another window.
-    if (r && (before === undefined || before.run === null) && isKnownClaude()) trigger = true;
+    // `localRun` appeared while the read says Claude (the switch may have
+    // moved in another window), or while the read is not known at all (a
+    // failed re-read during a real local period: without this nothing would
+    // read again, review round 1 item 2).
+    if (
+      r &&
+      (before === undefined || before.run === null) &&
+      (isKnownClaude() || _status !== "known")
+    ) {
+      trigger = true;
+    }
     // A Claude took the message while the read says local: the switch may
     // have moved back in another window with no chat line and no notice.
     if (stamped && (before === undefined || !before.stamped) && isKnownLocal()) trigger = true;
@@ -431,7 +467,9 @@ export function noteChatSent(message: ChatMessage, opts: { aiOff: boolean; held:
     next.add(message.id);
     _sentLocal = next;
   }
-  if (inLocalPeriod(opts.held)) void requestRead();
+  // In the local period, or with the read not known (review round 1 item 2):
+  // one read, no loop — a send is a user event.
+  if (inLocalPeriod(opts.held) || _status !== "known") void requestRead();
 }
 
 function isKnownLocal(): boolean {
@@ -592,6 +630,8 @@ export function _resetChatAnswererForTests(): void {
   _runGeneration = null;
   _reading = false;
   _postPending = false;
+  _postInFlight = false;
+  _outcomeToken = 0;
   _outcomeLine = null;
   _setToClaudeDone = false;
   _sentLocal = new Set();

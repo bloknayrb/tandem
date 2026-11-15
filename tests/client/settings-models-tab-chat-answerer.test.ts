@@ -227,7 +227,7 @@ describe("keys and sends (R2.2, R2.3)", () => {
     expect(v.radio("claude").getAttribute("aria-checked")).toBe("true");
   });
 
-  it("a click on the other position sends exactly one POST; Enter (a button's click) one more", async () => {
+  it("a click on the other position sends exactly one POST", async () => {
     const v = await mounted(known("claude"));
     await fireEvent.click(v.radio("local"));
     await drain();
@@ -235,12 +235,29 @@ describe("keys and sends (R2.2, R2.3)", () => {
     await posts()[0].answer(200, { answerer: "local", persisted: true });
     await (await held.request(3)).answer(200, known("local"));
     expect(v.radio("local").getAttribute("aria-checked")).toBe("true");
-    // A keydown on a radio sends nothing by itself (the button turns Enter
-    // and Space into a click, which is what selects).
-    await fireEvent.keyDown(v.radio("claude"), { key: "Enter" });
-    await fireEvent.keyDown(v.radio("claude"), { key: " " });
+  });
+
+  // Review round 1, item 5. Each radio is a real <button type="button">, so a
+  // browser turns Space and Enter on it into a click (happy-dom does not, so
+  // the keys themselves are driven in `tests/e2e/chat-answerer.spec.ts`, which
+  // presses Space in a real browser — unrun while the flag is off). Here the
+  // element's own activation behaviour (`HTMLElement.click()`, what that
+  // keypress invokes) selects, and a keydown alone sends nothing, so one
+  // keypress cannot send twice.
+  it("the radios are real buttons; their activation selects, a keydown alone does not", async () => {
+    const v = await mounted(known("claude"));
+    for (const value of ["claude", "local"] as const) {
+      expect(v.radio(value).tagName).toBe("BUTTON");
+      expect(v.radio(value).getAttribute("type")).toBe("button");
+    }
+    v.radio("local").focus();
+    await fireEvent.keyDown(v.radio("local"), { key: "Enter" });
+    await fireEvent.keyDown(v.radio("local"), { key: " " });
     await drain();
-    expect(posts()).toHaveLength(1);
+    expect(posts()).toHaveLength(0);
+    v.radio("local").click();
+    await drain();
+    expect(posts().map((c) => c.body)).toEqual([{ answerer: "local" }]);
   });
 
   it("the position already shown: no POST, and a re-read", async () => {

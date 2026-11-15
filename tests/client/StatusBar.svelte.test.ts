@@ -648,6 +648,26 @@ describe("StatusBar in the local period (#1123 part B, R7)", () => {
     expect(onStartClaude).toHaveBeenCalledOnce();
   });
 
+  it("with the read known local, a failed launcher poll keeps the local label (review round 1, item 10)", async () => {
+    // App derives `aiLocalChat` from the store's read alone when it is known
+    // (`localChatSettingFor`, pinned in chat-answerer-store.svelte.test.ts);
+    // a failed poll clears only the launcher's fresh view. Before: running.
+    const view = render(StatusBar, {
+      props: { ...baseProps, aiState: "ready", aiLauncherRunning: true, aiLocalChat: "local" },
+    });
+    expect(view.getByTestId("status-ai-indicator").textContent).toContain("Chat: your local model");
+    // After the failed poll: the launcher no longer reads running.
+    await view.rerender({
+      ...baseProps,
+      aiState: "stopped",
+      aiLauncherRunning: false,
+      aiLocalChat: "local",
+    });
+    const indicator = view.getByTestId("status-ai-indicator");
+    expect(indicator.textContent).toContain("Chat: your local model");
+    expect(indicator.getAttribute("data-ai-state")).toBe("local-not-connected");
+  });
+
   it("out of the local period the same chip reads as today", () => {
     const { getByTestId } = render(StatusBar, {
       props: { ...baseProps, aiState: "stopped", aiChip: "start", aiLauncherStandby: "off" },

@@ -201,13 +201,19 @@ async function selectAnswerer(value: ChatAnswerer) {
     void chatAnswerer.load();
     return;
   }
-  const hadFocus = answererGroup?.contains(document.activeElement) === true;
   await chatAnswerer.set(value);
   // R2.3: after any outcome, focus stays on the radio that shows the
-  // server's value — only if focus was in the group (never steal it).
+  // server's value — only if focus is still in the group now (never steal it
+  // from wherever the user tabbed during a slow POST).
   focusOverride = null;
-  if (hadFocus && chatAnswerer.known) focusAnswererRadio(chatAnswerer.answerer);
+  const hasFocus = answererGroup?.contains(document.activeElement) === true;
+  if (hasFocus && chatAnswerer.known) focusAnswererRadio(chatAnswerer.answerer);
 }
+
+/** The read is pending, or a retry of a failed read is in flight (R2.5). */
+const answererChecking = $derived(
+  chatAnswerer.status === "pending" || (chatAnswerer.status === "failed" && chatAnswerer.reading),
+);
 
 /** "Set chat to Claude" (R2.5, R2.6): offered whenever the page's access is
  *  not foreign and no write refusal has latched. */
@@ -469,9 +475,12 @@ function askDelete(id: string) {
           Retry
         </button>
       </div>
-    {:else}
-      <span role="status" data-testid="chat-answerer-loading">Checking…</span>
     {/if}
+    <!-- "Checking…" in a host that outlives its text (LiveRegion's rule), so
+         its arrival is a mutation a screen reader announces. -->
+    <LiveRegion data-testid="chat-answerer-loading">
+      {#if answererChecking}Checking…{/if}
+    </LiveRegion>
     <!-- R2.6: a host that outlives its text, so the line's arrival is a
          mutation a screen reader announces (LiveRegion's rule). -->
     <LiveRegion data-testid="chat-answerer-set-claude-done">

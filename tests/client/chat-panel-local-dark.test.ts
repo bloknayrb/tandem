@@ -55,6 +55,13 @@ describe("ChatPanel, flag off", () => {
     expect(BYO_MODELS_ENABLED).toBe(false);
   });
 
+  it("no chat-notice-live region is rendered (review round 1, item 1)", () => {
+    const { container } = renderChat([]);
+    expect(container.querySelector("[data-testid='chat-notice-live']")).toBeNull();
+    // Today's one live region only.
+    expect(container.querySelectorAll("[role='status']")).toHaveLength(1);
+  });
+
   it("a notice row renders as a Claude bubble, as on master", () => {
     const { container } = renderChat([
       { id: "n", author: "claude", text: "x", timestamp: T0, read: true, chatNotice: "no-reply" },

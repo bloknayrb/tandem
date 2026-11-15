@@ -1374,6 +1374,34 @@ describe("the dark guard", () => {
     }
   });
 
+  it("flag off (#1123 part B, R11; review round 1 item 10): switches attempted unprimed write no line, and the CTRL file is master's shape", async () => {
+    __setHonourLocalPeriodRecordsForTests(false);
+    setCtrlMode("tandem");
+    attachCtrlObservers();
+    wireLocalPeriod();
+    // Never primed, as in a dark build: whatever is attempted, the answerer
+    // reads Claude and nothing reaches onSwitch.
+    await setChatAnswerer("local", "own-window").catch(() => {});
+    userChat("during");
+    await setChatAnswerer("claude", "own-window").catch(() => {});
+    await __flushLocalModelAnnouncedForTests();
+    expect(chatAnswerer()).toBe("claude");
+    expect(
+      [...ctrlChat().values()].some(
+        (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+      ),
+    ).toBe(false);
+    expect(localPeriodRecordFor(new Set(["during"]))).toBeUndefined();
+    const file = path.join(SESSION_DIR, `${CTRL_ROOM}.json`);
+    fs.rmSync(file, { force: true });
+    await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+    // Master writes exactly these two fields (`saveCtrlSession`), in this order.
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, "utf8")))).toEqual([
+      "ydocState",
+      "lastAccessed",
+    ]);
+  });
+
   it("flag off (guard 2): the CTRL session file gains no field, and a stored record is ignored", () => {
     __setHonourLocalPeriodRecordsForTests(false);
     expect(localPeriodRecordFor(new Set(["a"]))).toBeUndefined();
