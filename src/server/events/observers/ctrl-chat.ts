@@ -10,6 +10,7 @@ import {
   isLocalPeriodChat,
   markWithheldForLocalPeriod,
   noteChatRowDeleted,
+  noteLocalPeriodUserChat,
   selectionMayBeHanded,
 } from "../../models/local-period.js";
 import { describeRangeFailure, validateRange } from "../../positions.js";
@@ -33,8 +34,17 @@ export function makeCtrlChatObserver(deps: {
     // deleted keeps its class, so a same-key re-add keeps it.
     const deleted: string[] = [];
     for (const [key, change] of event.changes.keys) {
-      if (change.action === "add") classChatRowAdded(key);
-      else if (change.action === "delete") {
+      if (change.action === "add") {
+        // #1123 part B, R11.3: the author test belongs here, where the row
+        // can be read; `classChatRowAdded` answers whether it classed the row
+        // as local-period chat just now.
+        if (
+          classChatRowAdded(key) &&
+          (chatMap.get(key) as ChatMessage | undefined)?.author === "user"
+        ) {
+          noteLocalPeriodUserChat();
+        }
+      } else if (change.action === "delete") {
         noteChatRowDeleted(key);
         deleted.push(key);
       }

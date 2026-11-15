@@ -46,7 +46,7 @@ import { createHash } from "node:crypto";
 import { BYO_MODELS_ENABLED, CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
 import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
-import type { ChatAnswerer } from "../../shared/models/contract.js";
+import type { ChatAnswerer, LocalModelState } from "../../shared/models/contract.js";
 import { withMcp } from "../../shared/origins.js";
 import type {
   AgentIdentity,
@@ -98,6 +98,7 @@ import {
   diagnoseLocalModel,
   type LocalModelUnusable,
   type LocalModelUnusableReason,
+  resolveLocalModel,
   resolveLocalModelConfig,
 } from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
@@ -377,10 +378,13 @@ export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
 /**
  * The chat notices (#1123): one short message in the chat, per chat message
  * the local model could not answer. Fixed strings, never a model name,
- * endpoint or id. They name "Settings → Models" as the remedy; part B of the
- * series puts the switch there (or re-words these in the same PR).
+ * endpoint or id. They name "Settings → Models" as the remedy, where the
+ * switch is, under "Who answers your chat" (#1123 part B, R2). The fourth
+ * kind, `"claude-again"`, is not the local model's: Tandem writes it at the
+ * user's own switch back (`local-period-wiring.ts`).
  */
-export const CHAT_NOTICE_TEXT: Record<ChatNoticeKind, string> = {
+export type LocalModelChatNoticeKind = Exclude<ChatNoticeKind, "claude-again">;
+export const CHAT_NOTICE_TEXT: Record<LocalModelChatNoticeKind, string> = {
   "no-document":
     "The local model could not answer this message, because no document was open for it. Open the document you want to ask about and send your message again.",
   "no-local-model":
@@ -405,13 +409,18 @@ export const CHAT_NOTICE_UNUSABLE_TEXT: Record<LocalModelUnusableReason, string>
 };
 
 /**
- * Would a local model answer a chat now? The one sanctioned export across the
- * dark audit for the chat-answerer GET (#1123): `index.ts` imports it and
- * hands it to the models routes, so no other `local-model/` module is reached
- * from outside. Only the boolean: never which model, or where it points.
+ * Would a local model answer a chat now, and if not, why? The one sanctioned
+ * export across the dark audit for the chat-answerer GET (#1123): `index.ts`
+ * imports it and hands it to the models routes, so no other `local-model/`
+ * module is reached from outside. It answers only the closed
+ * {@link LocalModelState} (#1123 part B, R1.3, widened from a boolean as A1's
+ * brief allowed): never which model, where it points, or how many.
  */
-export function localModelResolvesNow(): boolean {
-  return resolveLocalModelConfig() !== null;
+export function localModelResolvesNow(): LocalModelState {
+  const r = resolveLocalModel();
+  if (r.kind === "ok") return "usable";
+  if (r.kind === "none") return "none";
+  return r.reason;
 }
 
 /**
@@ -1269,7 +1278,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
    * checked it refuses the write: logged once, nothing posted.
    */
   function postNotice(
-    kind: ChatNoticeKind,
+    kind: LocalModelChatNoticeKind,
     messageId: string,
     documentId?: string,
     text: string = CHAT_NOTICE_TEXT[kind],

@@ -96,7 +96,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import type { ChatAnswerer } from "../../shared/models/contract.js";
+import { ANSWERER_LOCAL_NOTICE_KEY, type ChatAnswerer } from "../../shared/models/contract.js";
 import { atomicWriteConfigFile, readBoundedJsonFileSync } from "../integrations/storage.js";
 import { resolveAppDataDir } from "../platform.js";
 import {
@@ -128,7 +128,7 @@ const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /** Replay key and text of the notice for a switch to the local model that did
  *  not come from Tandem's own window (the development allowance). */
-export const ANSWERER_LOCAL_NOTICE_KEY = "local-model-answerer-local";
+export { ANSWERER_LOCAL_NOTICE_KEY };
 export const ANSWERER_LOCAL_NOTICE =
   "Your chat was set to be answered by a local model. If you did not do this, set who answers your chat back to Claude in Settings → Models.";
 

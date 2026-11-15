@@ -94,6 +94,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import {
+  ANSWERER_CLAUDE_NOTICE_KEY,
+  SETTINGS_CHANGED_NOTICE_KEY,
+} from "../../shared/models/contract.js";
 import type { TandemNotification } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { atomicWriteConfigFile, readBoundedJsonFileSync } from "../integrations/storage.js";
@@ -114,7 +118,7 @@ const MAX_BYTES = 4096;
 
 /** Replay key and text of the start-up notice (#2404). The text claims no
  *  more than is known, and carries no endpoint, path or credential. */
-export const SETTINGS_CHANGED_NOTICE_KEY = "local-model-settings-changed";
+export { SETTINGS_CHANGED_NOTICE_KEY };
 export const SETTINGS_CHANGED_NOTICE =
   "Your local-model settings changed since Tandem last recorded them. If you did not change them, check Settings → Models: remove any model you do not recognise, switch commenting off, and set who answers your chat back to Claude. This can also appear after an upgrade or after restoring Tandem's data.";
 /** The same notice when its parts include the switch: it says first that chat
@@ -126,7 +130,7 @@ export const SETTINGS_CHANGED_ANSWERER_LOCAL_NOTICE =
 /** Replay key of the notice that chat is answered by Claude again although the
  *  user's recorded choice was the local model, by anything but their own
  *  choice in Tandem's own window (#1123, Bryan's decision 2026-11-12). */
-export const ANSWERER_CLAUDE_NOTICE_KEY = "local-model-answerer-claude";
+export { ANSWERER_CLAUDE_NOTICE_KEY };
 
 interface Announced {
   /** Did the user switch commenting on themselves, or were they told it is on? */
