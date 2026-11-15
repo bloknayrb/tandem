@@ -22,6 +22,7 @@ import {
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback, resolveBindHostEnv } from "./bind-check.js";
 import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
+import { setChatRowsDeletedListener } from "./chat-row-deletions.js";
 import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import { attachCtrlObservers } from "./events/queue.js";
@@ -38,7 +39,7 @@ import {
 } from "./local-model/collaborator.js";
 import { formatLogLine } from "./log-filter.js";
 import { installLogRedaction } from "./log-redact.js";
-import { handOverDocumentInbox, onTandemReply } from "./mcp/awareness.js";
+import { handOverDocumentInbox, onTandemReply, ownershipChatSide } from "./mcp/awareness.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -84,6 +85,8 @@ import {
 } from "./session/manager.js";
 import {
   applyUserOpenDefaultToDocuments,
+  forgetChatMessageOwners,
+  setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
@@ -842,6 +845,13 @@ async function main() {
   // The inbox half of a handover (ownership design §6.3), wired beside it for
   // the same reason. Only a flag-on ownership change ever calls it.
   setOwnershipInboxHandover(handOverDocumentInbox);
+  // The chat side of ownership (the chat owners PR, R2.2): which messages are
+  // handled, which are on a document, a row's facts, and the re-owe. And the
+  // other direction: a deleted chat row's per-message owner goes (R3.6).
+  // Wired beside the others for the same reason; only a flag-on ownership
+  // decision calls the first, and the listener returns at the flag.
+  setOwnershipChatSide(ownershipChatSide);
+  setChatRowsDeletedListener(forgetChatMessageOwners);
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that
