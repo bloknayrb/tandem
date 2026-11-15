@@ -35,8 +35,10 @@ vi.mock("../../src/server/license/ai-refusal.js", async (importOriginal) => {
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
+  keyedDeliveryRoundsForTests,
   recordWakeForward,
   resetDeliveryStateForTests,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
@@ -62,7 +64,7 @@ import {
 } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { snapshotUserChat } from "../../src/server/mcp/greeting-reply.js";
 import {
   checkInboxLocalPeriodShape,
@@ -106,6 +108,7 @@ import {
   saveCtrlSession,
 } from "../../src/server/session/manager.js";
 import {
+  keyedDeliveryRounds,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
@@ -344,6 +347,12 @@ for (const ownership of ["", "1"] as const) {
       noteTransportRegistered("test:caller", { recordKind: "claude" });
       noteTransportRegistered(LP_OTHER, { recordKind: "claude" });
       setOwnershipChatSide(ownershipChatSide);
+      // The delivery-rounds PR: the round seam as `index.ts` wires it, so the
+      // ownership-on block runs keyed rounds (R4.2) and the off block master's.
+      setDeliveryRoundSeam({
+        keyed: keyedDeliveryRounds,
+        isDocumentOpen: (id) => getOpenDocs().has(id),
+      });
       resetWakeAdvisoryForTests();
       __resetLocalPeriodForTests();
       __setHonourLocalPeriodRecordsForTests(true);
@@ -378,6 +387,7 @@ for (const ownership of ["", "1"] as const) {
     });
 
     afterEach(async () => {
+      setDeliveryRoundSeam(undefined);
       await close?.();
       close = undefined;
       unsubscribe(extCb);
@@ -553,6 +563,40 @@ for (const ownership of ["", "1"] as const) {
         await toClaude();
         expect(takeWakeAdvisory(0)).toBe(WAKE_ADVISORY_TEXT);
       });
+
+      // The delivery-rounds PR (R4.2; review round 1, item 6): keyed rounds
+      // through the real local-period wiring and a real tab close, flag on.
+      // Registered in the ownership-on block only (this loop stubs the flag
+      // per block, so it always runs there; not keyed on the job's flag).
+      if (ownership === "1") {
+        it("keyed: a document round and a message round, a real switch to local (idle), a blank poll closes nothing, the tab closes, an own-window switch back discards the rest and its wake opens one key-less round the next poll closes", async () => {
+          annotation("lp-c1");
+          userChat("lp-m1", "hello", doc.id);
+          const kinds = () =>
+            keyedDeliveryRoundsForTests()
+              .map((r) => r.kind)
+              .sort();
+          expect(kinds()).toEqual(["document", "message"]);
+          await toLocal();
+          expect(getDeliveryState(Date.now(), 1)).toMatchObject({
+            state: "idle",
+            latencyMs: null,
+            waitingMs: null,
+          });
+          await poll(); // the local period's blank poll
+          expect(kinds(), "the blank poll closed nothing").toEqual(["document", "message"]);
+          const closed = await closeDocumentById(doc.id);
+          expect(closed.success).toBe(true);
+          expect(kinds(), "the close dropped the document's round").toEqual(["message"]);
+          await toClaude("own-window");
+          // The switch back discarded the message round; its wake opened one key-less round.
+          expect(kinds()).toEqual(["keyless"]);
+          expect(getDeliveryState(Date.now(), 1).state).toBe("awaiting-poll");
+          await poll();
+          expect(kinds()).toEqual([]);
+          expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
+        });
+      }
 
       it("a round open at the switch is suspended: no awaiting-poll, no latency; discarded at the switch back", async () => {
         recordWakeForward(Date.now() - 1000);

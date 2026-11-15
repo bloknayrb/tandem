@@ -54,9 +54,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
       "items are owed.",
     closedBy:
-      "The 'chat, rounds and the greeting' PR (per-document delivery rounds beside per-message " +
-      "rounds, design §6.7; moved there by the notice-rule PR's brief, then by the chat owners " +
-      "PR's brief, Ruling 1).",
+      "PR 3b, where the re-owe's wake (startOrWake) can open the round (moved there from the " +
+      "'chat, rounds and the greeting' PR by the delivery-rounds PR's brief).",
   },
   {
     gap:
@@ -127,13 +126,33 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The delivery round is still one global round (pendingSince): a scoped poll closes it " +
-      "although it did not read the documents other sessions hold, so /health can read idle " +
-      "while another session's document has items no poll of its holder has returned.",
+      "Flag on, a document's close drops its delivery round and a reopen opens none (the reopen " +
+      "merges annotations with withFileSync, which the channel skips), while the document's " +
+      "items may still be owed, so /health can read idle with items owed (the delivery-rounds " +
+      "PR, R3.1).",
+    closedBy: "PR 3b (its start-or-wake, which can open the round when it wakes someone).",
+  },
+  {
+    gap:
+      "Flag on, a message's delivery round that no poll will ever hand and no reply will name " +
+      "stays open, so the stall banner reports it: until a restart for a user row a client " +
+      "deleted whose undo failed (the row is gone, so Clear chat, which drops the rounds of the " +
+      "rows it finds, never drops it); until Clear chat for a client-added user row under a key " +
+      "that a Claude reply already handles, and for a carried-over key re-added after such a " +
+      "delete. Each needs client-written rows. Kept open with no fix in the delivery-rounds PR " +
+      "(the reviewing session's ruling); Bryan decides whether to accept it or have the inbox's " +
+      "'never handed' answer key such a forward as no round.",
+    closedBy: "Bryan's decision, before the flip.",
+  },
+  {
+    gap:
+      "Flag on, the stall banner's wording ('Your message is queued — it'll be seen the next " +
+      "time Claude checks in') and its lack of a dismiss have not been reviewed against keyed " +
+      "rounds: with two sessions, a session idle at its prompt that holds a document keeps the " +
+      "banner up while another session polls and is never handed that document's item.",
     closedBy:
-      "The 'chat, rounds and the greeting' PR (per-document delivery rounds beside per-message " +
-      "rounds, design §6.7; moved there by the notice-rule PR's brief, then by the chat owners " +
-      "PR's brief, Ruling 1).",
+      "Bryan's review of the banner against keyed rounds, in PR 3b (its start-or-wake changes " +
+      "when the banner shows).",
   },
   {
     gap:
@@ -331,8 +350,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The greeting classification is still keyed on the reply's session id, and a " +
       "`/api/channel-reply` reply can still be the greeting.",
     closedBy:
-      "The 'chat, rounds and the greeting' PR (classify by bound transport; a channel reply is " +
-      "never the greeting).",
+      "PR 3b (classify by bound transport; a channel reply is never the greeting), moved there " +
+      "from the 'chat, rounds and the greeting' PR by the delivery-rounds PR's brief.",
   },
   {
     gap:

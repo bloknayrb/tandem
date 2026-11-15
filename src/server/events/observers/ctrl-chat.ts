@@ -16,6 +16,7 @@ import {
 } from "../../models/local-period.js";
 import { describeRangeFailure, validateRange } from "../../positions.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
+import { noteChatMessageRowKey } from "../delivery-state.js";
 import type { BufferedSelection, TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import {
@@ -39,7 +40,10 @@ export function makeCtrlChatObserver(deps: {
     // `add`, BEFORE the origin skip and whatever its author — so Claude's own
     // rows, the local model's and a restore's rows are classed too, and no
     // later write (a `read` stamp, `localRun`) ever re-classes one. A row
-    // deleted keeps its class, so a same-key re-add keeps it.
+    // deleted keeps its class, so a same-key re-add keeps it. The one
+    // exception (#2358, the posts PR): with ownership on, a row a client
+    // connection added that the undo deletes at once (not a user row) is
+    // never classed (`removing` below).
     //
     // #2358 (the posts PR, R4): with ownership on, a client connection's
     // change to the chat map is undone (`chat-client-undo.ts`). Decided first,
@@ -180,6 +184,10 @@ export function makeCtrlChatObserver(deps: {
       // Local-period chat re-added under its key after the local period is
       // still local-period chat: never pushed to Claude (R3.4b).
       if (isLocalPeriodChat(key)) markWithheldForLocalPeriod(pushed);
+      // The delivery round's key (#2358, the delivery-rounds PR, R1.1): the
+      // row's chat-map key, noted beside the event, never on it. Read only
+      // while rounds are keyed (ownership on).
+      noteChatMessageRowKey(pushed, key);
       pushEvent(pushed);
     }
   };

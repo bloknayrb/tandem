@@ -57,6 +57,7 @@ import {
 import {
   __resetLocalPeriodForTests,
   __setHonourLocalPeriodRecordsForTests,
+  DELETED_CLASS_CAP,
   isLocalPeriodChat,
 } from "../../src/server/models/local-period.js";
 import { restoreCtrlDoc, saveCtrlSession } from "../../src/server/session/manager.js";
@@ -686,6 +687,56 @@ describe("R4.6 and R4.2: classing and pushes (review round 1, item 8)", () => {
     expect(isLocalPeriodChat(M()), "the restored row keeps its class").toBe(true);
   });
 
+  /**
+   * #2432 merge note (R0.2): the two observer guards that keep a client's
+   * undone change out of #2419's deleted-class ledger. `noteChatRowDeleted`
+   * keeps a deleted row's class by design, so the guards' only effect is the
+   * eviction at `DELETED_CLASS_CAP`: fill the ledger, oldest first with a
+   * local-period row, then make the client's change; the oldest class must
+   * survive. Each case fails with its guard removed.
+   */
+  async function fillDeletedClassLedger(): Promise<string> {
+    __setHonourLocalPeriodRecordsForTests(true);
+    const oldest = key("oldest");
+    answerer.local = true;
+    await seed({ [oldest]: userRow(oldest) });
+    answerer.local = false;
+    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+    withInternal(ctrlDoc, () => serverChat().delete(oldest));
+    const churn = Array.from({ length: DELETED_CLASS_CAP - 1 }, (_, i) => key(`churn${i}`));
+    withInternal(ctrlDoc, () => {
+      for (const k of churn) serverChat().set(k, userRow(k));
+    });
+    withInternal(ctrlDoc, () => {
+      for (const k of churn) serverChat().delete(k);
+    });
+    expect(isLocalPeriodChat(oldest), "the ledger is full and the oldest class is kept").toBe(true);
+    return oldest;
+  }
+
+  it("R0.2's positive control: at the cap, one more server delete of a classed row does evict the oldest class", async () => {
+    const oldest = await fillDeletedClassLedger();
+    const one = key("one-more");
+    withInternal(getOrCreateDocument(CTRL_ROOM), () => serverChat().set(one, userRow(one)));
+    withInternal(getOrCreateDocument(CTRL_ROOM), () => serverChat().delete(one));
+    expect(isLocalPeriodChat(oldest), "the oldest class was evicted").toBe(false);
+  });
+
+  it("R0.2(a): at the cap, a client delete that is undone evicts no deleted row's class", async () => {
+    const oldest = await fillDeletedClassLedger();
+    await seed({ [M()]: userRow(M()) });
+    await clientWrites((chat) => chat.delete(M()));
+    expect(serverChat().has(M()), "the delete was undone").toBe(true);
+    expect(isLocalPeriodChat(oldest), "the oldest class survives").toBe(true);
+  });
+
+  it("R0.2(b): at the cap, a client-added non-user row the undo removes evicts no deleted row's class", async () => {
+    const oldest = await fillDeletedClassLedger();
+    await clientWrites((chat) => chat.set(key("forged"), claudeRow(key("forged"))));
+    expect(serverChat().has(key("forged")), "the add was undone").toBe(false);
+    expect(isLocalPeriodChat(oldest), "the oldest class survives").toBe(true);
+  });
+
   it("the undo's own write pushes no chat:message; a client's own user row does", async () => {
     await seed({ [M()]: userRow(M()) });
     const seen: TandemEvent[] = [];
@@ -732,7 +783,9 @@ describe("flag off: more client writes untouched (review round 1, item 9)", () =
       (S.store as { pendingStructs: unknown }).pendingStructs,
       "not dropped flag-off",
     ).not.toBeNull();
-    // Leave no pending data for the next test.
-    (S.store as { pendingStructs: unknown }).pendingStructs = null;
+    // Leave no pending data for the next test: both halves of the store's
+    // pending state, as `dropPendingUpdates` clears them (#2432 merge note).
+    (S.store as { pendingStructs: unknown; pendingDs: unknown }).pendingStructs = null;
+    (S.store as { pendingStructs: unknown; pendingDs: unknown }).pendingDs = null;
   });
 });

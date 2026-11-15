@@ -237,6 +237,11 @@ Two things sit outside it, for two different reasons:
   the body carries a string `replyTo` and targets that id (`markUserChatRead`); no other
   body field can cause it, an invalid `text` or `inProgress` refuses the request before it,
   and it writes nothing for an unknown id, a Claude row or a message already read.
+  With multi-session ownership on (dark, ADR-054's delivery-rounds amendment), the same
+  `replyTo` also closes that message's delivery round once the reply is appended, so
+  `/health` and the editor's stall banner stop reporting it as waiting. Same bound: the
+  caller needs the message's key, and the route has no caller identity until PR 4's permit;
+  a refused (unlicensed) reply closes nothing.
 - **`/api/wake`** is a WebSocket upgrade registered on the `http.Server` upgrade event
   (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never sees it. It carries
   its own Origin guard. This is an exception to the middleware's *reach*, not to the policy.

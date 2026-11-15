@@ -48,6 +48,7 @@ import {
   noteFileWritable,
 } from "../documents/read-only-file.js";
 import { wireFileWatcher } from "../documents/watcher.js";
+import { dropDocumentDeliveryRound } from "../events/delivery-state.js";
 import { dropPendingUpdates } from "../events/observers/chat-client-undo.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
@@ -1926,6 +1927,17 @@ export async function closeDocumentById(
   // as it is (the change notice's file name is computed inside, flag on
   // only), so nothing new runs here while ownership is off.
   onDocumentClosed(safeId, closedPath);
+
+  // The document's delivery round goes with the tab (#2358, the
+  // delivery-rounds PR, R3.1): dropped, never closed, immediately before the
+  // step that makes the document not open, with no await since the awaits
+  // above, so a forward that landed during them cannot leave a round nothing
+  // will close, and any later forward on this id is key-less (R1.5). Before
+  // `closeDocument` rather than after it, so a throw from its broadcast
+  // cannot strand the round on a document no poll reads (diff review M1).
+  // After the handover, outside it (it pushes nothing: the source pin).
+  // Rounds of messages on the document survive. A no-op while not keyed.
+  dropDocumentDeliveryRound(safeId);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and

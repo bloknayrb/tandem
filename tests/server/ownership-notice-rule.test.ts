@@ -29,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { z } from "zod";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { setDeliveryRoundSeam } from "../../src/server/events/delivery-state.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   handOverDocumentInbox,
@@ -49,6 +50,7 @@ import {
   getDocOwner,
   inboxOwnership,
   inboxScopeOf as inboxScopeOfReal,
+  keyedDeliveryRounds,
   noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
@@ -75,7 +77,9 @@ import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
-/** Set to make the next `resolveDeliveryRound` throw: a throw after the commit. */
+/** Set to make the next `resolveDeliveryRound` throw: a throw after the commit. Since the
+ * delivery-rounds PR the round's close is the poll's last step, after the
+ * notice loop, so this is a throw after the notice step too. */
 const roundThrows = vi.hoisted(() => ({ next: false }));
 vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../src/server/events/delivery-state.js")>();
@@ -258,6 +262,12 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
   // The two lines of `src/server/index.ts`.
   setOwnershipSeqSource(() => deliveryRegistry.counter);
   setOwnershipInboxHandover(handOverDocumentInbox);
+  // And the delivery-round seam (the delivery-rounds PR; review round 1,
+  // item 4), so this file's polls run keyed rounds as a real server does.
+  setDeliveryRoundSeam({
+    keyed: keyedDeliveryRounds,
+    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+  });
   setCtrlMode("tandem");
   // An active document none of the tests' own, so theirs are background ones.
   const front = mkDoc("front");
@@ -273,6 +283,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setDeliveryRoundSeam(undefined);
   await close?.();
   close = undefined;
   vi.useRealTimers();

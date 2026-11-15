@@ -3486,8 +3486,10 @@ const shouldShowModelPicker = $derived(
         />
       {/key}
     {/if}
-    <!-- D-5: a projection, not an event. Document-independent (the join is
-         process-global), so it sits outside the per-tab guards above. -->
+    <!-- D-5: a projection, not an event. Document-independent (`/health`
+         reports one aggregate: flag off one process-global round, flag on the
+         oldest of the rounds keyed by document and by message), so it sits
+         outside the per-tab guards above. -->
     <WakeStallBanner stalledMs={aiReadiness.deliveryStalledMs} />
     {#if activeTab && activeTab.format === "docx"}
       <FidelityReportBanner

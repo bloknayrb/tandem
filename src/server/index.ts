@@ -26,6 +26,7 @@ import { setChatClientWritesUndone } from "./chat-client-writes.js";
 import { setChatRowsDeletedListener } from "./chat-row-deletions.js";
 import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
+import { setDeliveryRoundSeam } from "./events/delivery-state.js";
 import { attachCtrlObservers } from "./events/queue.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
@@ -87,6 +88,7 @@ import {
 import {
   applyUserOpenDefaultToDocuments,
   forgetChatMessageOwners,
+  keyedDeliveryRounds,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
@@ -858,6 +860,15 @@ async function main() {
   // map are undone, which is the ownership flag, read through this seam so
   // the CTRL chat observer never imports it.
   setChatClientWritesUndone(undoClientChatWrites);
+  // The delivery-rounds PR (design §6.7): whether delivery rounds are keyed by
+  // document and by message, which is the ownership flag, and whether a
+  // document is open (a forward on one that is not keys no document round,
+  // R1.5). Through this seam so `events/` never imports the flag. Flag off,
+  // master's one global round.
+  setDeliveryRoundSeam({
+    keyed: keyedDeliveryRounds,
+    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+  });
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that

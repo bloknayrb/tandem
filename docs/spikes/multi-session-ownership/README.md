@@ -118,7 +118,7 @@ A deliberate or sign-in teardown leaves `lastRunBound` as it was before that spa
 
 **Teardown, per spawn.** `teardownTurnDelivery` runs for a superseded spawn too, deliberately not identity-guarded (`supervisor.ts:2262-2275`), so it ends only its own spawn's object. **In PR 3a (R4.3):** that handle stops binding, its transports stop counting as bound, its run files are deleted; teardown moves no transport and no document (Ruling A). **From PR 3b:** its bound transports are re-pointed to fresh private records, its window timer is cancelled, and if it is still the latest spawn, never bound, and the teardown was neither deliberate nor a sign-in failure, the run is recorded as failed to bind (above). Its unbound-child record is retired when the next spawn starts (§3.1). A newer spawn's are never touched. The `tandem` record keeps its documents: presence, not the run, decides what it holds.
 
-**The greeting** is classified by "this transport was bound with the current handle" (§7.3), from the "chat, rounds and the greeting" PR (renamed by the chat owners PR's brief, Ruling 1). Until then it is classified by the reply's session id as before, which under Ruling A still names the launcher's child.
+**The greeting** is classified by "this transport was bound with the current handle" (§7.3), from PR 3b (moved there from the "chat, rounds and the greeting" PR by the delivery-rounds PR's brief, Ruling (reviewing session): there "the reply came from Tandem's Claude's bound run" is a fact about the caller's record, once 3b routes a bound transport to the `tandem` record). Until then it is classified by the reply's session id as before, which under Ruling A still names the launcher's child.
 
 **Dropped with the prompt route:** the three prompt builders (`src/shared/launcher/contract.ts:741`, `:760`, `:819`; the constants and their assertions stay); the `ownerHandle` argument on four tools; `OWNER_HANDLE_CONFLICT`, `INVALID_OWNER_HANDLE` and the absorb rule, which have no input once binding happens at `initialize`; the refusal sentences about handles; the argument-level handle scrub. Tandem never writes the handle into a prompt, a tool result or the transcript. The log-sink redaction stays (§11.2).
 
@@ -378,7 +378,15 @@ A tab close runs steps 1 to 3; reopening D starts from the default rule with not
 
 ### 6.7 Delivery rounds
 
-`pendingSince` (`src/server/events/delivery-state.ts:86`) is one global round, closed by any poll; under ownership a terminal's poll would close a round Tandem's Claude has not seen. Under the flag, rounds are keyed by document for document items and by message for chat. A poll closes the rounds of the documents it read and of the messages it handed out or that are now handled; a document's rounds are dropped when it closes, and a message's when chat is cleared. `/health` keeps reporting one aggregate (the oldest open round's age), never a document id or a per-document breakdown.
+`pendingSince` (`src/server/events/delivery-state.ts:86`) is one global round, closed by any poll; under ownership a terminal's poll would close a round Tandem's Claude has not seen. Under the flag, rounds are keyed by document for document items and by message for chat. A poll that commits closes the round of each document it read and put nothing back on at commit, and the round of each message it handed out or found refused; a message's round also closes when an acknowledgement of it or a final reply to it is accepted, through `tandem_reply` or `/api/channel-reply`. A round with no key closes on any committed poll. A document's rounds are dropped when it closes, and a message's when chat is cleared. `/health` keeps reporting one aggregate (the oldest open round's age), never a document id or a per-document breakdown. *(Amended by the delivery-rounds PR's brief; the paragraphs below are its additions where this section was silent.)*
+
+**Rounds with no key.** A forward that names neither an open document's annotation item nor a chat message (the Solo release wake, the local period's switch-back wake, an annotation event with no document) opens a key-less round, which any committed poll closes, as on master. It carries no item, so it can hide nothing.
+
+**A forward on a document that is not open.** An annotation item forwarded on a document that is not open at forward time opens a key-less round (no poll reads a document that is not open, so a keyed round there could never close). A chat message stays keyed by its message whatever document it names. A document's round is dropped in the same synchronous step that makes the document not open, so no keyed round outlives its document's close.
+
+**Latency once rounds are keyed.** `latencyMs` is the forward-to-close interval of the oldest round the most recent closing event (a poll or a reply) closed, and null while any round is open. A drop records no latency, and the latency of an earlier close is not reported again after one: with nothing left open the state reads `idle` until a later close.
+
+**Abandonment.** When every external consumer detaches, every open round is marked abandoned (`consumer-detached`, no waiting time); when one attaches again every round's mark clears and each keeps its first clock. A round closed while abandoned records no latency. The local period suspends every open round and discards every suspended one at the switch back, as #2419 did for the one round.
 
 ### 6.8 The cursor pin (R3.7)
 
@@ -417,7 +425,7 @@ A document's change of owner moves only the chat that follows that document, nev
 
 A post answers nothing; claiming is what keeps two sessions from both posting about the same unowned document.
 
-**The first-run greeting** (#2193) is Tandem's Claude's post, accepted under rule 2 either on a document it holds or doc-less. The greeting classifier (`isGreetingReply`, and the supervisor's own-child checks at `supervisor.ts:1270` and `:1310`) keys today on the reply's session header and treats a reply with no header as possibly the child's. Under the flag it keys on the calling transport having been bound with the current spawn's handle at `initialize` (§3.3), on the MCP path only; a `/api/channel-reply` reply is never the greeting. This lands in the "chat, rounds and the greeting" PR (moved from PR 3a by its brief, then named by the chat owners PR's brief, Ruling 1).
+**The first-run greeting** (#2193) is Tandem's Claude's post, accepted under rule 2 either on a document it holds or doc-less. The greeting classifier (`isGreetingReply`, and the supervisor's own-child checks at `supervisor.ts:1270` and `:1310`) keys today on the reply's session header and treats a reply with no header as possibly the child's. Under the flag it keys on the calling transport having been bound with the current spawn's handle at `initialize` (§3.3), on the MCP path only; a `/api/channel-reply` reply is never the greeting. This lands in PR 3b (moved from PR 3a by its brief, named "chat, rounds and the greeting" by the chat owners PR's brief, Ruling 1, then moved to 3b by the delivery-rounds PR's brief).
 
 ## 8. Tandem's Claude: presence, take-back, starting, waking
 
@@ -792,7 +800,7 @@ Item 1's "your documents" means the user's: the CHANGELOG says "your documents",
 | R1.4 | §7.1 | Two terminals, Tandem's Claude Off, one doc-less chat: one answer | 2 |
 | R1.5 | §5.5 | Tandem's Claude answers; a pushed terminal takes the document and replies; refused | 1c (comments), 2 (chat) |
 | R2.1 | §6.3, §6.5 | Acknowledged, then Off, then the terminal is handed it | 3b |
-| R2.2 | §5.2, §7.3 | Doc-less answer with no tabs; greeting; id-keyed reply on a non-active held document | 2, chat owners and replies; the greeting in "chat, rounds and the greeting" |
+| R2.2 | §5.2, §7.3 | Doc-less answer with no tabs; greeting; id-keyed reply on a non-active held document | 2, chat owners and replies; the greeting in PR 3b |
 | R2.3 | §7.2 | The owner dies, then the chat is answered | 2 (Tandem's Claude starting for it in 3b) |
 | R2.4 | §8.3, §8.4 | The decision-10 cases; Assign and Release with items waiting; single-session change 2; today's matrix otherwise | 3b (Assign and Release through the seam; end to end in 5) |
 | R2.5 | §8.1, §8.7 | A stub child that never presents its handle: after the bind window Tandem's Claude is not present, its documents are unowned and a terminal answers; a later binding run makes it present and takes back | 3a (only: a child that never presents its handle resolves as before and its `initialize` succeeds), 3b |

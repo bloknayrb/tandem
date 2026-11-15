@@ -22,7 +22,11 @@ import { generateMessageId } from "../../shared/utils.js";
 import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
-import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
+import {
+  closeMessageDeliveryRound,
+  recordInboxPoll,
+  resolveDeliveryRound,
+} from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannelInDocument } from "../events/queue.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
@@ -860,6 +864,17 @@ function noDocumentInboxNote(requestedId: string | undefined): string {
 /** Identity unless a test installed a corruptor (see `setInboxResponseCorruptorForTests`). */
 let responseCorruptorForTests: <T>(response: T) => unknown = (response) => response;
 
+/**
+ * Testing-only (#2358, the delivery-rounds PR, R2.4): throws inside the
+ * notice step of a committed poll, after its hand-out, so a test can show a
+ * poll that throws there closes no delivery round.
+ */
+let noticeFaultForTests: (() => void) | undefined;
+
+export function setInboxNoticeFaultForTests(fault: (() => void) | undefined): void {
+  noticeFaultForTests = fault;
+}
+
 /** Run at the start of a poll's chat commit (both collectors); may throw (the posts PR, R0.7). */
 let chatCommitFaultForTests: (() => void) | undefined;
 
@@ -1659,6 +1674,14 @@ interface InboxDocumentsPass extends DocumentInbox {
   /** Flag on: the documents whose pass returned at least one item. */
   yielded: Set<string>;
   /**
+   * Every document this pass read (#2358, the delivery-rounds PR, the
+   * brief's Terms): its pass ran and did not throw, or the quiet-document
+   * skip passed over it (its last pass was a quiet fixed point). Never an
+   * excluded document, one whose scope read failed, one with no store, or
+   * one whose pass threw. Read only while delivery rounds are keyed.
+   */
+  read: Set<string>;
+  /**
    * Flag on, the notice rule: per document, the settled marks this pass saw
    * change (`NoticeSettlement.ended`), ended by the commit only where the
    * poll read the document as its holder (`endObservedNotices`).
@@ -1719,6 +1742,7 @@ function collectInboxDocuments(
     readDocuments: new Map(),
     excluded: [],
     yielded: new Set(),
+    read: new Set(),
     noticeEnds: new Map(),
     commit: () => {
       for (const commit of commits) commit();
@@ -1827,6 +1851,7 @@ function collectInboxDocuments(
         if (isQuietSkip(id, state, modeState, view)) {
           // Sound only with nothing held (see `isQuietSkip`), so nothing to carry.
           if (view) pass.readDocuments.set(id, new Set());
+          pass.read.add(id);
           continue;
         }
         const epochBefore = state.epoch;
@@ -1920,6 +1945,7 @@ function collectInboxDocuments(
       ledgers.commit();
       commitQuiet?.();
     });
+    pass.read.add(id);
     pass.userActions.push(...inbox.userActions);
     pass.userResponses.push(...inbox.userResponses);
     pass.userReplies.push(...inbox.userReplies);
@@ -2007,6 +2033,12 @@ interface UnreadChat {
   messages: InboxChatMessage[];
   /** Messages refused as malformed: not returned, not stamped. */
   dropped: number;
+  /**
+   * Their chat-map keys (#2358, the delivery-rounds PR, R2.2): a committed
+   * poll that found a message refused closes its round. Only messages in the
+   * caller's chat scope reach `admit`.
+   */
+  droppedKeys: string[];
   /**
    * Stamp the returned messages. Call only once the response validated.
    * Cursor-less polls stamp them `read`; a cursor poll stamps them
@@ -2149,6 +2181,7 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
     stamped: [] as string[],
   };
   let dropped = 0;
+  const droppedKeys: string[] = [];
   // Ownership on (the posts PR, R3.5; design §6.4: the cursor-less path
   // "gains the check it lacks today"): a handled message is never handed,
   // even unread. While ownership is off, master's path: no check here.
@@ -2170,6 +2203,7 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
     const item = admitChatItem(msg);
     if (!item) {
       dropped += 1;
+      droppedKeys.push(key);
       return;
     }
     messages.push(item);
@@ -2181,6 +2215,7 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
   return {
     messages,
     dropped,
+    droppedKeys,
     owedAtSwitch,
     held: new Set(),
     scopes,
@@ -2606,6 +2641,7 @@ function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
   const owedAtSwitch: string[] = [];
   const held = new Set<number>();
   let dropped = 0;
+  const droppedKeys: string[] = [];
   const seqs: number[] = [];
   /** Entries this pass created (lookup before assign), for the undo (R4.4). */
   const created = new Map<string, RegistryEntry>();
@@ -2613,6 +2649,7 @@ function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
     const item = admitChatItem(chatMap.get(key) as Partial<ChatMessage>);
     if (!item) {
       dropped += 1;
+      droppedKeys.push(key);
       const entry = deliveryRegistry.lookup("c", key, 0);
       if (entry) held.add(entry.seq);
       continue;
@@ -2633,6 +2670,7 @@ function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
   return {
     messages,
     dropped,
+    droppedKeys,
     owedAtSwitch,
     held,
     scopes,
@@ -3292,6 +3330,10 @@ export function registerAwarenessTools(server: McpServer): void {
           // included, so it hides nothing from whoever does answer it.
           const claimed = new Set<string>();
           const chatExcluded = new Set<string>();
+          // The documents this poll put items back on at commit (a claim
+          // `"refused"` or `"changed"`): their delivery rounds stay open
+          // (#2358, the delivery-rounds PR, R2.1).
+          const putBack = new Set<string>();
           if (scope.scoped) {
             const chatOn = new Map<string, string[]>();
             for (const [key, { scope: chatScope, documentId: on }] of chat.scopes) {
@@ -3306,6 +3348,7 @@ export function registerAwarenessTools(server: McpServer): void {
               const outcome = scope.claim(id, before, getOpenDocs().has(id));
               if (outcome === "held") claimed.add(id);
               else {
+                putBack.add(id);
                 // The document is not the caller's: its chat goes back as it
                 // was (unregistered, unstamped), for whoever answers it.
                 for (const key of chatOn.get(id) ?? []) chatExcluded.add(key);
@@ -3368,29 +3411,50 @@ export function registerAwarenessTools(server: McpServer): void {
             }
             if (named.length > 0) response.summary += inboxLostNote(named);
           }
-          // The join closes only now, once what was returned is committed — a
-          // claim about the USER's message, kept apart from the poll stamp above.
-          // It stays OPEN while a document the round is waiting on could not be
-          // read at all; that held round is re-timed to its oldest item still
-          // undelivered (`resolveDeliveryRound`). A record `admit` refused does
-          // NOT hold it: the summary just told Claude about it, and holding would
-          // leave a permanently malformed record pinning the round at
-          // `awaiting-poll` for the life of the process (PR #2225 review). The round is process-wide, so a poll naming
-          // a different document still closes one whose forward was elsewhere —
-          // `polled` was never proof that that annotation was delivered.
-          resolveDeliveryRound(Date.now(), {
-            documents: new Set(docs.unreadable),
-            items: new Set(),
-          });
-
-          // The notice rule (R1.3a), last, so a throw anywhere above ends
-          // nothing: a settled mark ends where this committed poll read the
+          // The notice rule (R1.3a), after every other commit step, so a
+          // throw anywhere above ends nothing. Only the delivery round's close
+          // follows it (the delivery-rounds PR, R2.4), and that close is map
+          // operations that do not throw; the test suites that make it throw
+          // (`roundThrows`) therefore model a throw after the notice step,
+          // whose ended notices the catch does not restore. A settled mark ends where this committed poll read the
           // document as its holder and saw the notice's record change. A poll
           // that only may claim and did not, or one that did not commit,
           // observed nothing. Empty while ownership is off.
+          noticeFaultForTests?.();
           for (const [id, ended] of docs.noticeEnds) {
             if (scope.scopeOf(id) === "holds" || claimed.has(id)) endObservedNotices(ended);
           }
+
+          // The join closes only now, the last thing before the return, once
+          // what was returned is committed — a claim about the USER's message,
+          // kept apart from the poll stamp above — so a throw anywhere above
+          // closes nothing (#2358, the delivery-rounds PR, R2.4).
+          //
+          // Ownership off (the one global round): it stays OPEN while a
+          // document the round is waiting on could not be read at all; that
+          // held round is re-timed to its oldest item still undelivered
+          // (`resolveDeliveryRound`). A record `admit` refused does NOT hold
+          // it: the summary just told Claude about it, and holding would leave
+          // a permanently malformed record pinning the round at
+          // `awaiting-poll` for the life of the process (PR #2225 review). That
+          // round is process-wide, so a poll naming a different document still
+          // closes one whose forward was elsewhere — `polled` was never proof
+          // that that annotation was delivered.
+          //
+          // Ownership on, rounds are keyed (design §6.7): this poll closes the
+          // round of each document it read and put nothing back on, the round
+          // of each message it handed (outside `chatExcluded`) or found
+          // refused, and the key-less round; never a round another session's
+          // document or message is waiting on. The module decides which mode
+          // applies; this handler reads no flag.
+          resolveDeliveryRound(
+            Date.now(),
+            { documents: new Set(docs.unreadable), items: new Set() },
+            {
+              documents: new Set([...docs.read].filter((id) => !putBack.has(id))),
+              messages: new Set([...(chatCommitted?.handed ?? []), ...chat.droppedKeys]),
+            },
+          );
 
           return mcpStructured(response);
         } catch (err) {
@@ -3496,6 +3560,12 @@ export function registerAwarenessTools(server: McpServer): void {
             kind: appended.refusal.kind,
           });
         }
+        // The message's delivery round closes once the reply's row is
+        // appended (#2358, the delivery-rounds PR, R2.2): an acknowledgement
+        // or a final reply, before `gate.apply`, so nothing that step does
+        // can leave it open. A refused reply returned above. Nothing while
+        // rounds are not keyed (ownership off).
+        if (replyTo !== undefined) closeMessageDeliveryRound(replyTo);
         // The reply's claim and per-message owner (R5.2), once the append
         // landed, with no `await` since the gate: a reply the licence refused
         // above claims nothing and sets no owner.

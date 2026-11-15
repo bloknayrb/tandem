@@ -40,6 +40,86 @@ describe("each transport branch tells the ownership module its mode before servi
   });
 });
 
+describe("the delivery-round seam is wired in a running server (the delivery-rounds PR)", () => {
+  // Unwired, rounds stay master's one global round even flag on, and no unit
+  // test would notice: `main()` cannot run in a unit test, so the call is
+  // pinned from source, beside `setOwnershipSeqSource`.
+  const src = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("index.ts wires the ownership side's keyedDeliveryRounds and the registry, once, before either transport branch", () => {
+    const call =
+      "setDeliveryRoundSeam({\n    keyed: keyedDeliveryRounds,\n    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),\n  });";
+    expect(src.split(call)).toHaveLength(2);
+    const wired = src.indexOf(call);
+    expect(wired).toBeGreaterThan(
+      src.indexOf("setOwnershipSeqSource(() => deliveryRegistry.counter);"),
+    );
+    expect(wired).toBeLessThan(src.indexOf('if (transportMode === "http") {\n    // Ownership'));
+    const callers = [...SRC_FILES]
+      .filter(([, text]) => /\bsetDeliveryRoundSeam\(/.test(text))
+      .map(([file]) => file)
+      .sort();
+    expect(callers).toEqual(["src/server/events/delivery-state.ts", "src/server/index.ts"]);
+    const ownership = SRC_FILES.get("src/server/sessions/ownership.ts") as string;
+    expect(ownership).toMatch(
+      /export function keyedDeliveryRounds\(\): boolean \{\n {2}return ownershipEnabled\(\);\n\}/,
+    );
+  });
+
+  it("exactly one call in index.ts, an unconditional statement of main() in the same block as setOwnershipSeqSource (review round 1)", () => {
+    // Every call site, whatever its arguments: a second one (say
+    // `setDeliveryRoundSeam(undefined)`) would unwire the first.
+    expect(src.match(/\bsetDeliveryRoundSeam\s*\(/g)).toHaveLength(1);
+    const lines = src.split("\n");
+    const at = lines.findIndex((l) => /\bsetDeliveryRoundSeam\s*\(/.test(l));
+    // Two spaces and nothing before the call: not wrapped in a condition on
+    // its own line.
+    expect(lines[at]).toBe("  setDeliveryRoundSeam({");
+    // Between `setOwnershipSeqSource` (pinned as a statement of main()) and
+    // this call every brace closes, so the call is in the same block, not
+    // inside a branch or a function opened between them.
+    const from = lines.findIndex((l) => l.includes("setOwnershipSeqSource(() =>"));
+    expect(from).toBeGreaterThan(-1);
+    expect(from).toBeLessThan(at);
+    const between = lines
+      .slice(from, at)
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .join("\n");
+    let depth = 0;
+    for (const ch of between) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("no src file imports a round seam, drop or close under another name", () => {
+    for (const [file, text] of SRC_FILES) {
+      expect(text, file).not.toMatch(
+        /\b(?:setDeliveryRoundSeam|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound)\s+as\s+\w/,
+      );
+    }
+  });
+
+  it("the drops sit where the brief puts them: the close in closeDocumentById, Clear chat in clearCtrlChatDurably, never the chat observer", () => {
+    const callersOf = (name: string) =>
+      [...SRC_FILES]
+        .filter(
+          ([file, text]) =>
+            file !== "src/server/events/delivery-state.ts" && text.includes(`${name}(`),
+        )
+        .map(([file]) => file)
+        .sort();
+    expect(callersOf("dropDocumentDeliveryRound")).toEqual(["src/server/mcp/document-service.ts"]);
+    expect(callersOf("dropMessageDeliveryRounds")).toEqual(["src/server/session/manager.ts"]);
+    expect(callersOf("closeMessageDeliveryRound")).toEqual([
+      "src/server/mcp/awareness.ts",
+      "src/server/mcp/channel-routes.ts",
+    ]);
+  });
+});
+
 describe("an ownership entry's sinceSeq has a real source in a running server (ownership design §2; PR 2a)", () => {
   // `setOwnershipSeqSource` is a seam that answers 0 when nothing wires it, so
   // every unit test passes without the wiring: an unwired server would stamp
@@ -163,7 +243,7 @@ describe("the handover is wired in a running server, and reachable only through 
     const handOverBody = ownership.slice(handOverFrom, ownership.indexOf("\n}\n", handOverFrom));
     for (const text of [body, keys, handOverBody]) {
       expect(text).not.toMatch(
-        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
+        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
       );
     }
     // The annotation read is the plain one, on a Y.Doc from the non-creating getter.

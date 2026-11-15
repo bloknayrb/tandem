@@ -37,9 +37,11 @@
  * (`settles`, written by the chat side, and who wrote each reply row), the
  * boot's carried-over messages, and the switch that has a client
  * connection's changes to the chat map undone (`undoClientChatWrites`).
- * Still to come, named by content as in the plan: chat, rounds and the
- * greeting (per-document and per-message delivery rounds, and the greeting
- * by bound transport).
+ * The delivery-rounds PR: whether delivery rounds are keyed by document and
+ * by message (`keyedDeliveryRounds`, read through a seam by
+ * `events/delivery-state.ts`; flag on keyed, flag off master's one global
+ * round). Still to come, named by content as in the plan: the greeting by
+ * bound transport (PR 3b).
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -1106,6 +1108,16 @@ export function captureCarriedOverChat(candidates: () => readonly string[]): voi
  * flag.
  */
 export function undoClientChatWrites(): boolean {
+  return ownershipEnabled();
+}
+
+/**
+ * Whether delivery rounds are keyed by document and by message (the
+ * delivery-rounds PR; design §6.7): with ownership on, yes. `src/server/index.ts`
+ * wires it into `events/delivery-state.ts`'s round seam, so `events/` learns
+ * it without importing the flag.
+ */
+export function keyedDeliveryRounds(): boolean {
   return ownershipEnabled();
 }
 
