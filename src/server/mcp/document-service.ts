@@ -48,6 +48,7 @@ import {
   noteFileWritable,
 } from "../documents/read-only-file.js";
 import { wireFileWatcher } from "../documents/watcher.js";
+import { dropDocumentDeliveryRound } from "../events/delivery-state.js";
 import { dropPendingUpdates } from "../events/observers/chat-client-undo.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
@@ -1931,6 +1932,15 @@ export async function closeDocumentById(
   // closed doc held it, publish once. The store flush, file-sync context and
   // dirty teardown above stay here — their ordering is load-bearing.
   closeDocument(safeId);
+
+  // The document's delivery round goes with the tab (#2358, the
+  // delivery-rounds PR, R3.1): dropped, never closed, right after the step
+  // that makes the document not open, with no await since the awaits above,
+  // so a forward that landed during them cannot leave a round nothing will
+  // close, and any later forward on this id is key-less (R1.5). Outside the
+  // handover. Rounds of messages on the document survive. A no-op while
+  // rounds are not keyed.
+  dropDocumentDeliveryRound(safeId);
 
   // Delete the session file so this document doesn't reopen on restart —
   // unless the block above just wrote it as the surviving copy of unpersisted

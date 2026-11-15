@@ -15,6 +15,7 @@ import {
 } from "../../models/local-period.js";
 import { describeRangeFailure, validateRange } from "../../positions.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
+import { noteChatMessageRowKey } from "../delivery-state.js";
 import type { BufferedSelection, TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import {
@@ -172,6 +173,10 @@ export function makeCtrlChatObserver(deps: {
       // Local-period chat re-added under its key after the local period is
       // still local-period chat: never pushed to Claude (R3.4b).
       if (isLocalPeriodChat(key)) markWithheldForLocalPeriod(pushed);
+      // The delivery round's key (#2358, the delivery-rounds PR, R1.1): the
+      // row's chat-map key, noted beside the event, never on it. Read only
+      // while rounds are keyed (ownership on).
+      noteChatMessageRowKey(pushed, key);
       pushEvent(pushed);
     }
   };

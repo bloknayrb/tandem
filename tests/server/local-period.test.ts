@@ -23,6 +23,7 @@ import {
   getDeliveryState,
   recordWakeForward,
   resetDeliveryStateForTests,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
@@ -92,6 +93,7 @@ import {
   saveCtrlSession,
 } from "../../src/server/session/manager.js";
 import {
+  keyedDeliveryRounds,
   noteTransportRegistered,
   ownershipSnapshotForTests,
   resetOwnershipForTests,
@@ -318,6 +320,12 @@ for (const ownership of ["", "1"] as const) {
       noteTransportRegistered("test:caller", { recordKind: "claude" });
       noteTransportRegistered(LP_OTHER, { recordKind: "claude" });
       setOwnershipChatSide(ownershipChatSide);
+      // The delivery-rounds PR: the round seam as `index.ts` wires it, so the
+      // ownership-on block runs keyed rounds (R4.2) and the off block master's.
+      setDeliveryRoundSeam({
+        keyed: keyedDeliveryRounds,
+        isDocumentOpen: (id) => getOpenDocs().has(id),
+      });
       resetWakeAdvisoryForTests();
       __resetLocalPeriodForTests();
       __setHonourLocalPeriodRecordsForTests(true);
@@ -352,6 +360,7 @@ for (const ownership of ["", "1"] as const) {
     });
 
     afterEach(async () => {
+      setDeliveryRoundSeam(undefined);
       await close?.();
       close = undefined;
       unsubscribe(extCb);

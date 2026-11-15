@@ -28,6 +28,7 @@ import {
 } from "../annotations/store.js";
 import { noteChatRowsDeleted } from "../chat-row-deletions.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
+import { dropMessageDeliveryRounds } from "../events/delivery-state.js";
 import { atomicWrite } from "../file-io/index.js";
 import { ensurePrivateStoreDir, PRIVATE_FILE_MODE } from "../file-io/private-dir.js";
 import {
@@ -1017,6 +1018,10 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
     // And their per-message owners (#2358, the chat owners PR, R3.6, R7.5):
     // the same captured ids, through the seam.
     noteChatRowsDeleted(capturedIds);
+    // And their delivery rounds (#2358, the delivery-rounds PR, R3.2):
+    // dropped, never closed, on a Clear chat only. A no-op while rounds are
+    // not keyed.
+    dropMessageDeliveryRounds(capturedIds);
     const liveStream = doc.getMap(Y_MAP_CHAT_STREAM);
     withInternal(doc, () => {
       for (const id of capturedIds) {

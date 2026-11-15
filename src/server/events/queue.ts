@@ -24,6 +24,7 @@ import { installModeProvenanceObserver, readModeState } from "../mode.js";
 import { inLocalPeriod, withheldForLocalPeriod } from "../models/local-period.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
+  deliveryRoundKeyOf,
   isUnansweredAsk,
   noteExternalConsumerAttached,
   noteExternalConsumersGone,
@@ -225,6 +226,12 @@ function trackPayloadId(event: TandemEvent): boolean {
  * one: a `chat:message` also carries a `documentId`, but the inbox reads chat
  * from CTRL_ROOM whatever document it names, so an unreadable document must not
  * hold a chat's round open; and the Solo release wake names no document.
+ *
+ * That is the one global round's rule, which holds while ownership is off. With
+ * ownership on (#2358, the delivery-rounds PR) rounds are keyed instead
+ * (`deliveryRoundKeyOf`): a `chat:message` opens the round of its message, by
+ * its chat-map key, whatever document it names, so a document's round never
+ * holds a chat's; this item is then unused.
  */
 function pendingDeliveryItem(event: TandemEvent): PendingDeliveryItem | undefined {
   if (!event.documentId) return undefined;
@@ -454,7 +461,10 @@ function pushEvent(event: TandemEvent): void {
   // false on an unwritable stdin. `noteExternalConsumersGone` in `unsubscribe`
   // is what stops that becoming a permanent lie.
   if (forwardExternally && externalSubscribers.size > 0 && isUnansweredAsk(event)) {
-    recordWakeForward(now, pendingDeliveryItem(event));
+    // Keyed rounds (#2358, the delivery-rounds PR, R1): the round's key is
+    // decided here and passed beside the event, never on it. Undefined while
+    // rounds are not keyed, which `recordWakeForward` then ignores.
+    recordWakeForward(now, pendingDeliveryItem(event), deliveryRoundKeyOf(event));
   }
 
   // Revoke after a refused event, BEFORE the fan-out and never inside it:
