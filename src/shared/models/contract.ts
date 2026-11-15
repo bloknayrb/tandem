@@ -140,7 +140,7 @@ export type ModelProvider =
   | "local-lmstudio"
   | "local-other";
 
-export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
+const ALL_PROVIDERS = [
   "anthropic",
   "openai",
   "gemini",
@@ -151,7 +151,15 @@ export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
   // removed value would make this build's own `models.json` fail to parse.
   "local-lmstudio",
   "local-other",
-];
+] as const satisfies readonly ModelProvider[];
+
+// Exhaustiveness: a member added to `ModelProvider` but not to the list above
+// is a type error here, rather than a value every validator silently rejects.
+type UnlistedProvider = Exclude<ModelProvider, (typeof ALL_PROVIDERS)[number]>;
+const _everyProviderListed: [UnlistedProvider] extends [never] ? true : never = true;
+void _everyProviderListed;
+
+export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = ALL_PROVIDERS;
 
 /**
  * Local providers drive an OpenAI-compatible loopback endpoint and carry no

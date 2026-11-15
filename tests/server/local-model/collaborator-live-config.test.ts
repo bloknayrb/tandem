@@ -60,6 +60,7 @@ import {
 import type { TandemEvent } from "../../../src/shared/events/types.js";
 import {
   API_MODELS,
+  LOCAL_MODEL_PROVIDERS,
   type ModelsEntry,
   type ModelsFile,
 } from "../../../src/shared/models/contract.js";
@@ -719,8 +720,8 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
     }
 
     for (const endpoint of [MODEL_ADDRESS, `${MODEL_ADDRESS}/v1`]) {
-      it(`saved as ${endpoint}: one URL and one fetch init for all three providers`, async () => {
-        for (const provider of ["local-ollama", "local-lmstudio", "local-other"] as const) {
+      it(`saved as ${endpoint}: one URL and one fetch init for every local provider`, async () => {
+        for (const provider of LOCAL_MODEL_PROVIDERS) {
           // A fresh chat each time, so no run carries an earlier run's history.
           const ctrl = getOrCreateDocument(CTRL_ROOM);
           withInternal(ctrl, () => {
@@ -730,12 +731,11 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
           await save(file([entry({ provider, endpoint })], "m-1"));
           await chat();
         }
-        expect(sent).toHaveLength(3);
-        const [ollama, lmstudio, other] = [wire(0), wire(1), wire(2)];
-        expect(ollama.url).toBe(`${MODEL_ADDRESS}/v1/chat/completions`);
-        expect(lmstudio).toEqual(ollama);
-        expect(other).toEqual(ollama);
-        expect(ollama.headers).toEqual({ "content-type": "application/json" });
+        expect(sent).toHaveLength(LOCAL_MODEL_PROVIDERS.length);
+        const first = wire(0);
+        expect(first.url).toBe(`${MODEL_ADDRESS}/v1/chat/completions`);
+        for (let i = 1; i < sent.length; i++) expect(wire(i)).toEqual(first);
+        expect(first.headers).toEqual({ "content-type": "application/json" });
       });
     }
   });
