@@ -667,7 +667,7 @@ describe("run state on the user's row (R3.4)", () => {
       );
       collab.onEvent(userChat("u1", "doc-x"));
       await drain(collab);
-      const reply = claudeRows().find((m) => m.replyTo === "u1");
+      const reply = claudeRows().find((m) => m.replyTo === "u1" && m.chatNotice === undefined);
       expect(row("u1")?.localRun).toEqual({
         status: "stopped",
         reason,
@@ -675,6 +675,13 @@ describe("run state on the user's row (R3.4)", () => {
         ...(partial ? { replyId: reply?.id } : {}),
       });
       expect(Boolean(reply)).toBe(partial);
+      // Part C (R3.2): only a `clean` run that showed nothing gets the
+      // no-reply notice; every other exit posts no chat notice.
+      expect(
+        claudeRows()
+          .filter((m) => m.replyTo === "u1" && m.chatNotice !== undefined)
+          .map((m) => [m.chatNotice, m.text]),
+      ).toEqual(exit === "clean" ? [["no-reply", "Your local model produced no reply."]] : []);
     });
   }
 
@@ -899,7 +906,7 @@ describe("run state on the user's row (R3.4)", () => {
     expect(row("u3")?.localRun).toEqual({ status: "stopped", reason: "no-reply", generation: G });
   });
 
-  it("a chat row cleared mid-run gets nothing written back", async () => {
+  it("a chat row cleared mid-run gets nothing written back: no run state and no no-reply notice", async () => {
     setupDoc("doc-clr");
     const p = parked();
     const collab = createLocalModelCollaborator(deps({ runTurn: p.runTurn }));
@@ -910,6 +917,7 @@ describe("run state on the user's row (R3.4)", () => {
     p.release();
     await drain(collab);
     expect(row("u1")).toBeUndefined();
+    expect(claudeRows()).toEqual([]);
   });
 
   it("a 'running' state from another server process (one that stopped mid-run) reads as stopped, interrupted", () => {

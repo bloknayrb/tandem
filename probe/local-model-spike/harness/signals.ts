@@ -1,14 +1,20 @@
 /**
  * Things recorded about a reply that are reported and never gate (brief R2.7,
  * R2.8, R3.4): visible reasoning, a reply in another language, a reply that
- * repeats the system prompt, a prompt longer than the context window, and a
- * chat row left holding an earlier turn's preamble.
+ * repeats the system prompt, a prompt longer than the context window, a chat
+ * row left holding an earlier turn's preamble, and a `</think>` with no
+ * opening tag.
  *
  * Inline reasoning shapes ASSUMED (no model was available to check): a
  * `<think>`, `<thinking>` or `<reasoning>` block in the content, closed or left
- * open. Known misses: a closing tag with no opening one, and untagged
- * reasoning ("Okay, the user wants…").
+ * open. Since #1123 part C the product hides `<think>` blocks (never
+ * `<thinking>` or `<reasoning>`), so a reply shows reasoning only through the
+ * other two, or a `<think>` left open after visible text at a clean end. Known
+ * misses: untagged reasoning ("Okay, the user wants…"). A closing `</think>`
+ * with no opening one stays visible; it is counted (`orphanCloseThink`), so a
+ * real measurement can show whether any model emits one.
  */
+import { shownText } from "../../../src/server/local-model/think-filter.js";
 import type { TapRecord } from "./fetch-tap.js";
 import type { TurnText } from "./trial.js";
 
@@ -39,14 +45,44 @@ export function reasoningShape(input: {
 }
 
 /**
- * The final turn said nothing and the chat row still holds text from an
- * earlier turn (a preamble before a tool call that a flush had committed).
- * The run exits cleanly, so the user gets no notice: the preamble IS the reply.
+ * What a turn's text showed the user (#1123 part C, R5.2): inline `<think>`
+ * reasoning removed as the product removes it. A turn that ended without tool
+ * calls is the run's last, and a `clean` end releases a block left open after
+ * visible text; a tool-call turn and a cut turn never release one.
+ */
+export function turnShownText(turn: TurnText): string {
+  return shownText(turn.text, turn.hadToolCalls === false);
+}
+
+/**
+ * The final turn SHOWED nothing (empty, or only `<think>` reasoning) and the
+ * chat row still holds text from an earlier turn (a preamble before a tool
+ * call that a flush had committed). The run exits cleanly, so the user gets no
+ * notice: the preamble IS the reply (D-C1).
  */
 export function stalePreamble(input: { reply: string; turns: TurnText[] }): boolean {
   const last = input.turns[input.turns.length - 1];
   if (!last || input.reply.trim().length === 0) return false;
-  return last.hadToolCalls === false && last.text.trim().length === 0;
+  return last.hadToolCalls === false && turnShownText(last).trim().length === 0;
+}
+
+/**
+ * How many `</think>` (any case) the model wrote with no `<think>` before it
+ * in the same turn (#1123 part C, R5.3). The product leaves such a tag
+ * visible; this is the measurement that says whether any model needs more.
+ */
+export function orphanCloseThink(turns: TurnText[]): number {
+  let n = 0;
+  for (const t of turns) {
+    const lower = t.text.toLowerCase();
+    const firstOpen = lower.indexOf("<think>");
+    let at = lower.indexOf("</think>");
+    while (at !== -1 && (firstOpen === -1 || at < firstOpen)) {
+      n += 1;
+      at = lower.indexOf("</think>", at + 1);
+    }
+  }
+  return n;
 }
 
 const ENGLISH_STOPWORDS = new Set(

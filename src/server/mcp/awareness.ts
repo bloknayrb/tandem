@@ -807,6 +807,35 @@ export function finalizeClaudeChatMessage(id: string): void {
 }
 
 /**
+ * Remove a streamed reply row the local-model collaborator wrote (#1123 part
+ * C, Ruling C-1): only where a toast says the run stopped without replying or
+ * that its reply was not delivered, so no row contradicts it. Deletes the
+ * `Y_MAP_CHAT_STREAM` sidecar entry and the chat row in one `withMcp` write
+ * (one update, or part of the caller's), and retires the staleness ledger
+ * entry. Only a local-model reply row is removed; a missing row (chat cleared
+ * mid-run) is left missing and nothing is re-created. Not an append, so it is
+ * not an AI-surface admission point: it removes what an admitted run wrote.
+ */
+export function removeClaudeChatMessage(id: string): void {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const streamMap = ctrlDoc.getMap(Y_MAP_CHAT_STREAM);
+  clearStreamStaleness(id);
+  const existing = chatMap.get(id) as ChatMessage | undefined;
+  // A local-model row only (it carries `agentIdentity`): never Claude's own
+  // `tandem_reply`, never a notice.
+  const removeRow =
+    existing?.author === "claude" &&
+    existing.agentIdentity !== undefined &&
+    existing.chatNotice === undefined;
+  if (!removeRow && !streamMap.has(id)) return;
+  withMcp(ctrlDoc, () => {
+    if (streamMap.has(id)) streamMap.delete(id);
+    if (removeRow) chatMap.delete(id);
+  });
+}
+
+/**
  * Leads `tandem_checkInbox`'s summary when the poll read no document: a named
  * one that is not open, or nothing open at all. Deliberately carries no "call
  * tandem_open" advice: opening a document is something Claude does only when

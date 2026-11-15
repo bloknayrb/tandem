@@ -746,7 +746,7 @@ describe("endings and what counts as a scored trial", () => {
 describe("visible reasoning (R2.7)", () => {
   const s = () => scenario("ans-ops-review-q3-revenue");
 
-  it("inline reasoning reaches the reply and is marked", async () => {
+  it("inline reasoning is recorded, but never reaches the reply (part C, D-C2)", async () => {
     const { obs } = await runScripted(s(), [
       {
         content: [
@@ -755,10 +755,26 @@ describe("visible reasoning (R2.7)", () => {
         ],
       },
     ]);
+    expect(obs.reply).toBe("Revenue was $4.82 million.");
     const rec = record(s(), obs);
     expect(rec.signals.reasoning).toBe("inline");
+    expect(rec.signals.replyShowsReasoning).toBe(false);
+    // Scored on what the user sees: the planted value was only in the hidden block.
+    expect(rec.scorerPass).toBe(true);
+    expect(rec.scorerPassWithoutReasoning).toBe(true);
+  });
+
+  it("<thinking> and <reasoning> are not hidden: they still reach the reply and are marked", async () => {
+    const { obs } = await runScripted(s(), [
+      {
+        content: [
+          "<thinking>The Q2 figure was $4.41 million, so…</thinking>",
+          "Revenue was $4.82 million.",
+        ],
+      },
+    ]);
+    const rec = record(s(), obs);
     expect(rec.signals.replyShowsReasoning).toBe(true);
-    // Scored on what the user sees: the reasoning names the planted value.
     expect(rec.scorerPass).toBe(false);
     expect(rec.scorerPassWithoutReasoning).toBe(true);
   });
@@ -777,13 +793,16 @@ describe("visible reasoning (R2.7)", () => {
     expect(rec.scorerPass).toBe(true);
   });
 
-  it("an answer given only as reasoning leaves the user with nothing, and is recorded as that", async () => {
+  it("an answer given only as reasoning shows the user no reply, only the no-reply notice, and is recorded as that", async () => {
     const { obs } = await runScripted(s(), [
       { extraFrames: [{ choices: [{ delta: { reasoning: "The answer is $4.82 million." } }] }] },
     ]);
     expect(obs.loop?.metrics.exit).toBe("clean");
     expect(obs.reply).toBe("");
     expect(obs.notices).toEqual([]);
+    expect(obs.chatNotices).toEqual([
+      { kind: "no-reply", text: "Your local model produced no reply." },
+    ]);
     const rec = record(s(), obs);
     expect(rec.signals.reasoning).toBe("reasoning-only");
     expect(rec.signals.emptyReply).toBe(true);
