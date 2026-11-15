@@ -967,6 +967,8 @@ describe("#1123 A2 — the real queue, the real switch and the real supervisor",
       clearBufferedSelections: () => {},
       emitReturnWake: emitAnswererReturnWake,
       persist: () => {},
+      // #1123 part B, R11: the switch-back line; not this file's subject.
+      writeSwitchBackLine: () => {},
     });
   });
   afterEach(async () => {

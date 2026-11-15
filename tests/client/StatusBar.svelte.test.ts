@@ -14,6 +14,7 @@ const baseProps = {
   claudeActive: false,
   aiLiveIndicator: null,
   aiLauncherAttached: false,
+  aiLocalChat: null as "local" | "unusable" | null,
   aiLauncherRestarting: false,
   aiLauncherStarting: false,
   aiLauncherStandby: null,
@@ -556,5 +557,103 @@ describe("StatusBar — Reconnected flash (#2258)", () => {
   it("mounting already connected does not flash", () => {
     const { container } = render(StatusBar, { props: up });
     expect(container.textContent).not.toContain("Reconnected");
+  });
+});
+
+describe("StatusBar in the local period (#1123 part B, R7)", () => {
+  const S =
+    "Chat is set to your local model. Tandem does not send Claude the chat messages you send while it is, then or later.";
+
+  it("the label, the info tone's colours, and the session suffix where today's view shows one", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "ready",
+        aiLiveIndicator: "connected",
+        aiSessionCount: 2,
+        aiLocalChat: "local",
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.getAttribute("data-ai-state")).toBe("local-connected");
+    expect(indicator.textContent).toContain("Chat: your local model");
+    expect(getByTestId("status-ai-session-count").textContent).toBe(" · 2 sessions");
+    const dot = indicator.querySelector<HTMLElement>(".claude-dot");
+    expect(dot?.getAttribute("style")).toContain("var(--tandem-info)");
+    expect(dot?.getAttribute("style")).not.toContain("var(--tandem-success)");
+    const label = indicator.querySelector<HTMLElement>(".status-label-fade");
+    expect(label?.getAttribute("style")).toContain("var(--tandem-info-fg-strong)");
+  });
+
+  it("Claude's own status suffix reads 'Claude: …' in a local view, plain out of it", () => {
+    const local = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "ready",
+        aiLiveIndicator: "connected",
+        claudeStatus: "reviewing",
+        aiLocalChat: "local",
+      },
+    });
+    expect(local.getByTestId("status-ai-indicator").textContent).toContain(" · Claude: reviewing");
+    cleanup();
+    const today = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "ready",
+        aiLiveIndicator: "connected",
+        claudeStatus: "reviewing",
+      },
+    });
+    expect(today.getByTestId("status-ai-indicator").textContent).toContain(" · reviewing");
+    expect(today.getByTestId("status-ai-indicator").textContent).not.toContain("Claude: ");
+  });
+
+  it("'can't answer' uses not-connected's colours", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "ready",
+        aiLiveIndicator: "connected",
+        aiLocalChat: "unusable",
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.textContent).toContain("Your local model can't answer");
+    expect(indicator.querySelector(".claude-dot")?.getAttribute("style")).toContain(
+      "var(--tandem-fg-subtle)",
+    );
+  });
+
+  it("a chip's title and accessible name begin with the label and S, then the CTA's text; the action is today's", async () => {
+    const onStartClaude = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "stopped",
+        aiChip: "start",
+        aiLauncherStandby: "off",
+        aiLocalChat: "local",
+        onStartClaude,
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.getAttribute("title")).toBe(
+      `Chat: your local model. ${S} Tandem's Claude isn't running. Click to start it.`,
+    );
+    expect(indicator.getAttribute("aria-label")).toBe(
+      `Chat: your local model. ${S} Start Tandem's Claude.`,
+    );
+    await fireEvent.click(indicator);
+    expect(onStartClaude).toHaveBeenCalledOnce();
+  });
+
+  it("out of the local period the same chip reads as today", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, aiState: "stopped", aiChip: "start", aiLauncherStandby: "off" },
+    });
+    expect(getByTestId("status-ai-indicator").getAttribute("title")).toBe(
+      "Tandem's Claude is off. Tandem's Claude isn't running. Click to start it.",
+    );
   });
 });

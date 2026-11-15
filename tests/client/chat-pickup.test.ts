@@ -137,3 +137,22 @@ describe("chatPickupAnnouncement", () => {
     expect(chatPickupAnnouncement(null)).toBe("");
   });
 });
+
+describe("dark (#1123 part B, R10.1)", () => {
+  it("with the flag off, local inputs and rows carrying localRun or chatNotice change nothing", () => {
+    const m: ChatMessage = {
+      ...user("a", 0),
+      localRun: { status: "stopped", reason: "error", generation: "g" },
+    };
+    const inputs = {
+      runGeneration: "g",
+      sentLocal: new Set(["a"]),
+      readKnownLocal: true,
+      aiOff: false,
+    };
+    expect(chatPickup([m], T0 + 5_000, inputs)).toEqual({ kind: "waiting", waitedMs: 5_000 });
+    // A notice row is an untagged-looking Claude row as on master: the row ends.
+    const line: ChatMessage = { ...claude("n", 1), chatNotice: "claude-again" };
+    expect(chatPickup([user("b", 0), line], T0 + 5_000, inputs)).toBeNull();
+  });
+});

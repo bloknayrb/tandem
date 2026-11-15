@@ -191,6 +191,12 @@ export function registerModelsRoutes(
  * or allowance `Origin`, or none with `Sec-Fetch-Site: same-origin`. The
  * shared CORS middleware grants any `127.0.0.1` port, so without this a page
  * on another loopback port could read which way the switch points.
+ *
+ * The 200 carries the switch, `localModelResolves`, the run id and — since
+ * #1123 part B (R1.3) — `localModelState`, the closed enum that tells the
+ * editor "nothing is saved or enabled" from "one is saved but cannot be used"
+ * (their remedies differ). It is present on every 200, absent only when the
+ * check threw, and carries no name, endpoint, id, path or count.
  */
 function makeGetChatAnswererHandler(
   live: boolean,

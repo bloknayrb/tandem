@@ -4,6 +4,7 @@ import { defineConfig } from "@playwright/test";
 import { E2E_APP_DATA_DIR } from "./scripts/e2e-paths";
 import { E2E_MCP_PORT, E2E_VITE_PORT, E2E_WS_PORT } from "./scripts/test-ports";
 import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/shared/constants";
+import { MODELS_DEV_ORIGIN_ENV } from "./src/shared/models/contract";
 
 /**
  * This config's own directory, for `globalSetup` below.
@@ -153,6 +154,16 @@ export default defineConfig({
         // spec opens it explicitly via tandem_open, and openFileByPath injects
         // tutorial annotations idempotently whenever the sample doc is opened.
         TANDEM_NO_SAMPLE: "1",
+        // #1123 part B, R10.3: the E2E client is the Vite page on the harness
+        // port, not Tandem's own window, so the Models specs (skipped while
+        // BYO_MODELS_ENABLED is off) need the development allowance naming
+        // exactly that one origin. Set here, in the BACKEND's env only — never
+        // on process.env above, which Vite and everything else would inherit.
+        // The server logs one stderr line at boot for it, and a write admitted
+        // through it is not an own-window write: it raises the warning notices
+        // the specs expect. `tests/perf/playwright.config.ts` is not given it
+        // (it runs no Models spec).
+        [MODELS_DEV_ORIGIN_ENV]: `http://127.0.0.1:${E2E_VITE_PORT}`,
       },
     },
   ],
