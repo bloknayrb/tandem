@@ -294,6 +294,76 @@ describe("endings outside the removal set are as on master (R1.3)", () => {
   });
 });
 
+describe("text with no <think> trips the cap and ends as on master (R2.4)", () => {
+  it("a candidate tag at the cap: '<' as the character that reaches it", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    r1.stream.push({ content: ["x".repeat(64 * 1024 - 1), "<"] });
+    await vi.advanceTimersByTimeAsync(PAST_FLUSH_MS);
+    // The cap's abort has errored the stream by now, as a real one would be.
+    try {
+      r1.stream.close();
+    } catch {
+      // already errored by the abort
+    }
+    await settle(collab);
+    check("cap-at-pending-tag", snapshot("d"));
+  });
+});
+
+describe("R4 endings with nothing shown are as on master", () => {
+  it("a throw in runTurn, nothing shown", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator({
+      runTurn: async (o: RunTurnOpts) => {
+        await runLocalModelTurn(o);
+        throw new Error("boom");
+      },
+    });
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    r1.stream.close();
+    await settle(collab);
+    check("throw-nothing-shown", snapshot("d"));
+  });
+
+  it("an abort (newer chat), nothing shown", async () => {
+    const net = streamFetch();
+    setupDoc("d");
+    const collab = collaborator();
+    collab.onEvent(userChat("u1", "d"));
+    await net.next();
+    collab.onEvent(userChat("u2", "d"));
+    const r2 = await net.next();
+    r2.stream.push({ content: ["Second answer."] });
+    r2.stream.close();
+    await settle(collab);
+    await settle(collab);
+    check("abort-nothing-shown", snapshot("d"));
+  });
+
+  it("the !stillOwner arm, nothing shown", async () => {
+    const net = streamFetch();
+    const ydoc = setupDoc("d");
+    const collab = collaborator({
+      runTurn: async (o: RunTurnOpts) => {
+        const res = await runLocalModelTurn(o);
+        bumpContentGeneration(ydoc);
+        return res;
+      },
+    });
+    collab.onEvent(userChat("u1", "d"));
+    const r1 = await net.next();
+    r1.stream.close();
+    await settle(collab);
+    check("not-still-owner-nothing-shown", snapshot("d"));
+  });
+});
+
 describe("what the model is sent does not change (R2.8)", () => {
   it("a <think> block plus a tool call: the second request is byte-identical to master's", async () => {
     const net = streamFetch();

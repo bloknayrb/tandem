@@ -26,7 +26,11 @@ import {
   shownText,
   thinkFilterScannedForTests,
 } from "../../../src/server/local-model/think-filter.js";
-import { unansweredUserChatKeys } from "../../../src/server/mcp/awareness.js";
+import {
+  removeClaudeChatMessage,
+  unansweredUserChatKeys,
+  updateClaudeChatMessage,
+} from "../../../src/server/mcp/awareness.js";
 import { LOCAL_RUN_GENERATION as G } from "../../../src/server/models/local-run-generation.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
 import { CTRL_ROOM } from "../../../src/shared/constants.js";
@@ -430,7 +434,15 @@ describe("the removal set (R1)", () => {
   }
 
   it("doc-swapped, same instance (content replaced): preamble and partial removed", async () => {
+    const touches: string[] = [];
+    chatMap().observe((e) => {
+      for (const [k, c] of e.changes.keys) touches.push(`${c.action}:${k}`);
+    });
     await swappedRun((ydoc) => bumpContentGeneration(ydoc));
+    // The row was minted, then deleted with its sidecar in one update: never
+    // folded first (a fold would show as an `update` of the row).
+    const replyTouches = touches.filter((t) => !t.endsWith(":u1"));
+    expect(replyTouches.map((t) => t.split(":")[0])).toEqual(["add", "delete"]);
     expect(rows().filter((m) => m.author === "claude")).toEqual([]);
     expect(streamMap().size).toBe(0);
     expect(row("u1")?.localRun).toEqual({
@@ -496,6 +508,51 @@ describe("the removal set (R1)", () => {
       reason: "editing-off",
       generation: G,
     });
+  });
+});
+
+describe("removeClaudeChatMessage guards (the new chat writer)", () => {
+  function put(id: string, msg: Partial<import("../../../src/shared/types.js").ChatMessage>) {
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    withInternal(ctrl, () =>
+      chatMap().set(id, { id, author: "claude", text: "t", timestamp: 1, read: true, ...msg }),
+    );
+  }
+
+  it("keeps Claude's own tandem_reply row (no agentIdentity) and a notice row", () => {
+    put("r1", { replyTo: "u1" });
+    put("n1", { replyTo: "u1", chatNotice: "no-reply" });
+    expect(removeClaudeChatMessage("r1")).toBe(false);
+    expect(removeClaudeChatMessage("n1")).toBe(false);
+    expect(row("r1")).toBeDefined();
+    expect(row("n1")).toBeDefined();
+  });
+
+  it("removes a local-model reply row and its sidecar together", () => {
+    put("l1", { agentIdentity: { provider: "local-ollama", displayName: "M" } });
+    updateClaudeChatMessage("l1", "streamed text");
+    expect(streamMap().has("l1")).toBe(true);
+    let updates = 0;
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const onUpdate = () => {
+      updates += 1;
+    };
+    ctrl.on("update", onUpdate);
+    expect(removeClaudeChatMessage("l1")).toBe(true);
+    ctrl.off("update", onUpdate);
+    expect(updates).toBe(1);
+    expect(row("l1")).toBeUndefined();
+    expect(streamMap().has("l1")).toBe(false);
+  });
+
+  it("deletes an orphan sidecar whose row was cleared, and never re-creates the row", () => {
+    put("l2", { agentIdentity: { provider: "local-ollama", displayName: "M" } });
+    updateClaudeChatMessage("l2", "streamed text");
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    withInternal(ctrl, () => chatMap().delete("l2"));
+    expect(removeClaudeChatMessage("l2")).toBe(true);
+    expect(row("l2")).toBeUndefined();
+    expect(streamMap().has("l2")).toBe(false);
   });
 });
 
@@ -593,12 +650,16 @@ describe("the no-reply notice (R3)", () => {
     const collab = collaborator();
     collab.onEvent(userChat("u1", "d", "first"));
     const r1 = await net.next();
+    const abortSpy = vi.spyOn(AbortController.prototype, "abort");
+    const abortCalls = () => abortSpy.mock.calls.length;
     r1.stream.close();
     await microtasks(5000);
     await collab.__awaitCurrent();
     // No timer has run since the stream closed: the notice was not posted on
     // a later task, as `postNotice` would have.
     expect(noticeRows("u1").map((m) => m.chatNotice)).toEqual(["no-reply"]);
+    // And posting it aborted nothing (`postNotice` aborts `current`).
+    expect(abortCalls()).toBe(0);
     collab.onEvent(userChat("u2", "d", "second"));
     const r2 = await net.next();
     await streamTurn(r2, ["Second answer."], "u2");

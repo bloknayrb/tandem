@@ -528,7 +528,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // Latch, not a counter: the marker is appended exactly once, and every
     // subsequent delta is dropped rather than re-triggering the cap branch.
     let truncated = false;
-    const filter = new ThinkFilter();
+    // Held text beyond the cap can never be shown: release goes through it.
+    const filter = new ThinkFilter(MAX_STREAMED_CHARS);
 
     const isOwner = () =>
       current?.token === ctx.token &&
@@ -1040,10 +1041,22 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         // A throw here must not leave the run state at "running": the run
         // state is written whatever happens to the chat write before it.
         try {
-          if (removeReply && minted !== null) removeClaudeChatMessage(minted);
+          // A row the remover refuses (not a local-model reply) is folded
+          // instead, as `dispose` would have, so its streamed text is kept.
+          if (removeReply && minted !== null && !removeClaudeChatMessage(minted)) {
+            finalizeClaudeChatMessage(minted);
+          }
           if (noReplyNotice && req.replyTo) postNoReplyNotice(req.replyTo, req.docName);
         } catch (err) {
           console.error("[local-model] could not end the run in chat", err);
+          // Never leave a sidecar authoritative over a row: fold what is left.
+          if (removeReply && minted !== null) {
+            try {
+              finalizeClaudeChatMessage(minted);
+            } catch {
+              // Already logged above; the run state below is still written.
+            }
+          }
         }
         writeLocalRun(req.replyTo, { ...final, ...(replyId ? { replyId } : {}) });
       });

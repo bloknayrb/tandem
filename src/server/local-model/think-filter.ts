@@ -21,7 +21,7 @@
  * arrives and, when it ends a candidate tag that turns out not to be one, once
  * more as the possible start of the next (a tag holds `<` only at index 0, so
  * no other character can start one). Memory is the held text (capped at
- * {@link HELD_CAP}) plus a tail of at most seven characters; a block that
+ * the sink's cap plus one tag) plus a tail of at most seven characters; a block that
  * opens the turn is dropped as it streams.
  *
  * Whitespace before the first visible character passes straight through: the
@@ -32,12 +32,6 @@
 const OPEN = "<think>";
 const CLOSE = "</think>";
 
-/**
- * Held text beyond this is never shown: on release it goes through the sink's
- * cap (64 KiB), which keeps at most that many characters plus a marker. Kept
- * one tag above it so a held block can never be cut below what the cap keeps.
- */
-const HELD_CAP = 64 * 1024 + OPEN.length;
 
 type Mode =
   /** Nothing visible yet this turn: only whitespace and closed blocks. */
@@ -68,6 +62,17 @@ export class ThinkFilter {
   /** The held block, its opening tag as written included. */
   private held = "";
   private heldOverflow = false;
+  /**
+   * Held text beyond this is never shown: on release it goes through the
+   * sink's cap, which keeps at most that many characters plus a marker. One
+   * tag above it, so a held block is never cut below what the cap keeps.
+   */
+  private readonly heldCap: number;
+
+  /** `showCap`: the most text the caller will ever show (the sink's cap). */
+  constructor(showCap: number = Number.POSITIVE_INFINITY) {
+    this.heldCap = showCap + OPEN.length;
+  }
 
   /** Feed one delta; returns the text that may be shown now. */
   push(delta: string): string {
@@ -155,8 +160,8 @@ export class ThinkFilter {
   private hold(text: string): void {
     if (this.heldOverflow) return;
     this.held += text;
-    if (this.held.length > HELD_CAP) {
-      this.held = this.held.slice(0, HELD_CAP);
+    if (this.held.length > this.heldCap) {
+      this.held = this.held.slice(0, this.heldCap);
       this.heldOverflow = true;
     }
   }
