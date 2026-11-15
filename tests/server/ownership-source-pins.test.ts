@@ -82,11 +82,13 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     // is refused). Between the two statements, no `return` or `throw` at any
     // depth outside a nested function.
     //
-    // What this pin of source cannot see, accepted (a flip-blocker row): a
+    // What this pin of source cannot see, proposed for acceptance and open
+    // until Bryan accepts it (a flip-blocker row): a
     // conditional exit before the call that is not a `return` or `throw`
     // statement (a call that throws, say); braces or comment markers inside
     // strings, which the text depth check below counts as code; a call through
-    // a namespace import with a computed name (`ns["set" + name](undefined)`);
+    // a namespace import by element access (`ns["setDeliveryRoundSeam"]`, or
+    // a computed name such as `ns["set" + name]`);
     // and calls from other `src` files through an alias or `.call` (the
     // callers check above matches `setDeliveryRoundSeam(` only). A
     // behavioural pin that boots `main()` would see all four.
@@ -165,7 +167,8 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
 
   it("the seam has one writer: setDeliveryRoundSeam itself (the keyed-rounds suites PR)", () => {
     // A second assignment inside delivery-state.ts would unwire the seam with
-    // every pin on index.ts still passing.
+    // every pin on index.ts still passing. A text pin: it does not see a
+    // compound (`??=`) or destructuring assignment (the flip-blocker row).
     const module = SRC_FILES.get("src/server/events/delivery-state.ts") as string;
     expect(module.match(/\broundSeam\s*=(?!=)/g)).toHaveLength(1);
     expect(module).toMatch(

@@ -393,8 +393,10 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "source, not a running server, and cannot see: a conditional exit before the call that is " +
       "not a return or throw statement (a call that throws, say); braces or comment markers " +
       "inside strings, which its text depth check counts as code; a call through a namespace " +
-      "import with a computed name; and calls from other src files through an alias or .call. " +
-      "Accepted for a text pin.",
+      "import by element access (a string or computed name); calls from other src files " +
+      "through an alias or .call; and, in its one-writer pin on delivery-state.ts, a compound " +
+      "or destructuring assignment to roundSeam. Proposed for acceptance as limits of a text " +
+      "pin; open until Bryan accepts them.",
     closedBy: "Bryan's acceptance, or a behavioural pin that boots main().",
   },
 ];
