@@ -11,10 +11,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const app = readFileSync(join(process.cwd(), "src/client/App.svelte"), "utf8")
-  // Comments out, so a commented-out call cannot satisfy a pin.
+  // Script comments out, so a commented-out call cannot satisfy a pin. (Markup
+  // comments are left in: none of the pinned strings could match inside one.)
   .replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/^\s*\/\/.*$/gm, "")
-  .replace(/<!--[\s\S]*?-->/g, "");
+  .replace(/^\s*\/\/.*$/gm, "");
 
 /** The body of the `$effect(() => { … })` that contains `marker`. */
 function effectContaining(marker: string): string {
