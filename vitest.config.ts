@@ -145,7 +145,8 @@ export default defineConfig({
           name: "client",
           environment: "happy-dom",
           // Per-project: `setupFiles` has no root fallback (see the root `env` note).
-          setupFiles: ["./tests/setup/app-data-isolation.ts", "./tests/setup/acl-win-mock.ts"],
+          // biome-ignore format: tests/scripts/*-wiring.test.ts match each registration as ONE line
+          setupFiles: ["./tests/setup/app-data-isolation.ts", "./tests/setup/acl-win-mock.ts", "./tests/setup/loopback-fetch-passthrough.ts"],
           include: ["tests/client/**/*.test.ts"],
           // Same reason the node project below carries 15s, and the same
           // number: under vitest's parallel pool this project's specs exceed
@@ -175,7 +176,8 @@ export default defineConfig({
           name: "node",
           environment: "node",
           // Per-project: `setupFiles` has no root fallback (see the root `env` note).
-          setupFiles: ["./tests/setup/app-data-isolation.ts", "./tests/setup/acl-win-mock.ts"],
+          // biome-ignore format: tests/scripts/*-wiring.test.ts match each registration as ONE line
+          setupFiles: ["./tests/setup/app-data-isolation.ts", "./tests/setup/acl-win-mock.ts", "./tests/setup/loopback-fetch-passthrough.ts"],
           // `exclude`, NOT a negated `include` entry. `include: [..., "!tests/client/**"]`
           // selects exactly the same 324 files -- verified by diffing
           // `vitest list --project=node --filesOnly` across both spellings -- but it

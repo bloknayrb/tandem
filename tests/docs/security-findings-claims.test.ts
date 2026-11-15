@@ -351,6 +351,10 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
     why: "FIXED per request: wakeUrlField() returns the address only to a loopback TCP peer (peerIsLoopback), failing closed; moved out of Accepted 2026-11-05; whether the loopback-arriving forwarder residual needs its own Accepted entry is open for Bryan (#2368)",
   },
   {
+    issue: 2422,
+    why: "FIXED: loopback requests never use an environment proxy (src/shared/loopback-fetch.ts); resolved-entry only, not counted",
+  },
+  {
     issue: 2266,
     why: "FIXED on POSIX (save keeps the mode; 0700 app-data dirs, 0600 store files, derived-file ceiling); the Windows DACL / ownership residue is counted as accepted under #2278",
   },
