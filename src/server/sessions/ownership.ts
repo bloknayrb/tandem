@@ -1250,7 +1250,18 @@ function assignClosedDocumentChat(documentId: string, heldBy: string | undefined
     } else if (isTandemPresent()) {
       to = TANDEM_OWNER_ID;
     }
-    if (to === undefined) return;
+    if (to === undefined) {
+      // A holder that lapsed (its move deferred behind a busy queue) or whose
+      // record is gone: the chat that followed the document leaves that
+      // record here, and the deferred move never runs once the entry is gone,
+      // so this is the message's change of owner away from a record (R6.1).
+      // Re-owe it, or a message the holder had read would be owed to nobody.
+      if (heldBy !== undefined) {
+        const keys = chatSide.messagesOn(documentId).filter((key) => !ownerByMessage.has(key));
+        if (keys.length > 0) chatSide.reOwe(keys);
+      }
+      return;
+    }
     for (const key of chatSide.messagesOn(documentId)) {
       setMessageOwner(key, to, "close", documentId);
     }
@@ -1701,13 +1712,14 @@ export interface InboxPollScope {
    * handed to the caller (Ruling 4's arm). Nothing for a caller with no
    * record. Never throws.
    */
-  commitChat(taken: readonly string[], handed: readonly string[]): string[];
+  commitChat(taken: readonly string[], handed: readonly string[], set: string[]): void;
   /**
-   * Undo `commitChat`'s owners for a poll that threw after its chat commit:
-   * each of `keys` loses its per-message owner if this caller holds it with
-   * origin "poll" (the inbox then re-owes the message). Never throws.
+   * Undo `commitChat` for a poll that threw after its chat commit: each of
+   * `keys` (the owners it pushed onto `set`) loses its per-message owner if
+   * this caller holds it with origin "poll", and `handed` leaves the
+   * caller's "handed" memory (the response never returned). Never throws.
    */
-  dropChatOwners(keys: readonly string[]): void;
+  dropChatOwners(keys: readonly string[], handed: readonly string[]): void;
   /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
@@ -1754,7 +1766,7 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   claim: (): InboxClaimOutcome => "refused",
   holding: () => [],
   chatScopeOf: (): InboxChatScope => "owns",
-  commitChat: () => [],
+  commitChat: () => {},
   dropChatOwners: () => {},
   settledThrough: () => 0,
   changes: () => [],
@@ -1855,6 +1867,11 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
         documentOpen: open !== undefined,
         localPeriod: false,
       });
+      // R4.1: chat that follows a document whose scope read threw for this
+      // poll is not handed by it (a per-message owner's message still is).
+      if (open === "unread" && !(standing.kind === "owned" && standing.perMessage)) {
+        return "neither";
+      }
       switch (standing.kind) {
         case "none":
           return "neither";
@@ -1869,17 +1886,18 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           return mayTakePerMessage(callerId) ? "take" : "neither";
       }
     },
-    commitChat: (taken, handed) => {
-      if (callerId === undefined) return [];
-      return total("commitChat", [] as string[], () => {
-        const set = taken.filter((key) => setMessageOwner(key, callerId, "poll"));
+    commitChat: (taken, handed, set) => {
+      if (callerId === undefined) return;
+      total("commitChat", undefined, () => {
+        for (const key of taken) if (setMessageOwner(key, callerId, "poll")) set.push(key);
         noteHanded(callerId, handed);
-        return set;
       });
     },
-    dropChatOwners: (keys) => {
+    dropChatOwners: (keys, handed) => {
       if (callerId === undefined) return;
       total("dropChatOwners", undefined, () => {
+        const memory = handedByRecord.get(callerId);
+        for (const key of handed) memory?.delete(key);
         for (const key of keys) {
           const owner = ownerByMessage.get(key);
           if (owner?.ownerId !== callerId || owner.origin !== "poll") continue;
@@ -1917,14 +1935,6 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
     },
   };
   return scope;
-}
-
-/** A document id as `docIdFromPath` makes them: anything else in a client-written row's `documentId` names no document. */
-const DOCUMENT_ID_SHAPE = /^[A-Za-z0-9-]{1,256}$/;
-
-/** Whether a client-written `documentId` can name a document (never CTRL_ROOM, whose name holds underscores). */
-export function isDocumentIdShaped(value: unknown): value is string {
-  return typeof value === "string" && DOCUMENT_ID_SHAPE.test(value);
 }
 
 /**

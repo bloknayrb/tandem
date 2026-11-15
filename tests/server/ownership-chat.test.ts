@@ -60,7 +60,12 @@ import {
   __setHonourLocalPeriodRecordsForTests,
   loadLocalPeriodRecord,
 } from "../../src/server/models/local-period.js";
-import { clearCtrlChatDurably } from "../../src/server/session/manager.js";
+import {
+  clearCtrlChatDurably,
+  loadCtrlSession,
+  restoreCtrlDoc,
+  saveCtrlSession,
+} from "../../src/server/session/manager.js";
 import { DOC_OP_WAIT_MS, runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
   DEFAULT_GRACE_MS,
@@ -87,7 +92,7 @@ import {
   TANDEM_OWNER_ID,
   type TransportViewEntry,
 } from "../../src/server/sessions/ownership.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
@@ -645,13 +650,18 @@ describe("R3/R4: who is handed a message", () => {
     expect(a.cursor).toBe(c.cursor);
   });
 
-  it("R4.9: 300 messages B owns add nothing to A's cursor", async () => {
+  it("R4.9: 300 messages B owns add nothing to A's cursor or to its chat work", async () => {
     const r = reader(A);
     await r.poll();
     const without = decodeCursor((await r.poll()).cursor).cursor;
+    // B owns them before A polls again.
     for (let i = 0; i < 300; i++) userChat(key(`b${i}`));
     expect((await pollAs(B)).chatMessages).toHaveLength(300);
+    expect(ownershipSnapshotForTests().messageOwners).toHaveLength(300);
+    // A's chat work: no registry entry is created or touched for A.
+    const counter = deliveryRegistry.counter;
     const withThem = decodeCursor((await r.poll()).cursor).cursor;
+    expect(deliveryRegistry.counter).toBe(counter);
     expect(withThem.chat.held).toEqual(without.chat.held);
     expect(withThem.docs).toEqual(without.docs);
     expect(withThem.handOut).toBeUndefined();
@@ -1282,6 +1292,164 @@ describe("R6: the chat half of a handover, and the tab close", () => {
     } finally {
       unsubscribe(cb);
     }
+  });
+});
+
+describe("review round 1: the cases the first build missed", () => {
+  it("H1: a holder that lapsed with its move deferred, having read M: the close re-owes M, and B is handed it", async () => {
+    const d = mkDoc("lapsed-read");
+    setDocOwner(d.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), d.id);
+    expect(chatIds(await pollAs(A))).toEqual([m]);
+    expect(row(m)?.read).toBe(true);
+    let release!: () => void;
+    const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+    lapseByGrace(A, "stream dropped");
+    expect(getOwnerRecord(A)?.lapsed).toBe(true);
+    expect(ownerOf(d.id), "the move waits behind the busy queue").toBe(A);
+    await closeByRoute(d.id);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(row(m)?.read).toBe(false);
+    expect(chatIds(await pollAs(B))).toEqual([m]);
+    release();
+    await op;
+  });
+
+  it("M1: a held document whose scope read throws: its chat is not handed or acknowledged by that poll", async () => {
+    const d = mkDoc("held-throws");
+    setDocOwner(d.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), d.id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const a = reader(A);
+    setInboxScopeReadForTests((id, caller, now) => {
+      if (id === d.id) throw new Error("scope read");
+      return realScopeOf(id, caller, now);
+    });
+    expect(chatIds(await a.poll())).toEqual([]);
+    setInboxScopeReadForTests(undefined);
+    expect(chatIds(await a.poll())).toEqual([m]);
+  });
+
+  for (const how of ["cursor", "cursor-less"] as const) {
+    it(`a claim over a stale entry (${how}): the re-owe inside the claim runs before the chat stamp`, async () => {
+      const d = mkDoc("stale");
+      // Fabricated: no production path writes an entry for a record that does not exist.
+      setDocOwner(d.id, { ownerId: "claude:ghost", kind: "claimed" }, "claim");
+      const m = userChat(key("m"), d.id);
+      const r = reader(A);
+      const first = how === "cursor" ? await r.poll() : await pollAs(A);
+      expect(chatIds(first)).toEqual([m]);
+      expect(ownerOf(d.id)).toBe(A);
+      const second = how === "cursor" ? await r.poll() : await pollAs(A);
+      // Cursor: the re-owe retired the entry this poll's pass had just
+      // created, so the claimant is handed it once more (a duplicate, never
+      // a loss). Cursor-less: the stamp lands after the re-owe, so no duplicate.
+      expect(chatIds(second)).toEqual(how === "cursor" ? [m] : []);
+      const third = how === "cursor" ? await r.poll() : await pollAs(A);
+      expect(chatIds(third)).toEqual([]);
+    });
+  }
+
+  it("a re-owe, then a restart: the re-owe's write saved and restored is handed to whoever may take it", async () => {
+    const d = mkDoc("saved");
+    setDocOwner(d.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), d.id);
+    expect(chatIds(await pollAs(A))).toEqual([m]);
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    expect(row(m)?.read).toBe(false);
+    await saveCtrlSession(ctrl());
+    // The restart: the CTRL doc, the ownership module and the registry go.
+    removeDocument(CTRL_ROOM);
+    resetOwnershipForTests();
+    deliveryRegistry.reset();
+    const saved = await loadCtrlSession();
+    expect(saved).not.toBeNull();
+    restoreCtrlDoc(ctrl(), saved as string);
+    view = [];
+    setTransportView(() => view);
+    register(C);
+    setOwnershipSeqSource(() => deliveryRegistry.counter);
+    setOwnershipInboxHandover(handOverDocumentInbox);
+    setOwnershipChatSide(ownershipChatSide);
+    expect(chatIds(await reader(C).poll())).toEqual([m]);
+  });
+
+  it("the detached cap ranks an unhandled per-message message as held state, and a handled one as nothing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const t0 = Date.now();
+    // P owns only an unhandled doc-less message; Q owns only a handled one.
+    const P = "claude:cap-p";
+    const Q = "claude:cap-q";
+    register(P);
+    register(Q);
+    const mp = userChat(key("mp"));
+    expect(chatIds(await pollAs(P))).toEqual([mp]);
+    const mq = userChat(key("mq"));
+    expect((await reply(Q, mq)).error).toBe(false);
+    // Detach P and Q first (earliest graces).
+    for (const id of [P, Q]) {
+      entryOf(id).streamEver = true;
+      noteTransportChanged(id);
+    }
+    // 32 records holding a document, then 32 holding nothing, all detached later.
+    for (let i = 0; i < 64; i++) {
+      vi.setSystemTime(t0 + 1_000 + i);
+      const id = `claude:cap-${i}`;
+      register(id);
+      if (i < 32) setDocOwner(docId(`cap-held-${i}`), { ownerId: id, kind: "opened" }, "take", id);
+      entryOf(id).streamEver = true;
+      noteTransportChanged(id);
+    }
+    // 66 detached: the two in excess are the ones that hold nothing,
+    // earliest first: Q (handled only) and cap-32 (nothing). P is kept.
+    expect(getOwnerRecord(Q)?.lapsed).toBe(true);
+    expect(getOwnerRecord("claude:cap-32")?.lapsed).toBe(true);
+    expect(getOwnerRecord(P)?.lapsed).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("an already-lapsed record kept for an unhandled message is deleted when its grace runs out", async () => {
+    lapseByGrace(A, "stream dropped");
+    const m = userChat(key("m"));
+    expect(chatIds(await pollAs(A))).toEqual([m]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    removeTransport(A);
+    expect(getOwnerRecord(A)).toBeDefined();
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+    vi.useRealTimers();
+    expect(getOwnerRecord(A)).toBeUndefined();
+    expect(chatIds(await reader(B).poll())).toEqual([m]);
+  });
+
+  it("a throw after the chat commit forgets the handed memory too", async () => {
+    const d = mkDoc("u");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    const m = userChat(key("m"), d.id);
+    roundThrows.next = true;
+    callingAs = B;
+    expect(
+      parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} })).error,
+    ).toBe(true);
+    expect(ownershipSnapshotForTests().handed).toEqual([]);
+    expect(row(m)?.read).toBe(false);
+  });
+
+  it("R4.8: two records with the same holdings and per-message ownerships get equal decoded marks and held lists when both hand chat", async () => {
+    const shared = userChat(key("shared"));
+    // Neither may take this one: B holds its document.
+    const d = mkDoc("b-held");
+    setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
+    userChat(key("neither"), d.id);
+    const a = await reader(A).poll();
+    // C owns its own doc-less message, as A owns `shared`.
+    const own = userChat(key("c-own"));
+    const c = await reader(C).poll();
+    expect(chatIds(a)).toEqual([shared]);
+    expect(chatIds(c)).toEqual([own]);
+    const da = decodeCursor(a.cursor).cursor;
+    const dc = decodeCursor(c.cursor).cursor;
+    expect(dc.docs).toEqual(da.docs);
+    expect(dc.chat.held).toEqual(da.chat.held);
   });
 });
 

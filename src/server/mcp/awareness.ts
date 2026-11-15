@@ -1982,6 +1982,12 @@ interface UnreadChat {
    * made are left.
    */
   undo: () => void;
+  /**
+   * Take back what `commit` did (ownership on, R4.4: a throw after the chat
+   * commit): the entries it or the pass created are retired, the entries it
+   * acknowledged are unacknowledged, and the stamps it wrote are removed.
+   */
+  revert: () => void;
   /** Per returned key, its chat scope and the document it names (ownership on: R4.3, R4.4). */
   scopes: Map<
     string,
@@ -2025,8 +2031,8 @@ function admitChatItem(msg: Partial<ChatMessage>): InboxChatMessage | null {
  * `delivered` stamp, for that one). Nothing to stamp opens no transaction, so a
  * repeat poll writes nothing.
  */
-function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): void {
-  if (keys.length === 0) return;
+function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): string[] {
+  if (keys.length === 0) return [];
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
   const due = keys.filter((key) => {
@@ -2035,11 +2041,32 @@ function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): vo
     const msg = live as ChatMessage;
     return msg.author === "user" && !msg.read && (stamp === "read" || msg.delivered !== true);
   });
-  if (due.length === 0) return;
+  if (due.length === 0) return [];
   withMcp(ctrlDoc, () => {
     for (const key of due) {
       const msg = chatMap.get(key) as ChatMessage;
       chatMap.set(key, stamp === "read" ? { ...msg, read: true } : { ...msg, delivered: true });
+    }
+  });
+  return due;
+}
+
+/**
+ * Take back a stamp this poll made (ownership on, the chat owners PR, R4.4: a
+ * poll that threw after its chat commit): each of `keys` loses the `read` or
+ * `delivered` this poll wrote, in one server-origin transaction. Only
+ * re-owes.
+ */
+function unstampUserChat(keys: readonly string[], stamp: "read" | "delivered"): void {
+  if (keys.length === 0) return;
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  withInternal(ctrlDoc, () => {
+    for (const key of keys) {
+      const live = chatMap.get(key);
+      if (typeof live !== "object" || live === null) continue;
+      const { delivered: _delivered, ...rest } = live as ChatMessage;
+      chatMap.set(key, stamp === "read" ? { ...(live as ChatMessage), read: false } : rest);
     }
   });
 }
@@ -2070,6 +2097,11 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
   const messages: InboxChatMessage[] = [];
   const keys: string[] = [];
   const scopes: UnreadChat["scopes"] = new Map();
+  const committed = {
+    created: [] as RegistryEntry[],
+    acked: [] as RegistryEntry[],
+    stamped: [] as string[],
+  };
   let dropped = 0;
 
   chatMap.forEach((value, key) => {
@@ -2109,11 +2141,20 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
       // mark is below them is still handed them. Oldest first, so seq order
       // is hand-out order (`answeredChatIds` relies on it).
       for (const key of inTimestampOrder(chatMap, due)) {
-        deliveryRegistry.markAcked(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0));
+        const known = deliveryRegistry.lookup("c", key, 0);
+        const entry = known ?? deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+        if (!known) committed.created.push(entry);
+        else if (!known.acked) committed.acked.push(known);
+        deliveryRegistry.markAcked(entry);
       }
-      stampUserChat(due, "read");
+      committed.stamped = stampUserChat(due, "read");
     },
     undo: () => {},
+    revert: () => {
+      for (const entry of committed.created) deliveryRegistry.retire(entry);
+      for (const entry of committed.acked) deliveryRegistry.unacknowledge(entry);
+      unstampUserChat(committed.stamped, "read");
+    },
   };
 }
 
@@ -2299,7 +2340,7 @@ export const ownershipChatSide = Object.freeze({
   },
 });
 
-/** {@link ownershipChatSide}'s re-owe, also the inbox's undo of a poll that threw after its chat commit. */
+/** {@link ownershipChatSide}'s re-owe (R6.1). */
 function reOweChat(keys: readonly string[]): void {
   if (keys.length === 0) return;
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
@@ -2397,7 +2438,9 @@ function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
     seqs.push(entry.seq);
   }
   const handOut = deliveryRegistry.recordHandOut(seqs);
-  for (const key of [...scopes.keys()]) if (!keys.includes(key)) scopes.delete(key);
+  const returned = new Set(keys);
+  for (const key of [...scopes.keys()]) if (!returned.has(key)) scopes.delete(key);
+  let stamped: string[] = [];
 
   return {
     messages,
@@ -2408,20 +2451,24 @@ function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
     ...(handOut !== undefined ? { handOut } : {}),
     commit: (excluded) => {
       if (!excluded || excluded.size === 0) {
-        stampUserChat(keys, "delivered");
+        stamped = stampUserChat(keys, "delivered");
         return;
       }
       for (const key of excluded) {
         const entry = created.get(key);
         if (entry) deliveryRegistry.retire(entry);
       }
-      stampUserChat(
+      stamped = stampUserChat(
         keys.filter((key) => !excluded.has(key)),
         "delivered",
       );
     },
     undo: () => {
       for (const entry of created.values()) deliveryRegistry.retire(entry);
+    },
+    revert: () => {
+      for (const entry of created.values()) deliveryRegistry.retire(entry);
+      unstampUserChat(stamped, "delivered");
     },
   };
 }
@@ -2812,7 +2859,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // owners PR, R4.4): what it stamped and the owners it set, so a throw
         // after that point can put both back.
         let chat: UnreadChat | undefined;
-        let chatCommitted: { keys: string[]; owners: string[] } | undefined;
+        let chatCommitted: { handed: string[]; owners: string[] } | undefined;
         try {
           const docs = collectInboxDocuments(requestedId, modeState, reader, scope, log);
           const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
@@ -3081,20 +3128,22 @@ export function registerAwarenessTools(server: McpServer): void {
               }
             }
           }
-          chat.commit(scope.scoped ? chatExcluded : undefined);
+          // Set before the commit runs, so a throw inside it is undone too.
           if (scope.scoped) {
-            // The chat's owners (R3.3): a message claimable per message that
-            // this poll handed becomes the caller's; every message it returned
-            // is remembered as handed to it (Ruling 4's arm).
-            const returned = [...chat.scopes.keys()];
-            const taken = returned.filter(
-              (key) => chat?.scopes.get(key)?.scope === "take" && !chatExcluded.has(key),
-            );
             chatCommitted = {
-              keys: returned.filter((key) => !chatExcluded.has(key)),
+              handed: [...chat.scopes.keys()].filter((key) => !chatExcluded.has(key)),
               owners: [],
             };
-            chatCommitted.owners = scope.commitChat(taken, returned);
+          }
+          chat.commit(scope.scoped ? chatExcluded : undefined);
+          if (chatCommitted) {
+            // The chat's owners (R3.3): a message claimable per message that
+            // this poll handed becomes the caller's; every message it returned
+            // and kept is remembered as handed to it (Ruling 4's arm).
+            const taken = chatCommitted.handed.filter(
+              (key) => chat?.scopes.get(key)?.scope === "take",
+            );
+            scope.commitChat(taken, chatCommitted.handed, chatCommitted.owners);
           }
           if (ownership) {
             // The drain point (the change-notice PR, R3.2, R4.1): the queue
@@ -3150,11 +3199,13 @@ export function registerAwarenessTools(server: McpServer): void {
           if (scope.scoped) {
             undoPass(log);
             if (chatCommitted) {
-              // A throw after the chat commit (R4.4): the response is lost,
-              // so the owners this poll set go and what it stamped is owed
-              // again (unread, undelivered, unregistered).
-              scope.dropChatOwners(chatCommitted.owners);
-              reOweChat(chatCommitted.keys);
+              // A throw after (or inside) the chat commit (R4.4): the response
+              // is lost, so the owners this poll set and its "handed" memory
+              // go, and exactly what its commit and pass did is taken back:
+              // the entries they created retired, the acknowledgements and
+              // stamps they wrote removed. Nothing earlier polls did is touched.
+              scope.dropChatOwners(chatCommitted.owners, chatCommitted.handed);
+              chat?.revert();
             } else chat?.undo();
           }
           throw err;
@@ -3207,7 +3258,7 @@ export function registerAwarenessTools(server: McpServer): void {
       // marker is the generic "Claude is working" status-bar indicator.
       // `withTypingPresence` runs this callback before its first `await`, so
       // nothing interleaves between the gate above and the writes below
-      // (R5.1; pinned in tests/server/ownership-chat-replies.test.ts).
+      // (R5.1; pinned in tests/server/ownership-chat.test.ts).
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         // An accepted reply to a message is stamped with that message's
         // document, or none (R5.3); otherwise master's active-document stamp.

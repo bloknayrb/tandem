@@ -42,6 +42,7 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   LOCAL_PERIOD_STATUS_LINE,
   owedAtSwitchSentence,
+  ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
 } from "../../src/server/mcp/awareness.js";
@@ -92,7 +93,9 @@ import {
 } from "../../src/server/session/manager.js";
 import {
   noteTransportRegistered,
+  ownershipSnapshotForTests,
   resetOwnershipForTests,
+  setOwnershipChatSide,
   setTransportView,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
@@ -238,6 +241,10 @@ async function toClaude(source: "own-window" | "allowance" = "own-window"): Prom
 }
 
 const chatIds = (inbox: Inbox) => inbox.chatMessages.map((m) => m.id).sort();
+
+/** The chat owners PR's second session, and who the next tool call runs as. */
+const LP_OTHER = "claude:lp-other";
+let lpCaller = "test:caller";
 const wakes = () =>
   external.filter(
     (e) =>
@@ -258,8 +265,16 @@ for (const ownership of ["", "1"] as const) {
       resetDeliveryStateForTests();
       resetInbox();
       resetOwnershipForTests();
-      setTransportView(() => [{ ownerId: "test:caller", openStreams: 0 }]);
+      lpCaller = "test:caller";
+      // A second session, for the chat owners PR's cases (R7): its polls show
+      // who else is handed what. Flag off it records nothing.
+      setTransportView(() => [
+        { ownerId: "test:caller", openStreams: 0 },
+        { ownerId: LP_OTHER, openStreams: 0 },
+      ]);
       noteTransportRegistered("test:caller", { recordKind: "claude" });
+      noteTransportRegistered(LP_OTHER, { recordKind: "claude" });
+      setOwnershipChatSide(ownershipChatSide);
       resetWakeAdvisoryForTests();
       __resetLocalPeriodForTests();
       __setHonourLocalPeriodRecordsForTests(true);
@@ -289,7 +304,7 @@ for (const ownership of ["", "1"] as const) {
       subscribe(intCb, "internal");
       ({ client, close } = await setupMcpServer(
         [registerAwarenessTools, registerDocumentTools, registerAnnotationTools],
-        { dispatch: (fn) => asTestCaller(fn) },
+        { dispatch: (fn) => asTestCaller(fn, { ownerId: lpCaller }) },
       ));
     });
 
@@ -309,6 +324,65 @@ for (const ownership of ["", "1"] as const) {
       vi.unstubAllEnvs();
       await fs.promises.rm(dir, { recursive: true, force: true });
     });
+
+    if (ownership === "1") {
+      describe("ownership on: chat owners (the chat owners PR, R7)", () => {
+        const as = async <T>(who: string, fn: () => Promise<T>): Promise<T> => {
+          lpCaller = who;
+          try {
+            return await fn();
+          } finally {
+            lpCaller = "test:caller";
+          }
+        };
+
+        it("a blanked poll sets no owner and claims nothing while a claimable doc-less message exists", async () => {
+          await toLocal();
+          userChat("waiting-claimable");
+          const before = ownershipSnapshotForTests();
+          const inbox = await poll({ cursor: "start" });
+          expect(inbox.chatMessages).toEqual([]);
+          const after = ownershipSnapshotForTests();
+          expect(after.messageOwners).toEqual(before.messageOwners);
+          expect(after.ownerByDoc).toEqual(before.ownerByDoc);
+          expect(after.handed).toEqual(before.handed);
+        });
+
+        it("a local-period row is handed to nobody across the switch back, and Claude's reply to it is refused", async () => {
+          await toLocal();
+          userChat("during-lp");
+          await toClaude();
+          for (const who of ["test:caller", LP_OTHER]) {
+            expect(chatIds(await as(who, () => poll({ cursor: "start" }))), who).toEqual([]);
+            expect(chatIds(await as(who, () => poll())), who).toEqual([]);
+          }
+          const refused = parseResult(
+            await client.callTool({
+              name: "tandem_reply",
+              arguments: { text: "hi", replyTo: "during-lp" },
+            }),
+          );
+          expect(refused.error).toBe(true);
+          expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+        });
+
+        it("a pre-switch message the caller owned and had not answered is handed to it after the switch back, and to no one else", async () => {
+          userChat("pre-owned");
+          // The caller's cursor poll hands it (and makes the caller its owner);
+          // that cursor is never passed back.
+          expect(chatIds(await poll({ cursor: "start" }))).toEqual(["pre-owned"]);
+          expect(
+            ownershipSnapshotForTests().messageOwners.map(([key, o]) => [key, o.ownerId]),
+          ).toEqual([["pre-owned", "test:caller"]]);
+          await toLocal();
+          await toClaude();
+          expect(chatIds(await poll({ cursor: "start" }))).toEqual(["pre-owned"]);
+          const other = await as(LP_OTHER, () => poll({ cursor: "start" }));
+          expect(chatIds(other)).toEqual([]);
+          expect(chatIds(await as(LP_OTHER, () => poll()))).toEqual([]);
+        });
+      });
+    }
 
     describe("during the local period (guard 1)", () => {
       it("a poll returns the constant status line and field, nothing else, and the cursor as passed", async () => {
