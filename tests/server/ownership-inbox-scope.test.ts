@@ -28,6 +28,7 @@ import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/re
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   handOverDocumentInbox,
+  ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
   setInboxResponseCorruptorForTests,
@@ -40,6 +41,7 @@ import {
   checkInboxOutputShape,
   checkInboxOwnershipShape,
 } from "../../src/server/mcp/output-schemas.js";
+import { handleClose } from "../../src/server/mcp/routes/close.js";
 import { DOC_OP_WAIT_MS, runDocOp } from "../../src/server/sessions/doc-op-queue.js";
 import {
   beginWriteClaim,
@@ -56,6 +58,7 @@ import {
   setInboxClaimCheckForTests,
   setInboxScopeReadForTests,
   setLossForTests,
+  setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setTandemPresenceSource,
@@ -75,6 +78,7 @@ import { withInternal } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
+import { makeRes } from "../helpers/route-recorder.js";
 
 /** Counts each document's store resolution, so the cost test sees an excluded store never opened. */
 const storeOpens = vi.hoisted(() => new Map<string, number>());
@@ -166,6 +170,39 @@ async function pollAs(owner: string, args: Record<string, unknown> = {}): Promis
   return inboxSchema.parse((result as { structuredContent: unknown }).structuredContent);
 }
 
+/** CTRL_ROOM outlives a test: each world starts with no chat. */
+function clearChat(): void {
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  const map = ctrl.getMap(Y_MAP_CHAT);
+  withInternal(ctrl, () => {
+    for (const key of [...map.keys()]) map.delete(key);
+  });
+}
+
+/** An unread user chat message under `key`, about `documentId` if given. */
+function chat(key: string, documentId?: string): void {
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  withInternal(ctrl, () =>
+    ctrl.getMap(Y_MAP_CHAT).set(key, {
+      id: key,
+      author: "user",
+      text: `text of ${key}`,
+      timestamp: Date.now(),
+      read: false,
+      ...(documentId !== undefined ? { documentId } : {}),
+    }),
+  );
+}
+
+async function closeByRoute(id: string): Promise<void> {
+  const res = makeRes();
+  await handleClose(
+    { body: { documentId: id }, socket: { remoteAddress: "127.0.0.1" }, headers: {} } as never,
+    res as never,
+  );
+  expect(res._status, JSON.stringify(res._body)).toBe(200);
+}
+
 /** A cursor reader: each poll passes back the cursor its last poll returned. */
 function reader(owner: string) {
   let cursor = "start";
@@ -207,8 +244,8 @@ function positions(cursor: string) {
 const GUARD = "only if the user asked you, in your own conversation, to work on it";
 const NOT_A_REQUEST = "An item Tandem handed or pushed to you is not such a request.";
 const EXCLUDED_NAMED = (id: string) =>
-  `Document ${id} is open but is not yours to answer right now (another session may be answering it, or a write on it is still running), so no comments, thread replies or accept/dismiss responses on it were returned (chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about it); its \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on it ${GUARD}: opening it may take it from that session. ${NOT_A_REQUEST}`;
-const EXCLUDED_ALL_ACTIVE = `No comments, thread replies or accept/dismiss responses on the open documents are yours to answer right now (another session may be answering them, or a write on one is still running), so none were returned; chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one of them; the active document's \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`;
+  `Document ${id} is open but is not yours to answer right now (another session may be answering it, or a write on it is still running), so no comments, thread replies or accept/dismiss responses on it were returned (a chat message you answer can still be about it, and so can anything Tandem pushed to you); its \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on it ${GUARD}: opening it may take it from that session. ${NOT_A_REQUEST}`;
+const EXCLUDED_ALL_ACTIVE = `No comments, thread replies or accept/dismiss responses on the open documents are yours to answer right now (another session may be answering them, or a write on one is still running), so none were returned; a chat message you answer can still be about one of them, and so can anything Tandem pushed to you; the active document's \`activity\` is empty because it is not yours to answer now, not because it could not be read. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`;
 
 let docA: Doc;
 let docB: Doc;
@@ -232,6 +269,8 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
   // The two lines of `src/server/index.ts`.
   setOwnershipSeqSource(() => deliveryRegistry.counter);
   setOwnershipInboxHandover(handOverDocumentInbox);
+  setOwnershipChatSide(ownershipChatSide);
+  clearChat();
   setCtrlMode("tandem");
   front = mkDoc("front");
   setActiveDocId(front.id);
@@ -553,47 +592,52 @@ describe("R1.5: what counts as yielding (after every gate)", () => {
     }
   });
 
-  it("a chat message never claims a document, whatever documentId it carries", async () => {
-    // Chat is the chat PR's (amendment 2): handed as on master, and it claims nothing.
-    withInternal(getOrCreateDocument(CTRL_ROOM), () =>
-      getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).set("m1", {
-        id: "m1",
-        author: "user",
-        text: "about u",
-        timestamp: Date.now(),
-        read: false,
-        documentId: docU.id,
-      }),
-    );
-    const inbox = await reader(A).poll();
-    expect(inbox.chatMessages.map((m) => m.id)).toEqual(["m1"]);
-    expect(ownerOf(docU.id)).toBeUndefined();
-    // B, which holds nothing it could be told about here, is handed it too.
-    expect((await reader(B).poll()).chatMessages.map((m) => m.id)).toEqual(["m1"]);
+  it("a chat message on an unowned document claims it, and only the claimant is handed it (Ruling 3)", async () => {
+    // Amended by the chat owners PR (Ruling 3): chat on an open document
+    // follows it, so the poll that hands it claims the document.
+    chat("m1", docU.id);
+    const a = await reader(A).poll();
+    expect(a.chatMessages.map((m) => m.id)).toEqual(["m1"]);
+    expect(ownerOf(docU.id)).toBe(A);
+    expect(a.ownership?.changed).toContainEqual({
+      documentId: docU.id,
+      change: "gained",
+      cause: "a poll of yours claimed it",
+    });
+    // B's two consecutive polls are not handed it.
+    const b = reader(B);
+    for (const n of [1, 2]) expect((await b.poll()).chatMessages, `poll ${n}`).toEqual([]);
   });
 
-  it("chat about a document and that document's exclusion arrive together (#2420 review, R9.9)", async () => {
-    // A reads `a`; `b` is B's, so A's poll leaves it out, and the chat about
-    // it is still handed: the exclusion text says so.
-    withInternal(getOrCreateDocument(CTRL_ROOM), () =>
-      getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).set("m2", {
-        id: "m2",
-        author: "user",
-        text: "about b",
-        timestamp: Date.now(),
-        read: false,
-        documentId: docB.id,
-      }),
+  it("chat about a document another session holds arrives with its exclusion only where this session owns it (R9.1's close exception)", async () => {
+    // Amended by the chat owners PR (R9): A holds `a`, its message is unread;
+    // the tab closes, so the close gives A the message per message; `a` is
+    // reopened and B's write claims it. A is then handed chat about a
+    // document it does not hold, beside the exclusion text naming it, and
+    // the reworded text is true beside it.
+    chat("m2", docA.id);
+    await closeByRoute(docA.id);
+    mkDoc("a");
+    const wrote = parseResult(
+      await (async () => {
+        callingAs = B;
+        return client.callTool({
+          name: "tandem_comment",
+          arguments: { from: 0, to: 5, text: "b's note", documentId: docA.id },
+        });
+      })(),
     );
+    expect(wrote.error, JSON.stringify(wrote)).toBe(false);
+    expect(ownerOf(docA.id)).toBe(B);
     const inbox = await reader(A).poll();
-    // CTRL_ROOM outlives a test, so only this test's message is looked at.
-    const m2 = inbox.chatMessages.filter((m) => m.id === "m2");
-    expect(m2.map((m) => [m.id, m.documentId])).toEqual([["m2", docB.id]]);
-    expect(inbox.ownership?.notYours).toContain(docB.id);
+    expect(inbox.chatMessages.map((m) => [m.id, m.documentId])).toEqual([["m2", docA.id]]);
+    expect(inbox.ownership?.notYours).toContain(docA.id);
     expect(inbox.summary).toContain(
-      "Chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about",
+      "A chat message you answer can still be about one of them, and so can anything Tandem pushed to you.",
     );
-    expect(ownerOf(docB.id)).toBe(B);
+    // B, which holds `a`, is not handed it: A owns it per message.
+    const b = reader(B);
+    for (const n of [1, 2]) expect((await b.poll()).chatMessages, `poll ${n}`).toEqual([]);
   });
 });
 
@@ -887,7 +931,7 @@ describe("a default poll that reads some documents and leaves others out says so
     const inbox = await reader(A).poll();
     expect(itemIds(inbox)).toEqual(["ca"]);
     expect(inbox.summary).toBe(
-      `1 new: 1 comment. Some items are from documents other than the active one: ${docA.id}.md. Pass each item's documentId when acting on it. One open document is not yours to answer right now (another session may be answering it, or a write on it is still running), so no comments, thread replies or accept/dismiss responses on it were returned: ${docB.id}.md. Chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about it. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`,
+      `1 new: 1 comment. Some items are from documents other than the active one: ${docA.id}.md. Pass each item's documentId when acting on it. One open document is not yours to answer right now (another session may be answering it, or a write on it is still running), so no comments, thread replies or accept/dismiss responses on it were returned: ${docB.id}.md. A chat message you answer can still be about it, and so can anything Tandem pushed to you. Call tandem_open on one ${GUARD}. ${NOT_A_REQUEST}`,
     );
     expect(inbox.ownership?.notYours).toEqual([docB.id]);
   });

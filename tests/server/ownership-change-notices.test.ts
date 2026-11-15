@@ -35,6 +35,7 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   documentLabelCallsForTests,
   handOverDocumentInbox,
+  ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
   setInboxResponseCorruptorForTests,
@@ -61,6 +62,7 @@ import {
   setCompositeObserverForTests,
   setDocOwner,
   setInboxClaimCheckForTests,
+  setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setTransportView,
@@ -74,7 +76,7 @@ import {
   CHANGED_FIELD_DESCRIPTION,
 } from "../../src/server/sessions/ownership-refusal.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
@@ -343,6 +345,7 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
   // The two lines of `src/server/index.ts`.
   setOwnershipSeqSource(() => deliveryRegistry.counter);
   setOwnershipInboxHandover(handOverDocumentInbox);
+  setOwnershipChatSide(ownershipChatSide);
   setCtrlMode("tandem");
   // An active document none of the tests' own, so theirs are background ones.
   const front = mkDoc("front");
@@ -433,7 +436,7 @@ describe("R1: the field", () => {
       '"gained": this session held the document after the change and not before; "lost": it held it before and not after',
     );
     expect(CAUSE_FIELD_DESCRIPTION).toBe(
-      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it',
+      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "a chat reply of yours claimed it": a tandem_reply of yours to a chat message about it claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it',
     );
   });
 
@@ -484,7 +487,9 @@ describe("R1: the field", () => {
       expect(fact).not.toMatch(/owner-|terminal|Claude Desktop|other app|label/i);
       expect(fact).not.toMatch(/\buser\b|\bchose\b/i);
       expect(fact).not.toMatch(/\b(holds|is held|is open|is closed|now)\b/i);
-      expect(word).not.toMatch(/^(claim|take|lapse|stale|poll-claim|user-open|take-back)$/);
+      expect(word).not.toMatch(
+        /^(claim|take|lapse|stale|poll-claim|reply-claim|user-open|take-back)$/,
+      );
     }
     const lapse = CHANGE_CAUSE_FACTS[LAPSED];
     expect(lapse).not.toMatch(/released/i);
@@ -521,6 +526,22 @@ describe("R1: the field", () => {
     const t = await userOpen(realFile("t.md"));
     await writeAs(B, { id: t });
     await openAs(A, path.join(tmpDir, "t.md"));
+    // a reply's claim (the chat owners PR, R5.7): A answers a chat message
+    // about an unowned document
+    const r = mkDoc("r");
+    const key = `${prefix}-chat-r`;
+    withInternal(getOrCreateDocument(CTRL_ROOM), () =>
+      getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).set(key, {
+        id: key,
+        author: "user",
+        text: "about r",
+        timestamp: Date.now(),
+        read: false,
+        documentId: r.id,
+      }),
+    );
+    expect((await as(A, "tandem_reply", { text: "on it", replyTo: key })).error).toBe(false);
+    expect(getDocOwner(r.id)?.ownerId).toBe(A);
     // a close
     await closeByRoute(w.id);
     await rawPoll(A);

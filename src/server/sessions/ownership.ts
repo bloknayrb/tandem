@@ -26,18 +26,28 @@
  * notice-rule PR: the one reader of `handoverSeq` (`settledThrough` on a
  * poll's scope). The change-notice PR: change notices (step 3 of the
  * composite, and the tab close's notice), queued per record and drained by
- * a poll through `inboxOwnership` (`ownership.changed`). Still to come,
- * named by content as in the plan: the chat PR (chat ownership, and
- * per-document and per-message delivery rounds).
+ * a poll through `inboxOwnership` (`ownership.changed`). The chat owners
+ * PR: per-message owners of user chat messages (ownership design §7.1, §7.2),
+ * the inbox's chat scope, acknowledgement and claims through the same door,
+ * the reply gate for a `tandem_reply` that names a message
+ * (`inboxOwnership.replyGate`, design §7.3 rule 1), and the chat half of a
+ * handover and of the tab close (design §6.5, §7.2). Still to come, named by
+ * content as in the plan: posts, batches and forged values (the posts PR:
+ * posts, answered-once for chat, `settles`, `superseded`, the stripping of
+ * client-written values), and chat, rounds and the greeting (per-document
+ * and per-message delivery rounds, and the greeting by bound transport).
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
  *
  * **Nearly a leaf.** It imports the flag, one helper from `sessions/context.ts`,
- * the operation queue, two names from `mcp/transport-registry.ts`,
+ * the operation queue, two names from `mcp/transport-registry.ts`, the
+ * refusal copy (`ownership-refusal.ts`, which imports only types from here),
  * `crossBasename` from `src/shared` (dependency-free) and `node:crypto` — never the document registry or anything under `documents/`,
  * so every route and service that calls it keeps its module graph. Callers
- * pass document ids in.
+ * pass document ids in, and the chat side is reached only through the
+ * `setOwnershipChatSide` seam wired at boot: this module never reads the chat
+ * map or writes a CTRL row.
  *
  * **Identity headers select, they do not prove** (ownership design §11.1).
  * Ownership coordinates Claude sessions; it is not a security boundary.
@@ -55,6 +65,7 @@ import {
   resetDocOpQueuesForTests,
   runWhenDocIdle,
 } from "./doc-op-queue.js";
+import { chatReplyRefusal } from "./ownership-refusal.js";
 
 /** How a record was identified (ownership design §2, §3.1). Server-derived. */
 export type RecordKind = "tandem" | "claude" | "bridge" | "http" | "local";
@@ -69,13 +80,14 @@ export type DisplayKind = "Tandem's Claude" | "terminal" | "Claude Desktop" | "o
  * `ownership-refusal.ts` (`CHANGE_CAUSE_FACTS`), a `Record` over this type,
  * and the output schema's enum is this list, so no word can be queued that
  * the schema does not list. A cause no production path makes today (Tandem's
- * Claude's gains and losses, its take-back, a chat post's claim, Release,
+ * Claude's gains and losses, its take-back, a chat post's claim (the posts PR), Release,
  * Assign) is not here: each joins with the PR that produces it. None equals
  * an internal {@link OwnershipChangeCause}.
  */
 export const CHANGE_CAUSES = [
   "your write claimed it",
   "a poll of yours claimed it",
+  "a chat reply of yours claimed it",
   "you opened or created it",
   "another session took it",
   "its tab was closed",
@@ -112,7 +124,11 @@ export type OwnershipKind = "default" | "claimed" | "opened" | "assigned";
  * no cause for undoing one); `take` a `tandem_open` (ownership design §4.2);
  * `stale` an entry whose record was gone; `poll-claim` an inbox poll that
  * was handed items on an unowned document it may claim (the scope PR,
- * applied in the poll's synchronous commit, not at a turn in the queue).
+ * applied in the poll's synchronous commit, not at a turn in the queue);
+ * `reply-claim` an accepted `tandem_reply` to a chat message on an unowned
+ * document the caller may claim (the chat owners PR, applied in the reply's
+ * one synchronous run, not at a turn in the queue: Bryan's decision of
+ * 2026-11-11, "Chat replies always get through").
  */
 export type OwnershipChangeCause =
   | "user-open"
@@ -121,7 +137,8 @@ export type OwnershipChangeCause =
   | "claim"
   | "take"
   | "stale"
-  | "poll-claim";
+  | "poll-claim"
+  | "reply-claim";
 
 /**
  * Why a record lost a document, for the causes that block it from claiming
@@ -144,7 +161,8 @@ export type OwnershipRefusalReason =
   | "held"
   | "claimed"
   | "default"
-  | "not-present";
+  | "not-present"
+  | "chat";
 
 /** A refused ownership decision. `holder` is null when no record holds the document, or its record is gone. */
 export interface OwnershipRefusal {
@@ -273,12 +291,97 @@ const lossByDoc = new Map<string, { ownerId: string; cause: LossCause }>();
  */
 const answererByItem = new Map<string, string>();
 
+/** How a message's per-message owner was set (the chat owners PR, R3.3). */
+export type MessageOwnerOrigin = "poll" | "reply" | "acknowledgement" | "close";
+
+/** A user chat message's per-message owner (ownership design §7.1, §7.2). */
+export interface MessageOwner {
+  readonly ownerId: string;
+  /** How it was set. Never rewritten: an owner keeps the origin it was set with (R3.3). */
+  readonly origin: MessageOwnerOrigin;
+  /** Origin `close` only: the document whose tab close set it (PR 5's Assign and Release read it, R3.4). */
+  readonly closedDocumentId?: string;
+}
+
+/**
+ * Per-message owners of user chat messages, keyed by the row's key in
+ * CTRL_ROOM's chat map (a message's identity, R3.1's terms). **Server memory
+ * only**: never on a row, never in the session file, lost at restart like
+ * every map here (R3.2). At most one per chat row: an owner whose row is
+ * deleted goes (`forgetChatMessageOwners`, R3.6), and an owner goes with its
+ * record (`deleteRecord`, R3.5a). Written only by {@link setMessageOwner}, which
+ * is a check-and-set: an existing owner and its origin are never overwritten.
+ * Empty while ownership is off (every writer returns at the flag first).
+ */
+const ownerByMessage = new Map<string, MessageOwner>();
+
+/**
+ * Which chat messages each record was handed, by a poll of that record that
+ * committed and returned (the chat owners PR, R5.2's Ruling 4 arm: "handed"
+ * means returned by a poll). Read only by the reply gate's arm for an open,
+ * unowned document the caller may not claim now. It survives a re-owe of the
+ * message and goes with the record (`deleteRecord`, R3.5a) or with the row
+ * (`forgetChatMessageOwners`), so it is bounded by records times chat rows.
+ * Empty while ownership is off.
+ */
+const handedByRecord = new Map<string, Set<string>>();
+
+/** What the ownership side needs to know about one user chat row. */
+export interface ChatMessageFacts {
+  /** The document the row names, if any. */
+  readonly documentId?: string;
+  /** Whether that document is open now. False for a row that names none. */
+  readonly documentOpen: boolean;
+  /** #1123 A2's local-period chat: no owner, never claimable (Ruling 9). */
+  readonly localPeriod: boolean;
+}
+
+/**
+ * The chat side, as the ownership side may use it (the chat owners PR, R2.2).
+ * **This module never reads the chat map or writes a CTRL row**: everything it
+ * needs from chat comes through these four members, which `src/server/index.ts`
+ * wires once at boot (`setOwnershipChatSide`, pinned from source in
+ * `tests/server/ownership-source-pins.test.ts`). Each is synchronous.
+ */
+export interface OwnershipChatSide {
+  /**
+   * The keys of the user chat messages that are **handled** now, by master's
+   * predicate (`answeredChatIds`): a Claude row without `agentIdentity` or
+   * `chatNotice` names it in `replyTo` (`inProgress` rows included), or the
+   * global received-sweep settles it. A query, not a notification:
+   * handledness changes with no row write (a confirmed hand-out feeds the
+   * sweep), so nothing could announce it. One call reads every chat row once.
+   */
+  handledKeys(): ReadonlySet<string>;
+  /** The keys of the user messages on `documentId` that are not handled and not local-period chat. */
+  messagesOn(documentId: string): readonly string[];
+  /** The facts of the user row under `key`, or undefined when there is none (no row, or not a user row). */
+  message(key: string): ChatMessageFacts | undefined;
+  /**
+   * The chat half of a handover (ownership design §6.5 steps 1 and 2): each of
+   * `keys` that is a user row, not local-period chat and not handled has its
+   * chat entry retired and is written `read: false` with no `delivered`, in
+   * one server-origin transaction. It pushes nothing and wakes nothing.
+   */
+  reOwe(keys: readonly string[]): void;
+}
+
+const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
+  handledKeys: () => new Set<string>(),
+  messagesOn: () => [],
+  message: () => undefined,
+  reOwe: () => {},
+});
+
 let transportMode: "http" | "stdio" | undefined;
 let transportView: () => ReadonlyArray<TransportViewEntry> = () => [];
 let presenceSource: () => boolean = () => false;
 let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false;
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
+let chatSide: OwnershipChatSide = NO_CHAT_SIDE;
+let chatFaultForTests: ((at: "re-owe" | "close") => void) | undefined;
+let wakeObserverForTests: ((cause: WakeCause) => void) | undefined;
 let compositeObserver: ((step: CompositeStep, documentId: string) => void) | undefined;
 let noticeFaultForTests: ((at: "change" | "close", documentId: string) => void) | undefined;
 let graceMs = DEFAULT_GRACE_MS;
@@ -391,6 +494,19 @@ export function setOwnershipSeqSource(source: () => number): void {
  */
 export function setOwnershipInboxHandover(handover: (documentId: string) => void): void {
   inboxHandover = handover;
+}
+
+/**
+ * The chat side (the chat owners PR, R2.2): how this module reads which
+ * messages are handled, which messages are on a document and what a row says,
+ * and how it re-owes a message, without importing the inbox. `src/server/index.ts`
+ * wires `awareness.ts`'s `ownershipChatSide` at boot (pinned from source in
+ * `tests/server/ownership-source-pins.test.ts`). Unwired it answers that
+ * nothing is handled, nothing is on any document, no row exists and a re-owe
+ * writes nothing, so no unit test would notice a server that forgot it.
+ */
+export function setOwnershipChatSide(side: OwnershipChatSide): void {
+  chatSide = side;
 }
 
 /**
@@ -512,7 +628,13 @@ export function getOwnerRecord(ownerId: string): Readonly<OwnerRecord> | undefin
 /**
  * Whether a record holds anything a lapse must move out (ownership design
  * §3.4). **The one place a later PR adds per-record state that a lapse must
- * move out** (chat, in the chat PR). Change notices are per-record state that
+ * move out.** The chat owners PR adds per-message owners, counted **only
+ * while their message is not handled** (one predicate for held state, master's
+ * `answeredChatIds` read through the chat side's `handledKeys`): a handled
+ * message (answered, swept or acknowledged) never keeps a record alive and
+ * never re-arms a grace. The cost is one read of the chat rows per call, and
+ * only for a record that owns a message per message, so the detached cap's
+ * ranking reads at most records times chat rows. Change notices are per-record state that
  * is NOT counted here and that a lapse does not move (Ruling 6 of the
  * change-notice PR): a record whose only state is queued notices is deleted,
  * and ranked under the detached cap, as one holding nothing is, and its
@@ -529,8 +651,48 @@ export function recordHoldsState(record: OwnerRecord): boolean {
   for (const entry of ownerByDoc.values()) {
     if (entry.ownerId === record.ownerId) return true;
   }
+  let handled: ReadonlySet<string> | undefined;
+  for (const [key, owner] of ownerByMessage) {
+    if (owner.ownerId !== record.ownerId) continue;
+    handled ??= handledKeysOrNone();
+    // Only a live user row counts: an owner whose row is gone holds nothing,
+    // even if a delete never reached `forgetChatMessageOwners` (R3.6).
+    if (!handled.has(key) && rowStillOwed(key)) return true;
+  }
   return false;
 }
+
+/**
+ * The chat side's handled keys, or none when the read throws: a failed read
+ * counts every owned message as unhandled, so a record is kept rather than
+ * deleted with an unanswered message. Fixed log text.
+ */
+function handledKeysOrNone(): ReadonlySet<string> {
+  try {
+    return chatSide.handledKeys();
+  } catch {
+    logLimited("chat-handled-failed", CHAT_READ_FAILED);
+    return new Set();
+  }
+}
+
+/** Whether `key` is still a user row that is not local-period chat (a failed read counts it). */
+function rowStillOwed(key: string): boolean {
+  try {
+    const facts = chatSide.message(key);
+    return facts !== undefined && !facts.localPeriod;
+  } catch {
+    return true;
+  }
+}
+
+/** Fixed texts: nothing from the error, no record, no message and no document. */
+const CHAT_READ_FAILED =
+  "[ownership] reading which chat messages are answered failed; every message a session owns counts as unanswered";
+const CHAT_REOWE_FAILED =
+  "[ownership] a chat message's owner changed but it could not be marked unread again; the session that may answer it now may not be handed it until it changes again";
+const CHAT_CLOSE_FAILED =
+  "[ownership] a document's tab closed but its unanswered chat could not be given an owner; that chat follows the default rule";
 
 /**
  * Display kind (ownership design §10.3), record kind first: only the `tandem`
@@ -641,9 +803,113 @@ function clearGrace(record: OwnerRecord): void {
   record.graceArmedAt = undefined;
 }
 
+/**
+ * Delete a record, and what it owns per message (R3.5a): its per-message
+ * owners (any still unhandled is re-owed; a lapse has already re-owed those,
+ * so in practice only handled ones remain) and its "handed" memory, so no
+ * owner id dangles and a record created again under the same owner id
+ * inherits nothing.
+ */
 function deleteRecord(record: OwnerRecord): void {
   clearGrace(record);
   records.delete(record.ownerId);
+  handedByRecord.delete(record.ownerId);
+  releaseMessageOwners(record.ownerId, () => true);
+}
+
+/**
+ * Drop `ownerId`'s per-message owners that `select` picks and re-owe them
+ * (ownership design §6.5; the chat side re-owes only a message that is not
+ * handled, so a handled one just loses its owner). The one owner-dropping
+ * entry point: a lapse (unhandled only), a deleted record (all), and the
+ * later triggers (PR 3b's end of presence, selecting origin
+ * "acknowledgement"; PR 5's Release) call it. Never throws.
+ */
+function releaseMessageOwners(
+  ownerId: string,
+  select: (key: string, owner: MessageOwner) => boolean,
+): void {
+  const dropped: string[] = [];
+  for (const [key, owner] of [...ownerByMessage]) {
+    if (owner.ownerId !== ownerId || !select(key, owner)) continue;
+    ownerByMessage.delete(key);
+    dropped.push(key);
+    messageOwnerChanged();
+  }
+  if (dropped.length > 0) reOweChat(dropped);
+}
+
+/** The chat side's re-owe, in its own catch (fixed log text). */
+function reOweChat(keys: readonly string[]): void {
+  try {
+    chatFaultForTests?.("re-owe");
+    chatSide.reOwe(keys);
+  } catch {
+    logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+  }
+}
+
+/**
+ * The step 5 seam for a change of a message's owner (R6.4, Ruling 13): the
+ * same `startOrWake` a document's change reaches, a no-op until PR 3b.
+ */
+function messageOwnerChanged(): void {
+  startOrWake("message-owner");
+}
+
+/**
+ * Make `ownerId` the message's per-message owner, if it has none (R3.3): a
+ * check-and-set with nothing between the check and the write; an existing
+ * owner and its origin are never rewritten. Never for a caller with no
+ * record. Returns whether it set one. A lapsed record whose message is not
+ * handled has its grace armed again, as a claim does.
+ */
+function setMessageOwner(
+  key: string,
+  ownerId: string,
+  origin: MessageOwnerOrigin,
+  closedDocumentId?: string,
+): boolean {
+  if (!ownershipEnabled() || ownerByMessage.has(key)) return false;
+  if (ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
+  const record = records.get(ownerId);
+  if (!record) return false;
+  ownerByMessage.set(key, {
+    ownerId,
+    origin,
+    ...(closedDocumentId !== undefined ? { closedDocumentId } : {}),
+  });
+  messageOwnerChanged();
+  if (record.lapsed) rejudge(record);
+  return true;
+}
+
+/** Remember that `ownerId` was handed `keys` by a poll that returned. */
+function noteHanded(ownerId: string, keys: readonly string[]): void {
+  if (keys.length === 0 || !records.has(ownerId)) return;
+  let set = handedByRecord.get(ownerId);
+  if (!set) {
+    set = new Set();
+    handedByRecord.set(ownerId, set);
+  }
+  for (const key of keys) set.add(key);
+}
+
+/**
+ * The chat side tells this module that chat rows were deleted (Clear chat,
+ * or any other delete): their per-message owners and "handed" memory go
+ * (R3.6). Wired at boot through `chat-row-deletions.ts`, so neither
+ * `ctrl-chat.ts` nor `session/manager.ts` imports this module. Nothing is
+ * re-owed: the message is gone. Never throws.
+ */
+export function forgetChatMessageOwners(keys: Iterable<string>): void {
+  if (!ownershipEnabled()) return;
+  total("forgetChatMessageOwners", undefined, () => {
+    for (const key of keys) {
+      ownerByMessage.delete(key);
+      for (const set of handedByRecord.values()) set.delete(key);
+    }
+  });
 }
 
 function armGrace(record: OwnerRecord): void {
@@ -708,7 +974,9 @@ function enforceDetachedCap(): void {
 
 /**
  * The record's client went away (ownership design §3.4): each document it holds
- * goes to the default rule. Its chat follows in the chat PR. Its change
+ * goes to the default rule. Each message it owns per message that is not
+ * handled loses that owner and is re-owed (R6.2); a handled one stays with
+ * the record until the record is deleted. Its change
  * notices are not moved: each move queues a `lost` notice for it, read only
  * if its record survives (a transport still registered); a record deleted
  * once its documents move takes its notices with it. A lapse records no
@@ -747,6 +1015,8 @@ function lapse(record: OwnerRecord): void {
       (err) => logLimited("throw:lapse", `[ownership] lapse failed: ${errorText(err)}`),
     );
   }
+  const handled = ownerByMessage.size > 0 ? handledKeysOrNone() : new Set<string>();
+  releaseMessageOwners(record.ownerId, (key) => !handled.has(key));
   deleteIfGone(record);
 }
 
@@ -849,6 +1119,10 @@ export function setDocOwner(
       });
     }
     if (leavesRecord) handOver(documentId);
+    // The chat half of the handover (ownership design §6.5, R6.1): the
+    // unanswered chat that follows this document is owed again. Its own
+    // catch: the change above stands and the steps below still run.
+    if (leavesRecord) reOweDocumentChat(documentId);
     // Step 3, change notices. Its own catch: the change above stands.
     compositeObserver?.("notices", documentId);
     if (previousId !== next?.ownerId) {
@@ -871,11 +1145,33 @@ export function setDocOwner(
 }
 
 /**
+ * The chat half of a handover of `documentId` (R6.1): each unanswered,
+ * non-local-period message on it that has no per-message owner follows the
+ * document, so it is re-owed. Never the old owner's doc-less chat, and never
+ * a message with a per-message owner. Never throws.
+ */
+function reOweDocumentChat(documentId: string): void {
+  try {
+    chatFaultForTests?.("re-owe");
+    const keys = chatSide.messagesOn(documentId).filter((key) => !ownerByMessage.has(key));
+    if (keys.length > 0) chatSide.reOwe(keys);
+  } catch {
+    logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+  }
+}
+
+/** What reaches step 5: a document's change, or a change of a message's owner (R6.4). */
+export type WakeCause = OwnershipChangeCause | "message-owner";
+
+/**
  * Start or wake Tandem's Claude for returning work (ownership design §8.4).
  * **A no-op until PR 3b**, whose body must refuse through `aiRefusal()` before
- * it writes to the child (ownership design §11.5, Critical Rule 9).
+ * it writes to the child (ownership design §11.5, Critical Rule 9). A test may
+ * watch it (`setWakeObserverForTests`).
  */
-export function startOrWake(_cause: OwnershipChangeCause): void {}
+export function startOrWake(cause: WakeCause): void {
+  wakeObserverForTests?.(cause);
+}
 
 /**
  * The default rule for a document the user opened (ownership design §4.2:
@@ -927,7 +1223,40 @@ export function onDocumentClosed(documentId: string, filePath?: string): void {
     // carries the file name the document had, for the summary; the basename
     // is computed here, flag on only.
     if (held) queueCloseNotice(documentId, heldBy, filePath);
+    // The close's chat half (R6.3), after the handover and in its own catch,
+    // so it can never skip the handover. It is given the holder read above,
+    // before the entry was deleted.
+    assignClosedDocumentChat(documentId, heldBy);
   });
+}
+
+/**
+ * The tab close's chat half (R6.3, Ruling 6; design §6.3 "a tab close runs
+ * steps 1 to 3", §7.2): it re-owes nothing. Each unanswered, non-local-period
+ * message on the document that has **no per-message owner** gets one, origin
+ * "close": the holder at the close if its record exists and has not lapsed;
+ * if the document was unowned, Tandem's Claude while present; otherwise
+ * nobody (a lapsed holder's messages are then owned as closed-document
+ * messages are, so none is left with a record nothing will arm or delete).
+ * An existing per-message owner is never overwritten. Never throws.
+ */
+function assignClosedDocumentChat(documentId: string, heldBy: string | undefined): void {
+  try {
+    chatFaultForTests?.("close");
+    let to: string | undefined;
+    if (heldBy !== undefined) {
+      const record = records.get(heldBy);
+      if (record && !record.lapsed) to = heldBy;
+    } else if (isTandemPresent()) {
+      to = TANDEM_OWNER_ID;
+    }
+    if (to === undefined) return;
+    for (const key of chatSide.messagesOn(documentId)) {
+      setMessageOwner(key, to, "close", documentId);
+    }
+  } catch {
+    logLimited("chat-close-failed", CHAT_CLOSE_FAILED);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -961,6 +1290,7 @@ function changeCauseOf(
   if (change === "gained") {
     if (cause === "claim") return "your write claimed it";
     if (cause === "poll-claim") return "a poll of yours claimed it";
+    if (cause === "reply-claim") return "a chat reply of yours claimed it";
     if (cause === "take") return "you opened or created it";
     return undefined;
   }
@@ -1245,7 +1575,8 @@ export type InboxScope = "holds" | "may-claim" | "neither";
  *   record (PR 2a's ruling), and every caller while ownership is off.
  *
  * It cannot see whether the document is open (this module never imports the
- * registry): pass open documents only. Chat is the chat PR's.
+ * registry): pass open documents only. A chat message that follows an open
+ * document reads its answer here too (the chat owners PR, {@link messageStanding}).
  */
 export function inboxScopeOf(
   documentId: string,
@@ -1261,6 +1592,54 @@ export function inboxScopeOf(
   if (since === undefined) return "may-claim";
   return since !== null && now - since >= docOpWaitLimitMs() ? "may-claim" : "neither";
 }
+
+/**
+ * Who owns a user chat message now (R3.1; ownership design §7.1), in order:
+ * local-period chat has no owner and is never claimable; a per-message owner
+ * wins, even on a document open again; a message on an open document follows
+ * its holder, or is claimable with the document when it is unowned; a
+ * doc-less message, or one on a closed document, is Tandem's Claude's while
+ * it is present, otherwise claimable per message. **Pure.** `documentScope`
+ * answers an open document's {@link InboxDocumentScope} for the caller (a
+ * poll's snapshot, or a live read for a reply), `"closed"` when it is not open.
+ */
+type MessageStanding =
+  | { readonly kind: "none" }
+  | { readonly kind: "owned"; readonly ownerId: string; readonly perMessage: boolean }
+  | { readonly kind: "with-document"; readonly documentId: string }
+  | { readonly kind: "per-message" };
+
+function messageStanding(key: string, facts: ChatMessageFacts): MessageStanding {
+  if (facts.localPeriod) return { kind: "none" };
+  const own = ownerByMessage.get(key);
+  if (own && records.has(own.ownerId)) {
+    return { kind: "owned", ownerId: own.ownerId, perMessage: true };
+  }
+  if (facts.documentId !== undefined && facts.documentOpen) {
+    const entry = readEntry(facts.documentId);
+    if (entry) return { kind: "owned", ownerId: entry.ownerId, perMessage: false };
+    return { kind: "with-document", documentId: facts.documentId };
+  }
+  if (isTandemPresent()) return { kind: "owned", ownerId: TANDEM_OWNER_ID, perMessage: false };
+  return { kind: "per-message" };
+}
+
+/** Whether `callerId` may take a message that is claimable per message: a record, and not a Tandem's Claude that is not present. */
+function mayTakePerMessage(callerId: string | undefined): callerId is string {
+  if (callerId === undefined) return false;
+  if (callerId === TANDEM_OWNER_ID) return isTandemPresent();
+  return records.has(callerId);
+}
+
+/**
+ * What a poll may do with one chat message (R4.1): `"owns"` — the caller owns
+ * it; `"take"` — it is claimable per message and the caller may take it (the
+ * poll's commit makes the caller its owner, R3.3); `"claim"` — it follows an
+ * open, unowned document the caller may claim now (the commit claims the
+ * document, R4.3); `"neither"` — it is not handed. While ownership is off
+ * every message reads `"owns"`, which filters nothing.
+ */
+export type InboxChatScope = "owns" | "take" | "claim" | "neither";
 
 /**
  * Where a poll stands on one open document, as the poll's scope snapshot
@@ -1306,6 +1685,30 @@ export interface InboxPollScope {
   /** The documents the caller holds right now (empty for no record). */
   holding(): string[];
   /**
+   * The chat owners PR (R4.1): what this poll may do with the user chat
+   * message under `key`, which names `documentId` (undefined when it names
+   * none). An open document's answer is the snapshot's; per-message owners
+   * and Tandem's Claude's presence are read live. A caller with no record is
+   * handed nothing (R4.6). Local-period chat is skipped by the collectors
+   * before they ask.
+   */
+  chatScopeOf(key: string, documentId: string | undefined): InboxChatScope;
+  /**
+   * The chat half of a poll's commit (R3.3, R4.4), after the response
+   * validated and its claims were applied: `taken` (messages of scope
+   * `"take"` it handed) each get the caller as per-message owner, origin
+   * "poll", if they still have none; every key in `handed` is remembered as
+   * handed to the caller (Ruling 4's arm). Nothing for a caller with no
+   * record. Never throws.
+   */
+  commitChat(taken: readonly string[], handed: readonly string[]): string[];
+  /**
+   * Undo `commitChat`'s owners for a poll that threw after its chat commit:
+   * each of `keys` loses its per-message owner if this caller holds it with
+   * origin "poll" (the inbox then re-owes the message). Never throws.
+   */
+  dropChatOwners(keys: readonly string[]): void;
+  /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
    * handover has run on it this server run. A notice whose registry entry is
@@ -1350,6 +1753,9 @@ const UNSCOPED: InboxPollScope = Object.freeze({
   scopeOf: (): InboxDocumentScope => "holds",
   claim: (): InboxClaimOutcome => "refused",
   holding: () => [],
+  chatScopeOf: (): InboxChatScope => "owns",
+  commitChat: () => [],
+  dropChatOwners: () => {},
   settledThrough: () => 0,
   changes: () => [],
   drainChanges: () => ({ notices: [] }),
@@ -1439,6 +1845,49 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
       }
     },
     holding: () => (callerId === undefined ? [] : heldDocumentIds(callerId)),
+    chatScopeOf: (key, documentId) => {
+      if (callerId === undefined || (callerId !== TANDEM_OWNER_ID && !records.has(callerId))) {
+        return "neither";
+      }
+      const open = documentId !== undefined ? snapshot.get(documentId) : undefined;
+      const standing = messageStanding(key, {
+        documentId,
+        documentOpen: open !== undefined,
+        localPeriod: false,
+      });
+      switch (standing.kind) {
+        case "none":
+          return "neither";
+        case "owned":
+          return standing.ownerId === callerId ? "owns" : "neither";
+        case "with-document":
+          // The snapshot's answer (decided once, at the poll's start): an
+          // unowned document the caller may not claim now (busy within the
+          // bound, a blocking loss) or whose read threw hands nothing (R4.2).
+          return open === "may-claim" ? "claim" : "neither";
+        case "per-message":
+          return mayTakePerMessage(callerId) ? "take" : "neither";
+      }
+    },
+    commitChat: (taken, handed) => {
+      if (callerId === undefined) return [];
+      return total("commitChat", [] as string[], () => {
+        const set = taken.filter((key) => setMessageOwner(key, callerId, "poll"));
+        noteHanded(callerId, handed);
+        return set;
+      });
+    },
+    dropChatOwners: (keys) => {
+      if (callerId === undefined) return;
+      total("dropChatOwners", undefined, () => {
+        for (const key of keys) {
+          const owner = ownerByMessage.get(key);
+          if (owner?.ownerId !== callerId || owner.origin !== "poll") continue;
+          ownerByMessage.delete(key);
+          messageOwnerChanged();
+        }
+      });
+    },
     settledThrough: (documentId) => handoverSeq.get(documentId) ?? 0,
     changes: () =>
       (callerId === undefined ? undefined : records.get(callerId))?.changeNotices?.map((n) => ({
@@ -1470,6 +1919,167 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
   return scope;
 }
 
+/** A document id as `docIdFromPath` makes them: anything else in a client-written row's `documentId` names no document. */
+const DOCUMENT_ID_SHAPE = /^[A-Za-z0-9-]{1,256}$/;
+
+/** Whether a client-written `documentId` can name a document (never CTRL_ROOM, whose name holds underscores). */
+export function isDocumentIdShaped(value: unknown): value is string {
+  return typeof value === "string" && DOCUMENT_ID_SHAPE.test(value);
+}
+
+/**
+ * What `tandem_reply`'s ownership gate decided (the chat owners PR, R5;
+ * ownership design §7.3 rule 1). `legacy`: run master's path unchanged
+ * (ownership off; a post, which the posts PR gates; a `replyTo` that names
+ * no user message, judged as a post). `refused`: the error to return, with
+ * nothing written; `stage` says whether the arguments decided it (answered
+ * before the licence) or ownership did (answered after it). `accepted`:
+ * stamp the row with `documentId` (the message's, or none), then call
+ * `apply` once the append has landed, in the same synchronous run.
+ */
+export type ReplyGate =
+  | { readonly kind: "legacy" }
+  | {
+      readonly kind: "refused";
+      readonly stage: "arguments" | "ownership";
+      readonly code: "INVALID_ARGUMENT" | "NOT_DOC_OWNER" | "INTERNAL_ERROR";
+      readonly message: string;
+      readonly details?: Record<string, unknown>;
+    }
+  | { readonly kind: "accepted"; readonly documentId: string | undefined; apply(): void };
+
+const LEGACY_REPLY: ReplyGate = Object.freeze({ kind: "legacy" });
+
+/** The argument refusal (R5.2 step 1): no document id, no message text. */
+export const REPLY_DOCUMENT_MISMATCH =
+  "Nothing was sent: the documentId you passed is not the document of the chat message that replyTo names. Omit documentId when you reply to a chat message; the reply is filed with that message's own document.";
+
+/** A caller with a record-less identity (R5.4): a wiring fault, or a record deleted while the call ran. */
+export const REPLY_NO_RECORD =
+  "tandem_reply refused: Tandem has no record for this session, so it cannot answer a chat message now. Nothing was sent. This is a fault in Tandem, not something to retry with different arguments.";
+
+const REPLY_NO_OWNER =
+  "tandem_reply refused: this request carries no owner identity. This is a Tandem wiring fault, not something to retry with different arguments.";
+
+function chatRefused(
+  reason: "chat" | "not-present",
+  holder: HolderView | null,
+  facts: ChatMessageFacts,
+  why: "holder" | "busy" | "local" | "not-present",
+): ReplyGate {
+  const { message, details } = chatReplyRefusal({
+    reason,
+    holder,
+    why,
+    ...(facts.documentId !== undefined ? { documentId: facts.documentId } : {}),
+  });
+  return { kind: "refused", stage: "ownership", code: "NOT_DOC_OWNER", message, details };
+}
+
+/**
+ * The reply gate (R5.2), decided **without writing anything**. The caller
+ * returns a refusal before any write, and for an acceptance appends the row
+ * and then calls `apply` with no `await` between (R5.1): Bryan's decision of
+ * 2026-11-11 ("Chat replies always get through"): a reply never joins the
+ * document operation queue.
+ */
+function replyGate(
+  callerId: string | undefined,
+  request: { replyTo?: string; inProgress?: boolean; documentId?: string },
+): ReplyGate {
+  const key = request.replyTo;
+  if (key === undefined) return LEGACY_REPLY;
+  const facts = chatSide.message(key);
+  // A `replyTo` that names no user message is judged as a post: master's
+  // behaviour in this PR, with its warning.
+  if (facts === undefined) return LEGACY_REPLY;
+  // 1. The arguments: an explicit documentId that is not the message's (any
+  //    one, for a doc-less message).
+  const explicit = request.documentId || undefined;
+  if (explicit !== undefined && explicit !== facts.documentId) {
+    return {
+      kind: "refused",
+      stage: "arguments",
+      code: "INVALID_ARGUMENT",
+      message: REPLY_DOCUMENT_MISMATCH,
+    };
+  }
+  // 2. The licence is the handler's (the append is its admission point).
+  // 4. Local-period chat: nobody's, never claimable (Ruling 9).
+  if (facts.localPeriod) return chatRefused("chat", null, facts, "local");
+  // 5. A caller that may not reply, whatever it owns.
+  if (callerId === undefined) {
+    return { kind: "refused", stage: "ownership", code: "INTERNAL_ERROR", message: REPLY_NO_OWNER };
+  }
+  if (callerId === TANDEM_OWNER_ID) {
+    if (!isTandemPresent()) return chatRefused("not-present", null, facts, "not-present");
+  } else if (!records.has(callerId)) {
+    return {
+      kind: "refused",
+      stage: "ownership",
+      code: "INTERNAL_ERROR",
+      message: REPLY_NO_RECORD,
+    };
+  }
+  // 6. The owner.
+  const acknowledging = request.inProgress === true;
+  const origin: MessageOwnerOrigin = acknowledging ? "acknowledgement" : "reply";
+  // R5.8: an accepted acknowledgement makes the acknowledger the per-message
+  // owner of a message that has none, whatever kind of message it is.
+  const ownAcknowledgement = () => {
+    if (acknowledging) setMessageOwner(key, callerId, "acknowledgement");
+  };
+  const accept = (apply: () => void): ReplyGate => ({
+    kind: "accepted",
+    documentId: facts.documentId,
+    apply: () => total("replyApply", undefined, apply),
+  });
+  const standing = messageStanding(key, facts);
+  switch (standing.kind) {
+    case "none":
+      return chatRefused("chat", null, facts, "local");
+    case "owned":
+      if (standing.ownerId === callerId) return accept(ownAcknowledgement);
+      if (standing.ownerId === TANDEM_OWNER_ID) ensureRecord(TANDEM_OWNER_ID, "tandem");
+      return chatRefused("chat", viewOf(standing.ownerId), facts, "holder");
+    case "with-document": {
+      const documentId = standing.documentId;
+      if (inboxScopeOf(documentId, callerId) === "may-claim") {
+        return accept(() => {
+          claimForReply(key, documentId, callerId);
+          ownAcknowledgement();
+        });
+      }
+      // Ruling 4: the document cannot be claimed now. A caller a poll handed
+      // the message may still answer it, as its per-message owner; the
+      // document is not claimed.
+      if (handedByRecord.get(callerId)?.has(key)) {
+        return accept(() => setMessageOwner(key, callerId, origin));
+      }
+      return chatRefused("chat", null, facts, "busy");
+    }
+    case "per-message":
+      return accept(() => setMessageOwner(key, callerId, origin));
+  }
+}
+
+/**
+ * An accepted reply's claim of the unowned document its message is on
+ * (Ruling 3): the same rule a write's claim uses (`standingOf`), applied at
+ * once (an unqueued change, cause `reply-claim`). A claim no longer possible
+ * by now changes nothing: the reply stands.
+ */
+function claimForReply(key: string, documentId: string, callerId: string): void {
+  // Still open, as the poll's claim re-checks (`stillOpen`): an entry for a
+  // closed document would have no tab and no close to remove it.
+  if (chatSide.message(key)?.documentOpen !== true) return;
+  const standing = standingOf(documentId, callerId, readEntry(documentId));
+  if (!standing.ok || standing.holds || standing.claim === null) return;
+  setDocOwner(documentId, { ownerId: callerId, kind: standing.claim }, "reply-claim", callerId);
+  const record = records.get(callerId);
+  if (record && ownerByDoc.get(documentId)?.ownerId === callerId) rejudge(record);
+}
+
 /**
  * **The inbox's one door into ownership** (#2358 scope PR; design §6.2,
  * §6.6, §6.8 as amended by the scope PR's brief). `mcp/awareness.ts` imports
@@ -1499,6 +2109,18 @@ export const inboxOwnership = Object.freeze({
   ): InboxPollScope {
     if (!ownershipEnabled()) return UNSCOPED;
     return pollScope(caller.ownerId, openIds, now);
+  },
+  /**
+   * The reply gate for `tandem_reply` (the chat owners PR, R5): `legacy`
+   * while ownership is off, so the tool runs master's path. The caller is
+   * passed along unread, as for `begin`.
+   */
+  replyGate(
+    caller: { readonly ownerId?: string },
+    request: { replyTo?: string; inProgress?: boolean; documentId?: string },
+  ): ReplyGate {
+    if (!ownershipEnabled()) return LEGACY_REPLY;
+    return replyGate(caller.ownerId, request);
   },
 });
 
@@ -1670,6 +2292,10 @@ export function ownershipSnapshotForTests(): {
   pendingClaims: number;
   /** Each record's queued change notices, by owner id (records with none are left out). */
   changeNotices: Array<[string, ChangeNotice[]]>;
+  /** The chat owners PR: per-message owners, by chat key, each with its origin. */
+  messageOwners: Array<[string, MessageOwner]>;
+  /** The chat owners PR: what each record was handed by its polls, by owner id. */
+  handed: Array<[string, string[]]>;
 } {
   return {
     transportMode,
@@ -1684,7 +2310,23 @@ export function ownershipSnapshotForTests(): {
     changeNotices: [...records.values()]
       .filter((r) => (r.changeNotices?.length ?? 0) > 0)
       .map((r) => [r.ownerId, (r.changeNotices ?? []).map((n) => ({ ...n }))]),
+    messageOwners: [...ownerByMessage].map(([key, owner]) => [key, { ...owner }]),
+    handed: [...handedByRecord]
+      .filter(([, keys]) => keys.size > 0)
+      .map(([ownerId, keys]) => [ownerId, [...keys].sort()]),
   };
+}
+
+/** Make the chat half of a handover (`"re-owe"`) or of a close (`"close"`) throw; undefined clears it. */
+export function setChatOwnershipFaultForTests(
+  fault: ((at: "re-owe" | "close") => void) | undefined,
+): void {
+  chatFaultForTests = fault;
+}
+
+/** Watch `startOrWake` (step 5): told each cause that reaches it. Undefined clears it. */
+export function setWakeObserverForTests(observer: ((cause: WakeCause) => void) | undefined): void {
+  wakeObserverForTests = observer;
 }
 
 /**
@@ -1761,6 +2403,8 @@ export function resetOwnershipForTests(): void {
   handoverSeq.clear();
   lossByDoc.clear();
   answererByItem.clear();
+  ownerByMessage.clear();
+  handedByRecord.clear();
   pendingClaims.clear();
   compositeObserver = undefined;
   noticeFaultForTests = undefined;
@@ -1774,5 +2418,8 @@ export function resetOwnershipForTests(): void {
   waitingProbe = () => false;
   seqSource = () => 0;
   inboxHandover = () => {};
+  chatSide = NO_CHAT_SIDE;
+  chatFaultForTests = undefined;
+  wakeObserverForTests = undefined;
   graceMs = DEFAULT_GRACE_MS;
 }
