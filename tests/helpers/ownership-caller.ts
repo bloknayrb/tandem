@@ -1,5 +1,4 @@
 import { afterEach, beforeEach } from "vitest";
-import { ownershipChatSide } from "../../src/server/mcp/awareness.js";
 import {
   getMcpContext,
   type McpRequestContext,
@@ -86,9 +85,13 @@ export function useStdioOwnershipMode(): void {
  * `legacy` whatever is wired.
  */
 export function registerTestCallerRecord(): void {
-  beforeEach(() => {
+  beforeEach(async () => {
     setTransportView(() => [{ ownerId: TEST_OWNER_ID, openStreams: 0 }]);
     noteTransportRegistered(TEST_OWNER_ID, { recordKind: "claude" });
+    // Imported here, not at the top: a static import of the inbox from this
+    // shared helper loads the MCP tool modules before a suite's hoisted
+    // `vi.mock` factories can initialise (`convert-error-mapping.test.ts`).
+    const { ownershipChatSide } = await import("../../src/server/mcp/awareness.js");
     setOwnershipChatSide(ownershipChatSide);
   });
 }
