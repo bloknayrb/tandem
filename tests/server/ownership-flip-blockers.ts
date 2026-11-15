@@ -43,8 +43,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Handover gap (d): re-owed items open no delivery round, so /health can read idle while " +
       "items are owed.",
     closedBy:
-      "The chat PR (per-document delivery rounds beside its per-message rounds, design §6.7; " +
-      "moved there by the notice-rule PR's brief).",
+      "The 'chat, rounds and the greeting' PR (per-document delivery rounds beside per-message " +
+      "rounds, design §6.7; moved there by the notice-rule PR's brief, then by the chat owners " +
+      "PR's brief, Ruling 1).",
   },
   {
     gap:
@@ -62,7 +63,13 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "'polls every open document', and its contract that a summary with no document read means " +
       "nothing is open (flag-on, it can mean nothing open is yours to answer). docs/mcp-tools.md's " +
       "tandem_checkInbox section says the same things; it carries a 'ships dark' paragraph listing " +
-      "what changes flag-on, and the flip PR rewrites the section.",
+      "what changes flag-on, and the flip PR rewrites the section. Since the chat owners PR " +
+      "also: tandem_checkInbox's '`chatMessages` spans every document', 'each item repeats on " +
+      "every poll until you pass a cursor from a response that held it' and 'a chat message you " +
+      "answered with tandem_reply `replyTo` is not repeated' (chat is scoped by owner); " +
+      "CHAT_ACK_DIRECTIVE (said to every poll that hands chat, though a refused reply is now " +
+      "possible); and tandem_reply's `documentId` input 'defaults to active document' (a reply " +
+      "to a message is stamped with the message's document).",
     closedBy:
       "The flip PR: the flag-off text cannot change while dark, and the skill ships live, so it " +
       "changes at the flip together with the plugin ref bump.",
@@ -111,8 +118,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "although it did not read the documents other sessions hold, so /health can read idle " +
       "while another session's document has items no poll of its holder has returned.",
     closedBy:
-      "The chat PR (per-document delivery rounds beside its per-message rounds, design §6.7; " +
-      "moved there by the notice-rule PR's brief).",
+      "The 'chat, rounds and the greeting' PR (per-document delivery rounds beside per-message " +
+      "rounds, design §6.7; moved there by the notice-rule PR's brief, then by the chat owners " +
+      "PR's brief, Ruling 1).",
   },
   {
     gap:
@@ -123,20 +131,95 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Chat stays unscoped until the chat PR: every session is handed every user chat message, " +
-      "whatever document it is about (#2358's own symptom, for chat). Besides duplicate answers, " +
-      "a session handed 'please fix the intro in d3' for a document another session holds may " +
-      "tandem_open it, and the take rule lets an open by another session take a `claimed` " +
-      "document or one Tandem's Claude holds as `default`; the inbox's " +
-      "exclusion texts carry the refusals' guard (an item Tandem handed you is not a request), " +
-      "which only lowers that risk.",
-    closedBy: "The chat PR (design §7: per-message owners).",
+      "Push paths (/api/events, /api/wake, the channel shim, the plugin monitor) still deliver " +
+      "every user chat:message to every consumer, so a session can be pushed chat it may not " +
+      "answer (the chat owners PR scoped the inbox and the reply, not pushes).",
+    closedBy: "PR 4 (push scope, design §9.1).",
+  },
+  {
+    gap:
+      "Posts (tandem_reply without replyTo) are accepted from any caller and stamped with the " +
+      "active document (the chat owners PR gates only a reply that names a message).",
+    closedBy: "The posts PR (design §7.3 rule 2, the `post` refusal).",
+  },
+  {
+    gap:
+      "The batch rule is master's: one session's final reply can settle a message another " +
+      "session owns and has received (the global received-sweep); if that owner then lapses, " +
+      "the message is not re-owed (it reads as handled) and is lost. Master can do the same, " +
+      "less often.",
+    closedBy: "The posts PR (`settles` written by the server, the global sweep removed).",
+  },
+  {
+    gap:
+      "An acknowledged message is handled under master's predicate and owned by its " +
+      "acknowledger (the chat owners PR, R5.8). A live acknowledger that never answers keeps " +
+      "it (PR 5's control on the message). If the acknowledger's record is deleted before its " +
+      "final reply (its transport went and its grace ran out, the detached cap lapsed it early, " +
+      "it had already lapsed, or Tandem restarts), each outcome on ADR-054's accepted list " +
+      "'An acknowledger's record deleted before its final reply' follows, including the " +
+      "re-initialize case there (a session with no X-Claude-Session-Id gets a new record and is " +
+      "refused naming its own old label; probe-contingent, PR 3b's real-launcher smoke).",
+    closedBy:
+      "The posts PR (acknowledgements count for nothing and are superseded at a re-owe), with " +
+      "PR 3b's probe of which identity a real Claude Code HTTP session resolves to.",
+  },
+  {
+    gap:
+      "Answered-once is not enforced for chat: a record that now owns a message another record " +
+      "already answered may answer it again (design R1.5).",
+    closedBy: "The posts PR (answered-once for chat, the `answered` refusal).",
+  },
+  {
+    gap:
+      "A client can write server-only values (a Claude row with replyTo, and later `settles` " +
+      "and `superseded`) and hide a message from every inbox.",
+    closedBy: "The posts PR (stripping client-written server-only values).",
+  },
+  {
+    gap:
+      "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
+      "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead; " +
+      "the handled predicate honours its rows, an acknowledgement included. So an unmapped shim " +
+      "session can answer or acknowledge a message another session owns, and either one " +
+      "handles it (Ruling 11).",
+    closedBy: "PR 4 (the shim's permit, design §9.2).",
+  },
+  {
+    gap:
+      "When Tandem's Claude stops being present, its per-message owners of origin " +
+      "'acknowledgement' must be dropped (releaseMessageOwners in sessions/ownership.ts takes " +
+      "the selector). Until then, after it acknowledges and stops being present, its own reply " +
+      "is refused (not-present) and every other session is refused 'Tandem's Claude answers " +
+      "this message' (the chat owners PR, R5.8).",
+    closedBy: "PR 3b (presence).",
+  },
+  {
+    gap:
+      "The pickup and stall clock still counts from the message's arrival, not its last change " +
+      "of owner (design §6.5's sentence, deferred), so a re-owed message older than the stall " +
+      "threshold reads 'still waiting' at once and may show the Claude Code offer, though a " +
+      "session started from that offer is not handed it while another session holds the " +
+      "document (the chat owners PR, R8.1, R8.3).",
+    closedBy: "PR 5 (the clock carried to the client).",
+  },
+  {
+    gap:
+      "After a tab close, chat stays with the closing holder even when the document is reopened " +
+      "and claimed by another session (R6.3); and a message whose per-message owner never " +
+      "answers reads 'still waiting' with the Claude Code offer, and a session started from " +
+      "that offer is not handed it (R8.2).",
+    closedBy: "PR 5's controls (Assign and Release of a document and of a message).",
   },
   {
     gap:
       "A document claimed by a poll whose items its holder then never answers: the holder keeps " +
       "it, and no other session is handed its items until a lapse, a close or a take moves it " +
-      "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does).",
+      "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does). " +
+      "Since the chat owners PR the same holds for a message owned per message that its owner " +
+      "never answers: nobody else is handed it while that owner's record exists. An unhandled " +
+      "one is re-owed at the owner's lapse; a handled one (acknowledged, for instance) is never " +
+      "re-owed, and stays the owner's until its record is deleted.",
     closedBy: "PR 3b (waiting, startOrWake) for Tandem's Claude, or Bryan's answer for terminals.",
   },
   {
@@ -204,7 +287,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "Change-notice cause the chat PR owes (R7.2): a gained entry by a chat post's claim, a " +
       "past-tense fact with no instruction (Ruling 10). Until then such a change is told only " +
       "through `holding`.",
-    closedBy: "The chat PR: the cause, with a test through its production path.",
+    closedBy:
+      "The posts PR (retargeted by the chat owners PR, R5.7, whose reply claim has its own " +
+      "word): the cause, with a test through its production path.",
   },
   {
     gap:
@@ -242,7 +327,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "The `unbound-child` refusal and the take guard against Tandem's Claude are not built, so a " +
       "child of Tandem's Claude that did not bind is answered as an ordinary session.",
-    closedBy: "PR 3b for documents; the chat PR for messages.",
+    closedBy:
+      "PR 3b, for documents and for messages; the per-message owner its message half reads " +
+      "landed in the chat owners PR.",
   },
   {
     gap: "The Settings list of bound transports (Ruling C) is not built.",
@@ -252,7 +339,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "The greeting classification is still keyed on the reply's session id, and a " +
       "`/api/channel-reply` reply can still be the greeting.",
-    closedBy: "The chat PR (classify by bound transport; a channel reply is never the greeting).",
+    closedBy:
+      "The 'chat, rounds and the greeting' PR (classify by bound transport; a channel reply is " +
+      "never the greeting).",
   },
   {
     gap:

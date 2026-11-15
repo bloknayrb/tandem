@@ -456,3 +456,110 @@ describe("the inbox's door into ownership (the scope PR)", () => {
     expect(filesNaming(/"poll-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
   });
 });
+
+describe("the chat side's seams are wired in a running server (the chat owners PR, R2.2)", () => {
+  // Each is a seam that answers "nothing" when unwired (no message handled,
+  // none on any document, no row, a re-owe that writes nothing, a delete
+  // that tells nobody), so every unit test passes without the wiring.
+  // `main()` cannot be run in a unit test, so the calls are pinned from
+  // source, as the two above are. `ownership-chat.test.ts` wires the same
+  // expressions against the real inbox and calls each member.
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+  const filesNaming = (pattern: RegExp) =>
+    [...SRC_FILES]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort();
+  const beforeBothBranches = (line: string) => {
+    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  };
+
+  it("index.ts wires the chat side once, as a statement of main(), before either transport branch", () => {
+    beforeBothBranches("  setOwnershipChatSide(ownershipChatSide);");
+    expect(index.match(/setOwnershipChatSide\(/g)).toHaveLength(1);
+    expect(filesNaming(/\bsetOwnershipChatSide\(/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // (A comment in `ownership.ts` names it in backticks.)
+    expect(filesNaming(/\bownershipChatSide\b(?!`)/)).toEqual([
+      "src/server/index.ts",
+      "src/server/mcp/awareness.ts",
+    ]);
+  });
+
+  it("the chat side's members are synchronous, and its file reads no flag", () => {
+    const awareness = SRC_FILES.get("src/server/mcp/awareness.ts") as string;
+    const start = awareness.indexOf("export const ownershipChatSide = Object.freeze({");
+    expect(start).toBeGreaterThan(-1);
+    const body = awareness.slice(start, awareness.indexOf("\n});\n", start));
+    for (const member of [
+      "handledKeys()",
+      "messagesOn(documentId: string)",
+      "message(key: string)",
+      "reOwe(keys: readonly string[])",
+    ]) {
+      expect(body, member).toContain(member);
+    }
+    expect(body).not.toMatch(/\basync\b|\bawait\b|\.then\(/);
+    const reOwe = awareness.slice(
+      awareness.indexOf("function reOweChat("),
+      awareness.indexOf("\n}\n", awareness.indexOf("function reOweChat(")),
+    );
+    expect(reOwe).not.toMatch(/\basync\b|\bawait\b|\.then\(/);
+    // One server-origin transaction (Critical Rule 2), and no push.
+    expect(reOwe.match(/withInternal\(/g)).toHaveLength(1);
+    expect(reOwe).not.toMatch(/withMcp|withBrowser|transact\(|pushEvent/);
+    expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled/);
+  });
+
+  it("index.ts wires the deletion listener once, as a statement of main(), before either transport branch", () => {
+    beforeBothBranches("  setChatRowsDeletedListener(forgetChatMessageOwners);");
+    expect(filesNaming(/\bsetChatRowsDeletedListener\(/)).toEqual([
+      "src/server/chat-row-deletions.ts",
+      "src/server/index.ts",
+    ]);
+    expect(filesNaming(/\bforgetChatMessageOwners\b/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+
+  it("each chat-side delete path tells the seam, and neither imports the ownership module", () => {
+    const observer = SRC_FILES.get("src/server/events/observers/ctrl-chat.ts") as string;
+    const manager = SRC_FILES.get("src/server/session/manager.ts") as string;
+    expect(observer).toContain("noteChatRowsDeleted(deleted);");
+    // Before the origin skip, so every origin's delete is told.
+    expect(observer.indexOf("noteChatRowsDeleted(deleted);")).toBeLessThan(
+      observer.indexOf("if (shouldSkipChannel(txn.origin)) return;"),
+    );
+    const clear = manager.slice(
+      manager.indexOf("export async function clearCtrlChatDurably("),
+      manager.indexOf("\n}\n", manager.indexOf("export async function clearCtrlChatDurably(")),
+    );
+    expect(clear).toContain("noteChatRowsDeleted(capturedIds);");
+    expect(filesNaming(/\bnoteChatRowsDeleted\(/)).toEqual([
+      "src/server/chat-row-deletions.ts",
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/session/manager.ts",
+    ]);
+    for (const text of [observer, manager]) {
+      expect(text).not.toMatch(/sessions\/ownership(\.js|-flag)|ownership-flag/);
+    }
+    const seam = SRC_FILES.get("src/server/chat-row-deletions.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+  });
+
+  it("the reply's claim is a named unqueued change, and only the ownership module names its cause", () => {
+    expect(filesNaming(/"reply-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted `tandem_reply`");
+  });
+});
