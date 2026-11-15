@@ -30,6 +30,17 @@ export interface FlipBlocker {
 export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
+      "The posts PR drops CTRL-doc update data left pending after a browser tab's update " +
+      "(security review H1), on the reasoned but unmeasured premise that a real tab never " +
+      "leaves anything pending (CTRL is a star: a tab's update depends only on what the " +
+      "server sent it or it sent first). If a real tab can, its chat or mode write would be " +
+      "dropped silently.",
+    closedBy:
+      "A measurement with real browser tabs (reconnect, offline edits, two tabs) showing no " +
+      "pending data after a tab's update, or a narrower drop.",
+  },
+  {
+    gap:
       "The handled filter for comment threads (design §6.4's first two bullets), together with the " +
       "stripping of client-written Claude replies: without the filter an answered comment or reply " +
       "is re-owed by every handover (handover gap (c)); without the stripping a browser client " +
@@ -69,7 +80,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "answered with tandem_reply `replyTo` is not repeated' (chat is scoped by owner); " +
       "CHAT_ACK_DIRECTIVE (said to every poll that hands chat, though a refused reply is now " +
       "possible); and tandem_reply's `documentId` input 'defaults to active document' (a reply " +
-      "to a message is stamped with the message's document).",
+      "to a message is stamped with the message's document; since the posts PR, a post with no " +
+      "`documentId` from a session that does not hold the active document is stamped with no " +
+      "document, and one from a session that may not post doc-less is refused `post`).",
     closedBy:
       "The flip PR: the flag-off text cannot change while dark, and the skill ships live, so it " +
       "changes at the flip together with the plugin ref bump.",
@@ -138,43 +151,11 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Posts (tandem_reply without replyTo) are accepted from any caller and stamped with the " +
-      "active document (the chat owners PR gates only a reply that names a message).",
-    closedBy: "The posts PR (design §7.3 rule 2, the `post` refusal).",
-  },
-  {
-    gap:
-      "The batch rule is master's: one session's final reply can settle a message another " +
-      "session owns and has received (the global received-sweep); if that owner then lapses, " +
-      "the message is not re-owed (it reads as handled) and is lost. Master can do the same, " +
-      "less often.",
-    closedBy: "The posts PR (`settles` written by the server, the global sweep removed).",
-  },
-  {
-    gap:
-      "An acknowledged message is handled under master's predicate and owned by its " +
-      "acknowledger (the chat owners PR, R5.8). A live acknowledger that never answers keeps " +
-      "it (PR 5's control on the message). If the acknowledger's record is deleted before its " +
-      "final reply (its transport went and its grace ran out, the detached cap lapsed it early, " +
-      "it had already lapsed, or Tandem restarts), each outcome on ADR-054's accepted list " +
-      "'An acknowledger's record deleted before its final reply' follows, including the " +
-      "re-initialize case there (a session with no X-Claude-Session-Id gets a new record and is " +
-      "refused naming its own old label; probe-contingent, PR 3b's real-launcher smoke).",
-    closedBy:
-      "The posts PR (acknowledgements count for nothing and are superseded at a re-owe), with " +
-      "PR 3b's probe of which identity a real Claude Code HTTP session resolves to.",
-  },
-  {
-    gap:
-      "Answered-once is not enforced for chat: a record that now owns a message another record " +
-      "already answered may answer it again (design R1.5).",
-    closedBy: "The posts PR (answered-once for chat, the `answered` refusal).",
-  },
-  {
-    gap:
-      "A client can write server-only values (a Claude row with replyTo, and later `settles` " +
-      "and `superseded`) and hide a message from every inbox.",
-    closedBy: "The posts PR (stripping client-written server-only values).",
+      "A live acknowledger that never answers: since the posts PR an acknowledgement counts for " +
+      "nothing, so an acknowledged message is re-owed at any change of its owner, but while the " +
+      "acknowledger's record lives and owns the message (a doc-less or closed-document message, " +
+      "or Ruling 4's arm) nobody else is handed it, and the pickup row reads 'working'.",
+    closedBy: "PR 5's control on the message (Release from its pickup row).",
   },
   {
     gap:
@@ -191,10 +172,13 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
-      "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead; " +
-      "the handled predicate honours its rows, an acknowledgement included. So an unmapped shim " +
-      "session can answer or acknowledge a message another session owns, and either one " +
-      "handles it (Ruling 11).",
+      "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead. " +
+      "A channel-reply final reply handles its message (an unmapped shim session can answer a " +
+      "message another session owns), and settles only its target. A channel-reply " +
+      "acknowledgement handles nothing and sets no owner, but it still stamps `read`, so on a " +
+      "message a re-owe made unread it hides the message from its owner's polls (cursor and " +
+      "cursor-less) until the next re-owe (the posts PR, R0.5). A message is handled only by a " +
+      "final reply or `settles` (Ruling 11).",
     closedBy: "PR 4 (the shim's permit, design §9.2).",
   },
   {
@@ -233,7 +217,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "(design §8.5's 'waiting' is what would start or wake the holder; until then nothing does). " +
       "Since the chat owners PR the same holds for a message owned per message that its owner " +
       "never answers: nobody else is handed it while that owner's record exists. An unhandled " +
-      "one is re-owed at the owner's lapse; a handled one (acknowledged, for instance) is never " +
+      "one (an acknowledged one included: since the posts PR an acknowledgement handles nothing) " +
+      "is re-owed at the owner's lapse; a handled one (by a final reply or `settles`) is never " +
       "re-owed, and stays the owner's until its record is deleted.",
     closedBy: "PR 3b (waiting, startOrWake) for Tandem's Claude, or Bryan's answer for terminals.",
   },
@@ -296,15 +281,6 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "session took it'; a take by Tandem's Claude, which `lossCauseOf` calls 'taken back', must " +
       "get its own word then.",
     closedBy: "PR 3b: the causes, with tests through their production paths.",
-  },
-  {
-    gap:
-      "Change-notice cause the chat PR owes (R7.2): a gained entry by a chat post's claim, a " +
-      "past-tense fact with no instruction (Ruling 10). Until then such a change is told only " +
-      "through `holding`.",
-    closedBy:
-      "The posts PR (retargeted by the chat owners PR, R5.7, whose reply claim has its own " +
-      "word): the cause, with a test through its production path.",
   },
   {
     gap:

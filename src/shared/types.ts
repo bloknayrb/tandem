@@ -814,6 +814,23 @@ export interface ChatMessage {
    */
   localRun?: LocalRunState;
   /**
+   * Set only server-side (`withMcp`), on a real Claude **final** reply that
+   * `tandem_reply` wrote (#2358, the posts PR, R3.4; ships dark behind the
+   * ownership flag): the earlier user messages of the same batch that this
+   * reply also answers, within its sender's scope. With the flag on, a user
+   * message is handled when a final reply names it in `replyTo` or lists it
+   * here. Never written while ownership is off; a client cannot write it with
+   * the flag on (the server undoes a client connection's change, R4).
+   */
+  settles?: string[];
+  /**
+   * Set only server-side (`withInternal`), on an acknowledgement row
+   * (`inProgress: true`) whose message changed owner since (#2358, the posts
+   * PR, R3.3; ships dark): it counts for nothing, and the pickup row leaves it
+   * out, so the message reads "waiting" again. Only ever `true` or absent.
+   */
+  superseded?: true;
+  /**
    * The specific AI agent that authored this message (#1123 M3). Set only by the
    * local-model collaborator's streamed reply; absent on user messages and real
    * Claude (`tandem_reply`). Chat is read raw from the Y.Map (NOT allowlist-

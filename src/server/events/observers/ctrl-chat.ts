@@ -4,6 +4,7 @@ import * as Y from "yjs";
 import { Y_MAP_CHAT } from "../../../shared/constants.js";
 import { shouldSkipChannel } from "../../../shared/origins.js";
 import type { ChatMessage, FlatOffset } from "../../../shared/types.js";
+import { chatClientWritesUndone } from "../../chat-client-writes.js";
 import { noteChatRowsDeleted } from "../../chat-row-deletions.js";
 import {
   classChatRowAdded,
@@ -16,6 +17,13 @@ import { describeRangeFailure, validateRange } from "../../positions.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 import type { BufferedSelection, TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
+import {
+  applyChatUndo,
+  type ChatUndo,
+  dropPendingUpdates,
+  isClientConnection,
+  planChatUndo,
+} from "./chat-client-undo.js";
 
 export function makeCtrlChatObserver(deps: {
   ctrlDoc: Y.Doc;
@@ -31,10 +39,22 @@ export function makeCtrlChatObserver(deps: {
     // rows, the local model's and a restore's rows are classed too, and no
     // later write (a `read` stamp, `localRun`) ever re-classes one. A row
     // deleted keeps its class, so a same-key re-add keeps it.
+    //
+    // #2358 (the posts PR, R4): with ownership on, a client connection's
+    // change to the chat map is undone (`chat-client-undo.ts`). Decided first,
+    // from this event, so a delete that is about to be put back tells nobody
+    // it happened: #2419's ledger and the ownership side keep everything keyed
+    // by that row (R4.2), and the row's restore (an `add` under its old key)
+    // keeps its class (R4.6).
+    const undo: ChatUndo | undefined =
+      isClientConnection(txn.origin) && chatClientWritesUndone()
+        ? planChatUndo(chatMap, event)
+        : undefined;
     const deleted: string[] = [];
     for (const [key, change] of event.changes.keys) {
       if (change.action === "add") classChatRowAdded(key);
       else if (change.action === "delete") {
+        if (undo?.restored.has(key)) continue;
         noteChatRowDeleted(key);
         deleted.push(key);
       }
@@ -43,6 +63,19 @@ export function makeCtrlChatObserver(deps: {
     // goes, whatever the origin — through the seam, never an import of the
     // ownership module.
     noteChatRowsDeleted(deleted);
+    // The undo itself: one `withInternal` write, run now (Yjs runs a nested
+    // transaction's body at once and its observers after), so the push loop
+    // below reads the repaired rows. `internal` is skipped by the channel
+    // gate, so the undo emits no `chat:message`.
+    if (undo && !applyChatUndo(ctrlDoc, chatMap, undo)) {
+      // Fail closed on the bookkeeping (security review M2): a delete the
+      // failed undo did not put back is a delete, so tell its ledgers now.
+      const gone = [...undo.restored.keys()].filter(
+        (key) => !chatMap.has(key) && event.changes.keys.get(key)?.action === "delete",
+      );
+      for (const key of gone) noteChatRowDeleted(key);
+      noteChatRowsDeleted(gone);
+    }
 
     if (shouldSkipChannel(txn.origin)) return;
 
@@ -134,6 +167,23 @@ export function makeCtrlChatObserver(deps: {
     }
   };
 
+  // #2358 (the posts PR; security review H1): with ownership on, a client
+  // connection's update that leaves data pending in the CTRL doc's store is
+  // dropped at once. A fully pending update changes no map, so the chat
+  // observer never sees it; this sees every transaction.
+  const pendingGuard = (txn: Y.Transaction) => {
+    if (!isClientConnection(txn.origin) || !chatClientWritesUndone()) return;
+    if (dropPendingUpdates(ctrlDoc)) {
+      console.error(
+        "[Tandem] A browser tab sent CTRL updates that depend on data the server never wrote; they were dropped",
+      );
+    }
+  };
+
   chatMap.observe(chatObs);
-  return () => chatMap.unobserve(chatObs);
+  ctrlDoc.on("afterTransaction", pendingGuard);
+  return () => {
+    chatMap.unobserve(chatObs);
+    ctrlDoc.off("afterTransaction", pendingGuard);
+  };
 }

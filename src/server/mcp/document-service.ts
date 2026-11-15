@@ -9,6 +9,7 @@ import {
   DOCX_EXTENSION,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
+  Y_MAP_CHAT,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_FIDELITY_REPORT,
@@ -47,6 +48,7 @@ import {
   noteFileWritable,
 } from "../documents/read-only-file.js";
 import { wireFileWatcher } from "../documents/watcher.js";
+import { dropPendingUpdates } from "../events/observers/chat-client-undo.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
@@ -80,9 +82,14 @@ import {
   stopAutoSave,
   touchSession,
 } from "../session/manager.js";
-import { onDocumentClosed } from "../sessions/ownership.js";
+import {
+  captureCarriedOverChat,
+  onDocumentClosed,
+  undoClientChatWrites,
+} from "../sessions/ownership.js";
 import { addStartupNotice, beginStartupRestore, endStartupRestore } from "../startup-notices.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { carriedOverCandidates } from "./chat-handled.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
 //
@@ -2002,6 +2009,13 @@ export async function restoreCtrlSession(): Promise<string | null> {
 
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   restoreCtrlDoc(ctrlDoc, saved);
+  // #2358 (the posts PR, R0.1): the boot's carried-over messages, the
+  // restored user rows that are `read` and not handled now. Taken here, once,
+  // and only with ownership on (the thunk is not called otherwise).
+  captureCarriedOverChat(() => carriedOverCandidates(ctrlDoc.getMap(Y_MAP_CHAT)));
+  // And (security review H1) anything the restored file held back for a
+  // missing dependency is dropped, so it cannot land later under no origin.
+  if (undoClientChatWrites()) dropPendingUpdates(ctrlDoc);
 
   // Read the previous active doc before clearing stale tracking
   const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);

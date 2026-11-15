@@ -40,7 +40,13 @@ export function chatPickup(messages: readonly ChatMessage[], now: number): ChatP
   if (latest === null) return null;
   if (now - latest.timestamp > PICKUP_MAX_AGE_MS) return null;
 
-  const after = messages.filter((m) => m.author === "claude" && m.timestamp >= latest.timestamp);
+  // A `superseded` acknowledgement (#2358, the posts PR, R3.7: the server marks
+  // one when its message changed owner) is left out of both the replies and
+  // what ends "working", so a re-owed message reads "waiting" again. Only the
+  // server writes it, and only with ownership on; the client reads no flag.
+  const after = messages.filter(
+    (m) => m.author === "claude" && m.timestamp >= latest.timestamp && m.superseded !== true,
+  );
   const replies = after.filter((m) => m.replyTo === latest.id);
 
   if (replies.length > 0) {

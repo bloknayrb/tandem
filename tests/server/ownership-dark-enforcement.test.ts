@@ -123,6 +123,11 @@ const EMPTY_SNAPSHOT = {
   // each record was handed. Empty, since no record exists.
   messageOwners: [],
   handed: [],
+  // The posts PR: the carried-over set, the chat answerers and who wrote
+  // each reply row. Empty.
+  carriedOver: [],
+  chatAnswerers: [],
+  repliers: [],
 };
 
 describe("tools/list while dark", () => {
@@ -166,6 +171,10 @@ describe("tools/list while dark", () => {
       '"Tandem stopped counting this session as attached"',
       // The chat owners PR's cause word (a reply's claim of a document).
       '"a chat reply of yours claimed it"',
+      // The posts PR: the two server-only chat fields and a post's cause word.
+      '"settles"',
+      '"superseded"',
+      '"a chat post of yours claimed it"',
     ]) {
       expect(offText, `a dark tools/list says ${JSON.stringify(word)}`).not.toContain(word);
     }

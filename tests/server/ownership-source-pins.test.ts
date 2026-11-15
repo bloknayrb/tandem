@@ -532,6 +532,33 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     ]);
   });
 
+  it("index.ts wires the client-write undo once, before either transport branch and before Hocuspocus starts (the posts PR, R4.5; security review L2)", () => {
+    beforeBothBranches("  setChatClientWritesUndone(undoClientChatWrites);");
+    const wired = index.indexOf("  setChatClientWritesUndone(undoClientChatWrites);");
+    expect(wired).toBeLessThan(index.indexOf("startHocuspocus(wsPort)"));
+    expect(filesNaming(/\bsetChatClientWritesUndone\(/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+    ]);
+    // (The seam's docblock names it.)
+    expect(filesNaming(/\bundoClientChatWrites\b/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+      "src/server/mcp/document-service.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // The seam imports nothing; the observer and the undo never name the
+    // ownership module or the flag.
+    const seam = SRC_FILES.get("src/server/chat-client-writes.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+    for (const file of [
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/events/observers/chat-client-undo.ts",
+    ]) {
+      expect(SRC_FILES.get(file)).not.toMatch(/["'`][^"'`]*\/ownership(\.js)?["'`]|ownership-flag/);
+    }
+  });
+
   it("each chat-side delete path tells the seam, and neither imports the ownership module", () => {
     const observer = SRC_FILES.get("src/server/events/observers/ctrl-chat.ts") as string;
     const manager = SRC_FILES.get("src/server/session/manager.ts") as string;
