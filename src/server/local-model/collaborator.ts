@@ -63,6 +63,7 @@ import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
   appendClaudeChatMessage,
   finalizeClaudeChatMessage,
+  removeClaudeChatMessage,
   updateClaudeChatMessage,
 } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
@@ -100,6 +101,7 @@ import {
   resolveLocalModelConfig,
 } from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
+import { ThinkFilter } from "./think-filter.js";
 
 /** Inline the whole document into the prompt below this length; else windowed reads.
  *  Exported for the measurement harness (`probe/local-model-spike/`), which
@@ -383,6 +385,9 @@ export const CHAT_NOTICE_TEXT: Record<ChatNoticeKind, string> = {
     "The local model could not answer this message, because no document was open for it. Open the document you want to ask about and send your message again.",
   "no-local-model":
     "No local model could answer this message. Add or enable a local model in Settings → Models, or set who answers your chat back to Claude there.",
+  // #1123 part C (R3.3): a fact, no instruction, no model named, no cause
+  // guessed. Posted after a `clean` run that showed nothing.
+  "no-reply": "Your local model produced no reply.",
 };
 
 /**
@@ -523,6 +528,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // Latch, not a counter: the marker is appended exactly once, and every
     // subsequent delta is dropped rather than re-triggering the cap branch.
     let truncated = false;
+    // Held text beyond the cap can never be shown: release goes through it.
+    const filter = new ThinkFilter(MAX_STREAMED_CHARS);
 
     const isOwner = () =>
       current?.token === ctx.token &&
@@ -567,60 +574,95 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       }
     };
 
+    // Shown text only reaches `buffer`: inline reasoning is filtered out first
+    // (#1123 part C, D-C2), so it never counts toward the cap or the flush
+    // trigger. Text with no `<think>` passes through unchanged.
+    //
+    // `counted` is how many characters of visible text arrived, which differs
+    // from `delta.length` only by a candidate tag the filter is still holding
+    // (`<`, `<th`…): it counts as it arrives, as master counted it, so the
+    // flush trigger and the cap fire at the same character as before.
+    const append = (delta: string, counted: number) => {
+      // Post-cap deltas are dropped outright: the marker is already committed
+      // and the run is aborting, so appending would only grow a buffer nobody
+      // will write.
+      if (truncated || (delta.length === 0 && counted === 0)) return;
+
+      buffer += delta;
+      // A candidate counted as it arrived and then found to be a `<think>`
+      // tag takes its count back; never below zero.
+      charsSinceFlush = Math.max(0, charsSinceFlush + counted);
+
+      if (buffer.length + filter.pendingLiteral() >= MAX_STREAMED_CHARS) {
+        buffer += filter.takePendingLiteral();
+        // #1292. ORDER IS LOAD-BEARING — do not reorder these two calls.
+        // `write()` returns early on `!isOwner()`, and `isOwner()` includes
+        // `!ctx.abort.signal.aborted`, so aborting FIRST would permanently
+        // disable the only write path: the marker would never reach the
+        // Y.Map, and the user would see a silently truncated reply. The
+        // terminal path in `executeRun` cannot rescue it either — its
+        // `stillOwner()` carries the same abort clause.
+        //
+        // Both calls ride ONE deferred task so the ordering is guaranteed
+        // while preserving this file's nested-txn invariant (see the header:
+        // the sink flushes only from a timer, never on a delta stack).
+        truncated = true;
+        buffer = buffer.slice(0, MAX_STREAMED_CHARS) + TRUNCATION_MARKER;
+        cancelTimer();
+        timer = setTimeout(() => {
+          write();
+          ctx.abort.abort();
+        }, 0);
+        return;
+      }
+
+      // Deferred always — a flush must never run on the onContentDelta stack.
+      if (charsSinceFlush >= STREAM_FLUSH_CHARS) {
+        cancelTimer();
+        timer = setTimeout(write, 0);
+      } else if (!timer) {
+        timer = setTimeout(write, STREAM_FLUSH_MS);
+      }
+    };
+
     return {
       push: (delta: string) => {
-        // Post-cap deltas are dropped outright: the marker is already committed
-        // and the run is aborting, so appending would only grow a buffer nobody
-        // will write.
         if (truncated) return;
-
-        buffer += delta;
-        charsSinceFlush += delta.length;
-
-        if (buffer.length >= MAX_STREAMED_CHARS) {
-          // #1292. ORDER IS LOAD-BEARING — do not reorder these two calls.
-          // `write()` returns early on `!isOwner()`, and `isOwner()` includes
-          // `!ctx.abort.signal.aborted`, so aborting FIRST would permanently
-          // disable the only write path: the marker would never reach the
-          // Y.Map, and the user would see a silently truncated reply. The
-          // terminal path in `executeRun` cannot rescue it either — its
-          // `stillOwner()` carries the same abort clause.
-          //
-          // Both calls ride ONE deferred task so the ordering is guaranteed
-          // while preserving this file's nested-txn invariant (see the header:
-          // the sink flushes only from a timer, never on a delta stack).
-          truncated = true;
-          buffer = buffer.slice(0, MAX_STREAMED_CHARS) + TRUNCATION_MARKER;
-          cancelTimer();
-          timer = setTimeout(() => {
-            write();
-            ctx.abort.abort();
-          }, 0);
-          return;
-        }
-
-        // Deferred always — a flush must never run on the onContentDelta stack.
-        if (charsSinceFlush >= STREAM_FLUSH_CHARS) {
-          cancelTimer();
-          timer = setTimeout(write, 0);
-        } else if (!timer) {
-          timer = setTimeout(write, STREAM_FLUSH_MS);
-        }
+        const pendingBefore = filter.pendingLiteral();
+        const shown = filter.push(delta);
+        append(shown, shown.length + filter.pendingLiteral() - pendingBefore);
       },
       onTurnEnd: (info: { hadToolCalls: boolean }) => {
+        if (!info.hadToolCalls) return;
+        // A tool-call turn's end resets the filter: a held `<think>` block is
+        // dropped (R2.3), and a pending candidate tag that never completed is
+        // plain text, appended as master would have had it.
+        if (!truncated) {
+          const pending = filter.pendingLiteral();
+          const rest = filter.finish(false);
+          append(rest, rest.length - pending);
+        }
         // Once truncated, the buffer holds the committed-or-committing marker.
         // Dropping it here would cancel the pending cap flush and wipe the
         // marker, which is the one write the user needs to see (#1292).
         if (truncated) return;
-        if (info.hadToolCalls) {
-          // The turn's content was preamble/scaffolding — drop it so the next
-          // turn's content replaces it (no "" write → no empty-bubble flip).
-          cancelTimer();
-          buffer = "";
-          charsSinceFlush = 0;
-        }
+        // The turn's content was preamble/scaffolding — drop it so the next
+        // turn's content replaces it (no "" write → no empty-bubble flip).
+        cancelTimer();
+        buffer = "";
+        charsSinceFlush = 0;
       },
-      flushFinal: () => write(),
+      /**
+       * Commit what is buffered. `release` is passed only at a `clean` end:
+       * then a `<think>` block left open after visible text is shown as
+       * written (R2.3); at every other end it is dropped.
+       */
+      flushFinal: (opts: { release?: boolean } = {}) => {
+        const pending = filter.pendingLiteral();
+        const rest = filter.finish(opts.release === true);
+        append(rest, rest.length - pending);
+        write();
+      },
       /** The reply row this run minted, if any (a partial one included). */
       replyId: () => liveId,
       // Runs in executeRun's `finally` on EVERY exit (clean/budget/timeout/
@@ -632,9 +674,14 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       // and `isOwner()` is already false for a superseded/aborted run — gating
       // it would strand the truncation marker (#1292) and every superseded
       // stream's sidecar entry as a permanent leak (#1340).
-      dispose: () => {
+      //
+      // `fold: false` (#1123 part C) is passed only when the row is about to
+      // be removed in the same `finally`: the sidecar then goes with the row,
+      // in one update, instead of being folded into a row that is deleted
+      // straight after.
+      dispose: (opts: { fold?: boolean } = {}) => {
         cancelTimer();
-        if (liveId !== null) finalizeClaudeChatMessage(liveId);
+        if (liveId !== null && opts.fold !== false) finalizeClaudeChatMessage(liveId);
       },
     };
   }
@@ -703,6 +750,13 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
     // How it ended, set in each terminal branch below and written in the
     // `finally` once the sink has folded its reply. Unset there means a throw.
     let ended: { status: "replied" | "stopped"; reason?: LocalRunStopReason } | null = null;
+    // Set exactly where a toast says the run stopped without replying, or that
+    // its reply was not delivered (#1123 part C, D-C1, Ruling C-1): the run's
+    // reply row is then removed in the `finally`, once, so no row contradicts
+    // the toast. Nowhere else.
+    let removeReply = false;
+    // Set when a `clean` run showed the user nothing (Ruling C-4).
+    let noReplyNotice = false;
 
     // The editing permission for THIS run (#1123). Captured here, with no await
     // between this line and `runTurn` reading it, so the tier the engine picks
@@ -801,6 +855,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       //
       // No `sink.flushFinal()` here: dropping the terminal reply is #1657's
       // guarantee and stays. `sink.dispose()` in the `finally` still runs.
+      // Where a toast below says the reply was not delivered, the row a flush
+      // already wrote is removed too (#1123 part C, Ruling C-1); where no
+      // toast is posted, what a flush wrote stays.
       //
       // Ownership-gated terminal actions. A superseded / closed-doc / aborted run
       // drops its output silently (its last streamed partial stays in place).
@@ -838,6 +895,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
               documentId: req.docName,
               timestamp: Date.now(),
             });
+            removeReply = true;
           }
         } else if (live) {
           pushNotification({
@@ -853,6 +911,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             documentId: req.docName,
             timestamp: Date.now(),
           });
+          // After the toast is posted: the act defines the set (Ruling C-1).
+          removeReply = true;
         }
       } else if (!stillOwner()) {
         // Dropped silently, as before: superseded, aborted or closed — or its
@@ -868,7 +928,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
         const exit = result.metrics.exit;
         ended = endedFor(exit);
         if (exit === "clean") {
-          sink.flushFinal();
+          // The one end that releases a `<think>` block left open after
+          // visible text (R2.3).
+          sink.flushFinal({ release: true });
           // Replied only if the flush really left a reply row. A flush the
           // licence refused aborted the run instead (`makeSink`): "aborted".
           ended =
@@ -877,6 +939,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
               : abort.signal.aborted
                 ? { status: "stopped", reason: "aborted" }
                 : { status: "stopped", reason: "no-reply" };
+          // Showed nothing at all — empty, or reasoning only: the no-reply
+          // notice, posted in the `finally` (R3.2). A run that left a row,
+          // even an earlier turn's lead-in, keeps it as its reply (D-C1).
+          noReplyNotice = ended.reason === "no-reply";
         } else if (exit === "max_turns" || exit === "max_tool_calls") {
           // Budget exhausted mid-task (the model looped on tool calls, or never
           // produced a final no-tool answer turn). Commit any partial content
@@ -898,8 +964,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
           // and said nothing. Not a step limit: say what actually happened.
           // (When it did answer, the exit is `clean`.) `info`, so it expires.
           // Solo is named when Solo was the cause (#1123): the setting alone
-          // would have allowed it.
-          sink.flushFinal();
+          // would have allowed it. Nothing is flushed, and any row this run
+          // already wrote (a lead-in, a capped reply) is removed in the
+          // `finally` (#1123 part C, D-C1): the toast says it did not reply.
           if (refusedBy === "solo" || refusedBy === "mode-unknown") {
             ended = { status: "stopped", reason: refusedBy };
           }
@@ -916,6 +983,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
             documentId: req.docName,
             timestamp: Date.now(),
           });
+          removeReply = true;
         } else if (exit === "timeout") {
           // Deliberately its own branch, not folded into the budget message
           // above (#1295 L6). A wall-clock exit happens with turns to spare, so
@@ -956,13 +1024,42 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       }
     } finally {
       // Kill any pending flush timer on EVERY exit (clean/error/abort/throw).
-      sink.dispose();
+      sink.dispose({ fold: !removeReply });
       // After the fold, so the state never says "replied" before the reply
       // row holds its final text. A successor run awaits this promise before
       // it starts, so its own "running" can never be overwritten by this.
       const final = ended ?? { status: "stopped" as const, reason: "error" as const };
-      const replyId = sink.replyId();
-      writeLocalRun(req.replyTo, { ...final, ...(replyId ? { replyId } : {}) });
+      const minted = sink.replyId();
+      const replyId = removeReply ? null : minted;
+      // One Y.Doc transaction for whatever ends the run in chat — the row's
+      // removal or the no-reply notice — and the run state, so the editor
+      // never sees one without the other. Yjs runs the nested `withMcp`
+      // writes inside this one (#1123 part C, R3.5). Synchronous, in this
+      // `finally`: nothing here can abort a newer run (R3.6).
+      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+      withMcp(ctrlDoc, () => {
+        // A throw here must not leave the run state at "running": the run
+        // state is written whatever happens to the chat write before it.
+        try {
+          // A row the remover refuses (not a local-model reply) is folded
+          // instead, as `dispose` would have, so its streamed text is kept.
+          if (removeReply && minted !== null && !removeClaudeChatMessage(minted)) {
+            finalizeClaudeChatMessage(minted);
+          }
+          if (noReplyNotice && req.replyTo) postNoReplyNotice(req.replyTo, req.docName);
+        } catch (err) {
+          console.error("[local-model] could not end the run in chat", err);
+          // Never leave a sidecar authoritative over a row: fold what is left.
+          if (removeReply && minted !== null) {
+            try {
+              finalizeClaudeChatMessage(minted);
+            } catch {
+              // Already logged above; the run state below is still written.
+            }
+          }
+        }
+        writeLocalRun(req.replyTo, { ...final, ...(replyId ? { replyId } : {}) });
+      });
     }
   }
 
@@ -1181,6 +1278,28 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_CO
       });
       if (!appended.ok) logRefusal(appended.refusal);
     });
+  }
+
+  /**
+   * The no-reply notice (#1123 part C, R3): a `clean` run showed the user
+   * nothing. Called only from `executeRun`'s `finally`, inside its
+   * transaction — never through {@link postNotice}, which aborts `current`
+   * (by then possibly a newer run). Posted only while the local model is
+   * still chosen and the user's message row still exists; the licence can
+   * still refuse it (`appendClaudeChatMessage`), and then nothing is posted.
+   */
+  function postNoReplyNotice(messageId: string, documentId: string): void {
+    if (answerer() !== "local") return;
+    const live = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).get(messageId);
+    if (typeof live !== "object" || live === null || (live as ChatMessage).author !== "user") {
+      return;
+    }
+    const appended = appendClaudeChatMessage(CHAT_NOTICE_TEXT["no-reply"], {
+      replyTo: messageId,
+      documentId,
+      chatNotice: "no-reply",
+    });
+    if (!appended.ok) logRefusal(appended.refusal);
   }
 
   /** The switch moved (#1123 R2.1). To Claude: stop a run in flight, by abort

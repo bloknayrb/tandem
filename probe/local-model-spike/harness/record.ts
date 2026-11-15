@@ -54,12 +54,18 @@ export interface TrialRecord {
   inlined: boolean | null;
   /** The right answer in words, from the scenario. */
   expected: string;
-  /** What the user's chat row holds. */
+  /** What the user's chat row holds (since #1123 part C, never `<think>` text). */
   reply: string;
   turns: TurnText[];
   writes: WriteLog;
   toolSteps: ToolStep[];
   notices: { severity: string; message: string }[];
+  /**
+   * The chat notices the product posted about this message (#1123 part C,
+   * R5.4): kind and text, never scored as a reply. Absent on records written
+   * before part C: never defaulted into one, so an old record keeps its hash.
+   */
+  chatNotices?: { kind: string; text: string }[];
   score: ScoreResult;
   /** `ending === "completed"` and the scorer's predicate passed. */
   scorerPass: boolean;
@@ -74,9 +80,16 @@ export interface TrialRecord {
     otherLanguage: boolean;
     repeatsPrompt: boolean;
     context: ContextUse;
+    /** `</think>` with no opening tag before it in its turn (part C, R5.3).
+     *  Absent on records written before part C. */
+    orphanCloseThink?: number;
   };
   metrics: { turns: number; toolCalls: number; jsonParseFailures: number };
+  /** The first raw content delta (inline reasoning included). */
   timeToFirstTextMs: number | null;
+  /** The first visible character the user would be shown (part C, R5.2).
+   *  Absent on records written before part C. */
+  timeToFirstShownTextMs?: number | null;
   totalMs: number;
   /** Binds a verdict to exactly this record (see `recordHash`). */
   hash: string;

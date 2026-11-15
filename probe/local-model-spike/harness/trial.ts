@@ -59,6 +59,7 @@ import {
 } from "../../../src/shared/constants.js";
 import type { TandemEvent } from "../../../src/shared/events/types.js";
 import { withInternal } from "../../../src/shared/origins.js";
+import { ThinkFilter } from "../../../src/server/local-model/think-filter.js";
 import { type FetchTap, installFetchTap, type TapRecord } from "./fetch-tap.js";
 
 export type Tier = "chat" | "editing";
@@ -135,7 +136,14 @@ export interface TrialObservation {
   /** The document's flat text (what quotes are checked against). */
   documentText: string;
   fetches: TapRecord[];
+  /** The first content delta of any kind, raw (inline reasoning included). */
   timeToFirstTextMs: number | null;
+  /** The first visible character the product would show: inline `<think>`
+   *  reasoning and whitespace do not count (#1123 part C, R5.2). */
+  timeToFirstShownTextMs: number | null;
+  /** The chat notices the product posted about this message (part C, R5.4):
+   *  never the model's reply, never scored. */
+  chatNotices: { kind: string; text: string }[];
   totalMs: number;
 }
 
@@ -188,12 +196,26 @@ export function chatRowsFor(messageId: string): string[] {
     text?: string;
     chatNotice?: unknown;
   }[];
-  // A row carrying `chatNotice` is a notice the product posts about the turn
-  // (no document open, no usable local model: PR #2417), not the model's
-  // reply. A trial always has both, so none is expected; one is never scored.
+  // A row carrying `chatNotice` is a notice the product posts about the turn,
+  // not the model's reply, and is never scored. A trial always has a document
+  // and a model (so PR #2417's two notices are not expected), but a run that
+  // finished cleanly and showed nothing gets the no-reply notice (#1123 part
+  // C); `chatNoticesFor` reads those.
   return rows
     .filter((r) => r.author === "claude" && r.replyTo === messageId && r.chatNotice === undefined)
     .map((r) => r.text ?? "");
+}
+
+/** The chat notices posted about this message (exported for its test). */
+export function chatNoticesFor(messageId: string): { kind: string; text: string }[] {
+  const rows = [...getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).values()] as {
+    replyTo?: string;
+    text?: string;
+    chatNotice?: unknown;
+  }[];
+  return rows
+    .filter((r) => r.replyTo === messageId && typeof r.chatNotice === "string")
+    .map((r) => ({ kind: String(r.chatNotice), text: r.text ?? "" }));
 }
 
 /**
@@ -244,6 +266,22 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
     source: "file",
   });
   setTandemMode();
+  // The user's own chat row, as the editor writes it before the event fires.
+  // The product writes the run state on it and posts its no-reply notice only
+  // while it exists (#1123 part C). `withInternal`, not `withBrowser`: the
+  // trial hands the event to `onEvent` itself, so no queue event is wanted.
+  // Nothing in the row reaches the model: the task comes from the event.
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  withInternal(ctrl, () =>
+    ctrl.getMap(Y_MAP_CHAT).set(messageId, {
+      id: messageId,
+      author: "user",
+      text: input.prompt,
+      timestamp: Date.now(),
+      read: false,
+      documentId: docId,
+    }),
+  );
 
   const cleanup = () => {
     removeDoc(docId);
@@ -273,6 +311,11 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
   let currentText = "";
   let turnIndex = 0;
   let firstTextAt: number | null = null;
+  let firstShownAt: number | null = null;
+  // Its own filter, the product's class, fed the same deltas: what the user
+  // would be shown, for the shown time to first text. Reset per turn as the
+  // sink's is.
+  const shown = new ThinkFilter();
   const seen: {
     loop: TrialObservation["loop"];
     turnOpts: TrialObservation["turnOpts"];
@@ -305,6 +348,7 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
       ...opts,
       onContentDelta: (delta) => {
         if (firstTextAt === null && delta.length > 0) firstTextAt = Date.now();
+        if (firstShownAt === null && shown.push(delta).trim().length > 0) firstShownAt = Date.now();
         currentText += delta;
         opts.onContentDelta?.(delta);
       },
@@ -312,6 +356,7 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
         turnIndex += 1;
         turns.push({ turn: turnIndex, text: currentText, hadToolCalls: info.hadToolCalls });
         currentText = "";
+        shown.finish(false);
         opts.onTurnEnd?.(info);
       },
     });
@@ -372,6 +417,8 @@ export async function runTrial(input: TrialInput): Promise<TrialObservation> {
       documentText,
       fetches: tap.records,
       timeToFirstTextMs: firstTextAt === null ? null : firstTextAt - started,
+      timeToFirstShownTextMs: firstShownAt === null ? null : firstShownAt - started,
+      chatNotices: chatNoticesFor(messageId),
       totalMs: Date.now() - started,
     };
   } finally {

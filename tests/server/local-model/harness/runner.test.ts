@@ -216,7 +216,7 @@ describe("a run", () => {
     expect(fs.existsSync(lockPath(runDir))).toBe(false);
     // A progress line per trial, with timings and an estimate.
     expect(
-      d.lines.filter((l) => /^\[\d+\/20\] .* first text .* total .* min left$/.test(l)),
+      d.lines.filter((l) => /^\[\d+\/20] .* first shown text .* total .* min left$/.test(l)),
     ).toHaveLength(20);
   });
 

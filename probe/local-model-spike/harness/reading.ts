@@ -96,6 +96,7 @@ export function renderReadingFile(input: ReadingInput): string {
       sig.repeatsPrompt ? "reply repeats the system prompt" : "",
       sig.context.overContext === true ? `prompt over the context length (${sig.context.promptTokens} tokens${sig.context.estimated ? ", an estimate" : ""})` : "",
       t.claims.leakedIds.length > 0 ? `leaked internal id x${t.claims.leakedIds.length}` : "",
+      (sig.orphanCloseThink ?? 0) > 0 ? `a </think> with no opening tag x${sig.orphanCloseThink}` : "",
     ].filter((m) => m !== "");
     out.push(`  signals: ${marks.length > 0 ? marks.join("; ") : "none"}`);
     out.push(...field("the user's message", t.prompt));
@@ -106,7 +107,7 @@ export function renderReadingFile(input: ReadingInput): string {
     out.push(`  text of each turn (${t.turns.length}):`);
     for (const turn of t.turns) {
       const kind = turn.hadToolCalls === null ? "cut before its end" : turn.hadToolCalls ? "preamble before tool calls" : "final text turn";
-      out.push(`    turn ${turn.turn} (${kind}):`);
+      out.push(`    turn ${turn.turn} (${kind}; raw — text inside <think> was never shown):`);
       out.push(...block(turn.text));
     }
     out.push(`  tool calls (${t.toolSteps.length}):`);
@@ -132,6 +133,11 @@ export function renderReadingFile(input: ReadingInput): string {
     }
     out.push(`  notices the user was shown (${t.notices.length}):`);
     for (const nt of t.notices) out.push(`      [${quoted(nt.severity)}] ${quoted(nt.message)}`);
+    // #1123 part C: only on records that carry the field (never defaulted).
+    if (t.chatNotices !== undefined) {
+      out.push(`  chat notices the product posted about this message (${t.chatNotices.length}; never the reply):`);
+      for (const cn of t.chatNotices) out.push(`      [${quoted(cn.kind)}] ${quoted(cn.text)}`);
+    }
     // The scorer's provisional verdict comes LAST, after everything the reader
     // judges, so the reply is read before the scorer's word is seen.
     out.push(

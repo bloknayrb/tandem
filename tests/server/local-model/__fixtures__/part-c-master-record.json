@@ -1,0 +1,67 @@
+{
+  "runId": "run-master",
+  "trialId": "t1",
+  "scenarioId": "ans-ops-review-q3-revenue",
+  "tier": "chat",
+  "group": "answerable",
+  "repeat": 1,
+  "ending": "completed",
+  "detail": "clean",
+  "exit": "clean",
+  "fixture": "ops-review",
+  "documentHash": "a29a90382c7cab087094db32d0e6f40c4ac2a3d160815c4b5d6e97efac716403",
+  "prompt": "What was revenue in the third quarter?",
+  "composedTask": "What was revenue in the third quarter?",
+  "inlined": true,
+  "expected": "Third-quarter revenue was $4.82 million; $4.41 million is the second-quarter figure beside it.",
+  "reply": "<think>The Q2 figure was $4.41 million.</think>Revenue was $4.82 million.",
+  "turns": [
+    {
+      "turn": 1,
+      "text": "<think>The Q2 figure was $4.41 million.</think>Revenue was $4.82 million.",
+      "hadToolCalls": false
+    }
+  ],
+  "writes": {
+    "annotations": [],
+    "replies": []
+  },
+  "toolSteps": [],
+  "notices": [],
+  "score": {
+    "pass": false,
+    "failureMode": "DISTRACTOR_WITH_ANSWER",
+    "notes": [
+      "holds a planted value: 4.41 million"
+    ]
+  },
+  "scorerPass": false,
+  "scorerPassWithoutReasoning": true,
+  "claims": {
+    "flags": [],
+    "suspect": false,
+    "leakedIds": [],
+    "idWithClaim": false
+  },
+  "signals": {
+    "reasoning": "inline",
+    "replyShowsReasoning": true,
+    "emptyReply": false,
+    "stalePreamble": false,
+    "otherLanguage": false,
+    "repeatsPrompt": false,
+    "context": {
+      "promptTokens": 1071,
+      "estimated": true,
+      "overContext": "unknown"
+    }
+  },
+  "metrics": {
+    "turns": 1,
+    "toolCalls": 0,
+    "jsonParseFailures": 0
+  },
+  "timeToFirstTextMs": 4,
+  "totalMs": 13,
+  "hash": "65f5843b8e60e4348d783e29226b5133"
+}

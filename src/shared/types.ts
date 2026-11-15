@@ -697,7 +697,7 @@ export interface CapturedAnchor extends DocumentRange {
 }
 
 /** Why the local model could not answer a chat (#1123). See `ChatMessage.chatNotice`. */
-export type ChatNoticeKind = "no-document" | "no-local-model";
+export type ChatNoticeKind = "no-document" | "no-local-model" | "no-reply";
 
 /** Why a local-model run ended without a reply, or with only part of one (#1123). */
 export type LocalRunStopReason =
@@ -722,7 +722,8 @@ export type LocalRunStopReason =
   | "content-replaced"
   /** The document reconnected mid-run (its live instance was swapped). */
   | "reconnected"
-  /** It finished cleanly and said nothing. */
+  /** It finished cleanly and showed the user nothing (inline reasoning only
+   *  included: text inside `<think>` is never shown, #1123 part C). */
   | "no-reply";
 
 /** A stored stop reason, or `"interrupted"`: the read-time verdict on a
@@ -798,10 +799,11 @@ export interface ChatMessage {
    * Set only server-side, by the local-model collaborator, on a chat notice
    * (#1123): a short message in the chat saying why the local model could not
    * answer this chat — no document open (`"no-document"`), or no local model
-   * can answer (`"no-local-model"`). Carries `replyTo` (the chat it is about)
-   * and never `agentIdentity`. It is not an answer: no server path counts it as
-   * one (`answeredChatIds` skips it). Only ever one of the two strings or
-   * absent, so every other row stays byte-identical.
+   * can answer (`"no-local-model"`) — or that its run finished cleanly and
+   * showed nothing (`"no-reply"`, #1123 part C). Carries `replyTo` (the chat
+   * it is about) and never `agentIdentity`. It is not an answer: no server
+   * path counts it as one (`answeredChatIds` skips it). Only ever one of the
+   * three strings or absent, so every other row stays byte-identical.
    */
   chatNotice?: ChatNoticeKind;
   /**
