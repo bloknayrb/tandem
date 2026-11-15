@@ -373,6 +373,30 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "The real-launcher smoke measuring that merge order, before PR 3b gives the bound fact a " +
       "reader; then refuse the flags on such a file, or record the residual as accepted.",
   },
+  {
+    gap:
+      "Flag-on suites that drive ownership but read no delivery-round state run with the " +
+      "delivery-round seam unwired, so their polls run master's one global round, which no " +
+      "flag-on server runs: ownership-chat, ownership-posts and ownership-change-notices mock " +
+      "delivery-state.js with a pass-through that makes resolveDeliveryRound throw on demand; " +
+      "health-route injects its own getDeliveryState; and the same holds for every other " +
+      "flag-on suite that polls the inbox without wiring the seam. A change that makes their " +
+      "polls open or close a keyed round wrongly is not seen there, although every " +
+      "tandem_checkInbox poll reaches the round (its resolveDeliveryRound call in " +
+      "awareness.ts).",
+    closedBy: "Wiring them with a live check, or a test that drives their paths keyed.",
+  },
+  {
+    gap:
+      "The pin that src/server/index.ts wires the delivery-round seam " +
+      "(tests/server/ownership-source-pins.test.ts, the delivery-round seam describe) reads " +
+      "source, not a running server, and cannot see: a conditional exit before the call that is " +
+      "not a return or throw statement (a call that throws, say); braces or comment markers " +
+      "inside strings, which its text depth check counts as code; a call through a namespace " +
+      "import with a computed name; and calls from other src files through an alias or .call. " +
+      "Accepted for a text pin.",
+    closedBy: "Bryan's acceptance, or a behavioural pin that boots main().",
+  },
 ];
 
 /**

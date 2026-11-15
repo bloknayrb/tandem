@@ -2,7 +2,17 @@ import type { Server } from "node:http";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import WebSocket from "ws";
 
 /**
@@ -44,7 +54,9 @@ import { resetForTesting as resetAnnotationStoreForTesting } from "../../src/ser
 import { addDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
+  keyedDeliveryRoundsForTests,
   resetDeliveryStateForTests,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
@@ -74,6 +86,7 @@ import {
 } from "../../src/server/license/paths.js";
 import { appendClaudeChatMessage } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
   closeMcpSession,
   hasAnyMcpSession,
@@ -81,6 +94,7 @@ import {
   startMcpServerStdio,
 } from "../../src/server/mcp/server.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
+import { keyedDeliveryRounds } from "../../src/server/sessions/ownership.js";
 import { getDocument, getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -172,10 +186,19 @@ beforeAll(async () => {
 
 beforeEach(() => {
   useExpired();
+  // The delivery-round seam, as `src/server/index.ts` wires it in every
+  // server (the keyed-rounds suites PR): with the real `keyedDeliveryRounds`,
+  // flag off (`check`) is master's one global round and flag on (the
+  // ownership-on job) is the keyed rounds, as a real server of each runs.
+  setDeliveryRoundSeam({
+    keyed: keyedDeliveryRounds,
+    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+  });
 });
 
 afterEach(() => {
   resetForTesting();
+  setDeliveryRoundSeam(undefined);
 });
 
 afterAll(async () => {
@@ -638,6 +661,25 @@ describe("armed and keyless (#1521)", () => {
       expect(wasEmittedViaChannel("m-admitted")).toBe(true);
       // The twin of the refused case's "starts no wake clock".
       expect(getDeliveryState(Date.now(), getSubscriberCount()).state).toBe("awaiting-poll");
+      unsubscribe(cb);
+    });
+
+    it("flag on, the wiring is live: an admitted chat event opens a key-less keyed round", () => {
+      // Turned on here, whatever the job's flag, so `check` proves the wiring
+      // too. A chat event pushed here has no noted chat-map key and names no
+      // document, so the key-less round is the only kind it can open.
+      vi.stubEnv("TANDEM_OWNERSHIP", "1");
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+        resetDeliveryStateForTests();
+      });
+      resetDeliveryStateForTests();
+      useFreshTrial();
+      const cb = vi.fn();
+      subscribe(cb, "external");
+      _pushEventForTests(chatEvent("m-keyed"));
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(keyedDeliveryRoundsForTests().map((r) => r.kind)).toEqual(["keyless"]);
       unsubscribe(cb);
     });
 

@@ -309,6 +309,34 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
     expect(up.seen.find((s) => s.url === "/mcp")?.authorization).toBe(`Bearer ${TOKEN}`);
   }, 60_000);
 
+  it("control: a bare fetch to a [::1] upstream IS proxied under these variables; skipped where the host has no IPv6", async (ctx) => {
+    // The [::1] twin of the control above, so a clean [::1] case below means
+    // the bridge avoided the proxy, not that Node never proxies [::1].
+    let up: Awaited<ReturnType<typeof makeUpstream>>;
+    try {
+      up = await makeUpstream("::1");
+    } catch {
+      ctx.skip();
+      return;
+    }
+    const tunnel = await makeTunnel();
+    const c = spawn(
+      process.execPath,
+      [
+        "-e",
+        `fetch(${JSON.stringify(`${up.base}/health`)}).then(()=>process.exit(0),()=>process.exit(0))`,
+      ],
+      {
+        env: childEnv({ NODE_USE_ENV_PROXY: "1", HTTP_PROXY: tunnel.url }),
+        stdio: "ignore",
+      },
+    );
+    await new Promise<void>((r) => c.once("exit", () => r()));
+    expect(tunnel.connects, "Node's environment proxy must carry a [::1] request").toContain(
+      `[::1]:${up.port}`,
+    );
+  }, 30_000);
+
   it("bridge: a [::1] base URL; skipped where the host has no IPv6", async (ctx) => {
     try {
       await makeUpstream("::1");
