@@ -54,8 +54,14 @@ describe("useChatState, flag on", () => {
       doc.getMap(Y_MAP_CHAT).set(kind, notice(kind, kind));
     }
     doc.getMap(Y_MAP_CHAT).set("reply", { ...notice("reply", undefined), chatNotice: undefined });
+    // Rows written in one millisecond sort by id, so compare as a set.
     await waitFor(() =>
-      expect(notices).toEqual(["no-document", "no-local-model", "no-reply", "claude-again"]),
+      expect([...notices].sort()).toEqual([
+        "claude-again",
+        "no-document",
+        "no-local-model",
+        "no-reply",
+      ]),
     );
     expect(replies).toEqual(["reply"]);
     // Notice rows count toward the unread count (R6.3).
