@@ -669,18 +669,18 @@ describe("armed and keyless (#1521)", () => {
       // too. A chat event pushed here has no noted chat-map key and names no
       // document, so the key-less round is the only kind it can open.
       vi.stubEnv("TANDEM_OWNERSHIP", "1");
+      const cb = vi.fn();
       onTestFinished(() => {
+        unsubscribe(cb);
         vi.unstubAllEnvs();
         resetDeliveryStateForTests();
       });
       resetDeliveryStateForTests();
       useFreshTrial();
-      const cb = vi.fn();
       subscribe(cb, "external");
       _pushEventForTests(chatEvent("m-keyed"));
       expect(cb).toHaveBeenCalledTimes(1);
       expect(keyedDeliveryRoundsForTests().map((r) => r.kind)).toEqual(["keyless"]);
-      unsubscribe(cb);
     });
 
     it("revokes consumers with onRevoke; one without (the supervisor) is skipped, then woken after flipping back", () => {

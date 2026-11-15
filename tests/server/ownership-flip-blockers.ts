@@ -390,8 +390,9 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
     gap:
       "The pin that src/server/index.ts wires the delivery-round seam " +
       "(tests/server/ownership-source-pins.test.ts, the delivery-round seam describe) reads " +
-      "source, not a running server, and cannot see: a conditional exit before the call that is " +
-      "not a return or throw statement (a call that throws, say); braces or comment markers " +
+      "source, not a running server, and cannot see: an exit earlier in main(), before " +
+      "setOwnershipSeqSource; between setOwnershipSeqSource and the call, a conditional exit " +
+      "that is not a return or throw statement (a call that throws, say); braces or comment markers " +
       "inside strings, which its text depth check counts as code; a call through a namespace " +
       "import by element access (a string or computed name); calls from other src files " +
       "through an alias or .call; and, in its one-writer pin on delivery-state.ts, a compound " +

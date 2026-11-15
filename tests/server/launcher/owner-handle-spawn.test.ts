@@ -589,7 +589,7 @@ describe("teardown on every exit path (R4)", () => {
     expect(judgeBind(handle, run.sessionId)).toBeNull();
   });
 
-  it("stop() waits at most one second for a run file's deletion, timed from when the child is stopped (#2421 review)", async () => {
+  it("stop() waits for a hung run-file deletion, and at most one second from when its bound is armed (#2421 review)", async () => {
     const sup = makeSupervisor();
     await sup.startFresh(spawnDir);
     await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn");

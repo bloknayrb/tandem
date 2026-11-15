@@ -1626,11 +1626,15 @@ describe("the delivery-round seam is wired in this world (keyed rounds, flag on)
   });
 });
 
-// The two R1.8 brackets below compare the open rounds before and after. PR 3b
-// will change this check by design: its re-owe opens a round on the handed-
-// over document (flip-blocker row "Handover gap (d)", in
-// `ownership-flip-blockers.ts`), so after a handover with items owed the
-// rounds will differ.
+// The two R1.8 brackets below compare the open rounds before and after, by
+// kind and key. For PR 3b's reviewers: 3b's re-owe will open a round by design
+// (flip-blocker row "Handover gap (d)", in `ownership-flip-blockers.ts`), so
+// this check is expected to change then. Note what it can see: these brackets
+// open the handed-over document's round themselves before the handover, and a
+// forward joins an open round of the same key, so a re-owe that opens a round
+// on that same document leaves these keys unchanged; only a round of another
+// key (a key-less one, say) shows here. To see 3b's document round, 3b needs a
+// bracket that does not open that document's round first.
 
 describe("the handover moves nothing and pushes nothing (R1.8)", () => {
   it("no Y.Doc transaction, no event on the push path, no change to the delivery round; and the item is re-owed", async () => {

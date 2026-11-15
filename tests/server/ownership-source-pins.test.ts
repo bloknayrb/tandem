@@ -79,13 +79,14 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     // module (so another function imported under this name is refused), and
     // the call, a statement of the same block as `setOwnershipSeqSource`'s
     // (so a call commented out, with a stray reference to keep the count,
-    // is refused). Between the two statements, no `return` or `throw` at any
-    // depth outside a nested function.
+    // is refused). Between those two statements, no `return` or `throw` at
+    // any depth outside a nested function.
     //
     // What this pin of source cannot see, proposed for acceptance and open
-    // until Bryan accepts it (a flip-blocker row): a
-    // conditional exit before the call that is not a `return` or `throw`
-    // statement (a call that throws, say); braces or comment markers inside
+    // until Bryan accepts it (a flip-blocker row): an exit earlier in
+    // `main()`, before `setOwnershipSeqSource`; between the two statements, a
+    // conditional exit that is not a `return` or `throw` statement (a call
+    // that throws, say); braces or comment markers inside
     // strings, which the text depth check below counts as code; a call through
     // a namespace import by element access (`ns["setDeliveryRoundSeam"]`, or
     // a computed name such as `ns["set" + name]`);
