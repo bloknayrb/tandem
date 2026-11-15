@@ -2859,7 +2859,9 @@ export function registerAwarenessTools(server: McpServer): void {
         // owners PR, R4.4): what it stamped and the owners it set, so a throw
         // after that point can put both back.
         let chat: UnreadChat | undefined;
-        let chatCommitted: { handed: string[]; owners: string[] } | undefined;
+        let chatCommitted:
+          | { handed: string[]; out: { owners: string[]; handed: string[] } }
+          | undefined;
         try {
           const docs = collectInboxDocuments(requestedId, modeState, reader, scope, log);
           const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
@@ -3104,13 +3106,12 @@ export function registerAwarenessTools(server: McpServer): void {
                 log.counterBefore.get(id) ??
                 (docs.yielded.has(id) ? deliveryRegistry.counter : chatCounterBefore);
               const outcome = scope.claim(id, before, getOpenDocs().has(id));
-              if (outcome === "held") {
-                claimed.add(id);
-                continue;
+              if (outcome === "held") claimed.add(id);
+              else {
+                // The document is not the caller's: its chat goes back as it
+                // was (unregistered, unstamped), for whoever answers it.
+                for (const key of chatOn.get(id) ?? []) chatExcluded.add(key);
               }
-              // The document is not the caller's: its chat goes back as it
-              // was (unregistered, unstamped), for whoever answers it.
-              for (const key of chatOn.get(id) ?? []) chatExcluded.add(key);
               if (outcome === "refused") undoPassOn(log, id);
               else {
                 // The change ran but left the document with someone else (a
@@ -3119,10 +3120,12 @@ export function registerAwarenessTools(server: McpServer): void {
                 // ledger only the keys this poll wrote that the handover kept
                 // (notice keys): the caller never held the document, so its
                 // notices are owed to the next holder (R1.6).
-                undoPassOn(log, id, { ownKeysOnly: true });
-                // Once a claim's change ran, a later throw must not put the
-                // ledger back either: a handover inside it (a claim over a
-                // stale entry) deleted keys on purpose, to re-owe them.
+                if (outcome === "changed") undoPassOn(log, id, { ownKeysOnly: true });
+                // Once a claim's change ran (held or not), a later throw must
+                // not put the ledger back either: a handover inside it (a claim
+                // over a stale entry) deleted keys on purpose, to re-owe them.
+                // The chat commit and its owners now run after this loop, so
+                // a throw there must find these gone (review round 1, item 2).
                 log.legacyWrites.delete(id);
                 log.ackedExisting.delete(id);
               }
@@ -3132,7 +3135,7 @@ export function registerAwarenessTools(server: McpServer): void {
           if (scope.scoped) {
             chatCommitted = {
               handed: [...chat.scopes.keys()].filter((key) => !chatExcluded.has(key)),
-              owners: [],
+              out: { owners: [], handed: [] },
             };
           }
           chat.commit(scope.scoped ? chatExcluded : undefined);
@@ -3143,7 +3146,7 @@ export function registerAwarenessTools(server: McpServer): void {
             const taken = chatCommitted.handed.filter(
               (key) => chat?.scopes.get(key)?.scope === "take",
             );
-            scope.commitChat(taken, chatCommitted.handed, chatCommitted.owners);
+            scope.commitChat(taken, chatCommitted.handed, chatCommitted.out);
           }
           if (ownership) {
             // The drain point (the change-notice PR, R3.2, R4.1): the queue
@@ -3204,7 +3207,7 @@ export function registerAwarenessTools(server: McpServer): void {
               // go, and exactly what its commit and pass did is taken back:
               // the entries they created retired, the acknowledgements and
               // stamps they wrote removed. Nothing earlier polls did is touched.
-              scope.dropChatOwners(chatCommitted.owners, chatCommitted.handed);
+              scope.dropChatOwners(chatCommitted.out);
               chat?.revert();
             } else chat?.undo();
           }

@@ -34,7 +34,12 @@ import type * as Y from "yjs";
 import { z } from "zod";
 import { setChatRowsDeletedListener } from "../../src/server/chat-row-deletions.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
-import { subscribe, unsubscribe } from "../../src/server/events/queue.js";
+import {
+  attachCtrlObservers,
+  resetForTesting as resetEventsForTesting,
+  subscribe,
+  unsubscribe,
+} from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
@@ -94,7 +99,7 @@ import {
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
-import { withInternal } from "../../src/shared/origins.js";
+import { withBrowser, withInternal } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
@@ -113,6 +118,29 @@ vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
         throw new Error("after the chat commit");
       }
       return real.resolveDeliveryRound(...args);
+    },
+  };
+});
+
+/** Set to make `aiRefusal` refuse (the licence, R5.2 step 2); counts `noteClaudeActivity`. */
+const licence = vi.hoisted(() => ({ refuse: false, activity: 0 }));
+vi.mock("../../src/server/license/ai-refusal.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/server/license/ai-refusal.js")>();
+  return {
+    ...real,
+    aiRefusal: () =>
+      licence.refuse
+        ? { error: "LICENSE_REQUIRED", message: "Tandem is not licensed.", kind: "unlicensed" }
+        : real.aiRefusal(),
+  };
+});
+vi.mock("../../src/server/mcp/presence-expiry.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/server/mcp/presence-expiry.js")>();
+  return {
+    ...real,
+    noteClaudeActivity: (docName: string) => {
+      licence.activity++;
+      real.noteClaudeActivity(docName);
     },
   };
 });
@@ -323,12 +351,6 @@ function removeTransport(owner: string): void {
   noteTransportChanged(owner);
 }
 
-function reattach(owner: string): void {
-  const entry = entryOf(owner);
-  entry.openStreams = 1;
-  noteTransportChanged(owner);
-}
-
 async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
   if (flag === "1") vi.stubEnv("TANDEM_OWNERSHIP", "1");
   else vi.stubEnv("TANDEM_OWNERSHIP", "");
@@ -374,6 +396,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   roundThrows.next = false;
+  licence.refuse = false;
   setInboxClaimCheckForTests(undefined);
   setInboxScopeReadForTests(undefined);
   setInboxResponseCorruptorForTests(undefined);
@@ -474,6 +497,9 @@ describe("R3/R4: who is handed a message", () => {
     expect(refused.details).toEqual({ reason: "chat", holder: null });
     expect(chatMap().size).toBe(before);
     expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+    // The positive twin: a non-local message beside it is handed.
+    const other = userChat(key("not-local"));
+    expect(chatIds(await reader(A).poll())).toEqual([other]);
   });
 
   it("R4.1: a document whose scope read throws: its chat is not handed by that poll, and is by the next", async () => {
@@ -622,6 +648,8 @@ describe("R3/R4: who is handed a message", () => {
       expect(inbox.chatMessages, `poll ${n}`).toEqual([]);
       expect(inbox.summary).not.toContain("The user sees nothing in chat until you reply");
     }
+    // The positive twin: a registered caller's poll is handed it.
+    expect(chatIds(await reader(A).poll())).toHaveLength(1);
   });
 
   it("R4.7: a named poll of d1 hands a doc-less message and one on unowned d3, and claims d3 below its chat entries", async () => {
@@ -676,6 +704,12 @@ describe("R3.3/R3.5: owners and held state", () => {
     userChat(key("m"));
     expect(chatIds(await pollAs(A))).toHaveLength(1);
     expect(getOwnerRecord(A)?.graceTimer).toBeDefined();
+  });
+
+  it("the negative twin: a lapsed record whose poll hands it nothing stays unarmed", async () => {
+    lapseByGrace(A, "stream dropped");
+    expect(chatIds(await pollAs(A))).toEqual([]);
+    expect(getOwnerRecord(A)?.graceTimer).toBeUndefined();
   });
 
   it("an already-lapsed record owning an unhandled message is kept when its transport goes; one owning only a handled one is deleted at once", async () => {
@@ -744,8 +778,10 @@ describe("R3.3/R3.5: owners and held state", () => {
   });
 
   it("R3.7: a change of a message's owner queues no change notice", async () => {
-    userChat(key("m"));
+    const m = userChat(key("m"));
     const inbox = await reader(A).poll();
+    expect(chatIds(inbox), "the poll did hand it, and so changed its owner").toEqual([m]);
+    expect(messageOwner(m)?.ownerId).toBe(A);
     expect(inbox.ownership?.changed).toEqual([]);
     expect(inbox.ownership?.holding).toEqual([]);
   });
@@ -827,7 +863,9 @@ describe("R5: the reply gate", () => {
     expect((await reply(B, m)).error).toBe(false);
     expect(ownerOf(d.id)).toBe(B);
     const status = await as(B, "tandem_status", {});
-    expect(JSON.stringify(status.data)).toContain(d.id);
+    expect(
+      (status.data as { owner?: { holding?: string[] } } | undefined)?.owner?.holding,
+    ).toContain(d.id);
     const b = await reader(B).poll();
     expect(b.ownership?.holding).toContain(d.id);
     expect(b.ownership?.changed).toContainEqual({
@@ -980,8 +1018,8 @@ describe("R5: the reply gate", () => {
       `The terminal session ${labelOf(A)} answers this message. Do not reply to it.`,
     );
     const text = JSON.stringify(refused);
-    for (const leak of [A, B, "chat-a", "text of", m.replace(prefix, "")]) {
-      if (leak !== m.replace(prefix, "")) expect(text).not.toContain(leak);
+    for (const leak of [A, B, "chat-a", "chat-b", "text of", m, row(m)?.text as string]) {
+      expect(text, leak).not.toContain(leak);
     }
     expect(text).not.toMatch(/Another session answers/);
   });
@@ -1008,7 +1046,9 @@ describe("R5: the reply gate", () => {
     expect(getOwnerRecord(A)).toBeDefined();
     expect(ownerOf(d.id)).toBeUndefined();
     await writeAs(B, d.id);
-    reattach(A);
+    // A is still lapsed (its transport registered, its stream down): its
+    // final reply is accepted as a lapsed record's (review round 1, item 19).
+    expect(getOwnerRecord(A)?.lapsed).toBe(true);
     await assertStaysA(m);
   });
 
@@ -1132,6 +1172,9 @@ describe("R6: the chat half of a handover, and the tab close", () => {
     setOwnershipChatSide(ownershipChatSide);
     await writeAs(A, d.id);
     await notHanded(A, m);
+    // The positive twin: an unread message on the same document is handed.
+    const fresh = userChat(key("fresh"), d.id);
+    expect(chatIds(await reader(A).poll())).toEqual([fresh]);
   });
 
   it("design §7.2's last paragraph: A loses D to a take; its doc-less message is not re-owed and stays A's", async () => {
@@ -1284,13 +1327,34 @@ describe("R6: the chat half of a handover, and the tab close", () => {
     expect(chatIds(await pollAs(A))).toEqual([m]);
     const seen: TandemEvent[] = [];
     const cb = (e: TandemEvent) => seen.push(e);
+    // The real CTRL chat observer, so the negative below can fail (review
+    // round 1, item 19).
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    attachCtrlObservers();
     subscribe(cb, "internal");
     try {
       setDocOwner(d.id, { ownerId: B, kind: "opened" }, "take", B);
       expect(row(m)?.read).toBe(false);
       expect(seen.filter((e) => e.type === "chat:message")).toEqual([]);
+      // The positive twin: the subscriber does see a re-owe's neighbour, a
+      // new user row added through the browser path.
+      const ctrlDoc = ctrl();
+      withBrowser(ctrlDoc, () =>
+        chatMap().set(key("pushed"), {
+          id: key("pushed"),
+          author: "user",
+          text: "pushed",
+          timestamp: clock++,
+        }),
+      );
+      expect(
+        seen
+          .filter((e) => e.type === "chat:message")
+          .map((e) => (e.payload as { messageId?: string }).messageId),
+      ).toEqual([key("pushed")]);
     } finally {
       unsubscribe(cb);
+      resetEventsForTesting();
     }
   });
 });
@@ -1325,9 +1389,14 @@ describe("review round 1: the cases the first build missed", () => {
       if (id === d.id) throw new Error("scope read");
       return realScopeOf(id, caller, now);
     });
+    // An earlier hand-out, so the throwing poll has something to acknowledge.
+    const earlier = await reader(A).poll();
+    expect(chatIds(earlier)).toEqual([]);
     expect(chatIds(await a.poll())).toEqual([]);
     setInboxScopeReadForTests(undefined);
     expect(chatIds(await a.poll())).toEqual([m]);
+    // Handed once, and only now: the throwing poll neither handed nor stamped it.
+    expect(row(m)?.read).toBe(false);
   });
 
   for (const how of ["cursor", "cursor-less"] as const) {
@@ -1453,6 +1522,367 @@ describe("review round 1: the cases the first build missed", () => {
   });
 });
 
+describe("review round 2 (the reviewing session's round 1)", () => {
+  /** Run a refused reply and check it left no trace of any kind (R5.5). */
+  async function refusedWithNoTrace(
+    owner: string,
+    m: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<ReturnType<typeof as> extends Promise<infer R> ? R : never> {
+    const heard: unknown[] = [];
+    const off = onTandemReply((id) => heard.push(id));
+    const writes: string[] = [];
+    const docs = [ctrl(), ...[...getOpenDocs().keys()].map((id) => getOrCreateDocument(id))];
+    const listeners = docs.map((doc, i) => {
+      const fn = () => writes.push(String(i));
+      doc.on("update", fn);
+      return () => doc.off("update", fn);
+    });
+    const before = {
+      rows: chatMap().size,
+      read: row(m)?.read,
+      owners: JSON.stringify(ownershipSnapshotForTests().messageOwners),
+      entries: JSON.stringify(
+        ownershipSnapshotForTests().ownerByDoc.map(([id, e]) => [id, e.ownerId]),
+      ),
+      activity: licence.activity,
+    };
+    try {
+      const refused = await reply(owner, m, extra);
+      expect(refused.error, JSON.stringify(refused)).toBe(true);
+      expect(writes, "no Y.Doc write").toEqual([]);
+      expect(heard, "no notify").toEqual([]);
+      expect(chatMap().size, "no row").toBe(before.rows);
+      expect(row(m)?.read, "no read stamp").toBe(before.read);
+      expect(JSON.stringify(ownershipSnapshotForTests().messageOwners), "no owner").toBe(
+        before.owners,
+      );
+      expect(
+        JSON.stringify(ownershipSnapshotForTests().ownerByDoc.map(([id, e]) => [id, e.ownerId])),
+        "no claim",
+      ).toBe(before.entries);
+      expect(licence.activity, "no noteClaudeActivity").toBe(before.activity);
+      return refused;
+    } finally {
+      off();
+      for (const stop of listeners) stop();
+    }
+  }
+
+  it("item 5: a message whose owner is its document's holder: refused naming that holder, reason chat", async () => {
+    const d = mkDoc("held-by-a");
+    await writeAs(A, d.id);
+    const m = userChat(key("m"), d.id);
+    for (const extra of [{}, { inProgress: true }]) {
+      const refused = await refusedWithNoTrace(B, m, extra);
+      expect(refused.code).toBe("NOT_DOC_OWNER");
+      expect(refused.details).toEqual({
+        reason: "chat",
+        holder: { label: labelOf(A), displayKind: "terminal" },
+        documentId: d.id,
+      });
+    }
+    // The positive twin: A's reply lands.
+    expect((await reply(A, m)).error).toBe(false);
+  });
+
+  it("items 6 and 7: every refusal, final reply and acknowledgement alike, leaves no trace", async () => {
+    __setHonourLocalPeriodRecordsForTests(true);
+    const local = userChat(key("local"));
+    loadLocalPeriodRecord({ v: 1, open: false, owed: [], local: [local] });
+    const docless = userChat(key("docless"));
+    const d = mkDoc("busy");
+    setDocOwner(d.id, { ownerId: A, kind: "opened" }, "take", A);
+    const busy = userChat(key("busy"), d.id);
+    expect(chatIds(await reader(A).poll())).toEqual(expect.arrayContaining([busy, docless]));
+    setDocOwner(d.id, null, "lapse");
+    let release!: () => void;
+    const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+    const other = userChat(key("other"));
+    for (const extra of [{}, { inProgress: true }]) {
+      // Local-period chat.
+      expect((await refusedWithNoTrace(A, local, extra)).details?.reason).toBe("chat");
+      // A caller with no record.
+      expect((await refusedWithNoTrace(NOBODY, other, extra)).code).toBe("INTERNAL_ERROR");
+      // A not-present Tandem's Claude.
+      expect((await refusedWithNoTrace(TANDEM_OWNER_ID, other, extra)).details?.reason).toBe(
+        "not-present",
+      );
+      // Ruling 4's no-holder refusal: C was never handed `busy`.
+      expect((await refusedWithNoTrace(C, busy, extra)).details).toEqual({
+        reason: "chat",
+        holder: null,
+        documentId: d.id,
+      });
+      // INVALID_ARGUMENT.
+      expect((await refusedWithNoTrace(A, other, { ...extra, documentId: d.id })).code).toBe(
+        "INVALID_ARGUMENT",
+      );
+    }
+    release();
+    await op;
+  });
+
+  it("item 7: an acknowledgement on an open unowned document claims it AND sets an owner of origin acknowledgement", async () => {
+    const d = mkDoc("u");
+    const m = userChat(key("m"), d.id);
+    expect((await reply(B, m, { inProgress: true })).error).toBe(false);
+    expect(ownerOf(d.id)).toBe(B);
+    expect(messageOwner(m)).toEqual({ ownerId: B, origin: "acknowledgement" });
+  });
+
+  it("item 8: a reply the licence refuses claims nothing and sets no owner", async () => {
+    const d = mkDoc("u");
+    const onD = userChat(key("ond"), d.id);
+    const docless = userChat(key("docless"));
+    licence.refuse = true;
+    for (const [m, extra] of [
+      [onD, {}],
+      [onD, { inProgress: true }],
+      [docless, {}],
+      [docless, { inProgress: true }],
+    ] as const) {
+      const refused = await reply(B, m, extra);
+      expect(refused.code).toBe("LICENSE_REQUIRED");
+    }
+    // An ownership refusal answers with the licence too, when it would refuse.
+    licence.refuse = false;
+    const owned = userChat(key("owned"));
+    expect((await reply(A, owned, { inProgress: true })).error).toBe(false);
+    licence.refuse = true;
+    expect((await reply(C, owned)).code).toBe("LICENSE_REQUIRED");
+    expect(ownerOf(d.id)).toBeUndefined();
+    expect(messageOwner(onD)).toBeUndefined();
+    expect(repliesTo(onD)).toEqual([]);
+    licence.refuse = false;
+    // The positive twin: licensed, the same reply claims.
+    expect((await reply(B, onD)).error).toBe(false);
+    expect(ownerOf(d.id)).toBe(B);
+  });
+
+  it("item 9: R3.1 row 4 with Tandem's Claude present: a doc-less message is its, handed to neither A nor B, and their replies are refused naming it", async () => {
+    setTandemPresenceSource(() => true);
+    const m = userChat(key("m"));
+    await notHanded(A, m, { fresh: true });
+    await notHanded(B, m);
+    for (const who of [A, B]) {
+      expect((await reply(who, m)).message).toBe(
+        "Tandem's Claude answers this message. Do not reply to it.",
+      );
+    }
+    // The positive twin: Tandem's Claude is handed it.
+    expect(chatIds(await pollAs(TANDEM_OWNER_ID))).toEqual([m]);
+  });
+
+  describe("item 10: an acknowledger's record deleted before its final reply (accepted cases 2 to 4)", () => {
+    async function ackedThenDeleted(documentId?: string): Promise<string> {
+      const m = userChat(key("m"), documentId);
+      if (documentId !== undefined)
+        setDocOwner(documentId, { ownerId: A, kind: "opened" }, "take", A);
+      expect((await reply(A, m, { inProgress: true })).error).toBe(false);
+      lapseByGrace(A, "transport removed");
+      expect(getOwnerRecord(A)).toBeUndefined();
+      expect(messageOwner(m)).toBeUndefined();
+      register(A);
+      return m;
+    }
+
+    it("case 2: Tandem's Claude present: the doc-less message is its; the returning reply is refused naming it", async () => {
+      const m = await ackedThenDeleted();
+      setTandemPresenceSource(() => true);
+      expect((await reply(A, m)).message).toBe(
+        "Tandem's Claude answers this message. Do not reply to it.",
+      );
+      await notHanded(TANDEM_OWNER_ID, m);
+    });
+
+    it("case 3: a document nobody holds: the returning reply claims it; while its queue is busy, refused with no holder", async () => {
+      const d = mkDoc("nobody");
+      const m = await ackedThenDeleted(d.id);
+      expect(ownerOf(d.id)).toBeUndefined();
+      let release!: () => void;
+      const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+      expect((await reply(A, m)).details).toEqual({
+        reason: "chat",
+        holder: null,
+        documentId: d.id,
+      });
+      release();
+      await op;
+      expect((await reply(A, m)).error).toBe(false);
+      expect(ownerOf(d.id)).toBe(A);
+    });
+
+    it("case 4: a document B holds: the returning reply is refused naming B, and B is not handed it", async () => {
+      const d = mkDoc("b-holds");
+      const m = await ackedThenDeleted(d.id);
+      await writeAs(B, d.id);
+      expect((await reply(A, m)).message).toBe(
+        `The terminal session ${labelOf(B)} answers this message. Do not reply to it.`,
+      );
+      await notHanded(B, m);
+    });
+  });
+
+  it("item 11: in Ruling 4's arm an acknowledgement then a final reply leave origin acknowledgement", async () => {
+    const d = mkDoc("u");
+    setDocOwner(d.id, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), d.id);
+    expect(chatIds(await reader(A).poll())).toEqual([m]);
+    setDocOwner(d.id, null, "lapse");
+    let release!: () => void;
+    const op = runDocOp(d.id, () => new Promise<void>((r) => (release = r)));
+    expect((await reply(A, m, { inProgress: true })).error).toBe(false);
+    expect((await reply(A, m)).error).toBe(false);
+    expect(messageOwner(m)).toEqual({ ownerId: A, origin: "acknowledgement" });
+    expect(ownerOf(d.id)).toBeUndefined();
+    release();
+    await op;
+  });
+
+  it("item 12: local-period rows are unchanged by a take, a lapse and a close", async () => {
+    __setHonourLocalPeriodRecordsForTests(true);
+    const file = realFile("lp-rows.md");
+    const id = await userOpen(file);
+    await writeAs(A, id);
+    const m = userChat(key("lp"), id);
+    loadLocalPeriodRecord({ v: 1, open: false, owed: [], local: [m] });
+    withInternal(ctrl(), () => chatMap().set(m, { ...(row(m) as ChatMessage), read: true }));
+    const before = JSON.stringify(row(m));
+    await openAs(B, getOpenDocs().get(id)?.filePath as string); // a take
+    expect(JSON.stringify(row(m))).toBe(before);
+    lapseByGrace(B, "stream dropped"); // a lapse
+    expect(JSON.stringify(row(m))).toBe(before);
+    await closeByRoute(id); // a close
+    expect(JSON.stringify(row(m))).toBe(before);
+    expect(messageOwner(m)).toBeUndefined();
+  });
+
+  it("item 15: A's chat work does not grow with 300 messages B owns (seam calls counted)", async () => {
+    const counts = { handledKeys: 0, message: 0, messagesOn: 0, reOwe: 0 };
+    setOwnershipChatSide({
+      handledKeys: () => (counts.handledKeys++, ownershipChatSide.handledKeys()),
+      message: (k) => (counts.message++, ownershipChatSide.message(k)),
+      messagesOn: (id) => (counts.messagesOn++, ownershipChatSide.messagesOn(id)),
+      reOwe: (keys) => (counts.reOwe++, ownershipChatSide.reOwe(keys)),
+    });
+    const r = reader(A);
+    await r.poll();
+    const reset = () => {
+      for (const k of Object.keys(counts) as Array<keyof typeof counts>) counts[k] = 0;
+    };
+    reset();
+    await r.poll();
+    const without = { ...counts };
+    for (let i = 0; i < 300; i++) userChat(key(`b${i}`));
+    expect((await pollAs(B)).chatMessages).toHaveLength(300);
+    reset();
+    await r.poll();
+    expect(counts).toEqual(without);
+  });
+
+  it("item 16: a lapse whose re-owe throws keeps the owner (and so the record's grace), and the next lapse retries", async () => {
+    const m = userChat(key("m"));
+    expect(chatIds(await pollAs(A))).toEqual([m]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setChatOwnershipFaultForTests((at) => {
+      if (at === "re-owe") throw new Error("re-owe");
+    });
+    // One fake-timer window, so the grace the failed lapse re-arms is the one advanced.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    entryOf(A).streamEver = true;
+    entryOf(A).openStreams = 0;
+    noteTransportChanged(A);
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+    expect(getOwnerRecord(A)?.lapsed).toBe(true);
+    expect(messageOwner(m)?.ownerId, "kept: the re-owe failed").toBe(A);
+    expect(getOwnerRecord(A)?.graceTimer, "held state: its grace runs").toBeDefined();
+    setChatOwnershipFaultForTests(undefined);
+    vi.advanceTimersByTime(DEFAULT_GRACE_MS + 1);
+    vi.useRealTimers();
+    expect(messageOwner(m)).toBeUndefined();
+    expect(chatIds(await reader(B).poll())).toEqual([m]);
+  });
+
+  it("item 16: an acknowledgement's apply that throws is logged; the reply stands, and the message has no owner", async () => {
+    const m = userChat(key("m"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    setChatOwnershipFaultForTests((at) => {
+      if (at === "apply") throw new Error("apply");
+    });
+    expect((await reply(A, m, { inProgress: true })).error).toBe(false);
+    expect(repliesTo(m)).toHaveLength(1);
+    expect(messageOwner(m)).toBeUndefined();
+    expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toContain("replyApply failed");
+  });
+
+  it("item 16: a failed row read in recordHoldsState is logged and counts the message as owed", async () => {
+    lapseByGrace(A, "stream dropped");
+    const m = userChat(key("m"));
+    expect(chatIds(await pollAs(A))).toEqual([m]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    setOwnershipChatSide({
+      ...ownershipChatSide,
+      message: () => {
+        throw new Error("row read");
+      },
+    });
+    removeTransport(A);
+    expect(getOwnerRecord(A), "kept: the row read failed").toBeDefined();
+    expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toContain(
+      "reading which chat messages are answered failed",
+    );
+  });
+
+  it("item 17: a failed poll removes only the handed memory it added, not an earlier poll's", async () => {
+    const m = userChat(key("m"));
+    expect(chatIds(await pollAs(A, { cursor: "start" }))).toEqual([m]);
+    expect(ownershipSnapshotForTests().handed).toEqual([[A, [m]]]);
+    roundThrows.next = true;
+    callingAs = A;
+    expect(
+      parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: { cursor: "start" } }),
+      ).error,
+    ).toBe(true);
+    expect(ownershipSnapshotForTests().handed).toEqual([[A, [m]]]);
+  });
+
+  it("item 2: a held claim, then a throw after the chat commit: the claimed document's ledger stands (master's behaviour)", async () => {
+    const d = mkDoc("held-throw");
+    comment(d.ydoc, "c-held");
+    const m = userChat(key("m"), d.id);
+    roundThrows.next = true;
+    callingAs = A;
+    expect(
+      parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} })).error,
+    ).toBe(true);
+    expect(ownerOf(d.id), "the claim held").toBe(A);
+    // As on master for a held claim, the cursor-less ledger it wrote is kept,
+    // so a claim over a stale entry whose handover deleted keys cannot have
+    // them put back. Its chat was taken back (R4.4), so it is owed again.
+    const next = await pollAs(A);
+    expect(next.userActions.map((a) => a.id)).toEqual([]);
+    expect(chatIds(next)).toEqual([m]);
+  });
+
+  it("item 20: a single-row delete drops that row's owner only", async () => {
+    const one = userChat(key("one"));
+    const two = userChat(key("two"));
+    await pollAs(A);
+    // The real CTRL chat observer, whose delete arm tells the seam.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    attachCtrlObservers();
+    try {
+      withBrowser(ctrl(), () => chatMap().delete(one));
+      expect(messageOwner(one)).toBeUndefined();
+      expect(messageOwner(two)?.ownerId).toBe(A);
+    } finally {
+      resetEventsForTesting();
+    }
+  });
+});
+
 describe("R8: the pickup row after a re-owe", () => {
   it("a re-owed message's row reads waiting, and one older than the stall threshold is stalled", async () => {
     const { chatPickup, isPickupStalled } = await import("../../src/client/panels/chat-pickup.js");
@@ -1477,8 +1907,16 @@ describe("dark", () => {
     const m = userChat(key("m"), d.id);
     expect(chatIds(await reader(A).poll())).toEqual([m]);
     expect(chatIds(await reader(B).poll())).toEqual([m]);
-    expect((await reply(B, m, { documentId: docId("front") })).error).toBe(false);
-    expect(repliesTo(m)[0]?.documentId).toBe(docId("front"));
+    // No documentId: master's active-document stamp (review round 1, item 20).
+    const result = await reply(B, m);
+    expect(result.error).toBe(false);
+    expect(Object.keys(result.data ?? {}).sort()).toEqual(["messageId", "sent"]);
+    const stamped = repliesTo(m)[0] as ChatMessage;
+    expect(stamped.documentId).toBe(docId("front"));
+    expect(Object.keys(stamped).sort()).toEqual(
+      ["author", "documentId", "id", "read", "replyTo", "text", "timestamp"].sort(),
+    );
+    expect(row(m)?.read).toBe(true);
     const snap = ownershipSnapshotForTests();
     expect(snap.messageOwners).toEqual([]);
     expect(snap.handed).toEqual([]);

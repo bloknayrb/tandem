@@ -258,7 +258,7 @@ function body(input: NotDocOwnerInput): string {
 }
 
 /** Why a reply to a chat message was refused, for its copy (the chat owners PR, R5.6). */
-export type ChatRefusalWhy = "holder" | "busy" | "local" | "not-present";
+export type ChatRefusalWhy = "holder" | "busy" | "lost" | "local" | "not-present";
 
 /**
  * The `chat` refusal's text (Ruling 15; ownership design §5.3): it refuses
@@ -276,6 +276,8 @@ function chatRefusalText(why: ChatRefusalWhy, holder: HolderView | null): string
         : CHAT_BUSY;
     case "busy":
       return CHAT_BUSY;
+    case "lost":
+      return "This message is not yours to answer right now: you lost its document, which nobody holds now. Nothing was sent. If a later tandem_checkInbox hands it to you, answer it then.";
     case "local":
       return "A local model answers this message, not Claude. Nothing was sent. Do not reply to it.";
     case "not-present":

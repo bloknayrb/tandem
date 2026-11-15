@@ -551,8 +551,16 @@ describe("the chat side's seams are wired in a running server (the chat owners P
       "src/server/session/manager.ts",
     ]);
     for (const text of [observer, manager]) {
-      expect(text).not.toMatch(/sessions\/ownership(\.js|-flag)|ownership-flag/);
+      // Any specifier naming the ownership module or the flag, with or without
+      // an extension or the `sessions/` prefix.
+      expect(text).not.toMatch(/["'][^"']*\/ownership(\.js)?["']|ownership-flag/);
     }
+    // The delete arm fills the list it hands the seam.
+    const arm = observer.slice(
+      observer.indexOf("const deleted: string[] = [];"),
+      observer.indexOf("noteChatRowsDeleted(deleted);"),
+    );
+    expect(arm).toMatch(/change\.action === "delete"[\s\S]*deleted\.push\(key\)/);
     const seam = SRC_FILES.get("src/server/chat-row-deletions.ts") as string;
     expect(seam).not.toMatch(/^import /m);
   });

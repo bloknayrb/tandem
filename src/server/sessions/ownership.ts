@@ -380,7 +380,7 @@ let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
 let chatSide: OwnershipChatSide = NO_CHAT_SIDE;
-let chatFaultForTests: ((at: "re-owe" | "close") => void) | undefined;
+let chatFaultForTests: ((at: "re-owe" | "close" | "apply") => void) | undefined;
 let wakeObserverForTests: ((cause: WakeCause) => void) | undefined;
 let compositeObserver: ((step: CompositeStep, documentId: string) => void) | undefined;
 let noticeFaultForTests: ((at: "change" | "close", documentId: string) => void) | undefined;
@@ -682,6 +682,7 @@ function rowStillOwed(key: string): boolean {
     const facts = chatSide.message(key);
     return facts !== undefined && !facts.localPeriod;
   } catch {
+    logLimited("chat-handled-failed", CHAT_READ_FAILED);
     return true;
   }
 }
@@ -829,23 +830,39 @@ function releaseMessageOwners(
   ownerId: string,
   select: (key: string, owner: MessageOwner) => boolean,
 ): void {
-  const dropped: string[] = [];
+  const dropped: Array<[string, MessageOwner]> = [];
   for (const [key, owner] of [...ownerByMessage]) {
     if (owner.ownerId !== ownerId || !select(key, owner)) continue;
+    dropped.push([key, owner]);
+  }
+  if (dropped.length === 0) return;
+  // Re-owe first (review round 1, item 16): if the re-owe fails, the owners
+  // stay, so a lapsed record keeps its unhandled messages (and so its grace,
+  // which retries the lapse) instead of leaving a read message with no owner.
+  // A deleted record's owners go whatever happens: nothing could arm it again.
+  const reOwed = reOweChat(dropped.map(([key]) => key));
+  const record = records.get(ownerId);
+  if (!reOwed && record !== undefined) {
+    // A lapsed record keeps held state, so it must have a grace running: its
+    // expiry lapses it again and retries the re-owe (`recompute`).
+    if (record.lapsed) rejudge(record);
+    return;
+  }
+  for (const [key] of dropped) {
     ownerByMessage.delete(key);
-    dropped.push(key);
     messageOwnerChanged();
   }
-  if (dropped.length > 0) reOweChat(dropped);
 }
 
-/** The chat side's re-owe, in its own catch (fixed log text). */
-function reOweChat(keys: readonly string[]): void {
+/** The chat side's re-owe, in its own catch (fixed log text). Returns whether it ran without throwing. */
+function reOweChat(keys: readonly string[]): boolean {
   try {
     chatFaultForTests?.("re-owe");
     chatSide.reOwe(keys);
+    return true;
   } catch {
     logLimited("chat-reowe-failed", CHAT_REOWE_FAILED);
+    return false;
   }
 }
 
@@ -885,14 +902,19 @@ function setMessageOwner(
 }
 
 /** Remember that `ownerId` was handed `keys` by a poll that returned. */
-function noteHanded(ownerId: string, keys: readonly string[]): void {
+/** Remember that `ownerId` was handed `keys`; push onto `added` the ones it had not been handed before. */
+function noteHanded(ownerId: string, keys: readonly string[], added: string[]): void {
   if (keys.length === 0 || !records.has(ownerId)) return;
   let set = handedByRecord.get(ownerId);
   if (!set) {
     set = new Set();
     handedByRecord.set(ownerId, set);
   }
-  for (const key of keys) set.add(key);
+  for (const key of keys) {
+    if (set.has(key)) continue;
+    set.add(key);
+    added.push(key);
+  }
 }
 
 /**
@@ -1712,14 +1734,15 @@ export interface InboxPollScope {
    * handed to the caller (Ruling 4's arm). Nothing for a caller with no
    * record. Never throws.
    */
-  commitChat(taken: readonly string[], handed: readonly string[], set: string[]): void;
+  commitChat(taken: readonly string[], handed: readonly string[], out: InboxChatCommit): void;
   /**
-   * Undo `commitChat` for a poll that threw after its chat commit: each of
-   * `keys` (the owners it pushed onto `set`) loses its per-message owner if
-   * this caller holds it with origin "poll", and `handed` leaves the
-   * caller's "handed" memory (the response never returned). Never throws.
+   * Undo `commitChat` for a poll that threw after its chat commit: each
+   * owner it recorded in `out.owners` goes if this caller still holds it
+   * with origin "poll", and each key it added to the caller's "handed"
+   * memory (`out.handed`, only those an earlier poll had not already
+   * handed) leaves it again (the response never returned). Never throws.
    */
-  dropChatOwners(keys: readonly string[], handed: readonly string[]): void;
+  dropChatOwners(out: InboxChatCommit): void;
   /**
    * The notice rule (ownership design §6.3 step 2, as the notice-rule PR's
    * brief rules): the document's handover mark, read live, or 0 when no
@@ -1749,6 +1772,14 @@ export interface InboxPollScope {
    * gone or was created again (a new record never inherits). Never throws.
    */
   giveBack(batch: InboxChangeBatch): void;
+}
+
+/** What a poll's `commitChat` changed, filled as it goes so a throw part-way still reports it. */
+export interface InboxChatCommit {
+  /** Keys whose per-message owner this poll set. */
+  readonly owners: string[];
+  /** Keys this poll added to the caller's "handed" memory. */
+  readonly handed: string[];
 }
 
 /** What a poll drained (`InboxPollScope.drainChanges`). */
@@ -1886,19 +1917,19 @@ function pollScope(callerId: string | undefined, openIds: Iterable<string>, now:
           return mayTakePerMessage(callerId) ? "take" : "neither";
       }
     },
-    commitChat: (taken, handed, set) => {
+    commitChat: (taken, handed, out) => {
       if (callerId === undefined) return;
       total("commitChat", undefined, () => {
-        for (const key of taken) if (setMessageOwner(key, callerId, "poll")) set.push(key);
-        noteHanded(callerId, handed);
+        for (const key of taken) if (setMessageOwner(key, callerId, "poll")) out.owners.push(key);
+        noteHanded(callerId, handed, out.handed);
       });
     },
-    dropChatOwners: (keys, handed) => {
+    dropChatOwners: (out) => {
       if (callerId === undefined) return;
       total("dropChatOwners", undefined, () => {
         const memory = handedByRecord.get(callerId);
-        for (const key of handed) memory?.delete(key);
-        for (const key of keys) {
+        for (const key of out.handed) memory?.delete(key);
+        for (const key of out.owners) {
           const owner = ownerByMessage.get(key);
           if (owner?.ownerId !== callerId || owner.origin !== "poll") continue;
           ownerByMessage.delete(key);
@@ -1975,7 +2006,7 @@ function chatRefused(
   reason: "chat" | "not-present",
   holder: HolderView | null,
   facts: ChatMessageFacts,
-  why: "holder" | "busy" | "local" | "not-present",
+  why: "holder" | "busy" | "lost" | "local" | "not-present",
 ): ReplyGate {
   const { message, details } = chatReplyRefusal({
     reason,
@@ -2042,7 +2073,11 @@ function replyGate(
   const accept = (apply: () => void): ReplyGate => ({
     kind: "accepted",
     documentId: facts.documentId,
-    apply: () => total("replyApply", undefined, apply),
+    apply: () =>
+      total("replyApply", undefined, () => {
+        chatFaultForTests?.("apply");
+        apply();
+      }),
   });
   const standing = messageStanding(key, facts);
   switch (standing.kind) {
@@ -2066,7 +2101,10 @@ function replyGate(
       if (handedByRecord.get(callerId)?.has(key)) {
         return accept(() => setMessageOwner(key, callerId, origin));
       }
-      return chatRefused("chat", null, facts, "busy");
+      // A blocking loss on an unowned document (PR 5's Release; only
+      // `setLossForTests` reaches it before then) is not a running operation.
+      const lost = lossByDoc.get(documentId)?.ownerId === callerId;
+      return chatRefused("chat", null, facts, lost ? "lost" : "busy");
     }
     case "per-message":
       return accept(() => setMessageOwner(key, callerId, origin));
@@ -2329,7 +2367,7 @@ export function ownershipSnapshotForTests(): {
 
 /** Make the chat half of a handover (`"re-owe"`) or of a close (`"close"`) throw; undefined clears it. */
 export function setChatOwnershipFaultForTests(
-  fault: ((at: "re-owe" | "close") => void) | undefined,
+  fault: ((at: "re-owe" | "close" | "apply") => void) | undefined,
 ): void {
   chatFaultForTests = fault;
 }

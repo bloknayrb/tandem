@@ -178,6 +178,18 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
+      "A poll's claim through chat with outcome 'changed' (setDocOwner ran but the caller does " +
+      "not hold the document after it: only a re-entrant lapse, which needs the detached cap " +
+      "to lapse the claimant inside its own claim) is handled by code that excludes the " +
+      "document's chat from the stamp and retires the entries the poll created, so the message " +
+      "stays unread, undelivered and unregistered for its new owner; but no test reaches that " +
+      "outcome on chat (the chat owners PR, R4.4; review round 1, item 20).",
+    closedBy:
+      "A test that drives a re-entrant lapse through the cap inside a chat claim, or a seam " +
+      "that forces the outcome, showing the message reachable by its new owner.",
+  },
+  {
+    gap:
       "/api/channel-reply appends Claude rows with replyTo, answers and acknowledgements " +
       "(inProgress) alike, with no ownership check, sets no owner, and calls markUserChatRead; " +
       "the handled predicate honours its rows, an acknowledgement included. So an unmapped shim " +
@@ -187,11 +199,14 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "When Tandem's Claude stops being present, its per-message owners of origin " +
-      "'acknowledgement' must be dropped (releaseMessageOwners in sessions/ownership.ts takes " +
-      "the selector). Until then, after it acknowledges and stops being present, its own reply " +
-      "is refused (not-present) and every other session is refused 'Tandem's Claude answers " +
-      "this message' (the chat owners PR, R5.8).",
+      "When Tandem's Claude stops being present, every per-message owner it holds of a message " +
+      "that is not handled must be dropped and the message re-owed, whatever the origin " +
+      "(a tab close of a document nobody held while it was present gives it origin 'close'; " +
+      "an acknowledgement, origin 'acknowledgement', whose message is handled, must be dropped " +
+      "too). releaseMessageOwners in sessions/ownership.ts takes the selector. Its record never " +
+      "lapses, so until then such a message is handed to nobody once presence ends, its own " +
+      "reply is refused (not-present) and every other session is refused 'Tandem's Claude " +
+      "answers this message' (the chat owners PR, R5.8; review round 1, item 3).",
     closedBy: "PR 3b (presence).",
   },
   {

@@ -1243,5 +1243,8 @@ describe("no per-client state", () => {
       ...copy.matchAll(/^import (type )?\{[^}]*\} from "\.\/ownership\.js";$/gm),
     ];
     expect(fromOwnershipInCopy.map((m) => m[1])).toEqual(["type "]);
+    // Every other import form names the module too (a namespace or default
+    // import, a re-export, a dynamic import): exactly one mention, the type import.
+    expect(copy.match(/["']\.\/ownership(\.js)?["']/g)).toHaveLength(1);
   });
 });
