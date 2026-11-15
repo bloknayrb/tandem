@@ -476,6 +476,23 @@ describe("R3: the handled rule, `settles` and the sweep", () => {
     expect(handled().has(mNew)).toBe(false);
   });
 
+  it("the conjunction at step 2: a message in the same hand-out with a lower sequence but a later timestamp than the target is not settled", async () => {
+    const d = mkDoc("d");
+    setDocOwner(d, { ownerId: B, kind: "opened" }, "take", B);
+    const target = userChat(key("t"), d); // earlier timestamp
+    expect(chatIds(await reader(B).poll())).toEqual([target]);
+    const later = userChat(key("later")); // later timestamp, doc-less
+    expect(chatIds(await reader(A).poll())).toEqual([later]); // its entry, not confirmed
+    // A takes D: the target is re-owed and gets a higher sequence than `later`.
+    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
+    const a2 = reader(A);
+    expect(chatIds(await a2.poll())).toEqual([later, target].sort());
+    expect((await reply(A, target)).error).toBe(false);
+    await a2.poll(); // confirms the hand-out holding both
+    expect(finalReplyTo(target).settles ?? []).not.toContain(later);
+    expect(handled().has(later)).toBe(false);
+  });
+
   it("step 2 skips retired entries: M2's entry is retired by a re-owe before A's confirming poll; A's reply to M3 does not settle M2", async () => {
     const d = mkDoc("d");
     setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
@@ -711,6 +728,22 @@ describe("R0.1: carried-over messages", () => {
     expect(messageOwner(m1)).toBeUndefined();
     expect(messageOwner(m2)).toBeUndefined();
     await notHanded(A, m1);
+  });
+
+  it("a tab close whose holder has lapsed (its move deferred behind a busy queue) re-owes no carried-over message (R0.6)", async () => {
+    const { id, m1, m2 } = await carriedOverWorld();
+    await writeAs(A, id);
+    let release!: () => void;
+    const op = runDocOp(id, () => new Promise<void>((r) => (release = r)));
+    lapseByGrace(A, "transport removed");
+    expect(ownerOf(id)).toBe(A);
+    const before = snapshotRows([m1, m2]);
+    await closeByRoute(id);
+    expect(snapshotRows([m1, m2])).toEqual(before);
+    expect(messageOwner(m1)).toBeUndefined();
+    await notHanded(B, m1);
+    release();
+    await op;
   });
 
   it("nothing joins the set during a run: M4, pushed to A and acknowledged, is re-owed by B's take and handed to B", async () => {
@@ -1054,13 +1087,17 @@ describe("R2: answered once for chat", () => {
     expect(answererOf(m)).toBe(B);
   });
 
-  it("R2.4: after a simulated restart, a message settled in persisted state with no answerer: its current owner's reply is accepted", async () => {
-    const m = userChat(key("m"));
-    expect((await reply(A, m)).error).toBe(false);
+  it("R2.4: after a simulated restart, a message settled in persisted state with no answerer: its current owner's reply is accepted, another's refused chat", async () => {
+    const d = mkDoc("d");
+    setDocOwner(d, { ownerId: B, kind: "opened" }, "take", B);
+    const m = userChat(key("m"), d);
+    expect((await reply(B, m)).error).toBe(false);
     await restartFlagOn();
+    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
     expect(answererOf(m)).toBeUndefined();
     expect(handled().has(m)).toBe(true);
-    expect((await reply(B, m)).error).toBe(false);
+    expect((await reply(B, m)).details?.reason).toBe("chat");
+    expect((await reply(A, m)).error).toBe(false);
   });
 
   it("R2.4 in one run: a /api/channel-reply-style final reply (no caller), then M's owner's final reply is accepted", async () => {
@@ -1076,6 +1113,24 @@ describe("R2: answered once for chat", () => {
       }),
     );
     expect(answererOf(m)).toBeUndefined();
+    expect((await reply(A, m)).error).toBe(false);
+  });
+
+  it("R2.4 in one run, with an owner: after a no-caller final reply to M on A's document, B is refused chat and A's final reply is accepted", async () => {
+    const d = mkDoc("d");
+    setDocOwner(d, { ownerId: A, kind: "opened" }, "take", A);
+    const m = userChat(key("m"), d);
+    withMcp(ctrl(), () =>
+      chatMap().set(key("shim"), {
+        id: key("shim"),
+        author: "claude",
+        text: "from the shim",
+        timestamp: clock++,
+        read: true,
+        replyTo: m,
+      }),
+    );
+    expect((await reply(B, m)).details?.reason).toBe("chat");
     expect((await reply(A, m)).error).toBe(false);
   });
 

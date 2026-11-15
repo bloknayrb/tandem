@@ -101,11 +101,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function reducedUserRow(value: Record<string, unknown>): Record<string, unknown> | undefined {
   let changed = false;
   const out: Record<string, unknown> = {};
-  for (const field of CLIENT_FIELDS) if (field in value) out[field] = value[field];
+  // Own keys only, both ways (diff review, finding 1): `in` walks the
+  // prototype chain, so an own key named like an `Object.prototype` member
+  // (`constructor`, `toString`) would pass as one of the row's own fields.
+  for (const field of CLIENT_FIELDS) if (Object.hasOwn(value, field)) out[field] = value[field];
   out.author = FIXED.author;
   out.read = FIXED.read;
   for (const key of Object.keys(value)) {
-    if (!(key in out)) changed = true;
+    if (!Object.hasOwn(out, key)) changed = true;
   }
   if (value.author !== FIXED.author || value.read !== FIXED.read) changed = true;
   return changed ? out : undefined;

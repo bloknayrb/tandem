@@ -436,8 +436,10 @@ describe("R4: each client write is undone (flag on)", () => {
           delete after[k];
         }
         expect(JSON.stringify(after)).toBe(before);
-        expect(withoutDelivered(await persistedRows())).toContain(
-          withoutDelivered(before).slice(1, -1),
+        // Exact (diff review, finding 4): what is saved and restored is what
+        // the live doc holds after the undo, client-added user row included.
+        expect(JSON.parse(withoutDelivered(await persistedRows()))).toEqual(
+          JSON.parse(withoutDelivered(serverRows())),
         );
         if (c.handled) await assertHandled(M());
         else await assertUnhandled(M(), path);
@@ -470,6 +472,37 @@ describe("R4: each client write is undone (flag on)", () => {
   });
 });
 
+describe("diff review, finding 1: an own key named like an Object.prototype member", () => {
+  it("a user row with an own `constructor` key, sent as a raw update, is reduced and later server writes to it work", async () => {
+    await seed({ [M()]: userRow(M()) });
+    const S = getOrCreateDocument(CTRL_ROOM);
+    // The Yjs API cannot write such a value, so build the update with a
+    // same-length placeholder key and patch its bytes.
+    const C = new Y.Doc();
+    Y.applyUpdate(C, Y.encodeStateAsUpdate(S));
+    const k = key("ctor");
+    C.getMap(Y_MAP_CHAT).set(k, { ...userRow(k), constructoX: "x" });
+    const update = Y.encodeStateAsUpdate(C, Y.encodeStateVector(S));
+    const from = new TextEncoder().encode("constructoX");
+    const to = new TextEncoder().encode("constructor");
+    let patched = 0;
+    for (let i = 0; i + from.length <= update.length; i++) {
+      if (from.every((b, j) => update[i + j] === b)) {
+        update.set(to, i);
+        patched++;
+      }
+    }
+    expect(patched).toBe(1);
+    Y.applyUpdate(S, update, { socketId: "a-browser-tab" });
+    const row = serverChat().get(k) as Record<string, unknown>;
+    expect(Object.hasOwn(row, "constructor")).toBe(false);
+    expect(row.author).toBe("user");
+    // A later server write that spreads the row (a poll's stamp) works.
+    expect((await pollChat(A)).ids).toContain(k);
+    expect((serverChat().get(k) as ChatMessage).read).toBe(true);
+  });
+});
+
 describe("R4.2: an undone delete leaves the server memory keyed by the row as it was", () => {
   it("M's owner, answerer and A's handed memory survive a client delete of M; A's reply is judged as before", async () => {
     await seed({ [M()]: userRow(M()) });
@@ -487,7 +520,23 @@ describe("R4.2: an undone delete leaves the server memory keyed by the row as it
     };
     const before = snap();
     expect(before).toContain(M());
+    // Wait until the client holds the server's current M (the poll's and the
+    // reply's stamps), so its delete hits the live item (diff review,
+    // finding 2), and watch that the server really saw a client delete.
+    await waitFor(
+      () => JSON.stringify(clientChat().get(M())) === JSON.stringify(serverChat().get(M())),
+      "the client to hold the server's M",
+    );
+    const seen: string[] = [];
+    const watch = (e: Y.YMapEvent<unknown>, txn: Y.Transaction) => {
+      const origin = txn.origin as { socketId?: unknown } | null;
+      if (typeof origin?.socketId !== "string") return;
+      for (const [k, change] of e.changes.keys) seen.push(`${change.action}:${k}`);
+    };
+    serverChat().observe(watch);
     await clientWrites((chat) => chat.delete(M()));
+    serverChat().unobserve(watch);
+    expect(seen, "the server saw the client's delete").toContain(`delete:${M()}`);
     expect(serverChat().has(M())).toBe(true);
     expect(snap()).toBe(before);
     callingAs = A;
