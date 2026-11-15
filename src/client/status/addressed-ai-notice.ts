@@ -52,7 +52,11 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *   5. An affirmative claim needs a read that answered. `sessionLive` launders
  *      a stale value into a fresh-looking `true` when the probe fails, and
  *      `no-push` is the only branch that asserts connectivity off it.
- *   6. `no-push` fires ONLY on a confirmed zero.
+ *   6. `no-push` fires ONLY on a confirmed zero. `routes/health.ts:43-45` is
+ *      explicit that `subscribers: 0` is a sound negative while any positive
+ *      count includes an attached-but-inert shim — so `true` and `null` (field
+ *      absent, redacted, or not yet read) must both stay silent. Guessing here
+ *      would tell a working user their comment went nowhere.
  *   7. The local period (#1123 part B, R8): chat set to the local model.
  *      Applied AFTER rules 1–6 have decided, so Solo, `offline` and `ai-off`
  *      are untouched. A CHAT then raises no `no-agent` and no `no-push`: the
@@ -63,11 +67,7 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *      (`LOCAL_COMMENT_TEXT`): the local model is not sent comments, and
  *      Tandem is not sending it to Claude now. T promises nothing about
  *      later. Where rules 1–6 return `no-agent`, its kind, severity and CTA
- *      are kept and only the message becomes T. `routes/health.ts:43-45` is
- *      explicit that `subscribers: 0` is a sound negative while any positive
- *      count includes an attached-but-inert shim — so `true` and `null` (field
- *      absent, redacted, or not yet read) must both stay silent. Guessing here
- *      would tell a working user their comment went nowhere.
+ *      are kept and only the message becomes T.
  */
 export type AddressedAiNotice =
   | { kind: "offline" }

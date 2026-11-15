@@ -3,6 +3,8 @@ import {
   API_MODELS_CHAT_ANSWERER,
   CHAT_ANSWERER_NOTICE_KEYS,
   type ChatAnswerer,
+  ERROR_CODE_CHAT_ANSWERER_SUPERSEDED,
+  ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
   ERROR_CODE_OWN_WINDOW_ONLY,
   LOCAL_MODEL_STATES,
   type LocalModelState,
@@ -163,6 +165,8 @@ function adopt(outcome: ReadOutcome): void {
     _outcomeLine = null;
   }
   if (outcome.status === "known") {
+    // The radios now show the switch; the past-tense line is no longer needed.
+    _setToClaudeDone = false;
     _answerer = outcome.answerer;
     _localModelState = outcome.localModelState;
     _runGeneration = outcome.runGeneration;
@@ -190,7 +194,9 @@ function startRead(): Promise<ReadOutcome> {
       return outcome;
     } finally {
       if (_inFlight === slot.read) _inFlight = null;
-      _reading = _inFlight !== null;
+      // A queued read still counts: otherwise a failed read followed by a
+      // queued one would flash the "couldn't read" alert for one flush.
+      _reading = _inFlight !== null || _next !== null;
     }
   })();
   slot.read = read;
@@ -246,12 +252,17 @@ export const CHAT_ANSWERER_OUTCOME_LINES = {
 export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
   if (!BYO_MODELS_ENABLED) return;
   if (_postPending) return;
+  // A page that cannot see the switch never sends it to the local model
+  // (R2.2, R2.6); "Set chat to Claude" is the one send allowed then.
+  if (value === "local" && _status !== "known") return;
   _postPending = true;
   _outcomeLine = null;
   _outcomeFor = null;
   const readBefore = _status;
   let line: string | null = null;
   let unconfirmed = false;
+  /** The server answered that chat is set to Claude, as asked (R2.6). */
+  let setToClaude = false;
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -265,18 +276,19 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
     if (res.status === 403 && body?.code === ERROR_CODE_OWN_WINDOW_ONLY) {
       // Refused: nothing changed. The tab's own-window notice explains, once.
       noteModelsWriteRefused();
-    } else if (effective !== null && (res.status === 200 || res.status === 409)) {
+    } else if (
+      effective !== null &&
+      (res.status === 200 ||
+        (res.status === 409 && body?.code === ERROR_CODE_CHAT_ANSWERER_SUPERSEDED))
+    ) {
       // The server's body always carries the value in effect: adopt it.
       if (readBefore === "known") _answerer = effective;
-      if (
-        effective === "claude" &&
-        value === "claude" &&
-        res.status === 200 &&
-        (readBefore === "refused" || readBefore === "unreadable")
-      ) {
-        _setToClaudeDone = true;
-      }
-    } else if (effective !== null && res.status === 500) {
+      setToClaude = effective === "claude" && value === "claude";
+    } else if (
+      effective !== null &&
+      res.status === 500 &&
+      body?.code === ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED
+    ) {
       if (readBefore === "known") _answerer = effective;
       line =
         effective !== value
@@ -297,6 +309,11 @@ export async function setChatAnswerer(value: ChatAnswerer): Promise<void> {
   }
   const outcome = await requestRead();
   if (unconfirmed) line = outcome.status === "known" ? LINE_UNCONFIRMED : LINE_UNCONFIRMED_UNREAD;
+  // R2.6: a page whose re-read still cannot show the switch says, in the past
+  // tense, that the press worked — never leaving it with nothing said.
+  if (setToClaude && outcome.status !== "known" && outcome.status !== "dark") {
+    _setToClaudeDone = true;
+  }
   // Shown beside the answer this re-read gave, and only while it holds.
   _outcomeFor = outcome.status === "known" ? outcome.answerer : null;
   _outcomeLine = line;

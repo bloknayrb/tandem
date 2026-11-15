@@ -412,6 +412,11 @@ function askDelete(id: string) {
     aria-disabled={answererUnavailable}
     tabindex="-1"
     onkeydown={answererRg.handleKeyDown}
+    onfocusout={(e) => {
+      // Focus left the group: the tab stop goes back to the server's value
+      // (R2.2: re-synced to the read), from an event handler, never an effect.
+      if (!answererGroup?.contains(e.relatedTarget as Node | null)) focusOverride = null;
+    }}
     style="display: inline-flex; align-self: flex-start; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); overflow: hidden;"
   >
     {#each [["claude", "Claude"], ["local", "Local model"]] as const as [value, label] (value)}
@@ -452,9 +457,6 @@ function askDelete(id: string) {
       {#if !access.blocked}
         <p data-testid="chat-answerer-refused" style="margin: 0;">{REFUSED_READ_LINE}</p>
       {/if}
-      {#if chatAnswerer.setToClaudeDone}
-        <span role="status" data-testid="chat-answerer-set-claude-done">Chat was set to Claude.</span>
-      {/if}
     {:else if chatAnswerer.status === "failed" && !chatAnswerer.reading}
       <div style="display: flex; flex-wrap: wrap; align-items: center; gap: var(--tandem-space-2);">
         <span role="alert" data-testid="chat-answerer-load-error">Couldn't read what chat is set to.</span>
@@ -470,6 +472,11 @@ function askDelete(id: string) {
     {:else}
       <span role="status" data-testid="chat-answerer-loading">Checking…</span>
     {/if}
+    <!-- R2.6: a host that outlives its text, so the line's arrival is a
+         mutation a screen reader announces (LiveRegion's rule). -->
+    <LiveRegion data-testid="chat-answerer-set-claude-done">
+      {#if !chatAnswerer.known && chatAnswerer.setToClaudeDone}Chat was set to Claude.{/if}
+    </LiveRegion>
     {#if offerSetClaude}
       <button
         type="button"

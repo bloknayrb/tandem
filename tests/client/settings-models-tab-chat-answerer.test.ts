@@ -365,7 +365,7 @@ describe("refused, unreadable and unavailable (R2.6, R2.7)", () => {
     await (await held.request(3)).answer(403, { code: "OWN_WINDOW_ONLY" });
     const done = v.getByTestId("chat-answerer-set-claude-done");
     expect(done.getAttribute("role")).toBe("status");
-    expect(done.textContent).toBe("Chat was set to Claude.");
+    expect(done.textContent?.trim()).toBe("Chat was set to Claude.");
     expect(v.getByTestId("chat-answerer-refused")).toBeTruthy();
     expect(v.radio("claude").getAttribute("aria-checked")).toBe("false");
     expect(v.getByTestId("chat-answerer-use-claude")).toBeTruthy();
@@ -430,5 +430,61 @@ describe("outcome lines (R2.4)", () => {
     v.unmount();
     const again = mount();
     expect(again.queryByTestId("chat-answerer-error")).toBeNull();
+  });
+});
+
+describe("review fixes", () => {
+  it("the tab stop goes back to the server's value when focus leaves the group", async () => {
+    const v = await mounted(known("claude"));
+    v.radio("claude").focus();
+    await fireEvent.keyDown(v.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(v.radio("local").tabIndex).toBe(0);
+    await fireEvent.focusOut(v.radio("local"), { relatedTarget: document.body });
+    expect(v.radio("claude").tabIndex).toBe(0);
+    expect(v.radio("local").tabIndex).toBe(-1);
+  });
+
+  it("the store refuses to send 'local' while the read is not known", async () => {
+    mount();
+    await (await held.request(1)).fail();
+    await store.setChatAnswerer("local");
+    await drain();
+    expect(posts()).toHaveLength(0);
+  });
+});
+
+describe("'Chat was set to Claude.' is never left unsaid (UX review)", () => {
+  it("pressed while the first read is still pending, then a refused re-read: the line", async () => {
+    const v = mount();
+    const first = await held.request(1);
+    await fireEvent.click(v.getByTestId("chat-answerer-use-claude"));
+    await drain();
+    await first.answer(403, { code: "OWN_WINDOW_ONLY" });
+    await posts()[0].answer(200, { answerer: "claude", persisted: true });
+    await (await held.request(3)).answer(403, { code: "OWN_WINDOW_ONLY" });
+    expect(v.getByTestId("chat-answerer-set-claude-done").textContent?.trim()).toBe(
+      "Chat was set to Claude.",
+    );
+  });
+
+  it("after a failed read, a 200 and a failed re-read: the line beside the read error", async () => {
+    const v = mount();
+    await (await held.request(1)).fail();
+    await fireEvent.click(v.getByTestId("chat-answerer-use-claude"));
+    await drain();
+    await posts()[0].answer(200, { answerer: "claude", persisted: true });
+    await (await held.request(3)).fail();
+    expect(v.getByTestId("chat-answerer-set-claude-done").textContent?.trim()).toBe(
+      "Chat was set to Claude.",
+    );
+    expect(v.getByTestId("chat-answerer-load-error")).toBeTruthy();
+  });
+
+  it("the live region is mounted empty before the line arrives", async () => {
+    const v = mount();
+    await held.request(1);
+    const region = v.getByTestId("chat-answerer-set-claude-done");
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.textContent?.trim()).toBe("");
   });
 });
