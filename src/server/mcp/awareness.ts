@@ -49,6 +49,7 @@ import {
 } from "../sessions/ownership-refusal.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
+import { settledChatIds } from "./chat-handled.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore, YDocStore } from "./document-store.js";
 import { isGreetingReply } from "./greeting-reply.js";
@@ -858,6 +859,14 @@ function noDocumentInboxNote(requestedId: string | undefined): string {
 
 /** Identity unless a test installed a corruptor (see `setInboxResponseCorruptorForTests`). */
 let responseCorruptorForTests: <T>(response: T) => unknown = (response) => response;
+
+/** Run at the start of a poll's chat commit (both collectors); may throw (the posts PR, R0.7). */
+let chatCommitFaultForTests: (() => void) | undefined;
+
+/** Make a poll's chat commit (`chat.commit`) throw for a test; undefined clears it. */
+export function setChatCommitFaultForTests(fault: (() => void) | undefined): void {
+  chatCommitFaultForTests = fault;
+}
 
 /**
  * Make the next responses fail the backstop schema, for tests of what a
@@ -2140,11 +2149,16 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
     stamped: [] as string[],
   };
   let dropped = 0;
+  // Ownership on (the posts PR, R3.5; design §6.4: the cursor-less path
+  // "gains the check it lacks today"): a handled message is never handed,
+  // even unread. While ownership is off, master's path: no check here.
+  const handled = poll.scoped ? settledChatIds(chatMap) : undefined;
 
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || msg.read) return;
+    if (handled?.has(key)) return;
     // Local-period chat is never handed to Claude (#1123 A2, R2.1): skipped
     // before `admit`, so it is neither returned, stamped nor counted.
     if (isLocalPeriodChat(key)) return;
@@ -2171,6 +2185,7 @@ function collectUnreadChat(poll: PollScope): UnreadChat {
     held: new Set(),
     scopes,
     commit: (excluded) => {
+      chatCommitFaultForTests?.();
       const due = excluded ? keys.filter((key) => !excluded.has(key)) : keys;
       if (due.length === 0) return;
       // Registered as returned and acknowledged, like the document items a
@@ -2314,7 +2329,10 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
  */
 export function unansweredUserChatKeys(): string[] {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-  const answered = answeredChatIds(chatMap);
+  // Ownership on (the posts PR, R3.2): the same rule the inbox and every
+  // ownership decision use. Off, master's.
+  const answered =
+    inboxOwnership.chatRule() === "settles" ? settledChatIds(chatMap) : answeredChatIds(chatMap);
   const keys: string[] = [];
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
@@ -2330,17 +2348,19 @@ export function unansweredUserChatKeys(): string[] {
  * ownership module needs from chat, reached **only** through its
  * `setOwnershipChatSide` seam, which `index.ts` wires at boot. This file reads
  * no flag; nothing here runs unless an ownership decision, made flag on,
- * calls it. Each member is synchronous.
+ * calls it, so every member uses the flag-on handled rule (`settledChatIds`:
+ * a final reply's `replyTo` or `settles`, the posts PR, R3.2). Each member is
+ * synchronous.
  */
 export const ownershipChatSide = Object.freeze({
-  /** Master's handled predicate over the live chat rows. */
+  /** The handled rule over the live chat rows (the posts PR, R3.2). */
   handledKeys(): ReadonlySet<string> {
-    return answeredChatIds(getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT));
+    return settledChatIds(getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT));
   },
   /** The unhandled, non-local-period user messages that name `documentId`. */
   messagesOn(documentId: string): string[] {
     const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-    const handled = answeredChatIds(chatMap);
+    const handled = settledChatIds(chatMap);
     const keys: string[] = [];
     chatMap.forEach((value, key) => {
       if (typeof value !== "object" || value === null) return;
@@ -2368,21 +2388,138 @@ export const ownershipChatSide = Object.freeze({
    * The chat half of a handover (ownership design §6.5 steps 1 and 2, R6.1):
    * each key that is a user row, not local-period chat and not handled has
    * its chat entry retired and is written `read: false` with no `delivered`,
-   * in ONE server-origin (`withInternal`) transaction, so every reader is
-   * owed it again. The CTRL chat observer pushes only on `add` and skips the
-   * `internal` origin, so no `chat:message` fires and nothing is pushed.
+   * and every live acknowledgement of it (`inProgress`, not yet
+   * `superseded`) is marked `superseded: true` (the posts PR, R3.3), in ONE
+   * server-origin (`withInternal`) transaction, so every reader is owed it
+   * again and the pickup row reads "waiting". The CTRL chat observer pushes
+   * only on `add` and skips the `internal` origin, so no `chat:message` fires
+   * and nothing is pushed.
    */
   reOwe(keys: readonly string[]): void {
     reOweChat(keys);
   },
+  /**
+   * Step 1 of `settles` (the posts PR, R3.4), first half: the reply row
+   * under `rowKey` was just accepted; its target's earlier messages
+   * (registry sequence AND timestamp at or below the target's, master's
+   * `answeredBy` conjunction) that some model provably received
+   * (`receivedChat`). A target with no registry entry settles only itself.
+   * Writes nothing; the caller filters by scope and writes with
+   * {@link ownershipChatSide.addSettles}.
+   */
+  settleCandidates(rowKey: string): string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const bound = settleBound(chatMap, rowKey);
+    if (!bound) return [];
+    return receivedChat(chatMap)
+      .filter((h) => h.key !== bound.target && h.seq <= bound.seq && h.timestamp <= bound.timestamp)
+      .map((h) => h.key);
+  },
+  /**
+   * Step 1, second half: add `keys` (still user rows, not local-period chat,
+   * not already listed) to the row's `settles`, in one `withMcp` write.
+   * Returns the keys added.
+   */
+  addSettles(rowKey: string, keys: readonly string[]): string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    return addSettles(chatMap, new Map([[rowKey, keys]]), () => true);
+  },
 });
 
-/** {@link ownershipChatSide}'s re-owe (R6.1). */
+/** A final reply row's target and its place in the hand-out order, or undefined. */
+function settleBound(
+  chatMap: Y.Map<unknown>,
+  rowKey: string,
+): { target: string; seq: number; timestamp: number } | undefined {
+  const row = chatMap.get(rowKey);
+  if (typeof row !== "object" || row === null) return undefined;
+  const reply = row as Partial<ChatMessage>;
+  if (reply.author !== "claude" || reply.inProgress === true || reply.superseded === true) {
+    return undefined;
+  }
+  if (typeof reply.replyTo !== "string") return undefined;
+  const target = chatMap.get(reply.replyTo) as Partial<ChatMessage> | undefined;
+  const entry = deliveryRegistry.lookup("c", reply.replyTo, 0);
+  if (!entry || typeof target?.timestamp !== "number") return undefined;
+  return { target: reply.replyTo, seq: entry.seq, timestamp: target.timestamp };
+}
+
+/**
+ * Add each row's candidate keys that are still user rows, not local-period
+ * chat, accepted by `owns` and not already listed, to that row's `settles`,
+ * in ONE `withMcp` transaction (nothing to add opens none). Returns the keys
+ * added, once each.
+ */
+function addSettles(
+  chatMap: Y.Map<unknown>,
+  candidates: ReadonlyMap<string, readonly string[]>,
+  owns: (key: string) => boolean,
+): string[] {
+  const writes = new Map<string, string[]>();
+  const added = new Set<string>();
+  for (const [rowKey, keys] of candidates) {
+    const row = chatMap.get(rowKey) as Partial<ChatMessage> | undefined;
+    const listed = new Set(Array.isArray(row?.settles) ? row.settles : []);
+    const fresh: string[] = [];
+    for (const key of keys) {
+      if (listed.has(key) || fresh.includes(key)) continue;
+      const msg = chatMap.get(key);
+      if (typeof msg !== "object" || msg === null) continue;
+      if ((msg as Partial<ChatMessage>).author !== "user" || isLocalPeriodChat(key)) continue;
+      if (!owns(key)) continue;
+      fresh.push(key);
+    }
+    if (fresh.length === 0) continue;
+    writes.set(rowKey, [...listed, ...fresh].sort());
+    for (const key of fresh) added.add(key);
+  }
+  if (writes.size === 0) return [];
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  withMcp(ctrlDoc, () => {
+    for (const [rowKey, settles] of writes) {
+      chatMap.set(rowKey, { ...(chatMap.get(rowKey) as ChatMessage), settles });
+    }
+  });
+  return [...added];
+}
+
+/**
+ * Step 2 of `settles` (the posts PR, R3.4, R3.8): a poll of the confirming
+ * record just confirmed a hand-out, whose still-live entries are `confirmed`.
+ * For each of that record's own reply rows (`rows`) whose target is in the
+ * hand-out, the hand-out's earlier messages (sequence AND timestamp at or
+ * below the target's) that `owns` accepts are added to its `settles`, in one
+ * `withMcp` write. Returns the keys added.
+ */
+function settleHandOutRows(
+  confirmed: ReadonlyArray<{ readonly base: string; readonly seq: number }>,
+  rows: readonly string[],
+  owns: (key: string) => boolean,
+): string[] {
+  if (rows.length === 0) return [];
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const inHandOut = new Set(confirmed.map((e) => e.seq));
+  const candidates = new Map<string, string[]>();
+  for (const rowKey of rows) {
+    const bound = settleBound(chatMap, rowKey);
+    if (!bound || !inHandOut.has(bound.seq)) continue;
+    const earlier: string[] = [];
+    for (const entry of confirmed) {
+      if (entry.base === bound.target || entry.seq > bound.seq) continue;
+      const ts = (chatMap.get(entry.base) as Partial<ChatMessage> | undefined)?.timestamp;
+      if (typeof ts === "number" && ts <= bound.timestamp) earlier.push(entry.base);
+    }
+    if (earlier.length > 0) candidates.set(rowKey, earlier);
+  }
+  return candidates.size === 0 ? [] : addSettles(chatMap, candidates, owns);
+}
+
+/** {@link ownershipChatSide}'s re-owe (R6.1; the posts PR, R3.3). */
 function reOweChat(keys: readonly string[]): void {
   if (keys.length === 0) return;
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-  const handled = answeredChatIds(chatMap);
+  const handled = settledChatIds(chatMap);
   const due = keys.filter((key) => {
     const live = chatMap.get(key);
     if (typeof live !== "object" || live === null) return false;
@@ -2400,11 +2537,23 @@ function reOweChat(keys: readonly string[]): void {
     const msg = chatMap.get(key) as ChatMessage;
     return msg.read !== false || msg.delivered !== undefined;
   });
-  if (writes.length === 0) return;
+  // Every live acknowledgement of a re-owed message (design §6.5 step 2).
+  const dueSet = new Set(due);
+  const acknowledgements: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const row = value as Partial<ChatMessage>;
+    if (row.author !== "claude" || row.inProgress !== true || row.superseded === true) return;
+    if (typeof row.replyTo === "string" && dueSet.has(row.replyTo)) acknowledgements.push(key);
+  });
+  if (writes.length === 0 && acknowledgements.length === 0) return;
   withInternal(ctrlDoc, () => {
     for (const key of writes) {
       const { delivered: _delivered, ...rest } = chatMap.get(key) as ChatMessage;
       chatMap.set(key, { ...rest, read: false });
+    }
+    for (const key of acknowledgements) {
+      chatMap.set(key, { ...(chatMap.get(key) as ChatMessage), superseded: true });
     }
   });
 }
@@ -2425,7 +2574,9 @@ function reOweChat(keys: readonly string[]): void {
  */
 function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-  const answered = answeredChatIds(chatMap);
+  // Ownership on (the posts PR, R3.1, R3.2): the rule without the global
+  // received-sweep. Off, master's `answeredChatIds`.
+  const answered = poll.scoped ? settledChatIds(chatMap) : answeredChatIds(chatMap);
   const owedKeys: string[] = [];
   const scopes: UnreadChat["scopes"] = new Map();
 
@@ -2487,6 +2638,7 @@ function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
     scopes,
     ...(handOut !== undefined ? { handOut } : {}),
     commit: (excluded) => {
+      chatCommitFaultForTests?.();
       if (!excluded || excluded.size === 0) {
         stamped = stampUserChat(keys, "delivered");
         return;
@@ -2535,7 +2687,16 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
     }
     deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
   }
-  if (reader.handOut !== undefined) deliveryRegistry.confirmHandOut(reader.handOut);
+  if (reader.handOut !== undefined) {
+    const confirmed = deliveryRegistry.confirmHandOut(reader.handOut);
+    // Ownership on (the posts PR, R3.4 step 2, R3.8): the confirmed hand-out's
+    // batch is settled on this caller's own reply rows now, in the same step
+    // that spent the token, so a poll that fails after this point cannot lose
+    // it. Off, nothing (the token's spend is master's).
+    if (poll.scoped && confirmed.length > 0) {
+      poll.settleHandOut((rows, owns) => settleHandOutRows(confirmed, rows, owns));
+    }
+  }
   const view = reader.chat;
   if (view.mark === null) return;
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
@@ -2543,7 +2704,7 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
   // Flag on (the chat owners PR, R4.5): only messages the caller owns as the
   // poll begins, or that are handled. One session's acknowledgement never
   // hides a message from its owner or from a fresh reader that may take it.
-  const handled = poll.scoped ? answeredChatIds(chatMap) : undefined;
+  const handled = poll.scoped ? settledChatIds(chatMap) : undefined;
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
@@ -3278,13 +3439,22 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Document context for this reply (defaults to active document)"),
     },
     withErrorBoundary("tandem_reply", async ({ text, replyTo, inProgress, documentId }, caller) => {
-      // Ownership (the chat owners PR, R5; ownership design §7.3 rule 1): who
-      // may answer a message is decided first, writing nothing, OUTSIDE the
-      // typing presence, so a refused reply leaves no trace (R5.5). While
-      // ownership is off, and for a post or a `replyTo` naming no message,
-      // the gate answers `legacy` and master's path below runs unchanged.
+      // Ownership (the chat owners PR, R5; the posts PR, R1; ownership design
+      // §7.3): who may answer a message, or post, is decided first, writing
+      // nothing, OUTSIDE the typing presence, so a refused reply or post
+      // leaves no trace (R5.5, R1.5): no row, no notify, no greeting tag, no
+      // claim, no presence. While ownership is off the gate answers `legacy`
+      // and master's path below runs unchanged.
       // The caller is passed along unread.
-      const gate = inboxOwnership.replyGate(caller, { replyTo, inProgress, documentId });
+      const gate = inboxOwnership.replyGate(
+        caller,
+        { replyTo, inProgress, documentId },
+        // Read only with ownership on, for a post (the posts PR, R1.2, R1.3).
+        {
+          isOpen: (id) => getOpenDocs().has(id),
+          activeDocumentId: () => getCurrentDoc(undefined)?.id ?? undefined,
+        },
+      );
       if (gate.kind === "refused") {
         // The arguments are answered before the licence (R5.2 step 1); an
         // ownership refusal after it, so an unlicensed Tandem says so. The
@@ -3301,7 +3471,9 @@ export function registerAwarenessTools(server: McpServer): void {
       // (R5.1; pinned in tests/server/ownership-chat.test.ts).
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         // An accepted reply to a message is stamped with that message's
-        // document, or none (R5.3); otherwise master's active-document stamp.
+        // document, or none (R5.3); an accepted post with what its gate
+        // decided (the posts PR, R1.2, R1.3); flag off, master's
+        // active-document stamp.
         const current = gate.kind === "accepted" ? undefined : getCurrentDoc(documentId);
         const docId =
           gate.kind === "accepted" ? gate.documentId : (documentId ?? current?.id ?? undefined);
@@ -3327,7 +3499,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // The reply's claim and per-message owner (R5.2), once the append
         // landed, with no `await` since the gate: a reply the licence refused
         // above claims nothing and sets no owner.
-        if (gate.kind === "accepted") gate.apply();
+        if (gate.kind === "accepted") gate.apply(appended.id);
         notifyTandemReply(sessionId);
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({

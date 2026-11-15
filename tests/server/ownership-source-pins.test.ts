@@ -532,6 +532,46 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     ]);
   });
 
+  it("index.ts wires the client-write undo once, before either transport branch and before Hocuspocus starts (the posts PR, R4.5; security review L2)", () => {
+    beforeBothBranches("  setChatClientWritesUndone(undoClientChatWrites);");
+    const wired = index.indexOf("  setChatClientWritesUndone(undoClientChatWrites);");
+    expect(wired).toBeLessThan(index.indexOf("startHocuspocus(wsPort)"));
+    expect(filesNaming(/\bsetChatClientWritesUndone\(/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+    ]);
+    // (The seam's docblock names it.)
+    expect(filesNaming(/\bundoClientChatWrites\b/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+      "src/server/mcp/document-service.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // The seam imports nothing; the observer and the undo never name the
+    // ownership module or the flag.
+    const seam = SRC_FILES.get("src/server/chat-client-writes.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+    for (const file of [
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/events/observers/chat-client-undo.ts",
+    ]) {
+      expect(SRC_FILES.get(file)).not.toMatch(/["'`][^"'`]*\/ownership(\.js)?["'`]|ownership-flag/);
+    }
+  });
+
+  it("the carried-over capture and the pending drop run after restoreCtrlDoc, inside restoreCtrlSession (review round 1, item 1)", () => {
+    const service = SRC_FILES.get("src/server/mcp/document-service.ts") as string;
+    const fn = service.slice(
+      service.indexOf("export async function restoreCtrlSession("),
+      service.indexOf("\n}\n", service.indexOf("export async function restoreCtrlSession(")),
+    );
+    const restored = fn.indexOf("restoreCtrlDoc(ctrlDoc, saved);");
+    expect(restored).toBeGreaterThan(-1);
+    expect(fn.indexOf("captureCarriedOverChat(")).toBeGreaterThan(restored);
+    expect(fn.indexOf("dropPendingUpdates(ctrlDoc)")).toBeGreaterThan(restored);
+    expect(service.match(/captureCarriedOverChat\(/g)).toHaveLength(1);
+  });
+
   it("each chat-side delete path tells the seam, and neither imports the ownership module", () => {
     const observer = SRC_FILES.get("src/server/events/observers/ctrl-chat.ts") as string;
     const manager = SRC_FILES.get("src/server/session/manager.ts") as string;
@@ -569,5 +609,13 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     expect(filesNaming(/"reply-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
     const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
     expect(queue).toContain("a claim made by an accepted `tandem_reply`");
+  });
+
+  it("a post's claim is a named unqueued change too, and only the ownership module names its cause (review round 1, item 13)", () => {
+    expect(filesNaming(/"post-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted chat post");
+    expect(queue).toContain("cause\n * `post-claim`");
+    expect(queue).toContain("Seven run where they are");
   });
 });

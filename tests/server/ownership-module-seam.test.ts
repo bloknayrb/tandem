@@ -152,6 +152,7 @@ describe("tests and the flag", () => {
   // Every file that stubs the variable, by any argument: a stub through a
   // variable would slip past the two literal sets below.
   const OWNERSHIP_TEST_FILES = [
+    "tests/server/inbox-cursor.test.ts",
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
     "tests/server/launcher/supervisor.test.ts",
@@ -161,6 +162,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-api-no-context.test.ts",
     "tests/server/ownership-change-notices-http.test.ts",
     "tests/server/ownership-change-notices.test.ts",
+    "tests/server/ownership-chat-client-undo.test.ts",
     "tests/server/ownership-chat.test.ts",
     "tests/server/ownership-claim-at-outcome.test.ts",
     "tests/server/ownership-claims-table.test.ts",
@@ -173,6 +175,7 @@ describe("tests and the flag", () => {
     "tests/server/ownership-inbox-scope.test.ts",
     "tests/server/ownership-notice-rule.test.ts",
     "tests/server/ownership-owner-handle-bind.test.ts",
+    "tests/server/ownership-posts.test.ts",
     "tests/server/ownership-records.test.ts",
     "tests/server/ownership-tool-modes.test.ts",
     "tests/server/ownership-wait-bound.test.ts",
@@ -201,12 +204,14 @@ describe("tests and the flag", () => {
     // dark tests build their server flag-off (no `changed`, no sentence).
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
+      "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
       "tests/server/ownership-api-no-context.test.ts",
       "tests/server/ownership-change-notices.test.ts",
+      "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-dark-enforcement.test.ts",
       "tests/server/ownership-default-rule.test.ts",
@@ -214,6 +219,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
+      "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",
@@ -223,6 +229,7 @@ describe("tests and the flag", () => {
   it("the files that turn the flag ON for themselves are a reviewed set", () => {
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*"1"\s*\)/)).toEqual([
       // PR 3a: the chain, and the launcher's spawn path (flag on, with a dark block).
+      "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-chain.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
       "tests/server/local-period.test.ts",
@@ -231,6 +238,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-api-no-context.test.ts",
       "tests/server/ownership-change-notices-http.test.ts",
       "tests/server/ownership-change-notices.test.ts",
+      "tests/server/ownership-chat-client-undo.test.ts",
       "tests/server/ownership-chat.test.ts",
       "tests/server/ownership-claim-at-outcome.test.ts",
       "tests/server/ownership-claims-table.test.ts",
@@ -241,6 +249,7 @@ describe("tests and the flag", () => {
       "tests/server/ownership-handover.test.ts",
       "tests/server/ownership-inbox-scope.test.ts",
       "tests/server/ownership-notice-rule.test.ts",
+      "tests/server/ownership-posts.test.ts",
       "tests/server/ownership-records.test.ts",
       "tests/server/ownership-tool-modes.test.ts",
       "tests/server/ownership-wait-bound.test.ts",

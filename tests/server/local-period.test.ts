@@ -270,6 +270,21 @@ const CHAT_OWNERS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
+/**
+ * #2358's posts PR's changes to the flag-on schema, applied after the chat
+ * owners PR's: one new cause word, in the enum and in the cause description.
+ */
+const POSTS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    '"a chat reply of yours claimed it",',
+    '"a chat reply of yours claimed it",\n                                    "a chat post of yours claimed it",',
+  ],
+  [
+    '\\"a chat reply of yours claimed it\\": a tandem_reply of yours to a chat message about it claimed it; ',
+    '\\"a chat reply of yours claimed it\\": a tandem_reply of yours to a chat message about it claimed it; \\"a chat post of yours claimed it\\": a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document\'s documentId claimed it; ',
+  ],
+];
+
 /** The chat owners PR's second session, and who the next tool call runs as. */
 const LP_OTHER = "claude:lp-other";
 let lpCaller = "test:caller";
@@ -1186,7 +1201,7 @@ describe("the dark guard", () => {
         "utf8",
       );
       if (isOwnership) {
-        for (const [before, after] of CHAT_OWNERS_SCHEMA_CHANGES) {
+        for (const [before, after] of [...CHAT_OWNERS_SCHEMA_CHANGES, ...POSTS_SCHEMA_CHANGES]) {
           expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
           masterText = masterText.replace(before, after);
         }

@@ -17,7 +17,10 @@
  *
  * **What is written here is what PR 1c can reach**, plus the chat owners PR's
  * `chat` (a reply to a chat message another record owns, or that is not
- * this caller's to answer now); `post` arrives with the posts PR, `unlinked` with the shim's identity (PR 4),
+ * this caller's to answer now) and the posts PR's `post` with every other form a
+ * chat post can get ({@link postRefusal}: a post names no message and may be
+ * about an unowned document or about none, so it has forms of its own where
+ * the document forms would be false for it); `unlinked` arrives with the shim's identity (PR 4),
  * `unbound-child` with the records around the handle (PR 3b), and the `released` and `assigned`
  * causes of `lost` with the controls (PR 5). `default` and `not-present` need
  * a present Tandem's Claude, which arrives in PR 3b; their copy is here
@@ -177,6 +180,8 @@ export const CHANGE_CAUSE_FACTS: Readonly<Record<ChangeCause, string>> = Object.
   "a poll of yours claimed it": "a tandem_checkInbox poll of yours claimed it",
   "a chat reply of yours claimed it":
     "a tandem_reply of yours to a chat message about it claimed it",
+  "a chat post of yours claimed it":
+    "a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document's documentId claimed it",
   "you opened or created it":
     "an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours",
   "another session took it": "another session opened or created it and took it",
@@ -254,11 +259,13 @@ function body(input: NotDocOwnerInput): string {
       return `Tandem's Claude is turned off or stopped, so it holds no documents now. ${LEAVE}`;
     case "chat":
       return chatRefusalText("holder", input.holder);
+    case "post":
+      return postRefusalText({ reason: "post", holder: input.holder });
   }
 }
 
-/** Why a reply to a chat message was refused, for its copy (the chat owners PR, R5.6). */
-export type ChatRefusalWhy = "holder" | "busy" | "lost" | "local" | "not-present";
+/** Why a reply to a chat message was refused, for its copy (the chat owners PR, R5.6; `answered`, the posts PR, R2.2). */
+export type ChatRefusalWhy = "holder" | "busy" | "lost" | "local" | "not-present" | "answered";
 
 /**
  * The `chat` refusal's text (Ruling 15; ownership design §5.3): it refuses
@@ -281,9 +288,14 @@ function chatRefusalText(why: ChatRefusalWhy, holder: HolderView | null): string
     case "local":
       return "A local model answers this message, not Claude. Nothing was sent. Do not reply to it.";
     case "not-present":
-      return "Tandem's Claude is turned off or stopped, so it answers no chat now. Nothing was sent.";
+      return CHAT_NOT_PRESENT;
+    case "answered":
+      return `${holderPhrase(holder)} already answered this. Do not answer it again.`;
   }
 }
+
+const CHAT_NOT_PRESENT =
+  "Tandem's Claude is turned off or stopped, so it answers no chat now. Nothing was sent.";
 
 const CHAT_BUSY =
   "This message is not yours to answer right now: an operation on its document is still running. Nothing was sent. If a later tandem_checkInbox hands it to you, answer it then.";
@@ -291,7 +303,7 @@ const CHAT_BUSY =
 export interface ChatReplyRefusal {
   message: string;
   details: {
-    reason: "chat" | "not-present";
+    reason: "chat" | "not-present" | "answered";
     holder: HolderView | null;
     documentId?: string;
   };
@@ -303,7 +315,7 @@ export interface ChatReplyRefusal {
  * message; never an owner id and never the message's text.
  */
 export function chatReplyRefusal(input: {
-  reason: "chat" | "not-present";
+  reason: "chat" | "not-present" | "answered";
   holder: HolderView | null;
   why: ChatRefusalWhy;
   documentId?: string;
@@ -316,6 +328,111 @@ export function chatReplyRefusal(input: {
         ? { label: input.holder.label, displayKind: input.holder.displayKind }
         : null,
       ...(input.documentId !== undefined ? { documentId: input.documentId } : {}),
+    },
+  };
+}
+
+/** The reasons a chat post can be refused for (the posts PR, R1.7). */
+export type PostRefusalReason = "post" | "not-present" | "lost" | "held" | "claimed" | "default";
+
+/**
+ * The text of a refused chat post (the posts PR, R1.7; Ruling 15; design
+ * §5.3). Every form is true for a post: it names no message, says nothing
+ * false about who holds the document (a post can be about an unowned one, or
+ * about none), identifies no session beyond the holder's display kind and
+ * label, and never says the user chose. `held` and `lost` with a holder are
+ * the document forms, which are true for a post; the others are the post's
+ * own.
+ */
+function postRefusalText(input: PostRefusalInput): string {
+  const holder = holderPhrase(input.holder);
+  // Why this was judged a post at all, when the call did not look like one
+  // (plan review H1, M2): never a reason the model cannot see.
+  const why = input.unmatchedReplyTo
+    ? "The `replyTo` you passed names no user chat message, so this was treated as a message that answers nothing. "
+    : input.namedNotOpen
+      ? "The document you named is not open in Tandem, so this counts as a message that is not about a document. Do not open it just to post. "
+      : "";
+  return `${why}${postRefusalBody(input, holder)}`;
+}
+
+/** The outlet every post refusal ends with (plan review M4): the words are not lost. */
+const POST_OUTLET =
+  "Nothing was sent. If the user asked you in your own conversation to say this, tell them there.";
+
+function postRefusalBody(input: PostRefusalInput, holder: string): string {
+  switch (input.reason) {
+    case "post": {
+      const steps = input.callerHolds
+        ? "To answer a user's chat message, pass its id as `replyTo`; to post about a document you hold, pass its `documentId`."
+        : "To answer a user's chat message, pass its id as `replyTo`.";
+      return `${input.holder ? `${holder} answers chat that is not about a document. ` : ""}${steps} Do not open or take a document in order to post. ${POST_OUTLET}`;
+    }
+    case "not-present":
+      return "Tandem's Claude is turned off or stopped, so it cannot post to chat now. Nothing was sent. Do not retry.";
+    case "held":
+      return `${holder} is working on this document. ${ONLY_THE_USER} ${POST_OUTLET}`;
+    case "claimed":
+      return `${holder} picked this document up while Tandem's Claude was away, and answers its comments and chat. Do not take the document in order to post about it. ${POST_OUTLET}`;
+    case "default":
+      return `Tandem's Claude answers this document's comments and chat. Do not take the document in order to post about it. ${POST_OUTLET}`;
+    case "lost":
+      if (input.callerIsTandem) {
+        return input.holder
+          ? "A session the user is working with has this document now; leave it. Nothing was sent."
+          : "This document was taken from Tandem's Claude, and nobody holds it now. Nothing was sent.";
+      }
+      if (input.cause === "taken back") {
+        return `Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${POST_OUTLET}`;
+      }
+      return input.holder
+        ? `${holder} has this document now. ${ONLY_THE_USER} ${POST_OUTLET}`
+        : `You lost this document, and nobody holds it now. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${POST_OUTLET}`;
+  }
+}
+
+/** What a post's refusal is built from (the posts PR, R1.7). */
+export interface PostRefusalInput {
+  reason: PostRefusalReason;
+  holder: HolderView | null;
+  documentId?: string;
+  cause?: LossCause;
+  callerIsTandem?: boolean;
+  /** The call passed a `replyTo` that named no user message (so it was judged a post). */
+  unmatchedReplyTo?: boolean;
+  /** The call named a `documentId` that is not open (so it was judged doc-less). */
+  namedNotOpen?: boolean;
+  /** The caller holds at least one document. */
+  callerHolds?: boolean;
+}
+
+export interface PostRefusal {
+  message: string;
+  details: {
+    reason: PostRefusalReason;
+    holder: HolderView | null;
+    documentId?: string;
+    cause?: LossCause;
+  };
+}
+
+/**
+ * Build the `NOT_DOC_OWNER` refusal for a chat post (the posts PR, R1.7):
+ * `details.documentId` is the id the post named, absent when it named none;
+ * never an owner id and never the post's text. A post never sets
+ * `targetWasDefaulted` (one with no `documentId` is doc-less, never aimed at
+ * the active document).
+ */
+export function postRefusal(input: PostRefusalInput): PostRefusal {
+  return {
+    message: postRefusalText(input),
+    details: {
+      reason: input.reason,
+      holder: input.holder
+        ? { label: input.holder.label, displayKind: input.holder.displayKind }
+        : null,
+      ...(input.documentId !== undefined ? { documentId: input.documentId } : {}),
+      ...(input.cause !== undefined ? { cause: input.cause } : {}),
     },
   };
 }

@@ -436,7 +436,7 @@ describe("R1: the field", () => {
       '"gained": this session held the document after the change and not before; "lost": it held it before and not after',
     );
     expect(CAUSE_FIELD_DESCRIPTION).toBe(
-      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "a chat reply of yours claimed it": a tandem_reply of yours to a chat message about it claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it',
+      'What happened, as a past-tense fact. "your write claimed it": a write of yours claimed it; "a poll of yours claimed it": a tandem_checkInbox poll of yours claimed it; "a chat reply of yours claimed it": a tandem_reply of yours to a chat message about it claimed it; "a chat post of yours claimed it": a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document\'s documentId claimed it; "you opened or created it": an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours; "another session took it": another session opened or created it and took it; "its tab was closed": its tab was closed; "Tandem stopped counting this session as attached": Tandem stopped counting this session as attached, and this session stopped holding it',
     );
   });
 
@@ -488,7 +488,7 @@ describe("R1: the field", () => {
       expect(fact).not.toMatch(/\buser\b|\bchose\b/i);
       expect(fact).not.toMatch(/\b(holds|is held|is open|is closed|now)\b/i);
       expect(word).not.toMatch(
-        /^(claim|take|lapse|stale|poll-claim|reply-claim|user-open|take-back)$/,
+        /^(claim|take|lapse|stale|poll-claim|reply-claim|post-claim|user-open|take-back)$/,
       );
     }
     const lapse = CHANGE_CAUSE_FACTS[LAPSED];
@@ -542,6 +542,12 @@ describe("R1: the field", () => {
     );
     expect((await as(A, "tandem_reply", { text: "on it", replyTo: key })).error).toBe(false);
     expect(getDocOwner(r.id)?.ownerId).toBe(A);
+    // a post's claim (the posts PR, R1.8): A posts naming an unowned document
+    const q = mkDoc("q");
+    expect((await as(A, "tandem_reply", { text: "a note about q", documentId: q.id })).error).toBe(
+      false,
+    );
+    expect(getDocOwner(q.id)?.ownerId).toBe(A);
     // a close
     await closeByRoute(w.id);
     await rawPoll(A);

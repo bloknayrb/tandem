@@ -200,14 +200,26 @@ export class DeliveryRegistry {
    * The cursor carrying `token` came back, so the response that minted it
    * arrived: mark what it handed out `received`. Unknown or spent tokens do
    * nothing; a token is spent on first use.
+   *
+   * Returns copies of the entries it marked (`base`, `seq`): the hand-out's entries still live now (one
+   * retired since the hand-out, by a re-owe for instance, is not among them),
+   * in hand-out order; empty for an unknown or spent token. The posts PR
+   * (#2358, R3.8): with ownership on, the inbox settles a confirmed hand-out's
+   * batch from this list at once, so the spend and the settling happen in one
+   * step and a poll that fails afterwards cannot lose it. While ownership is
+   * off the caller ignores it.
    */
-  confirmHandOut(token: number): void {
+  confirmHandOut(token: number): ReadonlyArray<{ readonly base: string; readonly seq: number }> {
     const seqs = this.#spend(token);
-    if (!seqs) return;
+    if (!seqs) return [];
+    const marked: Array<{ base: string; seq: number }> = [];
     for (const seq of seqs) {
       const entry = this.#bySeq.get(seq);
-      if (entry) entry.received = true;
+      if (!entry) continue;
+      entry.received = true;
+      marked.push({ base: entry.base, seq: entry.seq });
     }
+    return marked;
   }
 
   lookup(kind: EntryKind, base: string, editedAt: number): RegistryEntry | undefined {

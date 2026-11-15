@@ -22,6 +22,7 @@ import {
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback, resolveBindHostEnv } from "./bind-check.js";
 import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
+import { setChatClientWritesUndone } from "./chat-client-writes.js";
 import { setChatRowsDeletedListener } from "./chat-row-deletions.js";
 import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
@@ -90,6 +91,7 @@ import {
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
   setOwnershipTransportMode,
+  undoClientChatWrites,
 } from "./sessions/ownership.js";
 import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
 import { installSidecarPipeGuard } from "./sidecar-pipe-guard.js";
@@ -852,6 +854,10 @@ async function main() {
   // decision calls the first, and the listener returns at the flag.
   setOwnershipChatSide(ownershipChatSide);
   setChatRowsDeletedListener(forgetChatMessageOwners);
+  // The posts PR (R4.5): whether a client connection's changes to the chat
+  // map are undone, which is the ownership flag, read through this seam so
+  // the CTRL chat observer never imports it.
+  setChatClientWritesUndone(undoClientChatWrites);
 
   if (transportMode === "http") {
     // Ownership (#2358, ADR-054): this process serves HTTP, so a tool call that
