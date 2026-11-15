@@ -2399,22 +2399,30 @@ export const ownershipChatSide = Object.freeze({
     reOweChat(keys);
   },
   /**
-   * Step 1 of `settles` (the posts PR, R3.4): the reply row under `rowKey`
-   * was just accepted. Its target's earlier messages (registry sequence AND
-   * timestamp at or below the target's, master's `answeredBy` conjunction)
-   * that some model provably received (`receivedChat`) and that `owns`
-   * accepts are added to the row's `settles`, in one `withMcp` write. A
-   * target with no registry entry settles only itself. Returns the keys
-   * added.
+   * Step 1 of `settles` (the posts PR, R3.4), first half: the reply row
+   * under `rowKey` was just accepted; its target's earlier messages
+   * (registry sequence AND timestamp at or below the target's, master's
+   * `answeredBy` conjunction) that some model provably received
+   * (`receivedChat`). A target with no registry entry settles only itself.
+   * Writes nothing; the caller filters by scope and writes with
+   * {@link ownershipChatSide.addSettles}.
    */
-  settleOnReply(rowKey: string, owns: (key: string) => boolean): string[] {
+  settleCandidates(rowKey: string): string[] {
     const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
     const bound = settleBound(chatMap, rowKey);
     if (!bound) return [];
-    const earlier = receivedChat(chatMap)
+    return receivedChat(chatMap)
       .filter((h) => h.key !== bound.target && h.seq <= bound.seq && h.timestamp <= bound.timestamp)
       .map((h) => h.key);
-    return addSettles(chatMap, new Map([[rowKey, earlier]]), owns);
+  },
+  /**
+   * Step 1, second half: add `keys` (still user rows, not local-period chat,
+   * not already listed) to the row's `settles`, in one `withMcp` write.
+   * Returns the keys added.
+   */
+  addSettles(rowKey: string, keys: readonly string[]): string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    return addSettles(chatMap, new Map([[rowKey, keys]]), () => true);
   },
 });
 

@@ -439,11 +439,13 @@ export interface OwnershipChatSide {
    */
   reOwe(keys: readonly string[]): void;
   /**
-   * Step 1 of `settles` (the posts PR, R3.4): add to the reply row under
-   * `rowKey` the earlier messages of its target's batch already marked
-   * received that `owns` accepts. Returns the keys added.
+   * Step 1 of `settles` (the posts PR, R3.4), first half: the earlier
+   * messages of the reply row's batch already marked received. Writes
+   * nothing.
    */
-  settleOnReply(rowKey: string, owns: (key: string) => boolean): string[];
+  settleCandidates(rowKey: string): string[];
+  /** Step 1, second half: add `keys` to the row's `settles`. Returns the keys added. */
+  addSettles(rowKey: string, keys: readonly string[]): string[];
 }
 
 const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
@@ -451,7 +453,8 @@ const NO_CHAT_SIDE: OwnershipChatSide = Object.freeze({
   messagesOn: () => [],
   message: () => undefined,
   reOwe: () => {},
-  settleOnReply: () => [],
+  settleCandidates: () => [],
+  addSettles: () => [],
 });
 
 let transportMode: "http" | "stdio" | undefined;
@@ -461,7 +464,9 @@ let waitingProbe: (documentId: string, ownerId: string) => boolean = () => false
 let seqSource: () => number = () => 0;
 let inboxHandover: (documentId: string) => void = () => {};
 let chatSide: OwnershipChatSide = NO_CHAT_SIDE;
-let chatFaultForTests: ((at: "re-owe" | "close" | "apply" | "commit") => void) | undefined;
+let chatFaultForTests:
+  | ((at: "re-owe" | "close" | "apply" | "commit" | "settles") => void)
+  | undefined;
 let wakeObserverForTests: ((cause: WakeCause) => void) | undefined;
 let compositeObserver: ((step: CompositeStep, documentId: string) => void) | undefined;
 let noticeFaultForTests: ((at: "change" | "close", documentId: string) => void) | undefined;
@@ -2347,21 +2352,28 @@ function replyGate(
         total("replyApply", undefined, () => {
           chatFaultForTests?.("apply");
           // A final reply (never an acknowledgement, R2.3): step 1 of
-          // `settles` adds the batch's received earlier messages the caller
+          // `settles` takes the batch's received earlier messages the caller
           // owns at the reply's acceptance, judged BEFORE this reply's own
           // claim or owner write, so a claim never brings into scope a message
-          // only another session received; each takes the caller as its
-          // answerer if it has none (R3.4).
-          const settled = acknowledging
+          // only another session received (R3.4). Only computed here: the
+          // claim or owner, the answerer and the row's writer are recorded
+          // first, and the `settles` write runs in its own guard after them,
+          // so a failed write cannot skip them (review round 1, item 12).
+          const batch = acknowledging
             ? []
-            : chatSide.settleOnReply(rowKey, (k) => ownsMessage(k, callerId));
+            : chatSide.settleCandidates(rowKey).filter((k) => ownsMessage(k, callerId));
           effect();
           if (acknowledging) return;
           // The caller answers the message if nobody has, and is remembered
           // as the row's writer (step 2).
           setChatAnswerer(key, callerId);
           if (records.has(callerId)) replierByRow.set(rowKey, callerId);
-          for (const k of settled) setChatAnswerer(k, callerId);
+          if (batch.length === 0) return;
+          total("replySettles", undefined, () => {
+            chatFaultForTests?.("settles");
+            // Each added message takes the caller as its answerer if it has none.
+            for (const k of chatSide.addSettles(rowKey, batch)) setChatAnswerer(k, callerId);
+          });
         }),
     };
   // 6. The owner. A carried-over message first (R0.1): it has none and gets
@@ -2772,11 +2784,12 @@ export function recordHoldsStateCallsForTests(): number {
 
 /**
  * Make the chat half of a handover (`"re-owe"`), of a close (`"close"`), a
- * reply's apply (`"apply"`) or a poll's chat commit (`"commit"`, inside
- * `commitChat`) throw; undefined clears it.
+ * reply's apply (`"apply"`), a poll's chat commit (`"commit"`, inside
+ * `commitChat`) or a reply's step 1 `settles` write (`"settles"`) throw;
+ * undefined clears it.
  */
 export function setChatOwnershipFaultForTests(
-  fault: ((at: "re-owe" | "close" | "apply" | "commit") => void) | undefined,
+  fault: ((at: "re-owe" | "close" | "apply" | "commit" | "settles") => void) | undefined,
 ): void {
   chatFaultForTests = fault;
 }

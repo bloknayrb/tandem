@@ -559,6 +559,19 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     }
   });
 
+  it("the carried-over capture and the pending drop run after restoreCtrlDoc, inside restoreCtrlSession (review round 1, item 1)", () => {
+    const service = SRC_FILES.get("src/server/mcp/document-service.ts") as string;
+    const fn = service.slice(
+      service.indexOf("export async function restoreCtrlSession("),
+      service.indexOf("\n}\n", service.indexOf("export async function restoreCtrlSession(")),
+    );
+    const restored = fn.indexOf("restoreCtrlDoc(ctrlDoc, saved);");
+    expect(restored).toBeGreaterThan(-1);
+    expect(fn.indexOf("captureCarriedOverChat(")).toBeGreaterThan(restored);
+    expect(fn.indexOf("dropPendingUpdates(ctrlDoc)")).toBeGreaterThan(restored);
+    expect(service.match(/captureCarriedOverChat\(/g)).toHaveLength(1);
+  });
+
   it("each chat-side delete path tells the seam, and neither imports the ownership module", () => {
     const observer = SRC_FILES.get("src/server/events/observers/ctrl-chat.ts") as string;
     const manager = SRC_FILES.get("src/server/session/manager.ts") as string;

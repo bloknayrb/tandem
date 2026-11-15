@@ -27,6 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import { z } from "zod";
 import { setChatRowsDeletedListener } from "../../src/server/chat-row-deletions.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -80,7 +81,7 @@ import {
   TANDEM_OWNER_ID,
   type TransportViewEntry,
 } from "../../src/server/sessions/ownership.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal, withMcp } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
@@ -371,15 +372,22 @@ async function buildWorld(flag: "1" | "" = "1"): Promise<void> {
 }
 
 /**
- * A simulated restart with the flag on (R0.1's fixture): the CTRL session is
- * saved, the delivery registry and the ownership module are reset, the
- * records come back, and `restoreCtrlSession` runs as `main()` runs it. The
- * rows stay in the live CTRL doc and the restore merges the same rows.
+ * A simulated restart (R0.1's and R3.6's fixture): the CTRL session is saved,
+ * the live CTRL doc is DROPPED (review round 1, item 1: before, the rows
+ * stayed in the live doc and the restore merged rows that were never lost),
+ * the delivery registry and the ownership module are reset, the records come
+ * back, and `restoreCtrlSession` restores into a fresh CTRL doc as `main()`
+ * does at boot. Flag on unless `flag` says otherwise.
  */
-async function restartFlagOn(): Promise<void> {
+async function restart(flag: "1" | "" = "1"): Promise<void> {
   await saveCtrlSession(ctrl());
   await close?.();
-  vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  const before = ctrl();
+  removeDocument(CTRL_ROOM);
+  expect(ctrl(), "a fresh CTRL doc").not.toBe(before);
+  expect(chatMap().size, "nothing survives but the file").toBe(0);
+  if (flag === "1") vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  else vi.stubEnv("TANDEM_OWNERSHIP", "");
   resetInbox();
   resetOwnershipForTests();
   view = [];
@@ -388,9 +396,11 @@ async function restartFlagOn(): Promise<void> {
   register(B);
   register(C);
   wireSeams();
+  setCtrlMode("tandem");
   await restoreCtrlSession();
   await startTools();
 }
+const restartFlagOn = () => restart("1");
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-posts-"));
@@ -521,6 +531,28 @@ describe("R3: the handled rule, `settles` and the sweep", () => {
     expect(finalReplyTo(ma2).settles, "B's confirmation touches no row of A's").toBeUndefined();
     await a.poll();
     expect(finalReplyTo(ma2).settles).toEqual([ma1]);
+  });
+
+  it("step 2 adds only to the confirming record's own rows: a no-caller final reply in the same hand-out gets no settles (review round 1, item 2)", async () => {
+    const [m1, m2, m3] = [userChat(key("m1")), userChat(key("m2")), userChat(key("m3"))];
+    const b = reader(B);
+    expect(chatIds(await b.poll())).toEqual([m1, m2, m3].sort());
+    expect((await reply(B, m3)).error).toBe(false);
+    // A server-origin final reply with no replier (as /api/channel-reply
+    // writes one) naming M2, which is in B's unconfirmed hand-out.
+    withMcp(ctrl(), () =>
+      chatMap().set(key("shim"), {
+        id: key("shim"),
+        author: "claude",
+        text: "from the shim",
+        timestamp: clock++,
+        read: true,
+        replyTo: m2,
+      }),
+    );
+    await b.poll();
+    expect(finalReplyTo(m3).settles).toEqual([m1, m2].sort());
+    expect(row(key("shim"))?.settles, "a row with no replier is never settled").toBeUndefined();
   });
 
   it("the sweep is gone: A's reply to a later message does not settle the message B received; after B lapses a fresh reader is handed it", async () => {
@@ -1257,6 +1289,48 @@ describe("R0.7: the throw sites and the failed re-owe's retry", () => {
     expect(messageOwner(m)).toBeUndefined();
     expect(getOwnerRecord(A)).toBeUndefined();
     expect(ownershipSnapshotForTests().timers).toBe(0);
+  });
+});
+
+describe("dark: the restore (review round 1, item 3)", () => {
+  /**
+   * A chat row that is read and unhandled, and CTRL data left pending (a
+   * forged struct aimed at the server's next write, which `encodeStateAsUpdate`
+   * carries into the session file).
+   */
+  function readRowAndPending(): string {
+    const m = userChat(key("read"));
+    withInternal(ctrl(), () => chatMap().set(m, { ...(row(m) as ChatMessage), read: true }));
+    const S = ctrl();
+    const F = new Y.Doc();
+    Y.applyUpdate(F, Y.encodeStateAsUpdate(S));
+    F.clientID = S.clientID;
+    F.getMap(Y_MAP_CHAT).set(key("next"), { placeholder: true });
+    const C = new Y.Doc();
+    Y.applyUpdate(C, Y.encodeStateAsUpdate(F));
+    C.getMap(Y_MAP_CHAT).set(key("next"), { author: "claude", replyTo: m, text: "" });
+    Y.applyUpdate(S, Y.encodeStateAsUpdate(C, Y.encodeStateVector(F)));
+    expect((S.store as { pendingStructs: unknown }).pendingStructs).not.toBeNull();
+    return m;
+  }
+  const pending = () => (ctrl().store as { pendingStructs: unknown }).pendingStructs;
+
+  it("flag off: no carried-over set is taken and the restored pending data is left as master leaves it", async () => {
+    await close?.();
+    await buildWorld("");
+    readRowAndPending();
+    await restart("");
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([]);
+    expect(pending(), "master's restore keeps it").not.toBeNull();
+  });
+
+  it("the flag-on twin: the read row is carried over and the pending data is dropped", async () => {
+    await close?.();
+    await buildWorld("");
+    const m = readRowAndPending();
+    await restart("1");
+    expect(ownershipSnapshotForTests().carriedOver).toEqual([m]);
+    expect(pending()).toBeNull();
   });
 });
 

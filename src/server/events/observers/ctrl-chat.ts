@@ -51,9 +51,15 @@ export function makeCtrlChatObserver(deps: {
         ? planChatUndo(chatMap, event)
         : undefined;
     const deleted: string[] = [];
+    // A row a client added that the undo deletes at once (not a user row) is
+    // never classed, so a tab cannot fill #2419's deleted-class ledger with
+    // keys of its own and evict real ones (review round 1, item 12); its
+    // delete then finds no class and notes nothing.
+    const removing = new Set(undo?.removed ?? []);
     for (const [key, change] of event.changes.keys) {
-      if (change.action === "add") classChatRowAdded(key);
-      else if (change.action === "delete") {
+      if (change.action === "add") {
+        if (!removing.has(key)) classChatRowAdded(key);
+      } else if (change.action === "delete") {
         if (undo?.restored.has(key)) continue;
         noteChatRowDeleted(key);
         deleted.push(key);
