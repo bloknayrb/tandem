@@ -68,6 +68,7 @@ import {
   registerAwarenessTools,
   resetInbox,
   setInboxNoticeFaultForTests,
+  setInboxResponseCorruptorForTests,
 } from "../../src/server/mcp/awareness.js";
 import { registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -89,9 +90,11 @@ import {
   noteTransportChanged,
   noteTransportRegistered,
   ownershipSnapshotForTests,
+  inboxScopeOf as realScopeOf,
   resetOwnershipForTests,
   setDocOwner,
   setInboxClaimCheckForTests,
+  setInboxScopeReadForTests,
   setOwnershipChatSide,
   setOwnershipInboxHandover,
   setOwnershipSeqSource,
@@ -371,6 +374,8 @@ afterEach(async () => {
   storeGate.hold = undefined;
   setInboxClaimCheckForTests(undefined);
   setInboxNoticeFaultForTests(undefined);
+  setInboxResponseCorruptorForTests(undefined);
+  setInboxScopeReadForTests(undefined);
   setChatRowsDeletedListener(undefined);
   setChatClientWritesUndone(undefined);
   setDeliveryRoundSeam(undefined);
@@ -525,6 +530,7 @@ describe("R2.1: a document's round", () => {
   it("an unowned d3 with a live comment: A's poll claims d3 and closes its round; d2's stays", async () => {
     const { d2, d3 } = worldOfRounds();
     userComment(d3.ydoc, "c3");
+    expect(rounds(), "d3's round was open first").toContain(docRound(d3));
     await pollAs(A, { documentId: d3.id });
     expect(getDocOwner(d3.id)?.ownerId).toBe(A);
     expect(rounds()).toEqual([docRound(d2), docRound("" + worldDoc("d1"))].sort());
@@ -538,6 +544,7 @@ describe("R2.1: a document's round", () => {
     it(`an unowned d3 whose forwarded item was ${what} before any poll: A's poll closes d3's round and claims nothing; d2's stays`, async () => {
       const { d2, d3 } = worldOfRounds();
       userComment(d3.ydoc, "c3");
+      expect(rounds(), "d3's round was open first").toContain(docRound(d3));
       rewrite(d3.ydoc, "c3", gone);
       vi.spyOn(console, "error").mockImplementation(() => {});
       await reader(A).poll(d3.id);
@@ -552,6 +559,60 @@ describe("R2.1: a document's round", () => {
     const inbox = await pollAs(A);
     expect(inbox.ownership?.notYours).toContain(d2.id);
     expect(rounds()).toEqual([docRound(d2)]);
+  });
+
+  it("a document whose scope read fails (\"unread\") keeps its round, while d4's (B holds too) is closed by that same poll of B's", async () => {
+    const { d2 } = worldOfRounds();
+    const d4 = mkDoc("d4");
+    setDocOwner(d4.id, { ownerId: B, kind: "opened" }, "take", B);
+    userComment(d4.ydoc, "c4");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setInboxScopeReadForTests((id, caller, now) => {
+      if (id === d2.id) throw new Error("scope read failed");
+      return realScopeOf(id, caller, now);
+    });
+    await pollAs(B);
+    setInboxScopeReadForTests(undefined);
+    expect(rounds()).toContain(docRound(d2));
+    expect(rounds()).not.toContain(docRound(d4));
+  });
+
+  it("a poll that fails its output validation closes nothing, not even the key-less round", async () => {
+    const { d1, d2 } = worldOfRounds();
+    const m = userChat(key("m"), { documentId: d1.id });
+    emitModeReleaseWake();
+    const before = rounds();
+    expect(before).toEqual([docRound(d1), docRound(d2), msgRound(m), "keyless:"].sort());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setInboxResponseCorruptorForTests(() => ({ broken: true }));
+    callingAs = A;
+    const result = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+    setInboxResponseCorruptorForTests(undefined);
+    expect(parseResult(result).error).toBe(true);
+    expect(rounds()).toEqual(before);
+  });
+
+  it("a document A held when its poll began and lost at commit closes its round (read, nothing of A's put back); d2's stays", async () => {
+    const { d1, d2 } = worldOfRounds();
+    expect(rounds()).toContain(docRound(d1));
+    // A's same poll also claims an unowned d3; while that claim is checked at
+    // commit, C takes d1 from A (a change of ownership inside the commit).
+    const d3 = mkDoc("d3");
+    userComment(d3.ydoc, "c3");
+    let taken = false;
+    setInboxClaimCheckForTests((check, id) => {
+      if (!taken && check === "claimable" && id === d3.id) {
+        taken = true;
+        setDocOwner(d1.id, { ownerId: C, kind: "opened" }, "take", C);
+      }
+      return true;
+    });
+    const inbox = await pollAs(A);
+    expect(taken, "d1 changed hands inside A's commit").toBe(true);
+    expect(inbox.userActions.map((x) => x.id)).toContain("c1");
+    expect(getDocOwner(d1.id)?.ownerId).toBe(C);
+    expect(rounds()).not.toContain(docRound(d1));
+    expect(rounds()).toContain(docRound(d2));
   });
 
   it("a pass over d2 that throws holds d2's round, while d4's (B holds too) is closed by that same poll of B's", async () => {
@@ -702,6 +763,33 @@ describe("R2.2: a message's round", () => {
     expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
   });
 
+  it("A's tandem_reply naming B's message is refused at the ownership stage: m2's round and d2's stay open", async () => {
+    const { d2, m2 } = bRounds();
+    expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
+    const refused = await reply(A, m2);
+    expect(refused.error).toBe(true);
+    expect(refused.code).toBe("NOT_DOC_OWNER");
+    expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
+    // Also as an acknowledgement.
+    expect((await reply(A, m2, { inProgress: true })).error).toBe(true);
+    expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
+  });
+
+  it("the licence refuses tandem_reply (at the ownership stage, and at the append): nothing closes", async () => {
+    const { d2, m2 } = bRounds();
+    const m = userChat(key("m"));
+    licence.refuse = true;
+    // B's message: the gate refuses at the ownership stage and answers the licence.
+    const viaGate = await reply(A, m2);
+    expect(viaGate.error).toBe(true);
+    expect(viaGate.code).toBe("LICENSE_REQUIRED");
+    // A message A may take: the gate accepts, the append refuses.
+    const viaAppend = await reply(A, m);
+    expect(viaAppend.error).toBe(true);
+    expect(viaAppend.code).toBe("LICENSE_REQUIRED");
+    expect(rounds()).toEqual([docRound(d2), msgRound(m), msgRound(m2)].sort());
+  });
+
   it("a reply the licence refuses (/api/channel-reply) closes nothing", () => {
     const { d2, m2 } = bRounds();
     const m = userChat(key("m"));
@@ -723,6 +811,16 @@ describe("R2.2: a message's round", () => {
     const m = userChat(key("m"));
     const inbox = await pollAs(A);
     expect(inbox.chatMessages.map((x) => x.id)).toContain(m);
+    expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
+  });
+
+  it("(cursor-less) a chat row admit refuses is closed by the poll that refused it; d2's and m2's stay", async () => {
+    const { d2, m2 } = bRounds();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const bad = userChat(key("bad"), { extra: { text: 42 } });
+    expect(rounds()).toContain(msgRound(bad));
+    const inbox = await pollAs(A);
+    expect(inbox.summary).toContain("1 chat message could not be returned");
     expect(rounds()).toEqual([docRound(d2), msgRound(m2)].sort());
   });
 
@@ -919,9 +1017,21 @@ describe("R3: what drops a round without a poll", () => {
   it("Clear chat drops the cleared message's round; a round on a document survives the clear", async () => {
     const { d2 } = worldOfRounds();
     const m1 = userChat(key("m1"));
+    expect(rounds(), "m1's round was open first").toContain(msgRound(m1));
     await clearCtrlChatDurably(ctrl());
     expect(rounds()).not.toContain(msgRound(m1));
     expect(rounds()).toContain(docRound(d2));
+  });
+
+  it("a message pushed while a Clear chat awaits its persist keeps its round; the cleared one's is dropped", async () => {
+    const m1 = userChat(key("m1"));
+    const clearing = clearCtrlChatDurably(ctrl());
+    // The clear captured its ids synchronously; this one arrives during its await.
+    const m2 = userChat(key("m2"));
+    expect(rounds()).toEqual([msgRound(m1), msgRound(m2)].sort());
+    await clearing;
+    expect(chatMap().has(m2), "the late message survives the clear").toBe(true);
+    expect(rounds()).toEqual([msgRound(m2)]);
   });
 
   it("a client deletes a row and #2432 undoes it: its round stays", () => {
@@ -952,17 +1062,48 @@ describe("R4.1: abandonment", () => {
   it("every consumer detaches: consumer-detached; A's poll closes d1's with no latency, d2's stays, still detached; re-attach, B's poll: d2's interval", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const t0 = Date.now();
-    const { d2 } = worldOfRounds();
+    const d1 = mkDoc("d1");
+    setDocOwner(d1.id, { ownerId: A, kind: "opened" }, "take", A);
+    userComment(d1.ydoc, "c1");
+    vi.setSystemTime(t0 + 300);
+    const d2 = mkDoc("d2");
+    setDocOwner(d2.id, { ownerId: B, kind: "opened" }, "take", B);
+    userComment(d2.ydoc, "c2");
     unsubscribe(extCb);
-    expect(health()).toMatchObject({ state: "consumer-detached", waitingMs: null });
+    vi.setSystemTime(t0 + 400);
+    expect(getDeliveryState(Date.now(), 0)).toEqual({
+      pollCount: 0,
+      forwardCount: 2,
+      state: "consumer-detached",
+      latencyMs: null,
+      waitingMs: null,
+      sincePollMs: null,
+    });
     vi.setSystemTime(t0 + 500);
     await pollAs(A);
     expect(rounds()).toEqual([docRound(d2)]);
-    expect(health().state).toBe("consumer-detached");
+    // Read with a consumer count of 1: still detached by the abandoned latch,
+    // not merely because nothing is attached.
+    expect(getDeliveryState(Date.now(), 1)).toEqual({
+      pollCount: 1,
+      forwardCount: 2,
+      state: "consumer-detached",
+      latencyMs: null,
+      waitingMs: null,
+      sincePollMs: 0,
+    });
     subscribe(extCb, "external");
     vi.setSystemTime(t0 + 2_000);
     await pollAs(B);
-    expect(health()).toMatchObject({ state: "polled", latencyMs: 2_000 });
+    // d2's interval (forwarded at t0 + 300), not d1's.
+    expect(getDeliveryState(Date.now(), 1)).toEqual({
+      pollCount: 2,
+      forwardCount: 2,
+      state: "polled",
+      latencyMs: 1_700,
+      waitingMs: null,
+      sincePollMs: 0,
+    });
   });
 
   it("every consumer detaches, then one re-attaches: both rounds open on their first clocks", () => {
@@ -973,6 +1114,7 @@ describe("R4.1: abandonment", () => {
     subscribe(extCb, "external");
     vi.setSystemTime(t0 + 3_000);
     expect(health()).toMatchObject({ state: "awaiting-poll", waitingMs: 3_000 });
+    expect(keyedDeliveryRoundsForTests()).toHaveLength(2);
     expect(keyedDeliveryRoundsForTests().every((r) => r.forwardedAt === t0)).toBe(true);
   });
 });

@@ -83,7 +83,9 @@ import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
-/** Set to make the next `resolveDeliveryRound` throw: a throw after the drain point. */
+/** Set to make the next `resolveDeliveryRound` throw: a throw after the drain point. Since the
+ * delivery-rounds PR the round's close is the poll's last step, after the
+ * notice loop, so this is a throw after the notice step too. */
 const roundThrows = vi.hoisted(() => ({
   next: false,
   /** Runs just before the throw: notices that arrive while the poll is still running. */

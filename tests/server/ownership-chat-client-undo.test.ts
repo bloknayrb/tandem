@@ -714,6 +714,14 @@ describe("R4.6 and R4.2: classing and pushes (review round 1, item 8)", () => {
     return oldest;
   }
 
+  it("R0.2's positive control: at the cap, one more server delete of a classed row does evict the oldest class", async () => {
+    const oldest = await fillDeletedClassLedger();
+    const one = key("one-more");
+    withInternal(getOrCreateDocument(CTRL_ROOM), () => serverChat().set(one, userRow(one)));
+    withInternal(getOrCreateDocument(CTRL_ROOM), () => serverChat().delete(one));
+    expect(isLocalPeriodChat(oldest), "the oldest class was evicted").toBe(false);
+  });
+
   it("R0.2(a): at the cap, a client delete that is undone evicts no deleted row's class", async () => {
     const oldest = await fillDeletedClassLedger();
     await seed({ [M()]: userRow(M()) });

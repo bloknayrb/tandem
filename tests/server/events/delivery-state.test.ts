@@ -615,6 +615,10 @@ describe("delivery-state, keyed (ownership on)", () => {
     );
   };
   const rounds = () => keyedDeliveryRoundsForTests().map((r) => `${r.kind}:${r.id ?? ""}`);
+  const deliveryItemOf = (event: TandemEvent) =>
+    event.documentId && event.type === "annotation:created"
+      ? { documentId: event.documentId, itemId: event.payload.annotationId }
+      : undefined;
 
   it("R1.1/R1.2/R1.5: each forward opens the round its key says; a chat row is keyed by its map key, not its id", () => {
     forward(T0, annotation("d1"));
@@ -746,6 +750,35 @@ describe("delivery-state, keyed (ownership on)", () => {
       ["forwardCount", "latencyMs", "pollCount", "sincePollMs", "state", "waitingMs"].sort(),
     );
     expect(JSON.stringify(state)).not.toMatch(/d1|secret-key/);
+  });
+
+  it("one round, keyed and master: every field the same at every step", () => {
+    const steps = (keyedMode: boolean) => {
+      resetDeliveryStateForTests();
+      setDeliveryRoundSeam(
+        keyedMode ? { keyed: () => true, isDocumentOpen: (id) => open.has(id) } : undefined,
+      );
+      const out: DeliveryState[] = [getDeliveryState(T0, 1)];
+      const event = annotation("d1");
+      recordWakeForward(T0, deliveryItemOf(event), deliveryRoundKeyOf(event));
+      out.push(getDeliveryState(T0 + 50, 1), getDeliveryState(T0 + 50, 0));
+      noteExternalConsumersGone();
+      out.push(getDeliveryState(T0 + 60, 1));
+      noteExternalConsumerAttached();
+      out.push(getDeliveryState(T0 + 70, 1));
+      recordInboxPoll(T0 + 100);
+      resolveDeliveryRound(
+        T0 + 100,
+        { documents: new Set(), items: new Set() },
+        { documents: new Set(["d1"]), messages: new Set() },
+      );
+      out.push(getDeliveryState(T0 + 150, 1));
+      return out;
+    };
+    const master = steps(false);
+    const keyedOut = steps(true);
+    expect(keyedOut).toEqual(master);
+    expect(master.at(-1)).toMatchObject({ state: "polled", latencyMs: 100 });
   });
 
   it("the dark guard: unwired or answering false, no keyed state is kept", () => {

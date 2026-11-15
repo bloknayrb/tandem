@@ -90,7 +90,9 @@ import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { asTestCaller } from "../helpers/ownership-caller.js";
 import { makeRes } from "../helpers/route-recorder.js";
 
-/** Set to make the next `resolveDeliveryRound` throw: a throw after the chat commit. */
+/** Set to make the next `resolveDeliveryRound` throw: a throw after the chat commit. Since the
+ * delivery-rounds PR the round's close is the poll's last step, after the
+ * notice loop, so this is a throw after the notice step too. */
 const roundThrows = vi.hoisted(() => ({ next: false }));
 vi.mock("../../src/server/events/delivery-state.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../src/server/events/delivery-state.js")>();

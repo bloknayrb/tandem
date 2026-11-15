@@ -135,12 +135,24 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   {
     gap:
       "Flag on, a message's delivery round that no poll will ever hand and no reply will name " +
-      "stays open until Clear chat, so the stall banner reports it: a user row a client deleted " +
-      "whose undo failed; a client-added user row under a key that a Claude reply already " +
-      "handles; a carried-over key re-added after such a delete. Each needs client-written rows. " +
-      "Left open for Bryan by the delivery-rounds PR (accept it, or have the inbox's own " +
-      "'never handed' answer key such a forward as no round).",
-    closedBy: "Bryan's decision on the delivery-rounds PR.",
+      "stays open, so the stall banner reports it: until a restart for a user row a client " +
+      "deleted whose undo failed (the row is gone, so Clear chat, which drops the rounds of the " +
+      "rows it finds, never drops it); until Clear chat for a client-added user row under a key " +
+      "that a Claude reply already handles, and for a carried-over key re-added after such a " +
+      "delete. Each needs client-written rows. Kept open with no fix in the delivery-rounds PR " +
+      "(the reviewing session's ruling); Bryan decides whether to accept it or have the inbox's " +
+      "'never handed' answer key such a forward as no round.",
+    closedBy: "Bryan's decision, before the flip.",
+  },
+  {
+    gap:
+      "Flag on, the stall banner's wording ('Your message is queued — it'll be seen the next " +
+      "time Claude checks in') and its lack of a dismiss have not been reviewed against keyed " +
+      "rounds: with two sessions, a session idle at its prompt that holds a document keeps the " +
+      "banner up while another session polls and is never handed that document's item.",
+    closedBy:
+      "Bryan's review of the banner against keyed rounds, in PR 3b (its start-or-wake changes " +
+      "when the banner shows).",
   },
   {
     gap:

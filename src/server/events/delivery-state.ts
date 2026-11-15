@@ -185,7 +185,10 @@ const messageRoundKey = (chatKey: string) => `m\u0000${chatKey}` as DeliveryRoun
  * it was open (R4.1). Bounded by one key-less round, one per open document
  * (a close drops it, and a forward on a document that is not open keys none)
  * and one per chat row pushed (a poll or a reply closes it, Clear chat drops
- * it). Empty while not keyed.
+ * it). The exceptions are client-written rows no poll will hand (a flip-blocker
+ * row): a row a client deleted whose undo failed is gone from the live map, so
+ * Clear chat never finds it and its round stays until a restart. Empty while
+ * not keyed.
  */
 const keyedRounds = new Map<DeliveryRoundKey, { forwardedAt: number; abandoned: boolean }>();
 /**
@@ -749,7 +752,7 @@ export function getDeliveryState(now: number, externalConsumerCount: number): De
 /**
  * `getDeliveryState` while rounds are keyed (R2.5): one aggregate over every
  * open round, in master's fields and types. `awaiting-poll` while any round is
- * open, `consumer-detached` while none is attached or every round was
+ * open, `consumer-detached` while none is attached or any open round was
  * abandoned, `waitingMs` the age of the oldest open round, `latencyMs` the
  * last closing event's (null while any round is open, or suspended). Never a
  * document id, a message key or a per-key breakdown.

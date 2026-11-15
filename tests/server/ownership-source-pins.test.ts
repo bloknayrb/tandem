@@ -66,6 +66,42 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     );
   });
 
+  it("exactly one call in index.ts, an unconditional statement of main() in the same block as setOwnershipSeqSource (review round 1)", () => {
+    // Every call site, whatever its arguments: a second one (say
+    // `setDeliveryRoundSeam(undefined)`) would unwire the first.
+    expect(src.match(/\bsetDeliveryRoundSeam\s*\(/g)).toHaveLength(1);
+    const lines = src.split("\n");
+    const at = lines.findIndex((l) => /\bsetDeliveryRoundSeam\s*\(/.test(l));
+    // Two spaces and nothing before the call: not wrapped in a condition on
+    // its own line.
+    expect(lines[at]).toBe("  setDeliveryRoundSeam({");
+    // Between `setOwnershipSeqSource` (pinned as a statement of main()) and
+    // this call every brace closes, so the call is in the same block, not
+    // inside a branch or a function opened between them.
+    const from = lines.findIndex((l) => l.includes("setOwnershipSeqSource(() =>"));
+    expect(from).toBeGreaterThan(-1);
+    expect(from).toBeLessThan(at);
+    const between = lines
+      .slice(from, at)
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .join("\n");
+    let depth = 0;
+    for (const ch of between) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("no src file imports a round seam, drop or close under another name", () => {
+    for (const [file, text] of SRC_FILES) {
+      expect(text, file).not.toMatch(
+        /\b(?:setDeliveryRoundSeam|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound)\s+as\s+\w/,
+      );
+    }
+  });
+
   it("the drops sit where the brief puts them: the close in closeDocumentById, Clear chat in clearCtrlChatDurably, never the chat observer", () => {
     const callersOf = (name: string) =>
       [...SRC_FILES]

@@ -93,5 +93,20 @@ export function registerTestCallerRecord(): void {
     // `vi.mock` factories can initialise (`convert-error-mapping.test.ts`).
     const { ownershipChatSide } = await import("../../src/server/mcp/awareness.js");
     setOwnershipChatSide(ownershipChatSide);
+    // The delivery-round seam (#2358, the delivery-rounds PR; review round 1,
+    // item 4), as `index.ts` wires it: flag on these suites then run keyed
+    // rounds, the only combination a real server is in. Flag off it answers
+    // false, so master's one global round, whatever is wired.
+    const { setDeliveryRoundSeam } = await import("../../src/server/events/delivery-state.js");
+    const { getOpenDocs } = await import("../../src/server/mcp/document-service.js");
+    const { keyedDeliveryRounds } = await import("../../src/server/sessions/ownership.js");
+    setDeliveryRoundSeam({
+      keyed: keyedDeliveryRounds,
+      isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+    });
+  });
+  afterEach(async () => {
+    const { setDeliveryRoundSeam } = await import("../../src/server/events/delivery-state.js");
+    setDeliveryRoundSeam(undefined);
   });
 }

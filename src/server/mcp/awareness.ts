@@ -3411,8 +3411,12 @@ export function registerAwarenessTools(server: McpServer): void {
             }
             if (named.length > 0) response.summary += inboxLostNote(named);
           }
-          // The notice rule (R1.3a), last, so a throw anywhere above ends
-          // nothing: a settled mark ends where this committed poll read the
+          // The notice rule (R1.3a), after every other commit step, so a
+          // throw anywhere above ends nothing. Only the delivery round's close
+          // follows it (the delivery-rounds PR, R2.4), and that close is map
+          // operations that do not throw; the test suites that make it throw
+          // (`roundThrows`) therefore model a throw after the notice step,
+          // whose ended notices the catch does not restore. A settled mark ends where this committed poll read the
           // document as its holder and saw the notice's record change. A poll
           // that only may claim and did not, or one that did not commit,
           // observed nothing. Empty while ownership is off.
