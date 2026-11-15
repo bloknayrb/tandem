@@ -10,10 +10,12 @@ import { score } from "./score.js";
 import type { Scenario } from "./scenarios/types.js";
 import {
   contextUse,
+  orphanCloseThink,
   otherLanguage,
   reasoningShape,
   repeatsPrompt,
   stalePreamble,
+  turnShownText,
   withoutInlineReasoning,
 } from "./signals.js";
 import type { TrialObservation } from "./trial.js";
@@ -96,13 +98,16 @@ export function evaluateTrial(input: {
     writes: obs.writes,
     toolSteps: toolSteps(obs),
     notices: obs.notices,
+    chatNotices: obs.chatNotices,
     score: scored,
     scorerPass: completed && scored.pass,
     scorerPassWithoutReasoning: completed && scoredPlain.pass,
     claims: claimCheck({
       tier: scenario.tier,
       reply: obs.reply,
-      turnTexts: obs.turns.map((t) => t.text),
+      // Shown text only (#1123 part C, R5.2): a `<think>` block never reached
+      // the user, so a claim inside one is not a claim made to them.
+      turnTexts: obs.turns.map(turnShownText),
       writes: obs.writes,
       documentText: obs.documentText,
       actionRequested,
@@ -115,6 +120,7 @@ export function evaluateTrial(input: {
       otherLanguage: otherLanguage(obs.reply),
       repeatsPrompt: repeatsPrompt(obs.reply, systemPromptFor(scenario.tier)),
       context: contextUse(obs.fetches, input.contextLength),
+      orphanCloseThink: orphanCloseThink(obs.turns),
     },
     metrics: {
       turns: obs.loop.metrics.turns,
@@ -122,6 +128,7 @@ export function evaluateTrial(input: {
       jsonParseFailures: obs.loop.metrics.jsonParseFailures,
     },
     timeToFirstTextMs: obs.timeToFirstTextMs,
+    timeToFirstShownTextMs: obs.timeToFirstShownTextMs,
     totalMs: obs.totalMs,
   });
   return { scored: true, record };

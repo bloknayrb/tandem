@@ -67,6 +67,9 @@ export const MAX_INFRASTRUCTURE_SHARE = 0.1;
 
 export type Outcome = "PASS" | "FAIL" | "INCONCLUSIVE" | "REPORTED" | "SCREEN";
 
+/** A report column for a field the run's records do not carry (#1123 part C). */
+export const NOT_RECORDED = "n/a (not recorded)";
+
 export interface GroupReport {
   group: Group;
   title: string;
@@ -96,7 +99,8 @@ export interface Report {
   reasons: string[];
   groups: GroupReport[];
   confirmedFalseClaims: string[];
-  columns: Record<string, number>;
+  /** A count, or {@link NOT_RECORDED} for a field no record of the run carries. */
+  columns: Record<string, number | typeof NOT_RECORDED>;
   text: string;
 }
 
@@ -261,7 +265,11 @@ export function computeReport(input: ReportInput): Report {
   // --- columns (reported, never gating) ---
   const all = [...byTrial.values()];
   const count = (f: (t: TrialRecord) => boolean) => all.filter(f).length;
-  const columns: Record<string, number> = {
+  // #1123 part C: a field that no record of this run carries (a run written
+  // before part C) is "not recorded", never a measured zero.
+  const recorded = (has: (t: TrialRecord) => boolean, f: (t: TrialRecord) => boolean) =>
+    all.some(has) ? count(f) : NOT_RECORDED;
+  const columns: Record<string, number | typeof NOT_RECORDED> = {
     "scored trials": all.length,
     timeout: count((t) => t.ending === "timeout"),
     "step limit": count((t) => t.ending === "budget"),
@@ -279,8 +287,18 @@ export function computeReport(input: ReportInput): Report {
     ),
     "reply shows reasoning": count((t) => t.signals.replyShowsReasoning),
     "reasoning in a separate field": count((t) => t.signals.reasoning === "separate" || t.signals.reasoning === "inline+separate"),
-    "reasoning only, user got nothing": count((t) => t.signals.reasoning === "reasoning-only"),
+    "reasoning in a separate field only, no text shown": count((t) => t.signals.reasoning === "reasoning-only"),
     "earlier turn's preamble left as the reply": count((t) => t.signals.stalePreamble),
+    // #1123 part C. Read only where the record has the field: a record written
+    // before part C has none, and is never given one.
+    "no-reply notice posted": recorded(
+      (t) => t.chatNotices !== undefined,
+      (t) => (t.chatNotices ?? []).some((n) => n.kind === "no-reply"),
+    ),
+    "a </think> with no opening tag": recorded(
+      (t) => t.signals.orphanCloseThink !== undefined,
+      (t) => (t.signals.orphanCloseThink ?? 0) > 0,
+    ),
     "reply not in the document's language": count((t) => t.signals.otherLanguage),
     "reply repeats the system prompt": count((t) => t.signals.repeatsPrompt),
     "prompt over the context length": count((t) => t.signals.context.overContext === true),
@@ -438,21 +456,38 @@ export function computeReport(input: ReportInput): Report {
     "timeout",
     "empty reply",
     "reply shows reasoning",
-    "reasoning only, user got nothing",
+    "reasoning in a separate field only, no text shown",
   ];
   lines.push("");
   lines.push("Counts (reported; none of these is a rate):");
   const names = Object.keys(columns);
   const ordered = outcome === "SCREEN" ? [...firstThings, ...names.filter((n) => !firstThings.includes(n))] : names;
   for (const name of ordered) lines.push(`  ${String(columns[name]).padStart(4)}  ${name}`);
+  if (all.length > 0 && !all.some((t) => t.chatNotices !== undefined)) {
+    lines.push(
+      "  This run was recorded before #1123 part C: its replies and signals were judged on raw text, inline <think> reasoning included.",
+    );
+  }
 
   const times = all.map((t) => t.totalMs).sort((a, b) => a - b);
-  const firsts = all.map((t) => t.timeToFirstTextMs).filter((n): n is number => n !== null).sort((a, b) => a - b);
+  // Time to first SHOWN text (#1123 part C, R5.2): inline reasoning and
+  // whitespace do not count. A run's records are all written by one commit
+  // (`resumeRefusal`), so either every record has the field or none does; a
+  // run written before part C reports the raw time, and says so. `null`
+  // (nothing was ever shown) is distinct from absent (a pre-C record).
+  const hasShown = all.length > 0 && all.every((t) => t.timeToFirstShownTextMs !== undefined);
+  const firsts = all
+    .map((t) => (hasShown ? (t.timeToFirstShownTextMs ?? null) : t.timeToFirstTextMs))
+    .filter((n): n is number => n !== null)
+    .sort((a, b) => a - b);
+  const firstLabel = hasShown
+    ? "median time to first shown text"
+    : "median time to first text (raw stream: recorded before shown text was measured)";
   const median = (xs: number[]) => (xs.length === 0 ? null : xs[Math.floor(xs.length / 2)]);
   const secs = (ms: number | null) => (ms === null ? "n/a" : `${Math.round(ms / 1000)} s`);
   lines.push("");
   lines.push(
-    `Latency (reported, never gating): median total ${secs(median(times))}, slowest ${secs(times[times.length - 1] ?? null)}, median time to first text ${secs(median(firsts))}`,
+    `Latency (reported, never gating): median total ${secs(median(times))}, slowest ${secs(times[times.length - 1] ?? null)}, ${firstLabel} ${secs(median(firsts))}`,
   );
 
   lines.push("");

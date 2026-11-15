@@ -314,7 +314,7 @@ describe("chat read moves behind the acknowledgement", () => {
     userChat("msg_noticed");
     const a = await poll({ cursor: "start" });
     expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_noticed"]);
-    for (const chatNotice of ["no-document", "no-local-model"] as const) {
+    for (const chatNotice of ["no-document", "no-local-model", "no-reply"] as const) {
       expect(appendClaudeChatMessage("notice", { replyTo: "msg_noticed", chatNotice }).ok).toBe(
         true,
       );
