@@ -38,7 +38,10 @@ export function makeCtrlChatObserver(deps: {
     // `add`, BEFORE the origin skip and whatever its author — so Claude's own
     // rows, the local model's and a restore's rows are classed too, and no
     // later write (a `read` stamp, `localRun`) ever re-classes one. A row
-    // deleted keeps its class, so a same-key re-add keeps it.
+    // deleted keeps its class, so a same-key re-add keeps it. The one
+    // exception (#2358, the posts PR): with ownership on, a row a client
+    // connection added that the undo deletes at once (not a user row) is
+    // never classed (`removing` below).
     //
     // #2358 (the posts PR, R4): with ownership on, a client connection's
     // change to the chat map is undone (`chat-client-undo.ts`). Decided first,

@@ -1010,6 +1010,7 @@ describe("R1: posts", () => {
     let release!: () => void;
     const op = runDocOp(d, () => new Promise<void>((r) => (release = r)));
     const refused = await post(A, { documentId: d });
+    expect(refused.code).toBe("NOT_DOC_OWNER");
     expect(refused.details).toEqual({
       reason: "lost",
       holder: null,
@@ -1029,6 +1030,7 @@ describe("R1: posts", () => {
     await writeAs(A, id);
     await openAs(B, getOpenDocs().get(id)?.filePath as string);
     const refused = await post(A, { documentId: id });
+    expect(refused.code).toBe("NOT_DOC_OWNER");
     expect(refused.details).toEqual({
       reason: "lost",
       holder: { label: labelOf(B), displayKind: "terminal" },
@@ -1077,6 +1079,7 @@ describe("R1: posts", () => {
 
   it("not-present: Tandem's Claude, not present, is refused with no document", async () => {
     const refused = await post(TANDEM_OWNER_ID);
+    expect(refused.code).toBe("NOT_DOC_OWNER");
     expect(refused.details).toEqual({ reason: "not-present", holder: null });
     expect(refused.message).toBe(
       "Tandem's Claude is turned off or stopped, so it cannot post to chat now. Nothing was sent. Do not retry.",
@@ -1127,6 +1130,13 @@ describe("R1: posts", () => {
     const updates: string[] = [];
     const watched = [ctrl(), ...[...getOpenDocs().keys()].map((id) => getOrCreateDocument(id))];
     const listener = () => updates.push("update");
+    // Every document the listener is attached to, so the `finally` detaches
+    // each one (#2432 merge note, R0.1), not only those open at the start.
+    const listened: Array<ReturnType<typeof getOrCreateDocument>> = [];
+    const listen = (d: ReturnType<typeof getOrCreateDocument>) => {
+      d.on("update", listener);
+      listened.push(d);
+    };
     try {
       const held = mkDoc("held");
       setDocOwner(held, { ownerId: B, kind: "opened" }, "take", B);
@@ -1143,7 +1153,7 @@ describe("R1: posts", () => {
       const activity = licence.activity;
       const before = JSON.stringify(ownershipSnapshotForTests().ownerByDoc);
       for (const d of [...watched, ...[held, claimedDoc, lost, taken].map(getOrCreateDocument)]) {
-        d.on("update", listener);
+        listen(d);
       }
       const refusals: Array<[string | undefined, Record<string, unknown>]> = [
         [A, { documentId: held }], // held
@@ -1157,10 +1167,16 @@ describe("R1: posts", () => {
       for (const [who, args] of refusals) {
         expect((await post(who, args)).error, JSON.stringify(args)).toBe(true);
       }
+      // Checked BEFORE the reset below (#2432 merge note, R0.1): the reset
+      // used to discard whatever these seven wrote, so a `held` or `lost`
+      // refusal that stamped `read` or wrote awareness passed.
+      expect(updates, "no Y.Doc write by the first seven refusals").toEqual([]);
       setTandemPresenceSource(() => true);
       const tandemDoc = mkDoc("tandem-default");
       setDocOwner(tandemDoc, { ownerId: TANDEM_OWNER_ID, kind: "default" }, "user-open");
-      getOrCreateDocument(tandemDoc).on("update", listener);
+      listen(getOrCreateDocument(tandemDoc));
+      // Only the set-up of the last document (its creation and owner) is
+      // discarded here; the first seven were checked above.
       updates.length = 0;
       for (const args of [
         {}, // post
@@ -1188,7 +1204,7 @@ describe("R1: posts", () => {
       expect(licence.activity).toBeGreaterThan(activity);
     } finally {
       off();
-      for (const d of watched) d.off("update", listener);
+      for (const d of new Set([...watched, ...listened])) d.off("update", listener);
     }
   });
 
