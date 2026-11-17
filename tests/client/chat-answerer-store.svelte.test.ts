@@ -376,6 +376,23 @@ describe("the triggers (R1.2)", () => {
       ...extra,
     });
 
+    // "No loop" must also hold for a retry on a timer. The store has none: its
+    // only timers are each request's `AbortSignal.timeout` and the send-read
+    // cap (`takeSendRead`, Ruling S-d), which only resolves a promise. Timers
+    // are faked from the start of each case and advanced well past the
+    // longest of them, so a retry scheduled on any delay up to that would
+    // still be counted.
+    const pastAnyRetryDelay = async () => {
+      await vi.advanceTimersByTimeAsync(store.REQUEST_TIMEOUT_MS * 2);
+      await drain();
+    };
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("this window's send while the read is not known reads once", async () => {
       await readAs(200, known("local"));
       const p = store.requestRead();
@@ -385,8 +402,12 @@ describe("the triggers (R1.2)", () => {
       // Not in the local period any more (nothing held), so only the new
       // trigger can read.
       store.noteChatSent(user("u1"), { aiOff: false, held: false });
-      await held.request(3);
+      // The read the trigger started fails too: nothing more is read (no loop).
+      await (await held.request(3)).fail();
       await drain();
+      expect(state.status).toBe("failed");
+      expect(gets()).toHaveLength(3);
+      await pastAnyRetryDelay();
       expect(gets()).toHaveLength(3);
     });
 
@@ -396,14 +417,19 @@ describe("the triggers (R1.2)", () => {
       await p;
       expect(state.status).toBe("failed");
       store.observeChatForAnswerer({ doc, synced: true, messages: [user("a")] });
-      store.observeChatForAnswerer({
-        doc,
-        synced: true,
-        messages: [
-          user("a", { localRun: { status: "stopped", reason: "error", generation: "g9" } }),
-        ],
-      });
-      await held.request(2);
+      const after = [
+        user("a", { localRun: { status: "stopped", reason: "error", generation: "g9" } }),
+      ];
+      store.observeChatForAnswerer({ doc, synced: true, messages: after });
+      // The read the trigger started fails too, and the same messages are
+      // observed once more: nothing more is read (no loop).
+      await (await held.request(2)).fail();
+      await drain();
+      store.observeChatForAnswerer({ doc, synced: true, messages: after });
+      await drain();
+      expect(state.status).toBe("failed");
+      expect(gets()).toHaveLength(2);
+      await pastAnyRetryDelay();
       expect(gets()).toHaveLength(2);
     });
   });

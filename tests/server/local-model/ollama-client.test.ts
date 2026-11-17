@@ -456,6 +456,9 @@ describe("ollama-client — a trailing /v1 in the saved address", () => {
     ["http://localhost:1234/v1x", "http://127.0.0.1:1234/v1x/v1/chat/completions"],
     // A query or fragment is still dropped (#1295 L5), and then `/v1` too.
     ["http://localhost:1234/v1?x=1#f", "http://127.0.0.1:1234/v1/chat/completions"],
+    // IPv6 loopback (`validateEndpoint` accepts `::1`): the brackets are kept.
+    ["http://[::1]:1234/v1", "http://[::1]:1234/v1/chat/completions"],
+    ["http://[::1]:1234", "http://[::1]:1234/v1/chat/completions"],
   ];
 
   for (const [saved, expected] of TABLE) {

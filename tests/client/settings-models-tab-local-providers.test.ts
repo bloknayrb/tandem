@@ -18,7 +18,6 @@ import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSetting
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../src/client/utils/local-model-copy";
 import { isLocalProvider, VALID_MODEL_PROVIDERS } from "../../src/shared/models/contract";
-import { PROVIDER_LABEL } from "../../src/shared/models/provider-ui";
 import { installHeldFetch } from "../helpers/held-fetch";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
@@ -146,6 +145,17 @@ function expectIntro(view: ReturnType<typeof mount>) {
   expect(section.compareDocumentPosition(intro) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 }
 
+/** Each provider's group heading, as literals (never `PROVIDER_LABEL`). */
+const HEADING: Readonly<Record<string, string>> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  "local-ollama": "Ollama (local)",
+  "local-llamacpp": "llama.cpp (local)",
+  "local-lmstudio": "LM Studio (local)",
+  "local-other": "Other local server (OpenAI-compatible)",
+};
+
 describe("R1.2: every provider's entry is listed under its own heading", () => {
   for (const provider of VALID_MODEL_PROVIDERS) {
     it(provider, () => {
@@ -154,7 +164,7 @@ describe("R1.2: every provider's entry is listed under its own heading", () => {
       const row = view.getByTestId(`model-row-${entry(provider).id}`);
       const group = row.parentElement?.parentElement;
       const heading = group?.querySelector(".settings-section-label");
-      expect(heading?.textContent?.trim()).toBe(PROVIDER_LABEL[provider]);
+      expect(heading?.textContent?.trim()).toBe(HEADING[provider]);
     });
   }
 
@@ -165,6 +175,20 @@ describe("R1.2: every provider's entry is listed under its own heading", () => {
       expect(view.getByTestId(`model-row-m-${p}`)).toBeTruthy();
     const first = view.container.querySelector("[data-testid^='model-row-']");
     expect(first?.getAttribute("data-testid")).toBe("model-row-m-anthropic");
+    // Every group's heading, in DOM order, as a literal list.
+    const headings = Array.from(view.container.querySelectorAll("[data-testid^='model-row-']"))
+      .map((row) => row.parentElement?.parentElement?.querySelector(".settings-section-label"))
+      .map((h) => h?.textContent?.trim());
+    expect([...new Set(headings)]).toEqual([
+      "Anthropic",
+      "OpenAI",
+      "Gemini",
+      "Ollama (local)",
+      "llama.cpp (local)",
+      "LM Studio (local)",
+      "Other local server (OpenAI-compatible)",
+    ]);
+    expect(headings).toHaveLength(7);
   });
 });
 

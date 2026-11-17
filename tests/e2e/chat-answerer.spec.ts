@@ -71,8 +71,13 @@ test("the control reads Claude by default and switches only on the user's select
     ALLOWANCE_LOCAL_NOTICE,
   );
 
-  // Back to Claude, so later specs start from the default.
-  await claude.click();
+  // Enter on the other position selects it too: back to Claude (so later
+  // specs start from the default) with one more POST.
+  await claude.focus();
+  await page.keyboard.press("Enter");
   await expect(claude).toHaveAttribute("aria-checked", "true");
-  expect(posts).toHaveLength(2);
+  expect(posts).toEqual([
+    JSON.stringify({ answerer: "local" }),
+    JSON.stringify({ answerer: "claude" }),
+  ]);
 });
