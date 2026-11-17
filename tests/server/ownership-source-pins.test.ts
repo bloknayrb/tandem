@@ -913,6 +913,19 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
     return text.slice(0, clear).split("\n").length;
   }
 
+  it("R2.1 (v) and Ruling A: a restart underway is exactly restartTimer or launching, never messageStartQueued or restartPending()", () => {
+    // Not reachable at the exact moment through the public API (a message
+    // start's queued flag outlives `launching` by a microtask), so pinned here:
+    // presence's (v) reads these three fields and nothing else.
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    const fn = text.slice(text.indexOf("function recomputePresence("));
+    const body = fn.slice(0, fn.indexOf("\n  }\n"));
+    expect(body).toMatch(
+      /const noError = lastError === undefined \|\| restartTimer !== null \|\| launching > 0;/,
+    );
+    expect(body).not.toMatch(/messageStartQueued|restartPending\(/);
+  });
+
   it("R2.8's order: noteOwnerHandleBind records the transport's bind synchronously after confirmBind", () => {
     // The run start is a microtask queued in `onFirstBind`, which `confirmBind`
     // calls; it sees the transport as bound only because nothing awaits between
