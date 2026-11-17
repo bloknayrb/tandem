@@ -380,11 +380,17 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "flag-on server runs: ownership-chat, ownership-posts and ownership-change-notices mock " +
       "delivery-state.js with a pass-through that makes resolveDeliveryRound throw on demand; " +
       "health-route injects its own getDeliveryState; and the same holds for every other " +
-      "flag-on suite that polls the inbox without wiring the seam. A change that makes their " +
-      "polls open or close a keyed round wrongly is not seen there, although every " +
-      "tandem_checkInbox poll reaches the round (its resolveDeliveryRound call in " +
-      "awareness.ts).",
-    closedBy: "Wiring them with a live check, or a test that drives their paths keyed.",
+      "suite that polls the inbox without wiring the seam (every suite runs flag-on in the " +
+      "ownership-on job). The set, over-approximated (a file that only names the tool is in " +
+      "it): the test files that name tandem_checkInbox and name neither setDeliveryRoundSeam " +
+      "nor registerTestCallerRecord, i.e. grep -rlE 'tandem_checkInbox' tests --include=*.test.ts " +
+      "| xargs grep -LE 'setDeliveryRoundSeam|registerTestCallerRecord' (38 files when this row " +
+      "was written). A change that makes their polls open or close a keyed round wrongly is " +
+      "not seen there, although every tandem_checkInbox poll reaches the round (its " +
+      "resolveDeliveryRound call in awareness.ts).",
+    closedBy:
+      "Wiring the suites of that set that poll the inbox, each with a live check, or a test " +
+      "that drives their paths keyed.",
   },
   {
     gap:
@@ -395,10 +401,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "that is not a return or throw statement (a call that throws, say); braces or comment markers " +
       "inside strings, which its text depth check counts as code; a call through a namespace " +
       "import by element access (a string or computed name); calls from other src files " +
-      "through an alias or .call; and, in its one-writer pin on delivery-state.ts, a compound " +
-      "or destructuring assignment to roundSeam. Proposed for acceptance as limits of a text " +
-      "pin; open until Bryan accepts them.",
-    closedBy: "Bryan's acceptance, or a behavioural pin that boots main().",
+      "through an alias or .call; and, in its one-writer pin on delivery-state.ts, a compound, " +
+      "destructuring or parenthesised assignment to roundSeam, or a mutation of the seam " +
+      "object (roundSeam.keyed = ...). Accepted as the limits of a text-and-tree pin by the " +
+      "reviewing session's ruling of 2026-11-17: the pin guards against an accidental second " +
+      "writer, and a deliberate bypass is a review matter.",
+    closedBy: "A behavioural pin that boots main().",
   },
 ];
 

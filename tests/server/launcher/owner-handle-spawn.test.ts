@@ -637,6 +637,45 @@ describe("teardown on every exit path (R4)", () => {
     }
   });
 
+  it("stop() resolves as soon as a pending deletion settles, before its bound, with no fake time passing (#2438 review)", async () => {
+    // The twin of the bound above: the deletion is still pending when stop()
+    // arms its bound, then settles. A build that always waited the full second
+    // would never settle here, since the fake clock never moves.
+    const sup = makeSupervisor();
+    await sup.startFresh(spawnDir);
+    await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn");
+    const real = await vi.importActual<typeof import("../../../src/server/launcher/run-files.js")>(
+      "../../../src/server/launcher/run-files.js",
+    );
+    const del = vi.mocked(deleteRunFile);
+    const held = deferred();
+    del.mockImplementation(() => held.promise);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const stopping = sup.stop().then(() => {
+        settled = true;
+      });
+      const deadline = Date.now() + 10_000;
+      // The bound is armed: the SIGTERM grace and the bound are the two fake timers.
+      while (vi.getTimerCount() < 2) {
+        if (Date.now() > deadline) throw new Error("Timed out waiting for stop()'s bound");
+        await new Promise((r) => setImmediate(r));
+      }
+      expect(settled).toBe(false);
+      held.resolve();
+      while (!settled) {
+        if (Date.now() > deadline) throw new Error("stop() did not resolve without fake time");
+        await new Promise((r) => setImmediate(r));
+      }
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+      del.mockImplementation(real.deleteRunFile);
+      held.resolve();
+    }
+  });
+
   it("an exit before binding (a crash) ends the spawn, and the crash restart's spawn is a new one", async () => {
     const sup = makeSupervisor();
     await sup.startFresh(spawnDir);

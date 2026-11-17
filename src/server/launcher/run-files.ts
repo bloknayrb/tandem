@@ -121,18 +121,20 @@ export function buildRunMcpConfig(opts: {
   return {
     mcpServers: {
       tandem: {
-        // Pinned to Node and the bridge script, with no flags. Since #2422 the
-        // bridge's requests to `127.0.0.1` / `[::1]` go through
+        // Pinned to Node and the bridge script, with no flags. This bridge is
+        // only ever given a loopback URL (`loopbackBaseUrl`: `127.0.0.1` or
+        // `[::1]`), and since #2422 its requests there go through
         // `loopbackFetch`'s proxy-free agent, which no proxy setting reaches
-        // (`src/shared/loopback-fetch.ts`); the bridge reads no proxy variable.
-        // For its global `fetch` (any other host), two settings make Node's
-        // environment proxy carry requests although the environment does not
-        // show it on: a Node config file that turns the proxy on
-        // (`--experimental-config-file` or `--experimental-default-config-file`,
-        // which Node refuses in `NODE_OPTIONS`, so only these arguments could
-        // pass one), and proxy variables deleted from `process.env` after
-        // start-up (Node fixes its dispatcher at start; nothing in the bridge
-        // deletes them). Both are unreachable for the bridge today.
+        // (`src/shared/loopback-fetch.ts`); the bridge reads no proxy
+        // variable. The settings that turn Node's environment proxy on without
+        // a variable the environment shows are `--use-env-proxy` given as an
+        // argument, which these pinned arguments never pass; a Node config
+        // file (`--experimental-config-file` or
+        // `--experimental-default-config-file`, which Node refuses in
+        // `NODE_OPTIONS`, so again only these arguments could pass one); and
+        // proxy variables deleted from `process.env` after start-up (Node
+        // fixes its dispatcher at start; nothing in the bridge deletes them).
+        // None of them reaches the bridge's loopback requests.
         command: opts.nodePath,
         args: [opts.bridgeScript],
         env: {
@@ -293,17 +295,20 @@ function errCode(err: unknown): string | undefined {
  * (#2358 PR 3a review, item 4: about five PowerShell starts per spawn, before
  * the child starts). Re-run whenever the identity changes (a directory removed
  * and recreated, or swapped). This weakens nothing against another user
- * unless the user or an administrator has already weakened `launcher/`'s ACL:
- * once locked, only they can change the directory or its ACL, and the user
- * can read the run files anyway. The residual: a non-inheritable broad ACE
- * added to `launcher/` after the first check is not seen again in this process
- * (no new file inherits it, so each file's re-read passes). Other users could
- * then list the run files' names, not read the files; and if the ACE grants
- * both delete-child and add-file rights (a Full Control grant does), they
- * could delete a run file and put their own at its name before Claude Code
- * reads it, so that Claude Code runs their MCP config's `command` (or their
- * settings' hooks) as the user. Each file's own ACL is still re-read per
- * spawn. The `lstat` link check above it runs every time.
+ * unless `launcher/`'s ACL has already been weakened by someone holding
+ * WRITE_DAC on it (the user as its owner, an administrator, SYSTEM): once
+ * locked, only they can change it, and the user can read the run files
+ * anyway. The residual: an EXPLICIT, NON-INHERITABLE broad ACE added to
+ * `launcher/` after the first check is not seen again in this process (no new
+ * file inherits it, so each file's re-read passes; an inheritable one reaches
+ * the new file and its re-read fails closed). If that ACE grants list rights,
+ * other users could list the run files' names, not read the files; if it also
+ * grants delete-child and add-file (a Full Control grant does; the names are
+ * random, so listing is needed too), they could delete a run file and put
+ * their own at its name before Claude Code reads it, so that Claude Code runs
+ * their MCP config's `command` (or their settings' hooks) as the user. Each
+ * file's own ACL is still re-read per spawn. The `lstat` link check above it
+ * runs every time.
  */
 const verifiedWindowsDirs = new Map<string, string>();
 

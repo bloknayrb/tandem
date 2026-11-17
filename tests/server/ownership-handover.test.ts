@@ -33,6 +33,7 @@ import type * as Y from "yjs";
 import { z } from "zod";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
+  getDeliveryState,
   keyedDeliveryRoundsForTests,
   noteChatMessageRowKey,
   resetDeliveryStateForTests,
@@ -1627,14 +1628,16 @@ describe("the delivery-round seam is wired in this world (keyed rounds, flag on)
 });
 
 // The two R1.8 brackets below compare the open rounds before and after, by
-// kind and key. For PR 3b's reviewers: 3b's re-owe will open a round by design
-// (flip-blocker row "Handover gap (d)", in `ownership-flip-blockers.ts`), so
-// this check is expected to change then. Note what it can see: these brackets
-// open the handed-over document's round themselves before the handover, and a
-// forward joins an open round of the same key, so a re-owe that opens a round
-// on that same document leaves these keys unchanged; only a round of another
-// key (a key-less one, say) shows here. To see 3b's document round, 3b needs a
-// bracket that does not open that document's round first.
+// kind and key, and the forward count. For PR 3b's reviewers: 3b's re-owe will
+// open a round by design (flip-blocker row "Handover gap (d)", in
+// `ownership-flip-blockers.ts`), so these brackets are expected to change then.
+// What each check sees: a round opens only through `pushEvent`
+// (`recordWakeForward`), and the bracket's external subscriber records every
+// push, so `events` is non-empty after any re-owe that pushes, whatever its
+// key. The key comparison alone cannot see a round opened on a key that is
+// already open (these brackets open the handed-over document's round
+// themselves), because a forward joins the open round; the forward count
+// catches that too, since every `recordWakeForward` moves it, push or not.
 
 describe("the handover moves nothing and pushes nothing (R1.8)", () => {
   it("no Y.Doc transaction, no event on the push path, no change to the delivery round; and the item is re-owed", async () => {
@@ -1650,6 +1653,7 @@ describe("the handover moves nothing and pushes nothing (R1.8)", () => {
     const other = mkDoc("other");
     openRounds([doc.id, other.id], "chat-bracket");
     const roundsBefore = roundKeys();
+    const forwardsBefore = getDeliveryState(Date.now(), 1).forwardCount;
     expect(roundsBefore, "the comparison's precondition").toEqual(
       [`document:${doc.id}`, `document:${other.id}`, "message:chat-bracket"].sort(),
     );
@@ -1681,6 +1685,7 @@ describe("the handover moves nothing and pushes nothing (R1.8)", () => {
     expect(events).toEqual([]);
     expect({ doc: snapshot(doc.ydoc), ctrl: snapshot(ctrl) }).toEqual(before);
     expect(roundKeys()).toEqual(roundsBefore);
+    expect(getDeliveryState(Date.now(), 1).forwardCount).toBe(forwardsBefore);
 
     // The positive: in this same run the handover re-owed the items.
     expect(handed(await b.poll())).toBe(true);
@@ -1697,6 +1702,7 @@ describe("the handover at the tab-close point moves nothing and pushes nothing e
     const other = mkDoc("other");
     openRounds([doc.id, other.id], "chat-bracket");
     const roundsBefore = roundKeys();
+    const forwardsBefore = getDeliveryState(Date.now(), 1).forwardCount;
     expect(roundsBefore, "the comparison's precondition").toEqual(
       [`document:${doc.id}`, `document:${other.id}`, "message:chat-bracket"].sort(),
     );
@@ -1728,6 +1734,7 @@ describe("the handover at the tab-close point moves nothing and pushes nothing e
     expect(transactions).toBe(0);
     expect(events).toEqual([]);
     expect(roundKeys()).toEqual(roundsBefore);
+    expect(getDeliveryState(Date.now(), 1).forwardCount).toBe(forwardsBefore);
 
     // The document is still open here (the untrack never ran): B is handed it.
     expect(handed(await b.poll())).toBe(true);

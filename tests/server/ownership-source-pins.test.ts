@@ -82,17 +82,18 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     // is refused). Between those two statements, no `return` or `throw` at
     // any depth outside a nested function.
     //
-    // What this pin of source cannot see, proposed for acceptance and open
-    // until Bryan accepts it (a flip-blocker row): an exit earlier in
-    // `main()`, before `setOwnershipSeqSource`; between the two statements, a
-    // conditional exit that is not a `return` or `throw` statement (a call
-    // that throws, say); braces or comment markers inside
-    // strings, which the text depth check below counts as code; a call through
-    // a namespace import by element access (`ns["setDeliveryRoundSeam"]`, or
-    // a computed name such as `ns["set" + name]`);
-    // and calls from other `src` files through an alias or `.call` (the
-    // callers check above matches `setDeliveryRoundSeam(` only). A
-    // behavioural pin that boots `main()` would see all four.
+    // What this pin of source cannot see (a flip-blocker row; accepted by the
+    // reviewing session's ruling of 2026-11-17: the pin guards against an
+    // accidental second writer, and a deliberate bypass is a review matter):
+    // an exit earlier in `main()`, before `setOwnershipSeqSource`; between the
+    // two statements, a conditional exit that is not a `return` or `throw`
+    // statement (a call that throws, say); braces or comment markers inside
+    // strings, which the text depth check below counts as code; a call
+    // through a namespace import by element access
+    // (`ns["setDeliveryRoundSeam"]`, or a computed name such as
+    // `ns["set" + name]`); and calls from other `src` files through an alias
+    // or `.call` (the callers check above matches `setDeliveryRoundSeam(`
+    // only). A behavioural pin that boots `main()` would see each of them.
     const tree = ts.createSourceFile("index.ts", src, ts.ScriptTarget.Latest, true);
     const uses: ts.Identifier[] = [];
     let seqStatement: ts.Statement | undefined;
@@ -166,11 +167,26 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     expect(depth).toBe(0);
   });
 
-  it("the seam has one writer: setDeliveryRoundSeam itself (the keyed-rounds suites PR)", () => {
-    // A second assignment inside delivery-state.ts would unwire the seam with
-    // every pin on index.ts still passing. A text pin: it does not see a
-    // compound (`??=`) or destructuring assignment (the flip-blocker row).
+  it("the seam has one writer: setDeliveryRoundSeam itself, which its own module never calls (the keyed-rounds suites PR)", () => {
+    // A second assignment inside delivery-state.ts, or a call of the setter
+    // there (the callers check above exempts this file, whose definition
+    // matches it), would unwire the seam with every pin on index.ts still
+    // passing. So the setter's name is counted over this module's syntax tree,
+    // as `setOwnershipSeqSource`'s is in its own: exactly one identifier, the
+    // declaration's (no call, alias or `.call`). A text pin for the
+    // assignment: it does not see a compound (`??=`), destructuring or
+    // parenthesised (`(roundSeam) = x`) assignment, or a mutation of the seam
+    // object (`roundSeam.keyed = ...`) (the flip-blocker row).
     const module = SRC_FILES.get("src/server/events/delivery-state.ts") as string;
+    const tree = ts.createSourceFile("delivery-state.ts", module, ts.ScriptTarget.Latest, true);
+    const named: ts.Identifier[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") named.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(named).toHaveLength(1);
+    expect(ts.isFunctionDeclaration((named[0] as ts.Identifier).parent)).toBe(true);
     expect(module.match(/\broundSeam\s*=(?!=)/g)).toHaveLength(1);
     expect(module).toMatch(
       /export function setDeliveryRoundSeam\(seam: DeliveryRoundSeam \| undefined\): void \{\n {2}roundSeam = seam;\n\}/,

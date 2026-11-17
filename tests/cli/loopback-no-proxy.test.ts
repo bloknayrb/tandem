@@ -137,6 +137,12 @@ async function makeUpstream(host = "127.0.0.1") {
   return { base, port: addr.port, seen };
 }
 
+/** Whether `err` is a listen on `::1` refused because this host has no IPv6. */
+function noIpv6(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "EAFNOSUPPORT" || code === "EADDRNOTAVAIL";
+}
+
 /** A CONNECT tunnel that records what it was asked to reach, then pipes. */
 async function makeTunnel() {
   const connects: string[] = [];
@@ -315,7 +321,9 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
     let up: Awaited<ReturnType<typeof makeUpstream>>;
     try {
       up = await makeUpstream("::1");
-    } catch {
+    } catch (err) {
+      // Only a host with no IPv6 skips; any other failure is a failure.
+      if (!noIpv6(err)) throw err;
       ctx.skip();
       return;
     }
@@ -340,7 +348,8 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
   it("bridge: a [::1] base URL; skipped where the host has no IPv6", async (ctx) => {
     try {
       await makeUpstream("::1");
-    } catch {
+    } catch (err) {
+      if (!noIpv6(err)) throw err;
       ctx.skip();
       return;
     }
