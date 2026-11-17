@@ -1825,13 +1825,16 @@ describe("3b-2a R2: startOrWake", () => {
     const waiting = waitingDouble(true);
     const { h } = await idleStopped({ workWaiting: waiting.fn });
     // The pass's own spawn: a chat lands while the standby watch is still armed.
+    let accepted: true | undefined;
     onSpawn = () => {
       onSpawn = null;
       h.emit(chatEvent());
+      accepted = pendingOf(h); // the watch accepted it: today's arm owes the pass
     };
     h.sup.startOrWake?.("document");
     await lockBarrier(h);
     const c2 = await childN(2);
+    expect(accepted).toBe(true);
     pushJson(c2, RESULT_OK);
     await settle();
     expect(pendingOf(h)).toBeUndefined();
@@ -2064,6 +2067,18 @@ describe("3b-2a R2: startOrWake", () => {
     expect(c.stdin.writes).toHaveLength(1);
   });
 
+  it("R2.9's positive twin: a waiting decision answering true starts, and wakes a live child", async () => {
+    const { h } = await idleStopped({ workWaiting: () => true });
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    await childN(2);
+    const h2 = makeSupervisor({ workWaiting: () => true });
+    const c = await runningIdle(h2);
+    h2.sup.startOrWake?.("document");
+    await lockBarrier(h2);
+    expect(wakes(c)).toBe(1);
+  });
+
   it("R2.9: a throwing waiting decision starts and wakes nothing", async () => {
     const throwing = () => {
       throw new Error("waiting boom doc_secret");
@@ -2121,9 +2136,12 @@ describe("3b-2a R2: startOrWake", () => {
     it("a start-or-wake-only pass that declines, with a setup Apply meanwhile: the Apply decides as on master", async () => {
       const waiting = waitingDouble(false);
       const { h } = await idleStopped({ workWaiting: waiting.fn });
+      // The Apply first, so its `restartPending()` read runs while the pass is
+      // queued behind it (the order in which a wrong build answers "running").
+      const applying = h.sup.startAfterSetup();
       h.sup.startOrWake?.("document");
-      const decision = await h.sup.startAfterSetup();
-      expect(decision).toBe("held"); // idle is a choice; "running" would be the queued pass's
+      expect(await applying).toBe("held"); // idle is a choice; "running" would be the queued pass's
+      await lockBarrier(h);
       expect(waiting.calls).toBe(1);
     });
   });
@@ -2139,6 +2157,16 @@ describe("3b-2a R2: startOrWake", () => {
       await lockBarrier(h);
       expect(children).toHaveLength(1);
       expect(logText()).toMatch(/not starting Claude \(message\)/);
+    });
+
+    it("positive twin: no local period, something waiting, no child: one spawn", async () => {
+      const lp = localDouble();
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ workWaiting: waiting.fn, localPeriod: lp.opts });
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      await childN(2);
+      expect(logText()).not.toMatch(/not starting Claude \(message\)/);
     });
 
     it("a live child: nothing written", async () => {

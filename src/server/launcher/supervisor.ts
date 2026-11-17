@@ -1877,7 +1877,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // The live standby, read here (design §8.1): Off is Off, whoever else is
     // attached. Another AI being on does not stop this start (R2.4).
     if (standby === "off" || shuttingDown || breakerTripped) return;
-    console.error(`[Launcher] Work is waiting for Tandem's Claude (${cause}) — starting it`);
+    console.error(`[Launcher] Work is waiting for Tandem's Claude (${cause}) — trying to start it`);
     // Owed after the guard, as `startForMessage` does: a start refused in
     // `respawn` keeps it, and licence activation writes it (R2.6).
     wakeOwedAcrossSpawns = true;
