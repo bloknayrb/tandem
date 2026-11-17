@@ -11,7 +11,7 @@
  * `ownership-dark-enforcement.test.ts`.
  *
  * Reached through 1a's presence seam, not reachable in a running server until
- * PR 3b makes Tandem's Claude present: `default`, `not-present`, and the
+ * PR 3b-2 makes Tandem's Claude present: `default`, `not-present`, and the
  * `taken back` cause of `lost`.
  */
 
@@ -910,7 +910,7 @@ describe("tandem_open: the take rule (§4.2, §5.4)", () => {
   });
 });
 
-describe("Tandem's Claude, through the presence seam (reachable in a server from PR 3b)", () => {
+describe("Tandem's Claude, through the presence seam (reachable in a server from PR 3b-2)", () => {
   beforeEach(() => {
     register(TANDEM_OWNER_ID, "tandem");
   });

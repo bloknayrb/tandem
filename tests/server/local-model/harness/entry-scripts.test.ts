@@ -346,6 +346,11 @@ describe("the fetch tap against a real connection", () => {
     const { installFetchTap } = await import(
       "../../../../probe/local-model-spike/harness/fetch-tap.js"
     );
+    // The tap wraps the client's own `fetch` (#2422), so the request is made
+    // through it, as the shipped client makes it.
+    const { localModelFetchForHarness } = await import(
+      "../../../../src/server/local-model/ollama-client.js"
+    );
     const stall = http.createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "partial" } }] })}\n\n`);
@@ -356,7 +361,11 @@ describe("the fetch tap against a real connection", () => {
     const tap = installFetchTap();
     try {
       const ctrl = new AbortController();
-      const res = await fetch(url, { method: "POST", body: "{}", signal: ctrl.signal });
+      const res = await localModelFetchForHarness()(url, {
+        method: "POST",
+        body: "{}",
+        signal: ctrl.signal,
+      });
       const reader = (res.body as ReadableStream<Uint8Array>).getReader();
       const first = await reader.read();
       expect(new TextDecoder().decode(first.value)).toContain("partial");

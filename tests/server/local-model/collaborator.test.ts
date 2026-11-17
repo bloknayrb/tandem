@@ -1918,10 +1918,9 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
     for (const text of texts) {
       expect(text.length).toBeGreaterThan(0);
       // The only address any text may hold is the documented example of an
-      // accepted one, provider-neutral since #1123 S7 (no port: LM Studio,
-      // llama.cpp and Other do not listen on Ollama's). Strip it, and nothing URL-, host- or credential-shaped
-      // may remain.
-      const rest = text.split("http://127.0.0.1 followed by the server's port").join("");
+      // accepted one, provider-neutral since #1123 S7 (it names no port).
+      // Strip it, and nothing URL-, host- or credential-shaped may remain.
+      const rest = text.split(EXAMPLE).join("");
       expect(rest).not.toMatch(/https?:/i);
       expect(rest).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
       expect(rest).not.toMatch(/localhost|:\d{2,5}\b|@/i);

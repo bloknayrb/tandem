@@ -56,6 +56,10 @@ interface Row {
   today: Partial<ViewInput>;
   todayLabel: string;
   todayState: string;
+  /** Today's title, accessible name and tone, as literals (#2433's carried Low). */
+  todayTitle: string;
+  todayAriaLabel: string;
+  todayTone: string;
   title: (local: "local" | "unusable") => string;
   solo?: boolean;
   /** Does today's view for this row carry the session count? */
@@ -68,6 +72,11 @@ const ROWS: Row[] = [
     today: { soloMode: true, liveIndicator: "solo-paused", sessionCount: 1 },
     todayLabel: "Solo · comments held",
     todayState: "solo-paused",
+    todayTitle:
+      "Solo mode — your comments and replies aren't sent to the AI until you switch to Tandem (chat and document edits still work). 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayAriaLabel:
+      "Solo mode — the AI is connected, but your comments and replies aren't forwarded until you switch to Tandem 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayTone: "solo",
     solo: true,
     counts: true,
     title: (l) =>
@@ -78,6 +87,11 @@ const ROWS: Row[] = [
     today: { soloMode: true, liveIndicator: "solo-paused", launcherRunning: true, sessionCount: 2 },
     todayLabel: "Solo · comments held",
     todayState: "solo-paused",
+    todayTitle:
+      "Solo mode — your comments and replies aren't sent to the AI until you switch to Tandem (chat and document edits still work). 2 sessions are connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayAriaLabel:
+      "Solo mode — the AI is connected, but your comments and replies aren't forwarded until you switch to Tandem 2 sessions are connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayTone: "solo",
     solo: true,
     counts: true,
     title: (l) =>
@@ -88,6 +102,11 @@ const ROWS: Row[] = [
     today: { soloMode: true, launcherRunning: true },
     todayLabel: "Solo · comments held",
     todayState: "solo-paused",
+    todayTitle:
+      "Solo mode — Tandem's Claude is running, but Tandem hasn't seen it connect. Your comments and replies aren't sent to it until you switch to Tandem.",
+    todayAriaLabel:
+      "Solo mode. Tandem's Claude is running, but Tandem hasn't seen it connect. Your comments and replies aren't forwarded until you switch to Tandem.",
+    todayTone: "solo",
     solo: true,
     counts: false,
     title: (l) =>
@@ -104,6 +123,11 @@ const ROWS: Row[] = [
     },
     todayLabel: "Tandem's Claude",
     todayState: "tandem-claude",
+    todayTitle:
+      "Tandem's Claude is running in ~/proj in the background. Tandem wakes it when you send a message. 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayAriaLabel:
+      "Tandem's Claude. Tandem's Claude is running in ~/proj in the background. Tandem wakes it when you send a message. 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayTone: "connected",
     counts: true,
     title: (l) => `Tandem's Claude is running in ~/proj. ${S[l]}`,
   },
@@ -117,6 +141,11 @@ const ROWS: Row[] = [
     },
     todayLabel: "Tandem's Claude",
     todayState: "tandem-claude",
+    todayTitle:
+      "Tandem's Claude is running. Document sync is down, so what you send now won't reach it until sync reconnects. Tandem can't confirm that any connection is this Claude. 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayAriaLabel:
+      "Tandem's Claude. Tandem's Claude is running. Document sync is down, so what you send now won't reach it until sync reconnects. Tandem can't confirm that any connection is this Claude. 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayTone: "pending",
     counts: true,
     title: (l) =>
       `Tandem's Claude is running. ${S[l]} Document sync is down, so what you send now won't reach Tandem until sync reconnects.`,
@@ -126,6 +155,10 @@ const ROWS: Row[] = [
     today: { launcherRunning: true, launcherBusy: true },
     todayLabel: "Tandem's Claude",
     todayState: "tandem-claude",
+    todayTitle: "Tandem's Claude is running and working on a turn; Tandem hasn't seen it connect.",
+    todayAriaLabel:
+      "Tandem's Claude. Tandem's Claude is running and working on a turn; Tandem hasn't seen it connect.",
+    todayTone: "pending",
     counts: false,
     title: (l) => `Tandem's Claude is running. ${S[l]}`,
   },
@@ -134,6 +167,9 @@ const ROWS: Row[] = [
     today: { state: "stopped", launcherRestarting: true },
     todayLabel: "Restarting Claude…",
     todayState: "restarting",
+    todayTitle: "Tandem is starting its Claude. There's nothing you need to do.",
+    todayAriaLabel: "Restarting Claude. Tandem is starting its Claude.",
+    todayTone: "pending",
     counts: false,
     title: (l) => `Tandem is starting its Claude. ${S[l]}`,
   },
@@ -142,6 +178,9 @@ const ROWS: Row[] = [
     today: { state: "stopped", launcherRestarting: true, launcherStarting: true },
     todayLabel: "Starting Claude…",
     todayState: "restarting",
+    todayTitle: "Tandem is starting its Claude. There's nothing you need to do.",
+    todayAriaLabel: "Starting Claude. Tandem is starting its Claude.",
+    todayTone: "pending",
     counts: false,
     title: (l) => `Tandem is starting its Claude. ${S[l]}`,
   },
@@ -150,6 +189,9 @@ const ROWS: Row[] = [
     today: { state: "stopped", launcherStandby: "off" },
     todayLabel: "Tandem's Claude is off",
     todayState: "standby",
+    todayTitle: "Tandem's Claude is turned off. Start it from the chat panel.",
+    todayAriaLabel: "Tandem's Claude is turned off.",
+    todayTone: "not-connected",
     counts: false,
     title: (l) => `Tandem's Claude is turned off. ${S[l]}`,
   },
@@ -158,6 +200,9 @@ const ROWS: Row[] = [
     today: { state: "stopped", launcherStandby: "awaiting-start" },
     todayLabel: "Tandem's Claude hasn't started",
     todayState: "standby",
+    todayTitle: "Tandem's Claude is set to start when you click Start in the chat panel.",
+    todayAriaLabel: "Tandem's Claude hasn't started. It starts when you click Start.",
+    todayTone: "not-connected",
     counts: false,
     title: (l) => `Tandem's Claude has not been started. ${S[l]}`,
   },
@@ -166,6 +211,10 @@ const ROWS: Row[] = [
     today: { state: "stopped", launcherStandby: "idle" },
     todayLabel: "Tandem's Claude stopped (idle)",
     todayState: "standby",
+    todayTitle:
+      "Tandem's Claude stopped after being idle, as set in Settings. Start it again any time; its conversation resumes.",
+    todayAriaLabel: "Tandem's Claude stopped while idle.",
+    todayTone: "not-connected",
     counts: false,
     title: (l) => `Tandem's Claude stopped after being idle. ${S[l]}`,
   },
@@ -174,6 +223,11 @@ const ROWS: Row[] = [
     today: { liveIndicator: "connected", sessionCount: 2, pushDelivery: "attached" },
     todayLabel: "AI attached",
     todayState: "connected",
+    todayTitle:
+      "Something is connected to Tandem. Tandem can't tell whether it's being notified, so if it's a session you're using, it may only see your messages when it next checks in. 2 sessions are connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayAriaLabel:
+      "AI attached. Something is connected to Tandem; Tandem can't tell whether it's being notified, so it may only see your messages when it next checks in. 2 sessions are connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayTone: "connected",
     counts: true,
     title: (l) => `Something is connected to Tandem. ${S[l]}`,
   },
@@ -182,6 +236,11 @@ const ROWS: Row[] = [
     today: { liveIndicator: "connected", sessionCount: 1, pushDelivery: "none" },
     todayLabel: "AI attached",
     todayState: "connected",
+    todayTitle:
+      "Something is connected to Tandem, but nothing is notifying it. If it's a session you're using, it sees your messages only when it next checks in, so you may need to prompt it. 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayAriaLabel:
+      "AI attached, but nothing is notifying it. If it's a session you're using, it sees your messages only when it next checks in. 1 session is connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.",
+    todayTone: "connected",
     counts: true,
     title: (l) => `Something is connected to Tandem. ${S[l]}`,
   },
@@ -190,6 +249,11 @@ const ROWS: Row[] = [
     today: { liveIndicator: "connected", sessionCount: 0 },
     todayLabel: "AI attached",
     todayState: "connected-stale",
+    todayTitle:
+      "Something connected to Tandem earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
+    todayAriaLabel:
+      "AI attached earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
+    todayTone: "pending",
     counts: false,
     title: (l) =>
       `Something connected to Tandem earlier, but Tandem can't see that it's still there. ${S[l]}`,
@@ -199,6 +263,9 @@ const ROWS: Row[] = [
     today: { state: "stopped", sessionCount: 3 },
     todayLabel: "AI not connected",
     todayState: "not-connected",
+    todayTitle: "No AI is connected. Start Claude Code and run /mcp to connect.",
+    todayAriaLabel: "No AI is connected",
+    todayTone: "not-connected",
     counts: false,
     title: (l) => `No Claude session is connected to Tandem. ${S[l]}`,
   },
@@ -212,6 +279,9 @@ describe("every row of R7.4, in the local period and out of it", () => {
       it("out of the local period: today's view, unchanged by the new input", () => {
         expect(today?.label).toBe(row.todayLabel);
         expect(today?.dataState).toBe(row.todayState);
+        expect(today?.title).toBe(row.todayTitle);
+        expect(today?.ariaLabel).toBe(row.todayAriaLabel);
+        expect(today?.tone).toBe(row.todayTone);
         expect(today?.localChat).toBeNull();
         expect(today?.localSentence).toBeNull();
         expect(aiIndicatorView(input({ ...row.today, localChat: null }))).toEqual(today);

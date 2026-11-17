@@ -100,6 +100,11 @@ async function waitFor<T>(probe: () => T | null | undefined | false, label: stri
 
 beforeEach(async () => {
   vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  // #2358 PR 3b-1: `prepareRun` reads the user-level Claude settings through
+  // `CLAUDE_CONFIG_DIR` before `claudeSettingsHome`, so without this stub a
+  // developer's exported value would be read here (a privacy leak into test
+  // runs, and nondeterminism).
+  vi.stubEnv("CLAUDE_CONFIG_DIR", "");
   for (const k of ENV_KEYS) saved[k] = process.env[k];
   // Every console line this file's process writes goes through the real
   // installer into `lines`, as the log sink does (R5.3).
@@ -226,6 +231,25 @@ describe("the chain: launcher → child → real bridge → real server (R1–R3
     }
     const health = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.text());
     expect(health).not.toMatch(HANDLE_RE);
+  }, 60_000);
+
+  it("R2.8 (#2358 PR 3b-1): at the run start, the presence subscriber and then the run-start subscriber each see the binding transport as bound", async () => {
+    const s = start();
+    const seam = s.tandemPresence?.();
+    if (!seam) throw new Error("no presence seam");
+    const seen: Array<{ what: string; bound: boolean }> = [];
+    const boundNow = () => mcpSessionBindsForTests().some((b) => b.boundSpawn !== null);
+    seam.subscribe((present) =>
+      seen.push({ what: present ? "present" : "not-present", bound: boundNow() }),
+    );
+    seam.onRunStart(() => seen.push({ what: "run-start", bound: boundNow() }));
+    await s.startFresh(spawnDir);
+    await waitFor(() => seen.some((e) => e.what === "run-start"), "the run start");
+    expect(seen).toEqual([
+      { what: "present", bound: true },
+      { what: "run-start", bound: true },
+    ]);
+    expect(seam.isPresent()).toBe(true);
   }, 60_000);
 
   // Not a late TEARDOWN in the sense of state still alive: the sign-in trip

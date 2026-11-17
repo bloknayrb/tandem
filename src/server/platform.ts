@@ -3,6 +3,7 @@ import envPaths from "env-paths";
 import net, { isIP } from "net";
 import path from "path";
 import { DEFAULT_BIND_HOST } from "../shared/constants.js";
+import { loopbackFetch } from "../shared/loopback-fetch.js";
 
 /**
  * Resolve the Tandem app-data root directory. `TANDEM_APP_DATA_DIR` overrides
@@ -195,7 +196,15 @@ async function probeHealthOnce(
   // A bare IPv6 literal is not a valid URL authority.
   const authority = isIP(host) === 6 ? `[${host}]` : host;
   try {
-    const res = await fetch(`http://${authority}:${mcpPort}/health`, {
+    // `loopbackFetch`, never the global `fetch` (#2422): under Node's
+    // environment proxy a probe of `127.0.0.1` / `[::1]` would go to the proxy,
+    // which can fail or misanswer it (one on this computer that honours the
+    // CONNECT reaches the real Tandem and answers correctly). A probe that
+    // returns null lets start-up proceed, and `freePort` can then kill the live
+    // Tandem on the port (#1758): an npm `tandem` (HTTP or stdio) started with
+    // the proxy variables set; the chain is inferred, not run. A LAN bind host
+    // still uses the global `fetch` inside `loopbackFetch`.
+    const res = await loopbackFetch(`http://${authority}:${mcpPort}/health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;

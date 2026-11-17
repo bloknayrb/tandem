@@ -8,6 +8,7 @@
  * transport-agnostic:
  *  - "v1":     OpenAI-compatible POST {endpoint}/v1/chat/completions
  *  - "native": Ollama-native       POST {endpoint}/api/chat
+ *  For both, one trailing `/v1` in the saved address is dropped first (`baseUrl`).
  *
  * Hardening beyond the spike's client (security review #1123):
  *  - endpoint comes from config, validated to loopback at the fetch boundary
@@ -18,8 +19,13 @@
  *  - error bodies are kept on stderr, never folded into the thrown message that
  *    may later reach the UI (the message carries only the status class).
  *
- * No SDK, no deps — Node 22+ global fetch / web streams.
+ * No SDK. The request goes through `loopbackFetch` (`src/shared/loopback-fetch.ts`,
+ * #2422): `baseUrl` leaves the host `127.0.0.1` or `[::1]`, so it is made with
+ * undici's own `fetch` and a private `Agent` and never through an environment
+ * proxy (`NODE_USE_ENV_PROXY` / `HTTP_PROXY`), which would otherwise see the
+ * prompt and with it the document's text. Web streams for the body.
  */
+import { loopbackFetch } from "../../shared/loopback-fetch.js";
 import { type LocalModelConfig, type LocalModelTransport, validateEndpoint } from "./config.js";
 
 export interface ToolSchema {
@@ -105,6 +111,36 @@ function parseArgs(raw: unknown): {
   }
 }
 
+/**
+ * The `fetch` every chat request is posted with: `loopbackFetch` (#2422), so
+ * the prompt never goes through an environment proxy.
+ *
+ * Swappable for ONE reason: the local-model measurement harness
+ * (`probe/local-model-spike/`) observes the shipped client's traffic with its
+ * fetch tap and scripts responses for its fingerprint, and it used to do both by
+ * replacing `globalThis.fetch`, which this client no longer calls. It now wraps
+ * what {@link localModelFetchForHarness} returns, so a measured request still
+ * leaves through `loopbackFetch`. Nothing in `src/` outside this file names the
+ * setter, and here `clientFetch` is assigned only by its declaration and the
+ * setter (`tests/server/local-model/client-fetch-seam.test.ts`); the seam test
+ * forbids the global `fetch` in `src/server` outside its allowlist and its
+ * written limits.
+ */
+let clientFetch: typeof fetch = loopbackFetch;
+
+/** The `fetch` the client currently posts with (measurement harness only). */
+export function localModelFetchForHarness(): typeof fetch {
+  return clientFetch;
+}
+
+/**
+ * Replace the `fetch` the client posts with; `null` puts `loopbackFetch` back.
+ * Measurement harness only: a wrapper must end in the `fetch` it wrapped.
+ */
+export function setLocalModelFetchForHarness(next: typeof fetch | null): void {
+  clientFetch = next ?? loopbackFetch;
+}
+
 /** Read a Response body to text with a hard byte ceiling, then return the text. */
 async function readBoundedText(res: Response, capBytes: number): Promise<string> {
   const body = res.body;
@@ -152,7 +188,10 @@ async function postLoopback<T>(
     ? AbortSignal.any([opts.signal, timeoutCtrl.signal])
     : timeoutCtrl.signal;
   try {
-    const res = await fetch(url, {
+    // `loopbackFetch` (above), never the global `fetch`: under Node's environment
+    // proxy that would send this loopback request, prompt and all, through the
+    // proxy (#2422).
+    const res = await clientFetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),

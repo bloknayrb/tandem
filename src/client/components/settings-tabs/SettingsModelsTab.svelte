@@ -216,6 +216,10 @@ async function selectAnswerer(value: ChatAnswerer) {
 const answererChecking = $derived(
   chatAnswerer.status === "pending" || (chatAnswerer.status === "failed" && chatAnswerer.reading),
 );
+/** R2.6's line, or "" when it does not apply. */
+const setToClaudeDoneLine = $derived(
+  !chatAnswerer.known && chatAnswerer.setToClaudeDone ? "Chat was set to Claude." : "",
+);
 
 /** "Set chat to Claude" (R2.5, R2.6): offered whenever the page's access is
  *  not foreign and no write refusal has latched. */
@@ -466,16 +470,27 @@ function askDelete(id: string) {
         </button>
       </div>
     {/if}
-    <!-- "Checking…" in a host that outlives its text (LiveRegion's rule), so
-         its arrival is a mutation a screen reader announces. -->
-    <LiveRegion data-testid="chat-answerer-loading">
-      {#if answererChecking}Checking…{/if}
-    </LiveRegion>
-    <!-- R2.6: a host that outlives its text, so the line's arrival is a
-         mutation a screen reader announces (LiveRegion's rule). -->
-    <LiveRegion data-testid="chat-answerer-set-claude-done">
-      {#if !chatAnswerer.known && chatAnswerer.setToClaudeDone}Chat was set to Claude.{/if}
-    </LiveRegion>
+    <!-- "Checking…" and R2.6's line: LiveRegion's announcer shape, because this
+         column is a gapped flex parent (an empty host would sit in it as dead
+         space). Each announcer is mounted for good and out of flow, so a
+         sentence's arrival is a mutation a screen reader announces; the
+         visible copy exists only while there is a sentence, aria-hidden so it
+         is not read twice. -->
+    <!-- "Checking…" is usually already true when the tab opens, so the
+         announcer takes it only after `announceReady` (the same real yield as
+         the own-window announcer above): created empty, it then receives the
+         sentence as a mutation instead of being inserted holding it. The
+         same accepted limit as above: for those 300 ms the radios'
+         description (#chat-answerer-description) lacks "Checking…" (the
+         visible copy is aria-hidden); do not fill the region at mount. -->
+    <LiveRegion srOnly message={announceReady && answererChecking ? "Checking…" : ""} data-testid="chat-answerer-loading" />
+    {#if answererChecking}
+      <p aria-hidden="true" style="margin: 0;">Checking…</p>
+    {/if}
+    <LiveRegion srOnly message={setToClaudeDoneLine} data-testid="chat-answerer-set-claude-done" />
+    {#if setToClaudeDoneLine}
+      <p aria-hidden="true" style="margin: 0;">{setToClaudeDoneLine}</p>
+    {/if}
     {#if offerSetClaude}
       <button
         type="button"

@@ -41,7 +41,7 @@
  * by message (`keyedDeliveryRounds`, read through a seam by
  * `events/delivery-state.ts`; flag on keyed, flag off master's one global
  * round). Still to come, named by content as in the plan: the greeting by
- * bound transport (PR 3b).
+ * bound transport (PR 3b-2).
  * **Nothing here answers a tool call**: the MCP tool
  * wrapper (`mcp/owned-op.ts`) asks these functions and builds the refusal, so
  * `/api`, autosave and the reload family never meet a check (ownership design §3.1).
@@ -542,7 +542,8 @@ export function setTransportView(view: () => ReadonlyArray<TransportViewEntry>):
   transportView = view;
 }
 
-/** Presence seam (ownership design §8.1). Not present until PR 3b wires the supervisor. */
+/** Presence seam (ownership design §8.1). Not present until PR 3b-2 wires the supervisor's
+ * computed presence (PR 3b-1, `Supervisor.tandemPresence`) here. */
 export function setTandemPresenceSource(source: () => boolean): void {
   presenceSource = source;
 }
@@ -633,7 +634,8 @@ function handOver(documentId: string): void {
 
 /**
  * Which record an MCP transport belongs to, from what its `initialize` carried
- * (ownership design §3.1 rules 1–3; rule 0, the handle bind, is PR 3a's).
+ * (ownership design §3.1 rules 1–3; rule 0's routing of a transport bound by PR 3a's
+ * handle bind is PR 3b-2's).
  * **Pure**: it creates nothing. `noteTransportRegistered` creates the record
  * once the transport is actually in the registry, so a record cannot be
  * removed in the window between the two (the registry's `add` awaits an LRU
@@ -925,7 +927,7 @@ function clearReOweRetry(ownerId: string): void {
  * (ownership design §6.5; the chat side re-owes only a message that is not
  * handled, so a handled one just loses its owner). The one owner-dropping
  * entry point: a lapse (unhandled only), a deleted record (all), and the
- * later triggers (PR 3b's end of presence, selecting origin
+ * later triggers (PR 3b-2's end of presence, selecting origin
  * "acknowledgement"; PR 5's Release) call it. Never throws.
  */
 function releaseMessageOwners(
@@ -1011,7 +1013,7 @@ function reOweChat(keys: readonly string[]): boolean {
 
 /**
  * The step 5 seam for a change of a message's owner (R6.4, Ruling 13): the
- * same `startOrWake` a document's change reaches, a no-op until PR 3b.
+ * same `startOrWake` a document's change reaches, a no-op until PR 3b-2.
  */
 function messageOwnerChanged(): void {
   startOrWake("message-owner");
@@ -1341,7 +1343,7 @@ export function setDocOwner(
     }
     // Step 4, publishing (PR 5): no body yet.
     compositeObserver?.("publish", documentId);
-    // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b's.
+    // Step 5 (ownership design §4.4). Frames for a non-tandem owner are PR 3b-2's.
     compositeObserver?.("wake", documentId);
     if (
       next !== null &&
@@ -1378,7 +1380,7 @@ export type WakeCause = OwnershipChangeCause | "message-owner";
 
 /**
  * Start or wake Tandem's Claude for returning work (ownership design §8.4).
- * **A no-op until PR 3b**, whose body must refuse through `aiRefusal()` before
+ * **A no-op until PR 3b-2**, whose body must refuse through `aiRefusal()` before
  * it writes to the child (ownership design §11.5, Critical Rule 9). A test may
  * watch it (`setWakeObserverForTests`).
  */
@@ -1531,7 +1533,7 @@ function changeCauseOf(
 const NOTICES_FAILED =
   "[ownership] a document changed hands but its change notice could not be queued; the change stands";
 
-/** The record a notice may reach: one that exists and is not Tandem's Claude (PR 3b's). */
+/** The record a notice may reach: one that exists and is not Tandem's Claude (PR 3b-2's). */
 function noticeRecord(ownerId: string | undefined): OwnerRecord | undefined {
   const record = ownerId === undefined ? undefined : records.get(ownerId);
   return record && record.recordKind !== "tandem" ? record : undefined;

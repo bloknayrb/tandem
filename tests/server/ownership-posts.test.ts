@@ -11,7 +11,7 @@
  * a write's claim `tandem_comment`, a tab close `POST /api/close`, a lapse
  * the grace. `setDocOwner` is used only for setup.
  *
- * Tests that need Tandem's Claude present use the presence seam; PR 3b makes
+ * Tests that need Tandem's Claude present use the presence seam; PR 3b-2 makes
  * that branch reachable in production (Ruling 5).
  *
  * The client side of R4 (a real Hocuspocus connection) is in
@@ -1073,7 +1073,7 @@ describe("R1: posts", () => {
     for (const text of [claimed.message, def.message]) expect(text).not.toMatch(/answer this/i);
   });
 
-  it("a present Tandem's Claude's doc-less post is accepted (it is the doc-less chat owner; the greeting's path once PR 3b binds it)", async () => {
+  it("a present Tandem's Claude's doc-less post is accepted (it is the doc-less chat owner; the greeting's path once PR 3b-2 binds it)", async () => {
     setTandemPresenceSource(() => true);
     expect((await post(TANDEM_OWNER_ID)).error).toBe(false);
     expect((claudeRows().at(-1) as ChatMessage).documentId).toBeUndefined();

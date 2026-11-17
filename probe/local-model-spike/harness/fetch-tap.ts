@@ -1,7 +1,9 @@
 /**
  * The fetch tap: an OBSERVER of the shipped chat client's traffic.
  *
- * It wraps `globalThis.fetch`, passes every call through untouched, and for the
+ * It wraps the `fetch` the shipped client posts with
+ * (`localModelFetchForHarness()`, which is `loopbackFetch` unless something else
+ * already wrapped it), passes every call through untouched, and for the
  * two chat paths reads a `clone()` of the response beside the product's own
  * read. It builds no request and changes none: what the product sends and what
  * the product receives are exactly what they would be without it. That is why
@@ -18,6 +20,11 @@
  * a v1 delta or message, `thinking` on a native message, a top-level `error`,
  * `usage.prompt_tokens` (v1) and `prompt_eval_count` (native).
  */
+
+import {
+  localModelFetchForHarness,
+  setLocalModelFetchForHarness,
+} from "../../../src/server/local-model/ollama-client.js";
 
 /** The two paths the shipped client posts chat to. Read-only knowledge of where
  *  to look, not a request: the tap never issues a call to either. */
@@ -157,12 +164,15 @@ async function readClone(
 }
 
 /**
- * Start observing. Wraps whatever `globalThis.fetch` is NOW (in the dry run
- * that is the scripted stub), so install it after any stub and restore it
- * before the stub is removed.
+ * Start observing. Wraps whatever the client's `fetch` is NOW
+ * (`localModelFetchForHarness()`), so install it after any stub and restore it
+ * before the stub is removed. Not `globalThis.fetch`: the client posts through
+ * `loopbackFetch` (#2422), which a global replacement never sees. (In a vitest
+ * run `loopbackFetch` delegates to the global `fetch`, so a test's
+ * `vi.stubGlobal("fetch", …)` still sits underneath the tap.)
  */
 export function installFetchTap(): FetchTap {
-  const previous = globalThis.fetch;
+  const previous = localModelFetchForHarness();
   const records: TapRecord[] = [];
   const pending: Promise<void>[] = [];
   /** Each clone still being read, with the record it belongs to. */
@@ -224,12 +234,14 @@ export function installFetchTap(): FetchTap {
     return res;
   };
 
-  globalThis.fetch = tapped as typeof fetch;
+  setLocalModelFetchForHarness(tapped as typeof fetch);
 
   const restore = () => {
     if (restored) return;
     restored = true;
-    if (globalThis.fetch === (tapped as typeof fetch)) globalThis.fetch = previous;
+    if (localModelFetchForHarness() === (tapped as typeof fetch)) {
+      setLocalModelFetchForHarness(previous);
+    }
   };
 
   return {
