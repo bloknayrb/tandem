@@ -97,7 +97,7 @@ remove that file for you; it is safe to delete.
 
 `sessions/`, `annotations/` and `doc-backups/` hold copies of your documents' content (a session
 is the whole open document; an annotation file quotes the text each comment is anchored to; a
-backup is a byte copy). They are private to your account:
+backup is a byte copy). They are private to your account (on Windows, within the limits below):
 
 - **macOS and Linux:** the three folders are `0700` (only you can list or open anything inside),
   and Tandem writes the files in them at `0600`. Tandem tightens a folder an older version created
@@ -106,8 +106,11 @@ backup is a byte copy). They are private to your account:
   written by an older version keeps its old mode until Tandem next rewrites it; until then the
   `0700` folder is what keeps it private. Quarantined files (`*.corrupt.*`, `*.partial.*`,
   `*.future`) are never rewritten, so the folder is all that protects them.
-- **Windows:** the same folders get an owner-only access list that their files and subfolders
-  inherit.
+- **Windows:** the same folders get an access list for you that their files and subfolders
+  inherit. On the one Windows 11 PC we measured it grants only you; on GitHub's Windows Server 2025
+  test machines, entries the parent folder already had stayed, and other PCs have not been measured. It is best effort: if setting it fails, Tandem logs that and keeps
+  working, and it does not remove an entry that someone with control of the folder added for
+  another account ([#2441 in the security register](security.md#accepted-bounded--decided-not-fixed)).
 - **The desktop app's one-time import from the npm folder** leaves the npm copy in place. Tandem
   makes that copy's `sessions/`, `annotations/` and `doc-backups/` folders private too when it imports them
   (`0700` on macOS and Linux; on Windows the old copy keeps the access list it already had).
