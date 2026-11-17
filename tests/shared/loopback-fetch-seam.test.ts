@@ -5,84 +5,197 @@ import { describe, expect, it } from "vitest";
 /**
  * #2422 seam: every other suite runs with `loopbackFetch` delegating to the
  * global `fetch` (tests/setup/loopback-fetch-passthrough.ts), so a request that
- * slipped back to the global `fetch` in a program that carries the token would
- * be invisible to them. Pinned here from source, for `src/cli`, `src/channel`,
- * `src/monitor` and `src/shared`:
+ * slipped back to the global `fetch` would be invisible to them. Pinned here
+ * from source, for `src/cli`, `src/channel`, `src/monitor`, `src/shared` and
+ * (since the #1123 follow-up) all of `src/server`, where the local-model client
+ * carries the chat prompt and so the document's text, and the start-up instance
+ * probe decides whether `freePort` may kill a running Tandem (#1758):
  *
  * - the bare identifier `fetch` appears nowhere but `typeof fetch` and an
  *   object key (`fetch: loopbackFetch`): a call, `= fetch`, `fetchImpl: fetch`,
  *   a shorthand `{ fetch }`, `cond ? x : fetch`, `return fetch`, `fetch.call(…)`
  *   and an argument are all caught;
- * - `globalThis.fetch` and `window.fetch` are forbidden;
- * - `undici` is imported only by `loopback-fetch.ts`, so no second, dispatcher-less
- *   `fetch` can be reached under another name;
- * - `node:http` and `node:https` are imported only by `doctor.ts`, whose two
+ * - `globalThis.fetch`, `global.fetch`, `window.fetch`, `self.fetch`, their
+ *   optional-chaining and bracket forms (`globalThis?.fetch`,
+ *   `globalThis["fetch"]`) and the destructuring form
+ *   (`const { fetch: f } = globalThis`) are forbidden;
+ * - `undici` is imported only by `loopback-fetch.ts`, so no second,
+ *   dispatcher-less `fetch` can be reached under another name;
+ * - `node:http` / `node:https` / `http` / `https` are imported (statically,
+ *   by `require` or by dynamic `import()`) only by `doctor.ts`, whose two
  *   probes pass a private agent (asserted below: an env proxy sends an
  *   absolute-form request through the default agent, which no `CONNECT`
  *   recorder shows).
  *
- * What this cannot see: a request made some other way (a spawned `curl`, a
- * websocket). The real-process tests cover the programs' actual behaviour.
+ * Exempt by rule, because neither can make a request: a declaration file
+ * (`*.d.ts`, skipped whole), and a type-only import or re-export
+ * (`import type … from "node:http"`, `export type … from "http"`), which TS
+ * erases. A mixed import (`import { type A, B } from "http"`) is NOT exempt,
+ * and neither is a type-position `import("node:http").Server` (it fails
+ * closed: rewrite it as an `import type`). The type-import strip stops at the
+ * first `;` or quote, which relies on biome writing statement semicolons.
+ *
+ * Everything else that matches must be one of `ALLOWED`'s exact source lines,
+ * each with its reason, and every entry must still match (no stale entries). A
+ * new hit, including a second hit of an allowed kind in an allowed file, fails.
+ *
+ * What this cannot see:
+ * - an alias for the global `fetch` imported from a module outside these
+ *   directories;
+ * - anything outside them (`probe/`, `scripts/`, `src-tauri/`, the client);
+ * - a request made some other way (a spawned process, a websocket, a raw
+ *   `net` socket);
+ * - a `fetch` reached through an alias of the global object
+ *   (`const g = globalThis; g.fetch`), `Reflect.get`, a computed key, or
+ *   `createRequire(…)("node:http")`;
+ * - code hidden by the comment strip: a `/*` inside a string or regex literal
+ *   removes everything up to the next `*\/` (none in these directories today).
+ * The real-process tests (`tests/cli/loopback-no-proxy.test.ts`,
+ * `tests/server/local-model/loopback-no-proxy.test.ts`) cover the programs'
+ * actual behaviour.
  */
 const ROOT = resolve(__dirname, "../..");
-const DIRS = ["src/cli", "src/channel", "src/monitor", "src/shared"];
+const DIRS = ["src/cli", "src/channel", "src/monitor", "src/shared", "src/server"];
 const LOOPBACK = "src/shared/loopback-fetch.ts";
 const HTTP_ALLOWED = new Set(["src/cli/doctor.ts"]);
 
+type Rule = "bare-fetch" | "global-fetch" | "undici-import" | "http-import";
+
 // `fetch` not part of a longer name, a property (`x.fetch`), a path (`a-fetch.js`).
-const BARE_FETCH = /(?<![\w.$/-])fetch\b(?!\s*:)/m;
-const GLOBAL_FETCH = /\b(?:globalThis|window|self)\.fetch\b/m;
+const BARE_FETCH = /(?<![\w.$/-])fetch\b(?!\s*:)/g;
+const GLOBAL_FETCH = new RegExp(
+  [
+    String.raw`\b(?:globalThis|global|window|self)\s*(?:\?\.|\.)\s*fetch\b`,
+    String.raw`\b(?:globalThis|global|window|self)\s*(?:\?\.)?\s*\[\s*["'\x60]fetch["'\x60]\s*\]`,
+    // `const { fetch: f } = globalThis` / `({ fetch } = window)`.
+    String.raw`\{[^{}]*\bfetch\b[^{}]*\}\s*=\s*(?:globalThis|global|window|self)\b`,
+  ].join("|"),
+  "g",
+);
 const UNDICI_IMPORT =
-  /from\s+["']undici["']|require\(\s*["']undici["']\s*\)|import\(\s*["']undici["']\s*\)/m;
+  /from\s+["']undici["']|require\(\s*["']undici["']\s*\)|import\(\s*["']undici["']\s*\)/g;
 const HTTP_IMPORT =
-  /from\s+["']node:https?["']|from\s+["']https?["']|require\(\s*["'](?:node:)?https?["']\s*\)/m;
+  /from\s+["'](?:node:)?https?["']|require\(\s*["'](?:node:)?https?["']\s*\)|import\(\s*["'](?:node:)?https?["']\s*\)/g;
+
+/**
+ * Every hit outside `loopback-fetch.ts` (and `doctor.ts`'s HTTP import) that
+ * is legitimate, by its exact trimmed source line. Verified by running the scan
+ * at the commit that added `src/server`.
+ */
+const ALLOWED: readonly { file: string; rule: Rule; line: string; reason: string }[] = [
+  {
+    file: "src/server/license/kv-store.ts",
+    rule: "bare-fetch",
+    line: "const fetchFn = deps.fetchFn ?? fetch;",
+    reason:
+      "the licence Worker's Cloudflare KV REST API (api.cloudflare.com), a remote host where an environment proxy may be what the user needs; licensing ships dark",
+  },
+  {
+    file: "src/server/integrations/install-claude-cli.ts",
+    rule: "http-import",
+    line: 'import { get as httpsGetDefault } from "node:https";',
+    reason: "downloads the Claude CLI installer from a remote https host, never loopback",
+  },
+  {
+    file: "src/server/integrations/install-claude-cli.ts",
+    rule: "bare-fetch",
+    line: "req.destroy(new Error(`Installer fetch timed out after ${FETCH_TIMEOUT_MS}ms`));",
+    reason: "the word inside an error message, not code",
+  },
+  {
+    file: "src/server/launcher/api-routes.ts",
+    rule: "bare-fetch",
+    line: 'message: "nonce mismatch (single-use; fetch a fresh one from GET /api/launcher/nonce)",',
+    reason: "the word inside a response message, not code",
+  },
+];
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {
     const p = join(dir, n);
-    return statSync(p).isDirectory() ? walk(p) : p.endsWith(".ts") ? [p] : [];
+    if (statSync(p).isDirectory()) return walk(p);
+    return p.endsWith(".ts") && !p.endsWith(".d.ts") ? [p] : [];
   });
+}
+
+/** Comments out, `typeof fetch` neutralised, type-only imports/re-exports erased. */
+function strip(raw: string): string {
+  return (
+    raw
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+      .replace(/typeof\s+fetch\b/g, "typeof _")
+      // `import type X from "m"`, `import type { A, B } from "m"` (any line
+      // breaks), `export type { A } from "m"`. `[^;"']*` cannot cross a string
+      // or a statement end, so a value import is never swallowed.
+      .replace(/^\s*(?:import|export)\s+type\b[^;"']*from\s*["'][^"']+["']\s*;?/gm, "")
+  );
 }
 
 function sources(): { rel: string; code: string }[] {
   return DIRS.flatMap((d) => walk(join(ROOT, d))).map((f) => ({
     rel: f.slice(ROOT.length + 1).replace(/\\/g, "/"),
-    code: readFileSync(f, "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .replace(/typeof\s+fetch\b/g, "typeof _"),
+    code: strip(readFileSync(f, "utf8")),
   }));
 }
 
-describe("no path around loopbackFetch in the programs that carry the token (#2422)", () => {
+/** Each match as `{file, rule, line}`, `line` the trimmed source line it is on. */
+function hits(rule: Rule, re: RegExp): { file: string; rule: Rule; line: string }[] {
+  return sources().flatMap(({ rel, code }) => {
+    if (rel === LOOPBACK) return [];
+    if (rule === "http-import" && HTTP_ALLOWED.has(rel)) return [];
+    const lines = code.split("\n");
+    return [...code.matchAll(re)].map((m) => {
+      const n = code.slice(0, m.index).split("\n").length - 1;
+      return { file: rel, rule, line: (lines[n] ?? "").trim() };
+    });
+  });
+}
+
+function allHits() {
+  return [
+    ...hits("bare-fetch", BARE_FETCH),
+    ...hits("global-fetch", GLOBAL_FETCH),
+    ...hits("undici-import", UNDICI_IMPORT),
+    ...hits("http-import", HTTP_IMPORT),
+  ];
+}
+
+const key = (h: { file: string; rule: Rule; line: string }) => `${h.file} [${h.rule}] ${h.line}`;
+
+describe("no path around loopbackFetch in the programs that make loopback requests (#2422)", () => {
   it("finds the files it is meant to scan", () => {
     const rels = sources().map((s) => s.rel);
     expect(rels).toContain("src/cli/rotate-token.ts");
     expect(rels).toContain("src/cli/license.ts");
     expect(rels).toContain("src/shared/auth-fetch.ts");
+    expect(rels).toContain("src/server/local-model/ollama-client.ts");
+    expect(rels).toContain("src/server/platform.ts");
   });
 
-  it("uses loopbackFetch, never the bare or global fetch", () => {
-    const offenders = sources()
-      .filter((s) => s.rel !== LOOPBACK && (BARE_FETCH.test(s.code) || GLOBAL_FETCH.test(s.code)))
-      .map((s) => s.rel);
-    expect(offenders).toEqual([]);
-  });
-
-  it("imports undici only in loopback-fetch.ts", () => {
+  it("every hit is an allowlisted line: no bare or global fetch, no stray undici or http import", () => {
+    const allowed = new Set(ALLOWED.map(key));
     expect(
-      sources()
-        .filter((s) => s.rel !== LOOPBACK && UNDICI_IMPORT.test(s.code))
-        .map((s) => s.rel),
+      allHits()
+        .map(key)
+        .filter((k) => !allowed.has(k)),
     ).toEqual([]);
   });
 
-  it("imports node:http / node:https only in doctor.ts", () => {
-    expect(
-      sources()
-        .filter((s) => !HTTP_ALLOWED.has(s.rel) && HTTP_IMPORT.test(s.code))
-        .map((s) => s.rel),
-    ).toEqual([]);
+  it("every allowlist entry still matches exactly one hit", () => {
+    const counts = new Map<string, number>();
+    for (const h of allHits()) counts.set(key(h), (counts.get(key(h)) ?? 0) + 1);
+    expect(ALLOWED.map((a) => [key(a), counts.get(key(a)) ?? 0])).toEqual(
+      ALLOWED.map((a) => [key(a), 1]),
+    );
+  });
+
+  it("the two #1123 call sites use loopbackFetch", () => {
+    const code = (rel: string) => sources().find((s) => s.rel === rel)?.code ?? "";
+    expect(code("src/server/local-model/ollama-client.ts")).toMatch(/await loopbackFetch\(url,/);
+    expect(code("src/server/platform.ts")).toMatch(
+      /await loopbackFetch\(`http:\/\/\$\{authority\}/,
+    );
   });
 
   it("the doctor's request sites all pass the private agent", () => {
@@ -92,5 +205,62 @@ describe("no path around loopbackFetch in the programs that carry the token (#24
     expect(sites.length).toBeGreaterThan(0);
     expect(agents.length).toBe(sites.length);
     expect(doctor).toMatch(/const PROBE_AGENT = new Agent\(\)/);
+  });
+});
+
+describe("the scan's patterns catch the forms they claim to (controls)", () => {
+  const caught = (re: RegExp, src: string) => [...strip(src).matchAll(re)].length > 0;
+
+  it.each([
+    "const r = await fetch(url);",
+    "const f = cond ? x : fetch;",
+    "const deps = { fetchImpl: fetch };",
+    "return fetch;",
+    "fetch.call(null, url);",
+  ])("bare fetch: %s", (src) => {
+    expect(caught(BARE_FETCH, src)).toBe(true);
+  });
+
+  it.each([
+    "const r = await globalThis.fetch(url);",
+    'const f = globalThis["fetch"];',
+    "const { fetch: f } = globalThis;",
+    "const { fetch } = self;",
+    "const r = await globalThis?.fetch(url);",
+    'const f = globalThis?.["fetch"];',
+    "const r = await global.fetch(url);",
+    "const { fetch } = global;",
+    "({ fetch: g } = window);",
+  ])("global fetch: %s", (src) => {
+    expect(caught(GLOBAL_FETCH, src)).toBe(true);
+  });
+
+  it.each([
+    'import http from "node:http";',
+    'import { request } from "https";',
+    'const http = await import("node:http");',
+    'const m = await import("https");',
+    'const h = require("node:https");',
+    'import { type IncomingMessage, request } from "node:http";',
+  ])("http import: %s", (src) => {
+    expect(caught(HTTP_IMPORT, src)).toBe(true);
+  });
+
+  it.each(['const u = await import("undici");', 'import { fetch as f } from "undici";'])(
+    "undici import: %s",
+    (src) => {
+      expect(caught(UNDICI_IMPORT, src)).toBe(true);
+    },
+  );
+
+  it.each([
+    'import type { Server } from "node:http";',
+    'import type {\n  IncomingMessage,\n  Server,\n} from "http";',
+    'export type { Server } from "node:https";',
+    "const t: typeof fetch = loopbackFetch;",
+    "const deps = { fetch: loopbackFetch };",
+  ])("exempt: %s", (src) => {
+    const s = strip(src);
+    expect([...s.matchAll(HTTP_IMPORT)].length + [...s.matchAll(BARE_FETCH)].length).toBe(0);
   });
 });

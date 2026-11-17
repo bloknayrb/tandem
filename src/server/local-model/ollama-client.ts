@@ -18,8 +18,13 @@
  *  - error bodies are kept on stderr, never folded into the thrown message that
  *    may later reach the UI (the message carries only the status class).
  *
- * No SDK, no deps — Node 22+ global fetch / web streams.
+ * No SDK. The request goes through `loopbackFetch` (`src/shared/loopback-fetch.ts`,
+ * #2422): `baseUrl` leaves the host `127.0.0.1` or `[::1]`, so it is made with
+ * undici's own `fetch` and a private `Agent` and never through an environment
+ * proxy (`NODE_USE_ENV_PROXY` / `HTTP_PROXY`), which would otherwise see the
+ * prompt and with it the document's text. Web streams for the body.
  */
+import { loopbackFetch } from "../../shared/loopback-fetch.js";
 import { type LocalModelConfig, type LocalModelTransport, validateEndpoint } from "./config.js";
 
 export interface ToolSchema {
@@ -152,7 +157,9 @@ async function postLoopback<T>(
     ? AbortSignal.any([opts.signal, timeoutCtrl.signal])
     : timeoutCtrl.signal;
   try {
-    const res = await fetch(url, {
+    // Never the global `fetch`: under Node's environment proxy that would send
+    // this loopback request, prompt and all, through the proxy (#2422).
+    const res = await loopbackFetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
