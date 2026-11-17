@@ -419,6 +419,15 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "is re-decided when OWNERSHIP_ENABLED flips.",
     closedBy: "Bryan's decision on #2439 at the flip, recorded in the register.",
   },
+  {
+    gap:
+      "After a local-model period, a start Tandem's Claude owes for its own work is handled at " +
+      "the user's switch back as today's held message start: it is not started while another AI " +
+      "is attached. Bryan decided on 2026-11-17 (picked from options: 'Yes, unless Claude is " +
+      "Off') that it starts whether or not another AI is on, unless Claude is Off. The behaviour " +
+      "is still built as today's.",
+    closedBy: "3b-2b builds the decided behaviour, with a test pinning it.",
+  },
 ];
 
 /**
