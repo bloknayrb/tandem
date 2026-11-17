@@ -162,6 +162,13 @@ const REFUSAL: AiRefusal = {
 // --- Waits with no timer --------------------------------------------------------
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+/**
+ * A few `setImmediate` turns: enough for microtasks and in-process emits (a
+ * fake child's stdout line, a `kill()`'s exit, the run-start microtask). A turn
+ * COUNT, so it is used only where no real I/O sits between the action and the
+ * event it waits for; anything that waits on the file system (a spawn's run
+ * files, a settings write) goes through `until`, which is bounded on real time.
+ */
 async function settle(n = 5): Promise<void> {
   for (let i = 0; i < n; i++) await tick();
 }
@@ -191,7 +198,9 @@ let children: FakeChild[];
 let onSpawn: ((child: FakeChild) => void) | null;
 let sups: Supervisor[];
 let errSpy: MockInstance<typeof console.error>;
-let reaperPath: string | undefined;
+/** Called synchronously when `setStandby` arms the standby watch (R2.7's
+ * live-read case reads the seam from inside it). */
+let standbySubscribeProbe: (() => void) | null;
 
 async function writeIntegration(present = true): Promise<void> {
   const file: IntegrationsFile = {
@@ -222,7 +231,7 @@ beforeEach(async () => {
   vi.stubEnv("CLAUDE_CONFIG_DIR", "");
   vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("TANDEM_TAURI_SIDECAR", "");
-  reaperPath = process.execPath;
+  standbySubscribeProbe = null;
   vi.stubEnv("TANDEM_REAPER_PATH", process.execPath);
   resetOwnerHandleBindForTests();
   tmpRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "presence-")));
@@ -318,7 +327,10 @@ function makeSupervisor(extra: ExtraOpts = {}): {
     integrationsBase: baseDir,
     subscribeToEvents: sub,
     subscribeDuringGap: sub,
-    subscribeDuringStandby: sub,
+    subscribeDuringStandby: (cb) => {
+      standbySubscribeProbe?.();
+      return sub(cb);
+    },
   });
   sups.push(sup);
   const seam = sup.tandemPresence?.() as TandemPresenceSeam;
@@ -530,7 +542,7 @@ describe("R1.3/R1.4: teardown unbound after the window started, one test per cau
     await noJudgementAfterWindow(h);
   });
 
-  it("idle-stop: not judged", async () => {
+  it("idle-stop: not judged (test-only staging: the idle limit below the window; a real idle stop comes after it)", async () => {
     await updateLauncherSettings(baseDir, { lifetime: "idle", idleMinutes: 1 }, null);
     const { h, c1 } = await unboundFresh({ idleMinuteMs: WINDOW / 4 });
     pushJson(c1, RESULT_OK);
@@ -562,6 +574,15 @@ describe("R1.3/R1.4: teardown unbound after the window started, one test per cau
     await until(() => c1.signalCode !== null, "the sign-in trip's kill");
     await settle();
     await noJudgementAfterWindow(h);
+  });
+
+  it("a child that emits `error` and then exits non-zero, with a turn written: not judged (cause child-error)", async () => {
+    const { h, c1 } = await unboundFresh();
+    c1.emit("error", EPIPE()); // not ENOENT: spawn-failed, a restart scheduled
+    c1.exitWith(1, null); // its exit follows: site (a) runs, and must decline
+    await settle();
+    expect(h.log).toEqual([]);
+    expect(failedLines()).toBe(0);
   });
 
   it("a child that emits `error` (ENOENT): not a failed bind", async () => {
@@ -926,13 +947,18 @@ describe("R2.3: when each change is announced", () => {
   });
 
   it("by predicate: a crash restart whose planAndSpawn returns early with spawn-failed recorded is not present only when the settle fires after launching--", async () => {
-    const h = makeSupervisor();
+    // Only `launching--` turns the value: the restart's plan still finds the
+    // integration (`configured` stays true) and is refused by the licence,
+    // which records nothing over `spawn-failed` (`recordLicenceRefusal`).
+    let refuse: AiRefusal | null = null;
+    const h = makeSupervisor({ aiRefusal: () => refuse });
     const c1 = await boundFreshRun(h);
     c1.emit("error", EPIPE()); // not ENOENT: spawn-failed, a restart scheduled
     await settle();
-    await writeIntegration(false); // the restart's plan finds nothing
+    refuse = REFUSAL;
     advance(1); // the restart timer fires; planAndSpawn returns early
-    await until(() => logText().includes("No claude-code integration"), "the early return");
+    await until(() => logText().includes("AI features are unlicensed"), "the early return");
+    expect(h.sup.status().lastError).toBe("spawn-failed");
     await settle();
     expect(h.log).toEqual(["present", "run-start"]);
     advance(SETTLE);
@@ -1020,10 +1046,8 @@ describe("R2.6: a throwing stopAndSpawn records spawn-failed when nothing else d
     const h = makeSupervisor();
     await boundFreshRun(h);
     vi.stubEnv("TANDEM_REAPER_PATH", path.join(tmpRoot, "no-such-reaper"));
-    reaperPath = undefined;
     await expect(h.sup.relaunch()).rejects.toThrow();
     expect(h.sup.status().lastError).toBe("binary-not-found");
-    void reaperPath;
   });
 
   it("with the late licence refusal: unlicensed kept", async () => {
@@ -1097,9 +1121,9 @@ describe("R2.3: shutdown", () => {
   it("start() returning early with a tripped breaker: the suppression lifts", async () => {
     const h = makeSupervisor();
     const c1 = await boundFreshRun(h);
+    void c1;
     await h.sup.stop();
-    c1.emit("error", ENOENT()); // a late error trips the breaker (superseded: ignored)
-    // Trip it on a live path instead: a start whose child errors ENOENT.
+    // Trip the breaker on a live path: a start whose child errors ENOENT.
     await h.sup.start();
     const c2 = await childN(2);
     c2.emit("error", ENOENT());
@@ -1157,6 +1181,21 @@ describe("R2.3: shutdown", () => {
 });
 
 describe("R2.7: the live standby read", () => {
+  it("answers Off synchronously inside setStandby's write, before any recompute has run", async () => {
+    const h = makeSupervisor();
+    await boundFreshRun(h);
+    const seen: Array<{ notOff: boolean; present: boolean; recomputes: number }> = [];
+    const before = h.seam.diagnosticsForTests().recomputes;
+    standbySubscribeProbe = () =>
+      seen.push({
+        notOff: h.seam.standbyNotOff(),
+        present: h.seam.isPresent(),
+        recomputes: h.seam.diagnosticsForTests().recomputes,
+      });
+    await h.sup.updateSettings({ startMode: "off" });
+    expect(seen[0]).toEqual({ notOff: false, present: true, recomputes: before });
+  });
+
   it("answers Off immediately after an Off is saved, while the announced value has not moved", async () => {
     const h = makeSupervisor();
     await boundFreshRun(h);
@@ -1169,7 +1208,59 @@ describe("R2.7: the live standby read", () => {
   });
 });
 
+describe("none from status()", () => {
+  it("status() never recomputes or announces, including its cli-unusable clear (Ruling H)", async () => {
+    let bin: string | null = process.execPath;
+    const h = makeSupervisor({ resolveClaudeCommand: () => bin });
+    await boundFreshRun(h);
+    await h.sup.updateSettings({ startMode: "off" });
+    await settle();
+    bin = null;
+    expect(await h.sup.startByUser()).toEqual({ spawned: false, why: "cli-unusable" });
+    await settle();
+    advance(SETTLE * 2);
+    await settle();
+    const log = [...h.log];
+    const recomputes = h.seam.diagnosticsForTests().recomputes;
+    bin = process.execPath;
+    expect(h.sup.status().lastError).toBeUndefined(); // the clear ran
+    for (let i = 0; i < 5; i++) h.sup.status();
+    await settle();
+    expect(h.seam.diagnosticsForTests().recomputes).toBe(recomputes);
+    expect(h.log).toEqual(log);
+  });
+});
+
 describe("the dark requirement: flag off, nothing", () => {
+  it("flag off: no microtask is queued and no timer beyond master's is armed, across a spawn, a turn, a relaunch and a stop", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const micro = vi.spyOn(globalThis, "queueMicrotask");
+    try {
+      const h = makeSupervisor();
+      await h.sup.startFresh(cwdDir);
+      const c1 = await childN(1);
+      await settle();
+      // Master's timers for a fresh spawn with its bootstrap turn: the wake
+      // latch, the receipt check and the backoff reset. A window timer would
+      // make this 4.
+      expect(vi.getTimerCount()).toBe(3);
+      pushJson(c1, RESULT_OK);
+      await settle();
+      h.emit(annotationEvent()); // a turn
+      await settle();
+      expect(vi.getTimerCount()).toBe(3);
+      await h.sup.relaunch();
+      await childN(2);
+      await settle();
+      await h.sup.stop();
+      await settle();
+      expect(micro).not.toHaveBeenCalled();
+      expect(h.seam.diagnosticsForTests().recomputes).toBe(0);
+    } finally {
+      micro.mockRestore();
+    }
+  });
+
   it("R2.6's guard: flag off, a relaunch whose plan read throws records no spawn-failed (master's behaviour)", async () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
     const h = makeSupervisor();

@@ -811,6 +811,13 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
    * sit inside that field's setter. The one named exception (Ruling H) is
    * `status()`'s `cli-unusable` clear, exactly one `lastError = undefined`
    * there.
+   *
+   * What this pin cannot see (review round 1, item 7): a write as the head of
+   * a `for (x of …)` or `for (x in …)` loop; a setter that calls
+   * `markPresenceDirty` only conditionally (the check below is that the call
+   * appears in the setter's body, not that it always runs); and a raw write
+   * inside a nested function within the field's own setter, which is counted
+   * as the setter's. Each is a review matter: none is a shape this file uses.
    */
   const SETTERS: Record<string, string> = {
     lastError: "setLastError",
@@ -924,6 +931,16 @@ describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2
       /const noError = lastError === undefined \|\| restartTimer !== null \|\| launching > 0;/,
     );
     expect(body).not.toMatch(/messageStartQueued|restartPending\(/);
+  });
+
+  it("the seam's diagnosticsForTests is read by no src file but its definition (review round 1, item 9)", () => {
+    const readers = [...SRC_FILES.entries()]
+      .filter(([, text]) => text.includes("diagnosticsForTests"))
+      .map(([file, text]) => [file, text.match(/diagnosticsForTests/g)?.length ?? 0] as const);
+    // Declared on `TandemPresenceSeam` and defined on the seam object: two
+    // mentions, both in supervisor.ts. A route, tool or log line reading it
+    // would add a mention here or a file below.
+    expect(readers).toEqual([["src/server/launcher/supervisor.ts", 2]]);
   });
 
   it("R2.8's order: noteOwnerHandleBind records the transport's bind synchronously after confirmBind", () => {
