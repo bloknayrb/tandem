@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
@@ -266,76 +267,55 @@ describe("AI surface inventory (#1346 discovery)", () => {
   });
 });
 
-/**
- * Blank the contents of string and template literals (keeping their quotes and
- * the text's length), so a brace inside a literal (`startsWith("{")`) does not
- * move the brace scan below. Comments must already be stripped.
- */
-function blankLiterals(src: string): string {
-  let out = "";
-  let i = 0;
-  while (i < src.length) {
-    const ch = src[i];
-    if (ch === '"' || ch === "'" || ch === "`") {
-      let j = i + 1;
-      while (j < src.length && src[j] !== ch) {
-        if (src[j] === "\\") j++;
-        else if (ch !== "`" && src[j] === "\n") break; // not a string after all
-        j++;
+/** The innermost named function around `node`: a declaration, a method, or a
+ *  function or arrow bound to a name (`const f = () => …`, `f: () => …`). */
+function enclosingName(node: ts.Node): string {
+  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+    if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) {
+      if (n.name) return n.name.getText();
+    }
+    if (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) {
+      const p = n.parent;
+      if ((ts.isVariableDeclaration(p) || ts.isPropertyAssignment(p)) && p.name) {
+        return p.name.getText();
       }
-      out += ch + src.slice(i + 1, j).replace(/[^\n]/g, " ") + (src[j] ?? "");
-      i = j + 1;
-      continue;
     }
-    out += ch;
-    i++;
   }
-  return out;
+  return "<top>";
 }
 
-const CONTROL_WORDS = new Set(["if", "for", "while", "switch", "catch", "function", "return"]);
-
-/** The name a `{` opens, read from the text since the previous `;`, `{` or `}`:
- *  a function declaration, a method, or an arrow bound to a name. Null for
- *  anything else (a block, an anonymous callback, an object literal). */
-function headerName(header: string): string | null {
-  const h = header.trim();
-  const decl = /\bfunction\s+(\w+)\s*\([\s\S]*\)[\s\S]*$/.exec(h);
-  if (decl) return decl[1];
-  const arrow = /(\w+)\s*(?::[^=()]*)?[=:]\s*(?:async\s*)?\([^()]*\)\s*(?::[^=]*)?=>$/.exec(h);
-  if (arrow) return arrow[1];
-  const method = /^(?:async\s+)?(\w+)\s*\([^()]*\)\s*(?::[\s\S]*)?$/.exec(h);
-  if (method && !CONTROL_WORDS.has(method[1])) return method[1];
-  return null;
+/** Every node of `src` that `pick` keys, as `enclosingName:key`. Parsed, so a
+ *  comment or a string that mentions a name is never a site. */
+function sitesIn(src: string, pick: (node: ts.Node) => string | null): string[] {
+  const file = ts.createSourceFile("s.ts", src, ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  const visit = (node: ts.Node): void => {
+    const key = pick(node);
+    if (key !== null) out.push(`${enclosingName(node)}:${key}`);
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return out.sort();
 }
 
-/** Each match of `pattern` in `src`, keyed by its innermost enclosing named
- *  function (brace-scanned over the comment-stripped, literal-blanked text). */
-function sitesByEnclosingFunction(src: string, pattern: RegExp): string[] {
-  const text = blankLiterals(stripComments(src));
-  const enclosing: Array<string | null> = [];
-  const nameAt = new Map<number, string>();
-  let boundary = 0;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === "{") {
-      enclosing.push(headerName(text.slice(boundary, i)));
-      boundary = i + 1;
-    } else if (ch === "}") {
-      enclosing.pop();
-      boundary = i + 1;
-    } else if (ch === ";") {
-      boundary = i + 1;
-    }
-    const inner = [...enclosing].reverse().find((n) => n !== null);
-    if (inner) nameAt.set(i, inner);
+/** An identifier named `name` that is not the name a declaration declares. */
+function isReferenceTo(node: ts.Node, names: readonly string[]): node is ts.Identifier {
+  if (!ts.isIdentifier(node) || !names.includes(node.text)) return false;
+  const p = node.parent;
+  return !((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p)) && p.name === node);
+}
+
+/** An assignment to `name` whose value is not the literal `false`. */
+function raisesFlag(node: ts.Node, name: string): boolean {
+  if (!ts.isBinaryExpression(node) || !ts.isIdentifier(node.left) || node.left.text !== name) {
+    return false;
   }
-  const raw = stripComments(src);
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  // `blankLiterals` keeps every character position of the stripped text, so a
-  // match's offset there is its offset in the scan.
-  return [...raw.matchAll(new RegExp(pattern.source, flags))].map(
-    (m) => `${nameAt.get(m.index) ?? "<top>"}:${m[1] ?? ""}`,
+  const op = node.operatorToken.kind;
+  if (op === ts.SyntaxKind.EqualsToken) return node.right.kind !== ts.SyntaxKind.FalseKeyword;
+  return (
+    op === ts.SyntaxKind.BarBarEqualsToken ||
+    op === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+    op === ts.SyntaxKind.QuestionQuestionEqualsToken
   );
 }
 
@@ -357,10 +337,16 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
   ].join(" ");
 
   it("sendTurn's call sites, and every other reference to it", () => {
-    const sites = sitesByEnclosingFunction(
-      SUPERVISOR,
-      /\bsendTurn\b(?!\s*\(text)\s*\(?\s*(\w*)/,
-    ).sort();
+    // Keyed `function:argument` for a call, `function:<ref>` for a reference
+    // that is not called (passed on or aliased).
+    const sites = sitesIn(SUPERVISOR, (node) => {
+      if (!isReferenceTo(node, ["sendTurn"])) return null;
+      const call = node.parent;
+      if (ts.isCallExpression(call) && call.expression === node) {
+        return call.arguments[0]?.getText() ?? "";
+      }
+      return "<ref>";
+    });
     expect(sites, OBLIGATION).toEqual(
       [
         "flushPendingWake:SUPERVISOR_WAKE_PROMPT",
@@ -374,10 +360,7 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
   });
 
   it("the writers of a pending wake", () => {
-    const sites = sitesByEnclosingFunction(
-      SUPERVISOR,
-      /\bpendingWake\s*(?:=(?![=>])(?!\s*false\b)|\|\|=|&&=|\?\?=)()/,
-    ).sort();
+    const sites = sitesIn(SUPERVISOR, (node) => (raisesFlag(node, "pendingWake") ? "" : null));
     expect(sites, OBLIGATION).toEqual(
       [
         "onNoReceipt:",
@@ -390,22 +373,66 @@ describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
     );
   });
 
+  it("the raw writes to the child's stdin, and the turn serializer, sit only in sendTurn", () => {
+    // A write that goes round `sendTurn` (`spawned.stdin.write(serializeUserTurn(…))`
+    // anywhere else) would show in neither list above.
+    const sites = sitesIn(SUPERVISOR, (node) => {
+      if (isReferenceTo(node, ["serializeUserTurn"])) return "serializeUserTurn";
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        node.name.text === "write" &&
+        /\bstdin\??$/.test(node.expression.getText())
+      ) {
+        return "stdin.write";
+      }
+      return null;
+    });
+    expect(sites, OBLIGATION).toEqual(
+      ["<top>:serializeUserTurn", "sendTurn:serializeUserTurn", "sendTurn:stdin.write"].sort(),
+    );
+  });
+
+  it("the writers of a wake owed across spawns", () => {
+    // Not a write to the child by itself — such a wake is written only by a
+    // spawn, which passes the licence admission — but a new owing site is
+    // listed so its review sees it.
+    const sites = sitesIn(SUPERVISOR, (node) =>
+      raisesFlag(node, "wakeOwedAcrossSpawns") ? "" : null,
+    );
+    expect(sites, OBLIGATION).toEqual(
+      [
+        "armGapWatch:", // the gap watch's callback
+        "onLocalPeriodChange:",
+        "onLocalPeriodChange:",
+        "sendTurn:", // a failed write after teardown
+        "setStandby:", // the standby watch's callback
+        "startForMessage:",
+        "startOrWakeStep:", // a pending restart timer is owed the wake
+        "startOrWakeStep:", // before its start
+        "teardownTurnDelivery:",
+      ].sort(),
+    );
+  });
+
   it("the functions that reach a turn write are referenced only where known", () => {
-    const refs = sitesByEnclosingFunction(
-      SUPERVISOR,
-      /\b(onTandemEvent|flushPendingWake|writeGreeting|requestWakeOnSpawn)\b/,
-    ).sort();
-    // Each function's own declaration counts once, in `spawnOnce`.
+    // Each function's own declaration is not a reference; every call, and any
+    // reference passed on, is.
+    const refs = sitesIn(SUPERVISOR, (node) =>
+      isReferenceTo(node, [
+        "onTandemEvent",
+        "flushPendingWake",
+        "writeGreeting",
+        "requestWakeOnSpawn",
+      ])
+        ? node.text
+        : null,
+    );
     expect(refs, OBLIGATION).toEqual(
       [
         "handleStdoutLine:flushPendingWake",
         "sendTurn:flushPendingWake",
-        "spawnOnce:flushPendingWake",
-        "spawnOnce:onTandemEvent",
         "spawnOnce:onTandemEvent",
         "spawnOnce:requestWakeOnSpawn",
-        "spawnOnce:requestWakeOnSpawn",
-        "spawnOnce:writeGreeting",
         "spawnOnce:writeGreeting",
         "spawnOnce:writeGreeting",
       ].sort(),
