@@ -479,7 +479,10 @@ function askDelete(id: string) {
     <!-- "Checking…" is usually already true when the tab opens, so the
          announcer takes it only after `announceReady` (the same real yield as
          the own-window announcer above): created empty, it then receives the
-         sentence as a mutation instead of being inserted holding it. -->
+         sentence as a mutation instead of being inserted holding it. The
+         same accepted limit as above: for those 300 ms the radios'
+         description (#chat-answerer-description) lacks "Checking…" (the
+         visible copy is aria-hidden); do not fill the region at mount. -->
     <LiveRegion srOnly message={announceReady && answererChecking ? "Checking…" : ""} data-testid="chat-answerer-loading" />
     {#if answererChecking}
       <p aria-hidden="true" style="margin: 0;">Checking…</p>

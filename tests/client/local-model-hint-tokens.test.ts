@@ -27,7 +27,7 @@ function rules(source: string): Array<{ selector: string; body: string }> {
   }));
 }
 
-const MUTED = /color\s*:\s*var\(--tandem-fg-muted\)/;
+const MUTED = /color\s*:\s*var\(--tandem-fg-muted\)/i;
 
 /** The element opening at `start` through its matching close tag (same-name
  *  nesting counted); the open tag alone when it is self-closing. */
@@ -60,7 +60,7 @@ describe("R4.4: the local-model hints use --tandem-fg-muted", () => {
         // A later rule for the same class (or a descendant) cannot override it
         // with any other colour.
         for (const r of all.filter((x) => hasClass(x.selector, cls))) {
-          for (const decl of r.body.match(/(?:^|[;\s])color\s*:[^;]*/g) ?? []) {
+          for (const decl of r.body.match(/(?:^|[;\s])color\s*:[^;]*/gi) ?? []) {
             expect(decl.trim().replace(/^;/, "").trim(), r.selector).toMatch(MUTED);
           }
         }
