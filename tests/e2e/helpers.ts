@@ -528,7 +528,9 @@ export const ALLOWANCE_NOTICE_PREFIXES: readonly string[] = [
  * Every warning toast on the page is one of the allowance's notices — the
  * Models specs EXPECT those (their writes are not own-window writes) and
  * nothing else. A cloud-model write raises none; a local-model write raises
- * the answering one.
+ * the answering one only when it changes which local model answers (its
+ * entry, endpoint or model id), or when a local model starts answering
+ * (`noticeAnsweringChange` in `src/server/local-model/collaborator.ts`).
  */
 export async function expectOnlyAllowanceNotices(page: Page): Promise<void> {
   const texts = await page

@@ -678,14 +678,25 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
   // Other entry with the same address and model id send the same request.
   describe("every local provider sends the same request (R3.1)", () => {
     const MODEL_ADDRESS = "http://127.0.0.1:1234";
+    const MODEL_CALL = `${MODEL_ADDRESS}/v1/chat/completions`;
     let sent: Array<{ url: string; init: RequestInit }>;
+    /** Every URL that is neither the test's own route server nor the model
+     *  call. Each is refused as a network error; the tests assert none. */
+    let unexpected: string[];
 
     beforeEach(async () => {
       sent = [];
+      unexpected = [];
       const realFetch = globalThis.fetch;
       vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-        const url = String(input);
-        if (!url.startsWith(MODEL_ADDRESS)) return realFetch(input, init);
+        const url = input instanceof Request ? input.url : String(input);
+        // Only the test's own route server reaches the real `fetch`.
+        if (url.startsWith(`${baseUrl}/`)) return realFetch(input, init);
+        if (url !== MODEL_CALL) {
+          unexpected.push(url);
+          // As a refused connection does: rejects at once, never hangs.
+          throw new TypeError("fetch failed");
+        }
         sent.push({ url, init: init ?? {} });
         const enc = new TextEncoder();
         return new Response(
@@ -703,8 +714,16 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       wireCollaborator({ runTurn: runLocalModelTurn });
     });
 
-    afterEach(() => {
-      vi.unstubAllGlobals();
+    afterEach(async () => {
+      // Stop first, with the stub still in place, so a request sent while the
+      // collaborator winds down is caught here rather than reaching the real
+      // `fetch` (the outer afterEach's stop then finds nothing running).
+      try {
+        await collab.stop();
+        expect(unexpected).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     function wire(i: number) {
@@ -731,9 +750,10 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
           await save(file([entry({ provider, endpoint })], "m-1"));
           await chat();
         }
+        expect(unexpected).toEqual([]);
         expect(sent).toHaveLength(LOCAL_MODEL_PROVIDERS.length);
         const first = wire(0);
-        expect(first.url).toBe(`${MODEL_ADDRESS}/v1/chat/completions`);
+        expect(first.url).toBe(MODEL_CALL);
         for (let i = 1; i < sent.length; i++) expect(wire(i)).toEqual(first);
         expect(first.headers).toEqual({ "content-type": "application/json" });
       });
