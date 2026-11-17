@@ -530,9 +530,13 @@ export function takeSendRead(): SendReadWait | null {
 /**
  * The local period for a send's toast, after its own read (#2433 M1): live
  * (the store's answer is local) if the read is KNOWN once the wait ends,
- * otherwise the value recorded at the send. The read's fetch timeout and the
- * cap are the same length, and this rule answers the same whichever fires
- * first. Never rejects: any error yields the value at the send.
+ * otherwise the value recorded at the send. "Known" is the store's read at
+ * that moment, which may be another trigger's read rather than this send's
+ * (at the cap, or when this send's answer was not adopted). For a read that
+ * was not queued, its fetch timeout and the cap are the same length, and this
+ * rule answers the same whichever fires first; a queued read's timeout runs
+ * from its own later start, so the cap comes first. Never rejects: any error
+ * yields the value at the send.
  */
 export async function settleSendLocalPeriod(handle: SendReadWait): Promise<boolean> {
   try {
@@ -541,6 +545,11 @@ export async function settleSendLocalPeriod(handle: SendReadWait): Promise<boole
     return handle.localPeriodAtSend;
   }
   return _status === "known" ? _answerer === "local" : handle.localPeriodAtSend;
+}
+
+/** Test seam — how many cap timers are pending (none once each settled). */
+export function _capTimerCountForTests(): number {
+  return _capTimers.size;
 }
 
 /** Test seam — plant a send's record whose read the test controls. */

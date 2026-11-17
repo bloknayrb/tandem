@@ -183,6 +183,35 @@ describe("the cap runs from the take", () => {
   });
 });
 
+describe("the cap timers are cleared", () => {
+  it("settled by the read: the take's timer is cleared and removed", async () => {
+    vi.useFakeTimers();
+    const take = sendAndTake();
+    expect(store._capTimerCountForTests()).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    // `request()` advances the fake clock 50 ms per check: far short of the cap.
+    await (await held.request(1)).answer(200, known("local"));
+    expect(await store.settleSendLocalPeriod(take!)).toBe(true);
+    expect(store._capTimerCountForTests()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("settled by the cap: the fired timer is removed", async () => {
+    void store.requestRead();
+    await held.request(1);
+    vi.useFakeTimers();
+    const take = sendAndTake();
+    expect(store._capTimerCountForTests()).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    const settled = track(store.settleSendLocalPeriod(take!));
+    await vi.advanceTimersByTimeAsync(store.REQUEST_TIMEOUT_MS);
+    await drain();
+    expect(settled.done).toBe(true);
+    expect(store._capTimerCountForTests()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe("whose read is waited on", () => {
   it("the send's own queued read, not the read already in flight", async () => {
     void store.requestRead(); // another trigger's read

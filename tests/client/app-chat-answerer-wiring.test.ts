@@ -26,7 +26,16 @@
  * - `chatMount()` ends at the first `/>` after `kind="chat"`, so a
  *   self-closing child or an attribute containing `/>` cuts it short;
  * - `/*` inside a script string, which the block-comment strip treats as a
- *   comment.
+ *   comment;
+ * - the markup strip runs over the script too, so a `<!--` inside a script
+ *   string or a trailing `//` comment would cut to the next `-->`; and the
+ *   block strip runs over markup and CSS, so markup text such as
+ *   `accept="image/*"` would start a block strip. Neither occurs in App today
+ *   (no `<!--` before `</script>`, no `/*` in markup outside the `<style>`
+ *   block's own comments). Either can remove real code, which makes the
+ *   count pins (`toBe(1)`, `toBe(2)`) able to pass wrongly: a stray opener
+ *   between two `await`s would hide a third. A strip that removed the
+ *   handler's own markers fails closed instead (its slice is not found).
  * There is no mount test of App (Ruling S-e): 129 imports and a live
  * Hocuspocus provider.
  */
@@ -183,12 +192,15 @@ describe("the send-time toast waits for the send's own read (#2433 M1)", () => {
       /pushDelivery: aiReadiness\.pushDelivery,/,
       /startingForMessage: viaKey === "chat" && chatResumeState\.pending,/,
       /via: "chat",/,
-      /localPeriod: localPeriodAfterRead,?/,
+      // Anchored at the end: `localPeriodAfterRead || localPeriodNow` fails.
+      /localPeriod: localPeriodAfterRead,?\s*$/,
     ]) {
       expect(secondArg).toMatch(input);
     }
-    expect(handler.slice(settle, second + "addressedAiNotice({".length)).toMatch(
-      /notice = addressedAiNotice\(\{$/,
+    // The whole statement, through the condition's close and the null return:
+    // the call's result is assigned as is (no `?? earlier`, no `||`).
+    expect(handler.slice(settle)).toMatch(
+      /^await settleSendLocalPeriod\(sendRead\);\s*notice = addressedAiNotice\(\{[^{}]*\}\);\s*\}\s*if \(notice === null\) return;/,
     );
   });
 });
