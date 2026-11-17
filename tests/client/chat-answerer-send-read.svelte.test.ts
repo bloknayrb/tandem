@@ -188,11 +188,17 @@ describe("the cap timers are cleared", () => {
     vi.useFakeTimers();
     const take = sendAndTake();
     expect(store._capTimerCountForTests()).toBe(1);
+    // The cap timer is the only fake timer: the send's read has not fetched
+    // yet (it starts a microtask after the send), so no fetch timeout exists.
     expect(vi.getTimerCount()).toBe(1);
     // `request()` advances the fake clock 50 ms per check: far short of the cap.
     await (await held.request(1)).answer(200, known("local"));
     expect(await store.settleSendLocalPeriod(take!)).toBe(true);
     expect(store._capTimerCountForTests()).toBe(0);
+    // The cap timer was cleared when the read settled. The read's fetch
+    // timeout is still pending but not counted: happy-dom's
+    // `AbortSignal.timeout` schedules it off vitest's fake clock (checked: an
+    // `AbortSignal.timeout(5)` here leaves the count unchanged).
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -202,12 +208,17 @@ describe("the cap timers are cleared", () => {
     vi.useFakeTimers();
     const take = sendAndTake();
     expect(store._capTimerCountForTests()).toBe(1);
+    // The cap timer is the only fake timer: the read in flight started before
+    // `vi.useFakeTimers()`, and the send's own read is queued behind it and
+    // has not fetched.
     expect(vi.getTimerCount()).toBe(1);
     const settled = track(store.settleSendLocalPeriod(take!));
     await vi.advanceTimersByTimeAsync(store.REQUEST_TIMEOUT_MS);
     await drain();
     expect(settled.done).toBe(true);
     expect(store._capTimerCountForTests()).toBe(0);
+    // The cap timer fired and removed itself; nothing replaced it: the first
+    // read is still held open, so the queued read has still not fetched.
     expect(vi.getTimerCount()).toBe(0);
   });
 });
