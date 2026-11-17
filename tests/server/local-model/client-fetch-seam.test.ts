@@ -46,6 +46,18 @@ describe("the local-model client's fetch seam (#1123, #2422)", () => {
     expect(users).toEqual(["src/server/local-model/ollama-client.ts"]);
   });
 
+  it("inside ollama-client.ts, clientFetch is assigned only by its declaration and the setter, and the setter is not called there", () => {
+    const src = readFileSync(join(ROOT, "src/server/local-model/ollama-client.ts"), "utf8");
+    // Every `clientFetch =` (not `==`/`===`), declaration included.
+    expect(src.match(/\bclientFetch\s*(?::[^=;]*)?=(?!=)/g)).toEqual([
+      "clientFetch: typeof fetch =",
+      "clientFetch =",
+    ]);
+    expect(src).toMatch(/let clientFetch: typeof fetch = loopbackFetch;/);
+    expect(src).toMatch(/\n {2}clientFetch = next \?\? loopbackFetch;\n/);
+    expect(src.match(/\bsetLocalModelFetchForHarness\(/g)).toHaveLength(1); // the definition
+  });
+
   it("in probe/, only the fetch tap and the fingerprint call it", () => {
     const users = walk(join(ROOT, "probe"))
       .filter((f) => SETTER.test(readFileSync(f, "utf8")))

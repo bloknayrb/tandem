@@ -119,10 +119,11 @@ function parseArgs(raw: unknown): {
  * fetch tap and scripts responses for its fingerprint, and it used to do both by
  * replacing `globalThis.fetch`, which this client no longer calls. It now wraps
  * what {@link localModelFetchForHarness} returns, so a measured request still
- * leaves through `loopbackFetch`. Nothing in `src/` may call the setter
- * (`tests/server/local-model/client-fetch-seam.test.ts`), and the seam test
- * forbids the global `fetch` anywhere in `src/server`, so the product cannot
- * hand this the global `fetch` either.
+ * leaves through `loopbackFetch`. Nothing in `src/` outside this file names the
+ * setter, and here `clientFetch` is assigned only by its declaration and the
+ * setter (`tests/server/local-model/client-fetch-seam.test.ts`); the seam test
+ * forbids the global `fetch` in `src/server` outside its allowlist and its
+ * written limits.
  */
 let clientFetch: typeof fetch = loopbackFetch;
 
