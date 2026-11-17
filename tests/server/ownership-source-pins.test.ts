@@ -82,8 +82,8 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     // is refused). Between those two statements, no `return` or `throw` at
     // any depth outside a nested function.
     //
-    // What this pin of source cannot see (a flip-blocker row; accepted by the
-    // reviewing session's ruling of 2026-11-17: the pin guards against an
+    // What this pin of source cannot see (limits accepted by Bryan on
+    // 2026-11-17, D-own-6, recorded in ADR-054: the pin guards against an
     // accidental second writer, and a deliberate bypass is a review matter):
     // an exit earlier in `main()`, before `setOwnershipSeqSource`; between the
     // two statements, a conditional exit that is not a `return` or `throw`
@@ -176,7 +176,8 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
     // declaration's (no call, alias or `.call`). A text pin for the
     // assignment: it does not see a compound (`??=`), destructuring or
     // parenthesised (`(roundSeam) = x`) assignment, or a mutation of the seam
-    // object (`roundSeam.keyed = ...`) (the flip-blocker row).
+    // object (`roundSeam.keyed = ...`) (limits accepted by Bryan on 2026-11-17,
+    // D-own-6, recorded in ADR-054).
     const module = SRC_FILES.get("src/server/events/delivery-state.ts") as string;
     const tree = ts.createSourceFile("delivery-state.ts", module, ts.ScriptTarget.Latest, true);
     const named: ts.Identifier[] = [];
@@ -796,5 +797,132 @@ describe("the chat side's seams are wired in a running server (the chat owners P
     expect(queue).toContain("a claim made by an accepted chat post");
     expect(queue).toContain("cause\n * `post-claim`");
     expect(queue).toContain("Seven run where they are");
+  });
+});
+
+describe("Tandem's Claude's presence has one writer per field (#2358 PR 3b-1, R2.9)", () => {
+  /**
+   * Presence (R2.1) is recomputed only when a field it reads is written
+   * through its setter, which marks presence dirty. A raw write anywhere else
+   * (`lastError = "spawn-failed"` in a new path, say) passes every behavioural
+   * case that does not reach that path, and leaves presence stale there. So
+   * every assignment to each field — plain, compound, `++`/`--`, destructuring
+   * or parenthesised — is found over `supervisor.ts`'s syntax tree, and must
+   * sit inside that field's setter. The one named exception (Ruling H) is
+   * `status()`'s `cli-unusable` clear, exactly one `lastError = undefined`
+   * there.
+   */
+  const SETTERS: Record<string, string> = {
+    lastError: "setLastError",
+    breakerTripped: "setBreakerTripped",
+    configured: "setConfigured",
+    restartTimer: "setRestartTimer",
+    launching: "setLaunching",
+    lastRunBound: "setLastRunBound",
+    standby: "setStandby",
+  };
+
+  function writesOutsideSetters(text: string): string[] {
+    const sf = ts.createSourceFile("supervisor.ts", text, ts.ScriptTarget.Latest, true);
+    const out: string[] = [];
+    const enclosingFunction = (node: ts.Node): string | undefined => {
+      for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+        if (ts.isFunctionDeclaration(n) && n.name) return n.name.text;
+      }
+      return undefined;
+    };
+    /** Identifiers a write targets: `x`, `(x)`, `[x] = …`, `({ x } = …)`. */
+    const targets = (node: ts.Expression): ts.Identifier[] => {
+      if (ts.isParenthesizedExpression(node)) return targets(node.expression);
+      if (ts.isIdentifier(node)) return [node];
+      if (ts.isArrayLiteralExpression(node)) {
+        return node.elements.flatMap((e) => (ts.isOmittedExpression(e) ? [] : targets(e)));
+      }
+      if (ts.isObjectLiteralExpression(node)) {
+        return node.properties.flatMap((p) =>
+          ts.isShorthandPropertyAssignment(p)
+            ? [p.name]
+            : ts.isPropertyAssignment(p)
+              ? targets(p.initializer)
+              : [],
+        );
+      }
+      return [];
+    };
+    const record = (id: ts.Identifier) => {
+      const setter = SETTERS[id.text];
+      if (setter === undefined) return;
+      const fn = enclosingFunction(id);
+      if (fn === setter) return;
+      const line = sf.getLineAndCharacterOfPosition(id.getStart()).line + 1;
+      out.push(`${id.text} written in ${fn ?? "(top level)"} at line ${line}`);
+    };
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      ) {
+        for (const id of targets(node.left)) record(id);
+      }
+      if (
+        (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+        (node.operator === ts.SyntaxKind.PlusPlusToken ||
+          node.operator === ts.SyntaxKind.MinusMinusToken)
+      ) {
+        for (const id of targets(node.operand)) record(id);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return out;
+  }
+
+  it("each field is assigned only inside its setter, but for status()'s one cli-unusable clear", () => {
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    expect(writesOutsideSetters(text)).toEqual([
+      "lastError written in status at line " + statusClearLine(text),
+    ]);
+    // Every setter exists and marks presence dirty.
+    for (const setter of Object.values(SETTERS)) {
+      const at = text.indexOf(`function ${setter}(`);
+      expect(at, setter).toBeGreaterThan(-1);
+      const body = text.slice(at, text.indexOf("\n  }\n", at));
+      expect(body, setter).toContain("markPresenceDirty();");
+    }
+  });
+
+  it("the pin is not vacuous: a planted raw write outside a setter is found", () => {
+    const text = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+    const planted = text.replace(
+      "function recordStartThrow(err: unknown, label: string): void {\n",
+      'function recordStartThrow(err: unknown, label: string): void {\n    lastError = "spawn-failed";\n    [breakerTripped] = [true];\n    (launching)++;\n',
+    );
+    expect(planted).not.toBe(text);
+    const found = writesOutsideSetters(planted).filter((w) => w.includes("recordStartThrow"));
+    expect(found.map((w) => w.split(" ")[0]).sort()).toEqual([
+      "breakerTripped",
+      "lastError",
+      "launching",
+    ]);
+  });
+
+  function statusClearLine(text: string): number {
+    const at = text.indexOf('lastError === "cli-unusable" &&');
+    const clear = text.indexOf("lastError = undefined;", at);
+    return text.slice(0, clear).split("\n").length;
+  }
+
+  it("R2.8's order: noteOwnerHandleBind records the transport's bind synchronously after confirmBind", () => {
+    // The run start is a microtask queued in `onFirstBind`, which `confirmBind`
+    // calls; it sees the transport as bound only because nothing awaits between
+    // `confirmBind` and `entry.boundSpawn = …` (behavioural cover:
+    // owner-handle-chain.test.ts, the R2.8 case).
+    const server = SRC_FILES.get("src/server/mcp/server.ts") as string;
+    expect(server).toMatch(
+      /confirmBind\(candidate, sessionId\)\) \{\n {4}entry\.boundSpawn = candidate\.serial;/,
+    );
+    const fn = server.slice(server.indexOf("function noteOwnerHandleBind("));
+    expect(fn.slice(0, fn.indexOf("\n}\n"))).not.toMatch(/\bawait\b/);
   });
 });

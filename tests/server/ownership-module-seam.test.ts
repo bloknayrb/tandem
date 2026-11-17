@@ -155,6 +155,7 @@ describe("tests and the flag", () => {
     "tests/server/inbox-cursor.test.ts",
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
+    "tests/server/launcher/supervisor-presence.test.ts",
     "tests/server/launcher/supervisor.test.ts",
     "tests/server/license-armed-restricted.test.ts",
     "tests/server/local-period.test.ts",
@@ -204,10 +205,13 @@ describe("tests and the flag", () => {
     // session script and its dark test run flag-off to compare with master.
     // The change-notice PR's one (`ownership-change-notices.test.ts`): its
     // dark tests build their server flag-off (no `changed`, no sentence).
+    // PR 3b-1's one (`launcher/supervisor-presence.test.ts`): the supervisor's
+    // run state flag on, with a dark case that builds its supervisor flag-off.
     expect(filesMatching(/stubEnv\(\s*"TANDEM_OWNERSHIP",\s*""\s*\)/)).toEqual([
       // PR 3a: the launcher's spawn path, flag on, with a dark block.
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      "tests/server/launcher/supervisor-presence.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
@@ -235,6 +239,7 @@ describe("tests and the flag", () => {
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-chain.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      "tests/server/launcher/supervisor-presence.test.ts",
       // The keyed-rounds suites PR: its live check of the delivery-round
       // wiring, flag on in `check` too (the rest of the file is unstubbed).
       "tests/server/license-armed-restricted.test.ts",
