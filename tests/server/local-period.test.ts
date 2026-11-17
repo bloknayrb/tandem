@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type * as Y from "yjs";
+import * as Y from "yjs";
 import { z } from "zod";
 
 /** #1123 part B, R11.6: refuse AI chat writes for one test. Off by default. */
@@ -32,6 +32,7 @@ vi.mock("../../src/server/license/ai-refusal.js", async (importOriginal) => {
   };
 });
 
+import { setChatClientWritesUndone } from "../../src/server/chat-client-writes.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
@@ -114,6 +115,7 @@ import {
   resetOwnershipForTests,
   setOwnershipChatSide,
   setTransportView,
+  undoClientChatWrites,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -871,6 +873,64 @@ for (const ownership of ["", "1"] as const) {
         // Still owed on the next poll as well: the line answered nothing.
         expect(JSON.stringify(await poll())).not.toContain(LINE);
       });
+
+      if (ownership === "1") {
+        // #2433's carried Low: a chat row written by the editor itself — a
+        // Hocuspocus connection's update, `{ socketId }` as its origin — with
+        // the client-write undo wired as `src/server/index.ts` wires it.
+        describe("a client-origin chat write in the local period", () => {
+          beforeEach(() => setChatClientWritesUndone(undoClientChatWrites));
+          afterEach(() => setChatClientWritesUndone(undefined));
+
+          /** Apply `rows` to CTRL's chat as a browser tab's update does. */
+          function clientWrites(rows: Record<string, unknown>[]): void {
+            const ctrl = getOrCreateDocument(CTRL_ROOM);
+            const scratch = new Y.Doc();
+            Y.applyUpdate(scratch, Y.encodeStateAsUpdate(ctrl));
+            const sv = Y.encodeStateVector(scratch);
+            for (const row of rows) scratch.getMap(Y_MAP_CHAT).set(row.id as string, row);
+            Y.applyUpdate(ctrl, Y.encodeStateAsUpdate(scratch, sv), { socketId: "a-tab" });
+            scratch.destroy();
+          }
+
+          /** Only the fields `useChatState`'s `send` writes. */
+          const sent = (id: string) => ({
+            id,
+            author: "user",
+            text: `text of ${id}`,
+            timestamp: 1000,
+            read: false,
+          });
+
+          it("the editor's own row is kept, classed local-period, and the switch back writes the line", async () => {
+            await toLocal();
+            clientWrites([sent("tab-row")]);
+            expect(ctrlChat().get("tab-row")).toEqual(sent("tab-row"));
+            expect(isLocalPeriodChat("tab-row")).toBe(true);
+            await toClaude();
+            const lines = switchBackLines();
+            expect(lines).toHaveLength(1);
+            expect(lines[0].text).toBe(LINE);
+          });
+
+          it("a server-only field or a fixed field's other value is rewritten; a non-user row is deleted", async () => {
+            await toLocal();
+            clientWrites([
+              { ...sent("with-delivered"), delivered: true },
+              { ...sent("read-true"), read: true },
+              { id: "not-user", author: "claude", text: "x", timestamp: 1000 },
+            ]);
+            expect(ctrlChat().get("with-delivered")).toEqual(sent("with-delivered"));
+            expect(ctrlChat().get("read-true")).toEqual(sent("read-true"));
+            expect(ctrlChat().has("not-user")).toBe(false);
+            // The rewritten rows are still the user's local-period chat; the
+            // deleted one is not classed at all.
+            expect(isLocalPeriodChat("with-delivered")).toBe(true);
+            expect(isLocalPeriodChat("read-true")).toBe(true);
+            expect(isLocalPeriodChat("not-user")).toBe(false);
+          });
+        });
+      }
     });
 
     describe("the selection hold (decision 11, guard 2)", () => {
@@ -1445,9 +1505,15 @@ describe("the dark guard", () => {
     wireLocalPeriod();
     // Never primed, as in a dark build: whatever is attempted, the answerer
     // reads Claude and nothing reaches onSwitch.
-    await setChatAnswerer("local", "own-window").catch(() => {});
+    await expect(setChatAnswerer("local", "own-window")).resolves.toEqual({
+      answerer: "claude",
+      persisted: false,
+    });
     userChat("during");
-    await setChatAnswerer("claude", "own-window").catch(() => {});
+    await expect(setChatAnswerer("claude", "own-window")).resolves.toEqual({
+      answerer: "claude",
+      persisted: false,
+    });
     await __flushLocalModelAnnouncedForTests();
     expect(chatAnswerer()).toBe("claude");
     expect(

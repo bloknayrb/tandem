@@ -406,7 +406,7 @@ function handleSkip() {
 .frm-hint {
   margin: 0;
   font-size: 11px;
-  color: var(--tandem-fg-subtle);
+  color: var(--tandem-fg-muted);
 }
 .frm-step {
   margin-top: 4px;
