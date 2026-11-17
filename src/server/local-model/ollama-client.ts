@@ -275,11 +275,22 @@ function buildNativeBody(
  * is precisely the shape that rebinds. Substituting the address here makes the
  * checked value and the connected value the same thing, so the loopback
  * guarantee rests on an address rather than on RFC 6761 goodwill.
+ *
+ * #1123 Decision L3: one trailing `/v1` is dropped, because LM Studio and
+ * other OpenAI-compatible servers document their address with it and the v1
+ * transport appends its own (`http://localhost:1234/v1` used to post to
+ * `/v1/v1/chat/completions`). Only the PATH changes, after validation and
+ * after the trailing-slash trim; exactly `/v1`, case-sensitive, once, and only
+ * when the `/` before it is not itself preceded by `/` (so `//v1` is kept).
+ * The saved address and `validateEndpoint` are untouched, and both transports
+ * build from here.
  */
 function baseUrl(validated: URL): string {
   const url = new URL(validated);
   if (url.hostname.toLowerCase() === "localhost") url.hostname = "127.0.0.1";
-  return url.origin + url.pathname.replace(/\/+$/, "");
+  let path = url.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/v1") && path.charAt(path.length - 4) !== "/") path = path.slice(0, -3);
+  return url.origin + path;
 }
 
 // ---------------------------------------------------------------------------

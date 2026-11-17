@@ -30,7 +30,11 @@ import {
   diagnoseLocalModel,
   resolveLocalModelConfig,
 } from "../../../src/server/local-model/config-source.js";
-import type { LoopResult, RunTurnOpts } from "../../../src/server/local-model/index.js";
+import {
+  type LoopResult,
+  type RunTurnOpts,
+  runLocalModelTurn,
+} from "../../../src/server/local-model/index.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
 import { registerModelsRoutes } from "../../../src/server/models/api-routes.js";
 import { createOwnWindowPolicy } from "../../../src/server/models/own-window.js";
@@ -56,6 +60,7 @@ import {
 import type { TandemEvent } from "../../../src/shared/events/types.js";
 import {
   API_MODELS,
+  LOCAL_MODEL_PROVIDERS,
   type ModelsEntry,
   type ModelsFile,
 } from "../../../src/shared/models/contract.js";
@@ -664,5 +669,74 @@ describe("collaborator — a model saved through POST /api/models reaches the lo
       ]);
       expect(answeringNotes()).toHaveLength(2);
     });
+  });
+
+  // #1123 R3.1 (LM Studio and "another local server", 2026-11-15): the
+  // provider never reaches the wire. Through the REAL path — the route, the
+  // store, the resolver, the collaborator and the production `runTurn` — only
+  // `fetch` to the model's address is a double. An Ollama, an LM Studio and an
+  // Other entry with the same address and model id send the same request.
+  describe("every local provider sends the same request (R3.1)", () => {
+    const MODEL_ADDRESS = "http://127.0.0.1:1234";
+    let sent: Array<{ url: string; init: RequestInit }>;
+
+    beforeEach(async () => {
+      sent = [];
+      const realFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const url = String(input);
+        if (!url.startsWith(MODEL_ADDRESS)) return realFetch(input, init);
+        sent.push({ url, init: init ?? {} });
+        const enc = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+              controller.enqueue(enc.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      });
+      await collab.stop();
+      wireCollaborator({ runTurn: runLocalModelTurn });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function wire(i: number) {
+      const { init, url } = sent[i];
+      expect(Object.keys(init).sort()).toEqual(["body", "headers", "method", "redirect", "signal"]);
+      return {
+        url,
+        method: init.method,
+        headers: init.headers,
+        body: init.body,
+        redirect: init.redirect,
+      };
+    }
+
+    for (const endpoint of [MODEL_ADDRESS, `${MODEL_ADDRESS}/v1`]) {
+      it(`saved as ${endpoint}: one URL and one fetch init for every local provider`, async () => {
+        for (const provider of LOCAL_MODEL_PROVIDERS) {
+          // A fresh chat each time, so no run carries an earlier run's history.
+          const ctrl = getOrCreateDocument(CTRL_ROOM);
+          withInternal(ctrl, () => {
+            chatMap().clear();
+            ctrl.getMap(Y_MAP_CHAT_STREAM).clear();
+          });
+          await save(file([entry({ provider, endpoint })], "m-1"));
+          await chat();
+        }
+        expect(sent).toHaveLength(LOCAL_MODEL_PROVIDERS.length);
+        const first = wire(0);
+        expect(first.url).toBe(`${MODEL_ADDRESS}/v1/chat/completions`);
+        for (let i = 1; i < sent.length; i++) expect(wire(i)).toEqual(first);
+        expect(first.headers).toEqual({ "content-type": "application/json" });
+      });
+    }
   });
 });

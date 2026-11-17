@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onDestroy, onMount } from "svelte";
 import type { ChatAnswerer } from "../../../shared/models/contract";
+import { MODELS_TAB_ORDER, PROVIDER_LABEL } from "../../../shared/models/provider-ui";
 import { createChatAnswerer } from "../../hooks/useChatAnswerer.svelte";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import { createLocalModelSettings } from "../../hooks/useLocalModelSettings.svelte";
@@ -10,6 +11,7 @@ import { createRadioGroup } from "../../hooks/useRadioGroup.svelte";
 import type { ModelProvider, ModelRegistryEntry } from "../../hooks/useTandemSettings.svelte";
 import { MCP_BASE_URL } from "../../utils/backend-ports";
 import { disabledControlStyle } from "../../utils/colors";
+import { LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../../utils/local-model-copy";
 import LiveRegion from "../LiveRegion.svelte";
 import ModelEditModal from "../ModelEditModal.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
@@ -276,23 +278,11 @@ const answererStatusLines = $derived.by<string[]>(() => {
 
 const REFUSED_READ_LINE = `This page can't show what chat is set to, because Tandem could not confirm it as Tandem's own window. To see or change it, use the Tandem desktop app, or open Tandem at ${MCP_BASE_URL} in an up-to-date browser.`;
 
-const PROVIDER_LABEL: Record<ModelProvider, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  gemini: "Gemini",
-  "local-ollama": "Ollama (local)",
-  "local-llamacpp": "llama.cpp (local)",
-};
-
 // Anthropic first per the D4 ordering anchor; remaining providers in
-// declaration order.
-const PROVIDER_ORDER: ModelProvider[] = [
-  "anthropic",
-  "openai",
-  "gemini",
-  "local-ollama",
-  "local-llamacpp",
-];
+// declaration order. Derived from the contract (#1123): `grouped` makes a
+// bucket only for a provider in this list, so a hand-written list silently
+// stopped listing an entry of any provider it missed.
+const PROVIDER_ORDER = MODELS_TAB_ORDER;
 
 const grouped = $derived.by(() => {
   const out = new Map<ModelProvider, ModelRegistryEntry[]>();
@@ -507,6 +497,16 @@ function askDelete(id: string) {
     </div>
   {/if}
 </section>
+
+<!-- #1123 R4 (S1, S2): what a local model can be and what Tandem sends it.
+     Outside the list-state branch below, so it shows in all five states. -->
+<div
+  data-testid="models-local-intro"
+  style="display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--tandem-space-3); font-size: 12px; color: var(--tandem-fg-muted);"
+>
+  <p style="margin: 0;">{LOCAL_SERVERS_LINE}</p>
+  <p style="margin: 0;">{LOCAL_REQUEST_LINE}</p>
+</div>
 
 <div style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
   {#if models.loading}

@@ -131,15 +131,35 @@ export const MODELS_SCHEMA_VERSION = 1 as const;
  * (`useTandemSettings.ts`) re-exports these so every existing import path
  * still resolves.
  */
-export type ModelProvider = "anthropic" | "openai" | "gemini" | "local-ollama" | "local-llamacpp";
+export type ModelProvider =
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "local-ollama"
+  | "local-llamacpp"
+  | "local-lmstudio"
+  | "local-other";
 
-export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
+const ALL_PROVIDERS = [
   "anthropic",
   "openai",
   "gemini",
   "local-ollama",
   "local-llamacpp",
-];
+  // #1123 Decisions L1/L2 (2026-11-15): LM Studio, and any other local server
+  // that offers the OpenAI-compatible chat API. Appended, never reordered: a
+  // removed value would make this build's own `models.json` fail to parse.
+  "local-lmstudio",
+  "local-other",
+] as const satisfies readonly ModelProvider[];
+
+// Exhaustiveness: a member added to `ModelProvider` but not to the list above
+// is a type error here, rather than a value every validator silently rejects.
+type UnlistedProvider = Exclude<ModelProvider, (typeof ALL_PROVIDERS)[number]>;
+const _everyProviderListed: [UnlistedProvider] extends [never] ? true : never = true;
+void _everyProviderListed;
+
+export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = ALL_PROVIDERS;
 
 /**
  * Local providers drive an OpenAI-compatible loopback endpoint and carry no
@@ -147,7 +167,12 @@ export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
  * resolves a config when the default entry is one of these; a cloud default
  * leaves the loop inert (cloud BYO keys are v1.1).
  */
-export const LOCAL_MODEL_PROVIDERS: readonly ModelProvider[] = ["local-ollama", "local-llamacpp"];
+export const LOCAL_MODEL_PROVIDERS: readonly ModelProvider[] = [
+  "local-ollama",
+  "local-llamacpp",
+  "local-lmstudio",
+  "local-other",
+];
 
 export function isLocalProvider(provider: ModelProvider): boolean {
   return LOCAL_MODEL_PROVIDERS.includes(provider);

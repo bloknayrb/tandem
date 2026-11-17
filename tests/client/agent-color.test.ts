@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentColor, agentTintColor } from "../../src/client/utils/agent-color";
-import type { ModelProvider } from "../../src/shared/models/contract";
+import { type ModelProvider, VALID_MODEL_PROVIDERS } from "../../src/shared/models/contract";
 import type { AgentIdentity } from "../../src/shared/types";
 
 function id(provider: ModelProvider, displayName = "Model"): AgentIdentity {
@@ -24,6 +24,9 @@ describe("agentColor (#1123 M4)", () => {
     expect(agentColor(id("gemini"))).toBe("var(--tandem-agent-gemini)");
     expect(agentColor(id("local-ollama"))).toBe("var(--tandem-agent-local-ollama)");
     expect(agentColor(id("local-llamacpp"))).toBe("var(--tandem-agent-local-llamacpp)");
+    // #1123 Ruling L-5: no new tokens; LM Studio and Other share llama.cpp's.
+    expect(agentColor(id("local-lmstudio"))).toBe("var(--tandem-agent-local-llamacpp)");
+    expect(agentColor(id("local-other"))).toBe("var(--tandem-agent-local-llamacpp)");
   });
 
   it("colors a non-anthropic agent distinctly from the claude fallback", () => {
@@ -53,13 +56,7 @@ describe("agentColor (#1123 M4)", () => {
   });
 
   it("emits only var() tokens, never a raw hex/rgba literal (token-lint safe)", () => {
-    for (const provider of [
-      "anthropic",
-      "openai",
-      "gemini",
-      "local-ollama",
-      "local-llamacpp",
-    ] as const) {
+    for (const provider of VALID_MODEL_PROVIDERS) {
       const color = agentColor(id(provider));
       expect(color).toMatch(/^var\(--tandem-/);
       expect(color).not.toMatch(/#[0-9a-fA-F]{3,8}|rgba?\(/);

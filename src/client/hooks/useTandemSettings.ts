@@ -122,7 +122,7 @@ export interface ModelRegistryEntry {
    * The actual secret lives in the OS keychain under service `tandem-models`.
    */
   apiKeyRef?: string;
-  /** Local providers only (local-ollama/local-llamacpp). */
+  /** Local providers only (`LOCAL_MODEL_PROVIDERS` in `shared/models/contract.ts`). */
   endpoint?: string;
   enabled: boolean;
   params?: Record<string, number | string | boolean>;

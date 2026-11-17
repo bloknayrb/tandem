@@ -370,7 +370,7 @@ export const UNUSABLE_NOTICE: Record<LocalModelUnusableReason, string> = {
   "no-default-chosen":
     "Your saved local models did not answer, because none of them was marked Default. Mark one as Default in Settings → Models.",
   "endpoint-rejected":
-    "Your local model did not answer, because its Endpoint was not accepted. It must be a plain http loopback address on this computer, such as http://127.0.0.1:11434, with no user name or password. Edit the model in Settings → Models, then send your message again.",
+    "Your local model did not answer, because its Endpoint was not accepted. It must be a plain http loopback address on this computer, such as http://127.0.0.1 followed by the server's port, with no user name or password. Edit the model in Settings → Models, then send your message again.",
   "no-endpoint":
     "Your local model did not answer, because it had no Endpoint saved. Edit the model in Settings → Models, then send your message again.",
 };

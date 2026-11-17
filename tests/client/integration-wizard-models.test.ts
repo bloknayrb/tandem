@@ -106,6 +106,10 @@ describe("integration wizard — AI models row (§3.6, flag ON)", () => {
     // The disabled coming-soon row must NOT be the one rendered.
     expect(q(container, "integration-wizard-more")?.textContent).toMatch(/local AI model/i);
     expect(q(container, "integration-wizard-more")?.textContent).not.toMatch(/coming soon/i);
+    // #1123 S5: the providers named as examples, no claim about any of them.
+    expect(q(container, "integration-wizard-more")?.textContent).toContain(
+      "Set up a local AI model, such as Ollama, LM Studio or llama.cpp",
+    );
   });
 
   it("Set up closes the wizard and invokes onSetupModels", async () => {

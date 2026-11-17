@@ -42,6 +42,8 @@ const PROVIDER_FAMILY: Record<ModelProvider, string> = {
   gemini: "Gemini",
   "local-ollama": "Local model",
   "local-llamacpp": "Local model",
+  "local-lmstudio": "Local model",
+  "local-other": "Local model",
 };
 
 /** Neutral label when no model is configured (or the selection is ambiguous). */
