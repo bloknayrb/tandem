@@ -29,6 +29,21 @@ function rules(source: string): Array<{ selector: string; body: string }> {
 
 const MUTED = /color\s*:\s*var\(--tandem-fg-muted\)/i;
 
+/** The component source with its `<style>` blocks cut out (by position, not
+ *  a regex replace: this is a test reading its own repo's source, never
+ *  sanitising HTML). An unclosed block cuts to the end. */
+function withoutStyleBlocks(source: string): string {
+  let out = "";
+  let at = 0;
+  for (let open = source.indexOf("<style", at); open !== -1; open = source.indexOf("<style", at)) {
+    out += source.slice(at, open);
+    const close = source.indexOf("</style>", open);
+    if (close === -1) return out;
+    at = close + "</style>".length;
+  }
+  return out + source.slice(at);
+}
+
 /** The element opening at `start` through its matching close tag (same-name
  *  nesting counted); the open tag alone when it is self-closing. */
 function elementSource(markup: string, start: number, tag: string): string {
@@ -79,7 +94,7 @@ describe("R4.4: the local-model hints use --tandem-fg-muted", () => {
       // limit: a class added from script (`classList`, a computed string not
       // naming it literally) is not seen; none exists in these components.
       it(`${file}: no element with class ${cls}, or inside one, carries an inline --tandem-fg-subtle`, () => {
-        const markup = source.replace(/<style[^>]*>[\s\S]*?<\/style>/g, "");
+        const markup = withoutStyleBlocks(source);
         const word = new RegExp(`(?<![\\w-])${cls}(?![\\w-])`);
         const opens = [...markup.matchAll(/<([a-zA-Z][\w-]*)\b[^>]*>/g)].filter(
           (m) => /\bclass[=:]/.test(m[0]) && word.test(m[0]),
