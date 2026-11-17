@@ -116,8 +116,10 @@ export function resolveLocalModel(): LocalModelResolution {
       config: {
         endpoint: entry.endpoint,
         modelId: entry.modelId,
-        // Both local kinds (Ollama, llama.cpp) expose an OpenAI-compatible
-        // `/v1/chat/completions`, so `v1` is uniform for now.
+        // Every local kind (Ollama, llama.cpp, LM Studio, another local
+        // server) is called on the OpenAI-compatible `/v1/chat/completions`.
+        // The provider never reaches the wire: it decides only the label, the
+        // list group, the colour, the address prefill and the hint's example.
         transport: "v1",
         // #1123 M3: build the byline identity ONCE here. CLAMP the displayName:
         // the registry permits longer names (client ≤256, server schema

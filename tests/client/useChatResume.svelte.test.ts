@@ -203,3 +203,46 @@ describe("createChatResume", () => {
     expect(resume.view).toEqual({ kind: "failed", remedy: "start" });
   });
 });
+
+describe("the local period (#1123 part B, R5.6)", () => {
+  const local = $state({ on: true });
+  function mountLocal(readiness: ChatResumeReadiness, afterLauncherAction: () => void) {
+    let made!: ReturnType<typeof createChatResume>;
+    dispose = $effect.root(() => {
+      made = createChatResume(
+        readiness,
+        afterLauncherAction,
+        () => lastClaude.at,
+        () => local.on,
+      );
+    });
+    flushSync();
+    return made;
+  }
+
+  it("a chat sent during the user's own Start records no request, and no resume row shows", () => {
+    local.on = true;
+    const { r, readiness, afterLauncherAction } = fakeReadiness();
+    r.launcherStartsOnMessage = false;
+    r.launcherStarting = true;
+    const resume = mountLocal(readiness, afterLauncherAction);
+    resume.noteSent();
+    flushSync();
+    expect(resume.pending).toBe(false);
+    expect(resume.view).toBeNull();
+    expect(afterLauncherAction).not.toHaveBeenCalled();
+  });
+
+  it("a request made before the switch shows no resume row in the local period", () => {
+    local.on = false;
+    const { readiness, afterLauncherAction } = fakeReadiness();
+    const resume = mountLocal(readiness, afterLauncherAction);
+    resume.noteSent();
+    flushSync();
+    expect(resume.view).not.toBeNull();
+    local.on = true;
+    flushSync();
+    expect(resume.view).toBeNull();
+    expect(resume.pending).toBe(false);
+  });
+});

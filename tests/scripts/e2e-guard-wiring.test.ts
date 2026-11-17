@@ -315,3 +315,22 @@ describe("related-test hook transport", () => {
     expect(existsSync(path.join(ROOT, "node_modules/vitest/vitest.mjs"))).toBe(true);
   });
 });
+
+describe("the Models specs' development allowance (#1123 part B, R10.3)", () => {
+  it("the backend alone carries TANDEM_MODELS_DEV_ORIGIN, naming exactly the harness Vite origin", () => {
+    const { vite, backend } = splitEntries(rootConfig);
+    expect(backend.env?.TANDEM_MODELS_DEV_ORIGIN).toBe(`http://127.0.0.1:${E2E_VITE_PORT}`);
+    expect(vite.env?.TANDEM_MODELS_DEV_ORIGIN).toBeUndefined();
+    // Never set on the runner's own environment, which Vite would inherit.
+    const text = readFileSync(path.join(ROOT, "playwright.config.ts"), "utf-8");
+    expect(text).not.toMatch(
+      /process\.env\[MODELS_DEV_ORIGIN_ENV\]|process\.env\.TANDEM_MODELS_DEV_ORIGIN/,
+    );
+  });
+
+  it("the perf config is not given the allowance (it runs no Models spec)", () => {
+    const text = readFileSync(path.join(ROOT, "tests/perf/playwright.config.ts"), "utf-8");
+    expect(text).not.toContain("TANDEM_MODELS_DEV_ORIGIN");
+    expect(text).not.toContain("MODELS_DEV_ORIGIN_ENV");
+  });
+});

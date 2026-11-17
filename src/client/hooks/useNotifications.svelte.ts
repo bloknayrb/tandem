@@ -63,6 +63,13 @@ interface CreateOpts {
    *  passes false so it never clobbers the real app's `ACTIVITY_HISTORY_KEY`. */
   persist?: boolean;
   storageKey?: string;
+  /**
+   * Called for every notice that arrives on the notify stream (after the
+   * replay dedupe), from the stream's own message handler — an event handler,
+   * never inside a reaction. App uses it to re-read who answers chat when the
+   * switch's own notices arrive (#1123 part B, R1.2).
+   */
+  onStreamNotice?: (notification: TandemNotification) => void;
 }
 
 const INFO_TTL = ACTIVITY_INFO_TTL_MS;
@@ -308,6 +315,11 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     if (seenStreamIds.has(notification.id)) return;
     seenStreamIds.add(notification.id);
     ingest(notification, false);
+    try {
+      opts.onStreamNotice?.(notification);
+    } catch (err) {
+      console.warn("[useNotifications] onStreamNotice failed", err);
+    }
   };
 
   es.onerror = () => {

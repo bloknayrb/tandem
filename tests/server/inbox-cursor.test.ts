@@ -46,6 +46,7 @@ import {
   seenBy,
 } from "../../src/server/mcp/inbox-cursor.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
+import { noteTransportRegistered, setTransportView } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -60,7 +61,11 @@ import { withInternal } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
-import { ownershipTestDispatch, registerTestCallerRecord } from "../helpers/ownership-caller.js";
+import {
+  ownershipTestDispatch,
+  registerTestCallerRecord,
+  TEST_OWNER_ID,
+} from "../helpers/ownership-caller.js";
 
 // #2358 scope PR: flag-on, a poll reads only what its record holds or may
 // claim, so this suite's one caller is a registered record (see the helper).
@@ -309,7 +314,7 @@ describe("chat read moves behind the acknowledgement", () => {
     userChat("msg_noticed");
     const a = await poll({ cursor: "start" });
     expect(a.chatMessages.map((m) => m.id)).toEqual(["msg_noticed"]);
-    for (const chatNotice of ["no-document", "no-local-model"] as const) {
+    for (const chatNotice of ["no-document", "no-local-model", "no-reply"] as const) {
       expect(appendClaudeChatMessage("notice", { replyTo: "msg_noticed", chatNotice }).ok).toBe(
         true,
       );
@@ -378,7 +383,17 @@ describe("the editor's pickup row counts a handed-out message as picked up", () 
   });
 });
 
-describe("a reply to the latest message of a batch answers the rest of it", () => {
+/**
+ * The batch rule. Master's rule (and the flag-off rule) settles a batch's
+ * earlier messages through the global received-sweep; with ownership on the
+ * posts PR (#2358, R3) replaces the sweep by `settles`, written on the reply
+ * row by the server. These cases test the rule each way: flag off they pin
+ * master's sweep, and every one still applies flag on, where one caller is
+ * every reader (`registerTestCallerRecord`), so `settles` must settle exactly
+ * what the sweep did. The tool server is rebuilt after the stub, so its
+ * registration reads the same flag as the handlers.
+ */
+function batchCases(): void {
   it("another session is not handed an earlier message the answering session acknowledged", async () => {
     const b0 = (await poll({ cursor: "start" })).cursor;
     userChat("msg_b1", 10);
@@ -568,7 +583,33 @@ describe("a reply to the latest message of a batch answers the rest of it", () =
     });
     expect((await poll({ cursor: b0 })).chatMessages.map((m) => m.id)).toEqual(["msg_d1"]);
   });
-});
+}
+
+for (const [flag, label] of [
+  ["", "flag off: master's received-sweep"],
+  ["1", "flag on: `settles` written by the server"],
+] as const) {
+  describe(`a reply to the latest message of a batch answers the rest of it (${label})`, () => {
+    beforeEach(async () => {
+      if (flag === "") vi.stubEnv("TANDEM_OWNERSHIP", "");
+      else {
+        vi.stubEnv("TANDEM_OWNERSHIP", "1");
+        // `registerTestCallerRecord`'s own beforeEach ran under the ambient
+        // flag; flag on, the caller needs its record now.
+        setTransportView(() => [{ ownerId: TEST_OWNER_ID, openStreams: 0 }]);
+        noteTransportRegistered(TEST_OWNER_ID, { recordKind: "claude" });
+      }
+      await close?.();
+      ({ client, close } = await setupMcpServer([registerAwarenessTools], {
+        dispatch: ownershipTestDispatch,
+      }));
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+    batchCases();
+  });
+}
 
 describe("per-reader ledger semantics", () => {
   it("`edited` is per reader", async () => {
@@ -1222,11 +1263,12 @@ describe("no per-client state", () => {
     // Nothing else reaches the ownership module from awareness.ts (no
     // namespace import, no re-export, no dynamic import).
     expect(awareness.match(/sessions\/ownership\.js/g)).toHaveLength(1);
-    // The exclusion texts come from the refusal copy, whose module imports
-    // from the ownership module only types and, since the change-notice PR,
-    // the constant `MAX_CHANGE_NOTICES` (named in `changed`'s description)
-    // (review round 1: the inbox texts carry the refusals' take guard). Those three builders, and the change
-    // notices' loss sentence (the change-notice PR), and nothing else.
+    // The exclusion texts come from the refusal copy (review round 1: the
+    // inbox texts carry the refusals' take guard), whose module imports only
+    // types from the ownership module (#2423 review, R1.4: it names the
+    // change-notice cap from its own constant). awareness.ts takes those three
+    // builders and the change notices' loss sentence (the change-notice PR)
+    // from it, and nothing else.
     const fromCopy = [
       ...awareness.matchAll(/import \{([^}]*)\} from "\.\.\/sessions\/ownership-refusal\.js";/g),
     ];
@@ -1236,5 +1278,16 @@ describe("no per-client state", () => {
     expect(awareness.match(/sessions\/ownership-/g)).toHaveLength(1);
     const cursorModule = readFileSync("src/server/mcp/inbox-cursor.ts", "utf8");
     expect(cursorModule).not.toMatch(/sessions\/ownership|owned-op|ownership-flag/);
+    // R1.4: the refusal copy's one import from the ownership module is types only.
+    const copy = readFileSync("src/server/sessions/ownership-refusal.ts", "utf8");
+    const fromOwnershipInCopy = [
+      ...copy.matchAll(/^import (type )?\{[^}]*\} from "\.\/ownership\.js";$/gm),
+    ];
+    expect(fromOwnershipInCopy.map((m) => m[1])).toEqual(["type "]);
+    // Every other import form names the module too (a namespace or default
+    // import, a re-export, a dynamic import): exactly one mention, the type import.
+    // A backtick specifier counts too (the posts PR, R0.7): `import(\`./ownership.js\`)`.
+    // An interpolated template specifier too (`./ownership${ext}`), review round 1, item 13.
+    expect(copy.match(/["'`]\.\/ownership(\.js|\$\{[^}]*\})?["'`]/g)).toHaveLength(1);
   });
 });

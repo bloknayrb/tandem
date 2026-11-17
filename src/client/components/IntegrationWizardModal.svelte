@@ -1625,7 +1625,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 <div class="iw-more-row">
                   <div class="iw-more-row-text">
                     <span class="iw-more-row-name">AI models</span>
-                    <span class="iw-more-row-detail">Set up a local AI model (Ollama or llama.cpp)</span>
+                    <span class="iw-more-row-detail">Set up a local AI model, such as Ollama, LM Studio or llama.cpp</span>
                   </div>
                   <button
                     type="button"

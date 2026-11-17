@@ -38,7 +38,13 @@
  * which is the correct reading on a machine where nothing is attached: that case
  * belongs to `subscribers === 0`, the sound negative, not here.
  *
- * ## The negative is sound for ONE model, not for two
+ * ## The negative is sound for ONE model, not for two (flag off)
+ *
+ * This section describes the one global round, which is every release build
+ * (multi-session ownership off). With ownership on, rounds are keyed by
+ * document and by message instead (the "Keyed rounds" section below): a poll
+ * closes only what it read or was handed, so one session's poll no longer
+ * masks another's, though `/health` still reports one aggregate.
  *
  * Process-global, deliberately: no per-session claim can be derived from it.
  * `claudeSessionId` is absent for the direct-HTTP entry (the hand-launched
@@ -122,6 +128,241 @@ let roundSuspended = false;
  * hide behind the held item's clock.
  */
 const pendingItems = new Map<string, { documentId: string; forwardedAt: number }>();
+
+// --- Keyed rounds (#2358, ADR-054: the delivery-rounds PR; design §6.7) -----
+//
+// With ownership on, a round has a KEY: a document (an annotation item on an
+// open document), a message (a `chat:message`, by its chat-map key), or none
+// (a forward that names neither: the Solo release wake, the switch-back wake,
+// an annotation event with no document or on a document that is not open). A
+// document's round closes on a committed poll that read the document and put
+// nothing back on it; a message's on a committed poll that handed it or found
+// it refused, or on an accepted acknowledgement or final reply naming it; a
+// key-less round on any committed poll. So one session's poll no longer
+// closes a round another session's document or message is waiting on.
+//
+// The mode is read through ONE seam (`setDeliveryRoundSeam`), wired at boot in
+// `index.ts` to the ownership flag: this module never imports the flag (the
+// flag-importer pin). Unwired, or answering false (every release build), every
+// function below runs master's code for the one global round above, and the
+// keyed state stays empty: each keyed write sits behind `keyed()`.
+// `tests/server/ownership-delivery-rounds.test.ts` pins that (the dark guard).
+
+/** What the keyed mode needs from outside `events/`, wired at boot. */
+export interface DeliveryRoundSeam {
+  /** Whether rounds are keyed: the ownership flag. */
+  keyed(): boolean;
+  /** Whether `documentId` is open now (the document registry). */
+  isDocumentOpen(documentId: string): boolean;
+}
+
+let roundSeam: DeliveryRoundSeam | undefined;
+
+/** Install the seam (`index.ts`, at boot; tests that build the keyed mode). */
+export function setDeliveryRoundSeam(seam: DeliveryRoundSeam | undefined): void {
+  roundSeam = seam;
+}
+
+/** Whether rounds are keyed now. False unwired: master's one global round. */
+function keyed(): boolean {
+  return roundSeam?.keyed() === true;
+}
+
+/**
+ * A round's key, as stored: `""` for the key-less round (at most one),
+ * `"d\0<documentId>"` or `"m\0<chat-map key>"`. NUL-separated, so no
+ * document id or chat key can forge the other kind.
+ */
+export type DeliveryRoundKey = string & { readonly __deliveryRoundKey: true };
+
+const KEYLESS = "" as DeliveryRoundKey;
+const documentRoundKey = (documentId: string) => `d\u0000${documentId}` as DeliveryRoundKey;
+const messageRoundKey = (chatKey: string) => `m\u0000${chatKey}` as DeliveryRoundKey;
+
+/**
+ * The open keyed rounds, by key: when each was first forwarded (a repeat
+ * forward keeps it, R1.3) and whether every external consumer detached while
+ * it was open (R4.1). Bounded by one key-less round, one per open document
+ * (a close drops it, and a forward on a document that is not open keys none)
+ * and one per chat row pushed (a poll or a reply closes it, Clear chat drops
+ * it). The exceptions are client-written rows no poll will hand (a flip-blocker
+ * row): a row a client deleted whose undo failed is gone from the live map, so
+ * Clear chat never finds it and its round stays until a restart. Empty while
+ * not keyed.
+ */
+const keyedRounds = new Map<DeliveryRoundKey, { forwardedAt: number; abandoned: boolean }>();
+/**
+ * The forward-to-close interval of the oldest round the most recent closing
+ * event closed, or null when that round was abandoned (R2.5, R4.1). Cleared by
+ * a drop that removed a round (R3.3) and by the local period's discard.
+ */
+let keyedLatencyMs: number | null = null;
+/** A round closed since the last drop that removed one, or the discard: `polled` rather than `idle`. */
+let keyedClosed = false;
+/** The local period suspended the keyed rounds (#1123 A2, R4.2). */
+let keyedSuspended = false;
+
+/**
+ * The CTRL chat observer notes each `chat:message` it pushes with the row's
+ * chat-map key here, so the key reaches the round without riding the event:
+ * the event goes verbatim to SSE, the wake socket and the channel shim, and
+ * its `messageId` is the row's client-writable `id` field, not its key (R1.1).
+ * A side table keyed by the event object; nothing reads it but
+ * {@link deliveryRoundKeyOf}.
+ */
+const chatRowKeyOf = new WeakMap<TandemEvent, string>();
+
+/** The CTRL chat observer's note of a pushed message's chat-map key. */
+export function noteChatMessageRowKey(event: TandemEvent, chatKey: string): void {
+  // Empty while rounds are not keyed (the dark guard).
+  if (!keyed()) return;
+  chatRowKeyOf.set(event, chatKey);
+}
+
+/**
+ * The key of the round a forward of `event` opens or joins, or undefined while
+ * rounds are not keyed (master's path, which ignores it). A `chat:message` is
+ * keyed by its message whatever document it names (R1.1); an annotation item
+ * by its document only while that document is open (R1.5); anything else, or
+ * a chat message pushed without a noted key, is key-less (R1.2).
+ */
+export function deliveryRoundKeyOf(event: TandemEvent): DeliveryRoundKey | undefined {
+  if (!keyed()) return undefined;
+  // Runs inside `pushEvent` before the fan-out: a throw must never lose the
+  // push, so a failed decision falls back to the key-less round, which any
+  // committed poll closes.
+  try {
+    return roundKeyOf(event);
+  } catch {
+    console.error("[Tandem] Deciding a delivery round's key failed; the round is key-less");
+    return KEYLESS;
+  }
+}
+
+function roundKeyOf(event: TandemEvent): DeliveryRoundKey {
+  if (event.type === "chat:message") {
+    const chatKey = chatRowKeyOf.get(event);
+    return chatKey === undefined ? KEYLESS : messageRoundKey(chatKey);
+  }
+  const documentId = event.documentId;
+  if (
+    documentId &&
+    (event.type === "annotation:created" ||
+      event.type === "annotation:edited" ||
+      event.type === "annotation:reply") &&
+    roundSeam?.isDocumentOpen(documentId) === true
+  ) {
+    return documentRoundKey(documentId);
+  }
+  return KEYLESS;
+}
+
+/** What one committed poll covered, for the keyed rounds (R2.1, R2.2). */
+export interface PollCoverage {
+  /** Documents the poll read and put nothing back on at commit. */
+  documents: ReadonlySet<string>;
+  /** Chat-map keys of the messages it handed, or found refused by `admit`. */
+  messages: ReadonlySet<string>;
+}
+
+/** Remove `keys`' rounds as one closing event: latency from the oldest (R2.5). */
+function closeKeyed(now: number, keys: Iterable<DeliveryRoundKey>): void {
+  let oldest: { forwardedAt: number; abandoned: boolean } | undefined;
+  for (const key of keys) {
+    const round = keyedRounds.get(key);
+    if (round === undefined) continue;
+    keyedRounds.delete(key);
+    if (oldest === undefined || round.forwardedAt < oldest.forwardedAt) oldest = round;
+  }
+  // A closing event that closed nothing changes nothing.
+  if (oldest === undefined) return;
+  keyedClosed = true;
+  // No latency for an abandoned round, as master (R4.1).
+  keyedLatencyMs = oldest.abandoned ? null : Math.max(0, now - oldest.forwardedAt);
+}
+
+/** Remove `keys`' rounds without closing them (R3): a drop measures nothing. */
+function dropKeyed(keys: Iterable<DeliveryRoundKey>): void {
+  let removed = false;
+  for (const key of keys) if (keyedRounds.delete(key)) removed = true;
+  // A drop that removed nothing changes nothing (R3.3): `polled` stays.
+  if (!removed) return;
+  // The latency of an earlier close is never reported again after a drop;
+  // with nothing left open the state reads `idle` until a later close.
+  keyedLatencyMs = null;
+  keyedClosed = false;
+}
+
+/**
+ * A committed poll's keyed closes (R2.1-R2.3), or nothing while not keyed or
+ * while suspended. Called by {@link resolveDeliveryRound}.
+ */
+function resolveKeyedRounds(now: number, coverage: PollCoverage | undefined): void {
+  if (keyedSuspended) return;
+  const keys: DeliveryRoundKey[] = [KEYLESS];
+  for (const id of coverage?.documents ?? []) keys.push(documentRoundKey(id));
+  for (const chatKey of coverage?.messages ?? []) keys.push(messageRoundKey(chatKey));
+  closeKeyed(now, keys);
+}
+
+/**
+ * An acknowledgement of, or a final reply to, the message under `chatKey`
+ * was accepted (its row appended), through `tandem_reply` or
+ * `/api/channel-reply` (R2.2): its round closes. Nothing while rounds are
+ * not keyed (every release build) or while the local period suspends them.
+ * A refused reply returns before its append and never calls this.
+ */
+export function closeMessageDeliveryRound(chatKey: string, now: number = Date.now()): void {
+  if (!keyed() || keyedSuspended) return;
+  // Runs after the reply's row is appended: never throws, so a reply that
+  // landed is never reported as failed (a retry would post it twice).
+  try {
+    closeKeyed(now, [messageRoundKey(chatKey)]);
+  } catch {
+    console.error("[Tandem] Closing a message's delivery round failed");
+  }
+}
+
+/**
+ * A document's tab closed (R3.1): its round is dropped, never closed. Called
+ * by `closeDocumentById` in the same synchronous step that makes the document
+ * not open, so no forward can open a round on it after the drop. Rounds of
+ * messages on that document survive. Applies while suspended too.
+ */
+export function dropDocumentDeliveryRound(documentId: string): void {
+  if (!keyed()) return;
+  dropKeyed([documentRoundKey(documentId)]);
+}
+
+/**
+ * Clear chat cleared these rows (R3.2): their message rounds are dropped.
+ * Called by `clearCtrlChatDurably` only, never by the chat observer's delete
+ * arm. Applies while suspended too.
+ */
+export function dropMessageDeliveryRounds(chatKeys: Iterable<string>): void {
+  if (!keyed()) return;
+  dropKeyed([...chatKeys].map(messageRoundKey));
+}
+
+/** Testing-only: the open keyed rounds, oldest first. */
+export function keyedDeliveryRoundsForTests(): Array<{
+  kind: "document" | "message" | "keyless";
+  id?: string;
+  forwardedAt: number;
+  abandoned: boolean;
+}> {
+  return [...keyedRounds]
+    .map(([key, round]) => {
+      const kind = key === KEYLESS ? "keyless" : key.startsWith("d") ? "document" : "message";
+      return {
+        kind,
+        ...(key === KEYLESS ? {} : { id: key.slice(2) }),
+        forwardedAt: round.forwardedAt,
+        abandoned: round.abandoned,
+      } as const;
+    })
+    .sort((a, b) => a.forwardedAt - b.forwardedAt);
+}
 
 /** One inbox item a forward is waiting on: its document and its annotation or reply id. */
 export interface PendingDeliveryItem {
@@ -224,7 +465,10 @@ export function recordInboxPoll(now: number = Date.now()): void {
 }
 
 /**
- * The inbox poll actually collected. Closes any outstanding forward.
+ * The inbox poll actually collected. Closes any outstanding forward — flag off.
+ * Keyed (ownership on), `coverage` says which rounds this poll closes: the
+ * documents it read and put nothing back on, the messages it handed or found
+ * refused, and always the key-less round (R2).
  *
  * Call only once the poll has committed what it returned — on a cursor-less
  * poll the chat bucket's `read: true` writes and the `surfacedIds` ledger
@@ -242,7 +486,14 @@ export function recordInboxPoll(now: number = Date.now()): void {
 export function resolveDeliveryRound(
   now: number = Date.now(),
   undelivered?: UndeliveredScope,
+  coverage?: PollCoverage,
 ): void {
+  // Keyed (ownership on): only the rounds this poll covered close (R2), and
+  // `undelivered` is not needed: a document whose pass threw was not read.
+  if (keyed()) {
+    resolveKeyedRounds(now, coverage);
+    return;
+  }
   if (pendingSince === null || roundSuspended) return;
   if (undelivered) {
     const held = [...pendingItems].filter(
@@ -287,9 +538,23 @@ export function resolveDeliveryRound(
  * Recording a forward with nothing attached would turn "nobody is listening"
  * into "Claude is ignoring you", which is a different and false story.
  */
-export function recordWakeForward(now: number = Date.now(), item?: PendingDeliveryItem): void {
+export function recordWakeForward(
+  now: number = Date.now(),
+  item?: PendingDeliveryItem,
+  round?: DeliveryRoundKey,
+): void {
   lastForwardAt = now;
   forwardCount += 1;
+  if (keyed()) {
+    // Keyed (R1): the round `round` names (`deliveryRoundKeyOf`), key-less
+    // when none was given. The FIRST forward of a key times it (R1.3). A
+    // forward while abandoned cannot happen (`pushEvent` records one only
+    // with an external consumer attached, which cleared the latch), so no
+    // arm for it here (R4.1 is built on detach and attach alone).
+    const key = round ?? KEYLESS;
+    if (!keyedRounds.has(key)) keyedRounds.set(key, { forwardedAt: now, abandoned: false });
+    return;
+  }
   if (pendingAbandoned) {
     // A fresh round: something is attached again and a new ask went out, so the
     // abandoned clock is superseded rather than extended — and so are the items
@@ -327,6 +592,11 @@ export function recordWakeForward(now: number = Date.now(), item?: PendingDelive
  * Called on the transition to zero, not per unsubscribe.
  */
 export function noteExternalConsumersGone(): void {
+  if (keyed()) {
+    // Keyed (R4.1): master's rule applied to every open round.
+    for (const round of keyedRounds.values()) round.abandoned = true;
+    return;
+  }
   if (pendingSince !== null) pendingAbandoned = true;
 }
 
@@ -355,15 +625,24 @@ export function noteExternalConsumersGone(): void {
  * Called on the transition to non-zero, not per subscribe.
  */
 export function noteExternalConsumerAttached(): void {
+  if (keyed()) {
+    // Keyed (R4.1): every round's latch clears; each keeps its first clock.
+    for (const round of keyedRounds.values()) round.abandoned = false;
+    return;
+  }
   pendingAbandoned = false;
 }
 
 export type DeliveryJoinState =
   /** Nothing has been forwarded this run — or, since #1123 A2, nothing since a
-   *  round was suspended or discarded at a switch of who answers chat. No
-   *  claim is made. */
+   *  round was suspended or discarded at a switch of who answers chat. Keyed
+   *  (ownership on), also: a drop (a tab close, Clear chat) left no round
+   *  open and none has closed since. No claim is made. */
   | "idle"
-  /** A poll followed the last forward. `latencyMs` is that interval. */
+  /** A poll followed the last forward. `latencyMs` is that interval. Keyed
+   *  (ownership on): the last open round was closed, by a poll or by an
+   *  accepted reply naming its message (so with `pollCount` 0 too), and
+   *  `latencyMs` is the oldest round that closing event closed. */
   | "polled"
   /** A forward is outstanding and something is still attached to receive it. */
   | "awaiting-poll"
@@ -432,6 +711,7 @@ export interface DeliveryState {
  * caught. Tests pass an explicit count like everyone else.
  */
 export function getDeliveryState(now: number, externalConsumerCount: number): DeliveryState {
+  if (keyed()) return getKeyedDeliveryState(now, externalConsumerCount);
   // Read-time re-evaluation, not just the detach hook. It also covers the case
   // where a consumer detaches and a NEW one attaches before anything is
   // forwarded — the old clock is meaningless either way, and only a read knows
@@ -470,11 +750,52 @@ export function getDeliveryState(now: number, externalConsumerCount: number): De
 }
 
 /**
+ * `getDeliveryState` while rounds are keyed (R2.5): one aggregate over every
+ * open round, in master's fields and types. `awaiting-poll` while any round is
+ * open, `consumer-detached` while none is attached or any open round was
+ * abandoned, `waitingMs` the age of the oldest open round, `latencyMs` the
+ * last closing event's (null while any round is open, or suspended). Never a
+ * document id, a message key or a per-key breakdown.
+ */
+function getKeyedDeliveryState(now: number, externalConsumerCount: number): DeliveryState {
+  const outstanding = keyedRounds.size > 0 && !keyedSuspended;
+  let oldest: number | null = null;
+  let abandoned = false;
+  if (outstanding) {
+    for (const round of keyedRounds.values()) {
+      if (oldest === null || round.forwardedAt < oldest) oldest = round.forwardedAt;
+      if (round.abandoned) abandoned = true;
+    }
+  }
+  const stranded = outstanding && (abandoned || externalConsumerCount === 0);
+  const state: DeliveryJoinState = stranded
+    ? "consumer-detached"
+    : outstanding
+      ? "awaiting-poll"
+      : keyedSuspended || !keyedClosed
+        ? "idle"
+        : "polled";
+  return {
+    pollCount,
+    forwardCount,
+    state,
+    latencyMs: outstanding || keyedSuspended ? null : keyedLatencyMs,
+    waitingMs: oldest === null || stranded ? null : Math.max(0, now - oldest),
+    sincePollMs: lastPollAt === null ? null : Math.max(0, now - lastPollAt),
+  };
+}
+
+/**
  * Chat came to be answered by a local model (#1123 A2, R3.5): suspend the round
  * open now, if any. No round opens during the local period — nothing is
- * forwarded externally — so only this one can be pending.
+ * forwarded externally — so only this one can be pending. Keyed (R4.2): every
+ * open round is suspended, keyed or not.
  */
 export function suspendDeliveryRound(): void {
+  if (keyed()) {
+    if (keyedRounds.size > 0) keyedSuspended = true;
+    return;
+  }
   if (pendingSince !== null) roundSuspended = true;
 }
 
@@ -484,6 +805,16 @@ export function suspendDeliveryRound(): void {
  * Runs before the switch-back wake can open a round of its own.
  */
 export function discardSuspendedRound(): void {
+  if (keyed()) {
+    // Keyed (R4.2): every suspended round goes, with no latency, before the
+    // switch-back wake can open its own key-less round.
+    if (!keyedSuspended) return;
+    keyedSuspended = false;
+    keyedRounds.clear();
+    keyedLatencyMs = null;
+    keyedClosed = false;
+    return;
+  }
   if (!roundSuspended) return;
   roundSuspended = false;
   pendingSince = null;
@@ -507,6 +838,10 @@ export function resetDeliveryStateForTests(): void {
   pendingAbandoned = false;
   lastLatencyMs = null;
   pendingItems.clear();
+  keyedRounds.clear();
+  keyedLatencyMs = null;
+  keyedClosed = false;
+  keyedSuspended = false;
 }
 
 /**

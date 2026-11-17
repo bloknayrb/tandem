@@ -1,4 +1,5 @@
-import type { ChatMessage } from "../../shared/types";
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
+import { type ChatMessage, isChatNoticeRow } from "../../shared/types";
 import type { ChatNotificationContent, ChatSound } from "../hooks/useTandemSettings";
 import {
   cleanNotificationText,
@@ -336,7 +337,12 @@ export function buildNotificationText(
   content: ChatNotificationContent,
   documentName: (documentId: string) => string | null,
 ): NotificationText {
-  const answers = replies.filter((reply) => reply.greeting !== true);
+  // A notice row is never counted (#1123 part B, R6.2); the reply detector
+  // already keeps it out, so this is defence in depth, flag-gated so a dark
+  // editor counts exactly as before.
+  const answers = replies.filter(
+    (reply) => reply.greeting !== true && !(BYO_MODELS_ENABLED && isChatNoticeRow(reply)),
+  );
   if (answers.length === 0) {
     const hello = replies[replies.length - 1];
     const body = content === "preview" && hello ? previewText(hello.text) : "";
@@ -352,7 +358,23 @@ export function buildNotificationText(
     content !== "generic" && documentIds.size === 1 && last.documentId
       ? documentName(last.documentId)
       : null;
-  const lead = count > 1 ? `Claude sent ${count} replies` : "Claude replied";
+  // #1123 part B (R9.2, Ruling B-b): a local model's reply (a row carrying
+  // `agentIdentity`, which only the local model writes) is announced as
+  // "your local model", never by name; a batch mixing local and Claude
+  // replies reads "N new replies". Claude-only batches are unchanged.
+  const localCount = BYO_MODELS_ENABLED
+    ? answers.filter((reply) => reply.agentIdentity !== undefined).length
+    : 0;
+  const lead =
+    localCount === 0
+      ? count > 1
+        ? `Claude sent ${count} replies`
+        : "Claude replied"
+      : localCount === count
+        ? count > 1
+          ? `Your local model sent ${count} replies`
+          : "Your local model replied"
+        : `${count} new replies`;
   const title = name ? `${lead} in ${name}` : lead;
   const body = content === "preview" ? previewText(last.text) : "";
   return {

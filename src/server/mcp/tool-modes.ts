@@ -9,9 +9,12 @@
  * - `write`: checked in the document's operation queue; claims an unowned
  *   document; a non-owner gets `NOT_DOC_OWNER`.
  * - `take`: `tandem_open`'s take rule (ownership design §4.2).
- * - `reply`: `tandem_reply`, whose acceptance rules (ownership design §7.3) are PR 2's. **Not
- *   enforced by PR 1c**: until PR 2 a session refused a write can still answer
- *   in chat.
+ * - `reply`: `tandem_reply`, whose acceptance rules (ownership design §7.3) are PR 2's, in
+ *   parts. Not through PR 1c's wrapper and never in the operation queue (Bryan,
+ *   2026-11-11, "Chat replies always get through"). Since the chat owners PR a
+ *   reply that names a message (`replyTo`) is checked against the message's
+ *   owner (the reply gate in `sessions/ownership.ts`, rule 1); since the posts PR a
+ *   post (no `replyTo`) goes through the same gate (rule 2).
  * - `owner-only`: never claims; refused on a document another record holds (ownership design §5.6).
  * - `status`: write-mode `tandem_status` (ownership design §5.2): the text is global, a focus on
  *   another record's document is ignored.

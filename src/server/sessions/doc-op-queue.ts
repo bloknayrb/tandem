@@ -8,8 +8,17 @@
  * runs out first (below). With ownership off nothing calls
  * this module: handlers run their bodies directly, as they always have.
  *
- * **Not every ownership change is queued.** Five run where they are, not at a
- * turn of their own: a lapse whose wait for its turn ran out
+ * **Not every ownership change is queued.** Seven run where they are, not at a
+ * turn of their own: a claim made by an accepted chat post (a `tandem_reply`
+ * that names no message) naming an open, unowned document (cause
+ * `post-claim`, the posts PR, R1.2: the same decision, so a post never waits
+ * either; while the document's operation is running within the bound the
+ * post is accepted and claims nothing), a claim made by an accepted `tandem_reply` to a chat
+ * message on an unowned document (cause `reply-claim`, the chat owners PR:
+ * Bryan's decision of 2026-11-11, "Chat replies always get through", so a
+ * reply never waits behind a document's writes; like a poll's claim it lands
+ * at once, and on a document whose operation is still running within the
+ * bound the reply claims nothing), a lapse whose wait for its turn ran out
  * ({@link runWhenDocIdle}: beside the operation still running when its timer
  * fires first, or between two operations when its late turn comes first), a
  * claim made by an inbox poll (the poll scope's `claim` in `ownership.ts`,

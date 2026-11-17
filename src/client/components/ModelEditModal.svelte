@@ -1,8 +1,14 @@
 <script lang="ts">
 import { untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
+import {
+  endpointPrefill,
+  PROVIDER_LABEL,
+  PROVIDER_OPTION_ORDER,
+} from "../../shared/models/provider-ui.js";
 import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.svelte.js";
 import { trapTab } from "../utils/focus-trap.js";
+import { endpointHint, LOCAL_REQUEST_LINE, LOCAL_SERVERS_LINE } from "../utils/local-model-copy.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 
 interface Props {
@@ -55,16 +61,14 @@ const { entry, error, saveUnavailable = false, onCancel, onSave }: Props = $prop
 // derived from the contract's `isLocalProvider` (single source of truth for the
 // local/cloud split) so the picker can never drift from what the collaborator
 // loop will actually resolve. Cloud options render disabled + a "coming soon"
-// note rather than being hidden, so the roadmap stays visible. Local-first order.
-const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string; disabled: boolean }> = (
-  [
-    { value: "local-ollama", label: "Ollama (local)" },
-    { value: "local-llamacpp", label: "llama.cpp (local)" },
-    { value: "anthropic", label: "Anthropic" },
-    { value: "openai", label: "OpenAI" },
-    { value: "gemini", label: "Gemini" },
-  ] satisfies Array<{ value: ModelProvider; label: string }>
-).map((opt) => ({ ...opt, disabled: !isLocalProvider(opt.value) }));
+// note rather than being hidden, so the roadmap stays visible. Local-first order,
+// derived from the contract's lists so no provider can be left out (#1123).
+const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string; disabled: boolean }> =
+  PROVIDER_OPTION_ORDER.map((value) => ({
+    value,
+    label: PROVIDER_LABEL[value],
+    disabled: !isLocalProvider(value),
+  }));
 
 // Discrete $state per field, hydrated ONCE from the `entry` prop snapshot.
 // We deliberately don't track `entry` reactively: the parent unmounts and
@@ -96,6 +100,9 @@ const isEditing = initialEntry !== undefined;
 // picker's disabled split can never disagree about what "cloud" means.
 const isLocal = $derived(isLocalProvider(provider));
 const isCloud = $derived(!isLocal);
+// #1123 Ruling L-f: a new entry's address stays empty; the selected provider's
+// documented address (or nothing) is the placeholder and the hint's example.
+const prefill = $derived(endpointPrefill(provider));
 
 // Last 4 chars of the opaque `apiKeyRef` for the masked preview. The ref
 // is not sensitive (no read path exposes the plaintext from it), but it
@@ -227,10 +234,17 @@ function startReplacingKey() {
       {#if isCloud}
         <span class="mem-provider-note" data-testid="model-edit-provider-note">
           Cloud providers are coming in a future release. For now, choose a local
-          provider (Ollama or llama.cpp).
+          provider.
         </span>
       {/if}
     </label>
+
+    {#if isLocal}
+      <div class="mem-local-intro" data-testid="model-edit-local-intro">
+        <p>{LOCAL_SERVERS_LINE}</p>
+        <p>{LOCAL_REQUEST_LINE}</p>
+      </div>
+    {/if}
 
     <label class="mem-field">
       <span class="mem-label">Display name</span>
@@ -240,7 +254,7 @@ function startReplacingKey() {
         type="text"
         autocomplete="off"
         bind:value={displayName}
-        placeholder="My Anthropic key"
+        placeholder={isLocal ? "" : "My Anthropic key"}
       />
     </label>
 
@@ -252,7 +266,7 @@ function startReplacingKey() {
         type="text"
         autocomplete="off"
         bind:value={modelId}
-        placeholder="e.g. claude-opus-4-7"
+        placeholder={isLocal ? "" : "e.g. claude-opus-4-7"}
       />
     </label>
 
@@ -287,17 +301,25 @@ function startReplacingKey() {
     {/if}
 
     {#if isLocal}
-      <label class="mem-field">
-        <span class="mem-label">Endpoint</span>
-        <input
-          data-testid="model-edit-endpoint"
-          class="mem-input mem-input--mono"
-          type="text"
-          autocomplete="off"
-          bind:value={endpoint}
-          placeholder="http://localhost:11434"
-        />
-      </label>
+      <!-- The hint sits OUTSIDE the label and is linked by aria-describedby, so
+           the field's accessible name stays "Endpoint". -->
+      <div class="mem-field">
+        <label class="mem-field">
+          <span class="mem-label">Endpoint</span>
+          <input
+            data-testid="model-edit-endpoint"
+            class="mem-input mem-input--mono"
+            type="text"
+            autocomplete="off"
+            bind:value={endpoint}
+            placeholder={prefill}
+            aria-describedby="model-edit-endpoint-hint"
+          />
+        </label>
+        <p id="model-edit-endpoint-hint" class="mem-hint" data-testid="model-edit-endpoint-hint">
+          {endpointHint(prefill)}
+        </p>
+      </div>
     {/if}
 
     <label class="mem-enabled-row">
@@ -482,6 +504,22 @@ function startReplacingKey() {
     font-size: 11px;
     color: var(--tandem-fg-subtle);
     margin-top: 2px;
+  }
+
+  .mem-local-intro {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--tandem-fg-subtle);
+  }
+  .mem-local-intro p {
+    margin: 0;
+  }
+  .mem-hint {
+    margin: 0;
+    font-size: 11px;
+    color: var(--tandem-fg-subtle);
   }
 
   .mem-error {

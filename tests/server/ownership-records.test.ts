@@ -343,7 +343,10 @@ describe("what a record holds", () => {
       changeNotices: [],
     };
     // `changeNotices` (the change-notice PR): NOT counted by
-    // recordHoldsState (Ruling 6), pinned by the next test.
+    // recordHoldsState (Ruling 6), pinned by the next test. The chat owners
+    // PR adds no field: per-message owners and "handed" memory live in the
+    // module's own maps (`ownerByMessage`, `handedByRecord`), counted by
+    // recordHoldsState only while their message is unhandled (R3.5).
     expect(Object.keys(full).sort()).toEqual([
       "changeNotices",
       "clientName",
@@ -407,6 +410,15 @@ describe("reset", () => {
       queuedDocuments: 0,
       pendingClaims: 0,
       changeNotices: [],
+      // The chat owners PR: per-message owners (with their origins) and what
+      // each record was handed. Empty, since no record exists.
+      messageOwners: [],
+      handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
   });
 });
@@ -432,6 +444,15 @@ describe("flag off: nothing is ever created", () => {
       queuedDocuments: 0,
       pendingClaims: 0,
       changeNotices: [],
+      // The chat owners PR: per-message owners (with their origins) and what
+      // each record was handed. Empty, since no record exists.
+      messageOwners: [],
+      handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
   });
 });

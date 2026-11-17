@@ -57,7 +57,14 @@ import { type AiNotice, aiOffCopy } from "../utils/license-ui";
  * elsewhere they stay `null` and StatusBar keeps its old logic until #2167
  * attributes activity to the session that picked up the chat.
  */
-export type AiIndicatorTone = "connected" | "solo" | "not-connected" | "pending";
+export type AiIndicatorTone =
+  | "connected"
+  | "solo"
+  | "not-connected"
+  | "pending"
+  /** "Chat: your local model" (#1123 part B, Ruling B-17): the existing `info`
+   *  family, never `connected`'s green. */
+  | "local-chat";
 
 export interface AiIndicatorView {
   /** User-facing label. */
@@ -74,7 +81,15 @@ export interface AiIndicatorView {
     | "restarting"
     /** Tandem's Claude is not running by choice (#2195); see `STANDBY`. */
     | "standby"
-    | "ai-off";
+    | "ai-off"
+    /** #1123 part B (R7.3): each local view is `local-` + today's row. */
+    | "local-solo-paused"
+    | "local-tandem-claude"
+    | "local-restarting"
+    | "local-standby"
+    | "local-connected"
+    | "local-connected-stale"
+    | "local-not-connected";
   /**
    * Whether this state may animate its dot off presence activity. Only ever
    * true when a session is live (connected/solo) — a disconnected indicator
@@ -102,12 +117,26 @@ export interface AiIndicatorView {
    * `null` to show none. Already folded into `title` and `ariaLabel`.
    */
   sessionCount: number | null;
+  /**
+   * Chat is set to the local model (#1123 part B, R7): which label the view
+   * carries, or null out of the local period (every view then exactly today's).
+   * StatusBar reads it to prefix `claudeStatus` with "Claude: " and to lead a
+   * chip's title and accessible name with the label and `localSentence`.
+   */
+  localChat: LocalChatLabel | null;
+  /** S, the local title sentence (R7.4), or null out of the local period. */
+  localSentence: string | null;
 }
+
+/** Which local label (Ruling B-17): "Chat: your local model" or "Your local
+ *  model can't answer". */
+export type LocalChatLabel = "local" | "unusable";
 
 /** No override: StatusBar's presence-driven activity logic applies. */
 const NO_OVERRIDE = { pulse: null, ownActivity: null } as const;
 /** A view before `withSessionCount`, its single writer of `sessionCount`. */
-type BaseView = Omit<AiIndicatorView, "sessionCount">;
+type BaseView = Omit<AiIndicatorView, "sessionCount" | "localChat" | "localSentence"> &
+  Partial<Pick<AiIndicatorView, "localChat" | "localSentence">>;
 /** Suppress presence-driven activity without claiming any of our own. */
 const QUIET = { pulse: false, ownActivity: null } as const;
 
@@ -323,7 +352,10 @@ const UNATTRIBUTED = " Tandem can't confirm that any connection is this Claude."
  * Tandem's own launched Claude is running.
  *
  * "Wakes it when you send a message" is the one wake claim in this file the
- * server can back: the supervisor writes a turn to the child's stdin. There is
+ * server can back: the supervisor writes a turn to the child's stdin. Not in
+ * the local period (#1123 part B, R7): chat set to the local model is never
+ * handed to Claude, so `localIndicatorView` replaces this title with one that
+ * promises no wake. There is
  * deliberately no reply/latency clause — the attached session may be some other
  * client while this child has not connected. With no session seen, the pending
  * variant drops even the wake claim and says only "hasn't seen it connect":
@@ -399,12 +431,20 @@ export function sessionCountLabel(count: number): string {
  * overcount; the rest of its limits are in docs/troubleshooting.md. Nothing at
  * zero or unknown, and never on "AI not connected", whose label already says it.
  */
-function withSessionCount(view: BaseView, count: number | null): AiIndicatorView {
+function withSessionCount(base: BaseView, count: number | null): AiIndicatorView {
+  const view = {
+    ...base,
+    localChat: base.localChat ?? null,
+    localSentence: base.localSentence ?? null,
+  };
   // Nor on "AI off": a refused handshake leaves at most a leftover connection.
+  // Nor on the local view of "AI not connected" (#1123 part B, R7.3): every
+  // local view shows the count exactly where today's view for its row does.
   if (
     count == null ||
     count < 1 ||
     view.dataState === "not-connected" ||
+    view.dataState === "local-not-connected" ||
     view.dataState === "ai-off"
   ) {
     return { ...view, sessionCount: null };
@@ -424,8 +464,101 @@ function withSessionCount(view: BaseView, count: number | null): AiIndicatorView
  * unreachable server).
  */
 export function aiIndicatorView(input: AiIndicatorInput): AiIndicatorView | null {
-  const view = baseIndicatorView(input);
-  return view === null ? null : withSessionCount(view, input.sessionCount);
+  const row = baseIndicatorRow(input);
+  if (row === null) return null;
+  const view = input.localChat == null ? row.view : localIndicatorView(row, input.localChat, input);
+  return withSessionCount(view, input.sessionCount);
+}
+
+// --- The local period (#1123 part B, R7) ----------------------------------------
+
+/** The local labels (Ruling B-17), and their Solo forms ("Solo · " plus the
+ *  label with its first letter in lower case, byte for byte, R7.2). */
+export const LOCAL_CHAT_LABEL: Record<LocalChatLabel, string> = {
+  local: "Chat: your local model",
+  unusable: "Your local model can't answer",
+};
+const soloLabel = (l: string) => `Solo · ${l.charAt(0).toLowerCase()}${l.slice(1)}`;
+
+/** S, the title sentence for each label (R7.4). */
+export const LOCAL_CHAT_SENTENCE: Record<LocalChatLabel, string> = {
+  local:
+    "Chat is set to your local model. Tandem does not send Claude the chat messages you send while it is, then or later.",
+  unusable:
+    "Chat is set to your local model, but no local model can be used now (see Settings → Models). Tandem does not send Claude the chat messages you send while it is, then or later.",
+};
+
+/** Where today's title says document sync is down (R7.4), worded about
+ *  Tandem, not Claude. */
+const LOCAL_SYNC_DOWN =
+  "Document sync is down, so what you send now won't reach Tandem until sync reconnects.";
+
+/**
+ * Today's view for a row, in the local period: the label claims the SETTING,
+ * never the outcome (Ruling B-17); the title never promises delivery to
+ * Claude; activity (`canAnimate`, `pulse`, `ownActivity`) is today's — Claude's
+ * real activity, since a turn in flight at the switch can still edit.
+ */
+function localIndicatorView(
+  row: IndicatorRow,
+  local: LocalChatLabel,
+  input: AiIndicatorInput,
+): BaseView {
+  const today = row.view;
+  // Rule 0: the licence refuses the local model too — "AI off" as today.
+  if (row.row === "ai-off") return today;
+  const S = LOCAL_CHAT_SENTENCE[local];
+  const L = LOCAL_CHAT_LABEL[local];
+  const solo = row.row === "solo";
+  const label = solo ? soloLabel(L) : L;
+  let title: string;
+  switch (row.row) {
+    case "solo":
+      title =
+        `Solo mode. ${S}` +
+        (local === "local" ? " In Solo your local model replies in chat only." : "");
+      break;
+    case "tandem-claude": {
+      const where = input.launcherCwd === null ? "" : ` in ${displayPath(input.launcherCwd)}`;
+      const sessionSeen =
+        (input.liveIndicator === "connected" && input.sessionCount !== 0) || input.launcherAttached;
+      title = `Tandem's Claude is running${where}. ${S}`;
+      // Kept: this title is the only place that says sync is down.
+      if (sessionSeen && !input.docSyncConnected) title += ` ${LOCAL_SYNC_DOWN}`;
+      break;
+    }
+    case "restarting":
+      title = `Tandem is starting its Claude. ${S}`;
+      break;
+    case "standby-off":
+      title = `Tandem's Claude is turned off. ${S}`;
+      break;
+    case "standby-awaiting-start":
+      title = `Tandem's Claude has not been started. ${S}`;
+      break;
+    case "standby-idle":
+      title = `Tandem's Claude stopped after being idle. ${S}`;
+      break;
+    case "connected":
+      title = `Something is connected to Tandem. ${S}`;
+      break;
+    case "connected-stale":
+      title = `Something connected to Tandem earlier, but Tandem can't see that it's still there. ${S}`;
+      break;
+    case "not-connected":
+      title = `No Claude session is connected to Tandem. ${S}`;
+      break;
+  }
+  return {
+    ...today,
+    label,
+    tone: solo ? "solo" : local === "local" ? "local-chat" : "not-connected",
+    dataState: `local-${today.dataState}` as AiIndicatorView["dataState"],
+    title,
+    ariaLabel: `${label}. ${title}`,
+    localChat: local,
+    localSentence: S,
+  };
 }
 
 export interface AiIndicatorInput {
@@ -453,6 +586,61 @@ export interface AiIndicatorInput {
   /** The licence refusal (`AiReadiness.aiNotice`) — the ONE source of the
    *  pill's ai-off state and its copy. */
   aiNotice: AiNotice | null;
+  /**
+   * Chat is set to the local model (#1123 part B, R7): which label, or
+   * null/absent out of the local period. Decided from the editor's read and
+   * the freshness-gated held flag only (`localChatSettingFor`), never from
+   * `launcherStandby` (a raw read that survives a failed poll).
+   */
+  localChat?: LocalChatLabel | null;
+}
+
+/** Which of today's rows a view came from (R7.4's table), so the local
+ *  period re-words exactly that row. */
+type IndicatorRow = {
+  row:
+    | "ai-off"
+    | "solo"
+    | "tandem-claude"
+    | "restarting"
+    | "standby-off"
+    | "standby-awaiting-start"
+    | "standby-idle"
+    | "connected"
+    | "connected-stale"
+    | "not-connected";
+  view: BaseView;
+};
+
+function baseIndicatorRow(input: AiIndicatorInput): IndicatorRow | null {
+  const view = baseIndicatorView(input);
+  if (view === null) return null;
+  switch (view.dataState) {
+    case "ai-off":
+      return { row: "ai-off", view };
+    case "solo-paused":
+      return { row: "solo", view };
+    case "tandem-claude":
+      return { row: "tandem-claude", view };
+    case "restarting":
+      return { row: "restarting", view };
+    case "standby":
+      return {
+        row:
+          view === STANDBY.off
+            ? "standby-off"
+            : view === STANDBY["awaiting-start"]
+              ? "standby-awaiting-start"
+              : "standby-idle",
+        view,
+      };
+    case "connected":
+      return { row: "connected", view };
+    case "connected-stale":
+      return { row: "connected-stale", view };
+    default:
+      return { row: "not-connected", view };
+  }
 }
 
 function baseIndicatorView(input: AiIndicatorInput): BaseView | null {

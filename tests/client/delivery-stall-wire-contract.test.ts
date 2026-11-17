@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deliveryStall } from "../../src/client/status/delivery-stall.js";
 import {
   applyAiRefusal,
   getDeliveryState,
+  keyedDeliveryRoundsForTests,
   recordWakeForward,
   resetDeliveryStateForTests,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import { DELIVERY_STALL_MS } from "../../src/shared/constants.js";
 
@@ -24,7 +26,16 @@ import { DELIVERY_STALL_MS } from "../../src/shared/constants.js";
  * stalled condition and feeds its real output to the real client predicate.
  */
 
-describe("delivery join — server state names reach the client predicate", () => {
+/**
+ * The same contract in both of the server's round modes (the ownership
+ * series' delivery-rounds PR, design §6.7): master's one global round
+ * (the delivery-round seam unwired, which every flag-off server runs) and the
+ * keyed rounds (the seam wired, which every flag-on server runs). Both modes
+ * are driven here explicitly, whatever the environment's ownership flag: the
+ * keyed one through a stub seam, so this client-side file imports nothing of
+ * the server's ownership module.
+ */
+function contractCases(): void {
   it("the state the server mints for an outstanding forward is the one the client acts on", () => {
     resetDeliveryStateForTests();
 
@@ -75,6 +86,28 @@ describe("delivery join — server state names reach the client predicate", () =
 
     resetDeliveryStateForTests();
   });
+}
+
+describe("delivery join — server state names reach the client predicate", () => {
+  // Unwired: master's one global round.
+  beforeEach(() => setDeliveryRoundSeam(undefined));
+  contractCases();
+});
+
+describe("delivery join, keyed rounds (stub seam) — server state names reach the client predicate", () => {
+  beforeEach(() => setDeliveryRoundSeam({ keyed: () => true, isDocumentOpen: () => false }));
+  afterEach(() => {
+    setDeliveryRoundSeam(undefined);
+    resetDeliveryStateForTests();
+  });
+
+  it("the stub seam is live: a forward opens a key-less keyed round", () => {
+    resetDeliveryStateForTests();
+    recordWakeForward(1_000_000);
+    expect(keyedDeliveryRoundsForTests().map((r) => r.kind)).toEqual(["keyless"]);
+  });
+
+  contractCases();
 });
 
 function silentFor(server: { state: string; waitingMs: number | null }): number | null {

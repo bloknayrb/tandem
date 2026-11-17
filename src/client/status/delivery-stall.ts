@@ -37,15 +37,26 @@ import { DELIVERY_STALL_MS } from "../../shared/constants.js";
  *
  * ## What it deliberately cannot catch
  *
- * `"awaiting-poll"` is only reachable when NO session has polled — or when no
- * poll since could hand the waited-on comment or reply over (PR #2225 review:
- * its document could not be read, or its record was refused as malformed), which
- * is an undelivered ask in its own right — because the outstanding forward is
- * process-global. With two sessions attached, a second
- * one polling on its routine cadence clears the flag and this stays silent while
- * the first is genuinely wedged. That is a real gap and it is the honest side of
- * the trade: the alternative is a per-session claim, and neither session id is
- * available on the population this exists for.
+ * While multi-session ownership is off (every release build), `"awaiting-poll"`
+ * is only reachable when NO session has polled — or when no poll since could
+ * hand the waited-on comment or reply over (PR #2225 review: its document could
+ * not be read, or its record was refused as malformed), which is an undelivered
+ * ask in its own right — because the outstanding forward is process-global.
+ * With two sessions attached, a second one polling on its routine cadence
+ * clears the flag and this stays silent while the first is genuinely wedged.
+ * That is a real gap and it is the honest side of the trade: the alternative is
+ * a per-session claim, and neither session id is available on the population
+ * this exists for.
+ *
+ * With ownership on (#2358, the delivery-rounds PR) the server keys rounds by
+ * document and by message: a poll closes only the rounds of what it read or was
+ * handed, and an accepted acknowledgement or final reply closes its message's
+ * round, so this reports the oldest round still waiting whichever session it
+ * waits on, and an unrelated session's poll no longer hides it. What it still
+ * cannot catch then: a key-less round (the Solo release wake, the switch-back
+ * wake), which any session's poll closes; and it can report a stall for an item
+ * deleted or resolved since, until a poll reads its document. This module reads
+ * only `state` and `waitingMs` and is unchanged by either mode.
  */
 export interface DeliveryStallInput {
   /** The server's join state. Unknown/absent reads as no claim. */

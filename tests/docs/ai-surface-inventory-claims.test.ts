@@ -64,7 +64,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
    * function; the surface gate's chat check has exactly one place to live only
    * for as long as that stays true.
    */
-  it("chat has exactly one write choke point, with the three callers the doc names", () => {
+  it("chat has exactly one write choke point, with the four callers the doc names", () => {
     const callers = sourcesUnder("src")
       .filter(({ path, src }) => {
         if (path.endsWith("src/server/mcp/awareness.ts")) return false; // the definition
@@ -80,7 +80,13 @@ describe("AI surface inventory (#1346 discovery)", () => {
         "Add it to the 'AI surfaces' table in docs/licensing-explained.md, or route it",
         "through an existing surface. Do not just widen this list.",
       ].join(" "),
-    ).toEqual(["src/server/local-model/collaborator.ts", "src/server/mcp/channel-routes.ts"]);
+    ).toEqual([
+      "src/server/local-model/collaborator.ts",
+      // #1123 part B, R11: Tandem's line at the user's own switch back to
+      // Claude, a notice routed through the choke point (licence-refused).
+      "src/server/local-period-wiring.ts",
+      "src/server/mcp/channel-routes.ts",
+    ]);
 
     // The third caller is inside the defining module (`tandem_reply`). Asserting
     // it by shape is not enough: excluding the whole module would make a FOURTH

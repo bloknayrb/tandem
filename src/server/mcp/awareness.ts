@@ -22,7 +22,11 @@ import { generateMessageId } from "../../shared/utils.js";
 import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
-import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
+import {
+  closeMessageDeliveryRound,
+  recordInboxPoll,
+  resolveDeliveryRound,
+} from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannelInDocument } from "../events/queue.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
@@ -49,6 +53,7 @@ import {
 } from "../sessions/ownership-refusal.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
+import { settledChatIds } from "./chat-handled.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore, YDocStore } from "./document-store.js";
 import { isGreetingReply } from "./greeting-reply.js";
@@ -807,6 +812,43 @@ export function finalizeClaudeChatMessage(id: string): void {
 }
 
 /**
+ * Remove a streamed reply row the local-model collaborator wrote (#1123 part
+ * C, Ruling C-1): only where a toast says the run stopped without replying or
+ * that its reply was not delivered, so no row contradicts it. Deletes the
+ * `Y_MAP_CHAT_STREAM` sidecar entry and the chat row in one `withMcp` write
+ * (one update, or part of the caller's), and retires the staleness ledger
+ * entry. Only a local-model reply row is removed; a missing row (chat cleared
+ * mid-run) is left missing and nothing is re-created. Returns false, writing
+ * nothing, when the id names a row that is not a local-model reply. Not an append, so it is
+ * not an AI-surface admission point: it removes what an admitted run wrote.
+ */
+export function removeClaudeChatMessage(id: string): boolean {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const streamMap = ctrlDoc.getMap(Y_MAP_CHAT_STREAM);
+  clearStreamStaleness(id);
+  const existing = chatMap.get(id) as ChatMessage | undefined;
+  // A local-model row only (it carries `agentIdentity`): never Claude's own
+  // `tandem_reply`, never a notice.
+  const removeRow =
+    existing?.author === "claude" &&
+    existing.agentIdentity !== undefined &&
+    existing.chatNotice === undefined;
+  // Not this run's kind of row: touch nothing, and say so, so the caller can
+  // fold the sidecar it skipped folding instead of losing the streamed text.
+  if (!removeRow && existing !== undefined) return false;
+  if (!removeRow && !streamMap.has(id)) return true;
+  // `withMcp` for the sidecar-only case too (the row was cleared mid-run):
+  // it is the same act, removing what this run streamed, and it runs inside
+  // the collaborator's own `withMcp` transaction anyway.
+  withMcp(ctrlDoc, () => {
+    if (streamMap.has(id)) streamMap.delete(id);
+    if (removeRow) chatMap.delete(id);
+  });
+  return true;
+}
+
+/**
  * Leads `tandem_checkInbox`'s summary when the poll read no document: a named
  * one that is not open, or nothing open at all. Deliberately carries no "call
  * tandem_open" advice: opening a document is something Claude does only when
@@ -821,6 +863,25 @@ function noDocumentInboxNote(requestedId: string | undefined): string {
 
 /** Identity unless a test installed a corruptor (see `setInboxResponseCorruptorForTests`). */
 let responseCorruptorForTests: <T>(response: T) => unknown = (response) => response;
+
+/**
+ * Testing-only (#2358, the delivery-rounds PR, R2.4): throws inside the
+ * notice step of a committed poll, after its hand-out, so a test can show a
+ * poll that throws there closes no delivery round.
+ */
+let noticeFaultForTests: (() => void) | undefined;
+
+export function setInboxNoticeFaultForTests(fault: (() => void) | undefined): void {
+  noticeFaultForTests = fault;
+}
+
+/** Run at the start of a poll's chat commit (both collectors); may throw (the posts PR, R0.7). */
+let chatCommitFaultForTests: (() => void) | undefined;
+
+/** Make a poll's chat commit (`chat.commit`) throw for a test; undefined clears it. */
+export function setChatCommitFaultForTests(fault: (() => void) | undefined): void {
+  chatCommitFaultForTests = fault;
+}
 
 /**
  * Make the next responses fail the backstop schema, for tests of what a
@@ -1613,6 +1674,14 @@ interface InboxDocumentsPass extends DocumentInbox {
   /** Flag on: the documents whose pass returned at least one item. */
   yielded: Set<string>;
   /**
+   * Every document this pass read (#2358, the delivery-rounds PR, the
+   * brief's Terms): its pass ran and did not throw, or the quiet-document
+   * skip passed over it (its last pass was a quiet fixed point). Never an
+   * excluded document, one whose scope read failed, one with no store, or
+   * one whose pass threw. Read only while delivery rounds are keyed.
+   */
+  read: Set<string>;
+  /**
    * Flag on, the notice rule: per document, the settled marks this pass saw
    * change (`NoticeSettlement.ended`), ended by the commit only where the
    * poll read the document as its holder (`endObservedNotices`).
@@ -1673,6 +1742,7 @@ function collectInboxDocuments(
     readDocuments: new Map(),
     excluded: [],
     yielded: new Set(),
+    read: new Set(),
     noticeEnds: new Map(),
     commit: () => {
       for (const commit of commits) commit();
@@ -1781,6 +1851,7 @@ function collectInboxDocuments(
         if (isQuietSkip(id, state, modeState, view)) {
           // Sound only with nothing held (see `isQuietSkip`), so nothing to carry.
           if (view) pass.readDocuments.set(id, new Set());
+          pass.read.add(id);
           continue;
         }
         const epochBefore = state.epoch;
@@ -1874,6 +1945,7 @@ function collectInboxDocuments(
       ledgers.commit();
       commitQuiet?.();
     });
+    pass.read.add(id);
     pass.userActions.push(...inbox.userActions);
     pass.userResponses.push(...inbox.userResponses);
     pass.userReplies.push(...inbox.userReplies);
@@ -1962,14 +2034,43 @@ interface UnreadChat {
   /** Messages refused as malformed: not returned, not stamped. */
   dropped: number;
   /**
+   * Their chat-map keys (#2358, the delivery-rounds PR, R2.2): a committed
+   * poll that found a message refused closes its round. Only messages in the
+   * caller's chat scope reach `admit`.
+   */
+  droppedKeys: string[];
+  /**
    * Stamp the returned messages. Call only once the response validated.
    * Cursor-less polls stamp them `read`; a cursor poll stamps them
    * `delivered` only, since `read` waits for the acknowledgement
    * (`acknowledgeCursor`) — and `delivered` is what the editor's pickup row
    * reads as "your AI has it", so a Claude that works on a message for minutes
    * before polling again is not reported as never having picked it up.
+   *
+   * `excluded` (ownership on only, the chat owners PR, R4.4): keys this poll
+   * returned on a document whose claim did not stand. They are neither
+   * registered nor stamped, and a cursor poll retires the entries it created
+   * for them, so each is back as it was before the poll.
    */
-  commit: () => void;
+  commit: (excluded?: ReadonlySet<string>) => void;
+  /**
+   * Retire the chat entries this poll created (a cursor poll's pass assigns
+   * them; a cursor-less one creates none before its commit), for a poll that
+   * failed before its commit (ownership on only, R4.4). Entries other polls
+   * made are left.
+   */
+  undo: () => void;
+  /**
+   * Take back what `commit` did (ownership on, R4.4: a throw after the chat
+   * commit): the entries it or the pass created are retired, the entries it
+   * acknowledged are unacknowledged, and the stamps it wrote are removed.
+   */
+  revert: () => void;
+  /** Per returned key, its chat scope and the document it names (ownership on: R4.3, R4.4). */
+  scopes: Map<
+    string,
+    { scope: ReturnType<PollScope["chatScopeOf"]>; documentId: string | undefined }
+  >;
   /** Cursor polls: chat seqs the reader must keep owed (refused by `admit`). */
   held: Set<number>;
   /** Cursor polls: the hand-out token the next cursor carries (`recordHandOut`). */
@@ -2008,8 +2109,8 @@ function admitChatItem(msg: Partial<ChatMessage>): InboxChatMessage | null {
  * `delivered` stamp, for that one). Nothing to stamp opens no transaction, so a
  * repeat poll writes nothing.
  */
-function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): void {
-  if (keys.length === 0) return;
+function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): string[] {
+  if (keys.length === 0) return [];
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
   const due = keys.filter((key) => {
@@ -2018,11 +2119,32 @@ function stampUserChat(keys: readonly string[], stamp: "read" | "delivered"): vo
     const msg = live as ChatMessage;
     return msg.author === "user" && !msg.read && (stamp === "read" || msg.delivered !== true);
   });
-  if (due.length === 0) return;
+  if (due.length === 0) return [];
   withMcp(ctrlDoc, () => {
     for (const key of due) {
       const msg = chatMap.get(key) as ChatMessage;
       chatMap.set(key, stamp === "read" ? { ...msg, read: true } : { ...msg, delivered: true });
+    }
+  });
+  return due;
+}
+
+/**
+ * Take back a stamp this poll made (ownership on, the chat owners PR, R4.4: a
+ * poll that threw after its chat commit): each of `keys` loses the `read` or
+ * `delivered` this poll wrote, in one server-origin transaction. Only
+ * re-owes.
+ */
+function unstampUserChat(keys: readonly string[], stamp: "read" | "delivered"): void {
+  if (keys.length === 0) return;
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  withInternal(ctrlDoc, () => {
+    for (const key of keys) {
+      const live = chatMap.get(key);
+      if (typeof live !== "object" || live === null) continue;
+      const { delivered: _delivered, ...rest } = live as ChatMessage;
+      chatMap.set(key, stamp === "read" ? { ...(live as ChatMessage), read: false } : rest);
     }
   });
 }
@@ -2047,47 +2169,93 @@ function inTimestampOrder(chatMap: Y.Map<unknown>, keys: readonly string[]): str
  * returned nor stamped, so it stays unread; it does not set `hasNew`, and the
  * summary counts it.
  */
-function collectUnreadChat(): UnreadChat {
+function collectUnreadChat(poll: PollScope): UnreadChat {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
   const owedAtSwitch: string[] = [];
   const messages: InboxChatMessage[] = [];
   const keys: string[] = [];
+  const scopes: UnreadChat["scopes"] = new Map();
+  const committed = {
+    created: [] as RegistryEntry[],
+    acked: [] as RegistryEntry[],
+    stamped: [] as string[],
+  };
   let dropped = 0;
+  const droppedKeys: string[] = [];
+  // Ownership on (the posts PR, R3.5; design §6.4: the cursor-less path
+  // "gains the check it lacks today"): a handled message is never handed,
+  // even unread. While ownership is off, master's path: no check here.
+  const handled = poll.scoped ? settledChatIds(chatMap) : undefined;
 
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || msg.read) return;
+    if (handled?.has(key)) return;
     // Local-period chat is never handed to Claude (#1123 A2, R2.1): skipped
     // before `admit`, so it is neither returned, stamped nor counted.
     if (isLocalPeriodChat(key)) return;
+    // Ownership (the chat owners PR, R4.1): only what this caller owns or
+    // may take now. Every message reads "owns" while ownership is off.
+    const documentId = chatDocumentOf(msg);
+    const scope = poll.chatScopeOf(key, documentId);
+    if (scope === "neither") return;
     const item = admitChatItem(msg);
     if (!item) {
       dropped += 1;
+      droppedKeys.push(key);
       return;
     }
     messages.push(item);
     keys.push(key);
+    scopes.set(key, { scope, documentId });
     if (wasOwedAtSwitch(key)) owedAtSwitch.push(item.id);
   });
 
   return {
     messages,
     dropped,
+    droppedKeys,
     owedAtSwitch,
     held: new Set(),
-    commit: () => {
-      if (keys.length === 0) return;
+    scopes,
+    commit: (excluded) => {
+      chatCommitFaultForTests?.();
+      const due = excluded ? keys.filter((key) => !excluded.has(key)) : keys;
+      if (due.length === 0) return;
       // Registered as returned and acknowledged, like the document items a
       // cursor-less poll commits (`teeLegacyCommit`): a cursor reader whose
       // mark is below them is still handed them. Oldest first, so seq order
       // is hand-out order (`answeredChatIds` relies on it).
-      for (const key of inTimestampOrder(chatMap, keys)) {
-        deliveryRegistry.markAcked(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0));
+      for (const key of inTimestampOrder(chatMap, due)) {
+        const known = deliveryRegistry.lookup("c", key, 0);
+        const entry = known ?? deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+        if (!known) committed.created.push(entry);
+        else if (!known.acked) committed.acked.push(known);
+        deliveryRegistry.markAcked(entry);
       }
-      stampUserChat(keys, "read");
+      committed.stamped = stampUserChat(due, "read");
+    },
+    undo: () => {},
+    revert: () => {
+      for (const entry of committed.created) deliveryRegistry.retire(entry);
+      for (const entry of committed.acked) deliveryRegistry.unacknowledge(entry);
+      unstampUserChat(committed.stamped, "read");
     },
   };
+}
+
+/** A document id as `docIdFromPath` makes them (never CTRL_ROOM): anything else in a row names no document. */
+const CHAT_DOCUMENT_ID = /^[A-Za-z0-9-]{1,256}$/;
+
+/**
+ * The document a user chat row names, for ownership (the chat owners PR): its
+ * client-written `documentId` only when it has a document id's shape, else
+ * none, so an arbitrary string never reaches a refusal or a reply row.
+ */
+function chatDocumentOf(msg: Partial<ChatMessage>): string | undefined {
+  const id = msg.documentId;
+  return typeof id === "string" && CHAT_DOCUMENT_ID.test(id) ? id : undefined;
 }
 
 /** A user chat message some model provably received, with its place in the hand-out order. */
@@ -2196,7 +2364,10 @@ function answeredChatIds(chatMap: Y.Map<unknown>): Set<string> {
  */
 export function unansweredUserChatKeys(): string[] {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-  const answered = answeredChatIds(chatMap);
+  // Ownership on (the posts PR, R3.2): the same rule the inbox and every
+  // ownership decision use. Off, master's.
+  const answered =
+    inboxOwnership.chatRule() === "settles" ? settledChatIds(chatMap) : answeredChatIds(chatMap);
   const keys: string[] = [];
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
@@ -2205,6 +2376,221 @@ export function unansweredUserChatKeys(): string[] {
     keys.push(key);
   });
   return keys;
+}
+
+/**
+ * The chat side of ownership (#2358, the chat owners PR, R2.2): what the
+ * ownership module needs from chat, reached **only** through its
+ * `setOwnershipChatSide` seam, which `index.ts` wires at boot. This file reads
+ * no flag; nothing here runs unless an ownership decision, made flag on,
+ * calls it, so every member uses the flag-on handled rule (`settledChatIds`:
+ * a final reply's `replyTo` or `settles`, the posts PR, R3.2). Each member is
+ * synchronous.
+ */
+export const ownershipChatSide = Object.freeze({
+  /** The handled rule over the live chat rows (the posts PR, R3.2). */
+  handledKeys(): ReadonlySet<string> {
+    return settledChatIds(getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT));
+  },
+  /** The unhandled, non-local-period user messages that name `documentId`. */
+  messagesOn(documentId: string): string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const handled = settledChatIds(chatMap);
+    const keys: string[] = [];
+    chatMap.forEach((value, key) => {
+      if (typeof value !== "object" || value === null) return;
+      const msg = value as Partial<ChatMessage>;
+      if (msg.author !== "user" || chatDocumentOf(msg) !== documentId) return;
+      if (handled.has(key) || isLocalPeriodChat(key)) return;
+      keys.push(key);
+    });
+    return keys;
+  },
+  /** The facts of the user row under `key`, or undefined. */
+  message(key: string) {
+    const value = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT).get(key);
+    if (typeof value !== "object" || value === null) return undefined;
+    const msg = value as Partial<ChatMessage>;
+    if (msg.author !== "user") return undefined;
+    const documentId = chatDocumentOf(msg);
+    return {
+      ...(documentId !== undefined ? { documentId } : {}),
+      documentOpen: documentId !== undefined && getOpenDocs().has(documentId),
+      localPeriod: isLocalPeriodChat(key),
+    };
+  },
+  /**
+   * The chat half of a handover (ownership design §6.5 steps 1 and 2, R6.1):
+   * each key that is a user row, not local-period chat and not handled has
+   * its chat entry retired and is written `read: false` with no `delivered`,
+   * and every live acknowledgement of it (`inProgress`, not yet
+   * `superseded`) is marked `superseded: true` (the posts PR, R3.3), in ONE
+   * server-origin (`withInternal`) transaction, so every reader is owed it
+   * again and the pickup row reads "waiting". The CTRL chat observer pushes
+   * only on `add` and skips the `internal` origin, so no `chat:message` fires
+   * and nothing is pushed.
+   */
+  reOwe(keys: readonly string[]): void {
+    reOweChat(keys);
+  },
+  /**
+   * Step 1 of `settles` (the posts PR, R3.4), first half: the reply row
+   * under `rowKey` was just accepted; its target's earlier messages
+   * (registry sequence AND timestamp at or below the target's, master's
+   * `answeredBy` conjunction) that some model provably received
+   * (`receivedChat`). A target with no registry entry settles only itself.
+   * Writes nothing; the caller filters by scope and writes with
+   * {@link ownershipChatSide.addSettles}.
+   */
+  settleCandidates(rowKey: string): string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    const bound = settleBound(chatMap, rowKey);
+    if (!bound) return [];
+    return receivedChat(chatMap)
+      .filter((h) => h.key !== bound.target && h.seq <= bound.seq && h.timestamp <= bound.timestamp)
+      .map((h) => h.key);
+  },
+  /**
+   * Step 1, second half: add `keys` (still user rows, not local-period chat,
+   * not already listed) to the row's `settles`, in one `withMcp` write.
+   * Returns the keys added.
+   */
+  addSettles(rowKey: string, keys: readonly string[]): string[] {
+    const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+    return addSettles(chatMap, new Map([[rowKey, keys]]), () => true);
+  },
+});
+
+/** A final reply row's target and its place in the hand-out order, or undefined. */
+function settleBound(
+  chatMap: Y.Map<unknown>,
+  rowKey: string,
+): { target: string; seq: number; timestamp: number } | undefined {
+  const row = chatMap.get(rowKey);
+  if (typeof row !== "object" || row === null) return undefined;
+  const reply = row as Partial<ChatMessage>;
+  if (reply.author !== "claude" || reply.inProgress === true || reply.superseded === true) {
+    return undefined;
+  }
+  if (typeof reply.replyTo !== "string") return undefined;
+  const target = chatMap.get(reply.replyTo) as Partial<ChatMessage> | undefined;
+  const entry = deliveryRegistry.lookup("c", reply.replyTo, 0);
+  if (!entry || typeof target?.timestamp !== "number") return undefined;
+  return { target: reply.replyTo, seq: entry.seq, timestamp: target.timestamp };
+}
+
+/**
+ * Add each row's candidate keys that are still user rows, not local-period
+ * chat, accepted by `owns` and not already listed, to that row's `settles`,
+ * in ONE `withMcp` transaction (nothing to add opens none). Returns the keys
+ * added, once each.
+ */
+function addSettles(
+  chatMap: Y.Map<unknown>,
+  candidates: ReadonlyMap<string, readonly string[]>,
+  owns: (key: string) => boolean,
+): string[] {
+  const writes = new Map<string, string[]>();
+  const added = new Set<string>();
+  for (const [rowKey, keys] of candidates) {
+    const row = chatMap.get(rowKey) as Partial<ChatMessage> | undefined;
+    const listed = new Set(Array.isArray(row?.settles) ? row.settles : []);
+    const fresh: string[] = [];
+    for (const key of keys) {
+      if (listed.has(key) || fresh.includes(key)) continue;
+      const msg = chatMap.get(key);
+      if (typeof msg !== "object" || msg === null) continue;
+      if ((msg as Partial<ChatMessage>).author !== "user" || isLocalPeriodChat(key)) continue;
+      if (!owns(key)) continue;
+      fresh.push(key);
+    }
+    if (fresh.length === 0) continue;
+    writes.set(rowKey, [...listed, ...fresh].sort());
+    for (const key of fresh) added.add(key);
+  }
+  if (writes.size === 0) return [];
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  withMcp(ctrlDoc, () => {
+    for (const [rowKey, settles] of writes) {
+      chatMap.set(rowKey, { ...(chatMap.get(rowKey) as ChatMessage), settles });
+    }
+  });
+  return [...added];
+}
+
+/**
+ * Step 2 of `settles` (the posts PR, R3.4, R3.8): a poll of the confirming
+ * record just confirmed a hand-out, whose still-live entries are `confirmed`.
+ * For each of that record's own reply rows (`rows`) whose target is in the
+ * hand-out, the hand-out's earlier messages (sequence AND timestamp at or
+ * below the target's) that `owns` accepts are added to its `settles`, in one
+ * `withMcp` write. Returns the keys added.
+ */
+function settleHandOutRows(
+  confirmed: ReadonlyArray<{ readonly base: string; readonly seq: number }>,
+  rows: readonly string[],
+  owns: (key: string) => boolean,
+): string[] {
+  if (rows.length === 0) return [];
+  const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
+  const inHandOut = new Set(confirmed.map((e) => e.seq));
+  const candidates = new Map<string, string[]>();
+  for (const rowKey of rows) {
+    const bound = settleBound(chatMap, rowKey);
+    if (!bound || !inHandOut.has(bound.seq)) continue;
+    const earlier: string[] = [];
+    for (const entry of confirmed) {
+      if (entry.base === bound.target || entry.seq > bound.seq) continue;
+      const ts = (chatMap.get(entry.base) as Partial<ChatMessage> | undefined)?.timestamp;
+      if (typeof ts === "number" && ts <= bound.timestamp) earlier.push(entry.base);
+    }
+    if (earlier.length > 0) candidates.set(rowKey, earlier);
+  }
+  return candidates.size === 0 ? [] : addSettles(chatMap, candidates, owns);
+}
+
+/** {@link ownershipChatSide}'s re-owe (R6.1; the posts PR, R3.3). */
+function reOweChat(keys: readonly string[]): void {
+  if (keys.length === 0) return;
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const handled = settledChatIds(chatMap);
+  const due = keys.filter((key) => {
+    const live = chatMap.get(key);
+    if (typeof live !== "object" || live === null) return false;
+    return (
+      (live as Partial<ChatMessage>).author === "user" &&
+      !handled.has(key) &&
+      !isLocalPeriodChat(key)
+    );
+  });
+  for (const key of due) {
+    const entry = deliveryRegistry.lookup("c", key, 0);
+    if (entry) deliveryRegistry.retire(entry);
+  }
+  const writes = due.filter((key) => {
+    const msg = chatMap.get(key) as ChatMessage;
+    return msg.read !== false || msg.delivered !== undefined;
+  });
+  // Every live acknowledgement of a re-owed message (design §6.5 step 2).
+  const dueSet = new Set(due);
+  const acknowledgements: string[] = [];
+  chatMap.forEach((value, key) => {
+    if (typeof value !== "object" || value === null) return;
+    const row = value as Partial<ChatMessage>;
+    if (row.author !== "claude" || row.inProgress !== true || row.superseded === true) return;
+    if (typeof row.replyTo === "string" && dueSet.has(row.replyTo)) acknowledgements.push(key);
+  });
+  if (writes.length === 0 && acknowledgements.length === 0) return;
+  withInternal(ctrlDoc, () => {
+    for (const key of writes) {
+      const { delivered: _delivered, ...rest } = chatMap.get(key) as ChatMessage;
+      chatMap.set(key, { ...rest, read: false });
+    }
+    for (const key of acknowledgements) {
+      chatMap.set(key, { ...(chatMap.get(key) as ChatMessage), superseded: true });
+    }
+  });
 }
 
 /**
@@ -2221,16 +2607,24 @@ export function unansweredUserChatKeys(): string[] {
  * Nothing is stamped here: `read: true` moves behind the acknowledgement, and
  * `delivered: true` waits for `commit`, once the response has validated.
  */
-function collectCursorChat(view: ScopeView): UnreadChat {
+function collectCursorChat(view: ScopeView, poll: PollScope): UnreadChat {
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
-  const answered = answeredChatIds(chatMap);
+  // Ownership on (the posts PR, R3.1, R3.2): the rule without the global
+  // received-sweep. Off, master's `answeredChatIds`.
+  const answered = poll.scoped ? settledChatIds(chatMap) : answeredChatIds(chatMap);
   const owedKeys: string[] = [];
+  const scopes: UnreadChat["scopes"] = new Map();
 
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user" || answered.has(key)) return;
     if (isLocalPeriodChat(key)) return; // #1123 A2, R2.1 — see `collectUnreadChat`
+    // Ownership (the chat owners PR, R4.1), as in `collectUnreadChat`.
+    const documentId = chatDocumentOf(msg);
+    const scope = poll.chatScopeOf(key, documentId);
+    if (scope === "neither") return;
+    scopes.set(key, { scope, documentId });
     const entry = deliveryRegistry.lookup("c", key, 0);
     const owed = entry
       ? view.mark === null
@@ -2247,11 +2641,15 @@ function collectCursorChat(view: ScopeView): UnreadChat {
   const owedAtSwitch: string[] = [];
   const held = new Set<number>();
   let dropped = 0;
+  const droppedKeys: string[] = [];
   const seqs: number[] = [];
+  /** Entries this pass created (lookup before assign), for the undo (R4.4). */
+  const created = new Map<string, RegistryEntry>();
   for (const key of inTimestampOrder(chatMap, owedKeys)) {
     const item = admitChatItem(chatMap.get(key) as Partial<ChatMessage>);
     if (!item) {
       dropped += 1;
+      droppedKeys.push(key);
       const entry = deliveryRegistry.lookup("c", key, 0);
       if (entry) held.add(entry.seq);
       continue;
@@ -2259,17 +2657,46 @@ function collectCursorChat(view: ScopeView): UnreadChat {
     messages.push(item);
     keys.push(key);
     if (wasOwedAtSwitch(key)) owedAtSwitch.push(item.id);
-    seqs.push(deliveryRegistry.assign("c", CHAT_SCOPE, key, 0).seq);
+    const known = deliveryRegistry.lookup("c", key, 0);
+    const entry = known ?? deliveryRegistry.assign("c", CHAT_SCOPE, key, 0);
+    if (!known) created.set(key, entry);
+    seqs.push(entry.seq);
   }
   const handOut = deliveryRegistry.recordHandOut(seqs);
+  const returned = new Set(keys);
+  for (const key of [...scopes.keys()]) if (!returned.has(key)) scopes.delete(key);
+  let stamped: string[] = [];
 
   return {
     messages,
     dropped,
+    droppedKeys,
     owedAtSwitch,
     held,
+    scopes,
     ...(handOut !== undefined ? { handOut } : {}),
-    commit: () => stampUserChat(keys, "delivered"),
+    commit: (excluded) => {
+      chatCommitFaultForTests?.();
+      if (!excluded || excluded.size === 0) {
+        stamped = stampUserChat(keys, "delivered");
+        return;
+      }
+      for (const key of excluded) {
+        const entry = created.get(key);
+        if (entry) deliveryRegistry.retire(entry);
+      }
+      stamped = stampUserChat(
+        keys.filter((key) => !excluded.has(key)),
+        "delivered",
+      );
+    },
+    undo: () => {
+      for (const entry of created.values()) deliveryRegistry.retire(entry);
+    },
+    revert: () => {
+      for (const entry of created.values()) deliveryRegistry.retire(entry);
+      unstampUserChat(stamped, "delivered");
+    },
   };
 }
 
@@ -2298,17 +2725,37 @@ function acknowledgeCursor(reader: ReaderCursor, poll: PollScope): void {
     }
     deliveryRegistry.acknowledge(scope, viewOf(reader, scope));
   }
-  if (reader.handOut !== undefined) deliveryRegistry.confirmHandOut(reader.handOut);
+  if (reader.handOut !== undefined) {
+    const confirmed = deliveryRegistry.confirmHandOut(reader.handOut);
+    // Ownership on (the posts PR, R3.4 step 2, R3.8): the confirmed hand-out's
+    // batch is settled on this caller's own reply rows now, in the same step
+    // that spent the token, so a poll that fails after this point cannot lose
+    // it. Off, nothing (the token's spend is master's).
+    if (poll.scoped && confirmed.length > 0) {
+      poll.settleHandOut((rows, owns) => settleHandOutRows(confirmed, rows, owns));
+    }
+  }
   const view = reader.chat;
   if (view.mark === null) return;
   const chatMap = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
   const keys: string[] = [];
+  // Flag on (the chat owners PR, R4.5): only messages the caller owns as the
+  // poll begins, or that are handled. One session's acknowledgement never
+  // hides a message from its owner or from a fresh reader that may take it.
+  const handled = poll.scoped ? settledChatIds(chatMap) : undefined;
   chatMap.forEach((value, key) => {
     if (typeof value !== "object" || value === null) return;
     const msg = value as Partial<ChatMessage>;
     if (msg.author !== "user") return;
     const entry = deliveryRegistry.lookup("c", key, 0);
     if (!entry || !seenBy(view, entry)) return;
+    if (
+      handled !== undefined &&
+      !handled.has(key) &&
+      poll.chatScopeOf(key, chatDocumentOf(msg)) !== "owns"
+    ) {
+      return;
+    }
     deliveryRegistry.markAcked(entry);
     if (!msg.read) keys.push(key);
   });
@@ -2644,13 +3091,23 @@ export function registerAwarenessTools(server: McpServer): void {
         // What this poll drained (the change-notice PR), so a throw after the
         // drain point can give it back (R4.2).
         let drained: ReturnType<PollScope["drainChanges"]> | undefined;
+        // The chat this poll collected, and once its commit ran (the chat
+        // owners PR, R4.4): what it stamped and the owners it set, so a throw
+        // after that point can put both back.
+        let chat: UnreadChat | undefined;
+        let chatCommitted:
+          | { handed: string[]; out: { owners: string[]; handed: string[] } }
+          | undefined;
         try {
           const docs = collectInboxDocuments(requestedId, modeState, reader, scope, log);
           const { userActions, userResponses, userReplies, activity, activityDocumentId } = docs;
 
           // Bucket 3: user chat from CTRL_ROOM — on a cursor-less poll the unread
           // messages, not yet marked read; on a cursor poll what this reader is owed.
-          const chat = reader ? collectCursorChat(reader.chat) : collectUnreadChat();
+          // The registry counter before the chat pass: the `sinceSeq` of a
+          // claim made through chat on a document no pass read (R4.7).
+          const chatCounterBefore = deliveryRegistry.counter;
+          chat = reader ? collectCursorChat(reader.chat, scope) : collectUnreadChat(scope);
           const chatMessages = chat.messages;
           const nextCursorString = reader
             ? encodeCursor(
@@ -2845,9 +3302,12 @@ export function registerAwarenessTools(server: McpServer): void {
           // trade: nothing is committed, nothing stamped, the round stays open.
           const checked = inboxBackstopSchema.safeParse(responseCorruptorForTests(response));
           if (!checked.success) {
-            // Flag on: retire what the pass registered (R1.7). Flag off, as on
-            // master, nothing.
-            if (scope.scoped) undoPass(log);
+            // Flag on: retire what the pass registered (R1.7), chat included
+            // (R4.4). Flag off, as on master, nothing.
+            if (scope.scoped) {
+              undoPass(log);
+              chat.undo();
+            }
             console.error(
               `[Tandem] tandem_checkInbox built a response that fails its output schema; nothing was marked returned: ${describeIssues(checked.error.issues)}`,
             );
@@ -2858,21 +3318,41 @@ export function registerAwarenessTools(server: McpServer): void {
           }
 
           docs.commit();
-          chat.commit();
 
-          // Claims by this poll (the scope PR, design §6.2): an unowned document
-          // the caller may claim that yielded at least one item, after every
-          // gate, becomes the caller's. After the response validated and the
-          // ledgers and chat committed, in this same synchronous run. A claim
-          // not applied takes back what this poll left on that document, so it
-          // hides nothing from whoever does answer it. Chat never claims.
+          // Claims by this poll (the scope PR, design §6.2; the chat owners
+          // PR, R4.3): an unowned document the caller may claim that yielded
+          // at least one item, after every gate, or whose chat this poll
+          // hands (Ruling 3: chat on an open document follows it), becomes
+          // the caller's — once, however it was reached. After the response
+          // validated and the ledgers committed, in this same synchronous
+          // run, and BEFORE the chat is stamped (R4.4): a claim not applied
+          // takes back what this poll left on that document, its chat
+          // included, so it hides nothing from whoever does answer it.
           const claimed = new Set<string>();
+          const chatExcluded = new Set<string>();
+          // The documents this poll put items back on at commit (a claim
+          // `"refused"` or `"changed"`): their delivery rounds stay open
+          // (#2358, the delivery-rounds PR, R2.1).
+          const putBack = new Set<string>();
           if (scope.scoped) {
-            for (const id of docs.yielded) {
+            const chatOn = new Map<string, string[]>();
+            for (const [key, { scope: chatScope, documentId: on }] of chat.scopes) {
+              if (chatScope !== "claim" || on === undefined) continue;
+              chatOn.set(on, [...(chatOn.get(on) ?? []), key]);
+            }
+            for (const id of new Set([...docs.yielded, ...chatOn.keys()])) {
               if (scope.scopeOf(id) !== "may-claim") continue;
-              const before = log.counterBefore.get(id) ?? deliveryRegistry.counter;
+              const before =
+                log.counterBefore.get(id) ??
+                (docs.yielded.has(id) ? deliveryRegistry.counter : chatCounterBefore);
               const outcome = scope.claim(id, before, getOpenDocs().has(id));
               if (outcome === "held") claimed.add(id);
+              else {
+                putBack.add(id);
+                // The document is not the caller's: its chat goes back as it
+                // was (unregistered, unstamped), for whoever answers it.
+                for (const key of chatOn.get(id) ?? []) chatExcluded.add(key);
+              }
               if (outcome === "refused") undoPassOn(log, id);
               else {
                 // The change ran but left the document with someone else (a
@@ -2882,13 +3362,32 @@ export function registerAwarenessTools(server: McpServer): void {
                 // (notice keys): the caller never held the document, so its
                 // notices are owed to the next holder (R1.6).
                 if (outcome === "changed") undoPassOn(log, id, { ownKeysOnly: true });
-                // Once a claim's change ran, a later throw must not put the
-                // ledger back either: a handover inside it (a claim over a
-                // stale entry) deleted keys on purpose, to re-owe them.
+                // Once a claim's change ran (held or not), a later throw must
+                // not put the ledger back either: a handover inside it (a claim
+                // over a stale entry) deleted keys on purpose, to re-owe them.
+                // The chat commit and its owners now run after this loop, so
+                // a throw there must find these gone (review round 1, item 2).
                 log.legacyWrites.delete(id);
                 log.ackedExisting.delete(id);
               }
             }
+          }
+          // Set before the commit runs, so a throw inside it is undone too.
+          if (scope.scoped) {
+            chatCommitted = {
+              handed: [...chat.scopes.keys()].filter((key) => !chatExcluded.has(key)),
+              out: { owners: [], handed: [] },
+            };
+          }
+          chat.commit(scope.scoped ? chatExcluded : undefined);
+          if (chatCommitted) {
+            // The chat's owners (R3.3): a message claimable per message that
+            // this poll handed becomes the caller's; every message it returned
+            // and kept is remembered as handed to it (Ruling 4's arm).
+            const taken = chatCommitted.handed.filter(
+              (key) => chat?.scopes.get(key)?.scope === "take",
+            );
+            scope.commitChat(taken, chatCommitted.handed, chatCommitted.out);
           }
           if (ownership) {
             // The drain point (the change-notice PR, R3.2, R4.1): the queue
@@ -2912,36 +3411,69 @@ export function registerAwarenessTools(server: McpServer): void {
             }
             if (named.length > 0) response.summary += inboxLostNote(named);
           }
-          // The join closes only now, once what was returned is committed — a
-          // claim about the USER's message, kept apart from the poll stamp above.
-          // It stays OPEN while a document the round is waiting on could not be
-          // read at all; that held round is re-timed to its oldest item still
-          // undelivered (`resolveDeliveryRound`). A record `admit` refused does
-          // NOT hold it: the summary just told Claude about it, and holding would
-          // leave a permanently malformed record pinning the round at
-          // `awaiting-poll` for the life of the process (PR #2225 review). The round is process-wide, so a poll naming
-          // a different document still closes one whose forward was elsewhere —
-          // `polled` was never proof that that annotation was delivered.
-          resolveDeliveryRound(Date.now(), {
-            documents: new Set(docs.unreadable),
-            items: new Set(),
-          });
-
-          // The notice rule (R1.3a), last, so a throw anywhere above ends
-          // nothing: a settled mark ends where this committed poll read the
-          // document as its holder and saw the notice's record change. A poll
-          // that only may claim and did not, or one that did not commit,
-          // observed nothing. Empty while ownership is off.
+          // The notice rule (R1.3a), after every other commit step, so a
+          // throw anywhere above ends nothing. Only the delivery round's close
+          // follows it (the delivery-rounds PR, R2.4), and that close is map
+          // operations that do not throw; the test suites that make it throw
+          // (`roundThrows`) therefore model a throw after the notice step,
+          // whose ended notices the catch does not restore. A settled mark
+          // ends where this committed poll read the document as its holder
+          // and saw the notice's record change. A poll that only may claim
+          // and did not, or one that did not commit, observed nothing. Empty
+          // while ownership is off.
+          noticeFaultForTests?.();
           for (const [id, ended] of docs.noticeEnds) {
             if (scope.scopeOf(id) === "holds" || claimed.has(id)) endObservedNotices(ended);
           }
+
+          // The join closes only now, the last thing before the return, once
+          // what was returned is committed — a claim about the USER's message,
+          // kept apart from the poll stamp above — so a throw anywhere above
+          // closes nothing (#2358, the delivery-rounds PR, R2.4).
+          //
+          // Ownership off (the one global round): it stays OPEN while a
+          // document the round is waiting on could not be read at all; that
+          // held round is re-timed to its oldest item still undelivered
+          // (`resolveDeliveryRound`). A record `admit` refused does NOT hold
+          // it: the summary just told Claude about it, and holding would leave
+          // a permanently malformed record pinning the round at
+          // `awaiting-poll` for the life of the process (PR #2225 review). That
+          // round is process-wide, so a poll naming a different document still
+          // closes one whose forward was elsewhere — `polled` was never proof
+          // that that annotation was delivered.
+          //
+          // Ownership on, rounds are keyed (design §6.7): this poll closes the
+          // round of each document it read and put nothing back on, the round
+          // of each message it handed (outside `chatExcluded`) or found
+          // refused, and the key-less round; never a round another session's
+          // document or message is waiting on. The module decides which mode
+          // applies; this handler reads no flag.
+          resolveDeliveryRound(
+            Date.now(),
+            { documents: new Set(docs.unreadable), items: new Set() },
+            {
+              documents: new Set([...docs.read].filter((id) => !putBack.has(id))),
+              messages: new Set([...(chatCommitted?.handed ?? []), ...chat.droppedKeys]),
+            },
+          );
 
           return mcpStructured(response);
         } catch (err) {
           // First, so a throw in the undo cannot lose what was drained;
           // `giveBack` never throws, so it cannot skip the undo either.
           if (drained) scope.giveBack(drained);
-          if (scope.scoped) undoPass(log);
+          if (scope.scoped) {
+            undoPass(log);
+            if (chatCommitted) {
+              // A throw after (or inside) the chat commit (R4.4): the response
+              // is lost, so the owners this poll set and its "handed" memory
+              // go, and exactly what its commit and pass did is taken back:
+              // the entries they created retired, the acknowledgements and
+              // stamps they wrote removed. Nothing earlier polls did is touched.
+              scope.dropChatOwners(chatCommitted.out);
+              chat?.revert();
+            } else chat?.undo();
+          }
           throw err;
         }
       }),
@@ -2972,11 +3504,44 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Document context for this reply (defaults to active document)"),
     },
     withErrorBoundary("tandem_reply", async ({ text, replyTo, inProgress, documentId }, caller) => {
+      // Ownership (the chat owners PR, R5; the posts PR, R1; ownership design
+      // §7.3): who may answer a message, or post, is decided first, writing
+      // nothing, OUTSIDE the typing presence, so a refused reply or post
+      // leaves no trace (R5.5, R1.5): no row, no notify, no greeting tag, no
+      // claim, no presence. While ownership is off the gate answers `legacy`
+      // and master's path below runs unchanged.
+      // The caller is passed along unread.
+      const gate = inboxOwnership.replyGate(
+        caller,
+        { replyTo, inProgress, documentId },
+        // Read only with ownership on, for a post (the posts PR, R1.2, R1.3).
+        {
+          isOpen: (id) => getOpenDocs().has(id),
+          activeDocumentId: () => getCurrentDoc(undefined)?.id ?? undefined,
+        },
+      );
+      if (gate.kind === "refused") {
+        // The arguments are answered before the licence (R5.2 step 1); an
+        // ownership refusal after it, so an unlicensed Tandem says so. The
+        // licence is read here, not written on: the append below stays its
+        // one admission point for chat (Critical Rule 9).
+        const licence = gate.stage === "ownership" ? aiRefusal() : null;
+        if (licence) return mcpError(licence.error, licence.message, { kind: licence.kind });
+        return mcpError(gate.code, gate.message, gate.details);
+      }
       // #651 presence: tandem_reply is a chat send — no annotationId — so the
       // marker is the generic "Claude is working" status-bar indicator.
+      // `withTypingPresence` runs this callback before its first `await`, so
+      // nothing interleaves between the gate above and the writes below
+      // (R5.1; pinned in tests/server/ownership-chat.test.ts).
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
-        const current = getCurrentDoc(documentId);
-        const docId = documentId ?? current?.id ?? undefined;
+        // An accepted reply to a message is stamped with that message's
+        // document, or none (R5.3); an accepted post with what its gate
+        // decided (the posts PR, R1.2, R1.3); flag off, master's
+        // active-document stamp.
+        const current = gate.kind === "accepted" ? undefined : getCurrentDoc(documentId);
+        const docId =
+          gate.kind === "accepted" ? gate.documentId : (documentId ?? current?.id ?? undefined);
         // Asked BEFORE the append, in the same synchronous stretch as the
         // notify below, which is what ends the greeting turn's "pending" — so
         // at most one reply is ever tagged (#2227). The id is the caller's, as
@@ -2996,6 +3561,16 @@ export function registerAwarenessTools(server: McpServer): void {
             kind: appended.refusal.kind,
           });
         }
+        // The message's delivery round closes once the reply's row is
+        // appended (#2358, the delivery-rounds PR, R2.2): an acknowledgement
+        // or a final reply, before `gate.apply`, so nothing that step does
+        // can leave it open. A refused reply returned above. Nothing while
+        // rounds are not keyed (ownership off).
+        if (replyTo !== undefined) closeMessageDeliveryRound(replyTo);
+        // The reply's claim and per-message owner (R5.2), once the append
+        // landed, with no `await` since the gate: a reply the licence refused
+        // above claims nothing and sets no owner.
+        if (gate.kind === "accepted") gate.apply(appended.id);
         notifyTandemReply(sessionId);
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({

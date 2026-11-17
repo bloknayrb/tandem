@@ -18,7 +18,7 @@ function user(id: string, at: number, read = false): ChatMessage {
 function claude(
   id: string,
   at: number,
-  extra: { replyTo?: string; inProgress?: true } = {},
+  extra: { replyTo?: string; inProgress?: true; superseded?: true } = {},
 ): ChatMessage {
   return { id, author: "claude", text: id, timestamp: T0 + at, read: true, ...extra };
 }
@@ -135,5 +135,61 @@ describe("chatPickupAnnouncement", () => {
   it("is keyed on the kind alone and empty with no row", () => {
     expect(chatPickupAnnouncement("waiting")).toBe("Sent · waiting for your AI to pick it up");
     expect(chatPickupAnnouncement(null)).toBe("");
+  });
+});
+
+describe("dark (#1123 part B, R10.1)", () => {
+  it("with the flag off, local inputs and rows carrying localRun or chatNotice change nothing", () => {
+    const m: ChatMessage = {
+      ...user("a", 0),
+      localRun: { status: "stopped", reason: "error", generation: "g" },
+    };
+    const inputs = {
+      runGeneration: "g",
+      sentLocal: new Set(["a"]),
+      readKnownLocal: true,
+      aiOff: false,
+    };
+    expect(chatPickup([m], T0 + 5_000, inputs)).toEqual({ kind: "waiting", waitedMs: 5_000 });
+    // A notice row is an untagged-looking Claude row as on master: the row ends.
+    const line: ChatMessage = { ...claude("n", 1), chatNotice: "claude-again" };
+    expect(chatPickup([user("b", 0), line], T0 + 5_000, inputs)).toBeNull();
+  });
+});
+
+describe("chatPickup: superseded acknowledgements (#2358, the posts PR, R3.7)", () => {
+  it("a message whose only acknowledgement is superseded reads waiting", () => {
+    expect(
+      chatPickup(
+        [user("a", 0), claude("ack", 1, { replyTo: "a", inProgress: true, superseded: true })],
+        T0 + 5_000,
+      ),
+    ).toEqual({ kind: "waiting", waitedMs: 5_000 });
+  });
+
+  it("a live and a superseded acknowledgement read working", () => {
+    expect(
+      chatPickup(
+        [
+          user("a", 0),
+          claude("old", 1, { replyTo: "a", inProgress: true, superseded: true }),
+          claude("new", 2, { replyTo: "a", inProgress: true }),
+        ],
+        T0 + 5_000,
+      ),
+    ).toEqual({ kind: "working" });
+  });
+
+  it("a superseded row never ends a working", () => {
+    expect(
+      chatPickup(
+        [
+          user("a", 0),
+          claude("live", 1, { replyTo: "a", inProgress: true }),
+          claude("old", 2, { replyTo: "a", inProgress: true, superseded: true }),
+        ],
+        T0 + 5_000,
+      ),
+    ).toEqual({ kind: "working" });
   });
 });

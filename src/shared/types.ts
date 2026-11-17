@@ -696,8 +696,35 @@ export interface CapturedAnchor extends DocumentRange {
   textSnapshot: string;
 }
 
-/** Why the local model could not answer a chat (#1123). See `ChatMessage.chatNotice`. */
-export type ChatNoticeKind = "no-document" | "no-local-model";
+/**
+ * A chat notice's kind (#1123). See `ChatMessage.chatNotice`. The first three
+ * are the local model's (why it could not answer a chat, or that it produced
+ * no reply); `"claude-again"` is Tandem's line at the user's own switch back
+ * to Claude (#1123 part B, R11), which names no message.
+ */
+export type ChatNoticeKind = "no-document" | "no-local-model" | "no-reply" | "claude-again";
+
+/** Every {@link ChatNoticeKind}: a row is a notice only with one of these. */
+export const CHAT_NOTICE_KINDS: readonly ChatNoticeKind[] = [
+  "no-document",
+  "no-local-model",
+  "no-reply",
+  "claude-again",
+];
+
+/**
+ * Is this chat row a notice (#1123 part B, R6)? Only a Claude-authored row
+ * (the server writes notices through `appendClaudeChatMessage`) carrying a
+ * known kind: a user row, or one carrying any other value, is not, whatever
+ * else it holds.
+ */
+export function isChatNoticeRow(m: { author: string; chatNotice?: unknown }): boolean {
+  return (
+    m.author === "claude" &&
+    typeof m.chatNotice === "string" &&
+    (CHAT_NOTICE_KINDS as readonly string[]).includes(m.chatNotice)
+  );
+}
 
 /** Why a local-model run ended without a reply, or with only part of one (#1123). */
 export type LocalRunStopReason =
@@ -722,7 +749,8 @@ export type LocalRunStopReason =
   | "content-replaced"
   /** The document reconnected mid-run (its live instance was swapped). */
   | "reconnected"
-  /** It finished cleanly and said nothing. */
+  /** It finished cleanly and showed the user nothing (inline reasoning only
+   *  included: text inside `<think>` is never shown, #1123 part C). */
   | "no-reply";
 
 /** A stored stop reason, or `"interrupted"`: the read-time verdict on a
@@ -798,10 +826,15 @@ export interface ChatMessage {
    * Set only server-side, by the local-model collaborator, on a chat notice
    * (#1123): a short message in the chat saying why the local model could not
    * answer this chat — no document open (`"no-document"`), or no local model
-   * can answer (`"no-local-model"`). Carries `replyTo` (the chat it is about)
-   * and never `agentIdentity`. It is not an answer: no server path counts it as
-   * one (`answeredChatIds` skips it). Only ever one of the two strings or
-   * absent, so every other row stays byte-identical.
+   * can answer (`"no-local-model"`) — or that its run finished cleanly and
+   * showed nothing (`"no-reply"`, #1123 part C). Those three carry `replyTo`
+   * (the chat it is about). `"claude-again"` (#1123 part B, R11) is Tandem's
+   * line at the user's own switch back to Claude and carries no `replyTo` and
+   * no `documentId`. None carries `agentIdentity`. A notice is not an answer:
+   * no server path counts it as one (`answeredChatIds` skips it), and the
+   * inbox hands only user rows. Only ever one of the four strings or absent,
+   * so every other row stays byte-identical. Read it through
+   * `isChatNoticeRow`.
    */
   chatNotice?: ChatNoticeKind;
   /**
@@ -813,6 +846,23 @@ export interface ChatMessage {
    * `inProgress` (that is Claude's acknowledgement row).
    */
   localRun?: LocalRunState;
+  /**
+   * Set only server-side (`withMcp`), on a real Claude **final** reply that
+   * `tandem_reply` wrote (#2358, the posts PR, R3.4; ships dark behind the
+   * ownership flag): the earlier user messages of the same batch that this
+   * reply also answers, within its sender's scope. With the flag on, a user
+   * message is handled when a final reply names it in `replyTo` or lists it
+   * here. Never written while ownership is off; a client cannot write it with
+   * the flag on (the server undoes a client connection's change, R4).
+   */
+  settles?: string[];
+  /**
+   * Set only server-side (`withInternal`), on an acknowledgement row
+   * (`inProgress: true`) whose message changed owner since (#2358, the posts
+   * PR, R3.3; ships dark): it counts for nothing, and the pickup row leaves it
+   * out, so the message reads "waiting" again. Only ever `true` or absent.
+   */
+  superseded?: true;
   /**
    * The specific AI agent that authored this message (#1123 M3). Set only by the
    * local-model collaborator's streamed reply; absent on user messages and real

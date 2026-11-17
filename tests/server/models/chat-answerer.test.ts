@@ -64,6 +64,8 @@ import {
   ERROR_CODE_CHAT_ANSWERER_WRITE_FAILED,
   ERROR_CODE_INVALID_CHAT_ANSWERER,
   ERROR_CODE_OWN_WINDOW_ONLY,
+  LOCAL_MODEL_STATES,
+  type LocalModelState,
   MODELS_SCHEMA_VERSION,
   type ModelsEntry,
   type ModelsFile,
@@ -1288,33 +1290,91 @@ describe(`${API_MODELS_CHAT_ANSWERER} (R1.3)`, () => {
     prime();
   });
 
-  it("GET answers the switch, whether a local model resolves now (through the injected seam), and the run id", async () => {
-    let resolves = false;
-    const base = await listen(makeApp({ localModelResolvesNow: () => resolves }));
+  it("GET answers the switch, the local model's state (through the injected seam), and the run id", async () => {
+    let state: LocalModelState = "none";
+    const base = await listen(makeApp({ localModelResolvesNow: () => state }));
     expect((await call(base, "GET", API_MODELS_CHAT_ANSWERER)).body).toEqual({
       answerer: "claude",
       localModelResolves: false,
+      localModelState: "none",
       runGeneration: LOCAL_RUN_GENERATION,
     });
-    resolves = true;
+    state = "usable";
     const res = await call(base, "GET", API_MODELS_CHAT_ANSWERER);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       answerer: "claude",
       localModelResolves: true,
+      localModelState: "usable",
       runGeneration: LOCAL_RUN_GENERATION,
     });
   });
 
-  it("GET with no seam at all answers that no local model resolves", async () => {
+  // #1123 part B, R1.3: every state value, whatever the switch says, and
+  // nothing but the documented fields.
+  for (const answerer of ["claude", "local"] as const) {
+    for (const state of LOCAL_MODEL_STATES) {
+      it(`GET with the switch at ${answerer} and the state ${state}: exactly the documented fields`, async () => {
+        const base = await listen(makeApp({ localModelResolvesNow: () => state }));
+        if (answerer === "local") {
+          await call(base, "POST", API_MODELS_CHAT_ANSWERER, { json: { answerer: "local" } });
+        }
+        const res = await call(base, "GET", API_MODELS_CHAT_ANSWERER);
+        expect(res).toEqual({
+          status: 200,
+          body: {
+            answerer,
+            localModelResolves: state === "usable",
+            localModelState: state,
+            runGeneration: LOCAL_RUN_GENERATION,
+          },
+        });
+      });
+    }
+  }
+
+  it("GET with a throwing seam: no state at all, and localModelResolves false", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const base = await listen(
+      makeApp({
+        localModelResolvesNow: () => {
+          throw new Error("boom http://secret.example/path");
+        },
+      }),
+    );
+    const res = await call(base, "GET", API_MODELS_CHAT_ANSWERER);
+    expect(res).toEqual({
+      status: 200,
+      body: { answerer: "claude", localModelResolves: false, runGeneration: LOCAL_RUN_GENERATION },
+    });
+    // The log line names the error's class, never its message.
+    expect(err.mock.calls.flat().join(" ")).not.toContain("secret");
+  });
+
+  it("GET with a seam answering outside the enum: treated as a throw, so nothing else reaches the wire", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const base = await listen(
+      makeApp({
+        localModelResolvesNow: () => "http://127.0.0.1:11434/llama" as unknown as LocalModelState,
+      }),
+    );
+    expect((await call(base, "GET", API_MODELS_CHAT_ANSWERER)).body).toEqual({
+      answerer: "claude",
+      localModelResolves: false,
+      runGeneration: LOCAL_RUN_GENERATION,
+    });
+  });
+
+  it("GET with no seam at all answers none", async () => {
     const base = await listen(makeApp());
     expect((await call(base, "GET", API_MODELS_CHAT_ANSWERER)).body).toMatchObject({
       localModelResolves: false,
+      localModelState: "none",
     });
   });
 
   it("GET is refused to another origin, and to a request with neither an Origin nor Sec-Fetch-Site: same-origin", async () => {
-    const base = await listen(makeApp({ localModelResolvesNow: () => true }));
+    const base = await listen(makeApp({ localModelResolvesNow: () => "usable" }));
     const foreign = await call(base, "GET", API_MODELS_CHAT_ANSWERER, {
       origin: "http://127.0.0.1:9999",
     });

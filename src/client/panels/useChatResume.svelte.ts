@@ -42,6 +42,13 @@ export function createChatResume(
    *  after the send means some AI answered (another one attached meanwhile,
    *  say), so the row has nothing left to say. */
   lastClaudeMessageAt: () => number | null,
+  /**
+   * Chat is set to the local model (#1123 part B, R5.6). Then a send records
+   * no request, and no resume row shows ("Starting Tandem's Claude… it will
+   * answer when it's ready" would be false: Claude is handed nothing). Always
+   * false while the flag is off (App's wiring).
+   */
+  localPeriod: () => boolean = () => false,
 ): {
   readonly view: ChatResume | null;
   /** A send is being answered by a start — the toast must not contradict it. */
@@ -53,14 +60,16 @@ export function createChatResume(
   let now = $state(Date.now());
 
   const view = $derived(
-    chatResume(request, {
-      running: r.launcherRunning,
-      serverUnreachable: r.serverUnreachable,
-      restarting: r.launcherRestarting,
-      standby: r.launcherStandby,
-      remedy: r.launcherRemedy,
-      now: Math.max(now, request?.at ?? 0),
-    }),
+    localPeriod()
+      ? null
+      : chatResume(request, {
+          running: r.launcherRunning,
+          serverUnreachable: r.serverUnreachable,
+          restarting: r.launcherRestarting,
+          standby: r.launcherStandby,
+          remedy: r.launcherRemedy,
+          now: Math.max(now, request?.at ?? 0),
+        }),
   );
 
   // Cleared once Claude runs, so a later idle stop does not resurrect it; and
@@ -93,7 +102,7 @@ export function createChatResume(
       return view;
     },
     get pending() {
-      return request !== null;
+      return request !== null && !localPeriod();
     },
     noteSent() {
       // Recorded only when the server said a message would start Claude, or a
@@ -101,8 +110,11 @@ export function createChatResume(
       // other send clears an old request, so a stale "couldn't start" never
       // swallows the next message's notice.
       const standby = r.launcherStandby;
+      // The lit editor's local period records nothing (R5.6). Outside it, a
+      // notice row still feeds `lastClaudeMessageAt` and clears a request, as
+      // any Claude row does today.
       request =
-        standby !== null && (r.launcherStartsOnMessage || r.launcherStarting)
+        !localPeriod() && standby !== null && (r.launcherStartsOnMessage || r.launcherStarting)
           ? { at: Date.now(), from: standby }
           : null;
       if (request !== null) afterLauncherAction();

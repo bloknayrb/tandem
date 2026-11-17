@@ -110,14 +110,21 @@ export interface HealthHandlerDeps {
  * and it is still not that indicator. Two qualifications belong with it wherever
  * copy is built on it:
  *
- *  - **The negative is sound for ONE model, not two.** Any session's poll clears
- *    the single process-global outstanding forward (unless that poll could not
- *    hand over an item the forward is waiting on — PR #2225 review), so a second
- *    busy session —
- *    two terminals, or an auto-launched child alongside a hand-launched one —
- *    pins `state` at `"polled"` while masking a first session that is wedged.
- *    `"awaiting-poll"` is trustworthy evidence; `"polled"` is not evidence of
- *    health.
+ *  - **Flag off, the negative is sound for ONE model, not two.** While
+ *    multi-session ownership is off (every release build), any session's poll
+ *    clears the single process-global outstanding forward (unless that poll
+ *    could not hand over an item the forward is waiting on — PR #2225 review),
+ *    so a second busy session — two terminals, or an auto-launched child
+ *    alongside a hand-launched one — pins `state` at `"polled"` while masking a
+ *    first session that is wedged. `"awaiting-poll"` is trustworthy evidence;
+ *    `"polled"` is not evidence of health. **Flag on** (#2358, the
+ *    delivery-rounds PR), rounds are keyed by document and by message, so a
+ *    session's poll closes only what it read or was handed, and an accepted
+ *    reply closes its message's round; one session no longer masks another
+ *    there. A key-less round (the Solo release wake, the switch-back wake) is
+ *    still closed by any poll, and `sincePollMs` is any session's poll, so
+ *    `"awaiting-poll"` beside a fresh `sincePollMs` is expected. Still one
+ *    aggregate: it cannot say which session is overdue.
  *  - **A busy turn looks like a wedged one.** The supervisor coalesces wakes
  *    while a turn is in flight (latch window: ten minutes), so `waitingMs` can
  *    climb through a perfectly healthy session that is simply working. Copy keyed
