@@ -1850,7 +1850,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       try {
         listener(...args);
       } catch (err) {
-        console.error(`[Launcher] A ${what} subscriber threw (ignored):`, err);
+        // Name and message only: a subscriber's error could carry ownership
+        // state into the log, which redacts only owner handles.
+        const brief = err instanceof Error ? `${err.name}: ${err.message}` : typeof err;
+        console.error(`[Launcher] A ${what} subscriber threw (ignored): ${brief}`);
       }
     }
   }
