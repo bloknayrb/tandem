@@ -183,18 +183,6 @@ describe("integration wizard — Cowork sub-view gating", () => {
     expect(toggleIntegration).not.toHaveBeenCalled();
   });
 
-  it("shows the AI-models 'coming soon' line and NO Set-up button while dark", async () => {
-    // This file runs with the shipped `BYO_MODELS_ENABLED=false`, so the `{#if}`
-    // (coming-soon) branch renders, not the `{:else}` enabled row.
-    const { container } = render(IntegrationWizardModal, {
-      props: { open: true, onClose: vi.fn() },
-    });
-    await tick();
-
-    expect(q(container, "integration-wizard-more")?.textContent).toMatch(/coming soon/i);
-    expect(q(container, "integration-wizard-models-setup")).toBeNull();
-  });
-
   it("cowork-enable-confirm-btn is the sole trigger of enable", async () => {
     const { container } = render(IntegrationWizardModal, {
       props: { open: true, onClose: vi.fn() },

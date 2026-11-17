@@ -95,7 +95,7 @@ const deps = (over: Partial<ModelsRoutesDeps> = {}): ModelsRoutesDeps => ({
 });
 
 interface AppOpts {
-  /** Omitted → the registrar's own default (the dark flag). */
+  /** Omitted → the registrar's own default (the shipped flag, in either state). */
   live?: boolean;
   mw?: typeof passthrough;
   /** Present → every request appears to come from this socket address. */
@@ -534,13 +534,21 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
     });
   });
 
-  describe("dark (the flag is false and localModelSettingsEnabled is omitted)", () => {
-    it("the flag this default follows is false", () => {
-      expect(BYO_MODELS_ENABLED).toBe(false);
-    });
+  // Production passes no `localModelSettingsEnabled` (no file under `src/`
+  // does), so the registrar's default — the shipped flag — is what decides.
+  // This is the one case that follows the literal, in either state. Lit, the
+  // route answers its `LocalModelSettingsResponse` (`contract.ts`: "`GET
+  // /api/models/local-settings`" → `{ editing: boolean }`), with 200
+  // (`api-routes.ts`, cited for the status code only).
+  it("with localModelSettingsEnabled omitted (production's shape), GET follows the shipped flag", async () => {
+    const base = await listen(makeApp());
+    const res = await getSetting(base);
+    expect(res.status).toBe(BYO_MODELS_ENABLED ? 200 : 404);
+  });
 
+  describe("dark (localModelSettingsEnabled: false)", () => {
     it("GET answers 404", async () => {
-      const base = await listen(makeApp());
+      const base = await listen(makeApp({ live: false }));
       const res = await getSetting(base);
       expect(res.status).toBe(404);
       expect(res.body).not.toHaveProperty("editing");
@@ -550,7 +558,7 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
     it.each([true, false])(
       "POST { editing: %s } answers 404, changes nothing and creates no file",
       async (editing) => {
-        const base = await listen(makeApp());
+        const base = await listen(makeApp({ live: false }));
         const before = localModelEditingState();
         const res = await postSetting(base, { editing });
         expect(res.status).toBe(404);
@@ -563,7 +571,7 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
     it("a dark POST does not read or overwrite a file left by a lit build", async () => {
       fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, editing: true }), "utf8");
       const bytes = fs.readFileSync(settingsFile);
-      const base = await listen(makeApp());
+      const base = await listen(makeApp({ live: false }));
       expect((await postSetting(base, { editing: false })).status).toBe(404);
       expect((await getSetting(base)).status).toBe(404);
       expect(fs.readFileSync(settingsFile).equals(bytes)).toBe(true);
@@ -578,7 +586,7 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
     });
 
     it("a dark POST still refuses a foreign Origin before answering 404", async () => {
-      const base = await listen(makeApp());
+      const base = await listen(makeApp({ live: false }));
       const res = await call(base, "POST", API_MODELS_LOCAL_SETTINGS, {
         json: { editing: true },
         origin: "https://evil.example",
@@ -774,7 +782,7 @@ describe(`${API_MODELS_LOCAL_SETTINGS} (#1123)`, () => {
       expect(fs.readdirSync(dir)).toEqual([]);
     });
 
-    it("the preflight is answered while dark as well", async () => {
+    it("the preflight is answered with localModelSettingsEnabled omitted (OPTIONS is registered in either state)", async () => {
       const base = await listen(makeApp({ mw: apiMiddleware }));
       const res = await call(base, "OPTIONS", API_MODELS_LOCAL_SETTINGS, {
         headers: { "Access-Control-Request-Method": "POST" },

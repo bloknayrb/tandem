@@ -1899,22 +1899,6 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(h.get().launcherStartsOnMessage).toBe(false);
     });
 
-    it("heldForLocalModel is never read while BYO_MODELS_ENABLED is off (#1123 part B, R10.1)", async () => {
-      // A status from a flag-on server, in a dark editor: fresh, both arms.
-      for (const body of [
-        { available: true, running: false, standby: "awaiting-start", heldForLocalModel: true },
-        { available: true, running: true, cwd: "/home/u", heldForLocalModel: true },
-      ]) {
-        globalThis.fetch = routedFetch({
-          launcher: () => mkResponse(body),
-          health: mkResponse({ status: "ok", hasSession: false }),
-        });
-        const h = mount();
-        await settle();
-        expect(h.get().launcherHeldForLocalModel).toBe(false);
-      }
-    });
-
     it("greetingLate (#2197): read from either arm, even in Solo; false without it", async () => {
       let body: Record<string, unknown> = {
         available: true,
