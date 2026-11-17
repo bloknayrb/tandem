@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelProvider, ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import { FALLBACK_AGENT_LABEL, resolveAgentLabel } from "../../src/client/utils/agentLabel";
+import { LOCAL_MODEL_PROVIDERS } from "../../src/shared/models/contract";
 
 function model(
   over: Partial<ModelRegistryEntry> & { provider: ModelProvider },
@@ -46,7 +47,7 @@ describe("resolveAgentLabel", () => {
   });
 
   it("labels local providers 'Local model' in family style (not empty)", () => {
-    for (const provider of ["local-ollama", "local-llamacpp"] as const) {
+    for (const provider of LOCAL_MODEL_PROVIDERS) {
       const m = model({ provider, displayName: "", modelId: "llama3.1:70b" });
       const settings = { models: [m], defaultModelId: m.id };
       expect(resolveAgentLabel(settings, "family")).toBe("Local model");

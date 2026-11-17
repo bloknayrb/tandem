@@ -254,7 +254,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   clicking scrolls the editor to it)
 - `chat-pickup-status` (the visible "waiting / picked up" row, `data-pickup`
   carries the kind) and `chat-pickup-live` (the persistent live region that
-  announces it and the rows below)
+  announces it and the rows below). With `BYO_MODELS_ENABLED` on (#1123 part B)
+  `data-pickup` can also be `local-interrupted`, `local-working`,
+  `local-stopped` or `local-sent`
+- `chat-notice-{*}` — a notice row (a Tandem line, not a reply; #1123 part B,
+  `data-notice` carries its kind), and `chat-notice-live` (its own persistent
+  live region)
 - `chat-tandem-claude-toggle` — Start / Turn off for Tandem's Claude in the chat panel header (#2195; `data-action` is `start` or `turn-off`)
 - `chat-tandem-claude-resuming` — "Claude is resuming…" / "Starting Tandem's Claude…" row for a chat that is starting a stopped Tandem's Claude (#2196; `data-verb` is `resuming` or `starting`); replaces the pickup row
 - `chat-tandem-claude-resume-failed` — the same row once the start failed or never began (#2196; `data-remedy` is the `AiChip` it offers)
@@ -416,6 +421,7 @@ of these selectors renders in a release build.
 - `model-{row,default,toggle,edit-btn,delete-confirm,delete-btn}-{*}`,
   `model-add-btn`
 - Local-model editing opt-in (#1123): `local-model-editing-{section,toggle,loading,load-error,retry,force-off,force-off-pending,error}`
+- Who answers your chat (#1123 part B): `chat-answerer-{section,claude,local,status,loading,load-error,retry,use-claude,set-claude-done,refused,unavailable,error}` (`chat-answerer-{claude,local}` are the two radios)
 - Not Tandem's own window (#2404): `models-own-window-notice` (the one visible message at the top of the tab) and `models-own-window-live` (its always-mounted screen-reader announcer)
 - Edit modal: `model-edit-{modal,cancel,provider,provider-note,displayname,modelid,apikey,apikey-replace-btn,endpoint,error,save}`
 - First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,apikey,endpoint,error,save,skip,skip-secondary}`

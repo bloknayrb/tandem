@@ -4,7 +4,12 @@ import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings";
 import { BYO_MODELS_ENABLED, TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
-import { cleanupAllOpenDocuments, McpTestClient, nextFrames } from "./helpers";
+import {
+  cleanupAllOpenDocuments,
+  expectOnlyAllowanceNotices,
+  McpTestClient,
+  nextFrames,
+} from "./helpers";
 
 /**
  * Settings → Models tab E2E (#659).
@@ -88,6 +93,14 @@ test.afterAll(async () => {
   } catch {
     /* best-effort */
   }
+});
+
+// #1123 part B, R10.3: this page is not Tandem's own window, so a models
+// write is admitted through the development allowance (playwright.config.ts)
+// and may raise its warning notices; those, and only those, are expected.
+test.afterEach(async ({ page }) => {
+  if (!BYO_MODELS_ENABLED) return;
+  await expectOnlyAllowanceNotices(page);
 });
 
 test.beforeEach(async ({ page }) => {

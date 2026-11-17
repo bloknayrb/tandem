@@ -18,11 +18,27 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { z } from "zod";
+
+/** #1123 part B, R11.6: refuse AI chat writes for one test. Off by default. */
+const refusal = vi.hoisted(() => ({ on: false }));
+vi.mock("../../src/server/license/ai-refusal.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/license/ai-refusal.js")>();
+  return {
+    ...actual,
+    aiRefusal: () =>
+      refusal.on
+        ? { error: "LICENSE_REQUIRED" as const, kind: "unlicensed" as const, message: "x" }
+        : actual.aiRefusal(),
+  };
+});
+
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
+  keyedDeliveryRoundsForTests,
   recordWakeForward,
   resetDeliveryStateForTests,
+  setDeliveryRoundSeam,
 } from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
@@ -42,12 +58,13 @@ import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   LOCAL_PERIOD_STATUS_LINE,
   owedAtSwitchSentence,
+  ownershipChatSide,
   registerAwarenessTools,
   resetInbox,
 } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { snapshotUserChat } from "../../src/server/mcp/greeting-reply.js";
 import {
   checkInboxLocalPeriodShape,
@@ -91,8 +108,11 @@ import {
   saveCtrlSession,
 } from "../../src/server/session/manager.js";
 import {
+  keyedDeliveryRounds,
   noteTransportRegistered,
+  ownershipSnapshotForTests,
   resetOwnershipForTests,
+  setOwnershipChatSide,
   setTransportView,
 } from "../../src/server/sessions/ownership.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
@@ -238,6 +258,65 @@ async function toClaude(source: "own-window" | "allowance" = "own-window"): Prom
 }
 
 const chatIds = (inbox: Inbox) => inbox.chatMessages.map((m) => m.id).sort();
+/** #1123 part B, R11: the switch-back lines in chat. */
+const switchBackLines = () =>
+  [...ctrlChat().values()].filter(
+    (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+  ) as Array<{
+    text: string;
+    author: string;
+    chatNotice?: string;
+    replyTo?: string;
+    documentId?: string;
+    agentIdentity?: unknown;
+  }>;
+
+/**
+ * The chat owners PR's (#2358) changes to the flag-on `tandem_checkInbox`
+ * output schema, as JSON-encoded text in master's frozen dump: each `before`
+ * occurs exactly once and becomes `after`.
+ */
+const CHAT_OWNERS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    "(chat is shown for every document, so a chat message, or anything Tandem pushed to you, may still be about one)",
+    "(a chat message you answer can still be about one of them, and so can anything Tandem pushed to you)",
+  ],
+  [
+    '"a poll of yours claimed it",',
+    '"a poll of yours claimed it",\n                                    "a chat reply of yours claimed it",',
+  ],
+  [
+    '\\"a poll of yours claimed it\\": a tandem_checkInbox poll of yours claimed it; ',
+    '\\"a poll of yours claimed it\\": a tandem_checkInbox poll of yours claimed it; \\"a chat reply of yours claimed it\\": a tandem_reply of yours to a chat message about it claimed it; ',
+  ],
+  [
+    "an open or create of yours (tandem_open, tandem_scratchpad) made it yours",
+    "an open or create of yours (tandem_open, tandem_scratchpad, or tandem_convertToMarkdown where Tandem offers it) made it yours",
+  ],
+  [
+    "to which documents this session held, since the last poll that returned them.",
+    "to which documents this session held, that no poll of this session that returned has reported yet.",
+  ],
+];
+
+/**
+ * #2358's posts PR's changes to the flag-on schema, applied after the chat
+ * owners PR's: one new cause word, in the enum and in the cause description.
+ */
+const POSTS_SCHEMA_CHANGES: ReadonlyArray<readonly [string, string]> = [
+  [
+    '"a chat reply of yours claimed it",',
+    '"a chat reply of yours claimed it",\n                                    "a chat post of yours claimed it",',
+  ],
+  [
+    '\\"a chat reply of yours claimed it\\": a tandem_reply of yours to a chat message about it claimed it; ',
+    '\\"a chat reply of yours claimed it\\": a tandem_reply of yours to a chat message about it claimed it; \\"a chat post of yours claimed it\\": a tandem_reply of yours that named no chat message (no replyTo, or one that matched none) and passed this document\'s documentId claimed it; ',
+  ],
+];
+
+/** The chat owners PR's second session, and who the next tool call runs as. */
+const LP_OTHER = "claude:lp-other";
+let lpCaller = "test:caller";
 const wakes = () =>
   external.filter(
     (e) =>
@@ -258,8 +337,22 @@ for (const ownership of ["", "1"] as const) {
       resetDeliveryStateForTests();
       resetInbox();
       resetOwnershipForTests();
-      setTransportView(() => [{ ownerId: "test:caller", openStreams: 0 }]);
+      lpCaller = "test:caller";
+      // A second session, for the chat owners PR's cases (R7): its polls show
+      // who else is handed what. Flag off it records nothing.
+      setTransportView(() => [
+        { ownerId: "test:caller", openStreams: 0 },
+        { ownerId: LP_OTHER, openStreams: 0 },
+      ]);
       noteTransportRegistered("test:caller", { recordKind: "claude" });
+      noteTransportRegistered(LP_OTHER, { recordKind: "claude" });
+      setOwnershipChatSide(ownershipChatSide);
+      // The delivery-rounds PR: the round seam as `index.ts` wires it, so the
+      // ownership-on block runs keyed rounds (R4.2) and the off block master's.
+      setDeliveryRoundSeam({
+        keyed: keyedDeliveryRounds,
+        isDocumentOpen: (id) => getOpenDocs().has(id),
+      });
       resetWakeAdvisoryForTests();
       __resetLocalPeriodForTests();
       __setHonourLocalPeriodRecordsForTests(true);
@@ -289,11 +382,12 @@ for (const ownership of ["", "1"] as const) {
       subscribe(intCb, "internal");
       ({ client, close } = await setupMcpServer(
         [registerAwarenessTools, registerDocumentTools, registerAnnotationTools],
-        { dispatch: (fn) => asTestCaller(fn) },
+        { dispatch: (fn) => asTestCaller(fn, { ownerId: lpCaller }) },
       ));
     });
 
     afterEach(async () => {
+      setDeliveryRoundSeam(undefined);
       await close?.();
       close = undefined;
       unsubscribe(extCb);
@@ -309,6 +403,87 @@ for (const ownership of ["", "1"] as const) {
       vi.unstubAllEnvs();
       await fs.promises.rm(dir, { recursive: true, force: true });
     });
+
+    if (ownership === "1") {
+      describe("ownership on: chat owners (the chat owners PR, R7)", () => {
+        const as = async <T>(who: string, fn: () => Promise<T>): Promise<T> => {
+          lpCaller = who;
+          try {
+            return await fn();
+          } finally {
+            lpCaller = "test:caller";
+          }
+        };
+
+        it("a blanked poll sets no owner and claims nothing while a claimable doc-less message and an unowned document with a comment exist", async () => {
+          // Both added BEFORE the switch (review round 1, item 1): a row added
+          // during the period is local-period chat and never claimable, so
+          // only a pre-switch row tests the blanked poll. The active document
+          // is open and nobody holds it.
+          userChat("waiting-claimable");
+          annotation("c-claimable");
+          await toLocal();
+          const before = ownershipSnapshotForTests();
+          expect(before.ownerByDoc).toEqual([]);
+          for (const cursor of ["start", undefined]) {
+            const inbox = await poll(cursor ? { cursor } : {});
+            expect(inbox.chatMessages).toEqual([]);
+            expect(inbox.userActions).toEqual([]);
+          }
+          const after = ownershipSnapshotForTests();
+          expect(after.messageOwners).toEqual(before.messageOwners);
+          expect(after.ownerByDoc).toEqual([]);
+          expect(after.handed).toEqual(before.handed);
+          // The positive twin: the same poll after the switch back claims the
+          // document and takes the message, so the fixture can fail.
+          await toClaude();
+          const back = await poll({ cursor: "start" });
+          expect(chatIds(back)).toEqual(["waiting-claimable"]);
+          expect(back.userActions.map((a) => a.id)).toEqual(["c-claimable"]);
+          const claimed = ownershipSnapshotForTests();
+          expect(claimed.ownerByDoc.map(([id, e]) => [id, e.ownerId])).toEqual([
+            [doc.id, "test:caller"],
+          ]);
+          expect(claimed.messageOwners.map(([key]) => key)).toEqual(["waiting-claimable"]);
+        });
+
+        it("a local-period row is handed to nobody across the switch back, and Claude's reply to it is refused", async () => {
+          await toLocal();
+          userChat("during-lp");
+          await toClaude();
+          for (const who of ["test:caller", LP_OTHER]) {
+            expect(chatIds(await as(who, () => poll({ cursor: "start" }))), who).toEqual([]);
+            expect(chatIds(await as(who, () => poll())), who).toEqual([]);
+          }
+          const refused = parseResult(
+            await client.callTool({
+              name: "tandem_reply",
+              arguments: { text: "hi", replyTo: "during-lp" },
+            }),
+          );
+          expect(refused.error).toBe(true);
+          expect(ownershipSnapshotForTests().messageOwners).toEqual([]);
+        });
+
+        it("a pre-switch message the caller owned and had not answered is handed to it after the switch back, and to no one else", async () => {
+          userChat("pre-owned");
+          // The caller's cursor poll hands it (and makes the caller its owner);
+          // that cursor is never passed back.
+          expect(chatIds(await poll({ cursor: "start" }))).toEqual(["pre-owned"]);
+          expect(
+            ownershipSnapshotForTests().messageOwners.map(([key, o]) => [key, o.ownerId]),
+          ).toEqual([["pre-owned", "test:caller"]]);
+          await toLocal();
+          await toClaude();
+          // The other session polls first (review round 1, item 12), so it is
+          // not passing only because the owner's poll got there before it.
+          const other = await as(LP_OTHER, () => poll({ cursor: "start" }));
+          expect(chatIds(other)).toEqual([]);
+          expect(chatIds(await as(LP_OTHER, () => poll()))).toEqual([]);
+          expect(chatIds(await poll({ cursor: "start" }))).toEqual(["pre-owned"]);
+        });
+      });
+    }
 
     describe("during the local period (guard 1)", () => {
       it("a poll returns the constant status line and field, nothing else, and the cursor as passed", async () => {
@@ -388,6 +563,60 @@ for (const ownership of ["", "1"] as const) {
         await toClaude();
         expect(takeWakeAdvisory(0)).toBe(WAKE_ADVISORY_TEXT);
       });
+
+      // The delivery-rounds PR (R4.2; review round 1, item 6): keyed rounds
+      // through the real local-period wiring and a real tab close, flag on.
+      // Registered in the ownership-on block only (this loop stubs the flag
+      // per block, so it always runs there; not keyed on the job's flag).
+      if (ownership === "1") {
+        it("keyed: a document round and a message round, a real switch to local (idle), a blank poll closes nothing, the tab closes, an own-window switch back discards the rest and its wake opens one key-less round the next poll closes", async () => {
+          annotation("lp-c1");
+          userChat("lp-m1", "hello", doc.id);
+          const kinds = () =>
+            keyedDeliveryRoundsForTests()
+              .map((r) => r.kind)
+              .sort();
+          expect(kinds()).toEqual(["document", "message"]);
+          await toLocal();
+          // User chat during the period, so the switch back writes #2433's
+          // line (the keyed-rounds suites PR, R3.2).
+          userChat("lp-m2", "during the period");
+          expect(getDeliveryState(Date.now(), 1)).toMatchObject({
+            state: "idle",
+            latencyMs: null,
+            waitingMs: null,
+          });
+          await poll(); // the local period's blank poll
+          expect(kinds(), "the blank poll closed nothing").toEqual(["document", "message"]);
+          const closed = await closeDocumentById(doc.id);
+          expect(closed.success).toBe(true);
+          expect(kinds(), "the close dropped the document's round").toEqual(["message"]);
+          const forwardsBefore = getDeliveryState(Date.now(), 1).forwardCount;
+          await toClaude("own-window");
+          // The switch back discarded the message round; its wake opened one key-less round.
+          expect(kinds()).toEqual(["keyless"]);
+          // The order at the switch back is discard, line, wake
+          // (`local-period.ts`), so "rounds unchanged across the line" would
+          // compare empty with empty. Instead: the line was written; exactly
+          // one forward happened across the switch back (a forward of the
+          // line would be a second, even one that joined the wake's key-less
+          // round in the same millisecond); and the one round left was opened
+          // no earlier than the wake. A line pushed as keyed chat would also
+          // show as a "message" round.
+          expect(switchBackLines()).toHaveLength(1);
+          expect(getDeliveryState(Date.now(), 1).forwardCount).toBe(forwardsBefore + 1);
+          const wake = wakes().at(-1);
+          expect(wake).toBeDefined();
+          const rounds = keyedDeliveryRoundsForTests();
+          expect(rounds).toHaveLength(1);
+          expect(rounds[0]?.kind).toBe("keyless");
+          expect(rounds[0]?.forwardedAt).toBeGreaterThanOrEqual(wake?.timestamp as number);
+          expect(getDeliveryState(Date.now(), 1).state).toBe("awaiting-poll");
+          await poll();
+          expect(kinds()).toEqual([]);
+          expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
+        });
+      }
 
       it("a round open at the switch is suspended: no awaiting-poll, no latency; discarded at the switch back", async () => {
         recordWakeForward(Date.now() - 1000);
@@ -557,6 +786,90 @@ for (const ownership of ["", "1"] as const) {
         userChat("plain");
         expect(external.filter((e) => e.type === "chat:message")).toHaveLength(1);
         expect(chatIds(await poll())).toEqual(["plain"]);
+      });
+    });
+
+    describe("the switch-back line (#1123 part B, R11)", () => {
+      const LINE = "Claude was not sent the chat from while chat was set to your local model.";
+
+      it("an own switch back after a period with user chat writes exactly one line: text, kind and fields", async () => {
+        await toLocal();
+        userChat("during");
+        await toClaude();
+        const lines = switchBackLines();
+        expect(lines).toHaveLength(1);
+        const [line] = lines;
+        expect(line.text).toBe(LINE);
+        expect(line.author).toBe("claude");
+        expect(line.chatNotice).toBe("claude-again");
+        expect(line.replyTo).toBeUndefined();
+        expect(line.documentId).toBeUndefined();
+        expect(line.agentIdentity).toBeUndefined();
+      });
+
+      it("after a period with no chat: no line", async () => {
+        await toLocal();
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("Claude's own rows in the period do not count as chat", async () => {
+        userChat("pre");
+        await toLocal();
+        claudeReply("late", "pre");
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("an unasked switch back: no line", async () => {
+        await toLocal();
+        userChat("during");
+        await toClaude("allowance");
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("period 1 with chat, an unasked switch back, period 2 with none, then an own switch back: no line", async () => {
+        await toLocal();
+        userChat("p1");
+        await toClaude("allowance");
+        await toLocal();
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("once per own switch back: two periods with chat write two lines, one each", async () => {
+        await toLocal();
+        userChat("p1");
+        await toClaude();
+        await toLocal();
+        userChat("p2");
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(2);
+      });
+
+      it("under a licence refusal the append is refused: no line", async () => {
+        await toLocal();
+        userChat("during");
+        refusal.on = true;
+        try {
+          await toClaude();
+        } finally {
+          refusal.on = false;
+        }
+        expect(switchBackLines()).toHaveLength(0);
+      });
+
+      it("is in no tandem_checkInbox result and answers nothing: the pre-switch row is still handed", async () => {
+        userChat("pre");
+        await toLocal();
+        userChat("during");
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(1);
+        const inbox = await poll();
+        expect(chatIds(inbox)).toEqual(["pre"]);
+        expect(JSON.stringify(inbox)).not.toContain(LINE);
+        // Still owed on the next poll as well: the line answered nothing.
+        expect(JSON.stringify(await poll())).not.toContain(LINE);
       });
     });
 
@@ -901,7 +1214,15 @@ for (const ownership of ["", "1"] as const) {
         await toLocal();
         userChat("during");
         await saveCtrlSession(getOrCreateDocument(CTRL_ROOM)); // shutdown
-        expect(record()).toEqual({ v: 1, open: true, owed: ["pre"], local: ["during"] });
+        // #1123 part B, R11.3: the record gained `chat: true` (user chat was
+        // sent in the open period); still `v: 1`.
+        expect(record()).toEqual({
+          v: 1,
+          open: true,
+          owed: ["pre"],
+          local: ["during"],
+          chat: true,
+        });
         await restartServer();
         expect(chatAnswerer()).toBe("local");
         expect(__localPeriodOpenForTests()).toBe(true);
@@ -911,6 +1232,34 @@ for (const ownership of ["", "1"] as const) {
         const inbox = await poll();
         expect(chatIds(inbox)).toEqual(["pre"]);
         expect(inbox.summary).toContain(owedAtSwitchSentence(["pre"]));
+      });
+
+      it("R11: a restart mid-period keeps the 'chat was sent' fact: the own switch back writes the line", async () => {
+        await toLocal();
+        userChat("during");
+        await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+        await restartServer();
+        expect(switchBackLines()).toHaveLength(0);
+        await toClaude();
+        expect(switchBackLines()).toHaveLength(1);
+      });
+
+      it("R11: a record with no `chat` field, or a non-literal one, reads as no chat: no line", async () => {
+        for (const chat of [undefined, "true", 1]) {
+          ctrlChat().forEach((_v, k) => {
+            withInternal(getOrCreateDocument(CTRL_ROOM), () => ctrlChat().delete(k));
+          });
+          await toLocal();
+          await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+          const file = JSON.parse(fs.readFileSync(ctrlFile(), "utf8"));
+          file.localPeriod = { ...file.localPeriod, ...(chat === undefined ? {} : { chat }) };
+          delete (file.localPeriod as { chat?: unknown }).chat;
+          if (chat !== undefined) file.localPeriod.chat = chat;
+          fs.writeFileSync(ctrlFile(), JSON.stringify(file));
+          await restartServer();
+          await toClaude();
+          expect(switchBackLines(), `chat: ${String(chat)}`).toHaveLength(0);
+        }
       });
 
       it("a period a boot begins is written at once: the file says open before any shutdown", async () => {
@@ -1031,6 +1380,22 @@ describe("the dark guard", () => {
     expect(__localPeriodOpenForTests()).toBe(false);
   });
 
+  it("flag off (#1123 part B, R11): the answerer is never primed, a chat classes nothing, and no line is written", async () => {
+    __setHonourLocalPeriodRecordsForTests(false);
+    fs.writeFileSync(path.join(dir, "chat-answerer.json"), '{"version":1,"answerer":"local"}');
+    setCtrlMode("tandem");
+    attachCtrlObservers();
+    wireLocalPeriod();
+    userChat("x");
+    expect(chatAnswerer()).toBe("claude");
+    expect(localPeriodRecordFor(new Set(["x"]))).toBeUndefined();
+    expect(
+      [...ctrlChat().values()].some(
+        (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+      ),
+    ).toBe(false);
+  });
+
   it("guard 2 reads the literal flag when no test overrides it", () => {
     __setHonourLocalPeriodRecordsForTests(null);
     expect(honourLocalPeriodRecords()).toBe(BYO_MODELS_ENABLED);
@@ -1049,17 +1414,56 @@ describe("the dark guard", () => {
       // Master's bytes, frozen (round-2 item 11): the schema origin/master
       // served at ed035a8 (master after #2423), dumped once with ownership off and once on. Which
       // one applies is read from the schema itself, never from the flag (only
-      // ownership-anchor.test.ts may key on it).
-      const frozen = Object.hasOwn(schema.properties ?? {}, "ownership")
+      // ownership-anchor.test.ts may key on it). Flag off it must equal master's
+      // bytes; flag on it is master's bytes with exactly #2358's chat owners PR's
+      // changes applied (a new cause word, and three reworded descriptions),
+      // spelled out here so any other difference fails.
+      const isOwnership = Object.hasOwn(schema.properties ?? {}, "ownership");
+      const frozen = isOwnership
         ? "master-checkinbox-output-schema.ownership.json"
         : "master-checkinbox-output-schema.json";
-      const master = JSON.parse(
-        fs.readFileSync(path.join(process.cwd(), "tests/fixtures/local-period", frozen), "utf8"),
+      let masterText = fs.readFileSync(
+        path.join(process.cwd(), "tests/fixtures/local-period", frozen),
+        "utf8",
       );
-      expect(schema).toEqual(master);
+      if (isOwnership) {
+        for (const [before, after] of [...CHAT_OWNERS_SCHEMA_CHANGES, ...POSTS_SCHEMA_CHANGES]) {
+          expect(masterText.split(before), `master carries: ${before}`).toHaveLength(2);
+          masterText = masterText.replace(before, after);
+        }
+      }
+      expect(schema).toEqual(JSON.parse(masterText));
     } finally {
       await done();
     }
+  });
+
+  it("flag off (#1123 part B, R11; review round 1 item 10): switches attempted unprimed write no line, and the CTRL file is master's shape", async () => {
+    __setHonourLocalPeriodRecordsForTests(false);
+    setCtrlMode("tandem");
+    attachCtrlObservers();
+    wireLocalPeriod();
+    // Never primed, as in a dark build: whatever is attempted, the answerer
+    // reads Claude and nothing reaches onSwitch.
+    await setChatAnswerer("local", "own-window").catch(() => {});
+    userChat("during");
+    await setChatAnswerer("claude", "own-window").catch(() => {});
+    await __flushLocalModelAnnouncedForTests();
+    expect(chatAnswerer()).toBe("claude");
+    expect(
+      [...ctrlChat().values()].some(
+        (m) => (m as { chatNotice?: string }).chatNotice === "claude-again",
+      ),
+    ).toBe(false);
+    expect(localPeriodRecordFor(new Set(["during"]))).toBeUndefined();
+    const file = path.join(SESSION_DIR, `${CTRL_ROOM}.json`);
+    fs.rmSync(file, { force: true });
+    await saveCtrlSession(getOrCreateDocument(CTRL_ROOM));
+    // Master writes exactly these two fields (`saveCtrlSession`), in this order.
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, "utf8")))).toEqual([
+      "ydocState",
+      "lastAccessed",
+    ]);
   });
 
   it("flag off (guard 2): the CTRL session file gains no field, and a stored record is ignored", () => {

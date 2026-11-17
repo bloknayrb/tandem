@@ -1908,12 +1908,20 @@ describe("collaborator — unusable-model notice, once per state (#1123 R1.3–R
     ]);
     const texts = REASONS.map((r) => UNUSABLE_NOTICE[r]);
     expect(new Set(texts).size).toBe(3);
+    // #1123 S7: the example names no server's port (it was Ollama's), and it
+    // appears exactly once, in the one notice that gives it.
+    const EXAMPLE = "http://127.0.0.1 followed by the server's port";
+    expect(UNUSABLE_NOTICE["endpoint-rejected"]).toBe(
+      `Your local model did not answer, because its Endpoint was not accepted. It must be a plain http loopback address on this computer, such as ${EXAMPLE}, with no user name or password. Edit the model in Settings → Models, then send your message again.`,
+    );
+    expect(texts.join("\n").split(EXAMPLE)).toHaveLength(2);
     for (const text of texts) {
       expect(text.length).toBeGreaterThan(0);
       // The only address any text may hold is the documented example of an
-      // accepted one. Strip it, and nothing URL-, host- or credential-shaped
+      // accepted one, provider-neutral since #1123 S7 (no port: LM Studio,
+      // llama.cpp and Other do not listen on Ollama's). Strip it, and nothing URL-, host- or credential-shaped
       // may remain.
-      const rest = text.split("http://127.0.0.1:11434").join("");
+      const rest = text.split("http://127.0.0.1 followed by the server's port").join("");
       expect(rest).not.toMatch(/https?:/i);
       expect(rest).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
       expect(rest).not.toMatch(/localhost|:\d{2,5}\b|@/i);

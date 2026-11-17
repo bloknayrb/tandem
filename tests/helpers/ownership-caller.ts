@@ -7,6 +7,7 @@ import {
 import {
   noteTransportRegistered,
   resetOwnershipForTests,
+  setOwnershipChatSide,
   setOwnershipTransportMode,
   setTransportView,
 } from "../../src/server/sessions/ownership.js";
@@ -76,10 +77,36 @@ export function useStdioOwnershipMode(): void {
  * pin the recordless caller (`mcp-write-precedence.test.ts`'s no-record arm,
  * PR 2a's recordless pin). Flag off it records nothing (the ownership module's
  * entry points return at once).
+ *
+ * It also wires the chat side as `src/server/index.ts` does (#2358, the chat
+ * owners PR; review round 1, item 13), so a `tandem_reply` naming a stored
+ * user message meets the real reply gate with the flag on rather than the
+ * unwired seam's "no such message" (master's path). Flag off the gate answers
+ * `legacy` whatever is wired.
  */
 export function registerTestCallerRecord(): void {
-  beforeEach(() => {
+  beforeEach(async () => {
     setTransportView(() => [{ ownerId: TEST_OWNER_ID, openStreams: 0 }]);
     noteTransportRegistered(TEST_OWNER_ID, { recordKind: "claude" });
+    // Imported here, not at the top: a static import of the inbox from this
+    // shared helper loads the MCP tool modules before a suite's hoisted
+    // `vi.mock` factories can initialise (`convert-error-mapping.test.ts`).
+    const { ownershipChatSide } = await import("../../src/server/mcp/awareness.js");
+    setOwnershipChatSide(ownershipChatSide);
+    // The delivery-round seam (#2358, the delivery-rounds PR; review round 1,
+    // item 4), as `index.ts` wires it: flag on these suites then run keyed
+    // rounds, the only combination a real server is in. Flag off it answers
+    // false, so master's one global round, whatever is wired.
+    const { setDeliveryRoundSeam } = await import("../../src/server/events/delivery-state.js");
+    const { getOpenDocs } = await import("../../src/server/mcp/document-service.js");
+    const { keyedDeliveryRounds } = await import("../../src/server/sessions/ownership.js");
+    setDeliveryRoundSeam({
+      keyed: keyedDeliveryRounds,
+      isDocumentOpen: (documentId) => getOpenDocs().has(documentId),
+    });
+  });
+  afterEach(async () => {
+    const { setDeliveryRoundSeam } = await import("../../src/server/events/delivery-state.js");
+    setDeliveryRoundSeam(undefined);
   });
 }

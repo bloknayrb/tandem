@@ -297,6 +297,15 @@ describe("flag off: today's behaviour, and nothing created", () => {
       queuedDocuments: 0,
       pendingClaims: 0,
       changeNotices: [],
+      // The chat owners PR: per-message owners (with their origins) and what
+      // each record was handed. Empty, since no record exists.
+      messageOwners: [],
+      handed: [],
+      // The posts PR: the carried-over set, the chat answerers and who wrote
+      // each reply row. Empty.
+      carriedOver: [],
+      chatAnswerers: [],
+      repliers: [],
     });
     const text = logs.join("\n");
     expect(text).toContain(

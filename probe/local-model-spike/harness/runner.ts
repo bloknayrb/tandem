@@ -446,7 +446,7 @@ export async function runMeasurement(opts: RunOptions, deps: RunDeps): Promise<R
             ? "pass"
             : `fail (${r.score.failureMode ?? "?"})`;
       deps.log(
-        `${position} ${plan.trialId}  ${outcome}${r.claims.suspect ? "  [suspect]" : ""}  first text ${seconds(r.timeToFirstTextMs)}  total ${seconds(r.totalMs)}  about ${Math.round((mean * left) / 60_000)} min left`,
+        `${position} ${plan.trialId}  ${outcome}${r.claims.suspect ? "  [suspect]" : ""}  first shown text ${seconds(r.timeToFirstShownTextMs ?? null)}  total ${seconds(r.totalMs)}  about ${Math.round((mean * left) / 60_000)} min left`,
       );
     }
     // Rule 3: the end of the run does not close a streak. What is held stays

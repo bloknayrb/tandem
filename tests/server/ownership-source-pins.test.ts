@@ -40,6 +40,185 @@ describe("each transport branch tells the ownership module its mode before servi
   });
 });
 
+describe("the delivery-round seam is wired in a running server (the delivery-rounds PR)", () => {
+  // Unwired, rounds stay master's one global round even flag on, and no unit
+  // test would notice: `main()` cannot run in a unit test, so the call is
+  // pinned from source, beside `setOwnershipSeqSource`.
+  const src = SRC_FILES.get("src/server/index.ts") as string;
+
+  it("index.ts wires the ownership side's keyedDeliveryRounds and the registry, once, before either transport branch", () => {
+    const call =
+      "setDeliveryRoundSeam({\n    keyed: keyedDeliveryRounds,\n    isDocumentOpen: (documentId) => getOpenDocs().has(documentId),\n  });";
+    expect(src.split(call)).toHaveLength(2);
+    const wired = src.indexOf(call);
+    expect(wired).toBeGreaterThan(
+      src.indexOf("setOwnershipSeqSource(() => deliveryRegistry.counter);"),
+    );
+    expect(wired).toBeLessThan(src.indexOf('if (transportMode === "http") {\n    // Ownership'));
+    const callers = [...SRC_FILES]
+      .filter(([, text]) => /\bsetDeliveryRoundSeam\(/.test(text))
+      .map(([file]) => file)
+      .sort();
+    expect(callers).toEqual(["src/server/events/delivery-state.ts", "src/server/index.ts"]);
+    const ownership = SRC_FILES.get("src/server/sessions/ownership.ts") as string;
+    expect(ownership).toMatch(
+      /export function keyedDeliveryRounds\(\): boolean \{\n {2}return ownershipEnabled\(\);\n\}/,
+    );
+  });
+
+  it("exactly one call in index.ts, an unconditional statement of main() in the same block as setOwnershipSeqSource (review round 1)", () => {
+    // Every use of the name, whatever its form: a second call (say
+    // `setDeliveryRoundSeam(undefined)`) would unwire the first, and so would
+    // an alias (`const f = setDeliveryRoundSeam; f(undefined)`) or a `.call`
+    // (`setDeliveryRoundSeam.call(null, undefined)`), which a count of
+    // `setDeliveryRoundSeam(` cannot see (the keyed-rounds suites PR, R2). So
+    // the identifier itself is counted, over index.ts's parsed syntax tree:
+    // comments are not in it (a mention in a comment neither adds one nor
+    // hides one), and neither is text inside a string. Exactly two, and each
+    // in its role: the import specifier, unrenamed, from the delivery-state
+    // module (so another function imported under this name is refused), and
+    // the call, a statement of the same block as `setOwnershipSeqSource`'s
+    // (so a call commented out, with a stray reference to keep the count,
+    // is refused). Between those two statements, no `return` or `throw` at
+    // any depth outside a nested function.
+    //
+    // What this pin of source cannot see (a flip-blocker row; accepted by the
+    // reviewing session's ruling of 2026-11-17: the pin guards against an
+    // accidental second writer, and a deliberate bypass is a review matter):
+    // an exit earlier in `main()`, before `setOwnershipSeqSource`; between the
+    // two statements, a conditional exit that is not a `return` or `throw`
+    // statement (a call that throws, say); braces or comment markers inside
+    // strings, which the text depth check below counts as code; a call
+    // through a namespace import by element access
+    // (`ns["setDeliveryRoundSeam"]`, or a computed name such as
+    // `ns["set" + name]`); and calls from other `src` files through an alias
+    // or `.call` (the callers check above matches `setDeliveryRoundSeam(`
+    // only). A behavioural pin that boots `main()` would see each of them.
+    const tree = ts.createSourceFile("index.ts", src, ts.ScriptTarget.Latest, true);
+    const uses: ts.Identifier[] = [];
+    let seqStatement: ts.Statement | undefined;
+    const visit = (node: ts.Node): void => {
+      // `forEachChild`, never `getChildren`: the latter walks JSDoc too.
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") uses.push(node);
+      if (
+        ts.isExpressionStatement(node) &&
+        ts.isCallExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "setOwnershipSeqSource"
+      ) {
+        seqStatement = node;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(uses).toHaveLength(2);
+    const [imported, called] = uses as [ts.Identifier, ts.Identifier];
+    const specifier = imported.parent;
+    expect(ts.isImportSpecifier(specifier) && specifier.propertyName === undefined).toBe(true);
+    const declaration = specifier.parent.parent.parent;
+    expect(
+      ts.isImportDeclaration(declaration) &&
+        ts.isStringLiteral(declaration.moduleSpecifier) &&
+        declaration.moduleSpecifier.text,
+    ).toBe("./events/delivery-state.js");
+    const call = called.parent;
+    expect(ts.isCallExpression(call) && call.expression === called).toBe(true);
+    const callStatement = call.parent;
+    expect(ts.isExpressionStatement(callStatement)).toBe(true);
+    expect(seqStatement, "setOwnershipSeqSource's statement").toBeDefined();
+    const block = (seqStatement as ts.Statement).parent;
+    expect(callStatement.parent).toBe(block);
+    const statements = (block as ts.Block).statements;
+    const seqAt = statements.indexOf(seqStatement as ts.Statement);
+    const callAt = statements.indexOf(callStatement as ts.Statement);
+    expect(seqAt).toBeGreaterThan(-1);
+    expect(seqAt).toBeLessThan(callAt);
+    const exits: string[] = [];
+    const findExits = (node: ts.Node): void => {
+      if (ts.isFunctionLike(node) || ts.isClassLike(node)) return;
+      if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) exits.push(node.getText());
+      ts.forEachChild(node, findExits);
+    };
+    for (const statement of statements.slice(seqAt + 1, callAt)) findExits(statement);
+    expect(exits).toEqual([]);
+    const lines = src.split("\n");
+    // The call's own line, from the syntax tree, so a comment mentioning the
+    // call above it is not taken for it.
+    const at = tree.getLineAndCharacterOfPosition(called.getStart(tree)).line;
+    // Two spaces and nothing before the call: not wrapped in a condition on
+    // its own line.
+    expect(lines[at]).toBe("  setDeliveryRoundSeam({");
+    // Between `setOwnershipSeqSource` (pinned as a statement of main()) and
+    // this call every brace closes, so the call is in the same block, not
+    // inside a branch or a function opened between them.
+    const from = lines.findIndex((l) => l.includes("setOwnershipSeqSource(() =>"));
+    expect(from).toBeGreaterThan(-1);
+    expect(from).toBeLessThan(at);
+    const between = lines
+      .slice(from, at)
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .join("\n");
+    let depth = 0;
+    for (const ch of between) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("the seam has one writer: setDeliveryRoundSeam itself, which its own module never calls (the keyed-rounds suites PR)", () => {
+    // A second assignment inside delivery-state.ts, or a call of the setter
+    // there (the callers check above exempts this file, whose definition
+    // matches it), would unwire the seam with every pin on index.ts still
+    // passing. So the setter's name is counted over this module's syntax tree,
+    // as `setOwnershipSeqSource`'s is in its own: exactly one identifier, the
+    // declaration's (no call, alias or `.call`). A text pin for the
+    // assignment: it does not see a compound (`??=`), destructuring or
+    // parenthesised (`(roundSeam) = x`) assignment, or a mutation of the seam
+    // object (`roundSeam.keyed = ...`) (the flip-blocker row).
+    const module = SRC_FILES.get("src/server/events/delivery-state.ts") as string;
+    const tree = ts.createSourceFile("delivery-state.ts", module, ts.ScriptTarget.Latest, true);
+    const named: ts.Identifier[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") named.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(named).toHaveLength(1);
+    expect(ts.isFunctionDeclaration((named[0] as ts.Identifier).parent)).toBe(true);
+    expect(module.match(/\broundSeam\s*=(?!=)/g)).toHaveLength(1);
+    expect(module).toMatch(
+      /export function setDeliveryRoundSeam\(seam: DeliveryRoundSeam \| undefined\): void \{\n {2}roundSeam = seam;\n\}/,
+    );
+  });
+
+  it("no src file imports a round seam, drop or close under another name", () => {
+    for (const [file, text] of SRC_FILES) {
+      expect(text, file).not.toMatch(
+        /\b(?:setDeliveryRoundSeam|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound)\s+as\s+\w/,
+      );
+    }
+  });
+
+  it("the drops sit where the brief puts them: the close in closeDocumentById, Clear chat in clearCtrlChatDurably, never the chat observer", () => {
+    const callersOf = (name: string) =>
+      [...SRC_FILES]
+        .filter(
+          ([file, text]) =>
+            file !== "src/server/events/delivery-state.ts" && text.includes(`${name}(`),
+        )
+        .map(([file]) => file)
+        .sort();
+    expect(callersOf("dropDocumentDeliveryRound")).toEqual(["src/server/mcp/document-service.ts"]);
+    expect(callersOf("dropMessageDeliveryRounds")).toEqual(["src/server/session/manager.ts"]);
+    expect(callersOf("closeMessageDeliveryRound")).toEqual([
+      "src/server/mcp/awareness.ts",
+      "src/server/mcp/channel-routes.ts",
+    ]);
+  });
+});
+
 describe("an ownership entry's sinceSeq has a real source in a running server (ownership design §2; PR 2a)", () => {
   // `setOwnershipSeqSource` is a seam that answers 0 when nothing wires it, so
   // every unit test passes without the wiring: an unwired server would stamp
@@ -163,7 +342,7 @@ describe("the handover is wired in a running server, and reachable only through 
     const handOverBody = ownership.slice(handOverFrom, ownership.indexOf("\n}\n", handOverFrom));
     for (const text of [body, keys, handOverBody]) {
       expect(text).not.toMatch(
-        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
+        /pushEvent|recordWakeForward|resolveDeliveryRound|recordInboxPoll|startOrWake|broadcast|stampUserChat|dropDocumentDeliveryRound|dropMessageDeliveryRounds|closeMessageDeliveryRound|getMap\([^)]*\)\s*\.(?:set|delete|clear)\(/,
       );
     }
     // The annotation read is the plain one, on a Y.Doc from the non-creating getter.
@@ -454,5 +633,168 @@ describe("the inbox's door into ownership (the scope PR)", () => {
       "src/server/mcp/awareness.ts",
     ]);
     expect(filesNaming(/"poll-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+  });
+});
+
+describe("the chat side's seams are wired in a running server (the chat owners PR, R2.2)", () => {
+  // Each is a seam that answers "nothing" when unwired (no message handled,
+  // none on any document, no row, a re-owe that writes nothing, a delete
+  // that tells nobody), so every unit test passes without the wiring.
+  // `main()` cannot be run in a unit test, so the calls are pinned from
+  // source, as the two above are. `ownership-chat.test.ts` wires the same
+  // expressions against the real inbox and calls each member.
+  const index = SRC_FILES.get("src/server/index.ts") as string;
+  const filesNaming = (pattern: RegExp) =>
+    [...SRC_FILES]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort();
+  const beforeBothBranches = (line: string) => {
+    expect(index.split("\n").filter((l) => l === line)).toHaveLength(1);
+    const wired = index.indexOf(line);
+    const http = index.indexOf('if (transportMode === "http") {\n    // Ownership');
+    const stdio = index.indexOf('setOwnershipTransportMode("stdio");');
+    expect(http).toBeGreaterThan(-1);
+    expect(stdio).toBeGreaterThan(-1);
+    expect(wired).toBeLessThan(http);
+    expect(wired).toBeLessThan(stdio);
+  };
+
+  it("index.ts wires the chat side once, as a statement of main(), before either transport branch", () => {
+    beforeBothBranches("  setOwnershipChatSide(ownershipChatSide);");
+    expect(index.match(/setOwnershipChatSide\(/g)).toHaveLength(1);
+    expect(filesNaming(/\bsetOwnershipChatSide\(/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // (A comment in `ownership.ts` names it in backticks.)
+    expect(filesNaming(/\bownershipChatSide\b(?!`)/)).toEqual([
+      "src/server/index.ts",
+      "src/server/mcp/awareness.ts",
+    ]);
+  });
+
+  it("the chat side's members are synchronous, and its file reads no flag", () => {
+    const awareness = SRC_FILES.get("src/server/mcp/awareness.ts") as string;
+    const start = awareness.indexOf("export const ownershipChatSide = Object.freeze({");
+    expect(start).toBeGreaterThan(-1);
+    const body = awareness.slice(start, awareness.indexOf("\n});\n", start));
+    for (const member of [
+      "handledKeys()",
+      "messagesOn(documentId: string)",
+      "message(key: string)",
+      "reOwe(keys: readonly string[])",
+    ]) {
+      expect(body, member).toContain(member);
+    }
+    expect(body).not.toMatch(/\basync\b|\bawait\b|\.then\(/);
+    const reOwe = awareness.slice(
+      awareness.indexOf("function reOweChat("),
+      awareness.indexOf("\n}\n", awareness.indexOf("function reOweChat(")),
+    );
+    expect(reOwe).not.toMatch(/\basync\b|\bawait\b|\.then\(/);
+    // One server-origin transaction (Critical Rule 2), and no push.
+    expect(reOwe.match(/withInternal\(/g)).toHaveLength(1);
+    expect(reOwe).not.toMatch(/withMcp|withBrowser|transact\(|pushEvent/);
+    expect(awareness).not.toMatch(/ownership-flag|ownershipEnabled/);
+  });
+
+  it("index.ts wires the deletion listener once, as a statement of main(), before either transport branch", () => {
+    beforeBothBranches("  setChatRowsDeletedListener(forgetChatMessageOwners);");
+    expect(filesNaming(/\bsetChatRowsDeletedListener\(/)).toEqual([
+      "src/server/chat-row-deletions.ts",
+      "src/server/index.ts",
+    ]);
+    expect(filesNaming(/\bforgetChatMessageOwners\b/)).toEqual([
+      "src/server/index.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+  });
+
+  it("index.ts wires the client-write undo once, before either transport branch and before Hocuspocus starts (the posts PR, R4.5; security review L2)", () => {
+    beforeBothBranches("  setChatClientWritesUndone(undoClientChatWrites);");
+    const wired = index.indexOf("  setChatClientWritesUndone(undoClientChatWrites);");
+    expect(wired).toBeLessThan(index.indexOf("startHocuspocus(wsPort)"));
+    expect(filesNaming(/\bsetChatClientWritesUndone\(/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+    ]);
+    // (The seam's docblock names it.)
+    expect(filesNaming(/\bundoClientChatWrites\b/)).toEqual([
+      "src/server/chat-client-writes.ts",
+      "src/server/index.ts",
+      "src/server/mcp/document-service.ts",
+      "src/server/sessions/ownership.ts",
+    ]);
+    // The seam imports nothing; the observer and the undo never name the
+    // ownership module or the flag.
+    const seam = SRC_FILES.get("src/server/chat-client-writes.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+    for (const file of [
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/events/observers/chat-client-undo.ts",
+    ]) {
+      expect(SRC_FILES.get(file)).not.toMatch(/["'`][^"'`]*\/ownership(\.js)?["'`]|ownership-flag/);
+    }
+  });
+
+  it("the carried-over capture and the pending drop run after restoreCtrlDoc, inside restoreCtrlSession (review round 1, item 1)", () => {
+    const service = SRC_FILES.get("src/server/mcp/document-service.ts") as string;
+    const fn = service.slice(
+      service.indexOf("export async function restoreCtrlSession("),
+      service.indexOf("\n}\n", service.indexOf("export async function restoreCtrlSession(")),
+    );
+    const restored = fn.indexOf("restoreCtrlDoc(ctrlDoc, saved);");
+    expect(restored).toBeGreaterThan(-1);
+    expect(fn.indexOf("captureCarriedOverChat(")).toBeGreaterThan(restored);
+    expect(fn.indexOf("dropPendingUpdates(ctrlDoc)")).toBeGreaterThan(restored);
+    expect(service.match(/captureCarriedOverChat\(/g)).toHaveLength(1);
+  });
+
+  it("each chat-side delete path tells the seam, and neither imports the ownership module", () => {
+    const observer = SRC_FILES.get("src/server/events/observers/ctrl-chat.ts") as string;
+    const manager = SRC_FILES.get("src/server/session/manager.ts") as string;
+    expect(observer).toContain("noteChatRowsDeleted(deleted);");
+    // Before the origin skip, so every origin's delete is told.
+    expect(observer.indexOf("noteChatRowsDeleted(deleted);")).toBeLessThan(
+      observer.indexOf("if (shouldSkipChannel(txn.origin)) return;"),
+    );
+    const clear = manager.slice(
+      manager.indexOf("export async function clearCtrlChatDurably("),
+      manager.indexOf("\n}\n", manager.indexOf("export async function clearCtrlChatDurably(")),
+    );
+    expect(clear).toContain("noteChatRowsDeleted(capturedIds);");
+    expect(filesNaming(/\bnoteChatRowsDeleted\(/)).toEqual([
+      "src/server/chat-row-deletions.ts",
+      "src/server/events/observers/ctrl-chat.ts",
+      "src/server/session/manager.ts",
+    ]);
+    for (const text of [observer, manager]) {
+      // Any specifier naming the ownership module or the flag, with or without
+      // an extension or the `sessions/` prefix.
+      expect(text).not.toMatch(/["'][^"']*\/ownership(\.js)?["']|ownership-flag/);
+    }
+    // The delete arm fills the list it hands the seam.
+    const arm = observer.slice(
+      observer.indexOf("const deleted: string[] = [];"),
+      observer.indexOf("noteChatRowsDeleted(deleted);"),
+    );
+    expect(arm).toMatch(/change\.action === "delete"[\s\S]*deleted\.push\(key\)/);
+    const seam = SRC_FILES.get("src/server/chat-row-deletions.ts") as string;
+    expect(seam).not.toMatch(/^import /m);
+  });
+
+  it("the reply's claim is a named unqueued change, and only the ownership module names its cause", () => {
+    expect(filesNaming(/"reply-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted `tandem_reply`");
+  });
+
+  it("a post's claim is a named unqueued change too, and only the ownership module names its cause (review round 1, item 13)", () => {
+    expect(filesNaming(/"post-claim"/)).toEqual(["src/server/sessions/ownership.ts"]);
+    const queue = SRC_FILES.get("src/server/sessions/doc-op-queue.ts") as string;
+    expect(queue).toContain("a claim made by an accepted chat post");
+    expect(queue).toContain("cause\n * `post-claim`");
+    expect(queue).toContain("Seven run where they are");
   });
 });

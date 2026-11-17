@@ -83,14 +83,42 @@ const deletedKeys = new Set<string>();
  * classed keeps its class (the same-key re-add rule), and its delete record is
  * dropped since the row exists again.
  */
-export function classChatRowAdded(key: string): void {
-  if (!honourLocalPeriodRecords()) return;
+export function classChatRowAdded(key: string): boolean {
+  if (!honourLocalPeriodRecords()) return false;
   if (classes.has(key)) {
     deletedKeys.delete(key);
-    return;
+    return false;
   }
-  classes.set(key, inLocalPeriod());
+  const local = inLocalPeriod();
+  classes.set(key, local);
+  return local;
 }
+
+// --- R11: was user chat sent during this local period? ------------------------
+
+/**
+ * Whether at least one USER chat row was classed as local-period chat during
+ * the current local period (#1123 part B, R11.3). Set by the CTRL chat
+ * observer's call site (which can read the row's author; `classChatRowAdded`
+ * returns true only for a row it classed local just now, so a same-key re-add
+ * of an older period's row does not count). Cleared when a period begins and
+ * at every switch back. Kept with the durable period record.
+ */
+let periodHadChat = false;
+
+/** The CTRL chat observer classed a user row as local-period chat just now. */
+export function noteLocalPeriodUserChat(): void {
+  if (!honourLocalPeriodRecords() || !inLocalPeriod()) return;
+  periodHadChat = true;
+}
+
+/**
+ * The line written into chat at the user's own switch back, when the period
+ * had chat (#1123 part B, Decision B7 as adopted, R11.2). A Tandem notice
+ * (`chatNotice: "claude-again"`), not a model's words.
+ */
+export const SWITCH_BACK_LINE_TEXT =
+  "Claude was not sent the chat from while chat was set to your local model.";
 
 /** A chat row was deleted (by anyone). Its class is kept, within the bound. */
 export function noteChatRowDeleted(key: string): void {
@@ -223,6 +251,12 @@ export interface LocalPeriodHooks {
   emitReturnWake: () => void;
   /** Write the CTRL snapshot through the queued path. */
   persist: () => void;
+  /**
+   * Write {@link SWITCH_BACK_LINE_TEXT} into chat as a notice row (#1123 part
+   * B, R11.2), through `appendClaudeChatMessage` — which this module must not
+   * import, and which the licence refuses like any AI chat write.
+   */
+  writeSwitchBackLine: () => void;
 }
 
 let hooks: LocalPeriodHooks | null = null;
@@ -260,6 +294,8 @@ function beginPeriod(h: LocalPeriodHooks): void {
   // throws leaves no earlier period's set behind (review item 17).
   owedAtSwitch = new Set();
   open = true;
+  // R11.5: a period begins with no chat, whatever an earlier one had.
+  periodHadChat = false;
   step("owed-at-switch", () => {
     owedAtSwitch = new Set(h.unansweredUserChat());
   });
@@ -299,12 +335,17 @@ function onSwitch(now: "claude" | "local", source: ChatAnswererSwitchSource): vo
   // The user's switch back is a switch to Claude made in Tandem's own window;
   // every other is unasked (the brief's Terms).
   const asked = source === "own-window";
+  // R11.3/R11.5: the period's chat fact ends with it, asked or not.
+  const hadChat = periodHadChat;
+  periodHadChat = false;
   // The buffer first: a selection made during the period must never ride a
   // later push, even if recording the stamps below fails.
   step("selection buffer", () => h.clearBufferedSelections());
   step("selection hold", () => recordAllSelections(h));
   step("round", () => h.discardSuspendedRound());
   step("supervisor", () => tellSupervisor({ to: "claude", asked }));
+  // R11: one line per own switch back, only if user chat was sent in it.
+  if (asked && hadChat) step("switch-back line", () => h.writeSwitchBackLine());
   if (asked) step("wake", () => h.emitReturnWake());
   step("persist", () => h.persist());
 }
@@ -348,6 +389,8 @@ export function bootLocalPeriod(): void {
     }
   } else if (open) {
     open = false;
+    // An unasked switch back while Tandem was down: no line (R11.5).
+    periodHadChat = false;
     changed = true;
   }
   step("selection hold", () => recordAllSelections(h));
@@ -373,6 +416,9 @@ export interface LocalPeriodRecord {
   open: boolean;
   owed: string[];
   local: string[];
+  /** #1123 part B, R11.3: user chat was sent in the open period. Optional
+   *  (still `v: 1`): a record without it reads as "no chat". */
+  chat?: true;
 }
 
 /** Read the field from a CTRL session file, before its rows are restored. A
@@ -385,6 +431,8 @@ export function loadLocalPeriodRecord(raw: unknown): void {
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   open = r.open === true;
+  // Only the literal `true`: anything else reads as "no chat".
+  periodHadChat = open && r.chat === true;
   owedAtSwitch = new Set(strings(r.owed));
   for (const key of strings(r.local)) classes.set(key, true);
 }
@@ -403,6 +451,7 @@ export function localPeriodRecordFor(retained: ReadonlySet<string>): LocalPeriod
     open,
     owed: [...owedAtSwitch].filter((key) => retained.has(key)),
     local,
+    ...(periodHadChat ? { chat: true as const } : {}),
   };
 }
 
@@ -419,6 +468,7 @@ export function __resetLocalPeriodForTests(): void {
   deletedKeys.clear();
   markedEvents = new WeakSet<TandemEvent>();
   open = false;
+  periodHadChat = false;
   owedAtSwitch = new Set();
   heldSelections.clear();
   supervisorListeners.clear();

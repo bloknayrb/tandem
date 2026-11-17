@@ -70,8 +70,10 @@ import {
   ERROR_CODE_MODELS_BUSY,
   ERROR_CODE_MODELS_STALE,
   ERROR_CODE_MODELS_WRITE_FAILED,
+  LOCAL_MODEL_STATES,
   type LocalModelSettingsPostResponse,
   type LocalModelSettingsResponse,
+  type LocalModelState,
   type ModelsEntry,
   type ModelsFile,
   type ModelsGetResponse,
@@ -115,12 +117,14 @@ export interface ModelsRoutesDeps {
    */
   localModelSettingsEnabled?: boolean;
   /**
-   * Would a local model answer a chat now? `localModelResolvesNow` from
-   * `local-model/collaborator.ts` — the one sanctioned bridge across the dark
-   * audit — handed in by `index.ts` through `startMcpServerHttp`. Absent means
-   * no. Only the boolean is ever answered: never a name, endpoint or id.
+   * Would a local model answer a chat now, and if not, why?
+   * `localModelResolvesNow` from `local-model/collaborator.ts` — the one
+   * sanctioned bridge across the dark audit — handed in by `index.ts` through
+   * `startMcpServerHttp`. Absent means `none`. Only the closed
+   * {@link LocalModelState} is ever answered (#1123 part B, R1.3): never a
+   * name, endpoint, id, path or count.
    */
-  localModelResolvesNow?: () => boolean;
+  localModelResolvesNow?: () => LocalModelState;
 }
 
 // Ref / secret bounds. Refs are client-chosen but server-validated against
@@ -187,11 +191,17 @@ export function registerModelsRoutes(
  * or allowance `Origin`, or none with `Sec-Fetch-Site: same-origin`. The
  * shared CORS middleware grants any `127.0.0.1` port, so without this a page
  * on another loopback port could read which way the switch points.
+ *
+ * The 200 carries the switch, `localModelResolves`, the run id and — since
+ * #1123 part B (R1.3) — `localModelState`, the closed enum that tells the
+ * editor "nothing is saved or enabled" from "one is saved but cannot be used"
+ * (their remedies differ). It is present on every 200, absent only when the
+ * check threw, and carries no name, endpoint, id, path or count.
  */
 function makeGetChatAnswererHandler(
   live: boolean,
   ownWindow: OwnWindowPolicy,
-  resolvesNow?: () => boolean,
+  resolvesNow?: () => LocalModelState,
 ): Handler {
   return (req: Request, res: Response) => {
     if (!live) {
@@ -206,9 +216,15 @@ function makeGetChatAnswererHandler(
       refuseNotOwnWindow(res);
       return;
     }
-    let resolves = false;
+    // The local model's state (#1123 part B, R1.3): a closed enum, present on
+    // every 200 whatever the switch says, and absent when the check threw.
+    // Anything outside the enum is treated as a throw, so nothing but the
+    // enum can reach the wire.
+    let state: LocalModelState | undefined;
     try {
-      resolves = resolvesNow?.() === true;
+      const answered = resolvesNow ? resolvesNow() : "none";
+      if (!LOCAL_MODEL_STATES.includes(answered)) throw new TypeError("not a LocalModelState");
+      state = answered;
     } catch (err) {
       console.error(
         `[tandem] GET ${API_MODELS_CHAT_ANSWERER}: could not tell whether a local model resolves (${
@@ -218,7 +234,8 @@ function makeGetChatAnswererHandler(
     }
     const body: ChatAnswererResponse = {
       answerer: chatAnswerer(),
-      localModelResolves: resolves,
+      localModelResolves: state === "usable",
+      ...(state !== undefined ? { localModelState: state } : {}),
       runGeneration: LOCAL_RUN_GENERATION,
     };
     res.status(200).json(body);

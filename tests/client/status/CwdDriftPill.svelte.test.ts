@@ -39,6 +39,7 @@ const baseProps = {
   onStartClaude: () => {},
   aiSessionCount: null as number | null,
   aiNotice: null,
+  aiLocalChat: null,
   onOpenLicenseSettings: () => {},
   aiState: "ready" as const,
   soloMode: false,

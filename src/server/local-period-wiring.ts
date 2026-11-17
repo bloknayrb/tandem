@@ -15,9 +15,13 @@ import {
 } from "../shared/constants.js";
 import { discardSuspendedRound, suspendDeliveryRound } from "./events/delivery-state.js";
 import { clearBufferedSelections, emitAnswererReturnWake } from "./events/queue.js";
-import { unansweredUserChatKeys } from "./mcp/awareness.js";
+import { appendClaudeChatMessage, unansweredUserChatKeys } from "./mcp/awareness.js";
 import { getOpenDocs } from "./mcp/document-service.js";
-import { bootLocalPeriod, installLocalPeriod } from "./models/local-period.js";
+import {
+  bootLocalPeriod,
+  installLocalPeriod,
+  SWITCH_BACK_LINE_TEXT,
+} from "./models/local-period.js";
 import { saveCtrlSession } from "./session/manager.js";
 import { getDocument, getOrCreateDocument } from "./yjs/provider.js";
 
@@ -41,6 +45,22 @@ export function wireLocalPeriod(): void {
     discardSuspendedRound,
     clearBufferedSelections,
     emitReturnWake: emitAnswererReturnWake,
+    // #1123 part B, R11: the line at the user's own switch back. A new caller
+    // of `appendClaudeChatMessage`, so a new AI surface (Critical Rule 9): the
+    // append is `withMcp` and the licence refuses it like any AI chat write —
+    // then no line appears (R11.6, accepted). A Tandem notice, never handed to
+    // Claude (the inbox hands only user rows) and never an answer
+    // (`answeredChatIds` skips notices); no `replyTo`, no `documentId`.
+    writeSwitchBackLine: () => {
+      const appended = appendClaudeChatMessage(SWITCH_BACK_LINE_TEXT, {
+        chatNotice: "claude-again",
+      });
+      if (!appended.ok) {
+        console.error(
+          `[Tandem] The chat line for the switch back to Claude was not written (${appended.refusal.kind}).`,
+        );
+      }
+    },
     // The third CTRL write site (the ruling): the classes, the owed set and the
     // open marker are durable from the switch on, through the queued path.
     persist: () => {

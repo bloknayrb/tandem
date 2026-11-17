@@ -9,6 +9,7 @@ import {
 import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
 import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
+import { closeMessageDeliveryRound } from "../events/delivery-state.js";
 import { recordPushConsumerEvent } from "../events/push-liveness.js";
 import { sseHandler } from "../events/sse.js";
 import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
@@ -155,6 +156,11 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       sendAiRefusal(res, appended.refusal);
       return;
     }
+    // The message's delivery round closes once the reply's row is appended
+    // (#2358, the delivery-rounds PR, R2.2): a shim Claude that just answers
+    // sends only a final. This route has no caller, so any session's reply
+    // closes it (until PR 4's permit). Nothing while rounds are not keyed.
+    if (typeof replyTo === "string") closeMessageDeliveryRound(replyTo);
     // The shim's `tandem_reply` is a Claude Code session's reply like the MCP
     // tool's, so it can be Tandem's own Claude saying hello (#2197).
     notifyTandemReply(sessionId);

@@ -1,11 +1,16 @@
-import { DELIVERY_STALL_MS } from "../../shared/constants";
-import type { ChatMessage } from "../../shared/types";
+import { BYO_MODELS_ENABLED, DELIVERY_STALL_MS } from "../../shared/constants";
+import { DEFAULT_RUN_DEADLINE_MS, effectiveLocalRun } from "../../shared/local-run";
+import { type ChatMessage, isChatNoticeRow } from "../../shared/types";
 
 /**
  * What has happened to the user's latest chat message, derived from the chat map
- * alone.
+ * and — for a message a local model handles (#1123 part B, R5) — the editor's
+ * read of who answers chat (`hooks/useChatAnswerer.svelte.ts`), passed in as
+ * {@link LocalPickupInputs}. Without those inputs (or while
+ * `BYO_MODELS_ENABLED` is off) it is derived from the chat map alone, exactly
+ * as before part B.
  *
- * Every state is something the server or Claude actually recorded: `received`
+ * Every Claude-side state is something the server or Claude actually recorded: `received`
  * is `read` (a cursor-less `tandem_checkInbox`'s stamp, a cursor poll's
  * acknowledgement, or a `tandem_reply` that named the message) OR `delivered`
  * (a cursor poll handed it out). `read` alone is not enough: under the cursor
@@ -22,7 +27,36 @@ import type { ChatMessage } from "../../shared/types";
 export type ChatPickup =
   | { kind: "waiting"; waitedMs: number }
   | { kind: "received" }
-  | { kind: "working" };
+  | { kind: "working" }
+  /** #1123 part B (R5.1): Tandem restarted mid-run (effective `interrupted`). */
+  | { kind: "local-interrupted" }
+  /** The local model's run is going (Decision B2). */
+  | { kind: "local-working" }
+  /** A run that stopped, with no reply row and no notice row for the message. */
+  | { kind: "local-stopped" }
+  /** Sent by this window to its local model; no run recorded yet (Ruling B-a). */
+  | { kind: "local-sent" };
+
+/**
+ * What the pickup row needs beyond the chat map for a message a local model
+ * handles (#1123 part B, R5.5). All from the chat-answerer store; App passes
+ * null while the flag is off.
+ */
+export interface LocalPickupInputs {
+  /** The server process's run id from the store's read, or null (not known). */
+  runGeneration: string | null;
+  /** Messages this window sent while its read was known local and the
+   *  licence admitted AI (Ruling B-6). */
+  sentLocal: ReadonlySet<string>;
+  /** The read is known, and says the local model. */
+  readKnownLocal: boolean;
+  /** The licence refuses the AI. */
+  aiOff: boolean;
+}
+
+/** Past this, a `running` state that cannot be judged (the run id is not
+ *  known) is no longer shown: the run deadline plus a minute (R5.1). */
+export const LOCAL_RUN_UNJUDGED_MAX_MS = DEFAULT_RUN_DEADLINE_MS + 60_000;
 
 /** Past this the row says nothing. Long enough to outlast a cold auto-launch;
  * short enough that a message Claude rightly never answered ("thanks!"), a session
@@ -30,7 +64,11 @@ export type ChatPickup =
  * keep claiming a state. A real stall past 2 min is `WakeStallBanner`'s story. */
 export const PICKUP_MAX_AGE_MS = 10 * 60_000;
 
-export function chatPickup(messages: readonly ChatMessage[], now: number): ChatPickup | null {
+export function chatPickup(
+  messages: readonly ChatMessage[],
+  now: number,
+  local: LocalPickupInputs | null = null,
+): ChatPickup | null {
   // Only the latest user message is a candidate, so answering it can never
   // resurrect an older one as pending.
   let latest: ChatMessage | null = null;
@@ -40,7 +78,27 @@ export function chatPickup(messages: readonly ChatMessage[], now: number): ChatP
   if (latest === null) return null;
   if (now - latest.timestamp > PICKUP_MAX_AGE_MS) return null;
 
-  const after = messages.filter((m) => m.author === "claude" && m.timestamp >= latest.timestamp);
+  const lit = BYO_MODELS_ENABLED && local !== null;
+  if (lit) {
+    const verdict = localPickup(messages, latest, now, local);
+    if (verdict !== "today") return verdict;
+  }
+
+  // A `superseded` acknowledgement (#2358, the posts PR, R3.7: the server marks
+  // one when its message changed owner) is left out of both the replies and
+  // what ends "working", so a re-owed message reads "waiting" again. Only the
+  // server writes it, and only with ownership on; the client reads no flag.
+  // Notice rows (#1123 part B) are the server's, not an answer: under the
+  // flag they never count as a reply or as an untagged Claude row, so the
+  // switch-back line (which names no message) never ends the row of a
+  // message owed to Claude.
+  const after = messages.filter(
+    (m) =>
+      m.author === "claude" &&
+      m.timestamp >= latest.timestamp &&
+      m.superseded !== true &&
+      !(lit && isChatNoticeRow(m)),
+  );
   const replies = after.filter((m) => m.replyTo === latest.id);
 
   if (replies.length > 0) {
@@ -67,13 +125,71 @@ export function chatPickup(messages: readonly ChatMessage[], now: number): ChatP
     : { kind: "waiting", waitedMs: now - latest.timestamp };
 }
 
+/**
+ * R5.1's table, top to bottom, for the latest user message: a local verdict,
+ * or `"today"` for today's rows. The rows keyed on `localRun` apply whatever
+ * window sent the message (it is the server's record that the local model
+ * handled it).
+ */
+function localPickup(
+  messages: readonly ChatMessage[],
+  latest: ChatMessage,
+  now: number,
+  local: LocalPickupInputs,
+): ChatPickup | null | "today" {
+  const run = effectiveLocalRun(latest.localRun, local.runGeneration);
+  const noticeFor = messages.some((m) => isChatNoticeRow(m) && m.replyTo === latest.id);
+  if (run !== undefined) {
+    // Shown beside a row a restart may have folded (part C, R4).
+    if (run.reason === "interrupted") return { kind: "local-interrupted" };
+    if (run.status === "running") {
+      // Not judgeable (the run id is not known) and past the deadline: the
+      // row can no longer say it is running.
+      if (local.runGeneration === null && now - latest.timestamp > LOCAL_RUN_UNJUDGED_MAX_MS) {
+        return null;
+      }
+      return { kind: "local-working" };
+    }
+    if (run.status === "replied") return null;
+    // Stopped: a reply row for the message (the local model's partial one,
+    // or a Claude's `tandem_reply` naming it after a switch back) or a notice
+    // speaks if present. A superseded acknowledgement (#2358) answers nothing.
+    const replyFor = messages.some(
+      (m) =>
+        m.author === "claude" &&
+        !isChatNoticeRow(m) &&
+        m.superseded !== true &&
+        (m.id === run.replyId || m.replyTo === latest.id),
+    );
+    if (replyFor || noticeFor) return null;
+    return { kind: "local-stopped" };
+  }
+  // No `localRun`: A1's no-document and no-local-model notices write none.
+  if (noticeFor) return null;
+  // The local model never stamps a user row: either stamp means a Claude has it.
+  if (latest.read || latest.delivered === true) return "today";
+  if (local.sentLocal.has(latest.id) && local.readKnownLocal && !local.aiOff) {
+    return { kind: "local-sent" };
+  }
+  return "today";
+}
+
 /** One line per state; the visible row and the screen-reader announcement both
  * read it, so the two cannot drift. Only "waiting" adds anything (its elapsed time). */
 const PICKUP_TEXT = {
   waiting: "Sent · waiting for your AI to pick it up",
   received: "Your AI has your message",
   working: "Your AI is working on it",
+  "local-interrupted": "Tandem restarted while your local model was working on this.",
+  "local-working": "Your local model is working on this…",
+  "local-stopped": "Your local model stopped without answering.",
+  "local-sent": "Sent to your local model",
 } as const satisfies Record<ChatPickup["kind"], string>;
+
+/** Is this one of the local model's rows (#1123 part B)? */
+export function isLocalPickup(pickup: ChatPickup | null): boolean {
+  return pickup !== null && pickup.kind.startsWith("local-");
+}
 
 /** The latest message has waited past the delivery-stall threshold: the row
  * reads "still waiting", and the Claude Code offer may show beside it. */
