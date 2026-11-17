@@ -182,6 +182,7 @@ describe("the send-time toast waits for the send's own read (#2433 M1)", () => {
       /chip: aiReadiness\.chip,/,
       /pushDelivery: aiReadiness\.pushDelivery,/,
       /startingForMessage: viaKey === "chat" && chatResumeState\.pending,/,
+      /via: "chat",/,
       /localPeriod: localPeriodAfterRead,?/,
     ]) {
       expect(secondArg).toMatch(input);
