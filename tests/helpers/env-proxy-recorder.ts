@@ -16,9 +16,10 @@ import { connect as netConnect } from "node:net";
  */
 
 /**
- * Node's environment proxy exists from 24.5 and was backported to 22.21; 23.x
- * and 24.0–24.4 ignore the variable, so the control would fail there rather
- * than prove anything.
+ * Run only on the release lines where Node's documentation lists both
+ * `NODE_USE_ENV_PROXY` and `--use-env-proxy` (22.21 and later on 22, 24.5 and
+ * later). Other lines may lack one of the two, so a control or the
+ * `NODE_OPTIONS` case could fail there rather than prove anything; they skip.
  */
 export function nodeHonoursEnvProxy(): boolean {
   const [maj = 0, min = 0] = process.versions.node.split(".").map(Number);

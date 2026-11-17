@@ -112,7 +112,8 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     const { base } = await listen((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(sse("first"));
-      // then stall: no more frames, no end
+      // then stall: no more frames, no end. The 2 s budget covers connect,
+      // headers and this first frame even on a loaded machine.
     });
     const deltas: string[] = [];
     // A caller signal that never fires, so `AbortSignal.any` is on the path.
@@ -121,7 +122,7 @@ describe("the local-model client on undici (#1123, #2422)", () => {
       config: config(base),
       messages: [],
       tools: [],
-      timeoutMs: 300,
+      timeoutMs: 2_000,
       signal: caller.signal,
       onContentDelta: (d) => deltas.push(d),
     }).catch((e: unknown) => e);
@@ -130,7 +131,7 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     expect((err as Error).name).toBe("AbortError");
 
     const r = await loop(base, {
-      timeoutMs: 300,
+      timeoutMs: 2_000,
       signal: new AbortController().signal,
       onContentDelta: () => {},
     });

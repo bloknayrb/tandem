@@ -50,8 +50,9 @@ import { describe, expect, it } from "vitest";
  *   destructuring with a type annotation, cast or parentheses
  *   (`const { fetch: f }: Window = globalThis`, `= (globalThis)`), or
  *   `createRequire(…)("node:http")`;
- * - code hidden by the comment strip: a `/*` inside a string or regex literal
- *   removes everything up to the next `*\/` (none in these directories today).
+ * - code the comment scanner misreads: it keeps strings, templates and regex
+ *   literals, and tells a regex from division by the token before the `/`;
+ *   a `/` that heuristic misjudges could hide code.
  * The real-process tests (`tests/cli/loopback-no-proxy.test.ts`,
  * `tests/server/local-model/loopback-no-proxy.test.ts`) cover the programs'
  * actual behaviour.
@@ -123,12 +124,136 @@ function walk(dir: string): string[] {
   });
 }
 
+/**
+ * Remove comments, keeping strings, template literals and regex literals
+ * intact. A regex strip cannot do this: a `/*` inside a `//` comment (e.g.
+ * "shared/*") or inside a string would open a fake block comment and hide
+ * the live code up to the next `*\/`. Line breaks inside a removed block are
+ * kept, so the line a hit is reported on stays meaningful.
+ *
+ * A `/` starts a regex literal when the last significant character before it
+ * cannot end an expression (an operator, an opening bracket, `,`, `;`, `:`,
+ * the start of the file) or the word before it is a keyword such as `return`;
+ * otherwise it is division. That heuristic is the scanner's one judgment call.
+ */
+function stripComments(src: string): string {
+  let out = "";
+  let i = 0;
+  let last = ""; // last significant code character emitted
+  let lastWord = "";
+  // Template nesting: each entry is the `{` depth at which a `${` resumes
+  // the enclosing template.
+  const templates: number[] = [];
+  let depth = 0;
+  const regexOk = () =>
+    last === "" ||
+    "([{,;:=!&|?+-*%<>~^".includes(last) ||
+    /^(?:return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await)$/.test(lastWord);
+  const readTemplate = () => {
+    // at the char after a backtick (or after the `}` closing a `${`)
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "\\") {
+        out += src.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (c === "`") {
+        out += c;
+        i += 1;
+        last = "`";
+        return;
+      }
+      if (c === "$" && src[i + 1] === "{") {
+        out += "${";
+        i += 2;
+        templates.push(depth);
+        depth += 1;
+        last = "{";
+        return;
+      }
+      out += c;
+      i += 1;
+    }
+  };
+  while (i < src.length) {
+    const c = src[i] as string;
+    const n = src[i + 1];
+    if (c === "/" && n === "/") {
+      while (i < src.length && src[i] !== "\n") i += 1;
+      continue;
+    }
+    if (c === "/" && n === "*") {
+      const end = src.indexOf("*/", i + 2);
+      const body = src.slice(i, end === -1 ? src.length : end + 2);
+      out += body.replace(/[^\n]/g, "");
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c && src[j] !== "\n") j += src[j] === "\\" ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+      last = c;
+      lastWord = "";
+      continue;
+    }
+    if (c === "`") {
+      out += c;
+      i += 1;
+      readTemplate();
+      lastWord = "";
+      continue;
+    }
+    if (c === "/" && regexOk()) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < src.length && src[j] !== "\n") {
+        const d = src[j];
+        if (d === "\\") {
+          j += 2;
+          continue;
+        }
+        if (d === "[") inClass = true;
+        else if (d === "]") inClass = false;
+        else if (d === "/" && !inClass) break;
+        j += 1;
+      }
+      out += src.slice(i, j + 1);
+      i = j + 1;
+      last = "/";
+      lastWord = "";
+      continue;
+    }
+    if (c === "{") depth += 1;
+    if (c === "}") {
+      depth -= 1;
+      if (templates.length > 0 && templates[templates.length - 1] === depth) {
+        templates.pop();
+        out += c;
+        i += 1;
+        readTemplate();
+        continue;
+      }
+    }
+    out += c;
+    i += 1;
+    if (/\w|\$/.test(c)) {
+      lastWord = /\w|\$/.test(last) ? lastWord + c : c;
+      last = c;
+    } else if (!/\s/.test(c)) {
+      last = c;
+      lastWord = "";
+    }
+  }
+  return out;
+}
+
 /** Comments out, `typeof fetch` neutralised, type-only imports/re-exports erased. */
 function strip(raw: string): string {
   return (
-    raw
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
+    stripComments(raw)
       .replace(/typeof\s+fetch\b/g, "typeof _")
       // `import type X from "m"`, `import type { A, B } from "m"` (any line
       // breaks), `export type { A } from "m"`. `[^;"']*` cannot cross a string
@@ -260,6 +385,20 @@ describe("the scan's patterns catch the forms they claim to (controls)", () => {
       expect(caught(UNDICI_IMPORT, src)).toBe(true);
     },
   );
+
+  it.each([
+    ["a /* inside a line comment", "// see shared/*\nconst r = await fetch(url);\n// end */"],
+    ["a /* inside a string", 'const g = "a/*b";\nconst r = await fetch(url);\nconst h = "*/";'],
+    ["a /* inside a regex", "const re = /[/*]/;\nconst r = await fetch(url);\nconst x = 1; /* */"],
+    ["a // inside a string", 'const u = "http://x";\nconst r = await fetch(u);'],
+    ["code inside a template ${}", "const s = `a${await fetch(u)}b`;"],
+  ])("the comment scanner does not hide live code: %s", (_label, src) => {
+    expect(caught(BARE_FETCH, src)).toBe(true);
+  });
+
+  it("the comment scanner does remove real comments", () => {
+    expect(caught(BARE_FETCH, "// fetch(url)\n/* fetch(url) */\nconst x = 1;")).toBe(false);
+  });
 
   it.each([
     'import type { Server } from "node:http";',
