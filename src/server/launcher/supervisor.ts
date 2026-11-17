@@ -368,6 +368,10 @@ interface SupervisorOpts {
   /** Test-only: the run files' 32-hex name suffix, so a test can plant a file
    * or a link at the name. Never passed by `index.ts`. */
   runFileNameSuffix?: (kind: "mcp" | "settings") => string;
+  /** Test-only override for `BIND_WINDOW_MS` (#2358 PR 3b-1). Ownership on only. */
+  bindWindowMs?: number;
+  /** Test-only override for `PRESENCE_SETTLE_MS` (#2358 PR 3b-1). Ownership on only. */
+  presenceSettleMs?: number;
 }
 
 /**
@@ -383,6 +387,74 @@ interface SpawnRun {
   readonly args: readonly string[];
   discard(): void;
 }
+
+/** Why a spawn was torn down (#2358 PR 3b-1, Terms). The first set wins. */
+type TeardownCause = "deliberate" | "sign-in" | "fault" | "child-error";
+
+/** Why the latest spawn was judged failed to bind (R1.6). */
+export type FailedBindReason = "window-expired" | "no-run-files" | "torn-down-unbound";
+
+/**
+ * One spawn's run state for presence (#2358 PR 3b-1, R1.1; Rulings C, F4).
+ * Created flag on at `child = spawned`, numbered in order; 3a's bind state and
+ * `SpawnRun` stay as they are. Outlives 3a's `endSpawn`: the judgement never
+ * reads the bind state, which a spawn's `discard` has already ended by the time
+ * its exit handler runs.
+ */
+interface SpawnRecord {
+  readonly n: number;
+  /** The spawn has run files, so it can bind at all. */
+  readonly hasRunFiles: boolean;
+  /** Its first `confirmBind` landed (latched in `onFirstBind`). */
+  everBound: boolean;
+  /** A turn was written to it, so its bind window is running or ran. */
+  windowStarted: boolean;
+  cause: TeardownCause | undefined;
+  windowTimer: NodeJS.Timeout | null;
+  /** Its `teardownTurnDelivery` ran. */
+  tornDown: boolean;
+  /** It was judged failed to bind (at most once). */
+  judged: boolean;
+}
+
+/**
+ * The supervisor's presence seam for Tandem's Claude (#2358 PR 3b-1, R2.7),
+ * so 3b-2 does not reopen this code. Nothing subscribes outside tests until
+ * 3b-2. Flag off every read is false and nothing is ever announced.
+ */
+export interface TandemPresenceSeam {
+  /** The value last announced. */
+  isPresent(): boolean;
+  /** Each announced change of presence. Returns an unsubscribe fn. */
+  subscribe(cb: (present: boolean) => void): () => void;
+  /** Each run start (the latest spawn's first bind), after presence. */
+  onRunStart(cb: () => void): () => void;
+  /**
+   * Each failed-bind judgement of the latest spawn, with its reason.
+   *
+   * **Called synchronously from the judging site**: inside the child's exit
+   * handler (site a), or just before a stop releases the spawn's turn delivery
+   * (site b), while `activeTurnDelivery` may still point at the spawn being
+   * torn down. A subscriber that writes a turn, starts or wakes anything
+   * (3b-2's failed-bind wake, design §8.7) must defer that work (a microtask
+   * or later), or it writes into the dying spawn. Kept synchronous so the
+   * failed-bind event precedes the presence announcement it causes.
+   */
+  onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
+  /** The live `standby !== "off"` read (design §8.1's widening arm). */
+  standbyNotOff(): boolean;
+  /** Test-only diagnostics. */
+  diagnosticsForTests(): { recomputes: number; settlePending: boolean; lastRunBound: boolean };
+}
+
+/** How long a spawn may go from its first turn to its first bind (#2358 PR
+ *  3b-1, R1.2; kept at 60 s by the reviewing session, 2026-11-17). Measured
+ *  2026-11-17 (Windows 11, Claude Code 2.1.325, one sample): a fresh launcher
+ *  child bound 25,974 ms after spawn. */
+const BIND_WINDOW_MS = 60_000;
+/** How long a settle-class loss of presence must hold before it is announced
+ *  (#2358 PR 3b-1, R2.3, R2.4). */
+const PRESENCE_SETTLE_MS = 5_000;
 
 /** How long `stop()` waits for the run files' deletion (#2358 PR 3a). */
 const RUN_FILE_DELETE_WAIT_MS = 1_000;
@@ -716,6 +788,11 @@ export interface Supervisor {
   /** The settings this supervisor last read or saved successfully, or null
    * before any. What it is acting on while the file cannot be read. */
   appliedSettings(): LauncherSettings | null;
+  /** Tandem's Claude's presence, computed and consumed by nothing yet (#2358
+   * PR 3b-1, R2.7). Ownership on only; flag off every read is false.
+   * Optional so the test fakes of this interface need not implement it; the
+   * real supervisor always has it. */
+  tandemPresence?(): TandemPresenceSeam;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -1202,6 +1279,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const otherAiAttached = opts.otherAiAttached ?? (() => false);
   const greetingMarker = opts.greeting ?? { isOwed: () => false, markDone: async () => {} };
   const greetingWindowMs = opts.greetingWindowMs ?? GREETING_REPLY_WINDOW_MS;
+  const bindWindowMs = opts.bindWindowMs ?? BIND_WINDOW_MS;
+  const presenceSettleMs = opts.presenceSettleMs ?? PRESENCE_SETTLE_MS;
   /** Guard 1 of #1123 A2, read live; a throw reads as not held. */
   function localHeld(): boolean {
     try {
@@ -1317,6 +1396,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     setIdlePolicy: (ms: number | null) => void;
     /** Drop this spawn's owed wake (#1123 A2: the local period's switches). */
     clearOwedWakes: () => void;
+    /** This spawn's run-state record (#2358 PR 3b-1), or null flag off. */
+    record: SpawnRecord | null;
   } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
@@ -1570,6 +1651,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   function setStandby(next: LauncherStandby | undefined): void {
     standby = next;
+    markPresenceDirty();
     standbyByLocalPeriod = false;
     if (next === undefined) {
       standbyUnsubscribe?.();
@@ -1680,6 +1762,211 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       () => undefined,
     );
     return next;
+  }
+
+  // --- Tandem's Claude's run state (#2358 PR 3b-1, ships dark) -------------
+  //
+  // Computed here and consumed by nothing yet (3b-2 is its first reader).
+  // Every write below is flag-on only: flag off no spawn record exists, no
+  // timer is armed, nothing is recomputed, announced or logged, and each
+  // setter is exactly its assignment.
+
+  /** One writer per field presence reads (R2.9, pinned in
+   *  `ownership-source-pins.test.ts`): each is assigned only inside its setter,
+   *  except `status()`'s `cli-unusable` clear (Ruling H). */
+  function setLastError(next: LauncherErrorCode | undefined): void {
+    lastError = next;
+    markPresenceDirty();
+  }
+  function setBreakerTripped(next: boolean): void {
+    breakerTripped = next;
+    markPresenceDirty();
+  }
+  function setConfigured(next: boolean): void {
+    configured = next;
+    markPresenceDirty();
+  }
+  function setRestartTimer(next: NodeJS.Timeout | null): void {
+    restartTimer = next;
+    markPresenceDirty();
+  }
+  function setLaunching(next: number): void {
+    launching = next;
+    markPresenceDirty();
+  }
+  function setLastRunBound(next: boolean): void {
+    lastRunBound = next;
+    markPresenceDirty();
+  }
+
+  /** The latest spawn's run started (its first bind, R2.8) and it has not been
+   *  judged failed to bind since (R1.5). False at boot. Nothing else moves it:
+   *  Off, idle-stop, a crash-resume and a relaunch keep it (decision 7). */
+  let lastRunBound = false;
+  /** Every spawn that reached `child = spawned` (flag on), numbered in order. */
+  let spawnRecordSeq = 0;
+  /** The spawn record with the highest number: the latest spawn (Terms). */
+  let latestRecord: SpawnRecord | null = null;
+  /** 3a's spawn serial (`run.bind.serial`) → that spawn's record, so
+   *  `onFirstBind` (created before the record) can reach it. Filled at
+   *  `child = spawned`, dropped at the spawn's teardown. */
+  const recordBySerial = new Map<number, SpawnRecord>();
+  /** Amendment 3 (Rulings B, F3): set by a recompute that finds presence
+   *  false because the breaker is tripped or an error stands with no restart
+   *  underway; cleared only at a run start. */
+  let presenceErrorLatch = false;
+  /** The last value announced to subscribers (R2.7's `isPresent`). */
+  let announcedPresent = false;
+  let presenceRecomputeQueued = false;
+  /** The 5-second settle (R2.4), or null. */
+  let settleTimer: NodeJS.Timeout | null = null;
+  /** The `needs-login` trip asked for its not-present at once (amendment 2,
+   *  identified by its site). Read and cleared by the next recompute. */
+  let tripAtOnce = false;
+  /** Raised by `stop()` (shutdown), lowered only by a `start()` that began
+   *  after the latest `stop()` (R2.3's shutdown rule). */
+  let presenceSuppressed = false;
+  let presenceRecomputes = 0;
+  const presenceListeners = new Set<(present: boolean) => void>();
+  const runStartListeners = new Set<() => void>();
+  const failedBindListeners = new Set<(reason: FailedBindReason) => void>();
+
+  /** A field presence reads was written: recompute once per synchronous run
+   *  (R2.3). Flag off: nothing. */
+  function markPresenceDirty(): void {
+    if (!ownershipEnabled() || presenceRecomputeQueued) return;
+    presenceRecomputeQueued = true;
+    queueMicrotask(() => {
+      presenceRecomputeQueued = false;
+      recomputePresence(false);
+    });
+  }
+
+  function cancelSettle(): void {
+    if (settleTimer !== null) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+  }
+
+  /** Call each listener in its own try/catch (R2.5): a throwing subscriber
+   *  cannot stop the others or reach the event loop. */
+  function notifyEach<T extends unknown[]>(
+    listeners: Iterable<(...args: T) => void>,
+    what: string,
+    ...args: T
+  ): void {
+    for (const listener of [...listeners]) {
+      try {
+        listener(...args);
+      } catch (err) {
+        // Name and message only: a subscriber's error could carry ownership
+        // state into the log, which redacts only owner handles.
+        const brief = err instanceof Error ? `${err.name}: ${err.message}` : typeof err;
+        console.error(`[Launcher] A ${what} subscriber threw (ignored): ${brief}`);
+      }
+    }
+  }
+
+  /**
+   * Recompute presence (R2.1) and announce a transition with the timing R2.3
+   * gives its predicate. `atOnce` is the run start's synchronous recompute and
+   * the settle timer's re-evaluation. Total (R2.5).
+   */
+  function recomputePresence(atOnce: boolean): void {
+    if (!ownershipEnabled()) return;
+    try {
+      presenceRecomputes += 1;
+      const bound = lastRunBound; // (i)
+      const isConfigured = configured === true; // (ii)
+      const notOff = standby !== "off"; // (iii)
+      const noBreaker = !breakerTripped; // (iv)
+      const noError = lastError === undefined || restartTimer !== null || launching > 0; // (v)
+      if (!noBreaker || !noError) presenceErrorLatch = true;
+      const present =
+        bound && isConfigured && notOff && noBreaker && noError && !presenceErrorLatch;
+      const trip = tripAtOnce;
+      tripAtOnce = false;
+      if (presenceSuppressed) {
+        cancelSettle();
+        return;
+      }
+      if (present === announcedPresent) {
+        // A change that reverted before it was announced announces nothing.
+        cancelSettle();
+        return;
+      }
+      if (!present && !atOnce && !trip && bound && notOff) {
+        // Only (ii), (iv), (v) or the latch turned it: the settle. A settle
+        // already pending keeps its start.
+        if (settleTimer === null) {
+          settleTimer = setTimeout(() => {
+            settleTimer = null;
+            recomputePresence(true);
+          }, presenceSettleMs);
+          settleTimer.unref?.();
+        }
+        return;
+      }
+      cancelSettle();
+      announcedPresent = present;
+      console.error(
+        `[Launcher] Tandem's Claude is ${present ? "present" : "not present"} (ownership)`,
+      );
+      notifyEach(presenceListeners, "presence", present);
+    } catch (err) {
+      console.error("[Launcher] Presence recompute failed (ignored):", err);
+    }
+  }
+
+  /** The run start (R2.8), at the deferred bind point: after `confirmBind` has
+   *  returned and the transport has recorded its bind. Conditions read here. */
+  function deferredRunStart(rec: SpawnRecord): void {
+    try {
+      if (rec !== latestRecord || rec.tornDown || rec.cause !== undefined) return;
+      setLastRunBound(true);
+      presenceErrorLatch = false;
+      console.error("[Launcher] Tandem's Claude's run started: its spawn bound (ownership)");
+      recomputePresence(true);
+      if (!presenceSuppressed) notifyEach(runStartListeners, "run-start");
+    } catch (err) {
+      console.error("[Launcher] Run start failed (ignored):", err);
+    }
+  }
+
+  /** Set a spawn's teardown cause; the first cause set wins (Ruling F). */
+  function setCause(rec: SpawnRecord | null | undefined, cause: TeardownCause): void {
+    if (rec && rec.cause === undefined) rec.cause = cause;
+  }
+
+  /** May this spawn be judged failed to bind (R1.4)? */
+  function judgeable(rec: SpawnRecord): boolean {
+    return (
+      rec === latestRecord &&
+      !rec.everBound &&
+      rec.windowStarted &&
+      !rec.judged &&
+      (rec.cause === undefined || rec.cause === "fault")
+    );
+  }
+
+  /** The latest spawn failed to bind (R1.4, R1.5, R1.6). */
+  function failBind(rec: SpawnRecord, reason: FailedBindReason): void {
+    rec.judged = true;
+    try {
+      setLastRunBound(false);
+      console.error(`[Launcher] Tandem's Claude's spawn did not bind: ${reason} (ownership)`);
+      if (!presenceSuppressed) notifyEach(failedBindListeners, "failed-bind", reason);
+    } catch (err) {
+      console.error("[Launcher] Failed-bind judgement failed (ignored):", err);
+    }
+  }
+
+  /** Site (b) of R1.4: a caller of `releaseTurnDelivery` that tears the
+   *  active spawn down before its exit. Only a record not yet torn down. */
+  function judgeActiveAtRelease(): void {
+    const rec = activeTurnDelivery?.record;
+    if (rec && !rec.tornDown && judgeable(rec)) failBind(rec, "torn-down-unbound");
   }
 
   async function readIntegration(): Promise<ClaudeCodeIntegration | null> {
@@ -2006,7 +2293,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * Claude's clean status alone.
    */
   function recordCliUnusable(where: string): void {
-    if (child === null) lastError = "cli-unusable";
+    if (child === null) setLastError("cli-unusable");
     console.error(
       `[Launcher] ${where}: Claude Code was not found (PATH, ~/.local/bin, TANDEM_CLAUDE_CMD) — not spawning`,
     );
@@ -2189,6 +2476,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // Probe 11: the file is read only at start, so it goes at first bind.
         onFirstBind: () => {
           if (mcpConfigPath) deleteRunFileTracked(mcpConfigPath);
+          // #2358 PR 3b-1, R2.8: latch "ever bound" here; the run start is
+          // decided and announced at the deferred bind point, a microtask that
+          // runs once `confirmBind` has returned and `noteOwnerHandleBind`
+          // has recorded the transport's bind.
+          const rec = bind ? recordBySerial.get(bind.serial) : undefined;
+          if (rec) {
+            rec.everBound = true;
+            queueMicrotask(() => deferredRunStart(rec));
+          }
         },
       });
       const dir = launcherDirFor(opts.integrationsBase);
@@ -2248,7 +2544,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
     const integration = await readIntegration();
-    configured = integration !== null;
+    setConfigured(integration !== null);
     if (!integration) return null;
 
     const { cwd, fromOverride, workingDirectoryIgnored } = resolveCwd(integration, cwdOverride);
@@ -2314,7 +2610,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       reaper = reaperPath();
     } catch (err) {
       run?.discard();
-      lastError = "binary-not-found";
+      setLastError("binary-not-found");
       throw err;
     }
     const claudeArgs = buildClaudeArgs(plan, run ?? undefined);
@@ -2354,6 +2650,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       spawned.once("exit", run.discard);
       spawned.once("error", run.discard);
     }
+    // This spawn's run-state record (#2358 PR 3b-1, Rulings C, F4): flag on
+    // only, created here and nowhere earlier, so a spawn that threw or was held
+    // before this point has none. The latest spawn is the highest number.
+    let record: SpawnRecord | null = null;
+    if (ownershipEnabled()) {
+      record = {
+        n: ++spawnRecordSeq,
+        hasRunFiles: run !== null,
+        everBound: false,
+        windowStarted: false,
+        cause: undefined,
+        windowTimer: null,
+        tornDown: false,
+        judged: false,
+      };
+      latestRecord = record;
+      if (run) recordBySerial.set(run.bind.serial, record);
+    }
 
     // In `spawnOnce`, TWO bare statements at the same indentation as
     // `child = spawned;`. NEVER the single-line
@@ -2379,6 +2693,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     let killedForDelivery = false;
     function markDeliveryKill(): void {
       killedForDelivery = true;
+      // A fault kill (#2358 PR 3b-1, R1.3): the stdin-gone and receipt kills.
+      setCause(record, "fault");
       // First kill only: the handler may run more than once for one child.
       if (child === spawned && deliveryKillAt === undefined) deliveryKillAt = Date.now();
     }
@@ -2388,7 +2704,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // A spawn that reached this point supersedes whatever went wrong before it;
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
-    lastError = undefined;
+    setLastError(undefined);
     lastRefusal = null;
     deliveryKillAt = undefined;
     setStandby(undefined);
@@ -2563,6 +2879,27 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       onStdinGone(RECEIPT_TIMEOUT);
     }
 
+    /**
+     * The bind window (#2358 PR 3b-1, R1.2; Rulings D, E): started by the first
+     * turn written to this spawn, inside the region its teardown cancels.
+     * Flag off there is no record, so nothing is armed.
+     */
+    function armBindWindow(): void {
+      const rec = record;
+      if (rec === null || rec.windowStarted || tornDown) return;
+      rec.windowStarted = true;
+      rec.windowTimer = setTimeout(() => {
+        rec.windowTimer = null;
+        try {
+          if (rec.cause !== undefined || rec.tornDown || !judgeable(rec)) return;
+          failBind(rec, rec.hasRunFiles ? "window-expired" : "no-run-files");
+        } catch (err) {
+          console.error("[Launcher] Bind window check failed (ignored):", err);
+        }
+      }, bindWindowMs);
+      rec.windowTimer.unref?.();
+    }
+
     /** Write one user turn. Targets `spawned`, not `child`.
      *
      * Returns whether the write was even attempted. Callers must not treat a
@@ -2591,6 +2928,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error("[Launcher] Claude stdin not writable — turn not delivered");
         return false;
       }
+      armBindWindow();
       // Receipt-check only a write to a child known to be idle. `turnInFlight`
       // blocks writes until a `result`, so a write can find a turn unresolved
       // only after the latch-expiry flush: the flush itself, or any write after
@@ -2688,6 +3026,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // decision must not be re-read after `start()` lowers `userStopped`.
       if (!tornDown) {
         tornDown = true;
+        if (record) {
+          record.tornDown = true;
+          if (record.windowTimer) {
+            clearTimeout(record.windowTimer);
+            record.windowTimer = null;
+          }
+          if (run) recordBySerial.delete(run.bind.serial);
+        }
         carryOwedWake = !userStopped;
         stopCountAtTeardown = userStopCount;
         // Hand an undelivered wake to the next spawn rather than dropping it —
@@ -2751,6 +3097,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       clearOwedWakes: () => {
         pendingWake = false;
       },
+      record,
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
@@ -2915,8 +3262,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           NOT_SIGNED_IN_RESULT.test(parsed.result)
         ) {
           if (child === spawned) {
-            lastError = "needs-login";
-            breakerTripped = true;
+            // The sign-in trip (#2358 PR 3b-1, amendment 2): its cause first,
+            // and its not-present at once, identified by this site.
+            setCause(record, "sign-in");
+            if (ownershipEnabled()) tripAtOnce = true;
+            setLastError("needs-login");
+            setBreakerTripped(true);
             loginRecheckOwed = true;
             persistLoginRecheck(plan.sessionId, true);
             console.error(
@@ -2986,6 +3337,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     spawned.stderr?.on("end", () => stderrFramer.flush());
 
     spawned.on("error", (err: NodeJS.ErrnoException) => {
+      // A child `error` is not a failed bind (#2358 PR 3b-1, Ruling O).
+      setCause(record, "child-error");
       teardownTurnDelivery();
       const wasCurrent = child === spawned;
       // CRITICAL: clear child state so status() doesn't lie about being
@@ -3029,13 +3382,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return;
       }
       if (err.code === "ENOENT") {
-        lastError = "binary-not-found";
-        breakerTripped = true;
+        setLastError("binary-not-found");
+        setBreakerTripped(true);
         console.error(
           `[Launcher] Reaper or Claude binary not found (${err.message}). Install Claude Code: npm i -g @anthropic-ai/claude-code`,
         );
       } else {
-        lastError = "spawn-failed";
+        setLastError("spawn-failed");
         console.error("[Launcher] Reaper spawn error:", err);
         if (!stopRequested) scheduleRestart();
       }
@@ -3071,6 +3424,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           clearSavedSession();
         }
       }
+      // Judging site (a) (#2358 PR 3b-1, R1.4): here, with the exit code in
+      // hand. The #1169 shape (a resumed, unconfirmed spawn exiting non-zero)
+      // is never judged; its record is torn down now, so no later release
+      // judges it either.
+      if (
+        record !== null &&
+        judgeable(record) &&
+        !shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })
+      ) {
+        try {
+          failBind(record, "torn-down-unbound");
+        } catch (err) {
+          console.error("[Launcher] Bind judgement failed (ignored):", err);
+        }
+      }
 
       // Only the CURRENT spawn's exit may restart anything. A superseded one has
       // already been replaced: `stopInternal` does not wait for a handle that is
@@ -3085,12 +3453,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // `restartIndex` resets once a child has lived 30 s — so it has its own
       // count, with no time window.
       if (killedForDelivery && ++deliveryKillStreak >= DELIVERY_KILL_LIMIT) {
-        breakerTripped = true;
+        setBreakerTripped(true);
         // Same guarded, fail-open probe as `scheduleRestart`'s trip: a missing
         // CLI (exit 127) can have its stdin error land before Node records the
         // exit, and that user needs Setup, not Restart.
         const cliUsable = probeCliUsableFailOpen("a wake-delivery failure");
-        lastError = cliUsable ? "wake-delivery-failed" : "cli-unusable";
+        setLastError(cliUsable ? "wake-delivery-failed" : "cli-unusable");
         console.error(
           cliUsable
             ? `[Launcher] Claude was ended ${deliveryKillStreak} times in a row because it stopped accepting turns — giving up. Restart Claude Code to retry.`
@@ -3183,7 +3551,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // breaker branch below returns without setting a new one;
       // `restartPending` already ignores the timer once the breaker trips, so
       // this is hygiene, not a fix (#2180).
-      restartTimer = null;
+      setRestartTimer(null);
     }
 
     // Circuit breaker: drop attempts older than the window, then check count.
@@ -3191,7 +3559,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     recentAttempts = recentAttempts.filter((t) => now - t < CIRCUIT_BREAKER_WINDOW_MS);
     recentAttempts.push(now);
     if (recentAttempts.length > CIRCUIT_BREAKER_MAX_ATTEMPTS) {
-      breakerTripped = true;
+      setBreakerTripped(true);
       // Disambiguate WHY it crash-looped, because the two causes have opposite
       // remedies and the UI routes off this one field. A missing or unstartable
       // CLI needs the integration wizard; anything else (stale --resume session,
@@ -3219,7 +3587,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // alarming and less recoverable of the two claims to make wrongly. This
       // is exactly the pre-change behaviour.
       const cliUsable = probeCliUsableFailOpen("a plain crash loop");
-      lastError = cliUsable ? "circuit-open" : "cli-unusable";
+      setLastError(cliUsable ? "circuit-open" : "cli-unusable");
       console.error(
         `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. ${
           cliUsable
@@ -3233,16 +3601,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const delay = restartBackoffs[Math.min(restartIndex, restartBackoffs.length - 1)];
     restartIndex++;
     console.error(`[Launcher] Restarting Claude in ${delay}ms (attempt ${restartIndex})`);
-    restartTimer = setTimeout(() => {
-      restartTimer = null;
-      // Nothing awaits this promise, so a rejection here is an
-      // unhandledRejection, and `index.ts` exits the whole server on one
-      // (#2125). Caught at this site rather than inside `startInternal`
-      // because `start()`'s caller relies on the throw to report a failed boot.
-      // The epoch is read at fire time; a stop before then cleared this timer.
-      const epoch = stopEpoch;
-      startInternal(epoch).catch((err: unknown) => onRestartFailed(err, epoch));
-    }, delay);
+    setRestartTimer(
+      setTimeout(() => {
+        setRestartTimer(null);
+        // Nothing awaits this promise, so a rejection here is an
+        // unhandledRejection, and `index.ts` exits the whole server on one
+        // (#2125). Caught at this site rather than inside `startInternal`
+        // because `start()`'s caller relies on the throw to report a failed boot.
+        // The epoch is read at fire time; a stop before then cleared this timer.
+        const epoch = stopEpoch;
+        startInternal(epoch).catch((err: unknown) => onRestartFailed(err, epoch));
+      }, delay),
+    );
   }
 
   /** A crash restart's `buildPlan` threw: `integrations.json` could not be
@@ -3280,7 +3650,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // A future schema, a file that fails validation, or an errno a retry
     // cannot fix (EISDIR, ENOTDIR…): the user's Restart awaits `buildPlan` and
     // shows the real message.
-    lastError = "spawn-failed";
+    setLastError("spawn-failed");
     console.error("[Launcher] Restart failed — staying down until Restart:", err);
   }
 
@@ -3295,11 +3665,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   ): Promise<void> {
     // Counted for `restartPending` (#2180). The restart timer nulls itself and
     // calls this synchronously, so no status poll lands between the two.
-    launching++;
+    setLaunching(launching + 1);
     try {
       await planAndSpawn(epoch, known, kind);
     } finally {
-      launching--;
+      setLaunching(launching - 1);
     }
   }
 
@@ -3447,7 +3817,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // error handler's own code on an early spawn error), and no restart
       // already pending (an exit before `'spawn'` has scheduled one).
       if (child === null && lastError === undefined && restartTimer === null) {
-        lastError = "spawn-failed";
+        setLastError("spawn-failed");
       }
     }
   }
@@ -3474,56 +3844,68 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   async function start(): Promise<void> {
     shuttingDown = false;
+    // #2358 PR 3b-1, R2.3: only a start that began after the latest `stop()`
+    // lifts the presence suppression, on every return.
+    const stopsAtEntry = shutdownCount;
     return withLock(async () => {
-      if (child || breakerTripped) return;
-      // The settings read counts as launching, so a status poll during it
-      // reads "starting" rather than a plain stopped launcher with a Restart
-      // button (#2180). It is one small file, so that window is milliseconds.
-      let settings: LauncherSettings;
-      launching++;
       try {
-        settings = await readSettingsNow();
+        if (child || breakerTripped) return;
+        // The settings read counts as launching, so a status poll during it
+        // reads "starting" rather than a plain stopped launcher with a Restart
+        // button (#2180). It is one small file, so that window is milliseconds.
+        let settings: LauncherSettings;
+        setLaunching(launching + 1);
+        try {
+          settings = await readSettingsNow();
+        } finally {
+          setLaunching(launching - 1);
+        }
+        // Leftover run files from an earlier run (#2358 PR 3a, R1.9), before
+        // this supervisor's first spawn. Ownership on and store lock held only.
+        if (ownershipEnabled()) await sweepRunFilesOnce();
+        walkthroughHold = walkthroughOwedAtBoot();
+        // The walkthrough hold (#2198) is the on-click hold: the same standby, so
+        // a message sent meanwhile still starts Claude (#2196) and Start is one
+        // click away; the walkthrough's confirm is what releases it.
+        if (settings.startMode !== "auto" || walkthroughHold) {
+          // The boot hold (#2195). The standby is set BEFORE the plan read, so
+          // no poll lands on a plain stopped launcher in between; the plan still
+          // runs, for `configured` alone — a user with no integration yet reads
+          // as not-configured, and this standby decides their chip once the
+          // wizard writes one (`startAfterSetup`, which holds rather than
+          // starts while this standby is set).
+          holdInStandby(settings.startMode === "off" ? "off" : "awaiting-start");
+          if (settings.startMode !== "off") armGapWatch();
+          console.error(
+            settings.startMode === "off"
+              ? "[Launcher] Tandem's Claude is turned off — not starting it"
+              : settings.startMode === "on-click"
+                ? "[Launcher] Tandem's Claude is set to start on click — waiting for Start"
+                : "[Launcher] The v1.0 setup walkthrough is pending — Tandem's Claude waits for it",
+          );
+          await buildPlan();
+          return;
+        }
+        // Synchronous from the decrement above to the increment inside, so no
+        // poll lands between them; the settings travel along rather than being
+        // read a second time.
+        try {
+          await startInternal(stopEpoch, settings, "boot");
+        } catch (err) {
+          // A boot whose integrations read throws would otherwise leave the
+          // status route reading a clean stop (#2145). Recorded only with no
+          // child alive and no code already set, as in `recordStartThrow`;
+          // rethrown so `index.ts` still logs it.
+          if (child === null && lastError === undefined) setLastError("spawn-failed");
+          throw err;
+        }
       } finally {
-        launching--;
-      }
-      // Leftover run files from an earlier run (#2358 PR 3a, R1.9), before
-      // this supervisor's first spawn. Ownership on and store lock held only.
-      if (ownershipEnabled()) await sweepRunFilesOnce();
-      walkthroughHold = walkthroughOwedAtBoot();
-      // The walkthrough hold (#2198) is the on-click hold: the same standby, so
-      // a message sent meanwhile still starts Claude (#2196) and Start is one
-      // click away; the walkthrough's confirm is what releases it.
-      if (settings.startMode !== "auto" || walkthroughHold) {
-        // The boot hold (#2195). The standby is set BEFORE the plan read, so
-        // no poll lands on a plain stopped launcher in between; the plan still
-        // runs, for `configured` alone — a user with no integration yet reads
-        // as not-configured, and this standby decides their chip once the
-        // wizard writes one (`startAfterSetup`, which holds rather than
-        // starts while this standby is set).
-        holdInStandby(settings.startMode === "off" ? "off" : "awaiting-start");
-        if (settings.startMode !== "off") armGapWatch();
-        console.error(
-          settings.startMode === "off"
-            ? "[Launcher] Tandem's Claude is turned off — not starting it"
-            : settings.startMode === "on-click"
-              ? "[Launcher] Tandem's Claude is set to start on click — waiting for Start"
-              : "[Launcher] The v1.0 setup walkthrough is pending — Tandem's Claude waits for it",
-        );
-        await buildPlan();
-        return;
-      }
-      // Synchronous from the decrement above to the increment inside, so no
-      // poll lands between them; the settings travel along rather than being
-      // read a second time.
-      try {
-        await startInternal(stopEpoch, settings, "boot");
-      } catch (err) {
-        // A boot whose integrations read throws would otherwise leave the
-        // status route reading a clean stop (#2145). Recorded only with no
-        // child alive and no code already set, as in `recordStartThrow`;
-        // rethrown so `index.ts` still logs it.
-        if (child === null && lastError === undefined) lastError = "spawn-failed";
-        throw err;
+        if (ownershipEnabled() && presenceSuppressed && shutdownCount === stopsAtEntry) {
+          presenceSuppressed = false;
+          // One recompute, announcing the current value if it differs from
+          // the last one announced (R2.3): at once, not through the settle.
+          queueMicrotask(() => recomputePresence(true));
+        }
       }
     });
   }
@@ -3579,15 +3961,40 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Counted from BEFORE the stop (#2180): `kill()` marks the child killed at
     // once, so `status()` reads not-running for the whole SIGTERM wait, and
     // that is exactly the window that used to offer a Restart button.
-    launching++;
+    setLaunching(launching + 1);
     try {
       return await stopAndSpawn(cwdOverride, opts, clearSession, byMessage);
     } finally {
-      launching--;
+      setLaunching(launching - 1);
     }
   }
 
-  async function stopAndSpawn(
+  /**
+   * `stopAndSpawnSteps`, plus R2.6 of #2358 PR 3b-1 (Rulings O, F7), flag on
+   * only: a throw after its `stopInternal` (the settings or plan read, the
+   * spawn) records `spawn-failed` when nothing else was recorded, no child is
+   * alive and no restart is pending, so a stopped Tandem's Claude is never left
+   * reading as a clean stop (present, with no way back). Never overwrites a code
+   * already recorded (`unlicensed`, `binary-not-found`). Flag off this returns
+   * the steps' own promise, untouched.
+   */
+  function stopAndSpawn(
+    cwdOverride: string | undefined,
+    opts: RelocateOpts | undefined,
+    clearSession: boolean,
+    byMessage: boolean,
+  ): Promise<RespawnResult> {
+    const steps = stopAndSpawnSteps(cwdOverride, opts, clearSession, byMessage);
+    if (!ownershipEnabled()) return steps;
+    return steps.catch((err: unknown) => {
+      if (child === null && lastError === undefined && restartTimer === null) {
+        setLastError("spawn-failed");
+      }
+      throw err;
+    });
+  }
+
+  async function stopAndSpawnSteps(
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
     clearSession: boolean,
@@ -3615,6 +4022,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // `shuttingDown` raised, and a relaunch after an earlier `stop()` spawns,
     // as before.
     const shutdownsAtEntry = shutdownCount;
+    // #2358 PR 3b-1, R1.3: deliberate, set just before the stop.
+    setCause(activeTurnDelivery?.record, "deliberate");
     await stopInternal();
     // Resolved before the session is dropped (#2199 review): a Start fresh
     // that finds no Claude Code must not have deleted the conversation on its
@@ -3629,7 +4038,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // leaves the attempt history alone too, so a message start cannot reset
     // the count of a Claude that is crashing now (#2196).
     if (!byMessage) {
-      breakerTripped = false;
+      setBreakerTripped(false);
       recentAttempts = [];
       // The backoff restarts with the history (#2145): a user relaunch is a
       // fresh start, not one more rung of the crash loop. A message start
@@ -3743,7 +4152,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     stopRequested = true;
     if (restartTimer) {
       clearTimeout(restartTimer);
-      restartTimer = null;
+      setRestartTimer(null);
     }
     if (confirmTimer) {
       clearTimeout(confirmTimer);
@@ -3756,6 +4165,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // spawnOnce() throws when `child` is non-null, so a killed-but-retained
       // handle turns the very next relaunch()/startFresh() into a user-visible
       // "relaunch failed" for a supervisor that is, in fact, idle.
+      judgeActiveAtRelease();
       releaseTurnDelivery();
       child = null;
       currentCwd = undefined;
@@ -3796,12 +4206,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error(
           "[Launcher] Reaper failed to exit even after SIGKILL — abandoning handle, child may persist",
         );
-        lastError = "stop-failed";
+        setLastError("stop-failed");
       }
     }
     // Unconditional, and NOT left to the `exit` handler: the abandon branch
     // above reaches here with a process that is still alive and will never emit
     // `exit`, so this is the only release that runs on that path.
+    judgeActiveAtRelease();
     releaseTurnDelivery();
     child = null;
     currentCwd = undefined;
@@ -3853,16 +4264,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *     spawn that brings it back.
    */
   async function stopByChoice(kind: "off" | "idle"): Promise<void> {
-    lastError = undefined;
+    setLastError(undefined);
     if (kind === "off") {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
       // Turned off: nothing the local period held is owed a start (R5.1).
       heldStarts.clear();
+      // #2358 PR 3b-1 (R1.3, R1.4 site b): the cause first, then the judgement.
+      setCause(activeTurnDelivery?.record, "deliberate");
+      judgeActiveAtRelease();
       releaseTurnDelivery();
       disarmGapWatch();
     } else {
+      setCause(activeTurnDelivery?.record, "deliberate");
+      judgeActiveAtRelease();
       releaseTurnDelivery();
       armGapWatch();
     }
@@ -3927,6 +4343,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // this stop must not spawn a Claude that shutdown then SIGTERMs (#2196).
     shuttingDown = true;
     shutdownCount += 1;
+    // #2358 PR 3b-1, R2.3: nothing about presence is emitted from here until a
+    // `start()` that began after this stop ends.
+    if (ownershipEnabled()) {
+      presenceSuppressed = true;
+      cancelSettle();
+    }
     return withLock(async () => {
       userStopped = true;
       userStopCount += 1;
@@ -3937,6 +4359,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Shutdown: no message may start Claude after this (#2196); see
       // `shuttingDown`.
       setStandby(undefined);
+      setCause(activeTurnDelivery?.record, "deliberate");
       await stopInternal();
       // The stopped spawn's run files (#2358 PR 3a): flag off there are none,
       // so the wait below is skipped; flag on their deletions are awaited.
@@ -4159,7 +4582,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error(`[Launcher] ${label}: unlicensed`);
       return;
     }
-    if (child === null && lastError === undefined) lastError = "spawn-failed";
+    if (child === null && lastError === undefined) setLastError("spawn-failed");
     console.error(`[Launcher] ${label}:`, err);
   }
 
@@ -4181,7 +4604,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function recordLicenceRefusal(refusal: AiRefusal): void {
     lastRefusal = refusal;
     if (lastError !== undefined && lastError !== "unlicensed") return;
-    lastError = "unlicensed";
+    setLastError("unlicensed");
   }
 
   /** See `Supervisor.resumeAfterLicence`. Under the op lock, and idempotent. */
@@ -4201,7 +4624,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Cleared first: a start the gate refuses again re-records it, and a
       // spawn would clear it anyway.
       lastRefusal = null;
-      if (lastError === "unlicensed") lastError = undefined;
+      if (lastError === "unlicensed") setLastError(undefined);
       const epoch = stopEpoch;
       try {
         await startInternal(epoch, undefined, "licence");
@@ -4218,6 +4641,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return lastRefusal;
   }
 
+  /** R2.7 (#2358 PR 3b-1). Flag off every read is false and nothing fires. */
+  const presenceSeam: TandemPresenceSeam = {
+    isPresent: () => ownershipEnabled() && announcedPresent,
+    subscribe: (cb) => {
+      presenceListeners.add(cb);
+      return () => presenceListeners.delete(cb);
+    },
+    onRunStart: (cb) => {
+      runStartListeners.add(cb);
+      return () => runStartListeners.delete(cb);
+    },
+    onFailedBind: (cb) => {
+      failedBindListeners.add(cb);
+      return () => failedBindListeners.delete(cb);
+    },
+    standbyNotOff: () => ownershipEnabled() && standby !== "off",
+    diagnosticsForTests: () => ({
+      recomputes: presenceRecomputes,
+      settlePending: settleTimer !== null,
+      lastRunBound,
+    }),
+  };
+
   return {
     start,
     relaunch,
@@ -4231,6 +4677,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     startByUser,
     updateSettings,
     appliedSettings: () => (lastGoodSettings ? { ...lastGoodSettings } : null),
+    tandemPresence: () => presenceSeam,
   };
 }
 
