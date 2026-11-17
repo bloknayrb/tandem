@@ -306,9 +306,10 @@ function errCode(err: unknown): string | undefined {
  * grants delete-child and add-file (a Full Control grant does; the names are
  * random, so listing is needed too), they could delete a run file and put
  * their own at its name before Claude Code reads it, so that Claude Code runs
- * their MCP config's `command` (or their settings' hooks) as the user. Each
- * file's own ACL is still re-read per spawn. The `lstat` link check above it
- * runs every time.
+ * their MCP config's `command` (or their settings' hooks) as the user. Bryan
+ * accepted this residual on 2026-11-17 (#2439; batching the permission checks
+ * is #2440). Each file's own ACL is still re-read per spawn. The `lstat` link
+ * check above it runs every time.
  */
 const verifiedWindowsDirs = new Map<string, string>();
 
