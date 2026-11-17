@@ -461,6 +461,17 @@ describe("R1.2: the window", () => {
     expect(h.log).toEqual(["present", "run-start", "run-start"]);
   });
 
+  it("a resumed spawn that is confirmed, then written to, never binds, and crashes after its window started: failed (site a)", async () => {
+    const h = makeSupervisor({ resumeConfirmMs: WINDOW / 10 });
+    const c2 = await crashToResumed(await boundFreshRun(h));
+    advance(WINDOW / 10); // its resume is confirmed
+    h.emit(annotationEvent()); // the window starts
+    advance(WINDOW / 10);
+    c2.exitWith(1, null); // a crash, not the #1169 shape (confirmed)
+    await settle();
+    expect(h.log).toEqual(["present", "run-start", "failed:torn-down-unbound", "not-present"]);
+  });
+
   it("a spawn with no run files: failed at its window's expiry, not before (site c)", async () => {
     const h = makeSupervisor({ getBoundMcpAddress: () => null });
     await h.sup.startFresh(cwdDir);
@@ -929,6 +940,21 @@ describe("R2.3: when each change is announced", () => {
     expect(h.log).toEqual(["present", "run-start", "not-present"]);
   });
 
+  it("a restart underway keeps (v): an error with a crash restart pending past the settle is never announced, and the rebind keeps presence", async () => {
+    const h = makeSupervisor({ restartBackoffsMs: [SETTLE * 3] });
+    const c1 = await boundFreshRun(h);
+    c1.emit("error", EPIPE()); // spawn-failed recorded, a restart scheduled (restartTimer)
+    await settle();
+    advance(SETTLE * 2); // well past the settle, the restart still pending
+    await settle();
+    expect(h.log).toEqual(["present", "run-start"]);
+    advance(SETTLE);
+    const c2 = await childN(2);
+    await settle();
+    expect(await bind(c2)).toBe(true);
+    expect(h.log).toEqual(["present", "run-start", "run-start"]);
+  });
+
   it("several writes in one synchronous run (the sign-in trip's): one recompute", async () => {
     const h = makeSupervisor();
     const c1 = await boundFreshRun(h);
@@ -1014,9 +1040,13 @@ describe("R2.6: a throwing stopAndSpawn records spawn-failed when nothing else d
 });
 
 describe("R2.3: shutdown", () => {
-  it("stop() from present: nothing announced, no settle timer pending", async () => {
+  it("stop() from present: nothing announced, and a pending settle is cancelled", async () => {
     const h = makeSupervisor();
     await boundFreshRun(h);
+    await writeIntegration(false);
+    await h.sup.refreshConfigured(); // (ii) false: a settle pending
+    await settle();
+    expect(h.seam.diagnosticsForTests().settlePending).toBe(true);
     await h.sup.stop();
     await settle();
     expect(h.log).toEqual(["present", "run-start"]);
@@ -1107,15 +1137,19 @@ describe("R2.3: shutdown", () => {
     expect(failedLines()).toBe(1); // judged and logged, not emitted
   });
 
-  it("once stop() has begun: a bind landing before shutdown's kill emits no run-start event", async () => {
+  it("once stop() has begun: a bind landing before shutdown's kill is a run start that emits no event", async () => {
     const h = makeSupervisor();
     await h.sup.startFresh(cwdDir);
     const c1 = await childN(1);
     const creds = credentialsOf(c1);
-    c1.holdExit = true;
+    // Another operation holds the lock, so stop()'s locked body (which sets
+    // the deliberate cause) has not run when the bind lands: the bind is a
+    // real run start, and only the suppression keeps it silent.
+    const refreshing = h.sup.refreshConfigured();
     const stopping = h.sup.stop();
     expect(await bind(c1, creds)).toBe(true);
-    c1.releaseExit();
+    expect(h.seam.diagnosticsForTests().lastRunBound).toBe(true);
+    await refreshing;
     await stopping;
     await settle();
     expect(h.log).toEqual([]);
@@ -1136,6 +1170,17 @@ describe("R2.7: the live standby read", () => {
 });
 
 describe("the dark requirement: flag off, nothing", () => {
+  it("R2.6's guard: flag off, a relaunch whose plan read throws records no spawn-failed (master's behaviour)", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const h = makeSupervisor();
+    await h.sup.startFresh(cwdDir);
+    await childN(1);
+    fs.rmSync(path.join(baseDir, "integrations.json"));
+    fs.mkdirSync(path.join(baseDir, "integrations.json"));
+    await expect(h.sup.relaunch()).rejects.toThrow();
+    expect(h.sup.status().lastError).toBeUndefined();
+  });
+
   it("no spawn record, window, recompute, announcement or log line; the same argv shape", async () => {
     vi.stubEnv("TANDEM_OWNERSHIP", "");
     const h = makeSupervisor();
