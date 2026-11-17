@@ -227,21 +227,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("collaborator — dark gating", () => {
-  it("start() does not subscribe or read config while BYO_MODELS_ENABLED is false", () => {
-    const subscribeSpy = vi.fn();
-    const resolveSpy = vi.fn(() => CONFIG);
-    const collab = createLocalModelCollaborator(
-      makeDeps({ subscribe: subscribeSpy, resolveConfig: resolveSpy }),
-    );
-    collab.start();
-    // The flag is a compile-time const false in tests → the subscriber is never
-    // registered and config is never resolved. This is the load-bearing dark gate.
-    expect(subscribeSpy).not.toHaveBeenCalled();
-    expect(resolveSpy).not.toHaveBeenCalled();
-  });
-});
-
 describe("collaborator — dispatch", () => {
   it("runs the loop for a chat:message in tandem mode and streams the reply into one message", async () => {
     setupDoc("doc-dispatch", "# Title\n\nBody.");

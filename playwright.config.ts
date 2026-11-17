@@ -68,6 +68,26 @@ export default defineConfig({
     // on a retry inside a timing gate would shift the measurement.
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    // #1123: with BYO_MODELS_ENABLED on, App's first-run "Connect an AI model"
+    // window (`shouldShowModelPicker`) opens over every page with no saved
+    // default model and would cover every unrelated spec. App reads
+    // `tandem:modelPickerDismissed === "1"` (its `MODEL_PICKER_DISMISSED_KEY`)
+    // to keep it closed; seeding it for the client's origin here is inert while
+    // the flag is off. Built inline from E2E_VITE_PORT rather than a checked-in
+    // JSON so the port is never hardcoded. scripts/screenshots and
+    // scripts/design-baselines inherit it; tests/perf defines its own `use` and
+    // does not (it runs no Models spec). `agent-identity.spec.ts`, which expects
+    // the window, opts out with an empty `storageState`. Whether this stays is
+    // for the readiness change for the first-run window to decide.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: `http://127.0.0.1:${E2E_VITE_PORT}`,
+          localStorage: [{ name: "tandem:modelPickerDismissed", value: "1" }],
+        },
+      ],
+    },
   },
   // Two webServer entries instead of `npm run dev:standalone`:
   //   1. Vite dev server for the client

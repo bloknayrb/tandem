@@ -21,7 +21,8 @@
  *      a persistent 409 adopts the server (no lingering divergence).
  *   8. A non-409 failure rolls back to the pre-mutation snapshot.
  *   9. `getModelsSnapshot()` reflects the live `$state` synchronously.
- *  10. Dark (`BYO_MODELS_ENABLED=false`) → `loadFromServer` does no fetch.
+ *  (Dark, `BYO_MODELS_ENABLED=false` → `loadFromServer` does no fetch, is in
+ *  `use-models-dark.test.ts`.)
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,7 +31,6 @@ import {
   _settleReconcile,
   createModels,
   getModelsSnapshot,
-  loadFromServer,
 } from "../../src/client/hooks/useModels.svelte.js";
 
 /**
@@ -455,7 +455,7 @@ describe("models store — write-through semantics", () => {
   });
 });
 
-describe("models store — snapshot + dark gate", () => {
+describe("models store — snapshot", () => {
   it("getModelsSnapshot reflects live $state synchronously", async () => {
     const models = createModels();
     expect(getModelsSnapshot()).toEqual({ models: [], defaultModelId: null });
@@ -469,15 +469,6 @@ describe("models store — snapshot + dark gate", () => {
     const snap = getModelsSnapshot();
     expect(snap.models.map((m) => m.id)).toEqual([id]);
     expect(snap.defaultModelId).toBe(id);
-  });
-
-  it("loadFromServer does NO fetch while dark (BYO_MODELS_ENABLED=false)", async () => {
-    const fetchMock = stubFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    await loadFromServer();
-    // Dark build: the flag is a literal const false, so the load short-circuits.
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(getModelsSnapshot().models).toEqual([]);
   });
 });
 

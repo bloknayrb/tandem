@@ -15,7 +15,7 @@ import type { ChatMessage } from "../../src/shared/types";
 
 vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
-  BYO_MODELS_ENABLED: true as false,
+  BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
 }));
 
 const { default: ChatPanel } = await import("../../src/client/panels/ChatPanel.svelte");

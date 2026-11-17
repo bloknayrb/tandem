@@ -2,7 +2,7 @@
 
 /**
  * #1123 (LM Studio and "another local server", 2026-11-15), the dark
- * requirement: with the shipped `BYO_MODELS_ENABLED=false` (not mocked here),
+ * requirement: with `BYO_MODELS_ENABLED` false (forced by this file's mock),
  * the two surfaces a dark build mounts that this change touches still render
  * as before — Settings has no Models tab, and the wizard's AI-models row is
  * the "coming soon" line — and no string of the change's copy appears in
@@ -22,6 +22,13 @@ import {
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 import { LOCAL_ENDPOINT_PREFILL } from "../../src/shared/models/provider-ui";
 import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
+
+// This whole file is the dark state, so it forces the flag off whatever the
+// shipped literal says (#1123: the suite holds in both states).
+vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants")>()),
+  BYO_MODELS_ENABLED: false as typeof import("../../src/shared/constants").BYO_MODELS_ENABLED,
+}));
 
 // isTauriRuntime → false: the Cowork row hides (its poller early-returns) but the
 // AI-models row is not Tauri-gated, so it still renders. Keeps the mock set lean.
@@ -110,7 +117,7 @@ afterEach(() => {
 });
 
 describe("flag off: nothing a dark build shows changes", () => {
-  it("runs with the shipped flag", () => {
+  it("the anchor: the file-level mock applied, so the flag reads false here", () => {
     expect(BYO_MODELS_ENABLED).toBe(false);
   });
 
