@@ -816,20 +816,20 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
       "http://user:pw@127.0.0.1:1234",
     ];
     for (const address of REFUSED_ADDRESSES) {
-      it(`${address} is refused with the same code for every local provider`, async () => {
-        const codes = new Set<string>();
+      it(`${address} is refused with the same answer for every local provider`, async () => {
+        const check = validateEndpoint(address);
+        expect(check.ok).toBe(false);
+        // The resolver's own answer, per provider: one provider's detail or
+        // state differing from another's fails here.
+        const answers = new Map<string, { detail: string; stateKey: string }>();
         for (const provider of LOCAL_MODEL_PROVIDERS) {
           await persistModelsFile(fileWith([{ ...local, provider, endpoint: address }], null));
           const r = unusableNow();
           expect(r.reason).toBe("endpoint-rejected");
-          const check = validateEndpoint(address);
-          expect(check.ok).toBe(false);
-          if (!check.ok) {
-            expect(r.detail).toContain(check.code);
-            codes.add(check.code);
-          }
+          if (!check.ok) expect(r.detail).toContain(check.code);
+          answers.set(provider, { detail: r.detail, stateKey: r.stateKey });
         }
-        expect(codes.size).toBe(1);
+        expect(new Set([...answers.values()].map((a) => JSON.stringify(a))).size).toBe(1);
       });
     }
 
@@ -838,7 +838,10 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
         await persistModelsFile(
           fileWith([{ ...local, provider, endpoint: "http://127.0.0.1:1234/v1" }], null),
         );
-        expect(okNow().config.endpoint).toBe("http://127.0.0.1:1234/v1");
+        const r = okNow();
+        expect(r.config.endpoint).toBe("http://127.0.0.1:1234/v1");
+        // This provider's entry resolved, not another's standing in for it.
+        expect(r.config.agentIdentity?.provider).toBe(provider);
       }
     });
   });

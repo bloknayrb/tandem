@@ -178,6 +178,11 @@ const runRecordFor = (pid: number) =>
 
 beforeEach(async () => {
   vi.stubEnv("TANDEM_OWNERSHIP", "1");
+  // #2358 PR 3b-1: `prepareRun` reads the user-level Claude settings through
+  // `CLAUDE_CONFIG_DIR` before `claudeSettingsHome`, so without this stub a
+  // developer's exported value would be read here (a privacy leak into test
+  // runs, and nondeterminism).
+  vi.stubEnv("CLAUDE_CONFIG_DIR", "");
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
   tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oh-spawn-")));
   spawnDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oh-spawn-cwd-")));

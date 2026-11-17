@@ -327,11 +327,11 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "Nothing reads PR 3a's bind fact: a transport bound to Tandem's Claude's current spawn " +
-      "still sits on its claude:<id> record, not on the `tandem` record, and there are no " +
-      "unbound-child records, no private records for its other own-child ids, and no retirement " +
-      "or demotion at a spawn (Ruling A).",
-    closedBy: "PR 3b (rule 0's routing to the `tandem` record, and the records around it).",
+      "Nothing routes on PR 3a's bind fact: the supervisor reads it for presence (3b-1), but a " +
+      "transport bound to the current spawn still sits on its `claude:<id>` record, not the " +
+      "`tandem` record, and there are no unbound-child records, no private records for other " +
+      "own-child ids, and no retirement or demotion at a spawn.",
+    closedBy: "PR 3b-2.",
   },
   {
     gap:
@@ -355,23 +355,40 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "PR 3a's assumptions are unmeasured (its PR body lists them): the supervisor's own signed-in " +
-      "child honours --mcp-config and --settings as the headless probes did, --settings still " +
-      "disables the plugin beside --mcp-config, an entry's env wins Claude Code's merge, a " +
-      "--resume spawn reads its new run MCP config, a project-scope tandem entry is still " +
-      "replaced, macOS and Linux, and the bridge binds before a not-signed-in child closes it.",
-    closedBy: "The real-launcher smoke on Bryan's Windows PC before PR 3b (Ruling J).",
+      "PR 3a's assumptions the 2026-11-17 smoke left unmeasured (Windows 11, Claude Code " +
+      "2.1.325, one sample, run contained): whether `--settings` disables a plugin beside " +
+      "`--mcp-config`; a project-scope `.mcp.json` `tandem` entry and the user's own Tandem " +
+      "entry and skill being replaced; missing or invalid run files; a `--settings` re-read; " +
+      "macOS, Linux and the bundled Node; whether a not-signed-in child's bridge binds before " +
+      "its refusal.",
+    closedBy: "A further smoke measuring them, or Bryan's acceptance of each.",
   },
   {
     gap:
-      "Whether Claude Code lets a settings file's `env` block (a project or local settings file " +
-      "in the child's working folder, possibly hostile) beat the launcher's `--mcp-config` " +
-      "entry's `env` is unmeasured: if it does, such a file can point the bridge's URL variables " +
-      "at another local listener, which then receives the handle (accepted as a residual for 3a, " +
-      "Bryan 2026-11-13).",
+      "Project settings `env` against the run config: measured for one key (`TANDEM_URL`) in " +
+      "one file (`.claude/settings.json`), in a hand run, with Tandem's value reaching the " +
+      "bridge; not measured for `settings.local.json`, the other keys the run config sets or " +
+      "clears (`TANDEM_OWNER_HANDLE`, `TANDEM_OWNER_HANDLE_URL`, " +
+      "`CLAUDE_PLUGIN_OPTION_SERVER_URL`, `NODE_OPTIONS`, `NODE_DEBUG`), the launcher's own " +
+      "invocation, or hook timing under `-p` before the first bind.",
     closedBy:
-      "The real-launcher smoke measuring that merge order, before PR 3b gives the bound fact a " +
-      "reader; then refuse the flags on such a file, or record the residual as accepted.",
+      "The remaining cases measured with Tandem's value winning in each, or a guard that " +
+      "refuses the run files on such a file; a measurement showing a project value wins does " +
+      "not close it.",
+  },
+  {
+    gap:
+      "An auth failure that is not 'Not logged in' (an expired token, a revoked key) is " +
+      "unmeasured: if it returns an ordinary `result`, such a child stays present though it " +
+      "cannot answer.",
+    closedBy:
+      "A measured list of auth-failure results, and the not-signed-in pattern widened to it.",
+  },
+  {
+    gap:
+      "Resumes the smoke did not exercise: a stale or doomed resume (`shouldClearSession`), a " +
+      "resume across a server restart, a resume after a crash.",
+    closedBy: "A smoke run of each, or Bryan's acceptance.",
   },
   {
     gap:
@@ -382,7 +399,8 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
       "health-route injects its own getDeliveryState; and the same holds for every other " +
       "suite that polls the inbox without wiring the seam (every suite runs flag-on in the " +
       "ownership-on job). The set, over-approximated (a file that only names the tool is in " +
-      "it): the test files that name tandem_checkInbox and name neither setDeliveryRoundSeam " +
+      "it) and possibly incomplete (a suite that polls through a helper without naming the " +
+      "tool is missed): the test files that name tandem_checkInbox and name neither setDeliveryRoundSeam " +
       "nor registerTestCallerRecord, i.e. grep -rlE 'tandem_checkInbox' tests --include=*.test.ts " +
       "| xargs grep -LE 'setDeliveryRoundSeam|registerTestCallerRecord' (38 files when this row " +
       "was written). A change that makes their polls open or close a keyed round wrongly is " +
@@ -394,19 +412,12 @@ export const OWNERSHIP_FLIP_BLOCKERS: readonly FlipBlocker[] = [
   },
   {
     gap:
-      "The pin that src/server/index.ts wires the delivery-round seam " +
-      "(tests/server/ownership-source-pins.test.ts, the delivery-round seam describe) reads " +
-      "source, not a running server, and cannot see: an exit earlier in main(), before " +
-      "setOwnershipSeqSource; between setOwnershipSeqSource and the call, a conditional exit " +
-      "that is not a return or throw statement (a call that throws, say); braces or comment markers " +
-      "inside strings, which its text depth check counts as code; a call through a namespace " +
-      "import by element access (a string or computed name); calls from other src files " +
-      "through an alias or .call; and, in its one-writer pin on delivery-state.ts, a compound, " +
-      "destructuring or parenthesised assignment to roundSeam, or a mutation of the seam " +
-      "object (roundSeam.keyed = ...). Accepted as the limits of a text-and-tree pin by the " +
-      "reviewing session's ruling of 2026-11-17: the pin guards against an accidental second " +
-      "writer, and a deliberate bypass is a review matter.",
-    closedBy: "A behavioural pin that boots main().",
+      "#2439: on Windows the launcher folder's owner and access-list checks run once per server " +
+      "process (verifiedWindowsDirs, src/server/launcher/run-files.ts), so an entry new files do " +
+      "not inherit, added after the first check, is not seen again in that process. Bryan accepted " +
+      "it on 2026-11-17 for the dark state (docs/security.md, Accepted (bounded)); the acceptance " +
+      "is re-decided when OWNERSHIP_ENABLED flips.",
+    closedBy: "Bryan's decision on #2439 at the flip, recorded in the register.",
   },
 ];
 

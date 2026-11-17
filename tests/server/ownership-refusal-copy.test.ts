@@ -230,7 +230,7 @@ describe("the posts PR (R1.7): forms a post can get that the tool cannot reach y
     );
   });
 
-  it("lost, taken back (PR 3b): true for a post", () => {
+  it("lost, taken back (PR 3b-2): true for a post", () => {
     expect(postRefusal({ reason: "lost", holder: tandem, cause: "taken back" }).message).toBe(
       `Tandem's Claude took this document back. You can still read it. Do not tandem_open it again unless the user asks you again after this point. ${OUTLET}`,
     );
