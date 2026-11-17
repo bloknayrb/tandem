@@ -20,6 +20,7 @@ import {
   observeChatForAnswerer,
   requestRead,
   setChatAnswerer,
+  takeSendRead,
 } from "../../src/client/hooks/useChatAnswerer.svelte";
 import { signalModelsWriteCommitted } from "../../src/client/models/models-write-signal";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
@@ -66,5 +67,16 @@ describe("chat-answerer store, flag off", () => {
     expect(state.status).toBe("pending");
     expect(state.sentLocal.size).toBe(0);
     expect(inLocalPeriod(true)).toBe(false);
+  });
+
+  it("a chat send records no read, so the send-time toast never waits (#2433 M1, R1.4)", () => {
+    // `requestRead`'s own guard alone keeps fetch silent, so "no fetch" cannot
+    // fail if `noteChatSent`'s guard is dropped; the take's result can: it
+    // would be a handle on a resolved `{ status: "dark" }` read.
+    const msg = { id: "u2", author: "user", text: "q", timestamp: 2, read: false } as ChatMessage;
+    noteChatSent(msg, { aiOff: false, held: false });
+    expect(takeSendRead()).toBeNull();
+    noteChatSent(msg, { aiOff: false, held: true });
+    expect(takeSendRead()).toBeNull();
   });
 });

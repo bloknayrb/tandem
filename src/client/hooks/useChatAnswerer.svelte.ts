@@ -75,7 +75,7 @@ export type ReadOutcome =
 
 /** Long enough for a busy loopback server, short enough that a hung one ends
  *  in the failed state while the user is still looking. */
-const REQUEST_TIMEOUT_MS = 10_000;
+export const REQUEST_TIMEOUT_MS = 10_000;
 const url = `${API_BASE}${API_MODELS_CHAT_ANSWERER}`;
 
 // --- Reactive state ------------------------------------------------------------
@@ -122,6 +122,14 @@ let _userRows = new Map<string, { run: string | null; stamped: boolean }>();
 /** R3: where the first-local-model toast goes (App's `notifications.push`). */
 let _toastSink: ((n: TandemNotification) => void) | null = null;
 let _toastShownInMemory = false;
+/** The last chat send's own read (#2433 M1, Ruling S-a): the promise its
+ *  `requestRead()` returned and the local period at the send. Replaced by every
+ *  `noteChatSent`, cleared by `takeSendRead`. Plain, not `$state`: no template
+ *  reads it, and the take writes it from inside an event handler. */
+let _sendRead: { read: Promise<ReadOutcome>; localPeriodAtSend: boolean } | null = null;
+/** Cap timers started by `takeSendRead` and not yet fired or cleared; held
+ *  only so the test reset can clear them. */
+let _capTimers = new Set<ReturnType<typeof setTimeout>>();
 
 // --- The read --------------------------------------------------------------------
 
@@ -462,6 +470,8 @@ export function observeChatForAnswerer(input: {
  */
 export function noteChatSent(message: ChatMessage, opts: { aiOff: boolean; held: boolean }): void {
   if (!BYO_MODELS_ENABLED) return;
+  // The local period at the send, from the caller's `held` (Ruling S-c).
+  const localPeriodAtSend = inLocalPeriod(opts.held);
   if (isKnownLocal() && !opts.aiOff) {
     const next = new Set(_sentLocal);
     next.add(message.id);
@@ -469,7 +479,73 @@ export function noteChatSent(message: ChatMessage, opts: { aiOff: boolean; held:
   }
   // In the local period, or with the read not known (review round 1 item 2):
   // one read, no loop — a send is a user event.
-  if (inLocalPeriod(opts.held) || _status !== "known") void requestRead();
+  const read = localPeriodAtSend || _status !== "known" ? requestRead() : null;
+  // Replaced on every send, with nothing when this send requested no read, so
+  // a later send can never wait on a read an earlier one requested.
+  _sendRead = read === null ? null : { read, localPeriodAtSend };
+}
+
+/** A chat send's own read, taken by the send-time toast (#2433 M1). */
+export interface SendReadWait {
+  /** Settles when the send's read settles, or at `REQUEST_TIMEOUT_MS` from
+   *  the take, whichever comes first. Never rejects. */
+  readonly wait: Promise<void>;
+  /** `inLocalPeriod(held)` at the send. */
+  readonly localPeriodAtSend: boolean;
+}
+
+/**
+ * Take the last chat send's own read (#2433 M1), clearing it. Null when that
+ * send requested no read (a known-Claude send), when none was recorded, and
+ * always while dark (`noteChatSent` records nothing then: its guard is the only
+ * one, on purpose). The capped wait starts HERE, so it runs concurrently with
+ * whatever the caller awaits next. Writes no `$state`.
+ */
+export function takeSendRead(): SendReadWait | null {
+  const record = _sendRead;
+  _sendRead = null;
+  if (record === null) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      if (timer !== undefined) _capTimers.delete(timer);
+      resolve();
+    }, REQUEST_TIMEOUT_MS);
+    _capTimers.add(timer);
+  });
+  // A catch at once: a read that rejects while nobody settles is never an
+  // unhandled rejection. The cap timer is cleared when the read settles first.
+  const readDone = record.read.then(
+    () => undefined,
+    () => undefined,
+  );
+  void readDone.then(() => {
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    _capTimers.delete(timer);
+  });
+  return { wait: Promise.race([readDone, cap]), localPeriodAtSend: record.localPeriodAtSend };
+}
+
+/**
+ * The local period for a send's toast, after its own read (#2433 M1): live
+ * (the store's answer is local) if the read is KNOWN once the wait ends,
+ * otherwise the value recorded at the send. The read's fetch timeout and the
+ * cap are the same length, and this rule answers the same whichever fires
+ * first. Never rejects: any error yields the value at the send.
+ */
+export async function settleSendLocalPeriod(handle: SendReadWait): Promise<boolean> {
+  try {
+    await handle.wait;
+  } catch {
+    return handle.localPeriodAtSend;
+  }
+  return _status === "known" ? _answerer === "local" : handle.localPeriodAtSend;
+}
+
+/** Test seam — plant a send's record whose read the test controls. */
+export function _setSendReadForTests(read: Promise<ReadOutcome>, localPeriodAtSend: boolean): void {
+  _sendRead = { read, localPeriodAtSend };
 }
 
 function isKnownLocal(): boolean {
@@ -647,6 +723,9 @@ export function _resetChatAnswererForTests(): void {
   _userRows = new Map();
   _toastSink = null;
   _toastShownInMemory = false;
+  _sendRead = null;
+  for (const timer of _capTimers) clearTimeout(timer);
+  _capTimers = new Set();
   _unsubscribeModelsWrite?.();
   _unsubscribeModelsWrite = BYO_MODELS_ENABLED ? onModelsWriteCommitted(onModelsWrite) : null;
 }
