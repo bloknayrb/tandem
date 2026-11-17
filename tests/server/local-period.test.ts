@@ -578,6 +578,9 @@ for (const ownership of ["", "1"] as const) {
               .sort();
           expect(kinds()).toEqual(["document", "message"]);
           await toLocal();
+          // User chat during the period, so the switch back writes #2433's
+          // line (the keyed-rounds suites PR, R3.2).
+          userChat("lp-m2", "during the period");
           expect(getDeliveryState(Date.now(), 1)).toMatchObject({
             state: "idle",
             latencyMs: null,
@@ -588,9 +591,26 @@ for (const ownership of ["", "1"] as const) {
           const closed = await closeDocumentById(doc.id);
           expect(closed.success).toBe(true);
           expect(kinds(), "the close dropped the document's round").toEqual(["message"]);
+          const forwardsBefore = getDeliveryState(Date.now(), 1).forwardCount;
           await toClaude("own-window");
           // The switch back discarded the message round; its wake opened one key-less round.
           expect(kinds()).toEqual(["keyless"]);
+          // The order at the switch back is discard, line, wake
+          // (`local-period.ts`), so "rounds unchanged across the line" would
+          // compare empty with empty. Instead: the line was written; exactly
+          // one forward happened across the switch back (a forward of the
+          // line would be a second, even one that joined the wake's key-less
+          // round in the same millisecond); and the one round left was opened
+          // no earlier than the wake. A line pushed as keyed chat would also
+          // show as a "message" round.
+          expect(switchBackLines()).toHaveLength(1);
+          expect(getDeliveryState(Date.now(), 1).forwardCount).toBe(forwardsBefore + 1);
+          const wake = wakes().at(-1);
+          expect(wake).toBeDefined();
+          const rounds = keyedDeliveryRoundsForTests();
+          expect(rounds).toHaveLength(1);
+          expect(rounds[0]?.kind).toBe("keyless");
+          expect(rounds[0]?.forwardedAt).toBeGreaterThanOrEqual(wake?.timestamp as number);
           expect(getDeliveryState(Date.now(), 1).state).toBe("awaiting-poll");
           await poll();
           expect(kinds()).toEqual([]);

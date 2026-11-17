@@ -3416,10 +3416,11 @@ export function registerAwarenessTools(server: McpServer): void {
           // follows it (the delivery-rounds PR, R2.4), and that close is map
           // operations that do not throw; the test suites that make it throw
           // (`roundThrows`) therefore model a throw after the notice step,
-          // whose ended notices the catch does not restore. A settled mark ends where this committed poll read the
-          // document as its holder and saw the notice's record change. A poll
-          // that only may claim and did not, or one that did not commit,
-          // observed nothing. Empty while ownership is off.
+          // whose ended notices the catch does not restore. A settled mark
+          // ends where this committed poll read the document as its holder
+          // and saw the notice's record change. A poll that only may claim
+          // and did not, or one that did not commit, observed nothing. Empty
+          // while ownership is off.
           noticeFaultForTests?.();
           for (const [id, ended] of docs.noticeEnds) {
             if (scope.scopeOf(id) === "holds" || claimed.has(id)) endObservedNotices(ended);
