@@ -1213,7 +1213,9 @@ describe("local-model notices under the own-window rule (#2404 R3)", () => {
           // The "own window" in this file is the desktop WebView.
           desktop: true,
         }),
-        // `localModelSettingsEnabled` omitted: the dark flag.
+        // Forced dark for this case alone (the file's other cases are lit), so
+        // it holds whatever the shipped literal says.
+        localModelSettingsEnabled: false,
       });
       const dark = await new Promise<Server>((resolve) => {
         const s = app.listen(0, "127.0.0.1", () => resolve(s));

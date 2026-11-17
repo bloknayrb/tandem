@@ -1,13 +1,20 @@
 // @vitest-environment happy-dom
 
 /**
- * Dark pin (#1123): while `BYO_MODELS_ENABLED` is false — the production
- * literal, NOT mocked here — the local-model settings store sends nothing.
+ * Dark pin (#1123): while `BYO_MODELS_ENABLED` is false — forced by this
+ * file's mock, whatever the shipped literal says — the local-model settings store sends nothing.
  * Importing it has no side effect, and neither a load nor a save fetches.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants.js";
+
+// This whole file is the dark state, so it forces the flag off whatever the
+// shipped literal says (#1123: the suite holds in both states).
+vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
+  BYO_MODELS_ENABLED: false as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
+}));
 
 const fetchSpy = vi.fn(() => Promise.reject(new Error("no fetch while dark")));
 
@@ -21,7 +28,7 @@ afterEach(() => {
 });
 
 describe("useLocalModelSettings — dark", () => {
-  it("the flag this file relies on is still off", () => {
+  it("the anchor: the file-level mock applied, so the flag reads false here", () => {
     expect(BYO_MODELS_ENABLED).toBe(false);
   });
 

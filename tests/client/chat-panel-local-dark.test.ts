@@ -1,16 +1,23 @@
 // @vitest-environment happy-dom
 
 /**
- * ChatPanel with `BYO_MODELS_ENABLED` at its shipped value (#1123 part B,
+ * ChatPanel with `BYO_MODELS_ENABLED` off, forced by this file's mock (#1123 part B,
  * R10.1): rows carrying `localRun` or `chatNotice` — a session restored from a
  * flag-on build — render exactly as on master, whatever local inputs App
  * passes.
  */
 import { render } from "@testing-library/svelte";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
 import { BYO_MODELS_ENABLED } from "../../src/shared/constants";
 import type { ChatMessage } from "../../src/shared/types";
+
+// This whole file is the dark state, so it forces the flag off whatever the
+// shipped literal says (#1123: the suite holds in both states).
+vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants")>()),
+  BYO_MODELS_ENABLED: false as typeof import("../../src/shared/constants").BYO_MODELS_ENABLED,
+}));
 
 const T0 = Date.now();
 
@@ -51,7 +58,7 @@ function renderChat(messages: ChatMessage[]) {
 }
 
 describe("ChatPanel, flag off", () => {
-  it("is the shipped literal false", () => {
+  it("the anchor: the file-level mock applied, so the flag reads false here", () => {
     expect(BYO_MODELS_ENABLED).toBe(false);
   });
 

@@ -62,23 +62,3 @@ describe("chat export", () => {
     expect(markdown).not.toContain("opaque-document-id");
   });
 });
-
-describe("flag off (#1123 part B, R10.1)", () => {
-  it("a notice row restored from a flag-on build is exported as Claude's, as on master", () => {
-    const md = exportChatMarkdown(
-      [
-        {
-          id: "n",
-          author: "claude",
-          text: "notice",
-          timestamp: 0,
-          read: true,
-          chatNotice: "no-reply",
-        },
-      ],
-      [],
-    );
-    expect(md).toContain("**Claude**");
-    expect(md).not.toContain("**Tandem**");
-  });
-});

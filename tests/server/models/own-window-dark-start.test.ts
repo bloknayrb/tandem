@@ -24,6 +24,13 @@ import {
 import { clearStartupNotices, getStartupNotices } from "../../../src/server/startup-notices.js";
 import { BYO_MODELS_ENABLED } from "../../../src/shared/constants.js";
 
+// This whole file is the dark state, so it forces the flag off whatever the
+// shipped literal says (#1123: the suite holds in both states).
+vi.mock(import("../../../src/shared/constants.js"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/shared/constants.js")>()),
+  BYO_MODELS_ENABLED: false as typeof import("../../../src/shared/constants.js").BYO_MODELS_ENABLED,
+}));
+
 /**
  * #2404 R3.2a / R3.4 — "a dark start must never create the marker".
  *
@@ -55,7 +62,7 @@ describe("a dark start of the local-model collaborator touches nothing (#2404)",
     await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 });
   });
 
-  it("the flag is off in this build (the anchor: this file describes the dark state)", () => {
+  it("the anchor: the file-level mock applied, so the flag reads false here (this file describes the dark state)", () => {
     expect(BYO_MODELS_ENABLED).toBe(false);
   });
 

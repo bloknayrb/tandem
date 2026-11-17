@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants")>()),
   // Production ships this dark as a literal `false`; the flip is deliberate.
-  BYO_MODELS_ENABLED: true as false,
+  BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants").BYO_MODELS_ENABLED,
 }));
 
 // isTauriRuntime → false: the Cowork row hides (its poller early-returns) but the

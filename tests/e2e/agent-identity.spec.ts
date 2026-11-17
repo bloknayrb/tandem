@@ -24,6 +24,11 @@ import { cleanupAllOpenDocuments, expectOnlyAllowanceNotices, McpTestClient } fr
  * marginLeaderGeometry.test.ts).
  */
 
+// The base config seeds `tandem:modelPickerDismissed` for every spec so the
+// first-run window stays out of the way (#1123); this spec is the one that
+// expects that window, so it starts from empty storage.
+test.use({ storageState: { cookies: [], origins: [] } });
+
 let mcp: McpTestClient;
 let tmpDir: string;
 
