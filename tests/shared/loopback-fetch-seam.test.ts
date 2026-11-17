@@ -46,7 +46,9 @@ import { describe, expect, it } from "vitest";
  * - a request made some other way (a spawned process, a websocket, a raw
  *   `net` socket);
  * - a `fetch` reached through an alias of the global object
- *   (`const g = globalThis; g.fetch`), `Reflect.get`, a computed key, or
+ *   (`const g = globalThis; g.fetch`), `Reflect.get`, a computed key, a
+ *   destructuring with a type annotation, cast or parentheses
+ *   (`const { fetch: f }: Window = globalThis`, `= (globalThis)`), or
  *   `createRequire(…)("node:http")`;
  * - code hidden by the comment strip: a `/*` inside a string or regex literal
  *   removes everything up to the next `*\/` (none in these directories today).
@@ -61,8 +63,10 @@ const HTTP_ALLOWED = new Set(["src/cli/doctor.ts"]);
 
 type Rule = "bare-fetch" | "global-fetch" | "undici-import" | "http-import";
 
-// `fetch` not part of a longer name, a property (`x.fetch`), a path (`a-fetch.js`).
-const BARE_FETCH = /(?<![\w.$/-])fetch\b(?!\s*:)/g;
+// `fetch` not part of a longer name, a property (`x.fetch`), a path (`a-fetch.js`),
+// and not an object key (`fetch:`) — except where `fetch :` is a ternary's
+// then-arm (`cond ? fetch : loopbackFetch`), which is a value and is caught.
+const BARE_FETCH = /(?<![\w.$/-])fetch\b(?!\s*:)|(?<=\?\s*)fetch\b(?=\s*:)/g;
 const GLOBAL_FETCH = new RegExp(
   [
     String.raw`\b(?:globalThis|global|window|self)\s*(?:\?\.|\.)\s*fetch\b`,
@@ -73,9 +77,9 @@ const GLOBAL_FETCH = new RegExp(
   "g",
 );
 const UNDICI_IMPORT =
-  /from\s+["']undici["']|require\(\s*["']undici["']\s*\)|import\(\s*["']undici["']\s*\)/g;
+  /from\s+["']undici["']|require\(\s*["'`]undici["'`]\s*\)|import\(\s*["'`]undici["'`]\s*\)/g;
 const HTTP_IMPORT =
-  /from\s+["'](?:node:)?https?["']|require\(\s*["'](?:node:)?https?["']\s*\)|import\(\s*["'](?:node:)?https?["']\s*\)/g;
+  /from\s+["'](?:node:)?https?["']|require\(\s*["'`](?:node:)?https?["'`]\s*\)|import\(\s*["'`](?:node:)?https?["'`]\s*\)/g;
 
 /**
  * Every hit outside `loopback-fetch.ts` (and `doctor.ts`'s HTTP import) that
@@ -114,7 +118,8 @@ function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {
     const p = join(dir, n);
     if (statSync(p).isDirectory()) return walk(p);
-    return p.endsWith(".ts") && !p.endsWith(".d.ts") ? [p] : [];
+    // Any TS or JS module; declaration files are exempt by rule.
+    return /\.[cm]?[tj]s$/.test(p) && !/\.d\.[cm]?ts$/.test(p) ? [p] : [];
   });
 }
 
@@ -214,6 +219,8 @@ describe("the scan's patterns catch the forms they claim to (controls)", () => {
   it.each([
     "const r = await fetch(url);",
     "const f = cond ? x : fetch;",
+    "const f = useProxy ? fetch : loopbackFetch;",
+    "const f = useProxy\n  ? fetch\n  : loopbackFetch;",
     "const deps = { fetchImpl: fetch };",
     "return fetch;",
     "fetch.call(null, url);",
@@ -240,6 +247,7 @@ describe("the scan's patterns catch the forms they claim to (controls)", () => {
     'import { request } from "https";',
     'const http = await import("node:http");',
     'const m = await import("https");',
+    "const m = await import(`node:http`);",
     'const h = require("node:https");',
     'import { type IncomingMessage, request } from "node:http";',
   ])("http import: %s", (src) => {
