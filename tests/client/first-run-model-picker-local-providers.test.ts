@@ -3,7 +3,6 @@
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_MODEL_PROVIDERS, type ModelProvider } from "../../src/shared/models/contract.js";
-import { LOCAL_ENDPOINT_PREFILL } from "../../src/shared/models/provider-ui.js";
 import { asTandemOwnWindow } from "../helpers/models-write-access.svelte";
 
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
@@ -58,7 +57,13 @@ asTandemOwnWindow();
  * only), the hint (S3), the subtitle (S6) and Other's name (Ruling L-h).
  */
 
-const PREFILL = LOCAL_ENDPOINT_PREFILL;
+/** Each local provider's prefill, as literals (never `LOCAL_ENDPOINT_PREFILL`). */
+const PREFILL_LITERAL: Readonly<Record<string, string>> = {
+  "local-ollama": "http://127.0.0.1:11434",
+  "local-llamacpp": "",
+  "local-lmstudio": "http://127.0.0.1:1234",
+  "local-other": "",
+};
 
 /** S3 per local provider, as literals (never built with `endpointHint`). */
 const HINT_WITH_PORT = (address: string) =>
@@ -121,7 +126,7 @@ describe("first-run picker — address prefill (R2.3)", () => {
     it(`switching from an untouched field to ${p} sets its prefill`, async () => {
       const m = mount();
       await choose(m, p);
-      expect(endpointField(m).value).toBe(PREFILL[p]);
+      expect(endpointField(m).value).toBe(PREFILL_LITERAL[p]);
     });
   }
 
@@ -142,7 +147,6 @@ describe("first-run picker — address prefill (R2.3)", () => {
     expect(endpointField(m).value).toBe("");
     await choose(m, "local-lmstudio");
     // Empty IS Other's prefill (it has none), so the switch fills it.
-    expect(endpointField(m).value).toBe(PREFILL["local-lmstudio"]);
     expect(endpointField(m).value).toBe("http://127.0.0.1:1234");
   });
 

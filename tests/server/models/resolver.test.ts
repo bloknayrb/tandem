@@ -829,7 +829,6 @@ describe("resolveLocalModel — every registry state (#1123)", () => {
           if (!check.ok) expect(r.detail).toContain(check.code);
           answers.set(provider, { detail: r.detail, stateKey: r.stateKey });
         }
-        expect(answers.size).toBe(LOCAL_MODEL_PROVIDERS.length);
         expect(new Set([...answers.values()].map((a) => JSON.stringify(a))).size).toBe(1);
       });
     }

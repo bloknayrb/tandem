@@ -6,9 +6,9 @@
  *
  * Two transports, normalized to one `{content, toolCalls}` shape so the loop is
  * transport-agnostic:
- *  - "v1":     OpenAI-compatible POST {endpoint}/v1/chat/completions, where one
- *              trailing `/v1` in the saved address is dropped first (`baseUrl`)
+ *  - "v1":     OpenAI-compatible POST {endpoint}/v1/chat/completions
  *  - "native": Ollama-native       POST {endpoint}/api/chat
+ *  For both, one trailing `/v1` in the saved address is dropped first (`baseUrl`).
  *
  * Hardening beyond the spike's client (security review #1123):
  *  - endpoint comes from config, validated to loopback at the fetch boundary

@@ -92,7 +92,7 @@ describe("ModelEditModal — every local provider", () => {
       const m = mountWith(p, false);
       const field = m.getByTestId("model-edit-endpoint") as HTMLInputElement;
       expect(field.value).toBe("");
-      expect(field.placeholder).toBe(LOCAL_ENDPOINT_PREFILL[p]);
+      expect(field.placeholder).toBe(PLACEHOLDER[p]);
     });
 
     it(`${p}: S1, S2 and S3 are shown, and the hint describes the Endpoint field`, async () => {
