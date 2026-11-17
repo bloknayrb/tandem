@@ -9,8 +9,10 @@
  * mock keeps them as they were: with it, the two stubs agree.
  *
  * What it costs: no spec in this run exercises the real routing. That is
- * covered by `tests/shared/loopback-fetch.test.ts` (which calls
- * `vi.unmock`) and by `tests/cli/loopback-no-proxy.test.ts` (real programs in
+ * covered by `tests/shared/loopback-fetch.test.ts` and
+ * `tests/server/local-model/ollama-client-undici.test.ts` (which call
+ * `vi.unmock`), and by `tests/cli/loopback-no-proxy.test.ts` and
+ * `tests/server/local-model/loopback-no-proxy.test.ts` (real programs in
  * their own processes, which this mock cannot reach).
  *
  * Setup files must not import modules from `src/` (see acl-win-mock.ts): the

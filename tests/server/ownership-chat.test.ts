@@ -18,7 +18,7 @@
  * a write's claim `tandem_comment`, a poll's claim a poll, a tab close
  * `POST /api/close`, a lapse the grace. `setDocOwner` is used only for setup.
  *
- * Tests that need Tandem's Claude present use the presence seam; PR 3b makes
+ * Tests that need Tandem's Claude present use the presence seam; PR 3b-2 makes
  * that branch reachable in production (Ruling 5).
  *
  * Platform: real files under `os.tmpdir()` joined with `path.join` for

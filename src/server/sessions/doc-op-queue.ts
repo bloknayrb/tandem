@@ -29,7 +29,7 @@
  * (`applyUserOpenDefault`: `/api/open`, upload, scratchpad, `/api/convert`,
  * startup; it only
  * writes an entry where there is none, and writes nothing until Tandem's
- * Claude can be present, so PR 3b must queue it), and the backstop that
+ * Claude can be present, so PR 3b-2 must queue it), and the backstop that
  * clears an entry whose record no longer exists (`liveEntry`, which every
  * decision runs first).
  *
