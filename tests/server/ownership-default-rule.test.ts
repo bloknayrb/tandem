@@ -42,7 +42,7 @@ import { TAURI_HOSTNAME } from "../../src/shared/constants.js";
  * The default rule's user-side callers and the tab-close point (#2358,
  * ADR-054; ownership design §4.2).
  *
- * Tandem's Claude is never present in 1a (presence lands in PR 3b), so with
+ * Tandem's Claude is never present in 1a (presence lands in PR 3b-2), so with
  * the real presence source every call below leaves a document unowned — and
  * deleting any of them would change nothing observable. So these turn presence
  * ON through the seam: each user-side open must then hand its document to

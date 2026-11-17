@@ -370,9 +370,9 @@ describe("what a record holds", () => {
     expect(recordHoldsState(record)).toBe(false);
   });
 
-  it("no change notice is queued for Tandem's Claude (every one of its causes is PR 3b's)", () => {
+  it("no change notice is queued for Tandem's Claude (every one of its causes is PR 3b-2's)", () => {
     // A cause literal: this proves the mapping, not a path (no path reaches
-    // the tandem record before PR 3b).
+    // the tandem record before PR 3b-2).
     register("claude:a");
     setDocOwner("d", { ownerId: TANDEM_OWNER_ID, kind: "default" }, "take", TANDEM_OWNER_ID);
     setDocOwner("d", { ownerId: "claude:a", kind: "opened" }, "take", "claude:a");
