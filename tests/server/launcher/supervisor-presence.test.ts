@@ -43,7 +43,10 @@ import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import type { RunFileAcl } from "../../../src/server/launcher/run-files.js";
-import { updateLauncherSettings } from "../../../src/server/launcher/settings.js";
+import {
+  readLauncherSettings,
+  updateLauncherSettings,
+} from "../../../src/server/launcher/settings.js";
 import {
   createSupervisor,
   LicenseRefusedError,
@@ -56,6 +59,7 @@ import {
   judgeBind,
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
+import { SUPERVISOR_WAKE_PROMPT } from "../../../src/shared/launcher/contract.js";
 import { OWNER_HANDLE_ENV } from "../../../src/shared/owner-handle.js";
 
 // --- Fake child ---------------------------------------------------------------
@@ -1301,5 +1305,883 @@ describe("the dark requirement: flag off, nothing", () => {
     expect(h.seam.isPresent()).toBe(false);
     expect(h.seam.standbyNotOff()).toBe(false);
     expect(logText()).not.toMatch(/ownership\)/);
+  });
+});
+
+// --- #2358 PR 3b-2a: requestWake and startOrWake (built, not called) -------------
+
+/** `status().restartPending`, read off either branch of the union. */
+function pendingOf(h: ReturnType<typeof makeSupervisor>): true | undefined {
+  return (h.sup.status() as { restartPending?: true }).restartPending;
+}
+
+/** The texts of the turns written to a child. */
+function turnTexts(child: FakeChild): string[] {
+  return child.stdin.writes.map(
+    (w) => (JSON.parse(w) as { message: { content: { text: string }[] } }).message.content[0].text,
+  );
+}
+const wakes = (child: FakeChild) =>
+  turnTexts(child).filter((t) => t === SUPERVISOR_WAKE_PROMPT).length;
+
+/** A waiting decision double that records its calls (the brief's harness rule). */
+function waitingDouble(answer: boolean | (() => boolean)) {
+  const d = {
+    calls: 0,
+    fn: (): boolean => {
+      d.calls += 1;
+      return typeof answer === "function" ? answer() : answer;
+    },
+  };
+  return d;
+}
+
+/** A licence decision double: refuses while `refusing`, throws while `throwing`. */
+function licenceDouble() {
+  const d = {
+    refusing: false,
+    throwing: false,
+    calls: 0,
+    fn: (): AiRefusal | null => {
+      d.calls += 1;
+      if (d.throwing) throw new Error("licence decision boom doc_secret");
+      return d.refusing ? REFUSAL : null;
+    },
+  };
+  return d;
+}
+
+/** A local-period double the test switches by hand. */
+function localDouble() {
+  const d = {
+    held: false,
+    switchTo: (_c: { to: "local" } | { to: "claude"; asked: boolean }) => {},
+    opts: {
+      held: () => d.held,
+      subscribe: (cb: (c: { to: "local" } | { to: "claude"; asked: boolean }) => void) => {
+        d.switchTo = cb;
+        return () => {};
+      },
+    },
+  };
+  return d;
+}
+
+/** Wait until every operation queued on the op lock before now has run. */
+async function lockBarrier(h: ReturnType<typeof makeSupervisor>): Promise<void> {
+  await h.sup.refreshConfigured();
+  await settle();
+}
+
+/** A running child whose bootstrap turn has been answered: idle. */
+async function runningIdle(h: ReturnType<typeof makeSupervisor>): Promise<FakeChild> {
+  const n = children.length;
+  await h.sup.startFresh(cwdDir);
+  const c = await childN(n + 1);
+  pushJson(c, RESULT_OK);
+  await settle();
+  return c;
+}
+
+const IDLE_MS = 100;
+/** Idle-stopped (standby "idle"), its first child answered and exited. */
+async function idleStopped(extra: ExtraOpts = {}): Promise<{
+  h: ReturnType<typeof makeSupervisor>;
+  c1: FakeChild;
+}> {
+  await updateLauncherSettings(baseDir, { lifetime: "idle", idleMinutes: 1 }, null);
+  const h = makeSupervisor({ idleMinuteMs: IDLE_MS, ...extra });
+  const n = children.length;
+  await h.sup.startFresh(cwdDir);
+  const c1 = await childN(n + 1);
+  pushJson(c1, RESULT_OK);
+  await settle();
+  advance(IDLE_MS);
+  await until(() => c1.signalCode !== null || c1.exitCode !== null, "the idle stop");
+  await settle();
+  expect(h.sup.status()).toMatchObject({ running: false, standby: "idle" });
+  return { h, c1 };
+}
+
+/** Off (standby "off") after an answered first child. */
+async function offStopped(extra: ExtraOpts = {}) {
+  const h = makeSupervisor(extra);
+  const c1 = await runningIdle(h);
+  await h.sup.updateSettings({ startMode: "off" });
+  await settle();
+  expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
+  return { h, c1 };
+}
+
+async function savedStartMode(): Promise<string> {
+  return (await readLauncherSettings(baseDir)).settings.startMode;
+}
+
+describe("3b-2a R1: requestWake", () => {
+  it("idle: one wake now; more calls mid-turn give one follow-up after the result", async () => {
+    const h = makeSupervisor();
+    const c = await runningIdle(h);
+    h.sup.requestWake?.();
+    expect(wakes(c)).toBe(1);
+    h.sup.requestWake?.();
+    h.sup.requestWake?.();
+    expect(wakes(c)).toBe(1);
+    pushJson(c, RESULT_OK);
+    await settle();
+    expect(wakes(c)).toBe(2);
+    pushJson(c, RESULT_OK);
+    await settle();
+    expect(wakes(c)).toBe(2);
+  });
+
+  it("licence refusing: nothing written, nothing owed on the spawn or across spawns", async () => {
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    const c = await runningIdle(h);
+    lic.refusing = true;
+    h.sup.requestWake?.();
+    expect(c.stdin.writes).toHaveLength(1); // the bootstrap only
+    pushJson(c, RESULT_OK); // a turn boundary flushes nothing
+    await settle();
+    expect(c.stdin.writes).toHaveLength(1);
+    lic.refusing = false;
+    await h.sup.relaunch();
+    const c2 = await childN(2);
+    await settle();
+    expect(argAfter(c2, "--resume")).toBeDefined();
+    expect(c2.stdin.writes).toHaveLength(0);
+  });
+
+  it("positive twin: licence admitting, one turn", async () => {
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    const c = await runningIdle(h);
+    h.sup.requestWake?.();
+    expect(wakes(c)).toBe(1);
+  });
+
+  it("stdin not writable: nothing now; once writable, the next turn boundary writes the wake once", async () => {
+    const h = makeSupervisor();
+    const c = await runningIdle(h);
+    c.stdin.writable = false;
+    h.sup.requestWake?.();
+    expect(wakes(c)).toBe(0);
+    c.stdin.writable = true;
+    pushJson(c, RESULT_OK); // a turn boundary
+    await settle();
+    expect(wakes(c)).toBe(1);
+    pushJson(c, RESULT_OK);
+    await settle();
+    expect(wakes(c)).toBe(1);
+  });
+
+  it("a licence decision that throws: the call returns normally and writes nothing", async () => {
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    const c = await runningIdle(h);
+    lic.throwing = true;
+    expect(() => h.sup.requestWake?.()).not.toThrow();
+    expect(c.stdin.writes).toHaveLength(1);
+    // Name only in the log: the message is not echoed.
+    expect(logText()).not.toMatch(/doc_secret/);
+  });
+
+  it("local period held: nothing written; the switch back's wakes are not doubled", async () => {
+    async function run(callRequestWake: boolean): Promise<number> {
+      const lp = localDouble();
+      const h = makeSupervisor({ localPeriod: lp.opts });
+      const c = await runningIdle(h);
+      lp.held = true;
+      lp.switchTo({ to: "local" });
+      if (callRequestWake) h.sup.requestWake?.();
+      expect(wakes(c)).toBe(0);
+      lp.held = false;
+      lp.switchTo({ to: "claude", asked: true });
+      // The switch back's own wake reaches a running child through the push
+      // path (an event), as in production.
+      h.emit(chatEvent());
+      await settle();
+      pushJson(c, RESULT_OK);
+      await settle();
+      const n = wakes(c);
+      await h.sup.stop();
+      return n;
+    }
+    const without = await run(false);
+    const withCall = await run(true);
+    expect(without).toBe(1);
+    expect(withCall).toBe(without);
+  });
+
+  it("no child: nothing written, and the next spawn writes no wake on its account", async () => {
+    const h = makeSupervisor();
+    h.sup.requestWake?.();
+    const c1 = await runningIdle(h);
+    expect(turnTexts(c1)).toHaveLength(1); // the bootstrap only
+    await h.sup.relaunch();
+    const c2 = await childN(2);
+    await settle();
+    expect(c2.stdin.writes).toHaveLength(0);
+  });
+
+  it("a child whose delivery an Off released: nothing written, and the next spawn writes no wake on its account", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    c1.holdExit = true;
+    const off = h.sup.updateSettings({ startMode: "off" });
+    await until(() => c1.killed, "the Off's SIGTERM");
+    h.sup.requestWake?.();
+    expect(c1.stdin.writes).toHaveLength(1);
+    c1.releaseExit();
+    await off;
+    await h.sup.startByUser();
+    const c2 = await childN(2);
+    await settle();
+    expect(argAfter(c2, "--resume")).toBeDefined();
+    expect(c2.stdin.writes).toHaveLength(0);
+  });
+
+  it("a delivery-killed child that has not exited (still holding its delivery): nothing written", async () => {
+    const h = makeSupervisor();
+    const c1 = await runningIdle(h);
+    c1.holdExit = true;
+    c1.stdin.emit("error", EPIPE()); // the stdin-gone kill
+    await until(() => c1.killed, "the delivery kill");
+    h.sup.requestWake?.();
+    expect(c1.stdin.writes).toHaveLength(1);
+  });
+
+  it("flag off: nothing written, no timer, no log line", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const lic = licenceDouble();
+    const h = makeSupervisor({ aiRefusal: lic.fn });
+    const c = await runningIdle(h);
+    const timers = vi.getTimerCount();
+    const logged = errSpy.mock.calls.length;
+    const licCalls = lic.calls;
+    h.sup.requestWake?.();
+    await settle();
+    expect(c.stdin.writes).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(timers);
+    expect(errSpy.mock.calls.length).toBe(logged);
+    expect(lic.calls).toBe(licCalls);
+  });
+});
+
+describe("3b-2a R2: startOrWake", () => {
+  describe("H1: a chat behind the user's Start", () => {
+    async function h1(sow: "none" | "false" | "true"): Promise<{ c2: FakeChild; calls: number }> {
+      const waiting = waitingDouble(sow === "true");
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      const starting = h.sup.startByUser();
+      h.emit(chatEvent()); // accepted; its pass queues behind the Start
+      if (sow !== "none") h.sup.startOrWake?.("document");
+      expect(pendingOf(h)).toBe(true);
+      await starting;
+      const c2 = await childN(2);
+      await settle();
+      expect(argAfter(c2, "--resume")).toBeDefined();
+      pushJson(c2, RESULT_OK); // the spawn's own first turn
+      await settle();
+      // The pass has demonstrably run: the lock is past it, the queued start
+      // no longer reads as pending, and (with a call) the waiting double ran.
+      await lockBarrier(h);
+      expect(pendingOf(h)).toBeUndefined();
+      if (sow !== "none") expect(waiting.calls).toBe(1);
+      pushJson(c2, RESULT_OK); // flush anything left pending
+      await settle();
+      return { c2, calls: waiting.calls };
+    }
+    it("no startOrWake: exactly one wake turn on the new child", async () => {
+      expect(wakes((await h1("none")).c2)).toBe(1);
+    });
+    it("a startOrWake that finds nothing waiting: exactly one wake turn", async () => {
+      expect(wakes((await h1("false")).c2)).toBe(1);
+    });
+    it("twin, waiting true: the live child gets exactly one extra wake turn (Accepted)", async () => {
+      expect(wakes((await h1("true")).c2)).toBe(2);
+    });
+  });
+
+  it("idle-stopped, another AI attached, waiting true: one resumed spawn whose first turn is the wake, mode unchanged", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(argAfter(c2, "--resume")).toBeDefined();
+    expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    expect(await savedStartMode()).toBe("auto");
+  });
+
+  it("twin: waiting false, no spawn", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn, otherAiAttached: () => true });
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(1);
+    expect(children).toHaveLength(1);
+  });
+
+  describe("H3: a chat and a startOrWake in one pass, another AI attaching by the pass", () => {
+    async function h3(waitingAnswer: boolean) {
+      let calls = 0;
+      const waiting = waitingDouble(waitingAnswer);
+      const { h } = await idleStopped({
+        workWaiting: waiting.fn,
+        // Clear when the chat is accepted, attached by the time the pass runs.
+        otherAiAttached: () => ++calls > 1,
+      });
+      calls = 0;
+      h.emit(chatEvent());
+      h.sup.startOrWake?.("message");
+      await lockBarrier(h);
+      expect(calls).toBe(2); // acceptance, then the pass's guard
+      expect(waiting.calls).toBe(1);
+      return h;
+    }
+    it("waiting false: no spawn", async () => {
+      await h3(false);
+      expect(children).toHaveLength(1);
+    });
+    it("waiting true: one spawn", async () => {
+      await h3(true);
+      await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+    });
+  });
+
+  it("live standby Off at the call: nothing recorded, no pass, and a later Start writes no wake for it", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await offStopped({ workWaiting: waiting.fn });
+    // The user's Start is queued first: a pass admitted here would run after
+    // it, find the live child and wake it.
+    const starting = h.sup.startByUser();
+    h.sup.startOrWake?.("document");
+    await starting;
+    const c2 = await childN(2);
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(0);
+    expect(c2.stdin.writes).toHaveLength(0);
+  });
+
+  it("positive twin: the same Start with the call admitted (standby idle) wakes the new child", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    const starting = h.sup.startByUser();
+    h.sup.startOrWake?.("document");
+    await starting;
+    const c2 = await childN(2);
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(1);
+    expect(wakes(c2)).toBe(1);
+  });
+
+  it("shutdown: a startOrWake during stop() is dropped (nothing recorded, no pass)", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    const stopping = h.sup.stop();
+    h.sup.startOrWake?.("document");
+    await stopping;
+    await lockBarrier(h);
+    expect(waiting.calls).toBe(0);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(0);
+    expect(children).toHaveLength(1);
+  });
+
+  it("a pass queued ahead of stop(): no start (the pass-time shutdown check); twin without stop() starts", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.sup.startOrWake?.("document");
+    await h.sup.stop();
+    await settle();
+    expect(waiting.calls).toBe(1);
+    expect(children).toHaveLength(1);
+
+    const w2 = waitingDouble(true);
+    const second = await idleStopped({ workWaiting: w2.fn });
+    second.h.sup.startOrWake?.("document");
+    await lockBarrier(second.h);
+    expect(children).toHaveLength(3);
+  });
+
+  it("a pass queued ahead of stop() with a live child writes no turn; twin without stop() wakes it", async () => {
+    const waiting = waitingDouble(true);
+    const h = makeSupervisor({ workWaiting: waiting.fn });
+    const c1 = await runningIdle(h);
+    h.sup.startOrWake?.("document");
+    await h.sup.stop();
+    expect(waiting.calls).toBe(1);
+    expect(c1.stdin.writes).toHaveLength(1);
+
+    const w2 = waitingDouble(true);
+    const h2 = makeSupervisor({ workWaiting: w2.fn });
+    const c2 = await runningIdle(h2);
+    h2.sup.startOrWake?.("document");
+    await lockBarrier(h2);
+    expect(wakes(c2)).toBe(1);
+  });
+
+  /** The Off-ahead construction (the brief's four steps). */
+  async function offAhead(
+    h: ReturnType<typeof makeSupervisor>,
+    order: string[],
+    inOffWait?: (c2: FakeChild) => void,
+  ): Promise<FakeChild> {
+    let relaunchChild: FakeChild | null = null;
+    // Each step is recorded where the lock runs it, not at its promise's
+    // settlement (which trails the next operation's start by microtasks):
+    // the relaunch at its spawn, the Off where it sets the standby (arming the
+    // standby watch), the pass at its waiting decision.
+    onSpawn = (c) => {
+      c.holdExit = true; // 1: the relaunch's new child holds its exit
+      relaunchChild = c;
+      order.push("relaunch");
+      onSpawn = null;
+    };
+    standbySubscribeProbe = () => {
+      order.push("off");
+      standbySubscribeProbe = null;
+    };
+    const relaunching = h.sup.relaunch(); // 2
+    const off = h.sup.updateSettings({ startMode: "off" }); // 3
+    h.sup.startOrWake?.("document"); // 4: a running child, standby unset: admitted
+    await relaunching;
+    const c2 = relaunchChild as unknown as FakeChild;
+    await until(() => c2.killed, "the Off's SIGTERM");
+    inOffWait?.(c2);
+    c2.releaseExit();
+    await off;
+    await lockBarrier(h);
+    return c2;
+  }
+
+  it("Off ahead of the pass, waiting true: the lock ran relaunch, Off, pass; no spawn after the Off, mode Off, nothing owed", async () => {
+    const order: string[] = [];
+    const waiting = waitingDouble(() => {
+      order.push("pass");
+      return true;
+    });
+    const h = makeSupervisor({ workWaiting: waiting.fn });
+    await runningIdle(h);
+    await offAhead(h, order);
+    expect(order).toEqual(["relaunch", "off", "pass"]);
+    expect(children).toHaveLength(2);
+    expect(await savedStartMode()).toBe("off");
+    expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
+    // Nothing owed: the user's later Start writes no wake.
+    await h.sup.startByUser();
+    const c3 = await childN(3);
+    await settle();
+    expect(c3.stdin.writes).toHaveLength(0);
+  });
+
+  describe("H4: a chat accepted from Off joins the queued pass", () => {
+    async function h4(otherAiAtPass: boolean) {
+      const order: string[] = [];
+      let otherAi = false;
+      const waiting = waitingDouble(() => {
+        order.push("pass");
+        return true;
+      });
+      const h = makeSupervisor({ workWaiting: waiting.fn, otherAiAttached: () => otherAi });
+      await runningIdle(h);
+      await offAhead(h, order, () => {
+        const st = h.sup.status();
+        if (!st.running && st.standby === "off") order.push("standby-off");
+        const before = pendingOf(h);
+        h.emit(chatEvent());
+        order.push("chat");
+        // Accepted: it marked the queued pass owed by today's arm.
+        expect(before).toBeUndefined();
+        expect(pendingOf(h)).toBe(true);
+        onSpawn = () => order.push("spawn");
+        otherAi = otherAiAtPass;
+      });
+      return { h, order };
+    }
+    it("no other AI at the pass: one spawn, mode saved on-click", async () => {
+      const { order } = await h4(false);
+      await childN(3);
+      expect(order.slice(0, 4)).toEqual(["relaunch", "off", "standby-off", "chat"]);
+      expect(order).toContain("spawn");
+      expect(order.indexOf("spawn")).toBeGreaterThan(order.indexOf("chat"));
+      expect(children).toHaveLength(3);
+      expect(await savedStartMode()).toBe("on-click");
+    });
+    it("another AI at the pass: no spawn, mode still Off (start-or-wake did not carry it)", async () => {
+      const { order } = await h4(true);
+      expect(order).toEqual(["relaunch", "off", "standby-off", "chat", "pass"]);
+      expect(children).toHaveLength(2);
+      expect(await savedStartMode()).toBe("off");
+    });
+  });
+
+  it("H2: a chat accepted during a pass's respawn leaves nothing that starts a later pass from Off", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    // The pass's own spawn: a chat lands while the standby watch is still armed.
+    onSpawn = () => {
+      onSpawn = null;
+      h.emit(chatEvent());
+    };
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    const c2 = await childN(2);
+    pushJson(c2, RESULT_OK);
+    await settle();
+    expect(pendingOf(h)).toBeUndefined();
+    await updateLauncherSettings(baseDir, { lifetime: "always" }, null);
+    const order: string[] = [];
+    await offAhead(h, order);
+    expect(children).toHaveLength(3); // the relaunch's child only
+    expect(await savedStartMode()).toBe("off");
+  });
+
+  describe("R2.5: standby unset", () => {
+    it("a restartTimer pending: no second spawn, and the restart's spawn writes the wake", async () => {
+      const waiting = waitingDouble(true);
+      const h = makeSupervisor({ workWaiting: waiting.fn, restartBackoffsMs: [1000] });
+      const c1 = await runningIdle(h);
+      c1.exitWith(1, null);
+      await settle();
+      expect(pendingOf(h)).toBe(true);
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(1);
+      expect(children).toHaveLength(1);
+      advance(1000);
+      const c2 = await childN(2);
+      await settle();
+      expect(argAfter(c2, "--resume")).toBeDefined();
+      expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    });
+
+    it("twin: the same restart with no call writes no turn", async () => {
+      const h = makeSupervisor({ restartBackoffsMs: [1000] });
+      const c1 = await runningIdle(h);
+      c1.exitWith(1, null);
+      await settle();
+      advance(1000);
+      const c2 = await childN(2);
+      await settle();
+      expect(c2.stdin.writes).toHaveLength(0);
+    });
+
+    it("launching > 0 (an unlocked crash restart under way): nothing owed", async () => {
+      let pendingAtPass: boolean | undefined;
+      const waiting = waitingDouble(() => {
+        pendingAtPass = pendingOf(h);
+        return true;
+      });
+      const h = makeSupervisor({ workWaiting: waiting.fn, restartBackoffsMs: [1000] });
+      const c1 = await runningIdle(h);
+      c1.exitWith(1, null);
+      await settle();
+      advance(1000); // the restart starts, unlocked, and awaits its plan
+      h.sup.startOrWake?.("document");
+      const c2 = await childN(2);
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(1);
+      expect(pendingAtPass).toBe(true);
+      expect(children).toHaveLength(2);
+      expect(c2.stdin.writes).toHaveLength(0);
+    });
+
+    it("a tripped breaker (standby unset, no restart timer): nothing", async () => {
+      const waiting = waitingDouble(true);
+      const h = makeSupervisor({ workWaiting: waiting.fn });
+      let c = await runningIdle(h);
+      // Crash until the windowed breaker trips (the [0] backoff is a faked timer).
+      for (let i = 0; i < 12; i++) {
+        const prev = children.length;
+        c.exitWith(1, null);
+        await settle();
+        if (h.sup.status().lastError === "circuit-open") break;
+        advance(1);
+        c = await childN(prev + 1);
+        await settle();
+      }
+      await until(() => h.sup.status().lastError === "circuit-open", "the breaker");
+      const n = children.length;
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(children).toHaveLength(n);
+      // Nothing owed: the user's Start (which resets the breaker) writes no
+      // wake (it may be fresh — the crash loop can drop the saved session).
+      await h.sup.startByUser();
+      const next = await childN(n + 1);
+      await settle();
+      expect(wakes(next)).toBe(0);
+    });
+  });
+
+  describe("R2.6: the licence inside the pass", () => {
+    it("a running child admitted at the call, refused by the pass: nothing written; twin admitting wakes it", async () => {
+      const lic = licenceDouble();
+      const waiting = waitingDouble(true);
+      const h = makeSupervisor({ aiRefusal: lic.fn, workWaiting: waiting.fn });
+      const c1 = await runningIdle(h);
+      h.sup.startOrWake?.("document");
+      lic.refusing = true;
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(1);
+      expect(c1.stdin.writes).toHaveLength(1);
+      lic.refusing = false;
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(wakes(c1)).toBe(1);
+    });
+
+    it("no child, admitted at the call, refused in respawn: no spawn, recorded; activation spawns once and writes the wake", async () => {
+      const lic = licenceDouble();
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ aiRefusal: lic.fn, workWaiting: waiting.fn });
+      h.sup.startOrWake?.("document");
+      lic.refusing = true;
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+      expect(h.sup.licenceRefusal()).not.toBeNull();
+      expect(h.sup.status().lastError).toBe("unlicensed");
+      lic.refusing = false;
+      await h.sup.resumeAfterLicence();
+      const c2 = await childN(2);
+      await settle();
+      expect(children).toHaveLength(2);
+      expect(turnTexts(c2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    });
+
+    it("refused at the call: activation spawns nothing for it", async () => {
+      const lic = licenceDouble();
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ aiRefusal: lic.fn, workWaiting: waiting.fn });
+      lic.refusing = true;
+      h.sup.startOrWake?.("document");
+      lic.refusing = false;
+      await lockBarrier(h);
+      await h.sup.resumeAfterLicence();
+      await settle();
+      expect(waiting.calls).toBe(0);
+      expect(children).toHaveLength(1);
+    });
+  });
+
+  describe("R2.7: the end of a pass", () => {
+    it("a call while a pass is running gives exactly one more pass, which wakes the new child", async () => {
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      onSpawn = () => {
+        onSpawn = null;
+        h.sup.startOrWake?.("document"); // during the first pass's respawn
+      };
+      h.sup.startOrWake?.("document");
+      const c2 = await childN(2);
+      await lockBarrier(h);
+      await lockBarrier(h);
+      expect(h.seam.diagnosticsForTests().startPasses).toBe(2);
+      expect(waiting.calls).toBe(2);
+      expect(children).toHaveLength(2);
+      pushJson(c2, RESULT_OK); // its first turn; the second pass's wake follows
+      await settle();
+      expect(wakes(c2)).toBe(2);
+    });
+
+    it("a chat during a pass whose respawn answers cli-unusable: no second attempt", async () => {
+      const waiting = waitingDouble(true);
+      let bin: string | null = process.execPath;
+      let resolves = 0;
+      let gate: Promise<void> | null = null;
+      let open!: () => void;
+      const { h } = await idleStopped({
+        workWaiting: waiting.fn,
+        resolveClaudeCommand: () => {
+          resolves += 1;
+          return bin;
+        },
+        readSettings: async () => {
+          if (gate) await gate;
+          return readLauncherSettings(baseDir);
+        },
+      });
+      bin = null;
+      resolves = 0;
+      gate = new Promise<void>((r) => {
+        open = r;
+      });
+      h.sup.startOrWake?.("document");
+      await until(() => waiting.calls === 1, "the pass");
+      await settle();
+      h.emit(chatEvent()); // the watch is still armed: accepted, joins
+      gate = null;
+      open();
+      await lockBarrier(h);
+      await lockBarrier(h);
+      expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+      expect(resolves).toBe(1);
+      expect(children).toHaveLength(1);
+    });
+  });
+
+  it("burst: five calls give one pass and one spawn", async () => {
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    for (let i = 0; i < 5; i++) h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    await childN(2);
+    await lockBarrier(h);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+    expect(waiting.calls).toBe(1);
+    expect(children).toHaveLength(2);
+  });
+
+  it("a chat that finds a start-or-wake pass queued joins it: no second pass", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.sup.startOrWake?.("document");
+    h.emit(chatEvent()); // accepted: joins the queued pass, which today's arm now owes
+    await lockBarrier(h);
+    await childN(2);
+    await lockBarrier(h);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+    expect(waiting.calls).toBe(0); // today's arm started it; start-or-wake's share did not run
+    expect(children).toHaveLength(2);
+  });
+
+  it("R2.9: an absent waiting decision starts and wakes nothing", async () => {
+    const { h } = await idleStopped();
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+    expect(children).toHaveLength(1);
+    const h2 = makeSupervisor();
+    const c = await runningIdle(h2);
+    h2.sup.startOrWake?.("document");
+    await lockBarrier(h2);
+    expect(c.stdin.writes).toHaveLength(1);
+  });
+
+  it("R2.9: a throwing waiting decision starts and wakes nothing", async () => {
+    const throwing = () => {
+      throw new Error("waiting boom doc_secret");
+    };
+    const { h } = await idleStopped({ workWaiting: throwing });
+    h.sup.startOrWake?.("document");
+    await lockBarrier(h);
+    expect(children).toHaveLength(1);
+    const h2 = makeSupervisor({ workWaiting: throwing });
+    const c = await runningIdle(h2);
+    h2.sup.startOrWake?.("document");
+    await lockBarrier(h2);
+    expect(c.stdin.writes).toHaveLength(1);
+    expect(logText()).not.toMatch(/doc_secret/);
+  });
+
+  it("R2.1, R2.12: throwing decisions never throw to the caller or leave a rejection unhandled", async () => {
+    const seen: unknown[] = [];
+    const listener = (reason: unknown) => seen.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      const { h } = await idleStopped({
+        workWaiting: () => {
+          throw new Error("waiting boom");
+        },
+      });
+      expect(() => h.sup.startOrWake?.("document")).not.toThrow();
+      await lockBarrier(h);
+      const lic = licenceDouble();
+      const h2 = makeSupervisor({ aiRefusal: lic.fn });
+      await runningIdle(h2);
+      lic.throwing = true;
+      expect(() => h2.sup.startOrWake?.("document")).not.toThrow();
+      expect(() => h2.sup.requestWake?.()).not.toThrow();
+      await lockBarrier(h2);
+      await settle(10);
+      expect(seen).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  describe("R2.10: the Starting status", () => {
+    it("a start-or-wake-only pass does not read as Starting; a chat joining it does, at once", async () => {
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      h.sup.startOrWake?.("document");
+      expect(pendingOf(h)).toBeUndefined();
+      h.emit(chatEvent());
+      expect(pendingOf(h)).toBe(true);
+      await lockBarrier(h);
+      expect(h.seam.diagnosticsForTests().startPasses).toBe(1);
+    });
+
+    it("a start-or-wake-only pass that declines, with a setup Apply meanwhile: the Apply decides as on master", async () => {
+      const waiting = waitingDouble(false);
+      const { h } = await idleStopped({ workWaiting: waiting.fn });
+      h.sup.startOrWake?.("document");
+      const decision = await h.sup.startAfterSetup();
+      expect(decision).toBe("held"); // idle is a choice; "running" would be the queued pass's
+      expect(waiting.calls).toBe(1);
+    });
+  });
+
+  describe("R2.11: during a local-model period", () => {
+    it("no child, something waiting: no spawn, and the hold's log line", async () => {
+      const lp = localDouble();
+      const waiting = waitingDouble(true);
+      const { h } = await idleStopped({ workWaiting: waiting.fn, localPeriod: lp.opts });
+      lp.held = true;
+      lp.switchTo({ to: "local" });
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(children).toHaveLength(1);
+      expect(logText()).toMatch(/not starting Claude \(message\)/);
+    });
+
+    it("a live child: nothing written", async () => {
+      const lp = localDouble();
+      const waiting = waitingDouble(true);
+      const h = makeSupervisor({ workWaiting: waiting.fn, localPeriod: lp.opts });
+      const c = await runningIdle(h);
+      lp.held = true;
+      lp.switchTo({ to: "local" });
+      h.sup.startOrWake?.("document");
+      await lockBarrier(h);
+      expect(waiting.calls).toBe(1);
+      expect(c.stdin.writes).toHaveLength(1);
+    });
+  });
+
+  it("Accepted (concurrency review M2): a chat that joins a start-or-wake pass queued ahead of an Off is started by that pass, then the Off stops it", async () => {
+    const waiting = waitingDouble(false);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    h.sup.startOrWake?.("document"); // pass P queued
+    const off = h.sup.updateSettings({ startMode: "off" }); // behind P
+    h.emit(chatEvent()); // standby still idle: accepted, joins P
+    await off;
+    await lockBarrier(h);
+    expect(children).toHaveLength(2); // P started Claude; the Off stopped it
+    expect(children[1].killed).toBe(true);
+    expect(await savedStartMode()).toBe("off");
+    expect(h.sup.status()).toMatchObject({ running: false, standby: "off" });
+  });
+
+  it("flag off: nothing recorded, no pass, never Starting, no log line", async () => {
+    vi.stubEnv("TANDEM_OWNERSHIP", "");
+    const waiting = waitingDouble(true);
+    const { h } = await idleStopped({ workWaiting: waiting.fn });
+    const logged = errSpy.mock.calls.length;
+    const timers = vi.getTimerCount();
+    h.sup.startOrWake?.("document");
+    expect(pendingOf(h)).toBeUndefined();
+    await lockBarrier(h);
+    expect(pendingOf(h)).toBeUndefined();
+    expect(waiting.calls).toBe(0);
+    expect(children).toHaveLength(1);
+    expect(errSpy.mock.calls.length).toBe(logged);
+    expect(vi.getTimerCount()).toBe(timers);
   });
 });
