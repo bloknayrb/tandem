@@ -20,8 +20,23 @@
  * licence to the local server: the stdio bridge's MCP transport and preflight,
  * `authFetch` (the channel shim, the monitor and the SSE consumer),
  * `tandem rotate-token`, and the licence commands (`tandem activate` /
- * `deactivate`). The SSE body streams as before.
+ * `deactivate`). The SSE body streams as before. In the server (#1123): the
+ * local-model client, whose POST carries the chat prompt and so the
+ * document's text, and the start-up instance probe (`probeHealthOnce`), which
+ * decides whether `freePort` may kill a port's listener (#1758).
  * Redirects are not touched: the caller's `redirect` mode passes through.
+ *
+ * Importing this module evaluates the installed undici, whose `lib/global.js`
+ * sets `Symbol.for("undici.globalDispatcher.1")` to a plain undici `Agent` when
+ * it is unset, and Node's global `fetch` reads that symbol. So on a Node that
+ * has not set it by then, every later global `fetch` in the process dispatches
+ * through the installed undici's `Agent` rather than Node's bundled one (seen
+ * on Node 24.22.1). On Node 22.23.5, the desktop sidecar's pinned Node, Node
+ * sets it at start-up and the import leaves it alone (measured). With the
+ * environment proxy on, Node installs its proxy agent first, so the import
+ * never replaces that. The `Agent` it may install reads no proxy variable,
+ * like Node's default without the proxy. No import path avoids this: undici's
+ * `fetch` module requires `lib/global.js` itself.
  *
  * Imports nothing from `src/server`, and reads no build flag, so any bundle
  * may take it.

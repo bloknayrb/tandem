@@ -130,7 +130,9 @@ async function runChild(
   c.stderr.on("data", (b: Buffer) => {
     err += b.toString("utf8");
   });
-  await new Promise<void>((r) => c.once("exit", () => r()));
+  // `close`, not `exit`: stdio can still be open when `exit` fires, so the
+  // RESULT line may not have been read yet.
+  await new Promise<void>((r) => c.once("close", () => r()));
   const line = out.split("\n").find((l) => l.startsWith("RESULT "));
   if (!line) throw new Error(`child printed no RESULT; stderr:\n${err.slice(-2000)}`);
   return JSON.parse(line.slice("RESULT ".length)) as Record<string, unknown>;

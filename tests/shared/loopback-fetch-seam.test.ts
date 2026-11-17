@@ -35,6 +35,10 @@ import { describe, expect, it } from "vitest";
  * closed: rewrite it as an `import type`). The type-import strip stops at the
  * first `;` or quote, which relies on biome writing statement semicolons.
  *
+ * The scan reads strings and regex literals as code, so a message string or
+ * a regex containing the word `fetch` (or an http module name) fails it: two
+ * allowlist lines below exist only for that reason.
+ *
  * Everything else that matches must be one of `ALLOWED`'s exact source lines,
  * each with its reason, and every entry must still match (no stale entries). A
  * new hit, including a second hit of an allowed kind in an allowed file, fails.
@@ -44,7 +48,7 @@ import { describe, expect, it } from "vitest";
  *   directories;
  * - anything outside them (`probe/`, `scripts/`, `src-tauri/`, the client);
  * - a request made some other way (a spawned process, a websocket, a raw
- *   `net` socket);
+ *   `net` socket), or by a dependency that makes the request itself;
  * - a `fetch` reached through an alias of the global object
  *   (`const g = globalThis; g.fetch`), `Reflect.get`, a computed key, a
  *   destructuring with a type annotation, cast or parentheses

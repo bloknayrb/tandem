@@ -198,9 +198,12 @@ async function probeHealthOnce(
   try {
     // `loopbackFetch`, never the global `fetch` (#2422): under Node's
     // environment proxy a probe of `127.0.0.1` / `[::1]` would go to the proxy,
-    // which fails or answers it; either way this returns null, start-up
-    // proceeds and `freePort` kills the live Tandem on the port (#1758). A LAN
-    // bind host still uses the global `fetch` inside `loopbackFetch`.
+    // which can fail or misanswer it (one on this computer that honours the
+    // CONNECT reaches the real Tandem and answers correctly). A probe that
+    // returns null lets start-up proceed, and `freePort` can then kill the live
+    // Tandem on the port (#1758): an npm `tandem` (HTTP or stdio) started with
+    // the proxy variables set; the chain is inferred, not run. A LAN bind host
+    // still uses the global `fetch` inside `loopbackFetch`.
     const res = await loopbackFetch(`http://${authority}:${mcpPort}/health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });

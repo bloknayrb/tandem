@@ -101,10 +101,20 @@ describe("the local-model client on undici (#1123, #2422)", () => {
     servers[0]?.on("request", () => {
       targetHits += 1;
     });
+    let redirectorHits = 0;
     const { base } = await listen((_req, res) => {
+      redirectorHits += 1;
       res.writeHead(302, { location: `${target.base}/v1/chat/completions` }).end();
     });
-    await expect(chat({ config: config(base), messages: [], tools: [] })).rejects.toThrow();
+    const err = await chat({ config: config(base), messages: [], tools: [] }).catch(
+      (e: unknown) => e,
+    );
+    // The request reached the redirecting server, and undici refused the 3xx
+    // itself (its `redirect: "error"` rejection), rather than failing earlier.
+    expect(redirectorHits).toBe(1);
+    expect(err).toBeInstanceOf(TypeError);
+    expect((err as TypeError).message).toBe("fetch failed");
+    expect(String((err as { cause?: { message?: unknown } }).cause?.message)).toMatch(/redirect/i);
     expect(targetHits).toBe(0);
   });
 
