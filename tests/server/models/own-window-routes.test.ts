@@ -229,10 +229,14 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
   /**
    * An accepted `{ editing: true }` POST to the settings route on the real
    * server, which follows the shipped flag (it takes no
-   * `localModelSettingsEnabled`). Lit, the change is "recorded at once"
-   * (#2404, fix item 3) and answered with `LocalModelSettingsPostResponse`
-   * (`contract.ts`: `{ editing, persisted }`) and 200; dark, the route is 404
-   * and no file is written. The dark-only cases live in
+   * `localModelSettingsEnabled`). Lit, the answer is a
+   * `LocalModelSettingsPostResponse`, whose doc comment in
+   * `src/shared/models/contract.ts` fixes the values: "`editing` is what the
+   * server is acting on now; `persisted` says whether the disk agrees, i.e.
+   * whether it will still hold after a restart." — so a successful On is
+   * `{ editing: true, persisted: true }` with the file on disk saying so (the
+   * 200 status is cited from `api-routes.ts` only). Dark, the route is 404 and
+   * no file is written. The dark-only cases live in
    * `own-window-routes-dark.test.ts`.
    */
   function expectSettingsPostAccepted(res: Answer): void {
@@ -706,12 +710,17 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
     );
   });
 
-  // Kept here unforced as well as in `own-window-routes-dark.test.ts` (#1123):
-  // this case is decided by the origin test and by nothing that reads the
-  // flag, so it passes in either state, and this copy keeps a real-server
-  // check of an own-window `/api/models` write in the flag-neutral file.
-  describe("an own-window /api/models write in either state", () => {
-    it("POST /api/models: written from an accepted origin (the reconcile), refused from any other, and only models.json exists", async () => {
+  // The POST /api/models handler alone, in either state (#1123). Kept here
+  // unforced as well as in `own-window-routes-dark.test.ts`: this harness
+  // starts no local-model collaborator, so nothing here is subscribed to the
+  // registry's change listeners, and the claim is narrowed to the handler.
+  // Its doc comment in `src/server/models/api-routes.ts`
+  // (`makePostModelsHandler`): "The handler itself never touches the record of
+  // what the user was told: it runs dark, and that record must not." In
+  // production a lit server's collaborator writes that record from its
+  // listener; this case does not speak for that.
+  describe("the POST /api/models handler alone (no collaborator in this harness), in either state", () => {
+    it("POST /api/models: written from an accepted origin (the reconcile), refused from any other; the handler itself writes only models.json", async () => {
       await boot();
       expectOwnWindowRefusal(
         await send(port, API_MODELS, {
@@ -728,7 +737,8 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
         body: modelsBody(fileWith(localModel), { reconcile: true }),
       });
       expect(mine.status, mine.text).toBe(200);
-      // No settings file, no record of what the user was told, no marker.
+      // The handler itself writes no settings file, no record of what the
+      // user was told and no marker (no collaborator listens here).
       expect(fs.readdirSync(dir)).toEqual([MODELS_FILE_NAME]);
       expect(bytes(path.join(dir, LOCAL_MODEL_ANNOUNCED_FILE_NAME))).toBeNull();
       expect(bytes(path.join(dir, "local-model-baseline.json"))).toBeNull();
