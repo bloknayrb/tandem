@@ -265,3 +265,150 @@ describe("AI surface inventory (#1346 discovery)", () => {
     expect(section).toMatch(/Row 3 is the browser/);
   });
 });
+
+/**
+ * Blank the contents of string and template literals (keeping their quotes and
+ * the text's length), so a brace inside a literal (`startsWith("{")`) does not
+ * move the brace scan below. Comments must already be stripped.
+ */
+function blankLiterals(src: string): string {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== ch) {
+        if (src[j] === "\\") j++;
+        else if (ch !== "`" && src[j] === "\n") break; // not a string after all
+        j++;
+      }
+      out += ch + src.slice(i + 1, j).replace(/[^\n]/g, " ") + (src[j] ?? "");
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+const CONTROL_WORDS = new Set(["if", "for", "while", "switch", "catch", "function", "return"]);
+
+/** The name a `{` opens, read from the text since the previous `;`, `{` or `}`:
+ *  a function declaration, a method, or an arrow bound to a name. Null for
+ *  anything else (a block, an anonymous callback, an object literal). */
+function headerName(header: string): string | null {
+  const h = header.trim();
+  const decl = /\bfunction\s+(\w+)\s*\([\s\S]*\)[\s\S]*$/.exec(h);
+  if (decl) return decl[1];
+  const arrow = /(\w+)\s*(?::[^=()]*)?[=:]\s*(?:async\s*)?\([^()]*\)\s*(?::[^=]*)?=>$/.exec(h);
+  if (arrow) return arrow[1];
+  const method = /^(?:async\s+)?(\w+)\s*\([^()]*\)\s*(?::[\s\S]*)?$/.exec(h);
+  if (method && !CONTROL_WORDS.has(method[1])) return method[1];
+  return null;
+}
+
+/** Each match of `pattern` in `src`, keyed by its innermost enclosing named
+ *  function (brace-scanned over the comment-stripped, literal-blanked text). */
+function sitesByEnclosingFunction(src: string, pattern: RegExp): string[] {
+  const text = blankLiterals(stripComments(src));
+  const enclosing: Array<string | null> = [];
+  const nameAt = new Map<number, string>();
+  let boundary = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") {
+      enclosing.push(headerName(text.slice(boundary, i)));
+      boundary = i + 1;
+    } else if (ch === "}") {
+      enclosing.pop();
+      boundary = i + 1;
+    } else if (ch === ";") {
+      boundary = i + 1;
+    }
+    const inner = [...enclosing].reverse().find((n) => n !== null);
+    if (inner) nameAt.set(i, inner);
+  }
+  const raw = stripComments(src);
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  // `blankLiterals` keeps every character position of the stripped text, so a
+  // match's offset there is its offset in the scan.
+  return [...raw.matchAll(new RegExp(pattern.source, flags))].map(
+    (m) => `${nameAt.get(m.index) ?? "<top>"}:${m[1] ?? ""}`,
+  );
+}
+
+describe("the launcher's turn writers (#2358 PR 3b-2a, R3.1)", () => {
+  // Every turn written to Tandem's Claude's stdin is an AI surface (Critical
+  // Rule 9): a new writer must consult the licence decision, as `requestWake`
+  // does at its writer (`requestWakeOnSpawn`) and as a spawn does at its
+  // admission. A choke-point check that passes the file if it calls
+  // `decideRefusal()` anywhere cannot see a new site; these multisets can.
+  // Keyed by enclosing named function plus argument, and compared as sorted
+  // lists, so a second site with an existing key is a second entry, not
+  // hidden behind the first.
+  const SUPERVISOR = read("src", "server", "launcher", "supervisor.ts");
+  const OBLIGATION = [
+    "A new turn writer in supervisor.ts (or a moved one). Every turn written to",
+    "Tandem's Claude is an AI surface: it must consult the licence decision",
+    "(decideRefusal(), Critical Rule 9) before it writes or owes a wake, and be",
+    "listed in docs/licensing-explained.md's launcher row. Then update this list.",
+  ].join(" ");
+
+  it("sendTurn's call sites, and every other reference to it", () => {
+    const sites = sitesByEnclosingFunction(
+      SUPERVISOR,
+      /\bsendTurn\b(?!\s*\(text)\s*\(?\s*(\w*)/,
+    ).sort();
+    expect(sites, OBLIGATION).toEqual(
+      [
+        "flushPendingWake:SUPERVISOR_WAKE_PROMPT",
+        "onTandemEvent:SUPERVISOR_WAKE_PROMPT",
+        "requestWakeOnSpawn:SUPERVISOR_WAKE_PROMPT",
+        "spawnOnce:SUPERVISOR_INITIAL_PROMPT",
+        "spawnOnce:SUPERVISOR_WAKE_PROMPT",
+        "writeGreeting:SUPERVISOR_GREETING_PROMPT",
+      ].sort(),
+    );
+  });
+
+  it("the writers of a pending wake", () => {
+    const sites = sitesByEnclosingFunction(
+      SUPERVISOR,
+      /\bpendingWake\s*(?:=(?![=>])(?!\s*false\b)|\|\|=|&&=|\?\?=)()/,
+    ).sort();
+    expect(sites, OBLIGATION).toEqual(
+      [
+        "onNoReceipt:",
+        "onTandemEvent:",
+        "onTandemEvent:",
+        "requestWakeOnSpawn:",
+        "requestWakeOnSpawn:",
+        "sendTurn:",
+      ].sort(),
+    );
+  });
+
+  it("the functions that reach a turn write are referenced only where known", () => {
+    const refs = sitesByEnclosingFunction(
+      SUPERVISOR,
+      /\b(onTandemEvent|flushPendingWake|writeGreeting|requestWakeOnSpawn)\b/,
+    ).sort();
+    // Each function's own declaration counts once, in `spawnOnce`.
+    expect(refs, OBLIGATION).toEqual(
+      [
+        "handleStdoutLine:flushPendingWake",
+        "sendTurn:flushPendingWake",
+        "spawnOnce:flushPendingWake",
+        "spawnOnce:onTandemEvent",
+        "spawnOnce:onTandemEvent",
+        "spawnOnce:requestWakeOnSpawn",
+        "spawnOnce:requestWakeOnSpawn",
+        "spawnOnce:writeGreeting",
+        "spawnOnce:writeGreeting",
+        "spawnOnce:writeGreeting",
+      ].sort(),
+    );
+  });
+});
