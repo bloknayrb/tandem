@@ -79,6 +79,17 @@ async function ownerSid(dir: string): Promise<string> {
   }
 }
 
+/**
+ * Whether this process runs elevated: its token carries the High (or System)
+ * mandatory level, by SID, so the probe reads the same in every locale. This,
+ * not the CI environment, is what lets a process make Administrators the
+ * owner of a directory.
+ */
+async function isElevated(): Promise<boolean> {
+  const { stdout } = await execFileAsync(system32("whoami.exe"), ["/groups", "/fo", "csv", "/nh"]);
+  return /"S-1-16-(?:12288|16384)"/.test(stdout);
+}
+
 /** Set `dir`'s owner, and report whether it now IS that owner: `icacls` exits 0
  * on a partial failure, so its exit code proves nothing (an unelevated process
  * cannot make Administrators the owner). */
@@ -120,7 +131,7 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
     await expect(assertNoBroadAce(file)).resolves.toBeUndefined();
   }, 120_000);
 
-  it("a directory anyone else owns is refused: TrustedInstaller always, Administrators (an elevated Tandem's) where it can be set", async () => {
+  it("a directory anyone else owns is refused: TrustedInstaller always, Administrators (an elevated Tandem's) when elevated", async (ctx) => {
     // Read-only: the owner check never reaches the lock, and only Get-Acl runs.
     await expect(assertOwnedByCurrentUser(process.env.SystemRoot ?? "C:\\Windows")).rejects.toThrow(
       /assertOwnedByCurrentUser/,
@@ -132,16 +143,26 @@ describe.skipIf(!WIN_ONLY)("run files — Windows ACL proof (#2358 PR 3a)", () =
     // new directories get. Only an elevated process may assign it; the CI
     // runner is elevated, so the job always proves this half.
     const assigned = await setOwner(dir, "S-1-5-32-544");
-    // CI's runner is elevated, so there the Administrators half must run:
-    // `windows-acl-proof` cannot go green with this refusal unproven (round 2).
-    if (process.env.CI) expect(assigned).toBe(true);
-    if (assigned) {
-      await expect(
-        ensureLauncherDir(dir, { create: true, acl: realRunFileAcl }),
-      ).rejects.toMatchObject({
-        step: "launcher-dir-not-owned",
-      });
+    const elevated = await isElevated();
+    // GitHub Actions' Windows runner is elevated, so there the Administrators
+    // half must run: `windows-acl-proof` cannot go green with this refusal
+    // unproven (round 2). Keyed on GITHUB_ACTIONS, not CI: an unelevated
+    // local run with CI set is not that runner (the 3a review).
+    if (process.env.GITHUB_ACTIONS) expect(elevated).toBe(true);
+    // Elsewhere the assertion is keyed on elevation, the real precondition,
+    // with no silent pass: elevated, the owner must have been assigned;
+    // unelevated, it must not have been, and the refusal half is reported as
+    // skipped rather than passed.
+    expect(assigned).toBe(elevated);
+    if (!elevated) {
+      ctx.skip("the Administrators half needs an elevated process; this one is not");
+      return;
     }
+    await expect(
+      ensureLauncherDir(dir, { create: true, acl: realRunFileAcl }),
+    ).rejects.toMatchObject({
+      step: "launcher-dir-not-owned",
+    });
   }, 120_000);
 
   it("a file or a dangling link at the run file's name is refused", async () => {

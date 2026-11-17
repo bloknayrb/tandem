@@ -3939,7 +3939,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       setStandby(undefined);
       await stopInternal();
       // The stopped spawn's run files (#2358 PR 3a): flag off there are none,
-      // and nothing here is awaited.
+      // so the wait below is skipped; flag on their deletions are awaited.
       // Bounded (review round 2, item 3): shutdown awaits this before the
       // store lock is released, and the desktop shell allows 5 s; a stuck
       // delete is left to the boot sweep.

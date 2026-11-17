@@ -156,6 +156,7 @@ describe("tests and the flag", () => {
     "tests/server/launcher/owner-handle-chain.test.ts",
     "tests/server/launcher/owner-handle-spawn.test.ts",
     "tests/server/launcher/supervisor.test.ts",
+    "tests/server/license-armed-restricted.test.ts",
     "tests/server/local-period.test.ts",
     "tests/server/mcp-context-seam.test.ts",
     "tests/server/mcp-write-precedence.test.ts",
@@ -234,6 +235,9 @@ describe("tests and the flag", () => {
       "tests/server/inbox-cursor.test.ts",
       "tests/server/launcher/owner-handle-chain.test.ts",
       "tests/server/launcher/owner-handle-spawn.test.ts",
+      // The keyed-rounds suites PR: its live check of the delivery-round
+      // wiring, flag on in `check` too (the rest of the file is unstubbed).
+      "tests/server/license-armed-restricted.test.ts",
       "tests/server/local-period.test.ts",
       "tests/server/mcp-context-seam.test.ts",
       "tests/server/mcp-write-precedence.test.ts",
