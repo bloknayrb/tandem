@@ -18,7 +18,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
-import { RUN_FILE_SWEEP_AGE_MS, type RunFileAcl } from "../../../src/server/launcher/run-files.js";
+import {
+  deleteRunFile,
+  RUN_FILE_SWEEP_AGE_MS,
+  type RunFileAcl,
+} from "../../../src/server/launcher/run-files.js";
 import {
   buildClaudeArgs,
   childEnv,
@@ -33,6 +37,13 @@ import {
   resetOwnerHandleBindForTests,
 } from "../../../src/server/sessions/owner-handle-bind.js";
 import { CLAUDE_STREAM_JSON_FLAGS } from "../../../src/shared/launcher/contract.js";
+
+// The stop bound's test makes one deletion hang; every other test gets the
+// real `deleteRunFile` through this pass-through.
+vi.mock(import("../../../src/server/launcher/run-files.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, deleteRunFile: vi.fn(actual.deleteRunFile) };
+});
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STUB_SOURCE = path.join(HERE, "stub-claude-cli.cjs");
@@ -576,6 +587,93 @@ describe("teardown on every exit path (R4)", () => {
     // No waiting: stop() (a normal quit) awaits the deletions (review item 9).
     expect(runFilesOnDisk()).toEqual([]);
     expect(judgeBind(handle, run.sessionId)).toBeNull();
+  });
+
+  it("stop() waits for a hung run-file deletion, and at most one second from when its bound is armed (#2421 review)", async () => {
+    const sup = makeSupervisor();
+    await sup.startFresh(spawnDir);
+    await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn");
+    const real = await vi.importActual<typeof import("../../../src/server/launcher/run-files.js")>(
+      "../../../src/server/launcher/run-files.js",
+    );
+    const del = vi.mocked(deleteRunFile);
+    // Every deletion from here on hangs until the test lets it go (in the
+    // `finally`, so `afterEach`'s own stop() is not held a second).
+    const hang = deferred();
+    del.mockImplementation(() => hang.promise);
+    // Only the timeout functions: the child's exit still arrives through real
+    // I/O, and `Date.now()` and `setImmediate` below stay real. No spy on the
+    // faked `setTimeout`: `afterEach`'s restoreAllMocks would put the fake
+    // back after the clock is gone.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const stopping = sup.stop().then(() => {
+        settled = true;
+      });
+      // stopInternal arms one fake timer (its SIGTERM grace) and, once the
+      // child's exit has run the teardown (which deletes the run files) and
+      // stopInternal has resolved, stop() arms its bound in the same
+      // synchronous step: the second fake timer. The fake clock has not moved
+      // since it was installed, so the bound is measured from that moment.
+      const deadline = Date.now() + 15_000;
+      while (vi.getTimerCount() < 2) {
+        if (Date.now() > deadline) throw new Error("Timed out waiting for stop()'s bound");
+        await new Promise((r) => setImmediate(r));
+      }
+      expect(vi.getTimerCount()).toBe(2);
+      expect(del).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      await new Promise((r) => setImmediate(r));
+      expect(settled, "still waiting at 999 ms").toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await new Promise((r) => setImmediate(r));
+      expect(settled, "resolved by 1,000 ms").toBe(true);
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+      del.mockImplementation(real.deleteRunFile);
+      hang.resolve();
+    }
+  });
+
+  it("stop() resolves as soon as a pending deletion settles, before its bound, with no fake time passing (#2438 review)", async () => {
+    // The twin of the bound above: the deletion is still pending when stop()
+    // arms its bound, then settles. A build that always waited the full second
+    // would never settle here, since the fake clock never moves.
+    const sup = makeSupervisor();
+    await sup.startFresh(spawnDir);
+    await waitFor(() => records<RunFilesRecord>("runfiles-")[0], "spawn");
+    const real = await vi.importActual<typeof import("../../../src/server/launcher/run-files.js")>(
+      "../../../src/server/launcher/run-files.js",
+    );
+    const del = vi.mocked(deleteRunFile);
+    const held = deferred();
+    del.mockImplementation(() => held.promise);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const stopping = sup.stop().then(() => {
+        settled = true;
+      });
+      const deadline = Date.now() + 10_000;
+      // The bound is armed: the SIGTERM grace and the bound are the two fake timers.
+      while (vi.getTimerCount() < 2) {
+        if (Date.now() > deadline) throw new Error("Timed out waiting for stop()'s bound");
+        await new Promise((r) => setImmediate(r));
+      }
+      expect(settled).toBe(false);
+      held.resolve();
+      while (!settled) {
+        if (Date.now() > deadline) throw new Error("stop() did not resolve without fake time");
+        await new Promise((r) => setImmediate(r));
+      }
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+      del.mockImplementation(real.deleteRunFile);
+      held.resolve();
+    }
   });
 
   it("an exit before binding (a crash) ends the spawn, and the crash restart's spawn is a new one", async () => {

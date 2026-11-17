@@ -67,11 +67,84 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
   });
 
   it("exactly one call in index.ts, an unconditional statement of main() in the same block as setOwnershipSeqSource (review round 1)", () => {
-    // Every call site, whatever its arguments: a second one (say
-    // `setDeliveryRoundSeam(undefined)`) would unwire the first.
-    expect(src.match(/\bsetDeliveryRoundSeam\s*\(/g)).toHaveLength(1);
+    // Every use of the name, whatever its form: a second call (say
+    // `setDeliveryRoundSeam(undefined)`) would unwire the first, and so would
+    // an alias (`const f = setDeliveryRoundSeam; f(undefined)`) or a `.call`
+    // (`setDeliveryRoundSeam.call(null, undefined)`), which a count of
+    // `setDeliveryRoundSeam(` cannot see (the keyed-rounds suites PR, R2). So
+    // the identifier itself is counted, over index.ts's parsed syntax tree:
+    // comments are not in it (a mention in a comment neither adds one nor
+    // hides one), and neither is text inside a string. Exactly two, and each
+    // in its role: the import specifier, unrenamed, from the delivery-state
+    // module (so another function imported under this name is refused), and
+    // the call, a statement of the same block as `setOwnershipSeqSource`'s
+    // (so a call commented out, with a stray reference to keep the count,
+    // is refused). Between those two statements, no `return` or `throw` at
+    // any depth outside a nested function.
+    //
+    // What this pin of source cannot see (a flip-blocker row; accepted by the
+    // reviewing session's ruling of 2026-11-17: the pin guards against an
+    // accidental second writer, and a deliberate bypass is a review matter):
+    // an exit earlier in `main()`, before `setOwnershipSeqSource`; between the
+    // two statements, a conditional exit that is not a `return` or `throw`
+    // statement (a call that throws, say); braces or comment markers inside
+    // strings, which the text depth check below counts as code; a call
+    // through a namespace import by element access
+    // (`ns["setDeliveryRoundSeam"]`, or a computed name such as
+    // `ns["set" + name]`); and calls from other `src` files through an alias
+    // or `.call` (the callers check above matches `setDeliveryRoundSeam(`
+    // only). A behavioural pin that boots `main()` would see each of them.
+    const tree = ts.createSourceFile("index.ts", src, ts.ScriptTarget.Latest, true);
+    const uses: ts.Identifier[] = [];
+    let seqStatement: ts.Statement | undefined;
+    const visit = (node: ts.Node): void => {
+      // `forEachChild`, never `getChildren`: the latter walks JSDoc too.
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") uses.push(node);
+      if (
+        ts.isExpressionStatement(node) &&
+        ts.isCallExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "setOwnershipSeqSource"
+      ) {
+        seqStatement = node;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(uses).toHaveLength(2);
+    const [imported, called] = uses as [ts.Identifier, ts.Identifier];
+    const specifier = imported.parent;
+    expect(ts.isImportSpecifier(specifier) && specifier.propertyName === undefined).toBe(true);
+    const declaration = specifier.parent.parent.parent;
+    expect(
+      ts.isImportDeclaration(declaration) &&
+        ts.isStringLiteral(declaration.moduleSpecifier) &&
+        declaration.moduleSpecifier.text,
+    ).toBe("./events/delivery-state.js");
+    const call = called.parent;
+    expect(ts.isCallExpression(call) && call.expression === called).toBe(true);
+    const callStatement = call.parent;
+    expect(ts.isExpressionStatement(callStatement)).toBe(true);
+    expect(seqStatement, "setOwnershipSeqSource's statement").toBeDefined();
+    const block = (seqStatement as ts.Statement).parent;
+    expect(callStatement.parent).toBe(block);
+    const statements = (block as ts.Block).statements;
+    const seqAt = statements.indexOf(seqStatement as ts.Statement);
+    const callAt = statements.indexOf(callStatement as ts.Statement);
+    expect(seqAt).toBeGreaterThan(-1);
+    expect(seqAt).toBeLessThan(callAt);
+    const exits: string[] = [];
+    const findExits = (node: ts.Node): void => {
+      if (ts.isFunctionLike(node) || ts.isClassLike(node)) return;
+      if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) exits.push(node.getText());
+      ts.forEachChild(node, findExits);
+    };
+    for (const statement of statements.slice(seqAt + 1, callAt)) findExits(statement);
+    expect(exits).toEqual([]);
     const lines = src.split("\n");
-    const at = lines.findIndex((l) => /\bsetDeliveryRoundSeam\s*\(/.test(l));
+    // The call's own line, from the syntax tree, so a comment mentioning the
+    // call above it is not taken for it.
+    const at = tree.getLineAndCharacterOfPosition(called.getStart(tree)).line;
     // Two spaces and nothing before the call: not wrapped in a condition on
     // its own line.
     expect(lines[at]).toBe("  setDeliveryRoundSeam({");
@@ -92,6 +165,32 @@ describe("the delivery-round seam is wired in a running server (the delivery-rou
       expect(depth).toBeGreaterThanOrEqual(0);
     }
     expect(depth).toBe(0);
+  });
+
+  it("the seam has one writer: setDeliveryRoundSeam itself, which its own module never calls (the keyed-rounds suites PR)", () => {
+    // A second assignment inside delivery-state.ts, or a call of the setter
+    // there (the callers check above exempts this file, whose definition
+    // matches it), would unwire the seam with every pin on index.ts still
+    // passing. So the setter's name is counted over this module's syntax tree,
+    // as `setOwnershipSeqSource`'s is in its own: exactly one identifier, the
+    // declaration's (no call, alias or `.call`). A text pin for the
+    // assignment: it does not see a compound (`??=`), destructuring or
+    // parenthesised (`(roundSeam) = x`) assignment, or a mutation of the seam
+    // object (`roundSeam.keyed = ...`) (the flip-blocker row).
+    const module = SRC_FILES.get("src/server/events/delivery-state.ts") as string;
+    const tree = ts.createSourceFile("delivery-state.ts", module, ts.ScriptTarget.Latest, true);
+    const named: ts.Identifier[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "setDeliveryRoundSeam") named.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    expect(named).toHaveLength(1);
+    expect(ts.isFunctionDeclaration((named[0] as ts.Identifier).parent)).toBe(true);
+    expect(module.match(/\broundSeam\s*=(?!=)/g)).toHaveLength(1);
+    expect(module).toMatch(
+      /export function setDeliveryRoundSeam\(seam: DeliveryRoundSeam \| undefined\): void \{\n {2}roundSeam = seam;\n\}/,
+    );
   });
 
   it("no src file imports a round seam, drop or close under another name", () => {
