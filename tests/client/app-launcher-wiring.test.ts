@@ -12,17 +12,15 @@
  *      wizard (#1268's bug class).
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { chatMount as chatMountIn, readAppSource } from "../helpers/app-source";
 
-const APP = readFileSync(join(import.meta.dirname, "../../src/client/App.svelte"), "utf8");
+// Comment-stripped (#2433 M2), so a commented-out copy of a mount or a call
+// cannot satisfy a pin; the strip's limits are in `app-source.ts`.
+const APP = readAppSource();
 
 function chatMount(): string {
-  const start = APP.indexOf('kind="chat"');
-  expect(start, "App mounts a chat PanelSlot").toBeGreaterThan(-1);
-  const end = APP.indexOf("/>", start);
-  return APP.slice(start, end);
+  return chatMountIn(APP);
 }
 
 describe("App launcher wiring (#2195)", () => {
