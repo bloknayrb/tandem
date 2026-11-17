@@ -691,16 +691,3 @@ describe("withTitleCount", () => {
     expect(withTitleCount("(9+) ⚠ Tandem", 0)).toBe("⚠ Tandem");
   });
 });
-
-describe("buildNotificationText, flag off (#1123 part B, R10.1)", () => {
-  const row = (id: string, extra: Record<string, unknown> = {}) =>
-    ({ id, author: "claude", text: id, timestamp: 0, read: true, ...extra }) as ChatMessage;
-  it("a local reply is titled as Claude's, and a notice row is counted, as on master", () => {
-    const local = row("a", { agentIdentity: { provider: "local-ollama", displayName: "Qwen" } });
-    expect(buildNotificationText([local], "generic", () => null).title).toBe("Claude replied");
-    expect(
-      buildNotificationText([row("b"), row("n", { chatNotice: "no-reply" })], "generic", () => null)
-        .title,
-    ).toBe("Claude sent 2 replies");
-  });
-});

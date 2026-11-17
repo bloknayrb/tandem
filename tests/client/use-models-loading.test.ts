@@ -14,7 +14,7 @@ vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
   // The production const is a literal `false` (ships dark), so a test that
   // deliberately flips it must say so rather than widen the export type.
-  BYO_MODELS_ENABLED: true as false,
+  BYO_MODELS_ENABLED: true as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
 }));
 
 const { _resetModelsStoreForTests, createModels, loadFromServer } = await import(

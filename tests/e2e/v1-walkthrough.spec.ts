@@ -56,8 +56,9 @@ async function launch(
   browser: import("@playwright/test").Browser,
   server: Server,
 ): Promise<{ context: BrowserContext; page: Page }> {
-  // A context made here does not inherit the project's `use`, so the base
-  // URL is passed on explicitly.
+  // A context made here does inherit the project's `use` (one run confirmed it
+  // reads the config's seeded `tandem:modelPickerDismissed` as "1", #1123);
+  // the base URL is passed on explicitly all the same.
   server.launch += 1;
   const context = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   await serve(context, server);

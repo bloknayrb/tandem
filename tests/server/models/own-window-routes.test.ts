@@ -62,9 +62,10 @@ import { allocPort } from "../../helpers/alloc-port.js";
  * sentence) and the BYTES of the files, not only a status.
  *
  * Two harnesses:
- *  - the real server (`startMcpServerHttp`), where the feature is dark: the
- *    whole chain including the pre-parse router, the Host checks and the
- *    development allowance read from the environment;
+ *  - the real server (`startMcpServerHttp`), which follows the shipped flag:
+ *    the whole chain including the pre-parse router, the Host checks and the
+ *    development allowance read from the environment (its dark-only cases are
+ *    in `own-window-routes-dark.test.ts`);
  *  - `registerModelsRoutes` with the real `apiMiddleware`, where the settings
  *    route can be lit.
  *
@@ -186,7 +187,7 @@ async function removeDir(dir: string): Promise<void> {
   await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
 
-// ── The real server (the feature is dark here) ────────────────────────────────
+// ── The real server (it follows the shipped flag) ─────────────────────────────
 
 describe("the real server: the two settings POSTs accept Tandem's own window only (#2404 R1)", () => {
   let dir: string;
@@ -225,6 +226,27 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
     ["the desktop WebView on macOS and Linux", TAURI_LINUX_ORIGIN],
   ];
 
+  /**
+   * An accepted `{ editing: true }` POST to the settings route on the real
+   * server, which follows the shipped flag (it takes no
+   * `localModelSettingsEnabled`). Lit, the change is "recorded at once"
+   * (#2404, fix item 3) and answered with `LocalModelSettingsPostResponse`
+   * (`contract.ts`: `{ editing, persisted }`) and 200; dark, the route is 404
+   * and no file is written. The dark-only cases live in
+   * `own-window-routes-dark.test.ts`.
+   */
+  function expectSettingsPostAccepted(res: Answer): void {
+    if (BYO_MODELS_ENABLED) {
+      expect(res.status, res.text).toBe(200);
+      expect(res.json).toEqual({ editing: true, persisted: true });
+      expect(JSON.parse(bytes(settingsFile) as string)).toMatchObject({ editing: true });
+    } else {
+      expect(res.status).toBe(404);
+      expect(res.json).toEqual({ error: "NOT_FOUND" });
+      expect(bytes(settingsFile)).toBeNull();
+    }
+  }
+
   beforeEach(async () => {
     dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-own-window-real-"));
     modelsFile = path.join(dir, MODELS_FILE_NAME);
@@ -243,10 +265,6 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
     __resetLocalModelSettingsForTests();
   });
 
-  it("this suite runs against a dark build", () => {
-    expect(BYO_MODELS_ENABLED).toBe(false);
-  });
-
   describe("accepted", () => {
     it("POST /api/models from the page this server serves is written (npm-shaped server)", async () => {
       await boot();
@@ -261,16 +279,14 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
       expect(JSON.parse(bytes(modelsFile) as string).models).toEqual([localModel]);
     });
 
-    it("POST /api/models/local-settings from the page this server serves passes the origin test (and is 404 while dark)", async () => {
+    it("POST /api/models/local-settings from the page this server serves passes the origin test (recorded when lit, 404 when dark)", async () => {
       await boot();
       const res = await send(port, API_MODELS_LOCAL_SETTINGS, {
         origin: own,
         contentType: JSON_CT,
         body: JSON.stringify({ editing: true }),
       });
-      expect(res.status).toBe(404);
-      expect(res.json).toEqual({ error: "NOT_FOUND" });
-      expect(bytes(settingsFile)).toBeNull();
+      expectSettingsPostAccepted(res);
     });
 
     // A server booted as the desktop app's sidecar: the WebView's origins are
@@ -348,7 +364,7 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
       });
 
       it.each(DESKTOP_FORMS)(
-        "POST /api/models/local-settings from %s passes the origin test (and is 404 while dark)",
+        "POST /api/models/local-settings from %s passes the origin test (recorded when lit, 404 when dark)",
         async (_label, origin) => {
           await boot(undefined, { sidecar: true });
           const res = await send(port, API_MODELS_LOCAL_SETTINGS, {
@@ -356,9 +372,7 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
             contentType: JSON_CT,
             body: JSON.stringify({ editing: true }),
           });
-          expect(res.status).toBe(404);
-          expect(res.json).toEqual({ error: "NOT_FOUND" });
-          expect(bytes(settingsFile)).toBeNull();
+          expectSettingsPostAccepted(res);
         },
       );
 
@@ -610,13 +624,15 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
         body: modelsBody(fileWith()),
       });
       expect(mine.status).toBe(200);
-      // The settings route passes the origin test for the allowance origin too.
+      // The settings route passes the origin test for the allowance origin too:
+      // the write is made when lit (#2404 item 4: "a write it admits is
+      // announced"), and the route is 404 when dark.
       const settings = await send(port, API_MODELS_LOCAL_SETTINGS, {
         origin: VITE_DEV_ORIGIN,
         contentType: JSON_CT,
         body: '{"editing":true}',
       });
-      expect(settings.status).toBe(404);
+      expect(settings.status).toBe(BYO_MODELS_ENABLED ? 200 : 404);
     });
 
     it("logs one line at boot when the allowance is active", async () => {
@@ -690,28 +706,12 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
     );
   });
 
-  describe("dark: both halves of each route", () => {
-    it("POST /api/models/local-settings: 404 from an accepted origin, 403 from any other, and no file", async () => {
-      await boot();
-      for (const editing of [true, false]) {
-        const mine = await send(port, API_MODELS_LOCAL_SETTINGS, {
-          origin: own,
-          contentType: JSON_CT,
-          body: JSON.stringify({ editing }),
-        });
-        expect(mine.status).toBe(404);
-        expectOwnWindowRefusal(
-          await send(port, API_MODELS_LOCAL_SETTINGS, {
-            origin: "http://127.0.0.1:8080",
-            contentType: JSON_CT,
-            body: JSON.stringify({ editing }),
-          }),
-        );
-      }
-      expect(fs.readdirSync(dir)).toEqual([]);
-    });
-
-    it("POST /api/models: written from an accepted origin (the dark reconcile), refused from any other, and only models.json exists", async () => {
+  // Kept here unforced as well as in `own-window-routes-dark.test.ts` (#1123):
+  // this case is decided by the origin test and by nothing that reads the
+  // flag, so it passes in either state, and this copy keeps a real-server
+  // check of an own-window `/api/models` write in the flag-neutral file.
+  describe("an own-window /api/models write in either state", () => {
+    it("POST /api/models: written from an accepted origin (the reconcile), refused from any other, and only models.json exists", async () => {
       await boot();
       expectOwnWindowRefusal(
         await send(port, API_MODELS, {
@@ -750,14 +750,6 @@ describe("the real server: the two settings POSTs accept Tandem's own window onl
       expect(res.status).toBe(200);
       expect(res.json).toEqual({ file: getCachedModelsFile(), etag: getModelsEtag() });
     });
-
-    it("GET /api/models/local-settings is still 404 while dark, for any origin", async () => {
-      await boot();
-      for (const origin of ["http://127.0.0.1:8080", own, undefined]) {
-        const res = await send(port, API_MODELS_LOCAL_SETTINGS, { method: "GET", origin });
-        expect(res.status).toBe(404);
-      }
-    });
   });
 });
 
@@ -786,7 +778,9 @@ describe("registerModelsRoutes, lit, with the real apiMiddleware (#2404 R1)", ()
         allowance: opts.allowance ?? null,
         desktop: opts.desktop === true,
       }),
-      ...(opts.live === false ? {} : { localModelSettingsEnabled: true }),
+      // Explicit either way, so `live: false` is dark whatever the shipped
+      // flag says.
+      localModelSettingsEnabled: opts.live !== false,
     });
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));

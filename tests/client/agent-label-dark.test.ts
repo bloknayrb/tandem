@@ -24,6 +24,13 @@ import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings
 import { FALLBACK_AGENT_LABEL, resolveAgentLabel } from "../../src/client/utils/agentLabel.js";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants.js";
 
+// This whole file is the dark state, so it forces the flag off whatever the
+// shipped literal says (#1123: the suite holds in both states).
+vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
+  BYO_MODELS_ENABLED: false as typeof import("../../src/shared/constants.js").BYO_MODELS_ENABLED,
+}));
+
 function seedLocalStorageModel(entry: Record<string, unknown>, defaultModelId: string): void {
   localStorage.setItem(
     TANDEM_SETTINGS_KEY,

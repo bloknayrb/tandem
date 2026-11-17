@@ -1462,7 +1462,10 @@ describe("the dark guard", () => {
   });
 
   it("dark tools/list: tandem_checkInbox's output schema has no local-period field and is master's shape", async () => {
-    __setHonourLocalPeriodRecordsForTests(null);
+    // Forced dark for this case alone (#1123: the suite holds in both states):
+    // the schema carries the field exactly when the honour seam is on
+    // (`awareness.ts`'s `localPeriodField`), and this case is about its absence.
+    __setHonourLocalPeriodRecordsForTests(false);
     const { client: c, close: done } = await setupMcpServer([registerAwarenessTools], {
       dispatch: (fn) => asTestCaller(fn),
     });
