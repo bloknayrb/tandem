@@ -832,3 +832,33 @@ describe("models store — M2b outcome returns + clearError", () => {
     expect(models.saveError).toBeNull();
   });
 });
+
+// #1123 R1.4 (LM Studio and "another local server", 2026-11-15): a first save
+// of either new provider is a first local model, so part B's first-local toast
+// fires for it as for Ollama (the toast's own store listens on this signal).
+describe("models store — the new local providers count as local", () => {
+  for (const provider of ["local-lmstudio", "local-other"] as const) {
+    it(`${provider}: the first save signals firstLocal, a second does not`, async () => {
+      const { onModelsWriteCommitted } = await import(
+        "../../src/client/models/models-write-signal.js"
+      );
+      const seen: boolean[] = [];
+      const off = onModelsWriteCommitted((info) => seen.push(info.firstLocal));
+      try {
+        const models = createModels();
+        const entry = {
+          provider,
+          displayName: "Mine",
+          modelId: "m",
+          endpoint: "http://127.0.0.1:1234",
+          enabled: true,
+        };
+        expect(await models.addModel(entry)).not.toBeNull();
+        expect(await models.addModel(entry)).not.toBeNull();
+        expect(seen).toEqual([true, false]);
+      } finally {
+        off();
+      }
+    });
+  }
+});

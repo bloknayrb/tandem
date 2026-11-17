@@ -17,6 +17,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ModelEditModal from "../../src/client/components/ModelEditModal.svelte";
 import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings.svelte.js";
+import {
+  isLocalProvider,
+  LOCAL_MODEL_PROVIDERS,
+  VALID_MODEL_PROVIDERS,
+} from "../../src/shared/models/contract.js";
 
 afterEach(() => {
   cleanup();
@@ -47,12 +52,12 @@ describe("ModelEditModal — per-provider gating", () => {
 
     const byValue = Object.fromEntries(options.map((o) => [o.value, o]));
     // Local providers: enabled, no "coming soon".
-    for (const v of ["local-ollama", "local-llamacpp"]) {
+    for (const v of LOCAL_MODEL_PROVIDERS) {
       expect(byValue[v].disabled).toBe(false);
       expect(byValue[v].textContent).not.toMatch(/coming soon/i);
     }
     // Cloud providers: disabled, labelled "coming soon".
-    for (const v of ["anthropic", "openai", "gemini"]) {
+    for (const v of VALID_MODEL_PROVIDERS.filter((p) => !isLocalProvider(p))) {
       expect(byValue[v].disabled).toBe(true);
       expect(byValue[v].textContent).toMatch(/coming soon/i);
     }
@@ -61,7 +66,10 @@ describe("ModelEditModal — per-provider gating", () => {
   it("orders local providers first in the picker", () => {
     const { container } = mountAdd();
     const { options } = providerOptions(container);
-    expect(options.slice(0, 2).map((o) => o.value)).toEqual(["local-ollama", "local-llamacpp"]);
+    expect(options.slice(0, LOCAL_MODEL_PROVIDERS.length).map((o) => o.value)).toEqual([
+      ...LOCAL_MODEL_PROVIDERS,
+    ]);
+    expect(options.map((o) => o.value).sort()).toEqual([...VALID_MODEL_PROVIDERS].sort());
   });
 
   it("shows no cloud 'coming soon' note while a local provider is selected", () => {

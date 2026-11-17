@@ -30,6 +30,10 @@ const AGENT_COLOR_VARS: Record<ModelProvider, string> = {
   gemini: "var(--tandem-agent-gemini)",
   "local-ollama": "var(--tandem-agent-local-ollama)",
   "local-llamacpp": "var(--tandem-agent-local-llamacpp)",
+  // #1123 Ruling L-5: no new colour tokens. LM Studio and "another local
+  // server" share llama.cpp's; the three are told apart by name.
+  "local-lmstudio": "var(--tandem-agent-local-llamacpp)",
+  "local-other": "var(--tandem-agent-local-llamacpp)",
 };
 
 /**
