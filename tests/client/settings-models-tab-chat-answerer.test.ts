@@ -117,6 +117,12 @@ function mount(readOnly = false) {
 }
 
 const posts = () => held.calls.filter((c) => c.method === "POST");
+/** Past the tab's `ANNOUNCE_DELAY_MS` (300 ms), a real wait: the announcers
+ *  take their text only after it. */
+const announceDelay = async () => {
+  await new Promise((r) => setTimeout(r, 350));
+  await drain();
+};
 const gets = () => held.calls.filter((c) => c.method === "GET");
 
 /** Mount and answer the mount read. */
@@ -323,6 +329,8 @@ describe("not known (R2.5)", () => {
     expect(v.radio("claude").getAttribute("aria-disabled")).toBe("true");
     const loading = v.getByTestId("chat-answerer-loading");
     expect(loading.getAttribute("role")).toBe("status");
+    // The announcer takes the sentence only after the tab's announce delay.
+    await announceDelay();
     expect(loading.textContent).toBe("Checking…");
     // Exactly one radio is tabbable with neither checked.
     expect([v.radio("claude").tabIndex, v.radio("local").tabIndex].sort()).toEqual([-1, 0]);
@@ -539,9 +547,27 @@ describe("'Checking…' and 'Chat was set to Claude.' as announcers (R4.3)", () 
     expect(v.getByTestId("chat-answerer-loading")).toBe(loading);
   });
 
+  it("first open: the 'Checking…' announcer is mounted empty, then receives it as a mutation", async () => {
+    const v = mount();
+    const first = await held.request(1);
+    // The read is pending at mount: the sentence is shown at once, but the
+    // announcer is created empty (LiveRegion's header: one inserted already
+    // holding its text is commonly read out by nothing).
+    const announcer = v.getByTestId("chat-answerer-loading");
+    expect(column(v).contains(announcer)).toBe(true);
+    expect(announcer.textContent).toBe("");
+    expect(visible(v, "Checking…")).toHaveLength(1);
+    await announceDelay();
+    expect(v.getByTestId("chat-answerer-loading")).toBe(announcer);
+    expect(announcer.textContent).toBe("Checking…");
+    await first.answer(200, known("claude"));
+    expect(announcer.textContent).toBe("");
+  });
+
   it("'Checking…': the announcer holds it and an aria-hidden visible copy is in the column; then both go", async () => {
     const v = mount();
     const first = await held.request(1);
+    await announceDelay();
     expect(v.getByTestId("chat-answerer-loading").textContent).toBe("Checking…");
     expect(visible(v, "Checking…")).toHaveLength(1);
     await first.answer(200, known("claude"));
@@ -569,6 +595,7 @@ describe("'Checking…' and 'Chat was set to Claude.' as announcers (R4.3)", () 
   it("'Checking…' after a failed read's Retry arrives in the announcer already mounted", async () => {
     const v = mount();
     await (await held.request(1)).fail();
+    await announceDelay();
     const announcer = v.getByTestId("chat-answerer-loading");
     expect(announcer.textContent).toBe("");
     await fireEvent.click(v.getByTestId("chat-answerer-retry"));

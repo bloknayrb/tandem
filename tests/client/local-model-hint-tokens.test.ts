@@ -27,6 +27,24 @@ function rules(source: string): Array<{ selector: string; body: string }> {
   }));
 }
 
+const MUTED = /color\s*:\s*var\(--tandem-fg-muted\)/;
+
+/** The element opening at `start` through its matching close tag (same-name
+ *  nesting counted); the open tag alone when it is self-closing. */
+function elementSource(markup: string, start: number, tag: string): string {
+  const open = markup.slice(start, markup.indexOf(">", start) + 1);
+  if (open.endsWith("/>")) return open;
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, "g");
+  re.lastIndex = start + open.length;
+  let depth = 1;
+  for (let m = re.exec(markup); m; m = re.exec(markup)) {
+    if (m[0].endsWith("/>")) continue;
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return markup.slice(start, m.index + m[0].length);
+  }
+  throw new Error(`no close tag for <${tag}> at ${start}`);
+}
+
 const hasClass = (selector: string, cls: string) =>
   new RegExp(`\\.${cls}(?![\\w-])`).test(selector);
 
@@ -35,12 +53,17 @@ describe("R4.4: the local-model hints use --tandem-fg-muted", () => {
     const source = read(file);
     const all = rules(source);
     for (const cls of classes) {
-      it(`${file}: .${cls} sets color: var(--tandem-fg-muted)`, () => {
+      it(`${file}: .${cls} sets color: var(--tandem-fg-muted), and every rule naming it that sets a color uses that token`, () => {
         const own = all.filter((r) => r.selector.split(",").some((s) => s.trim() === `.${cls}`));
         expect(own.length).toBeGreaterThan(0);
-        expect(own.some((r) => /(^|;|\s)color:\s*var\(--tandem-fg-muted\)/.test(r.body))).toBe(
-          true,
-        );
+        expect(own.some((r) => MUTED.test(r.body))).toBe(true);
+        // A later rule for the same class (or a descendant) cannot override it
+        // with any other colour.
+        for (const r of all.filter((x) => hasClass(x.selector, cls))) {
+          for (const decl of r.body.match(/(?:^|[;\s])color\s*:[^;]*/g) ?? []) {
+            expect(decl.trim().replace(/^;/, "").trim(), r.selector).toMatch(MUTED);
+          }
+        }
       });
 
       it(`${file}: no rule naming .${cls} (descendants included) uses --tandem-fg-subtle`, () => {
@@ -49,13 +72,23 @@ describe("R4.4: the local-model hints use --tandem-fg-muted", () => {
         for (const r of touching) expect(r.body, r.selector).not.toContain("--tandem-fg-subtle");
       });
 
-      it(`${file}: no element with class ${cls} carries an inline --tandem-fg-subtle`, () => {
-        const tags = [...source.matchAll(/<[a-zA-Z][^>]*>/g)].map((m) => m[0]);
-        const withClass = tags.filter((t) =>
-          new RegExp(`class="[^"]*(?<![\\w-])${cls}(?![\\w-])`).test(t),
+      // Finds the class in `class="…"`, `class={…}` and `class:${cls}`
+      // forms (any tag naming the class as a whole word), and checks each such
+      // element's whole subtree up to its matching close tag, so a child's
+      // inline style (the <p>s inside .mem-local-intro) is covered too. The
+      // limit: a class added from script (`classList`, a computed string not
+      // naming it literally) is not seen; none exists in these components.
+      it(`${file}: no element with class ${cls}, or inside one, carries an inline --tandem-fg-subtle`, () => {
+        const markup = source.replace(/<style[^>]*>[\s\S]*?<\/style>/g, "");
+        const word = new RegExp(`(?<![\\w-])${cls}(?![\\w-])`);
+        const opens = [...markup.matchAll(/<([a-zA-Z][\w-]*)\b[^>]*>/g)].filter(
+          (m) => /\bclass[=:]/.test(m[0]) && word.test(m[0]),
         );
-        expect(withClass.length).toBeGreaterThan(0);
-        for (const t of withClass) expect(t).not.toContain("--tandem-fg-subtle");
+        expect(opens.length).toBeGreaterThan(0);
+        for (const m of opens) {
+          const subtree = elementSource(markup, m.index ?? 0, m[1]);
+          expect(subtree, `<${m[1]}> with .${cls}`).not.toContain("--tandem-fg-subtle");
+        }
       });
     }
   }

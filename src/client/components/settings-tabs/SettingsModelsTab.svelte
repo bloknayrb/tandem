@@ -476,7 +476,11 @@ function askDelete(id: string) {
          sentence's arrival is a mutation a screen reader announces; the
          visible copy exists only while there is a sentence, aria-hidden so it
          is not read twice. -->
-    <LiveRegion srOnly message={answererChecking ? "Checking…" : ""} data-testid="chat-answerer-loading" />
+    <!-- "Checking…" is usually already true when the tab opens, so the
+         announcer takes it only after `announceReady` (the same real yield as
+         the own-window announcer above): created empty, it then receives the
+         sentence as a mutation instead of being inserted holding it. -->
+    <LiveRegion srOnly message={announceReady && answererChecking ? "Checking…" : ""} data-testid="chat-answerer-loading" />
     {#if answererChecking}
       <p aria-hidden="true" style="margin: 0;">Checking…</p>
     {/if}
