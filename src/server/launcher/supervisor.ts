@@ -433,12 +433,15 @@ export interface TandemPresenceSeam {
    * Each failed-bind judgement of the latest spawn, with its reason.
    *
    * **Called synchronously from the judging site**: inside the child's exit
-   * handler (site a), or just before a stop releases the spawn's turn delivery
+   * handler (site a), just before a stop releases the spawn's turn delivery
    * (site b), while `activeTurnDelivery` may still point at the spawn being
-   * torn down. A subscriber that writes a turn, starts or wakes anything
-   * (3b-2's failed-bind wake, design §8.7) must defer that work (a microtask
-   * or later), or it writes into the dying spawn. Kept synchronous so the
-   * failed-bind event precedes the presence announcement it causes.
+   * torn down, or from the bind window's timer when it expires (site c). At
+   * site (c) the spawn is not torn down — teardown cancels that timer — so
+   * `activeTurnDelivery` is that live, unbound spawn. A subscriber that writes
+   * a turn, starts or wakes anything (3b-2's failed-bind wake, design §8.7)
+   * must defer that work (a microtask or later), or it writes into a spawn
+   * the judging site is still acting on. Kept synchronous so the failed-bind
+   * event precedes the presence announcement it causes.
    */
   onFailedBind(cb: (reason: FailedBindReason) => void): () => void;
   /** The live `standby !== "off"` read (design §8.1's widening arm). */
