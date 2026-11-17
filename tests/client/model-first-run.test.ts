@@ -5,6 +5,7 @@ import {
   type ModelFirstRunInput,
   resolveModelFirstRunNeeded,
 } from "../../src/client/utils/model-first-run";
+import { readAppSource } from "../helpers/app-source";
 
 // A configured, past-first-run baseline: nothing should show.
 function base(overrides: Partial<ModelFirstRunInput> = {}): ModelFirstRunInput {
@@ -51,7 +52,8 @@ describe("resolveModelFirstRunNeeded (#1123 M4 first-run decouple)", () => {
 
   // The dark gate lives at the call site (`BYO_MODELS_ENABLED && …`), not in this
   // predicate — matching `resolveDefaultModelChip`. So there is no `byoEnabled`
-  // input to test here; the App.svelte conjunct is what keeps the picker dark.
+  // input to test here; the App.svelte conjunct is what keeps the picker dark,
+  // and it is pinned below ("the picker is gated on the flag at its call site").
 
   // #2404: a page that is not Tandem's own window cannot save a model, so the
   // picker never opens there; the Models tab says where to go instead.
@@ -69,6 +71,14 @@ describe("App.svelte feeds the picker the page's own-window verdict (#2404)", ()
     join(import.meta.dirname, "..", "..", "src", "client", "App.svelte"),
     "utf8",
   );
+
+  it("the picker is gated on the flag at its call site (#2433 carried, the flag-off rule)", () => {
+    // On comment-stripped text: dropping the `BYO_MODELS_ENABLED &&` half
+    // would open the picker on a dark build, and no other test would fail.
+    expect(readAppSource()).toMatch(
+      /const shouldShowModelPicker = \$derived\(\s*BYO_MODELS_ENABLED &&\s*resolveModelFirstRunNeeded\(/,
+    );
+  });
 
   it("pageCannotChangeModels is the page-origin classification, not the latch", () => {
     expect(app).toMatch(/pageCannotChangeModels:\s*modelsPageAccess\(\)\s*===\s*"foreign"/);
