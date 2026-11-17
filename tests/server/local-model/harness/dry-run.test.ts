@@ -50,6 +50,7 @@ import {
   runLocalModelTurn,
   TOOLS,
 } from "../../../../src/server/local-model/index.js";
+import { localModelFetchForHarness } from "../../../../src/server/local-model/ollama-client.js";
 import { extractText } from "../../../../src/server/mcp/document-model.js";
 import { findOccurrence } from "../../../../src/server/mcp/navigation.js";
 import { getOrCreateDocument, removeDocument } from "../../../../src/server/yjs/provider.js";
@@ -60,6 +61,7 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../../../src/shared/constants.js";
+import { loopbackFetch } from "../../../../src/shared/loopback-fetch.js";
 import { withBrowser, withInternal } from "../../../../src/shared/origins.js";
 import {
   advanceUntil,
@@ -819,6 +821,8 @@ describe("visible reasoning (R2.7)", () => {
 });
 
 describe("the fetch tap observes and changes nothing", () => {
+  // The tap wraps the client's own fetch (#2422), so the product's requests
+  // are driven through it here; in vitest it delegates to the stubbed global.
   it("passes the request through by identity and puts fetch back", async () => {
     const seen: { input: unknown; init: unknown }[] = [];
     const base = (async (input: unknown, init: unknown) => {
@@ -828,13 +832,15 @@ describe("the fetch tap observes and changes nothing", () => {
     vi.stubGlobal("fetch", base);
     const tap = installFetchTap();
     const init: RequestInit = { method: "POST", body: "{}", redirect: "error" };
-    await fetch("http://127.0.0.1:11434/v1/chat/completions", init);
-    await fetch("http://127.0.0.1:11434/api/version");
+    await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", init);
+    await localModelFetchForHarness()("http://127.0.0.1:11434/api/version");
     await tap.settle();
     expect(seen[0].init).toBe(init);
     expect(seen[0].input).toBe("http://127.0.0.1:11434/v1/chat/completions");
     expect(tap.records).toHaveLength(1); // the metadata path is not observed
     expect(globalThis.fetch).toBe(base);
+    // settle() restores the client's fetch too.
+    expect(localModelFetchForHarness()).toBe(loopbackFetch);
   });
 
   it("cancels a clone the product stopped reading, so a cut stream cannot run on", async () => {
@@ -853,7 +859,9 @@ describe("the fetch tap observes and changes nothing", () => {
       );
     });
     const tap = installFetchTap();
-    const res = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    const res = await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", {
+      body: "{}",
+    });
     await res.body?.cancel(); // the product gives up on its side
     await tap.settle(20);
     expect(cancelled).toBe(true);
@@ -879,11 +887,15 @@ describe("the fetch tap observes and changes nothing", () => {
       return new Response('data: {"choices":[{"delta":{"content":"b"}}]}\n\ndata: [DONE]\n\n');
     });
     const tap = installFetchTap();
-    const first = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    const first = await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", {
+      body: "{}",
+    });
     // The product gives up on its side. (A tee branch's cancel settles only
     // once the other branch is cancelled too, which settle() does below.)
     const gaveUp = first.body?.cancel();
-    const second = await fetch("http://127.0.0.1:11434/v1/chat/completions", { body: "{}" });
+    const second = await localModelFetchForHarness()("http://127.0.0.1:11434/v1/chat/completions", {
+      body: "{}",
+    });
     await second.text();
     await tap.settle(30);
     await gaveUp;

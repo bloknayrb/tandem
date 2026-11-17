@@ -1,10 +1,17 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server, type ServerResponse } from "node:http";
-import { connect as netConnect } from "node:net";
+import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  bareFetchThroughEnvProxy,
+  childEnv,
+  createRegistry,
+  makeTunnel as makeRecordingTunnel,
+  nodeHonoursEnvProxy,
+  noIpv6,
+} from "../helpers/env-proxy-recorder.js";
 
 /**
  * #2422: Tandem's own programs never send a loopback request through an
@@ -17,7 +24,9 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
  * process proves nothing. A control child (a bare global `fetch`) first proves
  * the tunnel really does see a `CONNECT` under these variables, so a clean run
  * means the program avoided the proxy rather than that the harness could not
- * show one.
+ * show one. The recorder, the child environment and the control are shared
+ * with the local-model client's and the instance probe's proof
+ * (`tests/helpers/env-proxy-recorder.ts`).
  */
 
 const TOKEN = "tok_Loopback2422_AbCdEfGhIjKlMnOpQrStUvWx";
@@ -28,11 +37,6 @@ const entries = {
   monitor: ["src/monitor/index.ts"],
 } as const;
 
-/** Node's environment proxy exists from 22.21 (earlier lines ignore the variable). */
-function nodeHonoursEnvProxy(): boolean {
-  const [maj = 0, min = 0] = process.versions.node.split(".").map(Number);
-  return maj > 22 || (maj === 22 && min >= 21);
-}
 const suite = nodeHonoursEnvProxy() ? describe : describe.skip;
 
 interface Seen {
@@ -41,16 +45,11 @@ interface Seen {
   authorization?: string;
 }
 
-const children: ChildProcessWithoutNullStreams[] = [];
-const servers: Server[] = [];
+const reg = createRegistry();
+const { servers, children } = reg;
+const makeTunnel = () => makeRecordingTunnel(reg);
 
-afterEach(async () => {
-  for (const c of children.splice(0)) c.kill();
-  for (const s of servers.splice(0)) {
-    s.closeAllConnections?.();
-    await new Promise<void>((r) => s.close(() => r()));
-  }
-});
+afterEach(() => reg.cleanup());
 
 const EVENT = {
   id: "evt_1",
@@ -137,64 +136,6 @@ async function makeUpstream(host = "127.0.0.1") {
   return { base, port: addr.port, seen };
 }
 
-/** Whether `err` is a listen on `::1` refused because this host has no IPv6. */
-function noIpv6(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null)?.code;
-  return code === "EAFNOSUPPORT" || code === "EADDRNOTAVAIL";
-}
-
-/** A CONNECT tunnel that records what it was asked to reach, then pipes. */
-async function makeTunnel() {
-  const connects: string[] = [];
-  const proxy = createServer();
-  proxy.on("connect", (req, client) => {
-    const target = String(req.url);
-    connects.push(target);
-    const cut = target.lastIndexOf(":");
-    const host = target.slice(0, cut).replace(/^\[|\]$/g, "");
-    const upstream = netConnect(Number(target.slice(cut + 1)), host, () => {
-      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      upstream.pipe(client);
-      client.pipe(upstream);
-    });
-    upstream.on("error", () => client.destroy());
-    client.on("error", () => upstream.destroy());
-  });
-  servers.push(proxy);
-  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
-  const addr = proxy.address();
-  if (!addr || typeof addr === "string") throw new Error("address");
-  return { connects, url: `http://127.0.0.1:${addr.port}` };
-}
-
-function childEnv(extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of [
-    // The monitor's entry skips its auto-run under vitest.
-    "VITEST",
-    "NODE_USE_ENV_PROXY",
-    "NODE_OPTIONS",
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "NO_PROXY",
-    "no_proxy",
-    "TANDEM_URL",
-    "CLAUDE_PLUGIN_OPTION_SERVER_URL",
-    "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN",
-    "TANDEM_AUTH_TOKEN",
-    "TANDEM_OWNER_HANDLE",
-    "TANDEM_OWNER_HANDLE_URL",
-  ]) {
-    delete env[k];
-  }
-  for (const [k, v] of Object.entries(extra)) {
-    if (v !== undefined) env[k] = v;
-  }
-  return env;
-}
-
 function start(args: readonly string[], env: NodeJS.ProcessEnv) {
   const c = spawn(process.execPath, ["--import", "tsx", ...args], {
     cwd: root,
@@ -277,18 +218,7 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
     // The control: with these variables a bare global fetch IS proxied.
     const up = await makeUpstream();
     const tunnel = await makeTunnel();
-    const c = spawn(
-      process.execPath,
-      [
-        "-e",
-        `fetch(${JSON.stringify(`${up.base}/health`)}).then(()=>process.exit(0),()=>process.exit(0))`,
-      ],
-      {
-        env: childEnv({ NODE_USE_ENV_PROXY: "1", HTTP_PROXY: tunnel.url }),
-        stdio: "ignore",
-      },
-    );
-    await new Promise<void>((r) => c.once("exit", () => r()));
+    await bareFetchThroughEnvProxy(reg, `${up.base}/health`, tunnel.url);
     expect(tunnel.connects, "the harness must be able to show a proxied request").toContain(
       `127.0.0.1:${up.port}`,
     );
@@ -328,18 +258,7 @@ suite("loopback requests never use an environment proxy (#2422)", () => {
       return;
     }
     const tunnel = await makeTunnel();
-    const c = spawn(
-      process.execPath,
-      [
-        "-e",
-        `fetch(${JSON.stringify(`${up.base}/health`)}).then(()=>process.exit(0),()=>process.exit(0))`,
-      ],
-      {
-        env: childEnv({ NODE_USE_ENV_PROXY: "1", HTTP_PROXY: tunnel.url }),
-        stdio: "ignore",
-      },
-    );
-    await new Promise<void>((r) => c.once("exit", () => r()));
+    await bareFetchThroughEnvProxy(reg, `${up.base}/health`, tunnel.url);
     expect(tunnel.connects, "Node's environment proxy must carry a [::1] request").toContain(
       `[::1]:${up.port}`,
     );

@@ -20,8 +20,28 @@
  * licence to the local server: the stdio bridge's MCP transport and preflight,
  * `authFetch` (the channel shim, the monitor and the SSE consumer),
  * `tandem rotate-token`, and the licence commands (`tandem activate` /
- * `deactivate`). The SSE body streams as before.
+ * `deactivate`). The SSE body streams as before. In the server (#1123): the
+ * local-model client, whose POST carries the chat prompt and so the
+ * document's text, and the start-up instance probe (`probeHealthOnce`), which
+ * decides whether `freePort` may kill a port's listener (#1758).
  * Redirects are not touched: the caller's `redirect` mode passes through.
+ *
+ * Importing this module evaluates the installed undici, whose `lib/global.js`
+ * sets `Symbol.for("undici.globalDispatcher.1")` to a plain undici `Agent` when
+ * it is unset, and Node's global `fetch` reads that symbol. Node does not set
+ * it at start-up: in a bare process it is unset until the first global
+ * `fetch` (measured on 22.23.5; seen in review on 22.23.2 and 24.22.1), so a
+ * process that reaches this import first has every later global `fetch`
+ * dispatch through the installed undici's `Agent` rather than Node's own. What decides
+ * it is load order: in an ES module, a static `import` of `node:http` sets
+ * Node's own `Agent` before the module body runs, and the shipped server
+ * bundle is ESM and imports `http` statically, so there it was Node's `Agent`
+ * that the global `fetch` kept (measured on Node 22.23.5 with the built
+ * `dist/server/index.js`). A CommonJS `require` of `node:http` does not set it.
+ * With the environment proxy on, Node installs its proxy agent at start-up
+ * and the import never replaces it. Either `Agent` reads no proxy variable, so
+ * no proxy behaviour depends on which wins. No import path avoids this:
+ * undici's `fetch` module requires `lib/global.js` itself.
  *
  * Imports nothing from `src/server`, and reads no build flag, so any bundle
  * may take it.
