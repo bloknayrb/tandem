@@ -88,6 +88,8 @@ import {
   noteNotifyNotice,
   observeChatForAnswerer,
   setChatAnswererToastSink,
+  settleSendLocalPeriod,
+  takeSendRead,
 } from "./hooks/useChatAnswerer.svelte";
 import { createChatState } from "./hooks/useChatState.svelte";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
@@ -897,13 +899,18 @@ $effect(() => {
       return;
     }
 
+    // #1123 (#2433 M1): this chat send's own chat-answerer read, taken in the
+    // send's frame (its capped wait starts now, beside the probe). Null for a
+    // comment, a send that requested no read, and always while dark.
+    const sendRead = viaKey === "chat" ? takeSendRead() : null;
+
     // ONE fresh /health read settles both branches. It re-confirms the session
     // — the polled value can be up to 8s stale, and an agent whose MCP
     // initialize landed after the last poll would otherwise get a false "no AI
     // is connected" notice (#1083) — and refreshes the push signal in the same
     // round trip.
     const probe = await aiReadiness.probeSession();
-    const notice = addressedAiNotice({
+    let notice = addressedAiNotice({
       // Re-read across the await, don't reuse the pre-probe capture: a user who
       // switches to Solo while the probe is in flight would otherwise still get
       // a notice. Every input here is re-read for the same reason.
@@ -918,6 +925,28 @@ $effect(() => {
       // Re-read after the await, like every input here.
       localPeriod: localPeriodNow,
     });
+    // A chat's "no AI" notices are the only ones the local period can change
+    // (rule 7). When this send requested a read, decide them after it settles
+    // (capped), so the toast cannot contradict the pickup row. No re-probe:
+    // the probe's answer is reused; every other input is re-read.
+    if (
+      (notice?.kind === "no-agent" || notice?.kind === "no-push") &&
+      viaKey === "chat" &&
+      sendRead !== null
+    ) {
+      const localPeriodAfterRead = await settleSendLocalPeriod(sendRead);
+      notice = addressedAiNotice({
+        soloMode: isSoloNow(),
+        serverUnreachable: aiReadiness.serverUnreachable,
+        probeAnswered: probe.answered,
+        sessionLive: probe.sessionLive,
+        chip: aiReadiness.chip,
+        pushDelivery: aiReadiness.pushDelivery,
+        startingForMessage: viaKey === "chat" && chatResumeState.pending,
+        via: "chat",
+        localPeriod: localPeriodAfterRead,
+      });
+    }
     if (notice === null) return;
 
     // The branching lives in the pure, exhaustive `noticeAction`; App only pushes
